@@ -16,6 +16,7 @@ import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { systemRoutes } from './system.js';
 import { loopRoutes } from './loops.js';
+import { workbenchRoutes } from './workbenches.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
@@ -214,6 +215,14 @@ export function setupRoutes(app: Express): void {
   // for that round trip. Every handler scopes to req.user.id itself. See
   // routes/developer.ts.
   app.use(`${api}/developer`, mount(developerRoutes()));
+
+  // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
+  // Pre-ownerScope for the billing reason, and more so: most handlers wait on
+  // the fleet (an archive runs a script and a push; the preview proxy can hold
+  // a response open), and an owner-scoped transaction would pin a pooled
+  // connection for that whole wait. Every handler authorises the workspace and
+  // gates on the `workbenches` flag itself. See routes/workbenches.ts.
+  app.use(`${api}/workbenches`, mount(workbenchRoutes()));
 
   // Owner-scoped DB enforcement for the data routers below: runs each request
   // inside a transaction that drops to the `authenticated` role so Postgres RLS

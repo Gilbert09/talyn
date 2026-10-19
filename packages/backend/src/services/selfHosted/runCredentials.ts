@@ -105,7 +105,16 @@ export async function resolveRunCredentials(
     .limit(1);
 
   const row = rows[0];
-  if (!row) return { ok: false, reason: 'unknown_run' };
+  if (!row) {
+    // Not a task. A workbench's long-lived box is the other thing this backend
+    // creates, and it is bound by the same rules — see the function it calls.
+    // Imported lazily: the workbench services import this module's types.
+    if (runId.startsWith('talyn-wb-')) {
+      const { resolveWorkbenchRunCredentials } = await import('../workbenches/runCredentials.js');
+      return resolveWorkbenchRunCredentials(host, runId);
+    }
+    return { ok: false, reason: 'unknown_run' };
+  }
 
   const cloud = readCloudTaskMeta({ metadata: row.metadata as Record<string, unknown> | null });
   const extra = (cloud?.extra ?? {}) as { host?: string; repo?: string; llm?: string };

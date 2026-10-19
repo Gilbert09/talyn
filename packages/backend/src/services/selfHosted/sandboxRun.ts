@@ -16,12 +16,17 @@ import {
   FleetClient,
   FleetDispatchUncertainError,
   type CreateSandboxInput,
+  type CreateSandboxTaskInput,
   type FleetMcpServerInline,
   type FleetSandbox,
 } from './client.js';
 import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
 import { mcpServersForDispatch, type McpServerWithSecret } from '../mcpServers/store.js';
-import { getSelfHostedCredentials, resolveFleetTarget } from './credentials.js';
+import {
+  getSelfHostedCredentials,
+  resolveFleetTarget,
+  type SelfHostedCredentials,
+} from './credentials.js';
 import { heldBackAgents, heldBackReason } from './exhaustedQuota.js';
 import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
 
@@ -198,6 +203,146 @@ function missingCredentialError(
   );
 }
 
+export type SandboxCredentialsResult =
+  | { ok: true; creds: SelfHostedCredentials; githubToken: string }
+  | { ok: false; error: string };
+
+/**
+ * The workspace's agent credentials and a fresh GitHub token, or the refusal
+ * that names what to connect.
+ *
+ * The GitHub token is fetched fresh each time so a re-connected or rotated
+ * one is current. It goes backend -> fleetd only; the fleet's credential proxy
+ * injects it host-side and it never enters the microVM (fleet spec §8).
+ */
+export async function resolveSandboxCredentials(workspaceId: string): Promise<SandboxCredentialsResult> {
+  const creds = await getSelfHostedCredentials(workspaceId);
+  if (!creds) {
+    return {
+      ok: false,
+      error:
+        'Talyn Fleet is not configured for this workspace — add your Claude OAuth token in workspace settings.',
+    };
+  }
+  const githubToken = await githubService.getVerifiedAccessToken(workspaceId);
+  if (!githubToken) {
+    return {
+      ok: false,
+      error: 'Connect GitHub for this workspace — the fleet uses it to clone the repo and open the PR.',
+    };
+  }
+  return { ok: true, creds, githubToken };
+}
+
+export interface SandboxCreateBodySpec {
+  /** The caller-chosen, idempotent sandbox id. */
+  id: string;
+  workspaceId: string;
+  /** Which LLM API the box is wired to. Decides its egress route table. */
+  provider: 'anthropic' | 'openai';
+  /** Named in the refusal when the vendor's credential is missing. */
+  model: string;
+  creds: SelfHostedCredentials;
+  githubToken: string;
+  internetAccess?: boolean;
+  /** Tri-state, never collapsed: null = every enabled server, [] = none, a list = exactly those. */
+  mcpServerIds: string[] | null;
+  /** Task dispatch: true. A workbench's long-lived box: omitted. */
+  ephemeral?: boolean;
+  /** Task dispatch: the initial work order. A bare workbench box: omitted. */
+  task?: CreateSandboxTaskInput;
+  /**
+   * A bare box only: the `owner/name` its GitHub token is scoped to. Ignored
+   * when `task` is set, because the task's own repo is the scope there.
+   */
+  repo?: string;
+  /** Who the box's commits are by. Omitted leaves the guest's baked default. */
+  gitAuthor?: { name: string; email: string };
+}
+
+/**
+ * The create body for one fleet sandbox — the ONE place the credential rules
+ * live, for task dispatch and for workbenches alike.
+ *
+ * Refuses rather than sending a body without the key its vendor needs, and
+ * always suppresses the other vendor. See the comments inline: each rule is a
+ * paid-for lesson, and a second copy of this would silently lose one of them.
+ */
+export async function buildSandboxCreateBody(
+  spec: SandboxCreateBodySpec,
+): Promise<{ ok: true; body: CreateSandboxInput } | { ok: false; error: string }> {
+  const { provider, creds } = spec;
+
+  // THE KEY FOR THIS DISPATCH'S VENDOR, OR NOTHING HAPPENS.
+  //
+  // This used to send `creds.openaiKey ?? ''`, and the empty string is the
+  // whole problem. The sandbox gateway fills an ABSENT OR BLANK credential
+  // from its own tenant's sealed custody — so a workspace with no Codex
+  // credential would not fail, it would quietly run on whatever key the
+  // Talyn tenant holds, billing one account's subscription for another's
+  // work. (Custody is only ever populated for GitHub-born tenants and ours is
+  // operator-minted, so there is nothing behind that door today. The fix is
+  // not about today: it is one settings change away from being live, and the
+  // failure is silent when it arrives.)
+  //
+  // Refusing is also the more useful answer. "Connect Codex" is something the
+  // user can act on; a run that silently spends somebody else's subscription
+  // is something nobody finds out about.
+  const agentKey = provider === 'openai' ? creds.openaiKey : creds.claudeToken;
+  if (!agentKey) {
+    return { ok: false, error: missingCredentialError(provider, spec.model, creds) };
+  }
+
+  // Resolved before the body is built, so a workspace whose credentials will
+  // not open costs a log line here instead of an exception halfway through.
+  const mcpServers = await mcpServersFor(spec.workspaceId, spec.mcpServerIds);
+
+  const body: CreateSandboxInput = {
+    id: spec.id,
+    workspaceId: spec.workspaceId,
+    ...(spec.ephemeral !== undefined ? { ephemeral: spec.ephemeral } : {}),
+    // A task carries its provider on itself; a bare box has nowhere else to
+    // say it. Never both: the fleet refuses a disagreement, and one source is
+    // what keeps that from being possible.
+    ...(spec.task ? { task: spec.task } : { provider }),
+    // The same rule for the repository scope. A bare box names it at the top
+    // level; a task's repo already is the scope, and a second copy could only
+    // disagree with it.
+    ...(!spec.task && spec.repo ? { repo: spec.repo } : {}),
+    githubToken: spec.githubToken,
+    // The credential for this dispatch's vendor, and only that one.
+    ...(provider === 'openai' ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
+    // SUPPRESS THE OTHER VENDOR, which is what makes the custody door
+    // structurally shut rather than shut by our remembering to fill a field.
+    //
+    // The fleet applies `policy.credentials` at EVERY door a credential can
+    // enter a run's proxy — the create body, the /credentials push, the
+    // refresh hook, and the adoption re-pull (`internal/fleet/policy.go`
+    // `filterCredentials`) — so a suppressed vendor cannot be filled from
+    // custody on any of them, including the one that runs when nobody is
+    // looking (a fleetd restart).
+    //
+    // ONE vendor, never both, and never `github`: suppressing everything
+    // nulls the refresh hook outright (`allCredentialsSuppressed`), which
+    // would strip the key we just sent.
+    policy: {
+      credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
+      // Only when the caller asked for it. Absent means the fleet's default —
+      // no routed network — and absent is what all but internet-enabled work
+      // sends.
+      ...(spec.internetAccess === true ? { egress: { mode: 'open' as const } } : {}),
+    },
+    // The workspace's MCP servers, with their credentials, defined on the
+    // spot. Omitted entirely when there are none, so a workspace that has
+    // connected nothing sends the body it always sent.
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+    ...(spec.gitAuthor
+      ? { gitAuthorName: spec.gitAuthor.name, gitAuthorEmail: spec.gitAuthor.email }
+      : {}),
+  };
+  return { ok: true, body };
+}
+
 /**
  * Boot one ephemeral fleet sandbox and hand back what it is.
  *
@@ -208,25 +353,9 @@ function missingCredentialError(
  * without a microVM ever being booted.
  */
 export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxRunResult> {
-  const creds = await getSelfHostedCredentials(spec.workspaceId);
-  if (!creds) {
-    return {
-      ok: false,
-      error:
-        'Talyn Fleet is not configured for this workspace — add your Claude OAuth token in workspace settings.',
-    };
-  }
-
-  // Fetched fresh each dispatch so a re-connected or rotated token is current.
-  // It goes backend -> fleetd only; the fleet's credential proxy injects it
-  // host-side and it never enters the microVM (fleet spec §8).
-  const githubToken = await githubService.getVerifiedAccessToken(spec.workspaceId);
-  if (!githubToken) {
-    return {
-      ok: false,
-      error: 'Connect GitHub for this workspace — the fleet uses it to clone the repo and open the PR.',
-    };
-  }
+  const resolved = await resolveSandboxCredentials(spec.workspaceId);
+  if (!resolved.ok) return resolved;
+  const { creds, githubToken } = resolved;
 
   const repo = await resolveRepository(spec.repositoryId, spec.workspaceId);
   if (!repo) {
@@ -337,34 +466,15 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
     // should be the one this dispatch chose.
     const provider = fleetProviderForModel(model);
 
-    // THE KEY FOR THIS DISPATCH'S VENDOR, OR NOTHING HAPPENS.
-    //
-    // This used to send `creds.openaiKey ?? ''`, and the empty string is the
-    // whole problem. The sandbox gateway fills an ABSENT OR BLANK credential
-    // from its own tenant's sealed custody — so a workspace with no Codex
-    // credential would not fail, it would quietly run on whatever key the
-    // Talyn tenant holds, billing one account's subscription for another's
-    // work. (Custody is only ever populated for GitHub-born tenants and ours is
-    // operator-minted, so there is nothing behind that door today. The fix is
-    // not about today: it is one settings change away from being live, and the
-    // failure is silent when it arrives.)
-    //
-    // Refusing is also the more useful answer. "Connect Codex" is something the
-    // user can act on; a run that silently spends somebody else's subscription
-    // is something nobody finds out about.
-    const agentKey = provider === 'openai' ? creds.openaiKey : creds.claudeToken;
-    if (!agentKey) {
-      return { ok: false, error: missingCredentialError(provider, model, creds) };
-    }
-
-    // Resolved before the create rather than inside it, so a workspace whose
-    // credentials will not open costs a log line here instead of an exception
-    // halfway through building a request body.
-    const mcpServers = await mcpServersFor(spec.workspaceId, spec.mcpServerIds ?? null);
-
-    const { sandbox, host } = await createSandboxRetryingUncertain(client, {
+    const built = await buildSandboxCreateBody({
       id: spec.runId,
       workspaceId: spec.workspaceId,
+      provider,
+      model,
+      creds,
+      githubToken,
+      internetAccess: spec.internetAccess,
+      mcpServerIds: spec.mcpServerIds ?? null,
       // Ephemeral is what a run was: the host stops and retires the sandbox
       // the moment its initial task reaches a terminal state.
       ephemeral: true,
@@ -385,34 +495,10 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
           : {}),
         ...(spec.budget?.timeoutSec !== undefined ? { timeoutSec: spec.budget.timeoutSec } : {}),
       },
-      githubToken,
-      // The credential for this dispatch's vendor, and only that one.
-      ...(provider === 'openai' ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
-      // SUPPRESS THE OTHER VENDOR, which is what makes the custody door
-      // structurally shut rather than shut by our remembering to fill a field.
-      //
-      // The fleet applies `policy.credentials` at EVERY door a credential can
-      // enter a run's proxy — the create body, the /credentials push, the
-      // refresh hook, and the adoption re-pull (`internal/fleet/policy.go`
-      // `filterCredentials`) — so a suppressed vendor cannot be filled from
-      // custody on any of them, including the one that runs when nobody is
-      // looking (a fleetd restart).
-      //
-      // ONE vendor, never both, and never `github`: suppressing everything
-      // nulls the refresh hook outright (`allCredentialsSuppressed`), which
-      // would strip the key we just sent.
-      policy: {
-        credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
-        // Only when the caller asked for it. Absent means the fleet's default —
-        // no routed network — and absent is what all but internet-enabled work
-        // sends.
-        ...(spec.internetAccess === true ? { egress: { mode: 'open' as const } } : {}),
-      },
-      // The workspace's MCP servers, with their credentials, defined on the
-      // spot. Omitted entirely when there are none, so a workspace that has
-      // connected nothing sends the body it always sent.
-      ...(mcpServers.length > 0 ? { mcpServers } : {}),
     });
+    if (!built.ok) return { ok: false, error: built.error };
+
+    const { sandbox, host } = await createSandboxRetryingUncertain(client, built.body);
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
     //
@@ -529,7 +615,7 @@ function sanitizeSlug(name: string): string | null {
  * plain (non-capacity) failure, which is the honest answer: nobody knows
  * whether the work started, so nothing may re-dispatch it elsewhere.
  */
-async function createSandboxRetryingUncertain(
+export async function createSandboxRetryingUncertain(
   client: FleetClient,
   input: CreateSandboxInput,
 ): Promise<{ sandbox: FleetSandbox; host?: string }> {

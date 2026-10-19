@@ -150,6 +150,14 @@ describe('Data API database boundary', () => {
       release_notes: ['SELECT'],
       workflow_runs: ['INSERT', 'SELECT', 'UPDATE'],
       loop_runs: ['INSERT', 'SELECT', 'UPDATE'],
+      // Sessions (migration 0076), each behind a workspace policy. Events are
+      // append-only; a chat's history goes with its chat.
+      workbenches: crud,
+      workbench_chats: crud,
+      workbench_checkpoints: crud,
+      workbench_events: ['DELETE', 'INSERT', 'SELECT'],
+      // Instruction files (migration 0077): the user's own CLAUDE.md and friends.
+      workbench_instruction_files: crud,
     });
     await testDb.pglite.exec('SET ROLE talyn_backend');
     for (const table of ['settings', 'admin_audit_log', 'billing_events', 'fleet_hosts', 'github_installations']) {

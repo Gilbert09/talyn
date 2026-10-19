@@ -483,6 +483,7 @@ describe('featuresForUser', () => {
       'reviewRankingCandidate',
       'reviewRankingExport',
       'teams',
+      'workbenches',
       'workflows',
     ]);
   });
@@ -499,6 +500,7 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      workbenches: false,
     });
   });
 
@@ -520,6 +522,7 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      workbenches: false,
     });
   });
 

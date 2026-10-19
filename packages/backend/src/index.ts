@@ -34,6 +34,8 @@ import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
 import { initChecksGreenTrigger } from './services/workflows/checksGreen.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
+import { initWorkbenches, stopWorkbenches } from './services/workbenches/lifecycle.js';
+import { handleTerminalUpgrade, matchTerminalPath } from './services/workbenches/terminalBridge.js';
 import { codeReviewPoller, initCodeReviewPoller } from './services/codeReview/poller.js';
 import {
   codeReviewReconciler,
@@ -187,6 +189,12 @@ async function main() {
   initCodeReviewTriggers();
   initCodeReviewPoller();
   initCodeReviewReconciler();
+
+  // Workbenches: a one-shot sweep, 90s after boot, that settles agent turns a
+  // previous process left `running` and carries on provisions it left half
+  // done. Not a poll loop, and a deployment with no workbenches reads two
+  // partial indexes and finds nothing.
+  initWorkbenches();
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
   // that matters is inside: the sweep asks the PostHog flag per workspace
@@ -381,6 +389,18 @@ async function main() {
       socket.destroy();
       return;
     }
+    // A workbench terminal: its own socket, bridged to a shell in the sandbox.
+    // Same origin gate (above) and the same per-IP upgrade budget as `/ws`;
+    // it authenticates with a first-frame token exactly as `/ws` does.
+    const terminalWorkbenchId = matchTerminalPath(pathname);
+    if (terminalWorkbenchId) {
+      if (!allowWebSocketUpgrade(req)) {
+        socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
+        return;
+      }
+      handleTerminalUpgrade(req, socket, head, terminalWorkbenchId);
+      return;
+    }
     if (pathname === '/ws') {
       if (!allowWebSocketUpgrade(req)) {
         const timer = setTimeout(() => socket.destroy(), 1000).unref();
@@ -422,6 +442,7 @@ async function main() {
     // listener attached through a drain would have it settling runs against a
     // database connection that is about to close.
     loopScheduler.stop();
+    stopWorkbenches();
 codeReviewPoller.stop();
 codeReviewReconciler.stop();
     // posthog-node batches the `$feature_flag_called` events that make a flag's

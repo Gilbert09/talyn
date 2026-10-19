@@ -229,6 +229,7 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        workbenches: false,
       });
     });
 
@@ -252,6 +253,7 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        workbenches: false,
       });
     });
   });

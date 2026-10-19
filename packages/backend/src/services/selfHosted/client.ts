@@ -6,6 +6,10 @@
  * SPEC §16.1 replaces it once the fleet publishes a tagged artifact.
  */
 
+import { createHash, randomBytes } from 'crypto';
+import { request as httpRequest } from 'http';
+import { request as httpsRequest } from 'https';
+import type { Duplex } from 'stream';
 import { createSseJsonParser } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 
@@ -254,10 +258,40 @@ export interface CreateSandboxInput {
    *  a repeated id rather than booting a second microVM. */
   id: string;
   workspaceId: string;
-  /** Talyn always dispatches ephemeral sandboxes — stop after the initial
-   *  task, exactly what a run was. */
-  ephemeral: boolean;
-  task: CreateSandboxTaskInput;
+  /**
+   * Task dispatch sends `true`: the host stops the sandbox as soon as the
+   * initial task ends, exactly what a run was. A workbench omits it — its box
+   * must outlive every turn, and the fleet suspends it when idle instead.
+   */
+  ephemeral?: boolean;
+  /**
+   * The initial work order. Absent means a BARE sandbox: it boots, serves
+   * exec and ssh, and waits. A workbench creates one of these and drives it
+   * with `exec`, one agent process per turn.
+   */
+  task?: CreateSandboxTaskInput;
+  /**
+   * The LLM upstream this SANDBOX is wired to — which builds its egress route
+   * table. A bare sandbox has no task to carry `task.provider`, so it goes
+   * here. When both are sent the fleet refuses a disagreement, so a caller
+   * sets one or the other.
+   */
+  provider?: 'anthropic' | 'openai';
+  /**
+   * `owner/name`: the repository a BARE sandbox's GitHub token is scoped to,
+   * as `task.repo.slug` scopes a dispatch. The fleet proxy's verified-commit,
+   * checks, review and review-thread endpoints refuse a box with no scope.
+   * The fleet keeps it on the box's record, so it survives a restart and a
+   * suspend. Sent beside `task.repo` it must name the same repository, so a
+   * task dispatch does not send it.
+   *
+   * The fleet decodes a create body leniently (no unknown-field refusal), so a
+   * fleet that predates the field ignores it rather than refusing the create.
+   */
+  repo?: string;
+  /** Who the box's commits are by. Written into the guest's ~/.gitconfig; not a secret. */
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
   githubToken?: string;
   /**
    * The credential for THIS sandbox's provider, and only that one. The fleet
@@ -434,6 +468,23 @@ export class FleetDispatchUncertainError extends Error {
 
 /** A rate-limit response. Shaped for the generic poller's ThrottleBackoff,
  *  which duck-types on `status === 429` and an optional `retryAfterMs`. */
+/**
+ * Any other non-2xx answer. A plain Error with the status on it, so a caller
+ * that must branch on "the fleet refused this body" (400) can do so without
+ * matching the message.
+ */
+export class FleetHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    /** The fleet's machine code (`error` in its JSON body), when it sent one. */
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'FleetHttpError';
+  }
+}
+
 export class FleetThrottleError extends Error {
   readonly status = 429;
   constructor(
@@ -550,6 +601,8 @@ export function resetFleetDispatcherCache(): void {
  * either.
  */
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** How long a resume may take. The fleet itself allows two hours; ten minutes covers a multi-gigabyte pull. */
+const RESUME_TIMEOUT_MS = 10 * 60_000;
 
 export class FleetClient {
   private readonly timeoutMs: number;
@@ -574,14 +627,20 @@ export class FleetClient {
    * and routing every other method through a two-field object to serve it would
    * put an unwrap at forty call sites to inform one.
    */
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    return (await this.requestWithMeta<T>(path, init)).data;
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    opts: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    return (await this.requestWithMeta<T>(path, init, opts)).data;
   }
 
   private async requestWithMeta<T>(
     path: string,
     init: RequestInit = {},
+    opts: { timeoutMs?: number } = {},
   ): Promise<{ data: T; host?: string }> {
+    const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
     const started = Date.now();
     const method = init.method ?? 'GET';
     let resp: Response;
@@ -593,7 +652,7 @@ export class FleetClient {
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...(init.headers ?? {}),
         },
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
         // @ts-expect-error `dispatcher` is undici's, not in the DOM fetch types
         dispatcher: fleetDispatcher(this.endpoint),
       });
@@ -616,7 +675,7 @@ export class FleetClient {
         `[fleet] ${method} ${path} failed after ${tookMs}ms:`,
         JSON.stringify({
           url: this.url(path),
-          timeoutMs: this.timeoutMs,
+          timeoutMs,
           proxied: fleetDispatcher(this.endpoint) !== undefined,
           name: err instanceof Error ? err.name : typeof err,
           message: err instanceof Error ? err.message : String(err),
@@ -649,12 +708,12 @@ export class FleetClient {
       );
     }
     if (!resp.ok) {
-      const message = await errorMessage(resp, `fleet returned ${resp.status}`);
+      const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
       if (isRunNotFoundResponse(resp.status, message)) {
         throw new FleetRunNotFoundError(message);
       }
-      throw new Error(message);
+      throw new FleetHttpError(message, resp.status, code);
     }
     // The gateway names the host that took a create, because Talyn has to bound
     // a later credential pull BY HOST and cannot read that off a registry it no
@@ -691,7 +750,9 @@ export class FleetClient {
       status,
       durationMs: Date.now() - started,
       ok,
-      error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
+      // The error itself, not its message: describeError walks the cause chain,
+      // which is where undici puts ECONNREFUSED and the like.
+      error: err,
     });
   }
 
@@ -948,6 +1009,547 @@ export class FleetClient {
       body: JSON.stringify(creds),
     });
   }
+
+  // --------------------------------------------------------------------
+  // Exec, ssh and the long-lived sandbox lifecycle (workbenches)
+  // --------------------------------------------------------------------
+
+  /** Wait mode: the command runs to its end, then its frames come back in one answer. */
+  async exec(id: string, req: FleetExecRequest): Promise<FleetExecFrame> {
+    return this.request<FleetExecFrame>(
+      sandboxPath(id, '/exec'),
+      { method: 'POST', body: JSON.stringify(req) },
+      { timeoutMs: execWaitMs(req) },
+    );
+  }
+
+  /**
+   * Follow mode: the command's frames as server-sent events, the same
+   * `{events, cursor, terminal}` object each time. Ends after the frame with
+   * `terminal: true`, when the caller aborts, or when the stream breaks.
+   *
+   * The command does NOT stop when this stream does: the fleet runs it
+   * detached from the request, so a dropped connection loses the view, not
+   * the work.
+   */
+  async *execFollow(
+    id: string,
+    req: FleetExecRequest,
+    signal: AbortSignal,
+  ): AsyncGenerator<FleetExecFrame> {
+    const path = sandboxPath(id, '/exec?follow=1');
+    const started = Date.now();
+    let resp: Response;
+    try {
+      resp = await fetch(this.url(path), {
+        method: 'POST',
+        body: JSON.stringify(req),
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        signal,
+        // @ts-expect-error `dispatcher` is undici's, not in the DOM fetch types
+        dispatcher: fleetDispatcher(this.endpoint),
+      });
+    } catch (err) {
+      this.recordHttp('POST', path, 0, started, false, err);
+      throw new FleetCapacityError(
+        `Fleet unreachable at ${this.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        'unreachable',
+      );
+    }
+    this.recordHttp('POST', path, resp.status, started, resp.ok);
+    if (!resp.ok || !resp.body) {
+      const { message, code } = await errorBody(resp, `exec ${id}: ${resp.status} ${resp.statusText}`);
+      if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
+      if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
+      throw new FleetHttpError(message, resp.status, code);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const parser = createSseJsonParser<FleetExecFrame>();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
+          yield frame;
+          if (frame.terminal) return;
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+  }
+
+  /**
+   * A command whose output should NOT land in the sandbox's events ring — a
+   * diff, a file read — tried as a quiet exec first.
+   *
+   * Learned once per endpoint: an answer with `events` in it means the fleet
+   * ignored the field, and every later call skips straight to a plain exec. A
+   * 400 or 404 to the quiet body is retried once as a plain exec, and only a
+   * plain exec that then works marks the feature absent — a 404 that repeats
+   * is the sandbox being gone, and the retry reports that.
+   */
+  async quietExec(id: string, req: FleetExecRequest): Promise<FleetExecOutcome> {
+    const key = `${this.endpoint}|quiet-exec`;
+    const plain = async (): Promise<FleetExecOutcome> => ({
+      kind: 'events',
+      frame: await this.exec(id, req),
+    });
+    if (optionalSupport.get(key) === false) return plain();
+
+    let body: unknown;
+    try {
+      body = await this.request<unknown>(
+        sandboxPath(id, `/exec?${QUIET_EXEC.query}`),
+        { method: 'POST', body: JSON.stringify(req) },
+        { timeoutMs: execWaitMs(req) },
+      );
+    } catch (err) {
+      const status =
+        err instanceof FleetHttpError ? err.status : err instanceof FleetRunNotFoundError ? 404 : 0;
+      if (status !== 400 && status !== 404) throw err;
+      const outcome = await plain();
+      optionalSupport.set(key, false);
+      return outcome;
+    }
+    const quiet = QUIET_EXEC.parse(body);
+    if (quiet) {
+      optionalSupport.set(key, true);
+      return { kind: 'quiet', result: quiet };
+    }
+    const frame = body as Partial<FleetExecFrame>;
+    if (Array.isArray(frame.events)) {
+      optionalSupport.set(key, false);
+      return {
+        kind: 'events',
+        frame: { events: frame.events, cursor: frame.cursor ?? 0, terminal: frame.terminal ?? true },
+      };
+    }
+    throw new Error(`exec ${id}: the fleet answered with neither output nor events`);
+  }
+
+  /**
+   * Replace the sandbox's authorized SSH keys. The list is the COMPLETE set —
+   * an empty one revokes everything — and the fleet offers no way to read the
+   * current one back, so whoever calls this owns the whole set.
+   */
+  async setSshKeys(id: string, publicKeys: string[]): Promise<FleetSshAccess> {
+    return this.request<FleetSshAccess>(sandboxPath(id, '/ssh'), {
+      method: 'POST',
+      body: JSON.stringify({ publicKeys }),
+    });
+  }
+
+  /**
+   * `GET /v1/sandboxes/{id}/ssh-stream`: one HTTP/1.1 upgrade spliced onto the
+   * guest's sshd. Raw SSH bytes both ways after the 101.
+   */
+  openSshStream(id: string, opts: { timeoutMs?: number } = {}): Promise<Duplex> {
+    return this.upgrade(sandboxPath(id, '/ssh-stream'), opts.timeoutMs);
+  }
+
+  /**
+   * `GET /v1/sandboxes/{id}/pty`: a shell on a pseudo-terminal, framed as
+   * `[type:1][len:uint32 BE][payload]` (see PTY_FRAME). `session` runs the
+   * shell inside `tmux new-session -A`, so a reconnect lands back in it.
+   * An older guest answers 409 `pty_unsupported`, thrown as
+   * FleetPtyUnsupportedError so the caller can fall back to ssh.
+   */
+  async openPty(
+    id: string,
+    opts: { cols: number; rows: number; session?: string; cwd?: string; timeoutMs?: number },
+  ): Promise<Duplex> {
+    const qs = new URLSearchParams({ cols: String(opts.cols), rows: String(opts.rows) });
+    if (opts.session) qs.set('session', opts.session);
+    if (opts.cwd) qs.set('cwd', opts.cwd);
+    try {
+      return await this.upgrade(sandboxPath(id, `/pty?${qs.toString()}`), opts.timeoutMs);
+    } catch (err) {
+      if (err instanceof FleetHttpError && (err.code === 'pty_unsupported' || err.status === 405)) {
+        throw new FleetPtyUnsupportedError(err.message);
+      }
+      // A fleet with no /pty route at all answers Go's plain-text 404.
+      if (err instanceof FleetHttpError && err.status === 404 && !err.code) {
+        throw new FleetPtyUnsupportedError(err.message);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * One HTTP/1.1 upgrade, websocket-SHAPED for the middleboxes (`Upgrade:
+   * websocket` and a Sec-WebSocket-Key, answered with 101 and the RFC 6455
+   * digest) and not websocket after it. Built on node's http client because
+   * fetch cannot hand back an upgraded socket.
+   *
+   * Not routed through FLEET_HTTP_PROXY: the normal path is the gateway, which
+   * is public. A deployment that reaches hosts only over the tailnet proxy has
+   * no terminal until this learns to CONNECT through it.
+   */
+  private upgrade(path: string, timeoutMs = 20_000): Promise<Duplex> {
+    const target = new URL(this.url(path));
+    const key = randomBytes(16).toString('base64');
+    const started = Date.now();
+    return new Promise<Duplex>((resolve, reject) => {
+      const doRequest = target.protocol === 'https:' ? httpsRequest : httpRequest;
+      const req = doRequest(target, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Connection: 'Upgrade',
+          Upgrade: 'websocket',
+          'Sec-WebSocket-Key': key,
+          'Sec-WebSocket-Version': '13',
+        },
+        timeout: timeoutMs,
+      });
+      req.on('upgrade', (res, socket, head) => {
+        this.recordHttp('GET', path, res.statusCode ?? 101, started, true);
+        const expected = createHash('sha1').update(key + WS_ACCEPT_MAGIC).digest('base64');
+        if (res.headers['sec-websocket-accept'] !== expected) {
+          socket.destroy();
+          reject(new Error('the fleet answered the upgrade with the wrong Sec-WebSocket-Accept; refusing the stream'));
+          return;
+        }
+        socket.setTimeout(0);
+        // Bytes the guest sent right behind the 101 headers.
+        if (head && head.length > 0) socket.unshift(head);
+        resolve(socket);
+      });
+      req.on('response', (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => {
+          if (chunks.length < 16) chunks.push(c);
+        });
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8').slice(0, 2000);
+          const status = res.statusCode ?? 0;
+          this.recordHttp('GET', path, status, started, false, new Error(text));
+          let message = text;
+          let code: string | undefined;
+          try {
+            const parsed = JSON.parse(text) as { message?: string; error?: string };
+            message = parsed.message || parsed.error || text;
+            code = parsed.error;
+          } catch {
+            /* plain text */
+          }
+          if (status === 503) reject(new FleetCapacityError(message));
+          else if (status === 404 && code && isRunNotFoundResponse(status, message)) {
+            reject(new FleetRunNotFoundError(message));
+          } else reject(new FleetHttpError(`${path.split('?')[0]}: ${status} ${message}`, status, code));
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error(`${path.split('?')[0]}: timed out after ${timeoutMs}ms`)));
+      req.on('error', (err) => {
+        this.recordHttp('GET', path, 0, started, false, err);
+        reject(err);
+      });
+      req.end();
+    });
+  }
+
+  /**
+   * `ANY /v1/sandboxes/{id}/ports/{port}/{path...}` — the preview proxy. The
+   * raw Response is handed back for the caller to stream; status codes from
+   * the guest's server are its answer, not errors.
+   */
+  async proxyPort(
+    id: string,
+    port: number,
+    pathAndQuery: string,
+    init: { method: string; headers: Record<string, string>; body?: Buffer; signal?: AbortSignal },
+  ): Promise<Response> {
+    const path = sandboxPath(id, `/ports/${port}/${pathAndQuery.replace(/^\/+/, '')}`);
+    const started = Date.now();
+    try {
+      const resp = await fetch(this.url(path), {
+        method: init.method,
+        headers: { ...init.headers, Authorization: `Bearer ${this.token}` },
+        ...(init.body && init.body.length > 0 ? { body: init.body } : {}),
+        redirect: 'manual',
+        signal: init.signal ?? AbortSignal.timeout(120_000),
+        // @ts-expect-error `dispatcher` is undici's, not in the DOM fetch types
+        dispatcher: fleetDispatcher(this.endpoint),
+      });
+      this.recordHttp(init.method, path, resp.status, started, resp.status < 500);
+      return resp;
+    } catch (err) {
+      this.recordHttp(init.method, path, 0, started, false, err);
+      throw new FleetCapacityError(
+        `Fleet unreachable at ${this.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        'unreachable',
+      );
+    }
+  }
+
+  async suspendSandbox(id: string): Promise<void> {
+    await this.request(sandboxPath(id, '/suspend'), { method: 'POST', body: '{}' });
+  }
+
+  async resumeSandbox(id: string): Promise<void> {
+    // A hibernated box pulls its image back from object storage first, which
+    // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
+    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body: '{}' }, { timeoutMs: RESUME_TIMEOUT_MS });
+  }
+
+  /** Delete a sandbox. Already gone counts as done: the caller wanted it gone. */
+  async deleteSandbox(id: string): Promise<void> {
+    try {
+      await this.request(sandboxPath(id), { method: 'DELETE' }, { timeoutMs: 60_000 });
+    } catch (err) {
+      if (err instanceof FleetRunNotFoundError) return;
+      throw err;
+    }
+  }
+
+  async getDiff(
+    id: string,
+    query: { base: string; path?: string; patch?: boolean; cwd?: string },
+  ): Promise<FleetOptionalResult<FleetDiffResult>> {
+    const qs = new URLSearchParams({ base: query.base });
+    if (query.path) qs.set('path', query.path);
+    if (query.patch) qs.set('patch', '1');
+    if (query.cwd) qs.set('cwd', query.cwd);
+    return this.optionalGet<FleetDiffResult>('diff', sandboxPath(id, `/diff?${qs.toString()}`));
+  }
+
+  async listFiles(id: string, opts: { cwd?: string } = {}): Promise<FleetOptionalResult<FleetFilesResult>> {
+    const qs = opts.cwd ? `?${new URLSearchParams({ cwd: opts.cwd }).toString()}` : '';
+    return this.optionalGet<FleetFilesResult>('files', sandboxPath(id, `/files${qs}`));
+  }
+
+  async readFile(
+    id: string,
+    filePath: string,
+    opts: { cwd?: string } = {},
+  ): Promise<FleetOptionalResult<FleetFileResult>> {
+    const qs = new URLSearchParams({ path: filePath });
+    if (opts.cwd) qs.set('cwd', opts.cwd);
+    return this.optionalGet<FleetFileResult>('file', sandboxPath(id, `/file?${qs.toString()}`));
+  }
+
+  /**
+   * A GET against a route only newer fleets serve. Unsupported is an ANSWER,
+   * not an error: a 404 whose body is not the fleet's own JSON error (Go's mux
+   * says "404 page not found"), a 405 or a 501 means the route is not there.
+   * Learned once per endpoint and feature.
+   */
+  private async optionalGet<T>(feature: string, path: string): Promise<FleetOptionalResult<T>> {
+    const key = `${this.endpoint}|${feature}`;
+    if (optionalSupport.get(key) === false) return { supported: false };
+    const started = Date.now();
+    let resp: Response;
+    try {
+      resp = await fetch(this.url(path), {
+        headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(60_000),
+        // @ts-expect-error `dispatcher` is undici's, not in the DOM fetch types
+        dispatcher: fleetDispatcher(this.endpoint),
+      });
+    } catch (err) {
+      this.recordHttp('GET', path, 0, started, false, err);
+      throw new FleetCapacityError(
+        `Fleet unreachable at ${this.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        'unreachable',
+      );
+    }
+    this.recordHttp('GET', path, resp.status, started, resp.ok);
+    if (resp.ok) {
+      optionalSupport.set(key, true);
+      return { supported: true, data: (await resp.json()) as T };
+    }
+    const text = await resp.text().catch(() => '');
+    let fleetError: { message?: string; error?: string } | null = null;
+    try {
+      fleetError = JSON.parse(text) as { message?: string; error?: string };
+    } catch {
+      fleetError = null;
+    }
+    const routeMissing =
+      resp.status === 405 || resp.status === 501 || (resp.status === 404 && !fleetError);
+    if (routeMissing) {
+      optionalSupport.set(key, false);
+      return { supported: false };
+    }
+    const message = fleetError?.message || fleetError?.error || `fleet returned ${resp.status}`;
+    if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
+    // A 404 about the THING asked for (a missing file) is not a missing sandbox.
+    if (resp.status === 404 && fleetError?.error === 'no_such_file') throw new FleetHttpError(message, 404, 'no_such_file');
+    if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
+    throw new FleetHttpError(message, resp.status, fleetError?.error);
+  }
+}
+
+// ------------------------------------------------------------------------
+// Exec, ssh and the long-lived sandbox lifecycle (workbenches)
+// ------------------------------------------------------------------------
+
+/** One command for `POST /v1/sandboxes/{id}/exec`. argv, never a shell string. */
+export interface FleetExecRequest {
+  cmd: string[];
+  shell?: boolean;
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Bounds the command in the guest. Zero or absent is no bound. */
+  timeoutMs?: number;
+}
+
+/**
+ * What exec answers in wait mode, and what each SSE frame carries in follow
+ * mode: the sandbox's events after the cursor the exec started at.
+ *
+ * NOT only this command's output. The ring is per SANDBOX, so a command that
+ * runs while another is running sees the other's frames too — callers that
+ * need their own output must frame it (see `services/workbenches/execFraming`).
+ * `terminal` is per command: THIS exec has finished.
+ */
+export interface FleetExecFrame {
+  events: FleetEvent[];
+  cursor: number;
+  terminal: boolean;
+}
+
+/** A quiet exec's answer: the command's own output, never written to the ring. */
+export interface FleetQuietExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  signal?: string;
+  timedOut?: boolean;
+  /** The fleet caps a quiet answer (4 MiB) and says so rather than cutting silently. */
+  truncated?: boolean;
+}
+
+export type FleetExecOutcome =
+  | { kind: 'quiet'; result: FleetQuietExecResult }
+  | { kind: 'events'; frame: FleetExecFrame };
+
+/**
+ * The quiet-exec contract, in ONE place: `POST /exec?quiet=1`, answered in wait
+ * mode with `{stdout, stderr, exit:{exitCode, signal?, timedOut?}, truncated}`.
+ * The output skips the sandbox's events ring.
+ *
+ * An older fleet ignores the unknown query parameter and runs an ordinary
+ * exec, so its answer has `events` instead — which is how the probe learns
+ * the feature is absent without a 404 to read.
+ */
+export const QUIET_EXEC = {
+  query: 'quiet=1',
+  parse(body: unknown): FleetQuietExecResult | null {
+    if (!body || typeof body !== 'object') return null;
+    const b = body as Record<string, unknown>;
+    if (typeof b.stdout !== 'string') return null;
+    const exit = (b.exit && typeof b.exit === 'object' ? b.exit : {}) as Record<string, unknown>;
+    const exitCode =
+      typeof exit.exitCode === 'number' ? exit.exitCode : typeof b.exitCode === 'number' ? b.exitCode : null;
+    if (exitCode === null) return null;
+    return {
+      stdout: b.stdout,
+      stderr: typeof b.stderr === 'string' ? b.stderr : '',
+      exitCode,
+      ...(typeof exit.signal === 'string' && exit.signal ? { signal: exit.signal } : {}),
+      ...(exit.timedOut === true ? { timedOut: true } : {}),
+      ...(b.truncated === true ? { truncated: true } : {}),
+    };
+  },
+};
+
+/** What `POST /v1/sandboxes/{id}/ssh` answers: who to log in as and the key to pin. */
+export interface FleetSshAccess {
+  user: string;
+  /** `ssh-ed25519 AAAA…` — the guest's own host key, for pinning. */
+  hostPublicKey: string;
+  fingerprint?: string;
+  knownHosts?: string;
+  host?: string;
+}
+
+/** `GET /v1/sandboxes/{id}/diff?base=&path=&patch=1&cwd=`. 409 `not_a_repository`/`no_commits`, 400 `bad_ref`. */
+export interface FleetDiffResult {
+  base: string;
+  baseSha?: string;
+  mergeBase: string;
+  headSha: string;
+  files: Array<{
+    path: string;
+    oldPath?: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    added: number;
+    removed: number;
+    binary: boolean;
+  }>;
+  truncated?: boolean;
+  patch?: string;
+  patchTruncated?: boolean;
+}
+
+/** `GET /v1/sandboxes/{id}/files?cwd=`. */
+export interface FleetFilesResult {
+  paths: string[];
+  truncated?: boolean;
+}
+
+/** `GET /v1/sandboxes/{id}/file?path=&cwd=`. */
+export interface FleetFileResult {
+  path: string;
+  size: number;
+  binary: boolean;
+  encoding: 'utf8' | 'base64';
+  content: string;
+  tooLarge?: boolean;
+}
+
+/** Frame types of the `/pty` stream: `[type:1][len:uint32 BE][payload]`. */
+export const PTY_FRAME = { DATA: 0x00, RESIZE: 0x01, EXIT: 0x02 } as const;
+
+/** The guest refuses a pty frame above this. */
+export const PTY_MAX_FRAME_PAYLOAD = 1 << 20;
+
+/** An older guest answers `/pty` with 409 `pty_unsupported`; the caller falls back to ssh. */
+export class FleetPtyUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FleetPtyUnsupportedError';
+  }
+}
+
+/**
+ * Which optional routes a fleet endpoint serves, learned once per process.
+ *
+ * Keyed by endpoint AND feature: the gateway and a host directly can differ,
+ * and a host mid-rollout answers for itself. `undefined` means not yet asked.
+ */
+const optionalSupport = new Map<string, boolean>();
+
+/** Exposed for tests, which point several fake fleets at one process. */
+export function resetFleetOptionalSupport(): void {
+  optionalSupport.clear();
+}
+
+/** How long a wait-mode exec may take when the command itself is unbounded. */
+const DEFAULT_EXEC_WAIT_MS = 15 * 60_000;
+
+/** RFC 6455's fixed GUID for the accept digest. */
+const WS_ACCEPT_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+export interface FleetOptionalResult<T> {
+  supported: boolean;
+  data?: T;
+}
+
+const sandboxPath = (id: string, rest = ''): string => `/v1/sandboxes/${encodeURIComponent(id)}${rest}`;
+
+function execWaitMs(req: FleetExecRequest): number {
+  return req.timeoutMs && req.timeoutMs > 0 ? req.timeoutMs + 30_000 : DEFAULT_EXEC_WAIT_MS;
 }
 
 async function errorMessage(resp: Response, fallback: string): Promise<string> {
@@ -956,6 +1558,16 @@ async function errorMessage(resp: Response, fallback: string): Promise<string> {
     return body.message || body.error || fallback;
   } catch {
     return fallback;
+  }
+}
+
+/** The fleet's error text and its machine code (`error` in its JSON body), when it sent one. */
+async function errorBody(resp: Response, fallback: string): Promise<{ message: string; code?: string }> {
+  try {
+    const body = (await resp.json()) as { message?: string; error?: string };
+    return { message: body.message || body.error || fallback, ...(body.error ? { code: body.error } : {}) };
+  } catch {
+    return { message: fallback };
   }
 }
 

@@ -91,6 +91,23 @@ import type {
   DeveloperActivityCategory,
   DeveloperAgents,
   DeveloperRateLimits,
+  CreateWorkbenchChatInput,
+  CreateWorkbenchInput,
+  PutWorkbenchInstructionFileInput,
+  WorkbenchInstructionFile,
+  CreateWorkbenchPullRequestInput,
+  CreateWorkbenchPullRequestResult,
+  SendWorkbenchMessageInput,
+  UpdateLocalWorkbenchChatInput,
+  UpdateWorkbenchChatInput,
+  UpdateWorkbenchInput,
+  Workbench,
+  WorkbenchChangedFile,
+  WorkbenchChat,
+  WorkbenchCheckpoint,
+  WorkbenchEvent,
+  WorkbenchNextAction,
+  WorkbenchReadiness,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
 // shares with the backend proxy and the fleet client.
@@ -2570,6 +2587,143 @@ export const mcpServers = {
     request<McpServerDefinition>('POST', `/mcp-servers/${id}/disconnect`),
 };
 
+// ============================================================================
+// Workbenches (a branch + agent chat + diff + terminal; see docs/WORKBENCHES.md)
+// ============================================================================
+
+const enc = encodeURIComponent;
+
+export const workbenches = {
+  list: (workspaceId: string, opts: { includeArchived?: boolean } = {}) => {
+    const qs = new URLSearchParams({ workspaceId });
+    if (opts.includeArchived) qs.set('includeArchived', 'true');
+    return request<Workbench[]>('GET', `/workbenches?${qs.toString()}`);
+  },
+  get: (id: string) => request<Workbench>('GET', `/workbenches/${enc(id)}`),
+  create: (input: CreateWorkbenchInput) => request<Workbench>('POST', '/workbenches', input),
+  update: (id: string, patch: UpdateWorkbenchInput) =>
+    request<Workbench>('PATCH', `/workbenches/${enc(id)}`, patch),
+  archive: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/archive`),
+  restore: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/restore`),
+  /** Provision again after a failed start. */
+  retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
+  readiness: (workspaceId: string) =>
+    request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
+  remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
+
+  // ---- The user's own instruction files, copied into sandbox sessions ----
+  instructions: {
+    /** Every stored file for the workspace. Never the content. */
+    list: (workspaceId: string) =>
+      request<WorkbenchInstructionFile[]>('GET', `/workbenches/instructions?workspaceId=${enc(workspaceId)}`),
+    /** Upsert one file. A file switched off keeps its row but not its content. */
+    put: (input: PutWorkbenchInstructionFileInput) =>
+      request<WorkbenchInstructionFile>('PUT', '/workbenches/instructions', input),
+    remove: (workspaceId: string, key: string) =>
+      request<void>('DELETE', `/workbenches/instructions/${enc(key)}?workspaceId=${enc(workspaceId)}`),
+  },
+
+  // ---- Chats ----
+  createChat: (workbenchId: string, input: CreateWorkbenchChatInput = {}) =>
+    request<WorkbenchChat>('POST', `/workbenches/${enc(workbenchId)}/chats`, input),
+  updateChat: (chatId: string, patch: UpdateWorkbenchChatInput) =>
+    request<WorkbenchChat>('PATCH', `/workbenches/chats/${enc(chatId)}`, patch),
+  /** Close a chat tab. A running turn is stopped first; the transcript is kept. */
+  closeChat: (chatId: string) => request<void>('DELETE', `/workbenches/chats/${enc(chatId)}`),
+  /** Drop one queued message (by its `id`) before it runs. Returns the chat with the shorter queue. */
+  removeQueuedMessage: (chatId: string, messageId: string) =>
+    request<WorkbenchChat>('DELETE', `/workbenches/chats/${enc(chatId)}/queue/${enc(messageId)}`),
+  /**
+   * Send a message. `queued: true` means a turn was already running: a sandbox
+   * exec has no stdin, so the message waits and runs when that turn ends.
+   */
+  sendMessage: (chatId: string, input: SendWorkbenchMessageInput) =>
+    request<{ queued: boolean }>('POST', `/workbenches/chats/${enc(chatId)}/messages`, input),
+  cancel: (chatId: string) => request<void>('POST', `/workbenches/chats/${enc(chatId)}/cancel`),
+  /** A page of stored transcript events with `seq > after`. Pass the returned `cursor` back as `after`. */
+  events: (chatId: string, opts: { after?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.after !== undefined) qs.set('after', String(opts.after));
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<{ events: WorkbenchEvent[]; cursor: number }>(
+      'GET',
+      `/workbenches/chats/${enc(chatId)}/events${suffix}`
+    );
+  },
+
+  // ---- Files and diff ----
+  changes: (id: string) =>
+    request<{ files: WorkbenchChangedFile[]; base: string; headSha: string }>(
+      'GET',
+      `/workbenches/${enc(id)}/changes`
+    ),
+  diff: (id: string, path?: string) =>
+    request<{ patch: string }>(
+      'GET',
+      `/workbenches/${enc(id)}/diff${path ? `?path=${enc(path)}` : ''}`
+    ),
+  file: (id: string, path: string) =>
+    request<{ content: string; binary: boolean }>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}`),
+  files: (id: string) => request<{ paths: string[] }>('GET', `/workbenches/${enc(id)}/files`),
+  /**
+   * The preview proxy for a port a script listens on in the sandbox. Bearer
+   * auth like every route, so it is for fetches, not for an iframe `src`.
+   */
+  portUrl: (id: string, port: number, path = '') =>
+    `${getConfig().baseUrl}/api/v1/workbenches/${enc(id)}/ports/${port}/${path.replace(/^\/+/, '')}`,
+
+  // ---- Checkpoints ----
+  checkpoints: (chatId: string) =>
+    request<WorkbenchCheckpoint[]>('GET', `/workbenches/chats/${enc(chatId)}/checkpoints`),
+  restoreCheckpoint: (chatId: string, turn: number) =>
+    request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
+
+  // ---- Scripts (output arrives as `workbench:script` WS frames) ----
+  runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {})) =>
+    request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}`),
+  stopScript: (id: string, name: string) =>
+    request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}/stop`),
+
+  /**
+   * Commit what is uncommitted, push the branch and open the PR. A sandbox
+   * Create PR turn does this server-side; a local session pushes first itself
+   * and sends `pushed: true`.
+   */
+  createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
+    request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),
+
+  /** Run a header action (Fix checks, Resolve conflicts, Merge, Archive), optionally in a given chat. */
+  action: (id: string, action: Exclude<WorkbenchNextAction, null>, chatId?: string) =>
+    request<{ chatId?: string }>(
+      'POST',
+      `/workbenches/${enc(id)}/actions/${enc(action)}`,
+      chatId ? { chatId } : undefined
+    ),
+
+  // ---- Local runtime reporting (the desktop owns the process, the backend owns the rows) ----
+  uploadLocalEvents: (chatId: string, events: WorkbenchEvent[]) =>
+    request<{ stored: number }>('POST', `/workbenches/chats/${enc(chatId)}/local-events`, { events }),
+  updateLocalChat: (chatId: string, input: UpdateLocalWorkbenchChatInput) =>
+    request<WorkbenchChat>('PATCH', `/workbenches/chats/${enc(chatId)}/local`, input),
+
+  /**
+   * The terminal WebSocket for a sandbox workbench.
+   *
+   * Auth matches the main socket: the token is NOT in the URL (URLs land in
+   * access logs and the edge proxy's request log). Open the socket, then send
+   * {@link workbenches.terminalAuthFrame} as the FIRST message; the server
+   * closes with 4401 if it is missing or invalid.
+   */
+  terminalUrl: (id: string) =>
+    `${getConfig().baseUrl.replace(/^http/, 'ws')}/api/v1/workbenches/${enc(id)}/terminal`,
+  /** `{"type":"auth","token":…}` — the first frame on a terminal socket, or null when signed out. */
+  terminalAuthFrame: async (): Promise<string | null> => {
+    const token = await getAuthToken();
+    return token ? JSON.stringify({ type: 'auth', token }) : null;
+  },
+};
+
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
@@ -2599,6 +2753,7 @@ export const api = {
   loops,
   codeReviews,
   mcpServers,
+  workbenches,
   admin,
   ws: wsClient,
 };

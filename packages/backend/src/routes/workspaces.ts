@@ -35,6 +35,7 @@ import {
   CodeReviewRequestError,
   codeReviewReviewersProblem,
   codeReviewSettingsPatch,
+  normaliseBranchPrefix,
   resolveCodeReviewSettings,
   type CodeReviewSettings,
   type PromptTemplateSettings,
@@ -388,6 +389,11 @@ export function workspaceRoutes(): Router {
           const msg = err instanceof Error ? err.message : 'invalid prompts';
           return res.status(400).json({ success: false, error: msg });
         }
+      }
+      if (body.settings.sessionBranchPrefix !== undefined) {
+        const prefix = normaliseBranchPrefix(body.settings.sessionBranchPrefix);
+        if (!prefix.ok) return res.status(400).json({ success: false, error: prefix.error });
+        body.settings.sessionBranchPrefix = prefix.value;
       }
       if (body.settings.visualReview !== undefined) {
         try {

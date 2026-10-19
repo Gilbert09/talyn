@@ -19,6 +19,9 @@ import type {
   McpOAuthGrant,
   McpProbeResult,
   ReleaseHighlight,
+  WorkbenchDiffStat,
+  WorkbenchQueuedMessage,
+  WorkbenchSettings,
 } from '@talyn/shared';
 // The envelope every stored credential uses. From services/ rather than
 // shared/ because the key handling is the backend's alone — tokenCrypto
@@ -1848,5 +1851,153 @@ export const prCodeReviewEvents = pgTable(
   },
   (t) => ({
     reviewAtIdx: index('idx_pr_code_review_events_review').on(t.reviewId, t.at),
+  })
+);
+
+// ---------- Workbenches (migration 0076; see docs/WORKBENCHES.md) ----------
+
+/**
+ * One branch of one repository, with agent chats, a diff, a terminal and
+ * scripts. A `sandbox` workbench lives in a long-lived fleet microVM the
+ * backend drives; a `local` one in a git worktree the desktop drives.
+ */
+export const workbenches = pgTable(
+  'workbenches',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    repoFullName: text('repo_full_name').notNull(),
+    name: text('name').notNull(),
+    branch: text('branch').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    /** `WorkbenchRuntimeKind`. */
+    runtime: text('runtime').notNull(),
+    /** `WorkbenchAgent`. Fixed at creation for a sandbox workbench. */
+    agent: text('agent').notNull(),
+    model: text('model'),
+    deviceId: text('device_id'),
+    localPath: text('local_path'),
+    sandboxId: text('sandbox_id'),
+    /** `WorkbenchSandboxState`. */
+    sandboxState: text('sandbox_state').notNull().default('none'),
+    /** The fleet host that took the sandbox — an authorization input for a credential pull. */
+    fleetHost: text('fleet_host'),
+    /** `WorkbenchStatus`. */
+    status: text('status').notNull().default('provisioning'),
+    statusMessage: text('status_message'),
+    pullRequestId: text('pull_request_id').references(() => pullRequests.id, {
+      onDelete: 'set null',
+    }),
+    settings: jsonb('settings').$type<WorkbenchSettings>().notNull().default({}),
+    diffStat: jsonb('diff_stat').$type<WorkbenchDiffStat | null>(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceIdx: index('idx_workbenches_workspace').on(t.workspaceId, t.createdAt),
+    liveNameUq: uniqueIndex('uq_workbenches_workspace_name_live')
+      .on(t.workspaceId, t.name)
+      .where(sql`${t.archivedAt} IS NULL`),
+    sandboxIdx: index('idx_workbenches_sandbox')
+      .on(t.sandboxId)
+      .where(sql`${t.sandboxId} IS NOT NULL`),
+  })
+);
+
+export const workbenchChats = pgTable(
+  'workbench_chats',
+  {
+    id: text('id').primaryKey(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    title: text('title').notNull(),
+    agent: text('agent').notNull(),
+    model: text('model'),
+    effort: text('effort'),
+    planMode: boolean('plan_mode').notNull().default(false),
+    agentSessionId: text('agent_session_id'),
+    /** `WorkbenchChatStatus`. */
+    status: text('status').notNull().default('idle'),
+    statusMessage: text('status_message'),
+    queuedMessages: jsonb('queued_messages').$type<WorkbenchQueuedMessage[]>().notNull().default([]),
+    turnCount: integer('turn_count').notNull().default(0),
+    /** The last event seq handed out. Bumped in the same statement as the insert. */
+    nextSeq: bigint('next_seq', { mode: 'number' }).notNull().default(0),
+    /** A closed tab. Its transcript stays; it drops out of the embedded chat list. */
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workbenchIdx: index('idx_workbench_chats_workbench').on(t.workbenchId, t.createdAt),
+    runningIdx: index('idx_workbench_chats_running')
+      .on(t.status)
+      .where(sql`${t.status} = 'running'`),
+  })
+);
+
+/** The transcript, append-only. The primary key is the paging index. */
+export const workbenchEvents = pgTable(
+  'workbench_events',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    turn: integer('turn').notNull(),
+    event: jsonb('event').$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_events_pkey', columns: [t.chatId, t.seq] }),
+  })
+);
+
+export const workbenchCheckpoints = pgTable(
+  'workbench_checkpoints',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    turn: integer('turn').notNull(),
+    ref: text('ref').notNull(),
+    sha: text('sha').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_checkpoints_pkey', columns: [t.chatId, t.turn] }),
+  })
+);
+
+/** Instruction files from the user's machine, copied into sandbox sessions (migration 0077). */
+export const workbenchInstructionFiles = pgTable(
+  'workbench_instruction_files',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    agent: text('agent').notNull(),
+    target: text('target').notNull(),
+    repoFullName: text('repo_full_name'),
+    sourcePath: text('source_path').notNull(),
+    /** Imports inlined. Empty while switched off. Never selected by a list. */
+    content: text('content').notNull().default(''),
+    contentHash: text('content_hash').notNull().default(''),
+    bytes: integer('bytes').notNull().default(0),
+    enabled: boolean('enabled').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceKeyUq: uniqueIndex('uq_workbench_instruction_files_workspace_key').on(t.workspaceId, t.key),
   })
 );

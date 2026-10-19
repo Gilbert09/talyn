@@ -47,7 +47,7 @@ export type Block =
       status: 'pending' | 'allowed' | 'denied' | 'auto_allowed';
       persist?: boolean;
     }
-  | { kind: 'system'; key: string; text: string; subtype?: string }
+  | { kind: 'system'; key: string; text: string; subtype?: string; url?: string; isError?: boolean }
   | {
       kind: 'result';
       key: string;
@@ -213,6 +213,23 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         outputTokens: usage.output_tokens,
         isError: Boolean(event.is_error),
         denials: event.permission_denials?.length ?? 0,
+      });
+      continue;
+    }
+
+    // What a workbench's Create PR turn did, as one line.
+    if (event.type === 'talyn_pr') {
+      const pr = event as { ok?: unknown; number?: unknown; url?: unknown; existing?: unknown; message?: unknown };
+      const ok = pr.ok === true && typeof pr.number === 'number';
+      blocks.push({
+        kind: 'system',
+        key: seqKey,
+        subtype: 'talyn_pr',
+        text: ok
+          ? `${pr.existing === true ? 'Linked the open pull request' : 'Opened pull request'} #${pr.number}`
+          : String(pr.message ?? 'Could not open the pull request.'),
+        ...(ok && typeof pr.url === 'string' ? { url: pr.url } : {}),
+        isError: !ok,
       });
       continue;
     }
