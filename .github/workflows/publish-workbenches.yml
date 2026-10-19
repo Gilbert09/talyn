@@ -9,6 +9,9 @@ name: Publish workbenches build
 # followsPrereleases). Stable installs, the website's download button and the
 # stable publish workflow all ignore pre-releases.
 #
+# Builds stay drafts until the WORKBENCHES_BUILDS_PUBLIC variable is 'true'
+# (see "Mark the pre-release").
+#
 # To join: install the DMG from the newest workbenches pre-release by hand.
 # To leave: install the stable DMG by hand.
 on:
@@ -159,15 +162,25 @@ jobs:
             -c.electronVersion="$ELECTRON_VERSION" \
             -c.electronDist="$ELECTRON_DIST"
 
-      - name: Publish the pre-release
+      - name: Mark the pre-release
+        # Stays a DRAFT until the repository variable WORKBENCHES_BUILDS_PUBLIC
+        # is 'true'. An installed stable app from before the updater fix, on
+        # the "nightly" channel, installs the newest release of ANY kind, so a
+        # public branch build would replace its stable app. Set the variable
+        # only when a stable release with the fix (followsPrereleases) has
+        # shipped and those apps have had time to take it.
         # --latest=false keeps the stable release as "Latest" for the website.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          PUBLIC: ${{ vars.WORKBENCHES_BUILDS_PUBLIC }}
         run: |
+          DRAFT=true
+          [ "$PUBLIC" = "true" ] && DRAFT=false
           gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --draft=false --prerelease --latest=false --target "$GITHUB_SHA" \
+            --draft="$DRAFT" --prerelease --latest=false --target "$GITHUB_SHA" \
             --notes "Workbenches branch build from $GITHUB_SHA. Not a stable release."
+          echo "Published v$VERSION (draft=$DRAFT)"
 
       - name: Remove old builds
         # Keep the five newest. The update feed lists only recent releases, and
@@ -177,7 +190,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq '.[] | select(.prerelease and (.tag_name | contains("-workbenches."))) | [.created_at, .tag_name] | @tsv' \
+            --jq '.[] | select(.tag_name | contains("-workbenches.")) | [.created_at, .tag_name] | @tsv' \
             | sort -r | tail -n +6 | cut -f2 \
             | while read -r tag; do
                 echo "Deleting $tag"
