@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
+import { _resetMergeQueueBroadcasts } from '../../services/mergeQueueBroadcast.js';
 import { FREE_PLAN_MERGE_QUEUE_LIMIT, MERGE_QUEUE_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { pullRequestRoutes } from '../../routes/pullRequests.js';
 import { apiErrorHandler } from '../../routes/index.js';
@@ -130,6 +131,8 @@ describe('free-plan merge-queue limit at the route surface', () => {
   });
 
   afterEach(async () => {
+    // The route rebroadcasts positions detached; it must not outlive the test DB.
+    _resetMergeQueueBroadcasts();
     vi.restoreAllMocks();
     if (savedPolarToken === undefined) delete process.env.POLAR_ACCESS_TOKEN;
     else process.env.POLAR_ACCESS_TOKEN = savedPolarToken;

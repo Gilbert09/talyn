@@ -76,14 +76,12 @@ import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import {
   applyQueueMembership,
+  broadcastPositionsAfterQueueWrite,
   emitDequeued,
   publishDraftsThenKick,
   setQueueMembership,
 } from '../services/mergeQueue/membership.js';
-import {
-  broadcastMergeQueuePositions,
-  QUEUE_RESET_COLUMNS,
-} from '../services/mergeQueueBroadcast.js';
+import { QUEUE_RESET_COLUMNS } from '../services/mergeQueueBroadcast.js';
 import {
   ancestorsOf,
   descendantsOf,
@@ -1187,10 +1185,11 @@ export function pullRequestRoutes(): Router {
     }
 
     // Per-call work, once for the batch rather than once per member. The
-    // draft publish and the kick run off this request's transaction, which
+    // rebroadcast, the draft publish and the kick run off this request's
+    // transaction, which
     // holds every member's row until the response is sent.
     if (!enabled) for (const member of members) emitDequeued(member);
-    await broadcastMergeQueuePositions(anchor.workspaceId);
+    broadcastPositionsAfterQueueWrite(anchor.workspaceId);
     if (enabled) publishDraftsThenKick(members, 'user:enqueue-stack');
 
     res.json({
