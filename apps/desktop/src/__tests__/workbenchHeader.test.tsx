@@ -183,6 +183,18 @@ describe('WorkbenchHeader action cycle', () => {
     ]);
   });
 
+  it.each<[string, PRRow['state'], boolean]>([
+    ['open', 'open', true],
+    ['merged', 'merged', false],
+    ['closed', 'closed', false],
+  ])('the PR button shows for an %s PR: %p', (_name, state, shown) => {
+    const row = prRow({ url: 'https://github.com/acme/app/pull/7' }, state);
+    render(<WorkbenchHeader workbench={WB} pr={row} chat={chat} ops={ops()} />);
+    const button = screen.queryByRole('button', { name: `PR #${row.number}` });
+    if (shown) expect(button).toBeInTheDocument();
+    else expect(button).toBeNull();
+  });
+
   it('an archived workbench shows no actions', () => {
     render(<WorkbenchHeader workbench={{ ...WB, status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }} pr={null} chat={chat} ops={ops()} />);
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();

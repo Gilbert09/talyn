@@ -28,6 +28,7 @@ import {
 } from '../ui/dropdown-menu';
 import { cn } from '../../lib/utils';
 import { api, type PRRow } from '../../lib/api';
+import { openExternal } from '../../lib/openExternal';
 import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -269,6 +270,18 @@ export function WorkbenchHeader({
       >
         <PanelRight className="h-4 w-4" />
       </Button>
+      {pr?.state === 'open' && pr.summary.url && (
+        <Button
+          variant="outline"
+          className="h-7 gap-1.5 px-2.5 text-xs"
+          onClick={() => void openExternal(pr.summary.url)}
+          title={`Open #${pr.number} on GitHub: ${pr.summary.title}`}
+          data-attr="workbench-open-pr"
+        >
+          <GitPullRequest className="h-3.5 w-3.5" />
+          PR #{pr.number}
+        </Button>
+      )}
       {!archived && (
         <div className="flex items-center">
           {primary && PrimaryIcon && (
