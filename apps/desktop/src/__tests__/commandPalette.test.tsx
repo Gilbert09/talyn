@@ -104,7 +104,9 @@ describe('CommandPalette', () => {
   it('lists the places to go, gated like the sidebar', () => {
     render(<CommandPalette />);
     expect(screen.getByText('History')).toBeInTheDocument();
-    expect(screen.getByText('Pull requests: My PRs')).toBeInTheDocument();
+    expect(screen.getByText('Pull requests: PRs')).toBeInTheDocument();
+    expect(screen.getByText('Review requests')).toBeInTheDocument();
+    expect(screen.getByText('Merge queue')).toBeInTheDocument();
     expect(screen.queryByText('Pull requests: Code review')).not.toBeInTheDocument();
     expect(screen.getByText('Automations: Workflows')).toBeInTheDocument();
     expect(screen.queryByText('Automations: Loops')).not.toBeInTheDocument();

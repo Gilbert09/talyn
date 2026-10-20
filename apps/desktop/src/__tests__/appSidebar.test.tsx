@@ -3,7 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within, act } from '@testing-library/react';
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../renderer/lib/api';
 import { AppSidebar } from '../renderer/components/layout/AppSidebar';
@@ -159,7 +159,7 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('button', { name: /rome/ })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('the Pull requests badge sums My PRs, Review requests, Code review and Merge queue', () => {
+  it('Pull requests, Review requests and Merge queue each count their own page', () => {
     usePullRequestStore.setState({
       rows: [
         pr({ id: 'a', authored: true }),
@@ -171,11 +171,32 @@ describe('AppSidebar', () => {
       ],
     });
     render(<AppSidebar />);
-    // 2 mine + 1 visible review + 1 code review + 1 queued.
-    expect(screen.getByText('5', { selector: '[data-attr="nav-pull-requests-badge"]' })).toBeInTheDocument();
+    // 2 mine; 1 visible review (the hidden one is not counted); 1 queued.
+    expect(screen.getByText('2', { selector: '[data-attr="nav-pull-requests-badge"]' })).toBeInTheDocument();
+    expect(screen.getByText('1', { selector: '[data-attr="nav-review-requests-badge"]' })).toBeInTheDocument();
+    expect(screen.getByText('1', { selector: '[data-attr="nav-merge-queue-badge"]' })).toBeInTheDocument();
   });
 
-  it('leaves Code review out of the badge when it is not offered', () => {
+  it.each<[string, string, string]>([
+    ['Review requests', 'reviews', 'nav-review-requests'],
+    ['Merge queue', 'merge_queue', 'nav-merge-queue'],
+  ])('%s opens its own page and marks only itself current', (label, tab) => {
+    render(<AppSidebar />);
+    fireEvent.click(screen.getByText(label));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab });
+  });
+
+  it('Pull requests stays on its tab, but leaves Review requests for PRs', () => {
+    useNavigationStore.getState().navigate({ view: 'prs', tab: 'queue' });
+    render(<AppSidebar />);
+    fireEvent.click(screen.getByText('Pull requests'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'queue' });
+    act(() => useNavigationStore.getState().navigate({ view: 'prs', tab: 'reviews' }));
+    fireEvent.click(screen.getByText('Pull requests'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'my_prs' });
+  });
+
+  it('the Pull requests badge counts PRs only, not Code review', () => {
     setFeatures({ workbenches: true, codeReview: false });
     usePullRequestStore.setState({ rows: [pr({ id: 'a', authored: true }), pr({ id: 'e', codeReview: { openCount: 1 } } as Partial<PRRow>)] });
     render(<AppSidebar />);

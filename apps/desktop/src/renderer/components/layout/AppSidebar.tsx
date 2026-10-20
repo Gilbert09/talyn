@@ -4,6 +4,8 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderPlus,
+  Eye,
+  GitMerge,
   GitPullRequest,
   History,
   Plus,
@@ -13,7 +15,7 @@ import {
 } from 'lucide-react';
 import { cn, isMacDesktop } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
-import { offeredAutomationTabs } from '../../lib/routeLabels';
+import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePrBadgeCounts } from '../../hooks/usePrBadgeCounts';
@@ -117,13 +119,31 @@ export function AppSidebar() {
           <SidebarItem
             icon={GitPullRequest}
             label="Pull requests"
-            badge={prCounts.total}
+            badge={prCounts.my_prs}
             collapsed={collapsed}
-            active={route.view === 'prs'}
+            active={route.view === 'prs' && PR_PAGE_TABS.includes(route.tab)}
             onClick={() => {
-              if (route.view !== 'prs') navigate({ view: 'prs', tab: 'my_prs' });
+              if (route.view !== 'prs' || !PR_PAGE_TABS.includes(route.tab)) navigate({ view: 'prs', tab: 'my_prs' });
             }}
             dataAttr="nav-pull-requests"
+          />
+          <SidebarItem
+            icon={Eye}
+            label="Review requests"
+            badge={prCounts.reviews}
+            collapsed={collapsed}
+            active={route.view === 'prs' && route.tab === 'reviews'}
+            onClick={() => navigate({ view: 'prs', tab: 'reviews' })}
+            dataAttr="nav-review-requests"
+          />
+          <SidebarItem
+            icon={GitMerge}
+            label="Merge queue"
+            badge={prCounts.merge_queue}
+            collapsed={collapsed}
+            active={route.view === 'prs' && route.tab === 'merge_queue'}
+            onClick={() => navigate({ view: 'prs', tab: 'merge_queue' })}
+            dataAttr="nav-merge-queue"
           />
           {automationTabs.length > 0 && (
             <SidebarItem

@@ -4,7 +4,7 @@ import { codeReviewOffered, mcpServersOffered, workbenchDisplayName, workbenches
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
-import { AUTOMATION_TAB_LABEL, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewWorkbench } from './workbench/new/openNewWorkbench';
 import {
@@ -83,7 +83,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       if (tab === 'code_reviews' && !codeReviewOffered(features)) continue;
       items.push({
         key: `prs:${tab}`,
-        label: `Pull requests: ${PR_TAB_LABEL[tab]}`,
+        label: PR_PAGE_TABS.includes(tab) ? `Pull requests: ${PR_TAB_LABEL[tab]}` : PR_TAB_LABEL[tab],
         icon: GitPullRequest,
         route: { view: 'prs', tab },
       });

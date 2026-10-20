@@ -4,10 +4,7 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { visibleReviewCohort } from '../components/panels/github/reviewHidden';
 import type { PrTab } from '../stores/navigation';
 
-export type PrBadgeCounts = Record<PrTab, number> & {
-  /** The sidebar's "Pull requests" badge: My PRs + Review requests + Code review + Merge queue. */
-  total: number;
-};
+export type PrBadgeCounts = Record<PrTab, number>;
 
 /**
  * The counts behind the Pull requests badges, from the live PR store (kept
@@ -25,6 +22,6 @@ export function usePrBadgeCounts(codeReviewShown: boolean): PrBadgeCounts {
     const code_reviews = codeReviewShown ? rows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length : 0;
     const merge_queue = rows.filter((r) => r.mergeQueued).length;
     const queue = tasks.filter((t) => t.status === 'in_progress').length;
-    return { my_prs, reviews, code_reviews, merge_queue, queue, total: my_prs + reviews + code_reviews + merge_queue };
+    return { my_prs, reviews, code_reviews, merge_queue, queue };
   }, [rows, tasks, codeReviewShown]);
 }
