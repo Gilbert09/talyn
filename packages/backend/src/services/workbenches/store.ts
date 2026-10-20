@@ -51,6 +51,7 @@ export const WORKBENCH_COLUMNS = {
   repositoryId: workbenchesTable.repositoryId,
   repoFullName: workbenchesTable.repoFullName,
   name: workbenchesTable.name,
+  title: workbenchesTable.title,
   branch: workbenchesTable.branch,
   baseBranch: workbenchesTable.baseBranch,
   runtime: workbenchesTable.runtime,
@@ -102,6 +103,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     repositoryId: row.repositoryId,
     repoFullName: row.repoFullName,
     name: row.name,
+    title: row.title ?? null,
     branch: row.branch,
     baseBranch: row.baseBranch,
     runtime: row.runtime as WorkbenchRuntimeKind,
@@ -181,6 +183,20 @@ export async function updateWorkbench(
     .update(workbenchesTable)
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(workbenchesTable.id, id))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Set a generated title, but only while the workbench has none. One
+ * statement, so a title a person sets at the same moment always wins.
+ * Null when nothing changed.
+ */
+export async function setGeneratedTitle(id: string, title: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ title, updatedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.title), isNull(workbenchesTable.archivedAt)))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }

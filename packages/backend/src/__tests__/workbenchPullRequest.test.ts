@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { FakeFleet, type ExecReply } from './helpers/fakeFleet.js';
+import { FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 
 /**
@@ -143,7 +143,7 @@ describe('workbench Create PR', () => {
 
     fleet = new FakeFleet();
     fleet.handler = async (script) => {
-      if (script.startsWith('claude ') || script.startsWith('codex ')) return turnReply;
+      if (isAgentTurn(script) || isAgentTurn(script, 'codex')) return turnReply;
       if (script.includes('git status --porcelain')) return { stdout: world.status ?? '' };
       if (script.includes('git commit -m')) return world.commit ?? { exitCode: 0 };
       if (script.includes('rev-list --count')) return { stdout: world.ahead ?? '' };
@@ -195,7 +195,7 @@ describe('workbench Create PR', () => {
       world.status = ' M src/a.ts\n';
       const events = await sendAndSettle(chatId, createPrMessage);
 
-      const script = scriptsSinceMark().find((s) => s.startsWith('claude '))!;
+      const script = scriptsSinceMark().find((s) => isAgentTurn(s))!;
       expect(script).toContain('--append-system-prompt');
       expect(script).toContain('Do not commit, push or open the pull request');
       expect(script).toContain('```talyn-pr');
@@ -233,7 +233,7 @@ describe('workbench Create PR', () => {
         ],
       };
       const events = await sendAndSettle(chatId, createPrMessage);
-      const script = scriptsSinceMark().find((s) => s.startsWith('codex '))!;
+      const script = scriptsSinceMark().find((s) => isAgentTurn(s, 'codex'))!;
       expect(script).not.toContain('--append-system-prompt');
       expect(script).toContain('Do not commit, push or open the pull request');
       expect(script).toContain('Create a pull request');
@@ -248,7 +248,7 @@ describe('workbench Create PR', () => {
       const chatId = (await listChats(wb.id))[0].id;
       mark = fleet.scripts.length;
       await sendAndSettle(chatId, createPrMessage);
-      expect(scriptsSinceMark().find((s) => s.startsWith('claude '))).toContain('Mention the ticket.');
+      expect(scriptsSinceMark().find((s) => isAgentTurn(s))).toContain('Mention the ticket.');
     });
 
     it('says so in the thread when the reply has no talyn-pr block, and opens nothing', async () => {
@@ -293,7 +293,7 @@ describe('workbench Create PR', () => {
       const chatId = (await listChats(wb.id))[0].id;
       mark = fleet.scripts.length;
       const events = await sendAndSettle(chatId, { text: 'Tidy up the tests' });
-      expect(scriptsSinceMark().find((s) => s.startsWith('claude '))).not.toContain('--append-system-prompt');
+      expect(scriptsSinceMark().find((s) => isAgentTurn(s))).not.toContain('--append-system-prompt');
       expect(prEvents(events)).toEqual([]);
       expect(createPr).not.toHaveBeenCalled();
     });
