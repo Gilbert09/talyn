@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
-  DEFAULT_FLEET_MODEL_ID,
   FLEET_MODELS,
   WORKBENCH_EFFORTS,
+  defaultFleetModelForAgent,
+  fleetAgentForModel,
   normaliseBranchPrefix,
+  storedFleetModelForAgent,
   type Workspace,
   type WorkbenchAgent,
   type WorkbenchEffort,
@@ -15,7 +17,6 @@ import type { WorkbenchRuntime } from '../../../lib/readiness';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
 import { InstructionFilesSection } from '../InstructionFilesSection';
-import { WorkspaceModelSelector } from '../WorkspaceModelSelector';
 
 const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
   low: 'Low',
@@ -102,6 +103,61 @@ function BranchPrefixRow() {
   );
 }
 
+/**
+ * The model for the default agent, so the list holds only that agent's models.
+ * A workspace setting, filed under the agent in `fleetModels`: the new-session
+ * page reads it back through `storedFleetModelForAgent`.
+ */
+function ModelRow({ agent }: { agent: WorkbenchAgent }) {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const [saving, setSaving] = useState(false);
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const models = FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === agent);
+  const current = storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
+  const agentLabel = agent === 'codex' ? 'Codex' : 'Claude';
+
+  const onChange = async (value: string) => {
+    if (!currentWorkspaceId) return;
+    const settings = {
+      fleetModels: { ...(workspace?.settings?.fleetModels ?? {}), [agent]: value },
+    } as Workspace['settings'];
+    setSaving(true);
+    try {
+      await api.workspaces.update(currentWorkspaceId, { settings });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, ...settings } as Workspace['settings'] }
+            : w,
+        ),
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save the model');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingRow label="Model" description={`The ${agentLabel} model new sessions start with.`}>
+      <SettingsSelect
+        value={current}
+        disabled={saving}
+        onChange={(e) => void onChange(e.target.value)}
+        aria-label="Default model"
+      >
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </SettingsSelect>
+    </SettingRow>
+  );
+}
+
 export function SessionsSettings() {
   const defaults = useSessionDefaults();
 
@@ -128,15 +184,7 @@ export function SessionsSettings() {
             <option value="codex">Codex</option>
           </SettingsSelect>
         </SettingRow>
-        {/* A workspace setting, not a device one: the same choice drives fleet runs for PR tasks. */}
-        <WorkspaceModelSelector
-          providerType="selfhosted"
-          title="Model"
-          description="Which model fleet runs use, and therefore which agent runs them — the model carries its vendor. Sonnet 5 handles the mechanical work (rebases, conflicts, re-running CI) at a fraction of Opus's cost."
-          models={FLEET_MODELS}
-          defaultId={DEFAULT_FLEET_MODEL_ID}
-          settingKey="fleetModel"
-        />
+        <ModelRow agent={defaults.agent} />
         <SettingRow label="Reasoning effort">
           <SettingsSelect
             value={defaults.effort}

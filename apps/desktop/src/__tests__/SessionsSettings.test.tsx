@@ -1,7 +1,8 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import type { Workspace } from '@talyn/shared';
+import { FLEET_MODELS, defaultFleetModelForAgent, fleetAgentForModel, type Workspace } from '@talyn/shared';
+import { SESSION_DEFAULTS_KEY } from '../renderer/lib/sessionDefaults';
 import { SessionsSettings } from '../renderer/components/settings/sections/SessionsSettings';
 
 const mockUpdate = jest.fn();
@@ -10,9 +11,6 @@ jest.mock('../renderer/lib/api', () => ({
 }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
-}));
-jest.mock('../renderer/components/settings/WorkspaceModelSelector', () => ({
-  WorkspaceModelSelector: () => null,
 }));
 
 const setWorkspaces = jest.fn();
@@ -31,6 +29,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.removeItem(SESSION_DEFAULTS_KEY);
   jest.clearAllMocks();
 });
 
@@ -72,5 +71,46 @@ describe('SessionsSettings branch prefix', () => {
     render(<SessionsSettings />);
     fireEvent.blur(field());
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionsSettings model', () => {
+  const modelSelect = () => screen.getByLabelText('Default model') as HTMLSelectElement;
+  const optionIds = () => Array.from(modelSelect().options).map((o) => o.value);
+
+  it.each(['claude', 'codex'] as const)('lists only %s models', (agent) => {
+    window.localStorage.setItem(SESSION_DEFAULTS_KEY, JSON.stringify({ agent }));
+    render(<SessionsSettings />);
+    const ids = optionIds();
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids).toEqual(FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === agent).map((m) => m.id));
+    expect(modelSelect().value).toBe(defaultFleetModelForAgent(agent));
+  });
+
+  it('switches the list when the agent changes', () => {
+    render(<SessionsSettings />);
+    expect(optionIds().every((id) => fleetAgentForModel(id) === 'claude')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Default agent'), { target: { value: 'codex' } });
+    expect(optionIds().every((id) => fleetAgentForModel(id) === 'codex')).toBe(true);
+  });
+
+  it('shows the stored model for the agent and ignores the other vendor', () => {
+    const claude = FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === 'claude').at(-1)!.id;
+    const codex = FLEET_MODELS.find((m) => fleetAgentForModel(m.id) === 'codex')!.id;
+    workspaces = [{ id: 'ws1', name: 'WS', settings: { fleetModel: codex, fleetModels: { claude } } } as unknown as Workspace];
+    render(<SessionsSettings />);
+    expect(modelSelect().value).toBe(claude);
+  });
+
+  it('files the choice under the agent and keeps the other agent', async () => {
+    const codex = FLEET_MODELS.find((m) => fleetAgentForModel(m.id) === 'codex')!.id;
+    const claude = FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === 'claude').at(-1)!.id;
+    workspaces = [{ id: 'ws1', name: 'WS', settings: { fleetModels: { codex } } } as unknown as Workspace];
+    render(<SessionsSettings />);
+    fireEvent.change(modelSelect(), { target: { value: claude } });
+    await waitFor(() =>
+      expect(mockUpdate).toHaveBeenCalledWith('ws1', { settings: { fleetModels: { codex, claude } } }),
+    );
+    await waitFor(() => expect(setWorkspaces).toHaveBeenCalled());
   });
 });
