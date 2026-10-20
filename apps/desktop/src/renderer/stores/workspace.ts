@@ -16,7 +16,6 @@ export type ActivePanel =
   | 'workflows'
   | 'loops'
   | 'code_reviews'
-  | 'mcp_servers'
   | 'workbenches'
   | 'settings';
 
@@ -118,6 +117,7 @@ export type SettingsSection =
   | 'teams'
   | 'appearance'
   | 'developer'
+  | 'mcpServers'
   | 'mcp'
   | 'about';
 

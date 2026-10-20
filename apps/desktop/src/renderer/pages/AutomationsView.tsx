@@ -6,9 +6,8 @@ import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../components/panels/loops/LoopsPanel';
-import { McpServersPanel } from '../components/panels/mcpServers/McpServersPanel';
 
-/** Workflows, Loops and MCP servers behind one tab strip, unchanged inside. */
+/** Workflows and Loops behind one tab strip, unchanged inside. */
 export function AutomationsView({ tab }: { tab: AutomationTab }) {
   const features = useWorkspaceStore((s) => s.features);
   const navigate = useNavigationStore((s) => s.navigate);
@@ -41,7 +40,6 @@ export function AutomationsView({ tab }: { tab: AutomationTab }) {
       <div className="min-h-0 flex-1 overflow-hidden">
         {shown === 'workflows' && <WorkflowsPanel />}
         {shown === 'loops' && <LoopsPanel />}
-        {shown === 'mcp_servers' && <McpServersPanel />}
       </div>
     </div>
   );

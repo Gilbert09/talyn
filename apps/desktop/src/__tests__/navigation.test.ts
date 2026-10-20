@@ -238,7 +238,6 @@ describe('navigation store', () => {
       ['queue', { view: 'prs', tab: 'queue' }],
       ['workflows', { view: 'automations', tab: 'workflows' }],
       ['loops', { view: 'automations', tab: 'loops' }],
-      ['mcp_servers', { view: 'automations', tab: 'mcp_servers' }],
       ['settings', { view: 'settings', section: 'workspace' }],
       ['workbenches', { view: 'home' }],
     ])('setActivePanel(%s) navigates to %p and derives the panel back', (panel, route) => {

@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { Cloud, GitPullRequest, History, Home, Laptop, Settings, Workflow } from 'lucide-react';
-import { codeReviewOffered, workbenchesOffered } from '@talyn/shared';
+import { codeReviewOffered, mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
@@ -33,7 +33,8 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   teams: 'Teams',
   appearance: 'Appearance',
   developer: 'Developer',
-  mcp: 'MCP',
+  mcpServers: 'MCP servers',
+  mcp: 'Talyn MCP server',
   about: 'About',
 };
 
@@ -96,6 +97,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       });
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
+      if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,

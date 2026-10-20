@@ -21,7 +21,7 @@ import { useWorkbenchStore } from './workbenches';
  */
 
 export type PrTab = 'my_prs' | 'reviews' | 'code_reviews' | 'merge_queue' | 'queue';
-export type AutomationTab = 'workflows' | 'loops' | 'mcp_servers';
+export type AutomationTab = 'workflows' | 'loops';
 
 export type Route =
   | { view: 'home' }
@@ -32,7 +32,7 @@ export type Route =
   | { view: 'settings'; section: SettingsSection };
 
 export const PR_TABS: readonly PrTab[] = ['my_prs', 'reviews', 'code_reviews', 'merge_queue', 'queue'];
-export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops', 'mcp_servers'];
+export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops'];
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sessions',
   'agents',
@@ -49,6 +49,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'teams',
   'appearance',
   'developer',
+  'mcpServers',
   'mcp',
   'about',
 ];
@@ -143,7 +144,6 @@ export function routeForPanel(
       return { view: 'prs', tab: panel };
     case 'workflows':
     case 'loops':
-    case 'mcp_servers':
       return { view: 'automations', tab: panel };
     case 'settings':
       return { view: 'settings', section: ctx.settingsSection };

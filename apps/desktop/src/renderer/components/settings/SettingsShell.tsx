@@ -11,6 +11,7 @@ import {
   Keyboard,
   Palette,
   Plug,
+  PlugZap,
   ScanSearch,
   Settings,
   SquareTerminal,
@@ -18,12 +19,13 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { codeReviewOffered } from '@talyn/shared';
+import { codeReviewOffered, mcpServersOffered } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace';
 import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsCard';
 import { InstructionsSettings } from '../panels/InstructionsSettings';
+import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { SkillsSettings } from '../panels/SkillsSettings';
 import { TeamSettings } from '../panels/TeamBilling';
 import { PageHeader } from '../ui/page-header';
@@ -76,6 +78,12 @@ function CodeReviewPage() {
   );
 }
 
+function McpServersPage() {
+  const features = useWorkspaceStore((s) => s.features);
+  if (!mcpServersOffered(features)) return null;
+  return <McpServersPanel />;
+}
+
 function TeamPage() {
   return (
     <SettingsPage title="Team">
@@ -83,6 +91,10 @@ function TeamPage() {
     </SettingsPage>
   );
 }
+
+// Sections that fill the pane and scroll their own body, like the MCP servers
+// panel with its fixed toolbar. The others scroll as one page.
+const FULL_HEIGHT_SECTIONS: ReadonlySet<SettingsSection> = new Set(['mcpServers']);
 
 const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   sessions: SessionsSettings,
@@ -100,6 +112,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   account: AccountSettings,
   appearance: AppearanceSettings,
   developer: DeveloperSettings,
+  mcpServers: McpServersPage,
   mcp: MCPServerSettings,
   about: AboutSettings,
 };
@@ -122,6 +135,10 @@ export function SettingsShell() {
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
         { id: 'skills', icon: Wand2, label: 'Skills' },
+        // Gated in the nav for the reason Code review is, below.
+        ...(mcpServersOffered(features)
+          ? [{ id: 'mcpServers' as const, icon: PlugZap, label: 'MCP servers' }]
+          : []),
       ],
     },
     {
@@ -196,9 +213,13 @@ export function SettingsShell() {
         </nav>
 
         <div className="min-w-0 flex-1 overflow-hidden">
-          <ScrollArea className="h-full">
-            {Body ? <Body /> : null}
-          </ScrollArea>
+          {FULL_HEIGHT_SECTIONS.has(activeSection) ? (
+            <div className="h-full">{Body ? <Body /> : null}</div>
+          ) : (
+            <ScrollArea className="h-full">
+              {Body ? <Body /> : null}
+            </ScrollArea>
+          )}
         </div>
       </div>
     </div>
