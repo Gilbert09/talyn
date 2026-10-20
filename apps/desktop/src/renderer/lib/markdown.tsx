@@ -44,7 +44,7 @@ const FEED: MdClasses = {
 
 const SURFACE: MdClasses = {
   heading: 'text-foreground',
-  fence: 'bg-muted text-foreground',
+  fence: 'border border-border bg-muted/60 text-foreground',
   inlineCode: 'bg-muted',
   link: 'text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300',
   blockquote: 'border-border text-muted-foreground',
@@ -134,6 +134,10 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
         <pre
           className={cn(
             'my-1 max-w-full overflow-x-auto whitespace-pre-wrap rounded p-2 font-mono text-xs [overflow-wrap:anywhere]',
+            // A fence with no language reaches `code` below with no
+            // `language-*` class and gets the inline pill. Inside a block the
+            // pill draws a band behind every line, so the block clears it.
+            '[&_code]:rounded-none [&_code]:bg-transparent [&_code]:p-0',
             c.fence
           )}
         >

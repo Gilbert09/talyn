@@ -200,7 +200,7 @@ function UserMessage({
     <div className="group flex justify-end">
       <div className="max-w-[85%] space-y-1">
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
-          {renderMarkdownish(text)}
+          {renderMarkdownish(text, 'surface')}
         </div>
         {canRevert && (
           <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">

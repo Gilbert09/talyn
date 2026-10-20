@@ -99,7 +99,7 @@ export function PlanCard({
           </span>
         )}
       </div>
-      <div className="min-w-0 px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">{renderMarkdownish(plan)}</div>
+      <div className="min-w-0 px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">{renderMarkdownish(plan, 'surface')}</div>
       {state === 'open' && chat && ops && (
         <div className="flex flex-wrap items-center gap-2 border-t border-border/60 px-3 py-2">
           <Button size="sm" onClick={() => void approve()} disabled={blocked}>

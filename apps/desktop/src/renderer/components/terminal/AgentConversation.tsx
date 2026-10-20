@@ -229,7 +229,7 @@ function TextBlock({ text }: { text: string }) {
     // would be two single-class rules at equal specificity fighting over
     // stylesheet order.
     <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {renderMarkdownish(shown)}
+      {renderMarkdownish(shown, 'surface')}
     </div>
   );
 }
