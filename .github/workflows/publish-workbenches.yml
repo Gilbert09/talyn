@@ -1,7 +1,12 @@
 name: Publish workbenches build
 
-# A signed macOS arm64 build of this branch, published as a GitHub
-# PRE-RELEASE named vX.Y.Z-workbenches.N on every push that changes the app.
+# A signed macOS arm64 build of the tom/workbenches branch, published as a
+# GitHub PRE-RELEASE named vX.Y.Z-workbenches.N. It runs every six hours,
+# half an hour after the stable publish, and builds only when the branch has
+# moved since the last build. "Run workflow" builds the branch at once.
+#
+# This file must be on main: GitHub runs a schedule only from the default
+# branch. The same file is on the branch, so the two copies stay the same.
 #
 # Only an app that already runs a -workbenches build follows these: the
 # updater takes pre-releases only when the app's own version is one, and then
@@ -15,25 +20,18 @@ name: Publish workbenches build
 # To join: install the DMG from the newest workbenches pre-release by hand.
 # To leave: install the stable DMG by hand.
 on:
-  push:
-    branches:
-      - tom/workbenches
-    paths:
-      - 'apps/desktop/**'
-      - 'packages/shared/**'
-      - 'packages/client/**'
-      - 'package-lock.json'
-      - '.github/workflows/publish-workbenches.yml'
+  schedule:
+    - cron: '30 */6 * * *'
   workflow_dispatch:
 
-# The newest push wins. A cancelled run leaves at most a draft, which nothing
-# can see.
+# One build at a time. A second run waits, and then finds nothing new to build.
 concurrency:
   group: publish-workbenches
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CHANNEL: workbenches
+  BRANCH: tom/workbenches
 
 jobs:
   publish:
@@ -43,16 +41,40 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout git repo
+      - name: Checkout the branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+
+      - name: Skip when the branch has not moved
+        # A scheduled run builds only a commit that has no build yet. The
+        # newest -workbenches release (drafts too) records its commit as the
+        # release target. "Run workflow" always builds.
+        id: changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          LAST=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=50" \
+            --jq '[.[] | select(.tag_name | contains("-workbenches."))] | sort_by(.created_at) | last | .target_commitish // ""')
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$LAST" = "$SHA" ]; then
+            echo "No new commits on $BRANCH since the last build ($SHA)."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building $SHA (last build: ${LAST:-none})."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Node and NPM
+        if: steps.changed.outputs.build == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Resolve the version
+        if: steps.changed.outputs.build == 'true'
         # The next stable patch, then the channel and the run number. The run
         # number only goes up, so each build is newer than the one before it.
         id: version
@@ -70,10 +92,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
+        if: steps.changed.outputs.build == 'true'
         run: |
           npm install
 
       - name: Stamp the release version
+        if: steps.changed.outputs.build == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -86,11 +110,13 @@ jobs:
           "
 
       - name: Build workspace packages
+        if: steps.changed.outputs.build == 'true'
         run: |
           npm run build -w @talyn/shared
           npm run build -w @talyn/client
 
       - name: Build desktop app
+        if: steps.changed.outputs.build == 'true'
         env:
           TALYN_API_URL: https://prod.talyn.dev
           TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL }}
@@ -101,6 +127,7 @@ jobs:
           npm run build -w @talyn/desktop
 
       - name: Select Xcode 26 for actool
+        if: steps.changed.outputs.build == 'true'
         # See publish.yml: the afterPack hook needs actool 26+.
         run: |
           XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
@@ -111,6 +138,7 @@ jobs:
           sudo xcode-select -s "$XCODE"
 
       - name: Import the signing certificate
+        if: steps.changed.outputs.build == 'true'
         # The same keychain setup as publish.yml, which explains why
         # electron-builder must not import the certificate itself.
         env:
@@ -142,6 +170,7 @@ jobs:
           echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Publish the build
+        if: steps.changed.outputs.build == 'true'
         # A draft until the files are up, as in publish.yml. The channel is set
         # explicitly so the update file is workbenches-mac.yml, the name the
         # updater asks for.
@@ -163,6 +192,7 @@ jobs:
             -c.electronDist="$ELECTRON_DIST"
 
       - name: Mark the pre-release
+        if: steps.changed.outputs.build == 'true'
         # Stays a DRAFT until the repository variable WORKBENCHES_BUILDS_PUBLIC
         # is 'true'. An installed stable app from before the updater fix, on
         # the "nightly" channel, installs the newest release of ANY kind, so a
@@ -173,16 +203,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.changed.outputs.sha }}
           PUBLIC: ${{ vars.WORKBENCHES_BUILDS_PUBLIC }}
         run: |
           DRAFT=true
           [ "$PUBLIC" = "true" ] && DRAFT=false
           gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --draft="$DRAFT" --prerelease --latest=false --target "$GITHUB_SHA" \
-            --notes "Workbenches branch build from $GITHUB_SHA. Not a stable release."
+            --draft="$DRAFT" --prerelease --latest=false --target "$SHA" \
+            --notes "Workbenches branch build from $SHA. Not a stable release."
           echo "Published v$VERSION (draft=$DRAFT)"
 
       - name: Remove old builds
+        if: steps.changed.outputs.build == 'true'
         # Keep the five newest. The update feed lists only recent releases, and
         # old branch builds are clutter on the releases page.
         continue-on-error: true
