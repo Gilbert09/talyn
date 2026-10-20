@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   aliveMarkerScript,
+  FLEET_PROXY_PRELUDE,
   frameCommand,
   FrameDemux,
   GUEST_MAX_LINE_BYTES,
@@ -28,6 +30,29 @@ describe('exec framing', () => {
     expect(f.env).toEqual({ A: '1', TALYN_SCRIPT: 'echo "$HOME"; exit 3' });
     expect(f.cmd[2]).toContain(`@@talyn:${f.nonce}:${mode === 'stream' ? 'o' : 'O'} `);
     expect(f.cmd[2]).toContain(pidFileFor('talyn-turn-abc'));
+  });
+
+  it.each(['stream', 'capture'] as const)('a %s command sets FLEET_PROXY_URL before the script runs', (mode) => {
+    const f = frameCommand('fleet-publish --help', { mode });
+    const lines = f.cmd[2].split('\n');
+    expect(lines.indexOf(FLEET_PROXY_PRELUDE)).toBeGreaterThan(-1);
+    expect(lines.indexOf(FLEET_PROXY_PRELUDE)).toBeLessThan(lines.findIndex((l) => l.includes('bash -c "$s"')));
+  });
+
+  it.each<[string, Record<string, string>, string]>([
+    ['session box: taken from HTTP_PROXY', { HTTP_PROXY: 'http://127.0.0.1:8080' }, 'http://127.0.0.1:8080'],
+    ['box already sets it: kept', { HTTP_PROXY: 'http://127.0.0.1:8080', FLEET_PROXY_URL: 'http://10.0.0.1:9' }, 'http://10.0.0.1:9'],
+    ['empty value counts as unset', { HTTP_PROXY: 'http://127.0.0.1:8080', FLEET_PROXY_URL: '' }, 'http://127.0.0.1:8080'],
+    ['no proxy at all: stays unset', {}, '<unset>'],
+    ['empty HTTP_PROXY: stays unset', { HTTP_PROXY: '' }, '<unset>'],
+  ])('the proxy prelude: %s', (_name, env, expected) => {
+    const res = spawnSync(
+      'sh',
+      ['-c', `${FLEET_PROXY_PRELUDE}\nsh -c 'printf %s "\${FLEET_PROXY_URL-<unset>}"'`],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } },
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe(expected);
   });
 
   it('gives every exec a different nonce', () => {
