@@ -123,6 +123,37 @@ describe('action prompts', () => {
     expect(DEFAULT_WORKBENCH_ACTION_PROMPTS[action]).toContain('fleet proxy');
   });
 
+  it.each(actions.flatMap((a) =>
+    ['GH013', 'fleet-publish --branch', '--base origin/<branch>', 'git reset --hard origin/<branch>', 'A failed push is not a finished task'].map(
+      (needle) => [a, needle] as const,
+    ),
+  ))('%s tells a sandbox agent what to do when a push needs signatures: %s', (action, needle) => {
+    expect(DEFAULT_WORKBENCH_ACTION_PROMPTS[action]).toContain(needle);
+  });
+
+  it.each([
+    'fleet-publish --branch tokyo-merge-',
+    '--message "Merge main into tokyo" --base origin/main',
+    'git rev-parse origin/<that branch>',
+    'fleet-publish --move-branch tokyo --oid <the full sha>',
+    'git push origin --delete <that branch>',
+    'git reset --hard origin/tokyo',
+    'except for step 5',
+  ])('resolve_conflicts publishes a signed merge with: %s', (needle) => {
+    const s = resolveWorkbenchActionPrompt('resolve_conflicts', null, { baseBranch: 'main', branch: 'tokyo' });
+    expect(s).toContain(needle);
+  });
+
+  it('resolve_conflicts tries a plain push before fleet-publish, and moves the branch only after publishing', () => {
+    const s = resolveWorkbenchActionPrompt('resolve_conflicts', null, { baseBranch: 'main', branch: 'tokyo' });
+    const push = s.indexOf('push the current branch with `git push`');
+    const publish = s.indexOf('fleet-publish --branch tokyo-merge-');
+    const move = s.indexOf('fleet-publish --move-branch tokyo');
+    expect(push).toBeGreaterThan(-1);
+    expect(publish).toBeGreaterThan(push);
+    expect(move).toBeGreaterThan(publish);
+  });
+
   it.each<[string, Parameters<typeof resolveWorkbenchActionPrompt>[1], Record<string, string>, (s: string) => void]>([
     ['default, variables filled', null, { baseBranch: 'main', branch: 'tokyo' }, (s) => {
       expect(s).toContain('git merge origin/main');

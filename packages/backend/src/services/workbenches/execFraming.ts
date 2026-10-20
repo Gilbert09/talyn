@@ -56,6 +56,18 @@ export function pidFileFor(marker: string): string {
   return `${PID_DIR}/${safeMarker(marker)}.pid`;
 }
 
+/**
+ * Gives every framed command `FLEET_PROXY_URL`, taken from the box's own
+ * `HTTP_PROXY` (the fleet sets both to the credential proxy).
+ *
+ * `fleet-publish` needs it, and it is the only way to push to a repository
+ * that requires signed commits. The fleet sets it for a task run only, so in a
+ * session box the tool stopped with "FLEET_PROXY_URL is not set". A value the
+ * box already has wins.
+ */
+export const FLEET_PROXY_PRELUDE =
+  'if [ -z "${FLEET_PROXY_URL:-}" ] && [ -n "${HTTP_PROXY:-}" ]; then export FLEET_PROXY_URL="$HTTP_PROXY"; fi';
+
 export type FrameMode = 'stream' | 'capture';
 
 export interface FramedCommand {
@@ -92,6 +104,7 @@ export function frameCommand(
   const x = tag(nonce, 'x');
   const lines = [
     `s=$TALYN_SCRIPT; unset TALYN_SCRIPT`,
+    FLEET_PROXY_PRELUDE,
     `mkdir -p ${PID_DIR} 2>/dev/null || true`,
     opts.marker ? `echo $$ > ${pidFileFor(marker)} 2>/dev/null || true` : ':',
     `rc_file=$(mktemp)`,
