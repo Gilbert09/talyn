@@ -12,6 +12,7 @@ import {
   type WorkbenchTodo,
 } from '@talyn/shared';
 import type { PRRow, PRState, PRSummaryShape } from './api';
+import { isInjectedUserMessage } from './skillInstructions';
 
 /**
  * Pure helpers for the Workbenches panel. Nothing here touches React, the
@@ -48,11 +49,12 @@ export function makeUserMessageEvent(text: string, attachments?: WorkbenchAttach
  * Accepts the shape above, a bare string `content`, and a
  * `talyn_user_message` event with a top-level `text` — whichever the runtime
  * that stored it chose. A user event that carries only `tool_result` blocks is
- * the agent's own tool output, not a message.
+ * the agent's own tool output, not a message. Nor is text the harness injected,
+ * such as a launched skill's SKILL.md: the Skill call draws that.
  */
 export function userMessageText(event: AgentEvent): string | null {
   if (event.type === 'talyn_user_message' && typeof event.text === 'string') return event.text;
-  if (event.type !== 'user') return null;
+  if (event.type !== 'user' || isInjectedUserMessage(event)) return null;
   const content = event.message?.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return null;

@@ -8,6 +8,7 @@ import React, {
 import { ChevronDown, ChevronRight, GitPullRequest, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
+import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
   buildBlocks,
@@ -78,6 +79,7 @@ export function AgentConversation({
     () => groupToolRuns(mergeToolBlocks(buildBlocks(transcript ?? []))),
     [transcript]
   );
+  const skills = useMemo(() => skillInstructionsByToolId(transcript ?? []), [transcript]);
 
   if (blocks.length === 0) {
     // Task may have events but none render as blocks yet (the very
@@ -106,6 +108,7 @@ export function AgentConversation({
           block={block}
           envName={envName}
           scopeId={scopeId}
+          skills={skills}
         />
       ))}
     </div>
@@ -133,10 +136,17 @@ export function AgentBlocks({
     const all = groupToolRuns(mergeToolBlocks(buildBlocks(events)));
     return hideCompletedResults ? all.filter((b) => b.kind !== 'result' || b.isError) : all;
   }, [events, hideCompletedResults]);
+  const skills = useMemo(() => skillInstructionsByToolId(events), [events]);
   return (
     <>
       {blocks.map((block) => (
-        <BlockView key={`${scopeId ?? ''}:${block.key}`} block={block} envName={envName} scopeId={scopeId} />
+        <BlockView
+          key={`${scopeId ?? ''}:${block.key}`}
+          block={block}
+          envName={envName}
+          scopeId={scopeId}
+          skills={skills}
+        />
       ))}
     </>
   );
@@ -151,22 +161,32 @@ export function AgentBlocks({
 // ---------------------------------------------------------------------------
 
 
+/** Which of a block's tool calls have skill instructions, and how long they are. */
+function skillsSignature(block: GroupedBlock, skills: Map<string, string>): string {
+  const tools = block.kind === 'tool' ? [block] : block.kind === 'tool_group' ? block.tools : [];
+  return tools.map((t) => skills.get(t.toolId)?.length ?? 0).join(',');
+}
+
 const BlockView = React.memo(
   BlockViewImpl,
   (prev, next) =>
     prev.envName === next.envName &&
     prev.scopeId === next.scopeId &&
-    groupedBlockSignature(prev.block) === groupedBlockSignature(next.block)
+    groupedBlockSignature(prev.block) === groupedBlockSignature(next.block) &&
+    skillsSignature(prev.block, prev.skills) === skillsSignature(next.block, next.skills)
 );
 
 function BlockViewImpl({
   block,
   envName,
+  skills,
 }: {
   block: GroupedBlock;
   envName?: string;
   /** Whose transcript this block belongs to; see blockSignature. */
   scopeId?: string;
+  /** The text each launched skill added, by Skill tool call id. */
+  skills: Map<string, string>;
 }) {
   switch (block.kind) {
     case 'text':
@@ -181,6 +201,7 @@ function BlockViewImpl({
           output={block.output}
           isError={block.isError}
           settled={block.settled}
+          skillInstructions={skills.get(block.toolId)}
         />
       );
     case 'tool_group':
@@ -190,6 +211,7 @@ function BlockViewImpl({
           summary={block.summary}
           running={block.running}
           isError={block.isError}
+          skills={skills}
         />
       );
     case 'permission':
@@ -303,12 +325,15 @@ function ToolBlockView({
   output,
   isError,
   settled,
+  skillInstructions,
 }: {
   name: string;
   input: unknown;
   output?: unknown;
   isError: boolean;
   settled: boolean;
+  /** The SKILL.md text a Skill call added to the conversation. */
+  skillInstructions?: string;
 }) {
   const described = describeTool(name, input);
   const { label, isCommand } = described;
@@ -399,6 +424,33 @@ function ToolBlockView({
           </pre>
         </div>
       )}
+      {skillInstructions && <SkillInstructions text={skillInstructions} />}
+    </div>
+  );
+}
+
+/**
+ * The skill's own instructions, closed by default. Claude Code adds them to
+ * the conversation as a `user` message, but the person did not send them.
+ */
+function SkillInstructions({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1 ml-[2px] border-l border-border pl-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Skill instructions
+      </button>
+      {open && (
+        <div className="mt-1 max-h-72 overflow-auto rounded bg-muted px-3 py-2 pr-2 font-sans text-[13px] text-foreground [overflow-wrap:anywhere]">
+          {renderMarkdownish(text, 'surface')}
+        </div>
+      )}
     </div>
   );
 }
@@ -422,11 +474,13 @@ function ToolGroupView({
   summary,
   running,
   isError,
+  skills,
 }: {
   tools: ToolBlock[];
   summary: string;
   running: boolean;
   isError: boolean;
+  skills: Map<string, string>;
 }) {
   // Open when there is something to see: a failure to read, or work still
   // happening. `useState` takes this once, at mount, so a group that finishes
@@ -469,6 +523,7 @@ function ToolGroupView({
               output={t.output}
               isError={t.isError}
               settled={t.settled}
+              skillInstructions={skills.get(t.toolId)}
             />
           ))}
         </div>
