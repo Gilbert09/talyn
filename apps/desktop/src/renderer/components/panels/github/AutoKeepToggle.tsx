@@ -21,10 +21,11 @@ import { toast } from '../../../stores/toast';
  * auto-keep-mergeable watcher armed, so a cloud agent clears conflicts and red
  * CI on its own.
  *
- * It lives in the My PRs header rather than only in Settings because that is
- * where you feel the absence of it: you are looking at the list of your own red
- * PRs. Same setting either place (`workspace.settings.defaultAutoKeepMergeable`),
- * so flipping it here shows up there.
+ * It is in the My PRs "⋯" menu as well as in Settings, because that is where
+ * you feel the absence of it: you are looking at the list of your own red PRs.
+ * Both places change one setting (`workspace.settings.defaultAutoKeepMergeable`).
+ * The menu uses `useAutoKeepDefault`; `AutoKeepToggle` is the same logic as a
+ * stand-alone button.
  *
  * **Turning it ON is an Unlimited feature, and the gate is on the transition.**
  * The backend refuses an OFF→ON change for a free plan with a 402
@@ -68,7 +69,12 @@ function markExplained(): void {
   }
 }
 
-export function AutoKeepToggle() {
+/**
+ * The state and actions of the setting, for a control in any place. The
+ * explainer is returned as a node and the caller draws it. A control inside a
+ * menu cannot hold the dialog itself, because the menu unmounts when it closes.
+ */
+export function useAutoKeepDefault() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
@@ -145,14 +151,70 @@ export function AutoKeepToggle() {
     else void apply(true);
   }
 
-  if (!currentWorkspaceId) return null;
+  const explainer = (
+    <Dialog open={explaining} onOpenChange={(o) => !o && setExplaining(false)}>
+      <DialogContent onClose={() => setExplaining(false)}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            Keep new PRs green
+          </DialogTitle>
+          <DialogDescription>
+            Every PR you open in this workspace gets watched from the moment Talyn sees
+            it — no flagging them one at a time.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-2 text-[13px]">
+          <p className="text-muted-foreground">
+            When a watched PR falls behind its base, hits a conflict, or goes red, Talyn
+            sends a cloud agent to fix it and push the fix to your branch. It keeps doing
+            that until the PR merges.
+          </p>
+          <ul className="space-y-1.5 text-xs text-muted-foreground">
+            <li>
+              <span className="font-medium text-foreground">Only PRs you author.</span>{' '}
+              Never one you are just reviewing — fixing pushes commits, and someone
+              else&apos;s branch is not yours to push to.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">It spends agent credits.</span>{' '}
+              Runs execute on the cloud provider you connected, under your account, one
+              per PR that needs fixing.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Per PR still works.</span> You
+              can arm or disarm any individual PR from its detail panel, whatever this is
+              set to.
+            </li>
+          </ul>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setExplaining(false)}>
+            Cancel
+          </Button>
+          <Button data-attr="auto-keep-explainer-confirm" onClick={confirmFromExplainer}>
+            {locked ? 'See Unlimited' : 'Turn it on'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  return { workspaceId: currentWorkspaceId, enabled, locked, saving, toggle: onClick, explainer };
+}
+
+export function AutoKeepToggle() {
+  const { workspaceId, enabled, locked, saving, toggle, explainer } = useAutoKeepDefault();
+  if (!workspaceId) return null;
 
   return (
     <>
       <button
         type="button"
         data-attr="my-prs-auto-keep-toggle"
-        onClick={onClick}
+        onClick={toggle}
         disabled={saving}
         aria-pressed={enabled}
         title={
@@ -206,54 +268,7 @@ export function AutoKeepToggle() {
         )}
       </button>
 
-      <Dialog open={explaining} onOpenChange={(o) => !o && setExplaining(false)}>
-        <DialogContent onClose={() => setExplaining(false)}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-violet-500" />
-              Keep new PRs green
-            </DialogTitle>
-            <DialogDescription>
-              Every PR you open in this workspace gets watched from the moment Talyn sees
-              it — no flagging them one at a time.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3 py-2 text-[13px]">
-            <p className="text-muted-foreground">
-              When a watched PR falls behind its base, hits a conflict, or goes red, Talyn
-              sends a cloud agent to fix it and push the fix to your branch. It keeps doing
-              that until the PR merges.
-            </p>
-            <ul className="space-y-1.5 text-xs text-muted-foreground">
-              <li>
-                <span className="font-medium text-foreground">Only PRs you author.</span>{' '}
-                Never one you are just reviewing — fixing pushes commits, and someone
-                else&apos;s branch is not yours to push to.
-              </li>
-              <li>
-                <span className="font-medium text-foreground">It spends agent credits.</span>{' '}
-                Runs execute on the cloud provider you connected, under your account, one
-                per PR that needs fixing.
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Per PR still works.</span> You
-                can arm or disarm any individual PR from its detail panel, whatever this is
-                set to.
-              </li>
-            </ul>
-          </div>
-
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setExplaining(false)}>
-              Cancel
-            </Button>
-            <Button data-attr="auto-keep-explainer-confirm" onClick={confirmFromExplainer}>
-              {locked ? 'See Unlimited' : 'Turn it on'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {explainer}
     </>
   );
 }

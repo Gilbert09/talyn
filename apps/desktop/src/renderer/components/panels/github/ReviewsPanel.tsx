@@ -26,11 +26,13 @@ import {
   RepoFilter,
   ReviewSortToggle,
   compareByCreated,
+  filterSelectClass,
   prMatchesText,
   sortDirForMode,
   type ReviewSortMode,
 } from './filters';
-import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
+import { cn } from '../../../lib/utils';
+import { PRFilterModal, SavedFilterMenu, useSavedPRFilters } from './savedFilters';
 import { useGitHubActions } from './useGitHubActions';
 import { hiddenReviewCohort, visibleReviewCohort } from './reviewHidden';
 import { useReviewRankingCapture } from './useReviewRankingCapture';
@@ -354,6 +356,26 @@ export function ReviewsPanel() {
         rows={filtered}
         filters={
           <>
+            <SavedFilterMenu
+              filters={savedFilters.filters}
+              activeIds={activeFilterIds}
+              rows={cohort}
+              onToggle={(id) =>
+                setActiveFilterIds((prev) =>
+                  prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+                )
+              }
+              onNew={() => setFilterModal({ open: true, editing: null })}
+              onEdit={(f) => setFilterModal({ open: true, editing: f })}
+            />
+            <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
+            {offerPriority && features?.reviewRankingExport === true && workspaceId && (
+              <ReviewRankingExportButton key={workspaceId} workspaceId={workspaceId} />
+            )}
+          </>
+        }
+        viewControls={
+          <>
             <RepoFilter
               value={repoFilter}
               onChange={setRepoFilter}
@@ -363,7 +385,7 @@ export function ReviewsPanel() {
               <select
                 value={requestedFilter}
                 onChange={(e) => setRequestedFilter(e.target.value)}
-                className="h-7 rounded-md border bg-background px-2 py-0 text-xs leading-7"
+                className={cn(filterSelectClass, requestedFilter !== 'all' && 'text-foreground')}
                 title="Filter by who was requested: you, or one of your teams"
               >
                 <option value="all">Any requested</option>
@@ -382,25 +404,7 @@ export function ReviewsPanel() {
               eventsUntilPersonalized={rankProfile?.eventsUntilPersonalized}
               nEvents={rankProfile?.nEvents}
             />
-            <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
-            {offerPriority && features?.reviewRankingExport === true && workspaceId && (
-              <ReviewRankingExportButton key={workspaceId} workspaceId={workspaceId} />
-            )}
           </>
-        }
-        filtersSecondary={
-          <SavedFilterBar
-            filters={savedFilters.filters}
-            activeIds={activeFilterIds}
-            rows={cohort}
-            onToggle={(id) =>
-              setActiveFilterIds((prev) =>
-                prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-              )
-            }
-            onNew={() => setFilterModal({ open: true, editing: null })}
-            onEdit={(f) => setFilterModal({ open: true, editing: f })}
-          />
         }
         emptyTitle={
           hiddenRows.length > 0 && cohort.length === 0

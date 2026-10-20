@@ -1,7 +1,66 @@
+import type { ReactNode } from 'react';
 import { ArrowUpDown, FilterX, Sparkles } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 export type SortDir = 'asc' | 'desc';
+
+/**
+ * The look every control in the PR filter row shares: borderless until hovered,
+ * so a row of eight controls reads as one bar and not as eight boxes.
+ */
+export const filterControlClass =
+  'inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground';
+
+/** A native select in the same quiet style as {@link filterControlClass}. */
+export const filterSelectClass =
+  'h-7 max-w-[200px] truncate rounded-md border border-transparent bg-transparent py-0 pl-2 pr-7 text-xs leading-7 text-muted-foreground transition-colors hover:border-border hover:text-foreground focus:border-border focus:outline-none';
+
+type ChipTone = 'amber' | 'violet' | 'emerald' | 'sky';
+
+const CHIP_TONE: Record<ChipTone, string> = {
+  amber: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+  violet: 'bg-violet-500/15 text-violet-700 dark:text-violet-400',
+  emerald: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+  sky: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+};
+
+/** A quick on/off filter with its count. Tinted only while it is on. */
+export function ToggleChip({
+  active,
+  onToggle,
+  tone,
+  count,
+  title,
+  dataAttr,
+  children,
+}: {
+  active: boolean;
+  onToggle: () => void;
+  tone: ChipTone;
+  count?: number;
+  title: string;
+  dataAttr?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-attr={dataAttr}
+      aria-pressed={active}
+      onClick={onToggle}
+      title={title}
+      className={cn(
+        'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors',
+        active ? CHIP_TONE[tone] : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+      )}
+    >
+      {children}
+      {count !== undefined && count > 0 && (
+        <span className={cn('tabular-nums', !active && 'opacity-60')}>{count}</span>
+      )}
+    </button>
+  );
+}
 
 /**
  * Reset every filter on the page at once — the repo dropdown, the toggles, the
@@ -14,7 +73,7 @@ export function ClearFiltersButton({ active, onClear }: { active: boolean; onCle
     <button
       type="button"
       onClick={onClear}
-      className="flex items-center gap-1 rounded-md border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+      className={filterControlClass}
       title="Clear every filter on this page, including the search box"
     >
       <FilterX className="h-3 w-3" />
@@ -37,7 +96,8 @@ export function RepoFilter({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-7 rounded-md border bg-background px-2 py-0 text-xs leading-7"
+      className={cn(filterSelectClass, value !== 'all' && 'text-foreground')}
+      title="Show one repository"
     >
       <option value="all">All repos</option>
       {repos.map((r) => (
@@ -55,7 +115,7 @@ export function SortToggle({ sortDir, onToggle }: { sortDir: SortDir; onToggle: 
     <button
       type="button"
       onClick={onToggle}
-      className="flex items-center gap-1 rounded-md border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+      className={filterControlClass}
       title={`Sorted by created date — ${
         sortDir === 'desc' ? 'newest first' : 'oldest first'
       }. Click to flip.`}
@@ -147,14 +207,14 @@ export function ReviewSortToggle({
       data-attr="pr-review-sort-toggle"
       onClick={() => onChange(next)}
       className={cn(
-        'inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs transition-all',
+        'inline-flex h-7 items-center gap-1.5 border px-2.5 text-xs transition-all',
         current === 'priority'
           ? 'rounded-full border-violet-400/50 bg-gradient-to-r from-violet-500/15 via-fuchsia-500/10 to-sky-500/15 ' +
             'font-medium text-violet-700 shadow-[0_0_14px_-3px_rgba(139,92,246,0.55)] ' +
             'hover:shadow-[0_0_18px_-3px_rgba(139,92,246,0.7)] ' +
             'dark:border-violet-400/40 dark:text-violet-200 ' +
             'dark:shadow-[0_0_14px_-4px_rgba(167,139,250,0.5)]'
-          : 'rounded-md text-muted-foreground hover:text-foreground',
+          : 'rounded-md border-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
       )}
       title={title}
     >

@@ -9,7 +9,7 @@
 // give. Within one filter, every criterion ANDs.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Filter, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Check, Filter, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { PRFilterCriteria, PRFilterDefinition, Workspace } from '@talyn/shared';
 import {
   MAX_PR_FILTER_NAME_LENGTH,
@@ -23,6 +23,7 @@ import { toast } from '../../../stores/toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/dialog';
 import { Input } from '../../ui/input';
 import { Button } from '../../ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { cn } from '../../../lib/utils';
 
 /**
@@ -87,9 +88,10 @@ export function useSavedPRFilters() {
 }
 
 /**
- * The saved-filter row: one toggle chip per filter (same look as the "Needs
- * review" toggles above it) plus the "New filter" button. Rendered on its own
- * line under the repo/search row.
+ * The saved-filter list: one row per filter (a toggle with its count, and a
+ * pencil to edit it), then "New filter". It is the body of
+ * {@link SavedFilterMenu}, so the filter row stays one line however many
+ * filters a workspace saves.
  */
 export function SavedFilterBar({
   filters,
@@ -104,7 +106,7 @@ export function SavedFilterBar({
   onToggle: (id: string) => void;
   onNew: () => void;
   onEdit: (f: PRFilterDefinition) => void;
-  /** The page's rows before saved filters are applied — drives the per-chip count. */
+  /** The page's rows before saved filters are applied — drives the per-row count. */
   rows: PRRow[];
 }) {
   const counts = useMemo(() => {
@@ -116,61 +118,98 @@ export function SavedFilterBar({
   }, [filters, rows]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span
-        className="flex items-center gap-1 text-muted-foreground"
-        title={
-          filters.length > 1
-            ? 'Your saved filters. Selecting more than one shows the PRs matching any of them.'
-            : 'Your saved filters — workspace-scoped, so they follow you between clients.'
-        }
-      >
-        <Filter className="h-3 w-3" />
-        Filters
-      </span>
+    <div className="flex flex-col text-xs">
+      {filters.length > 0 && (
+        <p className="px-2 pb-1 pt-0.5 text-[11px] text-muted-foreground">
+          {filters.length > 1 ? 'Saved filters. Pick more than one to match any of them.' : 'Saved filters'}
+        </p>
+      )}
       {filters.map((f) => {
         const active = activeIds.includes(f.id);
         const count = counts.get(f.id) ?? 0;
         return (
-          <span
-            key={f.id}
-            className={cn(
-              'group inline-flex items-center overflow-hidden rounded-md border transition-colors',
-              active
-                ? 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
+          <div key={f.id} className="group flex items-center rounded hover:bg-accent">
             <button
               type="button"
+              role="menuitemcheckbox"
+              aria-checked={active}
               onClick={() => onToggle(f.id)}
-              className="max-w-[220px] truncate px-2 py-1"
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
               title={`${describeCriteria(f.criteria)} — ${count} matching PR${count === 1 ? '' : 's'} on this page`}
             >
-              {f.name}
-              <span className="ml-1 opacity-70">{count}</span>
+              <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
+              </span>
+              <span className="truncate">{f.name}</span>
+              <span className="ml-auto tabular-nums text-muted-foreground">{count}</span>
             </button>
             <button
               type="button"
               onClick={() => onEdit(f)}
-              className="px-1.5 py-1 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-70"
+              className="px-2 py-1.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
               title={`Edit "${f.name}"`}
             >
               <Pencil className="h-3 w-3" />
             </button>
-          </span>
+          </div>
         );
       })}
+      {filters.length > 0 && <div className="-mx-1 my-1 h-px bg-border" />}
       <button
         type="button"
         onClick={onNew}
-        className="flex items-center gap-1 rounded-md border border-dashed px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+        className="flex items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
         title="Create a saved filter for this workspace"
       >
-        <Plus className="h-3 w-3" />
+        <Plus className="h-3.5 w-3.5" />
         New filter
       </button>
     </div>
+  );
+}
+
+/**
+ * The "Filters" button in the filter row. It names what is on (one filter's
+ * name, or how many), and opens {@link SavedFilterBar}. It closes before the
+ * editor opens, so the dialog is not drawn under the pop-up.
+ */
+export function SavedFilterMenu(props: React.ComponentProps<typeof SavedFilterBar>) {
+  const [open, setOpen] = useState(false);
+  const active = props.filters.filter((f) => props.activeIds.includes(f.id));
+  const label =
+    active.length === 0 ? 'Filters' : active.length === 1 ? active[0].name : `${active.length} filters`;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-attr="pr-saved-filters"
+          className={cn(
+            'inline-flex h-7 max-w-[200px] items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors',
+            active.length > 0
+              ? 'bg-sky-500/15 text-sky-700 dark:text-sky-400'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+          )}
+          title="Your saved filters. They belong to the workspace, so they follow you between clients."
+        >
+          <Filter className="h-3 w-3 shrink-0" />
+          <span className="truncate">{label}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-1">
+        <SavedFilterBar
+          {...props}
+          onNew={() => {
+            setOpen(false);
+            props.onNew();
+          }}
+          onEdit={(f) => {
+            setOpen(false);
+            props.onEdit(f);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 

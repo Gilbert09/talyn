@@ -1,18 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Sparkles } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
 import { prMatchesAnyFilter } from '@talyn/shared';
 import { taskCloudProvider } from '../../../lib/providerMeta';
-import { cn } from '../../../lib/utils';
-import { Button } from '../../ui/button';
+import { DropdownMenuCheckboxItem, DropdownMenuItem } from '../../ui/dropdown-menu';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, isNeedsAttention, isAwaitingReview, isReadyToMerge } from './prTableShared';
-import { ClearFiltersButton, RepoFilter, SortToggle, prMatchesText, type SortDir } from './filters';
-import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
+import { ClearFiltersButton, RepoFilter, SortToggle, ToggleChip, prMatchesText, type SortDir } from './filters';
+import { PRFilterModal, SavedFilterMenu, useSavedPRFilters } from './savedFilters';
 import { WatchPRModal } from './WatchPRModal';
-import { AutoKeepToggle } from './AutoKeepToggle';
+import { useAutoKeepDefault } from './AutoKeepToggle';
 import { buildStackedRows } from './stacks';
 import { useGitHubActions } from './useGitHubActions';
 
@@ -31,6 +30,7 @@ export function MyPRsPanel() {
   const rows = usePullRequestStore((s) => s.rows);
   const viewerLogin = usePullRequestStore((s) => s.viewerLogin);
   const actions = useGitHubActions();
+  const autoKeep = useAutoKeepDefault();
 
   const [repoFilter, setRepoFilter] = useState('all');
   const [needsAttention, setNeedsAttention] = useState(false);
@@ -153,102 +153,98 @@ export function MyPRsPanel() {
         onSearch={setSearch}
         rows={ordered}
         stackMeta={stackMeta}
-        headerActions={
+        menuItems={
           <>
-            <AutoKeepToggle />
-            <Button
-              size="sm"
-              variant="ghost"
+            <DropdownMenuItem
               data-attr="my-prs-add-pr"
-              onClick={() => setWatchModalOpen(true)}
-              title="Track any PR by its GitHub link — it doesn't have to be yours"
+              onSelect={() => setWatchModalOpen(true)}
+              title="Track any PR by its GitHub link. It does not have to be yours."
             >
               <Plus className="h-3.5 w-3.5" />
-              Add PR
-            </Button>
+              Add a PR by link…
+            </DropdownMenuItem>
+            {autoKeep.workspaceId && (
+              <DropdownMenuCheckboxItem
+                data-attr="my-prs-auto-keep-toggle"
+                checked={autoKeep.enabled}
+                disabled={autoKeep.saving}
+                onSelect={() => autoKeep.toggle()}
+                title="A cloud agent clears conflicts and red CI on every PR you open"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                Keep new PRs green
+                {autoKeep.locked && (
+                  <span className="ml-auto rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
+                    Unlimited
+                  </span>
+                )}
+              </DropdownMenuCheckboxItem>
+            )}
           </>
         }
         filters={
+          <>
+            <ToggleChip
+              active={needsAttention}
+              onToggle={() => setNeedsAttention((v) => !v)}
+              tone="amber"
+              count={attentionCount}
+              title="Only show PRs with blocking issues (conflicts, changes requested, failing checks)"
+            >
+              Needs attention
+            </ToggleChip>
+            <ToggleChip
+              active={needsReview}
+              onToggle={() => setNeedsReview((v) => !v)}
+              tone="violet"
+              count={reviewCount}
+              title="Only show PRs you opened that are still waiting on a review"
+            >
+              Needs review
+            </ToggleChip>
+            <ToggleChip
+              active={readyToMerge}
+              onToggle={() => setReadyToMerge((v) => !v)}
+              tone="emerald"
+              count={readyCount}
+              title="Only show PRs that are fully ready to merge (approved or no review needed, checks green, no conflicts)"
+            >
+              Ready to merge
+            </ToggleChip>
+            <ToggleChip
+              active={watchingOnly}
+              onToggle={() => setWatchingOnly((v) => !v)}
+              tone="sky"
+              count={watchingCount}
+              dataAttr="my-prs-watching-filter"
+              title="Only show PRs you added manually to track"
+            >
+              Watching
+            </ToggleChip>
+            <SavedFilterMenu
+              filters={savedFilters.filters}
+              activeIds={activeFilterIds}
+              rows={cohort}
+              onToggle={(id) =>
+                setActiveFilterIds((prev) =>
+                  prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+                )
+              }
+              onNew={() => setFilterModal({ open: true, editing: null })}
+              onEdit={(f) => setFilterModal({ open: true, editing: f })}
+            />
+            <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
+          </>
+        }
+        viewControls={
           <>
             <RepoFilter
               value={repoFilter}
               onChange={setRepoFilter}
               repos={repositories.map((r) => ({ id: r.id, name: r.fullName }))}
             />
-            <button
-              type="button"
-              onClick={() => setNeedsAttention((v) => !v)}
-              className={cn(
-                'rounded-md border px-2 py-1 transition-colors',
-                needsAttention
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Only show PRs with blocking issues (conflicts, changes requested, failing checks)"
-            >
-              Needs attention
-              {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
-            </button>
-            <button
-              type="button"
-              onClick={() => setNeedsReview((v) => !v)}
-              className={cn(
-                'rounded-md border px-2 py-1 transition-colors',
-                needsReview
-                  ? 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-400'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Only show PRs you opened that are still waiting on a review"
-            >
-              Needs review
-              {reviewCount > 0 && <span className="ml-1">{reviewCount}</span>}
-            </button>
-            <button
-              type="button"
-              onClick={() => setReadyToMerge((v) => !v)}
-              className={cn(
-                'rounded-md border px-2 py-1 transition-colors',
-                readyToMerge
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Only show PRs that are fully ready to merge (approved or no review needed, checks green, no conflicts)"
-            >
-              Ready to merge
-              {readyCount > 0 && <span className="ml-1">{readyCount}</span>}
-            </button>
-            <button
-              type="button"
-              data-attr="my-prs-watching-filter"
-              onClick={() => setWatchingOnly((v) => !v)}
-              className={cn(
-                'rounded-md border px-2 py-1 transition-colors',
-                watchingOnly
-                  ? 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Only show PRs you added manually to track"
-            >
-              Watching
-              {watchingCount > 0 && <span className="ml-1">{watchingCount}</span>}
-            </button>
             <SortToggle sortDir={sortDir} onToggle={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} />
-            <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
           </>
-        }
-        filtersSecondary={
-          <SavedFilterBar
-            filters={savedFilters.filters}
-            activeIds={activeFilterIds}
-            rows={cohort}
-            onToggle={(id) =>
-              setActiveFilterIds((prev) =>
-                prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-              )
-            }
-            onNew={() => setFilterModal({ open: true, editing: null })}
-            onEdit={(f) => setFilterModal({ open: true, editing: f })}
-          />
         }
       >
         {({ selectedId, onSelect }) => (
@@ -288,6 +284,7 @@ export function MyPRsPanel() {
         rows={cohort}
       />
       <WatchPRModal open={watchModalOpen} onOpenChange={setWatchModalOpen} />
+      {autoKeep.explainer}
     </>
   );
 }

@@ -1,11 +1,17 @@
 import React, { useEffect, useRef } from 'react';
-import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest, Loader2 } from 'lucide-react';
+import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest, Loader2, MoreHorizontal } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { ScrollArea } from '../../ui/scroll-area';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../../ui/dropdown-menu';
 import { PRDetailSheet } from '../../widgets/PRDetailSheet';
 import { api, type PRRow } from '../../../lib/api';
-import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useGitHubActions } from './useGitHubActions';
@@ -14,8 +20,8 @@ import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 
 /**
  * Shared chrome for the three GitHub pages (My PRs, Reviews, Merge Queue):
- * one toolbar (a page-specific `filters` slot, a common search box with ⌘F,
- * then Copy list / Refresh / Settings), the loading /
+ * one toolbar row (the page's `filters` on the left; its `viewControls`, a
+ * common search box with ⌘F and a "⋯" menu on the right), the loading /
  * error / empty / disconnected states, and the list+detail split layout.
  *
  * The page passes its already-filtered+sorted `rows` and renders the list
@@ -28,18 +34,16 @@ interface GitHubPageShellProps {
   search: string;
   onSearch: (v: string) => void;
   searchPlaceholder?: string;
-  /** Page-specific filter controls, rendered left of the search box. */
+  /** What the page shows: the quick filters and the saved filters, on the left. */
   filters?: React.ReactNode;
+  /** How the page shows it: the repo and the sort, just left of the search box. */
+  viewControls?: React.ReactNode;
   /**
-   * A second filter row, under the first — where the saved-filter chips live.
-   * Its own line because the chip set grows with whatever the user saves, and
-   * wrapping it into the row that carries the search box would push the search
-   * box around every time a filter is added.
+   * Page actions, as `DropdownMenuItem`s at the top of the "⋯" menu, above
+   * Copy list, Refresh and GitHub settings. Actions go in the menu so that the
+   * row only holds controls that change the list.
    */
-  filtersSecondary?: React.ReactNode;
-  /** Page-specific toolbar buttons, rendered left of Copy list. An ACTION, not
-   *  a filter — which is why it sits with the actions and not with the filters. */
-  headerActions?: React.ReactNode;
+  menuItems?: React.ReactNode;
   /** The page's filtered + sorted rows — drives Copy list + empty states. */
   rows: PRRow[];
   /** Per-row stack placement (when the page stacks PRs) — Copy list uses it
@@ -68,8 +72,8 @@ export function GitHubPageShell({
   onSearch,
   searchPlaceholder = 'Search title, repo or #number… (⌘F)',
   filters,
-  filtersSecondary,
-  headerActions,
+  viewControls,
+  menuItems,
   rows,
   stackMeta,
   emptyIcon,
@@ -78,7 +82,7 @@ export function GitHubPageShell({
   listFooter,
   children,
 }: GitHubPageShellProps) {
-  const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const loading = usePullRequestStore((s) => s.loading);
   const error = usePullRequestStore((s) => s.error);
@@ -128,68 +132,70 @@ export function GitHubPageShell({
 
   return (
     <div className="flex h-full flex-col">
-      <div
-        className={cn(
-          'flex shrink-0 flex-wrap items-center gap-2 px-4 py-1 text-xs',
-          filtersSecondary ? '' : 'border-b'
-        )}
-      >
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-4 py-1.5 text-xs">
         {filters}
-        <div className="relative ml-auto flex-1 min-w-[160px] max-w-md">
-          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            ref={searchInputRef}
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder={searchPlaceholder}
-            className="h-7 pl-7 pr-7 text-xs"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => onSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              title="Clear"
-            >
-              <X className="h-3 w-3" />
-            </button>
+        <div className="ml-auto flex items-center gap-1">
+          {/* The list refreshes in the background; the only sign is this. The
+              first load has its own spinner in the list. */}
+          {loading && rows.length > 0 && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Refreshing" />
           )}
-        </div>
-        <div className="flex items-center gap-1">
-          {headerActions}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void copyList(rows, stackMeta)}
-            disabled={rows.length === 0}
-            title="Copy the filtered PRs as a list for Slack"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            Copy list
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="w-7 p-0"
-            onClick={() => void refreshPullRequests()}
-            disabled={loading}
-            title="Refresh list"
-          >
-            <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-7 p-0"
-            onClick={() => setActivePanel('settings')}
-            title="GitHub settings"
-          >
-            <Settings className="h-3.5 w-3.5" />
-          </Button>
+          {viewControls}
+          <div className="relative w-56">
+            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              ref={searchInputRef}
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder={searchPlaceholder}
+              className="h-7 pl-7 pr-7 text-xs"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => onSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                title="Clear"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="w-7 p-0"
+                title="More actions"
+                data-attr="pr-toolbar-more"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              {menuItems}
+              {menuItems && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                disabled={rows.length === 0}
+                onSelect={() => void copyList(rows, stackMeta)}
+                title="Copy the PRs in the list for Slack"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy list
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={loading} onSelect={() => void refreshPullRequests()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Refresh
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => openSettings('pullRequests')}>
+                <Settings className="h-3.5 w-3.5" />
+                Pull request settings
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
-
-      {filtersSecondary && <div className="border-b px-4 pb-1.5">{filtersSecondary}</div>}
 
       {/* The list always keeps its full width; the detail panel floats over its
           right edge as a `contained` overlay (absolute to this relative row)
