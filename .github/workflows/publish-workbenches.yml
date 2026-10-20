@@ -1,0 +1,230 @@
+name: Publish workbenches build
+
+# A signed macOS arm64 build of the tom/workbenches branch, published as a
+# GitHub PRE-RELEASE named vX.Y.Z-workbenches.N. It runs every six hours,
+# half an hour after the stable publish, and builds only when the branch has
+# moved since the last build. "Run workflow" builds the branch at once.
+#
+# This file must be on main: GitHub runs a schedule only from the default
+# branch. The same file is on the branch, so the two copies stay the same.
+#
+# Only an app that already runs a -workbenches build follows these: the
+# updater takes pre-releases only when the app's own version is one, and then
+# only those with the same name (apps/desktop/src/main/updater.ts,
+# followsPrereleases). Stable installs, the website's download button and the
+# stable publish workflow all ignore pre-releases.
+#
+# Builds stay drafts until the WORKBENCHES_BUILDS_PUBLIC variable is 'true'
+# (see "Mark the pre-release").
+#
+# To join: install the DMG from the newest workbenches pre-release by hand.
+# To leave: install the stable DMG by hand.
+on:
+  schedule:
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+# One build at a time. A second run waits, and then finds nothing new to build.
+concurrency:
+  group: publish-workbenches
+  cancel-in-progress: false
+
+env:
+  CHANNEL: workbenches
+  BRANCH: tom/workbenches
+
+jobs:
+  publish:
+    if: github.repository == 'Gilbert09/talyn'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout the branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+
+      - name: Skip when the branch has not moved
+        # A scheduled run builds only a commit that has no build yet. The
+        # newest -workbenches release (drafts too) records its commit as the
+        # release target. "Run workflow" always builds.
+        id: changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          LAST=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=50" \
+            --jq '[.[] | select(.tag_name | contains("-workbenches."))] | sort_by(.created_at) | last | .target_commitish // ""')
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$LAST" = "$SHA" ]; then
+            echo "No new commits on $BRANCH since the last build ($SHA)."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building $SHA (last build: ${LAST:-none})."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Node and NPM
+        if: steps.changed.outputs.build == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve the version
+        if: steps.changed.outputs.build == 'true'
+        # The next stable patch, then the channel and the run number. The run
+        # number only goes up, so each build is newer than the one before it.
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          if [[ "$LATEST" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            BASE="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+          else
+            BASE=0.1.1
+          fi
+          VERSION="$BASE-$CHANNEL.$GITHUB_RUN_NUMBER"
+          echo "Building $VERSION (latest stable: $LATEST)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          npm install
+
+      - name: Stamp the release version
+        if: steps.changed.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd apps/desktop/release/app
+          node -e "
+            const fs = require('fs');
+            const p = require('./package.json');
+            p.version = process.env.VERSION;
+            fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Build workspace packages
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          npm run build -w @talyn/shared
+          npm run build -w @talyn/client
+
+      - name: Build desktop app
+        if: steps.changed.outputs.build == 'true'
+        env:
+          TALYN_API_URL: https://prod.talyn.dev
+          TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL }}
+          TALYN_SUPABASE_ANON_KEY: ${{ vars.TALYN_SUPABASE_ANON_KEY }}
+          TALYN_POSTHOG_KEY: ${{ vars.TALYN_POSTHOG_KEY }}
+          TALYN_POSTHOG_HOST: https://us.i.posthog.com
+        run: |
+          npm run build -w @talyn/desktop
+
+      - name: Select Xcode 26 for actool
+        if: steps.changed.outputs.build == 'true'
+        # See publish.yml: the afterPack hook needs actool 26+.
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "No Xcode 26 on this runner image — the Liquid Glass icon needs actool 26+."
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+
+      - name: Import the signing certificate
+        if: steps.changed.outputs.build == 'true'
+        # The same keychain setup as publish.yml, which explains why
+        # electron-builder must not import the certificate itself.
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/talyn-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          CERT="$RUNNER_TEMP/certificate.p12"
+          echo "$CSC_LINK" | base64 --decode > "$CERT"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          EXISTING=()
+          while IFS= read -r k; do
+            [ -n "$k" ] && EXISTING+=("$k")
+          done < <(security list-keychains -d user | sed 's/[" ]//g')
+          security list-keychains -d user -s "$KEYCHAIN" ${EXISTING[@]+"${EXISTING[@]}"}
+          rm -f "$CERT"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "Developer ID Application"; then
+            echo "No Developer ID Application identity in the keychain after import."
+            exit 1
+          fi
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Publish the build
+        if: steps.changed.outputs.build == 'true'
+        # A draft until the files are up, as in publish.yml. The channel is set
+        # explicitly so the update file is workbenches-mac.yml, the name the
+        # updater asks for.
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EP_DRAFT: 'true'
+        run: |
+          ELECTRON_DIST="$RUNNER_TEMP/electron-dist"
+          node scripts/prefetch-electron.mjs "$ELECTRON_DIST" darwin-arm64
+          cd apps/desktop
+          ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
+          npm exec electron-builder -- --mac --publish always \
+            -c.mac.target.arch=arm64 \
+            -c.publish.channel="$CHANNEL" \
+            -c.electronVersion="$ELECTRON_VERSION" \
+            -c.electronDist="$ELECTRON_DIST"
+
+      - name: Mark the pre-release
+        if: steps.changed.outputs.build == 'true'
+        # Stays a DRAFT until the repository variable WORKBENCHES_BUILDS_PUBLIC
+        # is 'true'. An installed stable app from before the updater fix, on
+        # the "nightly" channel, installs the newest release of ANY kind, so a
+        # public branch build would replace its stable app. Set the variable
+        # only when a stable release with the fix (followsPrereleases) has
+        # shipped and those apps have had time to take it.
+        # --latest=false keeps the stable release as "Latest" for the website.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.changed.outputs.sha }}
+          PUBLIC: ${{ vars.WORKBENCHES_BUILDS_PUBLIC }}
+        run: |
+          DRAFT=true
+          [ "$PUBLIC" = "true" ] && DRAFT=false
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --draft="$DRAFT" --prerelease --latest=false --target "$SHA" \
+            --notes "Workbenches branch build from $SHA. Not a stable release."
+          echo "Published v$VERSION (draft=$DRAFT)"
+
+      - name: Remove old builds
+        if: steps.changed.outputs.build == 'true'
+        # Keep the five newest. The update feed lists only recent releases, and
+        # old branch builds are clutter on the releases page.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq '.[] | select(.tag_name | contains("-workbenches.")) | [.created_at, .tag_name] | @tsv' \
+            | sort -r | tail -n +6 | cut -f2 \
+            | while read -r tag; do
+                echo "Deleting $tag"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done
