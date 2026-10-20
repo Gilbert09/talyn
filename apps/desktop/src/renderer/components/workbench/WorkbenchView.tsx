@@ -13,6 +13,7 @@ import { Composer } from './Composer';
 import { GitPanel } from './GitPanel';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
+import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 
 /**
@@ -62,17 +63,25 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
   }, [chat?.id, chat?.status, markRead]);
 
   const insights = useMemo(() => chatInsights(state.events), [state.events]);
+  const localQueue = useWorkbenchStore((s) => (chat ? s.localQueues[chat.id] : undefined));
+  const queued = (ops.runtime === 'local' ? localQueue : chat?.queuedMessages)?.length ?? 0;
+  const startingHint = isStarting(workbench) ? <StartingHint workbench={workbench} queued={queued} /> : undefined;
 
   return (
     <>
       <div className="min-h-0 flex-1">
         {chat ? (
-          <WorkbenchTranscript chat={chat} events={state.events} loading={state.loading} error={state.error} ops={ops} />
+          <WorkbenchTranscript
+            chat={chat}
+            events={state.events}
+            loading={state.loading}
+            error={state.error}
+            ops={ops}
+            emptyHint={startingHint}
+          />
         ) : (
           <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">
-            {workbench.status === 'provisioning'
-              ? 'The session is getting ready. You can write the first message now.'
-              : 'No chat yet. Send a message to start one.'}
+            {startingHint ?? 'No chat yet. Send a message to start one.'}
           </div>
         )}
       </div>
