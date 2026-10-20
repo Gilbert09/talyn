@@ -205,7 +205,23 @@ describe('chatInsights', () => {
   });
 
   it('is empty for no events', () => {
-    expect(chatInsights([])).toEqual({ todos: null, contextUsage: null });
+    expect(chatInsights([])).toEqual({ todos: null, contextUsage: null, slashCommands: null });
+  });
+
+  it.each([
+    [
+      'takes the latest init and combines commands and skills',
+      [
+        we(1, { type: 'system', subtype: 'init', slash_commands: ['old'] }),
+        we(2, { type: 'system', subtype: 'init', slash_commands: ['/review', 'compact', '/', 42], skills: ['/review', 'deploy', '//audit', ''] }),
+      ],
+      ['audit', 'compact', 'deploy', 'review'],
+    ],
+    ['returns null when the init has neither array', [we(1, { type: 'system', subtype: 'init' })], null],
+    ['keeps an empty list when arrays exist', [we(1, { type: 'system', subtype: 'init', slash_commands: [], skills: [] })], []],
+    ['reads skills without commands', [we(1, { type: 'system', subtype: 'init', skills: ['/test'] })], ['test']],
+  ] as const)('%s', (_name, events, expected) => {
+    expect(chatInsights([...events]).slashCommands).toEqual(expected);
   });
 
   it('takes the latest TodoWrite and the last top-level usage', () => {
@@ -243,10 +259,14 @@ describe('files', () => {
     expect(fuzzyMatchPaths(query, paths)).toEqual(expected);
   });
 
-  it('lists slash commands from .claude/commands, nested ones with a colon', () => {
-    expect(
-      slashCommandsFrom(['.claude/commands/review.md', '.claude/commands/git/sync.md', '.claude/other.md', 'docs/commands/x.md'])
-    ).toEqual(['git:sync', 'review']);
+  it.each([
+    ['commands, including nested commands', ['.claude/commands/review.md', '.claude/commands/git/sync.md'], ['git:sync', 'review']],
+    ['skills at the exact depth', ['.claude/skills/deploy/SKILL.md', '.claude/skills/review/SKILL.md'], ['deploy', 'review']],
+    ['deeper skill paths and other files', ['.claude/skills/deploy/nested/SKILL.md', '.claude/skills/deploy/notes.md', '.claude/skills/SKILL.md'], []],
+    ['duplicate names across files', ['.claude/commands/review.md', '.claude/skills/review/SKILL.md', '.claude/skills/review/SKILL.md'], ['review']],
+    ['unrelated paths', ['.claude/other.md', 'docs/commands/x.md'], []],
+  ])('slashCommandsFrom: %s', (_name, paths, expected) => {
+    expect(slashCommandsFrom(paths)).toEqual(expected);
   });
 });
 

@@ -85,7 +85,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
           </div>
         )}
       </div>
-      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} />
+      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} slashCommands={insights.slashCommands} />
     </>
   );
 }

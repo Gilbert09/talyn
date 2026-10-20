@@ -59,7 +59,7 @@ export function ComposerPopover({
   return (
     <div className="absolute bottom-full left-0 right-0 z-20 mb-1 max-h-60 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg">
       <div className="border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {kind === 'mention' ? 'Files' : 'Commands (.claude/commands)'}
+        {kind === 'mention' ? 'Files' : 'Commands and skills'}
       </div>
       {items.length === 0 ? (
         <p className="px-2 py-2 text-xs text-muted-foreground">

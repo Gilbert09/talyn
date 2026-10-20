@@ -103,6 +103,7 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
 export interface ChatInsights {
   todos: WorkbenchTodo[] | null;
   contextUsage: WorkbenchContextUsage | null;
+  slashCommands: string[] | null;
 }
 
 /**
@@ -136,7 +137,15 @@ export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
   const parser = createClaudeStreamParser();
   const picked = [...new Set([init, todo, result, assistant].filter((i) => i >= 0))].sort((a, b) => a - b);
   for (const i of picked) parser.push(JSON.stringify(events[i].event));
-  return { todos: parser.todos, contextUsage: parser.contextUsage };
+  const initEvent = init >= 0 ? events[init].event : null;
+  const names = [initEvent?.slash_commands, initEvent?.skills];
+  const slashCommands = names.some(Array.isArray)
+    ? [...new Set(names.flatMap((list) => (Array.isArray(list) ? list : []))
+      .filter((name): name is string => typeof name === 'string')
+      .map((name) => name.replace(/^\/+/, ''))
+      .filter(Boolean))].sort()
+    : null;
+  return { todos: parser.todos, contextUsage: parser.contextUsage, slashCommands };
 }
 
 export interface ChatTotals {
@@ -348,14 +357,19 @@ export function fuzzyMatchPaths(query: string, paths: string[], limit = 20): str
     .map((s) => s.path);
 }
 
-/** Slash commands from `.claude/commands/*.md` paths: `name` for `.claude/commands/name.md`. */
+// Claude Code built-ins that work in print mode, shown until the first turn reports the real list.
+export const CLAUDE_HEADLESS_SLASH_COMMANDS = ['compact', 'context', 'cost', 'init', 'pr-comments', 'release-notes', 'review', 'security-review'];
+
+/** Slash commands and skills from Claude files. */
 export function slashCommandsFrom(paths: string[]): string[] {
-  const out: string[] = [];
+  const out = new Set<string>();
   for (const p of paths) {
-    const match = /^\.claude\/commands\/(.+)\.md$/.exec(p);
-    if (match) out.push(match[1].replace(/\//g, ':'));
+    const command = /^\.claude\/commands\/(.+)\.md$/.exec(p);
+    const skill = /^\.claude\/skills\/([^/]+)\/SKILL\.md$/.exec(p);
+    if (command) out.add(command[1].replace(/\//g, ':'));
+    if (skill) out.add(skill[1]);
   }
-  return out.sort();
+  return [...out].sort();
 }
 
 export function formatTokens(n: number): string {

@@ -12,7 +12,7 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { downscaleImage } from '../../lib/imageDownscale';
-import { fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
+import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
@@ -30,12 +30,14 @@ export function Composer({
   ops,
   todos,
   contextUsage,
+  slashCommands,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
   ops: WorkbenchOps;
   todos: WorkbenchTodo[] | null;
   contextUsage: WorkbenchContextUsage | null;
+  slashCommands: string[] | null;
 }) {
   const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
@@ -93,10 +95,16 @@ export function Composer({
   const items = useMemo(() => {
     if (!trigger) return [];
     if (trigger.kind === 'mention') return fuzzyMatchPaths(trigger.query, paths ?? []);
-    const commands = slashCommandsFrom(paths ?? []);
+    const fileCommands = slashCommandsFrom(paths ?? []);
+    const commands = workbench.agent === 'codex'
+      ? fileCommands
+      : [...new Set([...(slashCommands ?? CLAUDE_HEADLESS_SLASH_COMMANDS), ...fileCommands])].sort();
     const q = trigger.query.toLowerCase();
-    return commands.filter((c) => c.toLowerCase().includes(q)).slice(0, 20);
-  }, [trigger, paths]);
+    return commands
+      .filter((c) => c.toLowerCase().includes(q))
+      .sort((a, b) => Number(b.toLowerCase().startsWith(q)) - Number(a.toLowerCase().startsWith(q)))
+      .slice(0, 20);
+  }, [trigger, paths, slashCommands, workbench.agent]);
 
   const updateTrigger = (text: string, caret: number) => {
     const next = findTrigger(text, caret);
