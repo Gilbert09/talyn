@@ -104,8 +104,17 @@ export interface Workbench {
   repositoryId: string;
   /** `owner/name`, denormalised so a list renders without a repository lookup. */
   repoFullName: string;
-  /** A city name, unique per workspace among live workbenches. */
+  /**
+   * A slug, unique per workspace among live workbenches: words from the first
+   * message, or a city. It named the branch and the local worktree directory.
+   */
   name: string;
+  /**
+   * What the app shows, when set: a model-written title from the first
+   * message, or one a person chose. Display only; it never renames the branch.
+   * Null: show `name`. Use {@link workbenchDisplayName}.
+   */
+  title?: string | null;
   branch: string;
   baseBranch: string;
   runtime: WorkbenchRuntimeKind;
@@ -282,7 +291,15 @@ export interface CreateWorkbenchInput {
 }
 
 export interface UpdateWorkbenchInput {
+  /** A rename. Also sets `title` to the new name, so a generated title cannot replace it. */
   name?: string;
+  /** A display title a person chose. Null or blank clears it. */
+  title?: string | null;
+  /**
+   * A model-written title (the local runtime reports it). Applied only while
+   * the session has no title, so it never replaces a person's choice.
+   */
+  generatedTitle?: string;
   settings?: WorkbenchSettings;
 }
 
@@ -485,6 +502,12 @@ export interface WorkbenchLocalBridge {
     attachments?: WorkbenchAttachment[];
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
+  /**
+   * A display title from the first message, by the local agent CLI with a
+   * cheap model. Null on any failure. Optional: an older main process does
+   * not have it.
+   */
+  generateTitle?(input: { agent: WorkbenchAgent; message: string }): Promise<string | null>;
   /** Run argv steps (see `workbenchGit.ts` `GitStep`) in `path`, in order, stopping at the first failure. */
   exec(
     path: string,

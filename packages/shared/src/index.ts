@@ -106,6 +106,7 @@ export * from './sse.js';
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
+export * from './workbenchTitle.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';

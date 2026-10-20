@@ -40,7 +40,8 @@ import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 /** Upload cadence. One request a second keeps a busy turn to a handful of writes. */
 export const LOCAL_UPLOAD_INTERVAL_MS = 1000;
 
-type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'>;
+type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'> &
+  Partial<Pick<typeof api.workbenches, 'update'>>;
 
 export interface LocalControllerDeps {
   bridge: WorkbenchLocalBridge;
@@ -64,6 +65,8 @@ export class LocalTurnController {
   private readonly nextSeq = new Map<string, number>();
   private readonly running = new Map<string, RunningTurn>();
   private readonly reportedSession = new Map<string, string>();
+  /** Workbenches this controller has already asked a title for. One attempt each. */
+  private readonly titled = new Set<string>();
   private pending = new Map<string, WorkbenchEvent[]>();
   private uploadTimer: unknown = null;
   private unsubscribers: Array<() => void> = [];
@@ -190,6 +193,7 @@ export class LocalTurnController {
     await this.checkpoint(path, chat.id, turn);
     this.record(chat.id, turn, makeUserMessageEvent(input.text, input.attachments));
     void this.report(chat.id, { status: 'running' });
+    if (turn === 1) void this.generateTitle(workbench, chat.agent, input.text);
 
     const text = withAttachmentNote(input.text, input.attachments);
     // The transcript keeps `input.text`; the hidden instructions reach the agent only.
@@ -228,6 +232,26 @@ export class LocalTurnController {
         resultText: '',
         cancelled: false,
       });
+    }
+  }
+
+  /**
+   * A display title from the first message, by the local CLI with a cheap
+   * model. Beside the turn, never in its way: any failure keeps the name. The
+   * backend writes it only while the session has no title, so a person's
+   * rename always wins.
+   */
+  async generateTitle(workbench: Workbench, agent: WorkbenchAgent, text: string): Promise<void> {
+    const { bridge, api: workbenches } = this.deps;
+    if (workbench.title || this.titled.has(workbench.id) || !bridge.generateTitle || !workbenches.update) return;
+    this.titled.add(workbench.id);
+    try {
+      const title = await bridge.generateTitle({ agent, message: text });
+      if (!title) return;
+      if (useWorkbenchStore.getState().workbenches[workbench.id]?.title) return;
+      useWorkbenchStore.getState().upsertWorkbench(await workbenches.update(workbench.id, { generatedTitle: title }));
+    } catch {
+      // The name stays.
     }
   }
 

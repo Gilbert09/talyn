@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { Cloud, GitPullRequest, History, Home, Laptop, Settings, Workflow } from 'lucide-react';
-import { codeReviewOffered, mcpServersOffered, workbenchesOffered } from '@talyn/shared';
+import { codeReviewOffered, mcpServersOffered, workbenchDisplayName, workbenchesOffered } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
@@ -127,11 +127,11 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
               return (
                 <CommandItem
                   key={wb.id}
-                  value={`session ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
+                  value={`session ${workbenchDisplayName(wb)} ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
                   onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))}
                 >
                   <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="truncate">{wb.name}</span>
+                  <span className="truncate">{workbenchDisplayName(wb)}</span>
                   <span className="truncate font-mono text-[11px] text-muted-foreground">{wb.repoFullName}</span>
                 </CommandItem>
               );

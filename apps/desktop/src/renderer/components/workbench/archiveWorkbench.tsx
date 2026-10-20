@@ -1,4 +1,4 @@
-import type { Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -24,7 +24,7 @@ export function ArchiveWorkbenchDialog({
   onConfirm,
   onCancel,
 }: {
-  workbench: Pick<Workbench, 'name'>;
+  workbench: Pick<Workbench, 'name' | 'title'>;
   open: boolean;
   busy: boolean;
   onConfirm: () => void;
@@ -33,7 +33,7 @@ export function ArchiveWorkbenchDialog({
   return (
     <ConfirmDialog
       open={open}
-      title={`Archive ${workbench.name}?`}
+      title={`Archive ${workbenchDisplayName(workbench)}?`}
       description="The session moves to History. The branch, its chats and any PR stay, and you can restore it later."
       confirmLabel="Archive"
       busy={busy}

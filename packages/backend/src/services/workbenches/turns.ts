@@ -35,6 +35,7 @@ import {
   sandboxScriptEnv,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
+import { startTitleGeneration } from './title.js';
 import {
   appendEvents,
   claimOrEnqueue,
@@ -297,6 +298,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     );
     await refreshSandboxCredentials(wb);
     if (live.cancelRequested) return cancelledOutcome(events);
+    // The box is awake and has its credentials: name the session beside the turn.
+    if (turn === 1) startTitleGeneration(wb, message.text);
 
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     // A reboot rewrites the agent's home files, so this runs every turn. A

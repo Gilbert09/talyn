@@ -443,3 +443,88 @@ describe('LocalTurnController Create PR', () => {
     expect(bridge.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'next' }));
   });
 });
+
+describe('LocalTurnController session titles', () => {
+  function withTitle(answer: string | null | Error) {
+    const ctx = setup();
+    const generateTitle = jest.fn(async (_input: { agent: string; message: string }) => {
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    const update = jest.fn(async (id: string, patch: { generatedTitle?: string }) => ({
+      ...WB,
+      id,
+      title: patch.generatedTitle ?? null,
+    }));
+    Object.assign(ctx.bridge, { generateTitle });
+    Object.assign(ctx.api, { update });
+    return { ...ctx, generateTitle, update };
+  }
+
+  it('asks for a title on the first turn and shows it, keeping the name and branch', async () => {
+    const { controller, generateTitle, update } = withTitle('Explain Merge Queue');
+    await controller.send(WB, chat(), { text: 'explain how the merge queue works' });
+    await settle();
+    expect(generateTitle).toHaveBeenCalledWith({ agent: 'claude', message: 'explain how the merge queue works' });
+    expect(update).toHaveBeenCalledWith('wb1', { generatedTitle: 'Explain Merge Queue' });
+    expect(useWorkbenchStore.getState().workbenches.wb1).toMatchObject({
+      title: 'Explain Merge Queue',
+      name: 'lisbon',
+      branch: 'lisbon',
+    });
+  });
+
+  it('does not ask after the first turn', async () => {
+    const { controller, generateTitle } = withTitle('Explain Merge Queue');
+    useWorkbenchStore.getState().appendEvents('c1', [{ chatId: 'c1', seq: 1, turn: 1, event: { seq: 1, type: 'user' } as never }]);
+    await controller.send(WB, chat(), { text: 'next' });
+    await settle();
+    expect(generateTitle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no title', null],
+    ['a failed call', new Error('spawn failed')],
+  ])('keeps the name, and still runs the turn, on %s', async (_label, answer) => {
+    const { controller, bridge, update } = withTitle(answer);
+    await controller.send(WB, chat(), { text: 'explain it' });
+    await settle();
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect(update).not.toHaveBeenCalled();
+    expect(useWorkbenchStore.getState().workbenches.wb1.title).toBeUndefined();
+  });
+
+  it('never asks for a session that already has a title', async () => {
+    const { controller, generateTitle } = withTitle('Explain Merge Queue');
+    await controller.send({ ...WB, title: 'My own name' }, chat(), { text: 'explain it' });
+    await settle();
+    expect(generateTitle).not.toHaveBeenCalled();
+  });
+
+  it('does not send a title when a person set one while the call ran', async () => {
+    const { controller, generateTitle, update } = withTitle('Explain Merge Queue');
+    let release!: (v: string) => void;
+    generateTitle.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    const pending = controller.generateTitle(WB, 'claude', 'explain it');
+    useWorkbenchStore.getState().upsertWorkbench({ ...WB, title: 'My own name' });
+    release('Explain Merge Queue');
+    await pending;
+    expect(update).not.toHaveBeenCalled();
+    expect(useWorkbenchStore.getState().workbenches.wb1.title).toBe('My own name');
+  });
+
+  it('asks once per session', async () => {
+    const { controller, generateTitle } = withTitle(null);
+    await controller.generateTitle(WB, 'claude', 'one');
+    await controller.generateTitle(WB, 'claude', 'two');
+    expect(generateTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing with an older main process that has no title call', async () => {
+    const { controller, bridge, api } = setup();
+    await controller.send(WB, chat(), { text: 'explain it' });
+    await settle();
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect('update' in api).toBe(false);
+  });
+});

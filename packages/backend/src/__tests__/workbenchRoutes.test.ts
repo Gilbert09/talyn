@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { claudeTurnLines, FakeFleet, type ExecReply } from './helpers/fakeFleet.js';
+import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 
 /**
@@ -86,7 +86,7 @@ describe('workbench routes', () => {
     fleet.handler = async (script) => {
       const custom = await turn(script);
       if (custom) return custom;
-      if (script.startsWith('claude ') || script.startsWith('codex ')) {
+      if (isAgentTurn(script) || isAgentTurn(script, 'codex')) {
         return { stdout: claudeTurnLines('sess-1', 'done') };
       }
       if (script.includes('git commit-tree')) return { stdout: `${'c'.repeat(40)}\n` };
@@ -411,7 +411,7 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
       const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules'));
-      const turn = fleet.execs.findIndex((e) => e.script.startsWith('claude '));
+      const turn = fleet.execs.findIndex((e) => isAgentTurn(e.script));
       expect(sync).toBeGreaterThan(-1);
       expect(sync).toBeLessThan(turn);
       expect(fleet.execs[sync].req.env?.TALYN_F0).toBe(Buffer.from('be terse').toString('base64'));
@@ -431,7 +431,7 @@ describe('workbench routes', () => {
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: "- fix 'it'", planMode: true, model: 'claude-opus-5', effort: 'high' });
       await idle(chatId);
-      const turn = fleet.execs.find((e) => e.script.startsWith('claude '))!;
+      const turn = fleet.execs.find((e) => isAgentTurn(e.script))!;
       expect(turn.follow).toBe(true);
       expect(turn.script).toContain('--permission-mode plan');
       expect(turn.script).toContain('--model claude-opus-5');
@@ -442,7 +442,7 @@ describe('workbench routes', () => {
       expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
       expect(turn.req.cmd[3]).toBe(turnMarker(chatId));
       // The checkpoint ran before the agent, and the credentials are the box's vendor only.
-      const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : s.startsWith('claude ') ? 'agent' : ''));
+      const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
       expect(order.indexOf('checkpoint')).toBeLessThan(order.indexOf('agent'));
       expect(fleet.credentialPushes[0].creds).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', repo: 'acme/app' });
       const cps = await call('GET', `/workbenches/chats/${chatId}/checkpoints`);
@@ -452,7 +452,7 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'again' });
       await vi.waitFor(async () => expect((await getChat(chatId))?.turnCount).toBe(2));
       await idle(chatId);
-      const second = fleet.execs.filter((e) => e.script.startsWith('claude '))[1];
+      const second = fleet.execs.filter((e) => isAgentTurn(e.script))[1];
       expect(second.script).toContain('--resume sess-1');
       expect(second.script).toContain('--permission-mode bypassPermissions');
       // No effort on the message or the chat runs at High.
@@ -463,7 +463,7 @@ describe('workbench routes', () => {
       const releases: Array<() => void> = [];
       const prompts: string[] = [];
       scriptedFleet((script) => {
-        if (!script.startsWith('claude ')) return null;
+        if (!isAgentTurn(script)) return null;
         prompts.push(script.slice(script.lastIndexOf('-- ') + 3));
         return { stdout: claudeTurnLines('sess-1', 'ok'), hold: new Promise<void>((r) => releases.push(r)) };
       });
@@ -495,7 +495,7 @@ describe('workbench routes', () => {
     it('removes a queued message before it runs', async () => {
       let release!: () => void;
       scriptedFleet((script) =>
-        script.startsWith('claude ')
+        isAgentTurn(script)
           ? { stdout: claudeTurnLines('s', 'ok'), hold: new Promise<void>((r) => (release = r)) }
           : null,
       );
@@ -514,7 +514,7 @@ describe('workbench routes', () => {
 
     it('marks the chat as an error, with the reason in the transcript, when the agent fails', async () => {
       scriptedFleet((script) =>
-        script.startsWith('claude ') ? { stdout: [], stderr: 'Error: invalid API key', exitCode: 1 } : null,
+        isAgentTurn(script) ? { stdout: [], stderr: 'Error: invalid API key', exitCode: 1 } : null,
       );
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
@@ -533,7 +533,7 @@ describe('workbench routes', () => {
       await idle(chatId);
       expect((await getChat(chatId))?.status).toBe('error');
       expect((await getChat(chatId))?.statusMessage).toMatch(/Claude subscription/);
-      expect(fleet.scripts.some((s) => s.startsWith('claude '))).toBe(false);
+      expect(fleet.scripts.some((s) => isAgentTurn(s))).toBe(false);
       // Never a push with the key left out, which the gateway would fill from its own custody.
       expect(fleet.credentialPushes).toEqual([]);
     });
@@ -556,7 +556,7 @@ describe('workbench routes', () => {
       let kill!: () => void;
       let started = false;
       scriptedFleet((script) => {
-        if (script.startsWith('claude ')) {
+        if (isAgentTurn(script)) {
           started = true;
           return { stdout: [claudeTurnLines('sess-9', 'x')[0]], hold: new Promise<void>((_r, reject) => (kill = () => reject(new Error('killed')))) };
         }
@@ -1155,6 +1155,74 @@ describe('workbench routes', () => {
       creds = { claudeToken: 'sk-ant-oat-claude' };
       await call('POST', `/workbenches/${wb.id}/archive`);
       expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'run_not_live' });
+    });
+  });
+  describe('the display title', () => {
+    const titleOf = async (id: string) => (await getWorkbench(id))?.title ?? null;
+
+    it('names a sandbox session from its first message beside the first turn, and keeps the branch', async () => {
+      scriptedFleet((script) => (isTitleScript(script) ? { stdout: '"Explain the Merge Queue."\n' } : null));
+      const wb = await createSandboxWorkbench({ prompt: 'explain how the merge queue works' });
+      await vi.waitFor(async () => expect(await titleOf(wb.id)).toBe('Explain the Merge Queue'), { timeout: 5000 });
+      const row = (await getWorkbench(wb.id))!;
+      expect([row.name, row.branch]).toEqual([wb.name, wb.branch]);
+      const title = fleet.execs.find((e) => isTitleScript(e.script))!;
+      expect(title.script.startsWith('claude -p --output-format text --model haiku')).toBe(true);
+      expect(title.req.cwd).toBe('/tmp');
+      expect(fleet.execs.filter((e) => isTitleScript(e.script))).toHaveLength(1);
+      const updates = emitted.filter((e) => e.type === 'workbench:updated') as Array<{ payload: { workbench: Loose } }>;
+      expect(updates.some((e) => e.payload.workbench.title === 'Explain the Merge Queue')).toBe(true);
+      // The turn ran as normal.
+      await idle(await chatIdOf(wb.id));
+      expect((await getChat(await chatIdOf(wb.id)))?.status).toBe('idle');
+    });
+
+    it('keeps the name, and still runs the turn, when the title call fails', async () => {
+      scriptedFleet((script) => (isTitleScript(script) ? { exitCode: 1, stderr: 'usage limit' } : null));
+      const wb = await createSandboxWorkbench({ prompt: 'explain how the merge queue works' });
+      const chatId = await chatIdOf(wb.id);
+      await vi.waitFor(() => expect(fleet.execs.some((e) => isTitleScript(e.script))).toBe(true), { timeout: 5000 });
+      await idle(chatId);
+      expect(await getChat(chatId)).toMatchObject({ status: 'idle', turnCount: 1 });
+      expect(await titleOf(wb.id)).toBeNull();
+    });
+
+    it('applies a generated title only while the session has none', async () => {
+      const wb = await createLocalWorkbench();
+      const first = await call('PATCH', `/workbenches/${wb.id}`, { generatedTitle: '"Fix login."' });
+      expect(first.body.data).toMatchObject({ title: 'Fix login', name: wb.name, branch: wb.branch });
+      const second = await call('PATCH', `/workbenches/${wb.id}`, { generatedTitle: 'Something else' });
+      expect(second.body.data.title).toBe('Fix login');
+    });
+
+    it('never lets a generated title replace a rename', async () => {
+      const wb = await createLocalWorkbench();
+      await call('PATCH', `/workbenches/${wb.id}`, { name: 'my-name' });
+      const res = await call('PATCH', `/workbenches/${wb.id}`, { generatedTitle: 'Fix login' });
+      expect(res.body.data).toMatchObject({ name: 'my-name', title: 'my-name', branch: wb.branch });
+    });
+
+    it('takes a title a person sets, and clears it with null', async () => {
+      const wb = await createLocalWorkbench();
+      const set = await call('PATCH', `/workbenches/${wb.id}`, { title: '  My   own  title ' });
+      expect(set.body.data.title).toBe('My own title');
+      expect((await call('PATCH', `/workbenches/${wb.id}`, { generatedTitle: 'Fix login' })).body.data.title).toBe('My own title');
+      expect((await call('PATCH', `/workbenches/${wb.id}`, { title: null })).body.data.title).toBeNull();
+    });
+
+    it.each([
+      [{ title: 42 }],
+      [{ title: 'x'.repeat(101) }],
+    ])('refuses the title patch %j', async (patch) => {
+      const wb = await createLocalWorkbench();
+      expect((await call('PATCH', `/workbenches/${wb.id}`, patch)).status).toBe(400);
+    });
+
+    it('ignores a generated title that is junk', async () => {
+      const wb = await createLocalWorkbench();
+      const res = await call('PATCH', `/workbenches/${wb.id}`, { generatedTitle: 'line one\nline two' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.title).toBeNull();
     });
   });
 });

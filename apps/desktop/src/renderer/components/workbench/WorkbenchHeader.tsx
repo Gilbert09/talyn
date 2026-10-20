@@ -15,7 +15,7 @@ import {
   PanelRight,
   Wrench,
 } from 'lucide-react';
-import { CREATE_PR_MESSAGE, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -215,7 +215,7 @@ export function WorkbenchHeader({
     <div className="app-region-drag flex items-center gap-2 border-b px-3 py-1.5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="truncate text-sm font-semibold">{workbench.name}</h1>
+          <h1 className="truncate text-sm font-semibold">{workbenchDisplayName(workbench)}</h1>
           <span
             className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
             title={workbench.runtime === 'local' ? `Local worktree: ${workbench.localPath ?? ''}` : 'Talyn Fleet sandbox'}

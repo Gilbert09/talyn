@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Archive, ArrowRight, Cloud, Laptop, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react';
-import type { Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { api } from '../lib/api';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -34,7 +34,7 @@ export function filterAndGroupArchived(all: Workbench[], query: string): Array<{
   const q = query.trim().toLowerCase();
   const rows = all
     .filter(isArchived)
-    .filter((wb) => !q || [wb.name, wb.branch, wb.repoFullName].some((s) => s.toLowerCase().includes(q)))
+    .filter((wb) => !q || [workbenchDisplayName(wb), wb.name, wb.branch, wb.repoFullName].some((s) => s.toLowerCase().includes(q)))
     .sort((a, b) => archivedAtOf(b).localeCompare(archivedAtOf(a)));
   const map = new Map<string, Workbench[]>();
   for (const wb of rows) {
@@ -143,7 +143,7 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       <RuntimeIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label={`${workbench.runtime} runtime`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{workbench.name}</span>
+          <span className="truncate font-medium">{workbenchDisplayName(workbench)}</span>
           {workbench.pr && <PrPill number={workbench.pr.number} state={workbench.pr.state} />}
         </div>
         <div className="flex items-center gap-1 truncate font-mono text-[11px] text-muted-foreground">
@@ -161,7 +161,7 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
         className="h-7 gap-1.5 text-xs"
         onClick={() => void restore()}
         disabled={busy}
-        aria-label={`Restore ${workbench.name}`}
+        aria-label={`Restore ${workbenchDisplayName(workbench)}`}
       >
         {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
         Restore
@@ -172,7 +172,7 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
         className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
         onClick={onDelete}
         disabled={busy}
-        aria-label={`Delete ${workbench.name}`}
+        aria-label={`Delete ${workbenchDisplayName(workbench)}`}
       >
         <Trash2 className="h-3.5 w-3.5" />
       </Button>

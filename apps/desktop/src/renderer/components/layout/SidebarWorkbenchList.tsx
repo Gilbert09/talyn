@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Archive, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
-import type { Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { openExternal } from '../../lib/openExternal';
 import { toast } from '../../stores/toast';
@@ -111,12 +111,12 @@ function WorkbenchRow({
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
               (suspended || done) && !selected && 'opacity-60'
             )}
-            title={`${state.label}\n${workbench.name} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
+            title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
           >
             <span className="flex h-3 w-3 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
             </span>
-            <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbench.name}</span>
+            <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbenchDisplayName(workbench)}</span>
             {diff && (
               <span className="shrink-0 font-mono text-[11px] tabular-nums">
                 <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>

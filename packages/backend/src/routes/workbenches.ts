@@ -6,8 +6,10 @@ import {
   isValidBranchName,
   normaliseBranchPrefix,
   pickWorkbenchName,
+  sanitizeWorkbenchTitle,
   workbenchNameFromTask,
   WORKBENCH_EFFORTS,
+  WORKBENCH_MANUAL_TITLE_MAX,
   type ApiResponse,
   type CreateWorkbenchChatInput,
   type CreateWorkbenchInput,
@@ -58,6 +60,7 @@ import {
   liveWorkbenchNames,
   removeQueuedMessage,
   rowToChat,
+  setGeneratedTitle,
   storeNumberedEvents,
   updateChat,
   updateWorkbench,
@@ -547,13 +550,31 @@ export function workbenchRoutes(): Router {
         return bad(res, 409, `A session named "${name}" already exists.`, 'name_taken');
       }
       patch.name = name;
+      // A rename is a person's choice of what to show, so it is the title too.
+      // A title set means a generated one can never replace it.
+      patch.title = name;
+    }
+    if (body.title !== undefined) {
+      if (body.title !== null && typeof body.title !== 'string') return bad(res, 400, 'title must be a string or null.');
+      const title = (body.title ?? '').replace(/\s+/g, ' ').trim();
+      if (title.length > WORKBENCH_MANUAL_TITLE_MAX) {
+        return bad(res, 400, `title must be at most ${WORKBENCH_MANUAL_TITLE_MAX} characters.`);
+      }
+      patch.title = title || null;
     }
     if (body.settings !== undefined) {
       const settings = validateSettings(body.settings);
       if (typeof settings === 'string') return bad(res, 400, settings);
       patch.settings = settings;
     }
-    const updated = (await updateWorkbench(row.id, patch)) ?? row;
+    const onlyGenerated = body.generatedTitle !== undefined && Object.keys(patch).length === 0;
+    let updated = onlyGenerated ? row : ((await updateWorkbench(row.id, patch)) ?? row);
+    if (body.generatedTitle !== undefined) {
+      // The local runtime's model-written title. Applied only while there is no
+      // title; junk is ignored, not refused, since the caller cannot do better.
+      const title = sanitizeWorkbenchTitle(typeof body.generatedTitle === 'string' ? body.generatedTitle : null);
+      if (title) updated = (await setGeneratedTitle(row.id, title)) ?? updated;
+    }
     const data = await publicWorkbench(updated);
     emitWorkbenchUpdated(data);
     ok(res, data);

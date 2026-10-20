@@ -1873,6 +1873,8 @@ export const workbenches = pgTable(
       .references(() => repositories.id, { onDelete: 'cascade' }),
     repoFullName: text('repo_full_name').notNull(),
     name: text('name').notNull(),
+    /** The display title (model-written or a person's). Null: show `name`. Never renames the branch. */
+    title: text('title'),
     branch: text('branch').notNull(),
     baseBranch: text('base_branch').notNull(),
     /** `WorkbenchRuntimeKind`. */

@@ -16,6 +16,7 @@ import { WorkbenchPaths } from './paths';
 import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
+import { generateWorkbenchTitle } from './title';
 
 export async function pickRepoFolder(repoPaths?: RepoPaths): Promise<{
   path: string;
@@ -96,6 +97,11 @@ export function registerWorkbenchIpc(
       agents.startTurn(input),
   );
   handle('cancel-turn', (chatId: string) => agents.cancelTurn(chatId));
+  handle(
+    'generate-title',
+    (input: Parameters<NonNullable<WorkbenchLocalBridge['generateTitle']>>[0]) =>
+      generateWorkbenchTitle(input),
+  );
   handle('exec', async (worktree: string, steps: GitStep[]) => {
     // Give checkpoint steps a private index outside the worktree.
     const replacements = new Map<string, string>();

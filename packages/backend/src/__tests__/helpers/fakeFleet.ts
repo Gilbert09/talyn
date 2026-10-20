@@ -161,3 +161,13 @@ export function claudeTurnLines(sessionId: string, text: string): string[] {
     JSON.stringify({ type: 'result', subtype: 'success', session_id: sessionId, is_error: false, result: text }),
   ];
 }
+
+/** The session-title call (`services/workbenches/title.ts`), which runs beside the first turn. */
+export function isTitleScript(script: string): boolean {
+  return script.includes('--no-session-persistence') || script.includes(' exec --ephemeral ');
+}
+
+/** An agent turn: the agent's CLI, but not the title call. */
+export function isAgentTurn(script: string, agent: 'claude' | 'codex' = 'claude'): boolean {
+  return script.startsWith(`${agent} `) && !isTitleScript(script);
+}
