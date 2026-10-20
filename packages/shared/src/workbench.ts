@@ -11,6 +11,7 @@
 import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
+import type { WorkbenchConfig } from './workbenchConfig.js';
 
 // ============================================================================
 // Vocabulary
@@ -514,6 +515,8 @@ export interface WorkbenchLocalBridge {
     steps: Array<{ argv: string[]; env?: Record<string, string>; allowFailure?: boolean; capture?: string }>
   ): Promise<WorkbenchExecResult>;
   readFile(path: string, relativePath: string): Promise<{ content: string; binary: boolean }>;
+  readConfig(path: string): Promise<WorkbenchConfig>;
+  saveDetectedConfig(path: string): Promise<void>;
   listFiles(path: string): Promise<string[]>;
   terminal: {
     open(input: { workbenchId: string; path: string; kind: 'shell' | 'agent' }): Promise<string>;

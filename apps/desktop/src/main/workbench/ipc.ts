@@ -2,6 +2,7 @@ import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
 import { AgentProcesses } from './agentProcess';
+import { readConfigWithDetection, saveDetectedConfig } from './config';
 import { detectAgents, localReadiness, loginPath } from './environment';
 import {
   exec,
@@ -137,6 +138,8 @@ export function registerWorkbenchIpc(
     }
   });
   handle('read-file', readFile);
+  handle('read-config', readConfigWithDetection);
+  handle('save-detected-config', saveDetectedConfig);
   handle('list-files', listFiles);
   handle(
     'terminal:open',

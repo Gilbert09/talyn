@@ -47,7 +47,7 @@ import {
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
-import { fleetClientFor, sandboxIdFor } from '../services/workbenches/sandboxRuntime.js';
+import { fleetClientFor, loadWorkbenchConfigWithDetection, sandboxIdFor, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
@@ -695,6 +695,29 @@ export function workbenchRoutes(): Router {
   });
 
   // ---- Scripts (output arrives as `workbench:script` WS frames) ----
+
+  router.get('/:id/config', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      requireReadySandbox(row);
+      ok(res, await loadWorkbenchConfigWithDetection(row));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post('/:id/config/detected', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      requireReadySandbox(row);
+      await saveDetectedConfig(row);
+      ok(res, null);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
 
   router.post('/:id/scripts/:name', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);

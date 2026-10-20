@@ -102,6 +102,7 @@ import type {
   UpdateWorkbenchChatInput,
   UpdateWorkbenchInput,
   Workbench,
+  WorkbenchConfig,
   WorkbenchChangedFile,
   WorkbenchChat,
   WorkbenchCheckpoint,
@@ -2680,6 +2681,8 @@ export const workbenches = {
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
 
   // ---- Scripts (output arrives as `workbench:script` WS frames) ----
+  config: (id: string) => request<WorkbenchConfig>('GET', `/workbenches/${enc(id)}/config`),
+  saveDetectedConfig: (id: string) => request<void>('POST', `/workbenches/${enc(id)}/config/detected`),
   runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {})) =>
     request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}`),
   stopScript: (id: string, name: string) =>

@@ -14,6 +14,7 @@
  * here touches a filesystem, so both runtimes resolve config the same way.
  */
 import type { WorkbenchNamedRunScript, WorkbenchRunMode, WorkbenchSettings } from './workbench.js';
+import type { DetectedWorkbenchScripts } from './workbenchDetect.js';
 
 // ============================================================================
 // A TOML subset
@@ -375,6 +376,7 @@ export interface WorkbenchScript {
 export type WorkbenchConfigSource = 'talyn' | 'conductor-json' | 'conductor-toml' | 'none';
 
 export interface WorkbenchConfig {
+  detected?: DetectedWorkbenchScripts;
   setup?: WorkbenchScript;
   /** Named run scripts; exactly one has `default: true` when the list is non-empty. */
   run: WorkbenchNamedRunScript[];

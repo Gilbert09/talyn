@@ -43,6 +43,8 @@ const workbench: WorkbenchLocalBridge = {
   exec: (path, steps) => ipcRenderer.invoke('workbench:exec', path, steps),
   readFile: (path, relativePath) => ipcRenderer.invoke('workbench:read-file', path, relativePath),
   listFiles: (path) => ipcRenderer.invoke('workbench:list-files', path),
+  readConfig: (path) => ipcRenderer.invoke('workbench:read-config', path),
+  saveDetectedConfig: (path) => ipcRenderer.invoke('workbench:save-detected-config', path),
   terminal: {
     open: (input) => ipcRenderer.invoke('workbench:terminal:open', input),
     write: (id, data) => { void ipcRenderer.invoke('workbench:terminal:write', id, data).catch(console.error); },

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react';
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchConfig } from '@talyn/shared';
 import { cn } from '../../../lib/utils';
 import { formatKeys } from '../../../lib/shortcuts';
 import { clampDockHeight } from '../../../lib/workbenchLayout';
@@ -26,11 +26,49 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const open = useWorkbenchStore((s) => s.terminalOpen);
   const height = useWorkbenchStore((s) => s.terminalHeight);
   const setHeight = useWorkbenchStore((s) => s.setTerminalHeight);
-  const tab = useWorkbenchStore((s) => s.terminalTab);
+  const storedTab = useWorkbenchStore((s) => s.terminalTab);
   const setTab = useWorkbenchStore((s) => s.setTerminalTab);
   const setOpen = useWorkbenchStore((s) => s.setTerminalOpen);
   const rootRef = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState<number | undefined>(undefined);
+  const [loaded, setLoaded] = useState<{ id: string; config: WorkbenchConfig } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const config = loaded?.id === workbench.id ? loaded.config : null;
+  const detected = config?.source === 'none' ? config.detected : undefined;
+  const hideScripts = config?.source === 'none' && !detected?.setup && !detected?.run;
+  const tab = hideScripts ? 'terminal' : storedTab;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(null);
+    if (!ops.unavailable) {
+      void ops.config().then((value) => {
+        if (!cancelled) setLoaded({ id: workbench.id, config: value });
+      }).catch((err) => {
+        if (!cancelled) toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [workbench.id, ops]);
+
+  useEffect(() => {
+    if (hideScripts && storedTab !== 'terminal') {
+      useWorkbenchStore.setState({ terminalTab: 'terminal' });
+    }
+  }, [hideScripts, storedTab]);
+
+  const saveDetected = async () => {
+    setSaving(true);
+    try {
+      await ops.saveDetectedConfig();
+      setLoaded({ id: workbench.id, config: await ops.config() });
+      toast.success('Config saved', "The file is now in this session's changes. You can commit it.");
+    } catch (err) {
+      toast.error('Could not save the repository config', err instanceof Error ? err.message : undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
   // The shell mounts on first visit and then stays, so switching tabs keeps the session.
   const [shellStarted, setShellStarted] = useState(open && tab === 'terminal');
   useEffect(() => {
@@ -82,7 +120,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
         />
       )}
       <div className="flex h-7 shrink-0 items-center gap-0.5 px-1.5 text-xs" role="tablist" aria-label="Terminal">
-        {TABS.map((t) => (
+        {TABS.filter((t) => !hideScripts || t.id === 'terminal').map((t) => (
           <button
             key={t.id}
             type="button"
@@ -98,7 +136,9 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           </button>
         ))}
         <div className="flex-1" />
-        {open && (tab === 'setup' || tab === 'run') && <ScriptControls workbench={workbench} ops={ops} name={tab} />}
+        {open && config && config.source !== 'none' && (tab === 'setup' || tab === 'run') && (
+          <ScriptControls workbench={workbench} ops={ops} name={tab} />
+        )}
         <button
           type="button"
           onClick={() => setOpen(!open)}
@@ -111,7 +151,36 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
       </div>
       <div className={cn('relative min-h-0 flex-1 border-t', !open && 'hidden')}>
         {open && (tab === 'setup' || tab === 'run') && (
-          <ScriptOutput key={`${workbench.id}:${tab}`} workbenchId={workbench.id} name={tab} />
+          detected?.[tab] ? (
+            <div className="m-3 space-y-2 rounded border bg-muted p-3 text-xs">
+              <p>
+                Detected: <code className="break-all">{detected[tab].command}</code>{' '}
+                <span className="text-muted-foreground">({detected[tab].reason})</span>
+              </p>
+              <p className="text-muted-foreground">Talyn does not run detected commands until you save them.</p>
+              <button
+                type="button"
+                className="rounded border bg-background px-2 py-1 hover:bg-accent disabled:opacity-50"
+                disabled={saving || Boolean(ops.unavailable)}
+                onClick={() => void saveDetected()}
+              >
+                Save to .talyn/settings.toml
+              </button>
+            </div>
+          ) : (
+            <ScriptOutput
+              key={`${workbench.id}:${tab}`}
+              workbenchId={workbench.id}
+              name={tab}
+              emptyText={!config
+                ? 'Loading the repository config.'
+                : tab === 'setup'
+                  ? config.setup ? 'The setup script has not run yet.' : 'This repository has no setup script.'
+                  : config.run.length
+                    ? 'No run output yet. Press Run to start the run script from the repository config.'
+                    : 'This repository has no run script.'}
+            />
+          )
         )}
         {shellStarted && (
           <div className={cn('absolute inset-0', tab !== 'terminal' && 'invisible')}>
@@ -158,7 +227,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
 }
 
 /** A read-only xterm fed from the store's script output. */
-function ScriptOutput({ workbenchId, name }: { workbenchId: string; name: string }) {
+function ScriptOutput({ workbenchId, name, emptyText }: { workbenchId: string; name: string; emptyText: string }) {
   const { ref, term } = useXterm({ readOnly: true });
   const output = useWorkbenchStore((s) => s.scriptOutput[workbenchId]?.[name]);
   const written = useRef(0);
@@ -187,7 +256,7 @@ function ScriptOutput({ workbenchId, name }: { workbenchId: string; name: string
     <div className="absolute inset-0">
       {!output && (
         <p className="absolute left-3 top-2 z-10 text-xs text-muted-foreground">
-          No {name} output yet. Press Run to start the {name} script from the repository config.
+          {emptyText}
         </p>
       )}
       <div ref={ref} className="h-full w-full px-2 py-1" />

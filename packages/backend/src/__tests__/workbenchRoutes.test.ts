@@ -6,6 +6,7 @@ import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
+import { resolveWorkbenchConfig } from '@talyn/shared';
 
 /**
  * The workbench routes, end to end against a fake fleet: the gate, tenancy,
@@ -961,6 +962,88 @@ describe('workbench routes', () => {
   });
 
   describe('files, diff and scripts', () => {
+    const detectionOutput = [
+      `FILES ${Buffer.from('package.json\npackage-lock.json\nuv.lock\n').toString('base64')}`,
+      `PACKAGE ${Buffer.from('{"scripts":{"dev":"vite"}}').toString('base64')}`,
+    ].join('\n');
+
+    it('returns detected commands without running them during setup', async () => {
+      scriptedFleet((script) => script.includes('ls -A') ? { stdout: detectionOutput } : null);
+      const wb = await createSandboxWorkbench();
+      const res = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        source: 'none',
+        run: [],
+        detected: {
+          setup: { command: 'npm ci && uv sync', reason: 'from package-lock.json, uv.lock' },
+          run: { command: 'npm run dev', reason: 'from the dev script in package.json' },
+        },
+      });
+      expect(res.body.data.setup).toBeUndefined();
+      expect(fleet.scripts.some((script) => script === 'npm ci && uv sync' || script === 'npm run dev')).toBe(false);
+      expect(emitted.some((event) => event.type === 'workbench:script')).toBe(false);
+    });
+
+    it.each(['TALYN', 'CJSON', 'CTOML'])('does not detect commands when %s has config', async (label) => {
+      const wb = await createSandboxWorkbench();
+      const text = label === 'CJSON' ? '{"scripts":{"setup":"custom"}}' : '[scripts]\nsetup = "custom"';
+      scriptedFleet((script) => script.includes('cat .talyn/settings.toml')
+        ? { stdout: `${label} ${Buffer.from(text).toString('base64')}\n` } : null);
+      const before = fleet.scripts.length;
+      const res = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(res.body.data.setup.command).toBe('custom');
+      expect(res.body.data.detected).toBeUndefined();
+      expect(fleet.scripts.slice(before).some((script) => script.includes('ls -A'))).toBe(false);
+    });
+
+    it('saves newly detected commands and ignores client command text', async () => {
+      const wb = await createSandboxWorkbench();
+      scriptedFleet((script) => script.includes('ls -A') ? { stdout: detectionOutput } : null);
+      const res = await call('POST', `/workbenches/${wb.id}/config/detected`, { setup: 'untrusted', content: 'untrusted' });
+      expect(res.status).toBe(200);
+      const write = fleet.scripts.find((script) => script.includes('base64 -d > .talyn/settings.toml'))!;
+      expect(write).toBeDefined();
+      expect(write).not.toContain('untrusted');
+      const encoded = /printf '%s' '([A-Za-z0-9+/=]+)'/.exec(write)![1];
+      expect(resolveWorkbenchConfig({ talynToml: Buffer.from(encoded, 'base64').toString('utf8') })).toMatchObject({
+        setup: { command: 'npm ci && uv sync' },
+        run: [{ command: 'npm run dev' }],
+      });
+      expect(write).toContain('set -C');
+      for (const file of ['.talyn/settings.toml', 'conductor.json', '.conductor/settings.toml']) {
+        expect(write).toContain(file);
+      }
+    });
+
+    it.each(['read', 'write'])('returns 409 when config exists at the %s step', async (step) => {
+      const wb = await createSandboxWorkbench();
+      scriptedFleet((script) => {
+        if (script.includes('ls -A')) return step === 'read' ? { exitCode: 3 } : { stdout: detectionOutput };
+        if (script.includes('base64 -d > .talyn/settings.toml')) return { exitCode: 3 };
+        return null;
+      });
+      const res = await call('POST', `/workbenches/${wb.id}/config/detected`);
+      expect([res.status, res.body.code]).toEqual([409, 'config_exists']);
+      expect(res.body.error).toContain('already exists');
+    });
+
+    it('refuses to save when nothing is detected', async () => {
+      const wb = await createSandboxWorkbench();
+      const res = await call('POST', `/workbenches/${wb.id}/config/detected`);
+      expect([res.status, res.body.code]).toEqual([409, 'no_detected_scripts']);
+      expect(fleet.scripts.some((script) => script.includes('base64 -d > .talyn/settings.toml'))).toBe(false);
+    });
+
+    it.each([['GET', 'config'], ['POST', 'config/detected']])('checks access for %s %s', async (method, route) => {
+      const wb = await createSandboxWorkbench();
+      const before = fleet.scripts.length;
+      expect((await call(method, `/workbenches/${wb.id}/${route}`, undefined, 'owner-b')).status).toBe(404);
+      await updateWorkbench(wb.id, { status: 'provisioning' });
+      expect((await call(method, `/workbenches/${wb.id}/${route}`)).status).toBe(409);
+      expect(fleet.scripts.length).toBe(before);
+    });
+
     it('reads changes through git when the fleet has no diff route, and stores the stat', async () => {
       const wb = await createSandboxWorkbench();
       const b64 = (s: string) => Buffer.from(s).toString('base64');
@@ -1075,6 +1158,8 @@ describe('workbench routes', () => {
 
     it.each([
       ['GET', (id: string) => `/workbenches/${id}/changes`],
+      ['GET', (id: string) => `/workbenches/${id}/config`],
+      ['POST', (id: string) => `/workbenches/${id}/config/detected`],
       ['GET', (id: string) => `/workbenches/${id}/diff`],
       ['GET', (id: string) => `/workbenches/${id}/file?path=a`],
       ['GET', (id: string) => `/workbenches/${id}/files`],

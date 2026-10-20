@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FolderOpen, Github, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import { resolveWorkbenchConfig, type WorkbenchConfig } from '@talyn/shared';
+import type { WorkbenchConfig } from '@talyn/shared';
 import { api, GitHubRepo } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
 import { isOwnerCovered, parseRepoInput } from '../../../lib/githubInstall';
@@ -468,19 +468,12 @@ function RepoScripts({ path }: { path: string }) {
     const bridge = getWorkbenchBridge();
     if (!bridge) return undefined;
     let cancelled = false;
-    const read = async (rel: string) => {
-      try {
-        const file = await bridge.readFile(path, rel);
-        return file.binary ? null : file.content;
-      } catch {
-        return null;
-      }
-    };
-    void Promise.all([read('.talyn/settings.toml'), read('conductor.json'), read('.conductor/settings.toml')]).then(
-      ([talynToml, conductorJson, conductorToml]) => {
-        if (!cancelled) setConfig(resolveWorkbenchConfig({ talynToml, conductorJson, conductorToml }));
-      }
-    );
+    setConfig(null);
+    void bridge.readConfig(path).then((value) => {
+      if (!cancelled) setConfig(value);
+    }).catch(() => {
+      if (!cancelled) setConfig(null);
+    });
     return () => {
       cancelled = true;
     };
@@ -488,6 +481,10 @@ function RepoScripts({ path }: { path: string }) {
 
   if (!config) return null;
   const scripts: Array<[string, string]> = [
+    ...(config.source === 'none' && config.detected?.setup
+      ? [['Detected setup', config.detected.setup.command] as [string, string]] : []),
+    ...(config.source === 'none' && config.detected?.run
+      ? [['Detected run', config.detected.run.command] as [string, string]] : []),
     ...(config.setup ? [['Setup', config.setup.command] as [string, string]] : []),
     ...config.run.map((r) => [config.run.length > 1 ? `Run · ${r.name}` : 'Run', r.command] as [string, string]),
     ...(config.archive ? [['Archive', config.archive.command] as [string, string]] : []),

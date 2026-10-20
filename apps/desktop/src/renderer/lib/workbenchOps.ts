@@ -22,6 +22,7 @@ import {
   type WorkbenchAttachment,
   type WorkbenchChanges,
   type WorkbenchChat,
+  type WorkbenchConfig,
   type WorkbenchLocalBridge,
   type WorkbenchNextAction,
 } from '@talyn/shared';
@@ -60,6 +61,8 @@ export interface WorkbenchOps {
   diff(path?: string): Promise<string>;
   listFiles(): Promise<string[]>;
   readFile(path: string): Promise<{ content: string; binary: boolean }>;
+  config(): Promise<WorkbenchConfig>;
+  saveDetectedConfig(): Promise<void>;
   restoreCheckpoint(chatId: string, turn: number): Promise<void>;
   runScript(name: string): Promise<void>;
   stopScript(name: string): Promise<void>;
@@ -101,6 +104,8 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     diff: async (path) => (await api.workbenches.diff(id, path)).patch,
     listFiles: async () => (await api.workbenches.files(id)).paths,
     readFile: (path) => api.workbenches.file(id, path),
+    config: () => api.workbenches.config(id),
+    saveDetectedConfig: () => api.workbenches.saveDetectedConfig(id),
     restoreCheckpoint: (chatId, turn) => api.workbenches.restoreCheckpoint(chatId, turn),
     runScript: async (name) => {
       useWorkbenchStore.getState().markScriptStarted(id, name);
@@ -219,6 +224,8 @@ export function localOps(
     },
     listFiles: async () => parseNulList(await run([listFiles()])),
     readFile: (rel) => need().readFile(path, rel),
+    config: async () => applyWorkbenchScriptOverrides(await need().readConfig(path), workbench.settings),
+    saveDetectedConfig: () => need().saveDetectedConfig(path),
     restoreCheckpoint: async (chatId, turn) => {
       const refs = parseCheckpointRefs(await run([listCheckpointRefs(chatId)]));
       const hit = refs.find((r) => r.turn === turn);

@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
 import {
   applyWorkbenchScriptOverrides,
+  detectWorkbenchScripts,
+  detectedScriptsToToml,
   resolveWorkbenchConfig,
   shellQuote,
   toShellScript,
@@ -557,6 +559,66 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
     conductorToml: files.CTOML || null,
   });
   return applyWorkbenchScriptOverrides(config, row.settings);
+}
+
+const configAbsentScript = [
+  'for file in .talyn/settings.toml conductor.json .conductor/settings.toml; do',
+  '  if [ -e "$file" ] || [ -L "$file" ]; then exit 3; fi',
+  'done',
+].join('\n');
+
+function checkConfigResult(result: SandboxExecResult): void {
+  if (result.exitCode === 3) {
+    throw new WorkbenchError(
+      'A repository config file already exists. Edit that file to change its scripts.',
+      409,
+      'config_exists',
+    );
+  }
+  if (result.exitCode !== 0) {
+    throw new WorkbenchError('Could not read or save the repository config.', 500, 'config_failed');
+  }
+}
+
+async function detectScripts(row: WorkbenchRow, requireAbsent = false) {
+  const result = await runCapture(
+    row,
+    `${requireAbsent ? `${configAbsentScript}\n` : ''}${sectionsScript([
+      { label: 'FILES', command: 'ls -A' },
+      { label: 'PACKAGE', command: 'cat package.json' },
+    ])}`,
+    { quiet: true, timeoutMs: 30_000 },
+  );
+  checkConfigResult(result);
+  const sections = parseSections(result.stdout);
+  return detectWorkbenchScripts({
+    files: (sections.FILES ?? '').split('\n'),
+    packageJson: sections.PACKAGE || null,
+  });
+}
+
+export async function loadWorkbenchConfigWithDetection(row: WorkbenchRow): Promise<WorkbenchConfig> {
+  const config = await loadWorkbenchConfig(row);
+  if (config.source === 'none') config.detected = await detectScripts(row);
+  return config;
+}
+
+export async function saveDetectedConfig(row: WorkbenchRow): Promise<void> {
+  const detected = await detectScripts(row, true);
+  if (!detected.setup && !detected.run) {
+    throw new WorkbenchError('No setup or run command was detected.', 409, 'no_detected_scripts');
+  }
+  const content = Buffer.from(detectedScriptsToToml(detected)).toString('base64');
+  const result = await runCapture(
+    row,
+    [
+      configAbsentScript,
+      'mkdir -p .talyn || exit 4',
+      ` (set -C; printf '%s' '${content}' | base64 -d > .talyn/settings.toml) || exit 4`,
+    ].join('\n'),
+    { quiet: true, timeoutMs: 30_000 },
+  );
+  checkConfigResult(result);
 }
 
 /**
