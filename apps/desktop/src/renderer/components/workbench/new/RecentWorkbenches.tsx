@@ -4,7 +4,8 @@ import type { Workbench } from '@talyn/shared';
 import { useNavigationStore } from '../../../stores/navigation';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useWorkbenchStore } from '../../../stores/workbenches';
-import { PrStateDot, StatusDot, chatTone, prDotState } from '../WorkbenchBadges';
+import { SessionStateIcon } from '../WorkbenchBadges';
+import { sessionState } from '../../../lib/sessionState';
 import { isArchived } from '../workbenchSelectors';
 
 export const RECENT_LIMIT = 8;
@@ -67,18 +68,19 @@ function RecentRow({ workbench, onOpen }: { workbench: Workbench; onOpen: () => 
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const tone =
-    workbench.status === 'error' ? 'error' : workbench.status === 'provisioning' ? 'running' : chatTone(chats ?? [], unread);
+  const state = sessionState(workbench, chats ?? [], unread, pr ?? null);
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   return (
     <button
       type="button"
       onClick={onOpen}
       data-attr="home-recent-row"
-      title={`${workbench.name} · ${workbench.repoFullName} · ${workbench.branch} · ${new Date(workbench.updatedAt).toLocaleString()}`}
+      title={`${state.label}\n${workbench.name} · ${workbench.repoFullName} · ${workbench.branch} · ${new Date(workbench.updatedAt).toLocaleString()}`}
       className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-accent/60"
     >
-      {tone === 'idle' && pr ? <PrStateDot state={prDotState(pr.state, pr.summary.draft)} /> : <StatusDot tone={tone} />}
+      <span className="flex h-3 w-3 shrink-0 items-center justify-center">
+        <SessionStateIcon state={state} />
+      </span>
       <span className="min-w-0 flex-[1_1_30%] truncate font-medium">{workbench.name}</span>
       <span className="min-w-0 flex-[1_1_35%] truncate text-xs text-muted-foreground">{workbench.repoFullName}</span>
       <span className="hidden min-w-0 flex-[1_1_25%] truncate font-mono text-[11px] text-muted-foreground sm:block">

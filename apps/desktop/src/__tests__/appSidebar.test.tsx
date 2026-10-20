@@ -107,15 +107,15 @@ describe('AppSidebar', () => {
     useWorkbenchStore.getState().setChats('rome', [{ id: 'c2', workbenchId: 'rome', status: 'idle', createdAt: 'a' } as WorkbenchChat]);
     useWorkbenchStore.setState({ unread: { c2: true } });
     render(<AppSidebar />);
-    expect(within(screen.getByRole('button', { name: /oslo/ })).getByLabelText('Running')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /oslo/ })).getByLabelText('Working')).toBeInTheDocument();
     expect(screen.getByText('rome')).toHaveClass('font-semibold');
     expect(screen.getByText('lisbon')).not.toHaveClass('font-semibold');
   });
 
   it.each<[string, Partial<Workbench>, string]>([
-    ['a failed workbench', { status: 'error' }, 'Error'],
-    ['a sandbox that failed to start', { sandboxState: 'error' }, 'Error'],
-    ['a starting workbench', { status: 'provisioning' }, 'Running'],
+    ['a failed workbench', { status: 'error' }, 'Failed to start'],
+    ['a sandbox that failed to start', { sandboxState: 'error' }, 'Failed to start'],
+    ['a starting workbench', { status: 'provisioning' }, 'Starting'],
     ['a ready idle workbench', {}, 'Idle'],
   ])('%s shows the %s dot', (_name, over, label) => {
     useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', { repoFullName: 'acme/web', ...over }));
@@ -145,11 +145,11 @@ describe('AppSidebar', () => {
     expect(screen.getByText(text)).toBeInTheDocument();
   });
 
-  it('an idle row with a PR shows the PR state colour', () => {
+  it('an idle row with a merged PR shows it is done', () => {
     useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', { repoFullName: 'acme/web', pullRequestId: 'p9' }));
     usePullRequestStore.setState({ rows: [pr({ id: 'p9', state: 'merged' })] });
     render(<AppSidebar />);
-    expect(within(screen.getByRole('button', { name: /lisbon/ })).getByLabelText('Pull request merged')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /lisbon/ })).getByLabelText(/^Done: #\d+ merged$/)).toBeInTheDocument();
   });
 
   it('clicking a row opens the workbench route and marks it current', () => {
@@ -192,7 +192,8 @@ describe('AppSidebar', () => {
     [{ workbenches: true }, false],
     [{ workbenches: true, workflows: true }, true],
     [{ workbenches: true, loops: true }, true],
-    [{ workbenches: true, mcpServers: true }, true],
+    // MCP servers is in Settings, so it alone does not offer Automations.
+    [{ workbenches: true, mcpServers: true }, false],
     [null, false],
   ])('Automations appears only when something is offered (%p → %s)', (features, shown) => {
     setFeatures(features as Partial<Features> | null);

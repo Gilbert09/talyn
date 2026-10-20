@@ -16,7 +16,8 @@ import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
-import { PrStateDot, StatusDot, chatTone, prDotState } from '../workbench/WorkbenchBadges';
+import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
 /**
@@ -73,10 +74,9 @@ function WorkbenchRow({
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const provisioning = workbench.status === 'provisioning';
-  const failed = workbench.status === 'error' || workbench.sandboxState === 'error';
-  const tone = failed ? 'error' : provisioning ? 'running' : chatTone(chats ?? [], unread);
-  const isUnread = tone === 'unread';
+  const state = sessionState(workbench, chats ?? [], unread, pr ?? null);
+  const isUnread = state.kind === 'needs_reply';
+  const done = state.kind === 'merged' || state.kind === 'closed';
   const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : suspended ? 'Sandbox (asleep)' : 'Sandbox';
@@ -109,11 +109,13 @@ function WorkbenchRow({
             className={cn(
               'app-region-no-drag flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
-              suspended && !selected && 'opacity-60'
+              (suspended || done) && !selected && 'opacity-60'
             )}
-            title={`${workbench.name} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
+            title={`${state.label}\n${workbench.name} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
           >
-            {tone === 'idle' && pr ? <PrStateDot state={prDotState(pr.state, pr.summary.draft)} /> : <StatusDot tone={tone} />}
+            <span className="flex h-3 w-3 shrink-0 items-center justify-center">
+              <SessionStateIcon state={state} />
+            </span>
             <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbench.name}</span>
             {diff && (
               <span className="shrink-0 font-mono text-[11px] tabular-nums">
