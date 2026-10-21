@@ -172,12 +172,14 @@ export interface ChatTotals {
   costUsd: number | null;
   /** Prompt tokens, cache reads and writes included: what the model read. */
   inputTokens: number;
+  /** Prompt tokens read from the prompt cache. */
+  cachedInputTokens: number;
   outputTokens: number;
 }
 
 /** One chat's spend, added up over every turn's result. */
 export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
-  const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, outputTokens: 0 };
+  const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   for (const { event } of events) {
     if (event.type !== 'result') continue;
     totals.turns += 1;
@@ -190,6 +192,7 @@ export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
     };
     totals.inputTokens +=
       (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+    totals.cachedInputTokens += usage.cache_read_input_tokens ?? 0;
     totals.outputTokens += usage.output_tokens ?? 0;
   }
   return totals;

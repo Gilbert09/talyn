@@ -132,9 +132,15 @@ function ChatTotalsFooter({ totals }: { totals: ReturnType<typeof chatTotals> })
       <span>
         {totals.turns} {totals.turns === 1 ? 'turn' : 'turns'}
       </span>
-      {totals.costUsd !== null && <span>${totals.costUsd.toFixed(2)}</span>}
-      <span title="Tokens the model read (cache included) and wrote, over every turn">
-        {compactCount(totals.inputTokens)} in · {compactCount(totals.outputTokens)} out
+      {totals.costUsd !== null && (
+        <span title="What these turns would cost at Anthropic's API prices. Runs on your subscription are not billed this amount; they count toward your plan's usage limits.">
+          ≈ ${totals.costUsd.toFixed(2)} at API prices
+        </span>
+      )}
+      <span title="Each step of a turn re-reads the whole conversation, so input adds up quickly. Cached tokens cost about a tenth of fresh ones.">
+        {compactCount(totals.inputTokens)} in
+        {totals.cachedInputTokens > 0 && ` (${compactCount(totals.cachedInputTokens)} cached)`} ·{' '}
+        {compactCount(totals.outputTokens)} out
       </span>
     </div>
   );

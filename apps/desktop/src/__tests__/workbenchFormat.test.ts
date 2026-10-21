@@ -168,6 +168,7 @@ describe('chatTotals', () => {
     expect(totals.turns).toBe(2);
     expect(totals.costUsd).toBeCloseTo(0.06);
     expect(totals.inputTokens).toBe(115);
+    expect(totals.cachedInputTokens).toBe(100);
     expect(totals.outputTokens).toBe(25);
   });
 
@@ -176,6 +177,7 @@ describe('chatTotals', () => {
       turns: 1,
       costUsd: null,
       inputTokens: 0,
+      cachedInputTokens: 0,
       outputTokens: 4,
     });
     expect(chatTotals([]).turns).toBe(0);

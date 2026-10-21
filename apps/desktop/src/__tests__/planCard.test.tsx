@@ -117,6 +117,36 @@ describe('the plan card', () => {
   });
 });
 
+describe('the transcript totals footer', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    seq = 0;
+    mockUpdateChat.mockImplementation(async (id: string, patch: Partial<WorkbenchChat>) => ({ ...CHAT, id, ...patch }));
+    useWorkbenchStore.getState().setChats('wb1', [CHAT]);
+  });
+
+  it('shows cached input, API price, and their explanations', () => {
+    renderTranscript([
+      ev(1, {
+        type: 'result',
+        total_cost_usd: 31.54,
+        usage: { input_tokens: 600_000, cache_read_input_tokens: 14_300_000, output_tokens: 42_000 },
+      }),
+    ]);
+    expect(screen.getByText('1 turn')).toBeInTheDocument();
+    expect(screen.getByTitle("What these turns would cost at Anthropic's API prices. Runs on your subscription are not billed this amount; they count toward your plan's usage limits.")).toHaveTextContent('≈ $31.54 at API prices');
+    expect(screen.getByTitle('Each step of a turn re-reads the whole conversation, so input adds up quickly. Cached tokens cost about a tenth of fresh ones.')).toHaveTextContent('14.9M in (14.3M cached) · 42k out');
+  });
+
+  it('omits cached input when it is zero and omits an unreported cost', () => {
+    renderTranscript([ev(1, { type: 'result', usage: { input_tokens: 1_200, output_tokens: 42 } })]);
+    expect(screen.getByText('1 turn')).toBeInTheDocument();
+    expect(screen.getByTitle('Each step of a turn re-reads the whole conversation, so input adds up quickly. Cached tokens cost about a tenth of fresh ones.')).toHaveTextContent('1.2k in · 42 out');
+    expect(screen.queryByText(/API prices/)).toBeNull();
+    expect(screen.queryByText(/cached/)).toBeNull();
+  });
+});
+
 describe('approving keeps the chat state current', () => {
   it('does not undo the running status the build turn set', async () => {
     seq = 0;
