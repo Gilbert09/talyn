@@ -265,9 +265,9 @@ describe('action cycle mapping', () => {
 
 describe('notifications', () => {
   it.each<[WorkbenchChat['status'], string]>([
-    ['idle', 'lisbon: done'],
-    ['error', 'lisbon: stopped with an error'],
-    ['awaiting_input', 'lisbon: needs your input'],
+    ['idle', 'Done: lisbon'],
+    ['error', 'Failed: lisbon'],
+    ['awaiting_input', 'Needs your reply: lisbon'],
   ])('%s → %p', (status, title) => {
     expect(notificationText({ status, title: 'Chat' }, { name: 'lisbon' }).title).toBe(title);
   });
