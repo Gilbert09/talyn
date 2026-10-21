@@ -218,6 +218,30 @@ describe('Checks tab', () => {
 });
 
 describe('Changes tab', () => {
+  it('a second click on a file row collapses its diff', async () => {
+    const ops = makeOps();
+    render(
+      <ChangesTab
+        workbench={WB}
+        chat={chat}
+        ops={ops}
+        visible
+        turnsEnded={0}
+        comments={[]}
+        setComments={jest.fn()}
+      />
+    );
+    const row = await screen.findByRole('button', { name: /a\.ts/ });
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(row);
+    await waitFor(() => expect(row).toHaveAttribute('aria-expanded', 'true'));
+    await waitFor(() => expect(ops.diff).toHaveBeenCalled());
+    fireEvent.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /b\.ts/ }));
+    expect(screen.getByRole('button', { name: /b\.ts/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('"N comments ready to send" sends them to the agent as one message', async () => {
     const setComments = jest.fn();
     const send = jest.fn(async () => ({ queued: false }));

@@ -137,7 +137,7 @@ export function ChangesTab({
               key={f.path}
               file={f}
               active={f.path === selectedPath}
-              onClick={() => setSelectedPath(f.path)}
+              onClick={() => setSelectedPath((current) => (current === f.path ? null : f.path))}
             />
           ))}
         </ul>
@@ -173,6 +173,7 @@ function FileRow({
       <button
         type="button"
         onClick={onClick}
+        aria-expanded={active}
         className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1 text-left text-xs"
         title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
       >
