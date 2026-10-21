@@ -218,6 +218,16 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       continue;
     }
 
+    if (event.type === 'talyn_pr_link') {
+      blocks.push({
+        kind: 'system',
+        key: seqKey,
+        subtype: 'talyn_pr_link',
+        text: `${event.linked === true ? 'Linked' : 'Unlinked'} PR #${event.number}`,
+      });
+      continue;
+    }
+
     // What a workbench's Create PR turn did, as one line.
     if (event.type === 'talyn_pr') {
       const pr = event as {

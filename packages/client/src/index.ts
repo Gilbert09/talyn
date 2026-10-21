@@ -2717,6 +2717,15 @@ export const workbenches = {
    */
   createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
     request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),
+  openPullRequests: (id: string) =>
+    request<import('@talyn/shared').OpenWorkbenchPullRequest[]>('GET', `/workbenches/${enc(id)}/pull-requests/open`),
+  linkPullRequest: (id: string, number: number) =>
+    request<import('@talyn/shared').LinkWorkbenchPullRequestResult>(
+      'POST', `/workbenches/${enc(id)}/pull-request/link`, { number }
+    ),
+  unlinkPullRequest: (id: string) =>
+    request<Workbench>('POST', `/workbenches/${enc(id)}/pull-request/unlink`),
+
   /**
    * The safety net after a Create PR turn whose reply had no talyn-pr block:
    * link the open PR the agent opened itself, found by the session's HEAD

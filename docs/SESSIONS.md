@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Link an existing session to a pull request (2026-10-21)
+
+The session Actions menu can link or unlink an open PR from its repository.
+The dialog lists recent PRs and accepts a PR number or repository URL.
+Both runtimes use shared git steps to fetch and check out the head branch.
+Fork PRs use GitHub's pull ref. A dirty worktree blocks checkout.
+The existing PR tracking path stores the link. Transcript events record each link and unlink.
+Unlink keeps the branch and saves the PR number in settings. Automatic branch matching skips that number.
+The local runtime reports its branch through the session update route after checkout.
+
 ## Workbenches, and a desktop app rebuilt around them (2026-10-13 to 2026-10-14, branch only)
 
 On branch `tom/workbenches`, not on `main`. Design and state: [`WORKBENCHES.md`](./WORKBENCHES.md).

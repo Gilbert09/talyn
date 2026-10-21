@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Workbench, WorkbenchPullRequestSummary } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable } from '../../db/schema.js';
@@ -69,7 +69,7 @@ export function toPrSummary(row: PrSummaryRow): WorkbenchPullRequestSummary {
 }
 
 /** The query that finds a branch's PR, exposed for the egress test. */
-export function findBranchPrQuery(workspaceId: string, repositoryId: string, branch: string) {
+export function findBranchPrQuery(workspaceId: string, repositoryId: string, branch: string, excludedNumber?: number) {
   return getPoolDbClient()
     .select({ id: prTable.id })
     .from(prTable)
@@ -77,6 +77,7 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
       and(
         eq(prTable.workspaceId, workspaceId),
         eq(prTable.repositoryId, repositoryId),
+        excludedNumber === undefined ? undefined : ne(prTable.number, excludedNumber),
         sql`${prTable.lastSummary} ->> 'headBranch' = ${branch}`,
       ),
     )
@@ -92,7 +93,7 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
  */
 export async function linkPullRequest(row: WorkbenchRow): Promise<WorkbenchRow> {
   if (row.pullRequestId) return row;
-  const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch))[0];
+  const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch, row.settings?.prUnlinked))[0];
   if (!found) return row;
   return (await updateWorkbench(row.id, { pullRequestId: found.id })) ?? row;
 }

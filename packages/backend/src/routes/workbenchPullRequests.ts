@@ -3,7 +3,12 @@ import type { ApiResponse } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { fleetErrorAsRefusal, WorkbenchError } from '../services/workbenches/errors.js';
-import { adoptPullRequestForWorkbench } from '../services/workbenches/pullRequest.js';
+import {
+  adoptPullRequestForWorkbench,
+  linkWorkbenchPullRequest,
+  openPullRequestsForWorkbench,
+  unlinkWorkbenchPullRequest,
+} from '../services/workbenches/pullRequest.js';
 import { getWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
 
 /**
@@ -57,6 +62,25 @@ export function workbenchPullRequestRoutes(): Router {
       bad(res, refusal.status, refusal.message, refusal.code);
     }
   });
+
+  const handlers = [
+    ['get', '/:id/pull-requests/open', (row: WorkbenchRow) => openPullRequestsForWorkbench(row)],
+    ['post', '/:id/pull-request/link', (row: WorkbenchRow, req: Request) => linkWorkbenchPullRequest(row, req.body?.number)],
+    ['post', '/:id/pull-request/unlink', (row: WorkbenchRow) => unlinkWorkbenchPullRequest(row)],
+  ] as const;
+  for (const [method, path, handler] of handlers) {
+    router[method](path, async (req, res) => {
+      const row = await gatedWorkbench(req, res, req.params.id);
+      if (!row) return;
+      try {
+        ok(res, await handler(row, req));
+      } catch (err) {
+        const refusal = fleetErrorAsRefusal(err);
+        if (!refusal) throw err;
+        bad(res, refusal.status, refusal.message, refusal.code);
+      }
+    });
+  }
 
   return router;
 }

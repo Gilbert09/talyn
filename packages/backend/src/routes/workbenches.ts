@@ -547,6 +547,13 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     const body = (req.body ?? {}) as UpdateWorkbenchInput;
     const patch: Parameters<typeof updateWorkbench>[1] = {};
+    if (body.branch !== undefined) {
+      if (row.runtime !== 'local') return bad(res, 409, 'Only a local session can report its branch.');
+      if (typeof body.branch !== 'string' || !isValidBranchName(body.branch)) {
+        return bad(res, 400, 'branch is not a valid branch name.');
+      }
+      patch.branch = body.branch;
+    }
     if (body.name !== undefined) {
       const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
       if (!NAME_PATTERN.test(name)) return bad(res, 400, 'name must be lowercase letters, digits and hyphens.');
@@ -571,6 +578,7 @@ export function workbenchRoutes(): Router {
       if (typeof settings === 'string') return bad(res, 400, settings);
       patch.settings = {
         ...settings,
+        ...(row.settings?.prUnlinked !== undefined ? { prUnlinked: row.settings.prUnlinked } : {}),
         ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
           ? { internetAccess: row.settings.internetAccess }
           : {}),

@@ -47,6 +47,7 @@ import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenc
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
+import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -129,8 +130,20 @@ export function WorkbenchHeader({
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
+  const unlink = async () => {
+    setLinkBusy(true);
+    try {
+      useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.unlinkPullRequest(workbench.id));
+    } catch (err) {
+      toast.error('Could not unlink the pull request', err instanceof Error ? err.message : undefined);
+    } finally {
+      setLinkBusy(false);
+    }
+  };
 
   const prLike = pr ? prRowAsLike(pr) : null;
   const primary = primaryWorkbenchAction(workbench, prLike);
@@ -339,6 +352,13 @@ export function WorkbenchHeader({
                 );
               })}
               <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={linkBusy}
+                onSelect={() => workbench.pullRequestId ? void unlink() : setLinkOpen(true)}
+              >
+                <GitPullRequest className="mr-2 h-3.5 w-3.5" />
+                {workbench.pullRequestId ? 'Unlink pull request' : 'Link pull request…'}
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={copyBranch}>
                 <Copy className="mr-2 h-3.5 w-3.5" />
                 Copy branch name
@@ -347,6 +367,7 @@ export function WorkbenchHeader({
           </DropdownMenu>
         </div>
       )}
+      {linkOpen && <LinkPullRequestDialog workbench={workbench} onClose={() => setLinkOpen(false)} />}
       <ConfirmDialog
         open={confirm === 'merge' && pr !== null}
         title={pr ? `Merge #${pr.number}?` : 'Merge?'}

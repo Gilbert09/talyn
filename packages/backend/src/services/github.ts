@@ -298,8 +298,8 @@ interface GitHubPullRequest {
   draft: boolean;
   mergeable: boolean | null;
   mergeable_state: string;
-  head: { ref: string; sha: string };
-  base: { ref: string };
+  head: { ref: string; sha: string; repo?: { full_name: string } | null };
+  base: { ref: string; repo?: { full_name: string } };
   // Users with a pending review request. Present on the list endpoint;
   // a reviewer drops off once they submit a review.
   requested_reviewers?: Array<{ login: string }>;
@@ -1904,11 +1904,13 @@ class GitHubService extends EventEmitter {
     workspaceId: string,
     owner: string,
     repo: string,
-    options: { state?: 'open' | 'closed' | 'all'; per_page?: number } = {}
+    options: { state?: 'open' | 'closed' | 'all'; per_page?: number; sort?: 'updated'; direction?: 'desc' } = {}
   ): Promise<GitHubPullRequest[]> {
     const params = new URLSearchParams({
       state: options.state || 'open',
       per_page: String(options.per_page || 30),
+      ...(options.sort ? { sort: options.sort } : {}),
+      ...(options.direction ? { direction: options.direction } : {}),
     });
     return this.apiRequest<GitHubPullRequest[]>(
       workspaceId,
