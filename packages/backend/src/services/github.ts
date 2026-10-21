@@ -308,6 +308,14 @@ interface GitHubPullRequest {
   merged_at?: string | null;
 }
 
+/** A PR as the list endpoints return it, narrowed to what a commit or head lookup reads. */
+export interface GitHubCommitPullRequest {
+  number: number;
+  html_url: string;
+  state: 'open' | 'closed';
+  head: { ref: string; sha: string; repo: { full_name: string } | null };
+}
+
 interface GitHubCheckRun {
   id: number;
   name: string;
@@ -2742,6 +2750,39 @@ class GitHubService extends EventEmitter {
     const params = new URLSearchParams({ state: 'open', head: `${owner}:${branch}`, per_page: '1' });
     const prs = await this.apiRequest<GitHubPullRequest[]>(workspaceId, `/repos/${owner}/${repo}/pulls?${params}`);
     return prs[0] ?? null;
+  }
+
+  /** Every open PR whose head is `branch` in this repository (one per base branch). */
+  async listOpenPullRequestsForHead(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<GitHubCommitPullRequest[]> {
+    const params = new URLSearchParams({ state: 'open', head: `${owner}:${branch}`, per_page: '10' });
+    return this.apiRequest<GitHubCommitPullRequest[]>(workspaceId, `/repos/${owner}/${repo}/pulls?${params}`);
+  }
+
+  /**
+   * The PRs that contain commit `sha` (`GET /repos/{owner}/{repo}/commits/{sha}/pulls`):
+   * open and closed, and PRs where it is not the head. Callers filter. A commit
+   * GitHub does not have answers 404 or 422; that is "no PRs", not an error.
+   */
+  async listPullRequestsForCommit(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    sha: string
+  ): Promise<GitHubCommitPullRequest[]> {
+    try {
+      return await this.apiRequest<GitHubCommitPullRequest[]>(
+        workspaceId,
+        `/repos/${owner}/${repo}/commits/${encodeURIComponent(sha)}/pulls?per_page=30`
+      );
+    } catch (err) {
+      if (err instanceof GitHubApiError && (err.status === 404 || err.status === 422)) return [];
+      throw err;
+    }
   }
 
   async createPRReview(

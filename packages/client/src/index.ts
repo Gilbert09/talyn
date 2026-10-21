@@ -95,6 +95,7 @@ import type {
   CreateWorkbenchInput,
   PutWorkbenchInstructionFileInput,
   WorkbenchInstructionFile,
+  AdoptWorkbenchPullRequestResult,
   CreateWorkbenchPullRequestInput,
   CreateWorkbenchPullRequestResult,
   SendWorkbenchMessageInput,
@@ -2695,6 +2696,14 @@ export const workbenches = {
    */
   createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
     request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),
+  /**
+   * The safety net after a Create PR turn whose reply had no talyn-pr block:
+   * link the open PR the agent opened itself, found by the session's HEAD
+   * commit (or branch). A local session sends its worktree's HEAD; a sandbox
+   * session's HEAD is read in the box. `pullRequest` is null when nothing matched.
+   */
+  adoptPullRequest: (id: string, head: { sha?: string; branch?: string } = {}) =>
+    request<AdoptWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request/adopt`, head),
 
   /** Run a header action (Fix checks, Resolve conflicts, Merge, Archive), optionally in a given chat. */
   action: (id: string, action: Exclude<WorkbenchNextAction, null>, chatId?: string) =>

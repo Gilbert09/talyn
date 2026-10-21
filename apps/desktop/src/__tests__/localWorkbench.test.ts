@@ -71,6 +71,15 @@ function makeApi() {
       pullRequest: { number: 12, url: 'https://github.com/acme/app/pull/12' },
       existing: false,
     })),
+    adoptPullRequest: jest.fn(
+      async (
+        _id: string,
+        _head?: { sha?: string; branch?: string }
+      ): Promise<{ workbench: Workbench; pullRequest: { number: number; url: string; headRef: string } | null }> => ({
+        workbench: WB,
+        pullRequest: null,
+      })
+    ),
   };
 }
 
@@ -286,13 +295,18 @@ describe('LocalTurnController Create PR', () => {
   const ok = (resultText = REPLY) => ({ sessionId: 's1', isError: false, resultText, cancelled: false });
 
   type Steps = Array<{ argv: string[] }>;
-  function gitWorld(bridge: ReturnType<typeof setup>['bridge'], over: { push?: { exitCode: number; stderr: string } } = {}) {
+  const HEAD_SHA = 'a'.repeat(40);
+  function gitWorld(
+    bridge: ReturnType<typeof setup>['bridge'],
+    over: { push?: { exitCode: number; stderr: string }; head?: string } = {}
+  ) {
     bridge.exec.mockImplementation(async (_path: string, steps: Steps) => {
       const argv = steps.flatMap((s) => s.argv);
       if (argv.includes('--absolute-git-dir')) return { exitCode: 0, stdout: '/repo/.git\n', stderr: '' };
       if (argv.includes('--porcelain')) return { exitCode: 0, stdout: ' M a.ts\n', stderr: '' };
       if (argv.includes('rev-list')) return { exitCode: 0, stdout: '2\n', stderr: '' };
       if (argv.includes('push')) return { exitCode: 0, stdout: '', stderr: '', ...(over.push ?? {}) };
+      if (argv.includes('--abbrev-ref')) return { exitCode: 0, stdout: over.head ?? `${HEAD_SHA}\nagent-branch\n`, stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     });
   }
@@ -306,14 +320,18 @@ describe('LocalTurnController Create PR', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('Claude: shows the short text, and hands the instructions over as a system prompt', async () => {
+  it('Claude: shows the short text, and hands the instructions over in the prompt and as a system prompt', async () => {
     const { controller, bridge } = setup();
     await controller.send({ ...WB, settings: { prompts: { create_pr: 'Mention the ticket.' } } }, chat(), CREATE_PR);
     const user = useWorkbenchStore.getState().chatEvents.c1.events[0];
     expect(userMessageText(user.event)).toBe('Create a pull request');
+    expect(JSON.stringify(useWorkbenchStore.getState().chatEvents.c1.events)).not.toContain('Do not commit');
     const req = (bridge.startTurn.mock.calls[0] as unknown[])[0] as { prompt: string; appendSystemPrompt?: string };
-    expect(req.prompt).toBe('Create a pull request');
+    expect(req.prompt.startsWith(req.appendSystemPrompt ?? '')).toBe(true);
+    expect(req.prompt.endsWith('---\n\nCreate a pull request')).toBe(true);
+    expect(req.prompt).toContain(`Stay on branch \`${WB.branch}\``);
     expect(req.appendSystemPrompt).toContain('Do not commit, push or open the pull request');
+    expect(req.appendSystemPrompt).toContain("override the repository's own pull-request instructions");
     expect(req.appendSystemPrompt).toContain('merged into `main`');
     expect(req.appendSystemPrompt).toContain('Mention the ticket.');
   });
@@ -365,7 +383,10 @@ describe('LocalTurnController Create PR', () => {
     expect((await controller.send(WB, chat({ status: 'running' }), CREATE_PR)).queued).toBe(true);
     await controller.handleTurnEnd('c1', ok('done'));
     expect(bridge.startTurn).toHaveBeenLastCalledWith(
-      expect.objectContaining({ prompt: 'Create a pull request', appendSystemPrompt: expect.stringContaining('```talyn-pr') })
+      expect.objectContaining({
+        prompt: expect.stringMatching(/```talyn-pr[\s\S]*Create a pull request$/),
+        appendSystemPrompt: expect.stringContaining('```talyn-pr'),
+      })
     );
   });
 
@@ -383,6 +404,41 @@ describe('LocalTurnController Create PR', () => {
       'Could not open the pull request',
       'The agent did not return a pull request title. Press Create PR to try again.'
     );
+    // It asked the backend for a PR the agent opened itself, by the worktree's HEAD.
+    expect(api.adoptPullRequest).toHaveBeenCalledWith('wb1', { sha: HEAD_SHA, branch: 'agent-branch' });
+  });
+
+  it('links the PR the agent opened itself, and says so instead of the missing-block error', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    api.adoptPullRequest.mockResolvedValueOnce({
+      workbench: { ...WB, branch: 'agent-branch', pullRequestId: 'pr-77' },
+      pullRequest: { number: 77, url: 'https://github.com/acme/app/pull/77', headRef: 'agent-branch' },
+    });
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', ok('Opened https://github.com/acme/app/pull/999.'));
+    expect(prEvents()).toEqual([
+      expect.objectContaining({ ok: true, adopted: true, existing: true, number: 77, url: 'https://github.com/acme/app/pull/77' }),
+    ]);
+    expect(useWorkbenchStore.getState().workbenches.wb1).toMatchObject({ branch: 'agent-branch', pullRequestId: 'pr-77' });
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(gitArgvs(bridge).some((a) => a.includes('push'))).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the backend fails', { head: undefined, fail: true }],
+    ['the worktree has no commit', { head: 'fatal: ambiguous argument HEAD\n', fail: false }],
+  ])('keeps the missing-block error when %s', async (_name, over) => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge, { head: over.head });
+    if (over.fail) api.adoptPullRequest.mockRejectedValueOnce(new Error('offline'));
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', ok('No block here.'));
+    expect(prEvents()).toEqual([
+      expect.objectContaining({ ok: false, message: 'The agent did not return a pull request title. Press Create PR to try again.' }),
+    ]);
+    if (!over.fail) expect(api.adoptPullRequest).not.toHaveBeenCalled();
   });
 
   it('records a refused push in the thread and toasts it', async () => {

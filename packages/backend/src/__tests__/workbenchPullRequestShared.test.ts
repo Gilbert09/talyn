@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adoptedPullRequestMessage,
+  afterSignedPublishSteps,
   buildBlocks,
   buildClaudeArgv,
   buildCreatePrTurnInstructions,
@@ -7,13 +9,23 @@ import {
   commitsAheadSteps,
   CREATE_PR_MESSAGE,
   describePushFailure,
+  describeSignedPublishFailure,
+  headCommitSteps,
+  isSignedCommitRefusal,
   MISSING_PR_BLOCK_MESSAGE,
+  newBranchBaseSteps,
   parseCommitsAhead,
+  parseHeadCommit,
   parsePrDetails,
+  parseRemoteBranchHead,
+  parseSha,
   prCommitMessage,
   pullRequestOutcomeEvent,
   pushHeadStep,
+  remoteBranchHeadStep,
+  remoteHeadContainedSteps,
   shellQuote,
+  signedPublishStep,
   toShellScript,
   workbenchTurnPrompt,
   type AgentEvent,
@@ -81,7 +93,14 @@ describe('buildCreatePrTurnInstructions', () => {
       '`oslo`',
       'merged into `develop`',
       'Do not commit, push or open the pull request',
-      'do not run `gh`',
+      'Do not run `gh`, `fleet-publish` or `git push`, and do not call the GitHub API.',
+      'Stay on branch `oslo`. Do not create, rename or switch branches.',
+      "these instructions override the repository's own pull-request instructions",
+      'CLAUDE.md',
+      'AGENTS.md',
+      'skills',
+      'Talyn opens this pull request, not you.',
+      'fill it in and keep its headings',
       'git diff origin/develop...HEAD',
       'git status',
       '.github/pull_request_template.md',
@@ -115,13 +134,18 @@ describe('buildCreatePrTurnInstructions', () => {
 describe('workbenchTurnPrompt for a Create PR turn', () => {
   const createPr = { branch: 'tom/x', baseBranch: 'main' };
 
-  it('Claude: the visible text is the prompt, the instructions an appended system prompt', () => {
+  it('Claude: the instructions go in front of the text AND in an appended system prompt', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: CREATE_PR_MESSAGE, planMode: false, intent: 'create_pr', createPr });
-    expect(turn.prompt).toBe('Create a pull request');
-    expect(turn.appendSystemPrompt).toContain('talyn-pr');
+    const instructions = buildCreatePrTurnInstructions(createPr);
+    expect(turn.appendSystemPrompt).toBe(instructions);
+    expect(turn.prompt).toBe(`${instructions}\n\n---\n\nCreate a pull request`);
     const argv = buildClaudeArgv({ prompt: turn.prompt, appendSystemPrompt: turn.appendSystemPrompt });
     expect(argv[argv.indexOf('--append-system-prompt') + 1]).toBe(turn.appendSystemPrompt);
-    expect(argv.slice(-2)).toEqual(['--', 'Create a pull request']);
+    expect(argv.slice(-2)).toEqual(['--', turn.prompt]);
+  });
+
+  it.each(['claude', 'codex'] as const)('%s: an ordinary turn gets the visible text only', (agent) => {
+    expect(workbenchTurnPrompt({ agent, text: 'Tidy up', planMode: false, createPr })).toEqual({ prompt: 'Tidy up' });
   });
 
   it('Codex: the instructions go in front of the text, with no system prompt', () => {
@@ -145,6 +169,15 @@ describe('pullRequestOutcomeEvent in the transcript', () => {
       'an existing PR says it was linked',
       { ok: true, number: 9, url: 'https://github.com/acme/app/pull/9', existing: true },
       { text: 'Linked the open pull request #9', isError: false },
+    ],
+    [
+      'a PR the agent opened itself says so',
+      { ok: true, number: 120958, url: 'https://github.com/acme/app/pull/120958', existing: true, adopted: true },
+      {
+        text: 'The agent opened #120958 itself. Talyn linked it to this session.',
+        url: 'https://github.com/acme/app/pull/120958',
+        isError: false,
+      },
     ],
     [
       'a failure carries its message',
@@ -228,5 +261,108 @@ describe('describePushFailure', () => {
     const stderr = ['one', 'two', 'three', 'four', 'five', 'error: 403'].join('\n');
     const text = describePushFailure({ stderr, runtime: 'sandbox', repoFullName: 'acme/app' });
     expect(text.split('\n').slice(1)).toEqual(['three', 'four', 'five', 'error: 403']);
+  });
+});
+
+describe('signed publish', () => {
+  it.each([
+    [
+      'GH013 with the signature rule',
+      'remote: error: GH013: Repository rule violations found for refs/heads/x.\nremote: - Commits must have verified signatures.',
+      true,
+    ],
+    ['only the rule text', 'remote: - Commits must have verified signatures.', true],
+    ['a 403', "remote: Write access to repository not granted.\nfatal: unable to access 'x': 403", false],
+    ['a non-fast-forward', ' ! [rejected]        HEAD -> oslo (fetch first)', false],
+    ['nothing', '', false],
+  ])('isSignedCommitRefusal: %s', (_name, stderr, expected) => {
+    expect(isSignedCommitRefusal(stderr)).toBe(expected);
+  });
+
+  const sha = 'a'.repeat(40);
+
+  it.each([
+    ['the branch head', `${sha}\trefs/heads/oslo\n`, sha],
+    ['an upper-case sha', `${'A'.repeat(40)}\trefs/heads/oslo`, sha],
+    ['another branch with the same suffix', `${sha}\trefs/heads/team/oslo\n`, null],
+    ['no output (the branch is not on GitHub)', '', null],
+    ['an error', 'fatal: could not read from remote', null],
+  ])('parseRemoteBranchHead reads %s', (_name, stdout, expected) => {
+    expect(parseRemoteBranchHead(stdout, 'oslo')).toBe(expected);
+  });
+
+  it('asks GitHub for the exact branch ref and never prompts', () => {
+    expect(remoteBranchHeadStep('tom/x')).toEqual({
+      argv: ['git', 'ls-remote', '--heads', 'origin', 'refs/heads/tom/x'],
+      allowFailure: true,
+      env: { GIT_TERMINAL_PROMPT: '0' },
+    });
+  });
+
+  it('checks that HEAD contains the remote head, and starts a new branch at the merge-base', () => {
+    expect(remoteHeadContainedSteps('oslo', sha).map((s) => s.argv)).toEqual([
+      ['git', 'fetch', 'origin', 'oslo'],
+      ['git', 'merge-base', '--is-ancestor', sha, 'HEAD'],
+    ]);
+    expect(newBranchBaseSteps('main').map((s) => s.argv)).toEqual([
+      ['git', 'fetch', 'origin', 'main'],
+      ['git', 'merge-base', 'HEAD', 'FETCH_HEAD'],
+    ]);
+  });
+
+  it.each([
+    ['a sha', `${sha}\n`, sha],
+    ['fetch noise before the sha', `From x\n${sha}`, sha],
+    ['nothing', '', null],
+    ['an error', 'fatal: no merge base', null],
+  ])('parseSha reads %s', (_name, stdout, expected) => {
+    expect(parseSha(stdout)).toBe(expected);
+  });
+
+  it('publishes with fleet-publish, the message one argument, quoted safely', () => {
+    const step = signedPublishStep({ branch: 'oslo', message: "feat: it's $(x)", baseOid: sha });
+    expect(step.argv).toEqual(['fleet-publish', '--branch', 'oslo', '--message', "feat: it's $(x)", '--base', sha]);
+    expect(toShellScript([step])).toContain(`--message ${shellQuote("feat: it's $(x)")}`);
+  });
+
+  it('moves the local branch to the published commit without touching the files', () => {
+    expect(afterSignedPublishSteps('oslo').map((s) => s.argv)).toEqual([
+      ['git', 'fetch', 'origin', 'oslo'],
+      ['git', 'reset', '--soft', 'FETCH_HEAD'],
+      ['git', 'branch', '--set-upstream-to=origin/oslo'],
+    ]);
+  });
+
+  it.each([
+    ['a missing tool', { stderr: 'bash: fleet-publish: command not found', exitCode: 127 }, /no `fleet-publish`/],
+    ['a refusal', { stderr: 'fleet-publish: the fleet refused the commit (HTTP 422)', exitCode: 1 }, /could not publish the branch with `fleet-publish`\.\nfleet-publish: the fleet refused/],
+  ])('describeSignedPublishFailure: %s', (_name, input, expected) => {
+    expect(describeSignedPublishFailure(input)).toMatch(expected);
+  });
+});
+
+describe('the HEAD of the working tree', () => {
+  const sha = 'b'.repeat(40);
+
+  it('reads the commit and the branch, and the branch may fail', () => {
+    const steps = headCommitSteps();
+    expect(steps.map((s) => s.argv)).toEqual([
+      ['git', 'rev-parse', 'HEAD'],
+      ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+    ]);
+    expect(steps[1].allowFailure).toBe(true);
+  });
+
+  it.each([
+    ['a commit and a branch', `${sha}\nwarehouse-sources/chdb-no-redirects\n`, { sha, branch: 'warehouse-sources/chdb-no-redirects' }],
+    ['a detached HEAD', `${sha}\nHEAD\n`, { sha, branch: null }],
+    ['no commit yet', 'fatal: ambiguous argument', { sha: null, branch: null }],
+    ['nothing', '', { sha: null, branch: null }],
+  ])('parseHeadCommit reads %s', (_name, stdout, expected) => {
+    expect(parseHeadCommit(stdout)).toEqual(expected);
+  });
+
+  it('says what Talyn did with a PR the agent opened', () => {
+    expect(adoptedPullRequestMessage(5)).toBe('The agent opened #5 itself. Talyn linked it to this session.');
   });
 });

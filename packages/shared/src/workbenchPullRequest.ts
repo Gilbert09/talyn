@@ -4,7 +4,8 @@
  * Create PR sends a short visible message ({@link CREATE_PR_MESSAGE}) to the
  * chat with the `create_pr` intent. The agent also gets Talyn's instructions
  * ({@link buildCreatePrTurnInstructions}), which the transcript never shows:
- * Claude through `--append-system-prompt`, Codex in front of the prompt. The
+ * in front of the prompt for both agents, and for Claude also through
+ * `--append-system-prompt`. The
  * agent only writes the words, in a ```talyn-pr block at the end of its reply.
  * When the turn ends, Talyn commits what is uncommitted, pushes the branch and
  * opens the pull request through the GitHub API, and records the outcome in
@@ -84,11 +85,22 @@ export function buildCreatePrTurnInstructions(input: {
   extra?: string | null;
 }): string {
   const base = input.baseBranch;
+  const branch = input.branch;
   const lines = [
-    `The person pressed Create PR in Talyn. Prepare the pull request for the work on this branch (\`${input.branch}\`), to be merged into \`${base}\`.`,
+    `The person pressed Create PR in Talyn. Prepare the pull request for the work on this branch (\`${branch}\`), to be merged into \`${base}\`.`,
     '',
-    'Do not commit, push or open the pull request, and do not run `gh`. Talyn commits any uncommitted changes,',
-    'pushes the branch and opens the pull request from your reply when this turn ends.',
+    'Talyn opens this pull request, not you. When this turn ends, Talyn commits any uncommitted changes,',
+    `pushes \`${branch}\` (signed, when the repository requires it) and opens the pull request from your reply.`,
+    '',
+    "In this turn, these instructions override the repository's own pull-request instructions: CLAUDE.md,",
+    'AGENTS.md, skills, CONTRIBUTING and other docs. Use those only to write the title and the description.',
+    '',
+    'Rules for this turn:',
+    `- Stay on branch \`${branch}\`. Do not create, rename or switch branches.`,
+    '- Do not commit, push or open the pull request.',
+    '- Do not run `gh`, `fleet-publish` or `git push`, and do not call the GitHub API.',
+    '- If you think the pull request needs a different branch, a draft or other changes, say so in your reply.',
+    '  Talyn and the person decide.',
     '',
     '1. See everything that changed:',
     '   - `git status` for uncommitted changes, and `git diff HEAD` for their content.',
@@ -108,6 +120,8 @@ export function buildCreatePrTurnInstructions(input: {
     '     Otherwise say what changed and why, how it was tested, and anything a reviewer must know.',
     '   - "commitMessage": a conventional commit message for the uncommitted changes, or "" when there are none.',
     '   - "draft": true only when the person asked for a draft pull request.',
+    '',
+    `Without the \`\`\`${PR_BLOCK_FENCE} block, Talyn cannot open the pull request. Always end with it.`,
   ];
   const extra = input.extra?.trim();
   if (extra) lines.push('', 'Extra instructions for this pull request:', '', extra);
@@ -190,9 +204,39 @@ export function parsePrDetails(text: string): { ok: true; details: WorkbenchPrDe
 // The outcome in the thread
 // ============================================================================
 
+/**
+ * `adopted`: the agent opened the PR itself, against the instructions, and
+ * Talyn found it by the box's head commit or branch and linked it.
+ */
 export type PullRequestOutcome =
-  | { ok: true; number: number; url: string; existing: boolean }
+  | { ok: true; number: number; url: string; existing: boolean; adopted?: boolean }
   | { ok: false; message: string };
+
+export function adoptedPullRequestMessage(number: number): string {
+  return `The agent opened #${number} itself. Talyn linked it to this session.`;
+}
+
+/** What `POST /workbenches/:id/pull-request/adopt` answers. `pullRequest` is null when no open PR matched. */
+export interface AdoptWorkbenchPullRequestResult {
+  workbench: Workbench;
+  pullRequest: { number: number; url: string; headRef: string } | null;
+}
+
+/** The HEAD commit and branch of the working tree, for finding a PR the agent opened itself. */
+export function headCommitSteps(): GitStep[] {
+  return [
+    { argv: ['git', 'rev-parse', 'HEAD'] },
+    { argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], allowFailure: true },
+  ];
+}
+
+/** `{ sha, branch }` from {@link headCommitSteps}' stdout. `branch` is null on a detached HEAD. */
+export function parseHeadCommit(stdout: string): { sha: string | null; branch: string | null } {
+  const [first = '', second = ''] = stdout.split('\n').map((l) => l.trim());
+  const sha = /^[0-9a-f]{40}$/i.test(first) ? first.toLowerCase() : null;
+  const branch = second && second !== 'HEAD' ? second : null;
+  return { sha, branch };
+}
 
 /** The transcript event that records what a Create PR turn did. `buildBlocks` renders it as one line. */
 export function pullRequestOutcomeEvent(outcome: PullRequestOutcome): Record<string, unknown> {
@@ -240,6 +284,98 @@ export function parseCommitsAhead(stdout: string): number | null {
 /** Push the current branch and track it. Never prompts: a missing credential fails at once. */
 export function pushHeadStep(): GitStep {
   return { argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
+}
+
+// ============================================================================
+// Signed publish (sandbox only)
+// ============================================================================
+
+/**
+ * A push refused because the repository requires verified signatures
+ * (GitHub's rule violation GH013). The sandbox has no signing key, so Talyn
+ * then publishes with `fleet-publish`, which makes GitHub sign the commit.
+ */
+export function isSignedCommitRefusal(stderr: string): boolean {
+  return /\bGH013\b|verified signatures|must be signed|commits? must have (?:a )?(?:verified )?signature/i.test(stderr);
+}
+
+/** The branch's head on GitHub: `<sha>\trefs/heads/<branch>`, or nothing when the branch is not there. */
+export function remoteBranchHeadStep(branch: string): GitStep {
+  return {
+    argv: ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${branch}`],
+    allowFailure: true,
+    env: { GIT_TERMINAL_PROMPT: '0' },
+  };
+}
+
+/** The sha in {@link remoteBranchHeadStep}'s stdout, or null. */
+export function parseRemoteBranchHead(stdout: string, branch: string): string | null {
+  for (const line of stdout.split('\n')) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (ref === `refs/heads/${branch}` && /^[0-9a-f]{40}$/i.test(sha ?? '')) return sha.toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Fetch the branch's head on GitHub and check that HEAD contains it. A publish
+ * diffs the working tree against that head, so remote commits that HEAD does
+ * not have would be undone. Exit 1 from the last step means "not contained".
+ */
+export function remoteHeadContainedSteps(branch: string, remoteSha: string): GitStep[] {
+  return [
+    { argv: ['git', 'fetch', 'origin', branch], env: { GIT_TERMINAL_PROMPT: '0' } },
+    { argv: ['git', 'merge-base', '--is-ancestor', remoteSha, 'HEAD'] },
+  ];
+}
+
+/**
+ * The commit a branch that is not on GitHub yet starts from: where HEAD left
+ * the base. Not the base's tip: a diff against the tip would also revert every
+ * change the base got since.
+ */
+export function newBranchBaseSteps(base: string): GitStep[] {
+  return [
+    { argv: ['git', 'fetch', 'origin', base], env: { GIT_TERMINAL_PROMPT: '0' } },
+    { argv: ['git', 'merge-base', 'HEAD', 'FETCH_HEAD'] },
+  ];
+}
+
+export function parseSha(stdout: string): string | null {
+  const last = stdout.trim().split('\n').pop()?.trim() ?? '';
+  return /^[0-9a-f]{40}$/i.test(last) ? last.toLowerCase() : null;
+}
+
+/**
+ * `fleet-publish`: the working tree, as ONE commit on top of `baseOid`, made
+ * by GitHub through the fleet proxy and so signed. The local commits are not
+ * replayed; only the final files matter.
+ */
+export function signedPublishStep(input: { branch: string; message: string; baseOid: string }): GitStep {
+  return { argv: ['fleet-publish', '--branch', input.branch, '--message', input.message, '--base', input.baseOid] };
+}
+
+/**
+ * After a publish, point the local branch at the published commit. `--soft`
+ * keeps the files and the index as they are: the published tree is the working
+ * tree, so nothing changes but the history.
+ */
+export function afterSignedPublishSteps(branch: string): GitStep[] {
+  return [
+    { argv: ['git', 'fetch', 'origin', branch], env: { GIT_TERMINAL_PROMPT: '0' } },
+    { argv: ['git', 'reset', '--soft', 'FETCH_HEAD'] },
+    { argv: ['git', 'branch', `--set-upstream-to=origin/${branch}`], allowFailure: true },
+  ];
+}
+
+/** A failed `fleet-publish`, in words a person can act on. */
+export function describeSignedPublishFailure(input: { stderr: string; exitCode: number | null }): string {
+  const detail = gitStderrTail(input.stderr);
+  const head =
+    input.exitCode === 127 || /fleet-publish: (?:command )?not found/i.test(input.stderr)
+      ? 'The repository requires signed commits, and this sandbox has no `fleet-publish` to sign them with. Recreate the session to get a current sandbox.'
+      : 'The repository requires signed commits, and Talyn could not publish the branch with `fleet-publish`.';
+  return detail ? `${head}\n${detail}` : head;
 }
 
 /** The commit message for uncommitted changes: the agent's, else the title. */

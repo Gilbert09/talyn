@@ -38,6 +38,7 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
 }));
 
 const { workbenchRoutes } = await import('../routes/workbenches.js');
+const { workbenchPullRequestRoutes } = await import('../routes/workbenchPullRequests.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { GitHubApiError, githubService } = await import('../services/github.js');
@@ -70,6 +71,33 @@ interface GitWorld {
   ahead?: string;
   push?: ExecReply;
   commit?: ExecReply;
+  /** `git ls-remote` for the session branch: '' when the branch is not on GitHub. */
+  remote?: string;
+  contained?: ExecReply;
+  mergeBase?: string;
+  publish?: ExecReply;
+  /** `git rev-parse HEAD` then `--abbrev-ref HEAD`. */
+  head?: string;
+}
+
+const HEAD_SHA = 'a'.repeat(40);
+const BASE_SHA = 'b'.repeat(40);
+const REMOTE_SHA = 'c'.repeat(40);
+const GH013 =
+  'remote: error: GH013: Repository rule violations found for refs/heads/x.\nremote: - Commits must have verified signatures.\n ! [remote rejected] HEAD -> x (push declined due to repository rule violations)';
+
+/** A PR as `GET /commits/{sha}/pulls` and `GET /pulls?head=` return it. */
+function ghPr(number: number, over: { state?: 'open' | 'closed'; sha?: string; ref?: string; repo?: string | null } = {}) {
+  return {
+    number,
+    html_url: `https://github.com/acme/app/pull/${number}`,
+    state: over.state ?? 'open',
+    head: {
+      ref: over.ref ?? 'agent-branch',
+      sha: over.sha ?? HEAD_SHA,
+      repo: over.repo === null ? null : { full_name: over.repo ?? 'acme/app' },
+    },
+  };
 }
 
 describe('workbench Create PR', () => {
@@ -110,6 +138,8 @@ describe('workbench Create PR', () => {
   const createPr = vi.fn();
   const findExisting = vi.fn();
   const watch = vi.fn();
+  const prsForCommit = vi.fn();
+  const prsForHead = vi.fn();
 
   beforeEach(async () => {
     emitted.length = 0;
@@ -140,6 +170,10 @@ describe('workbench Create PR', () => {
     vi.spyOn(githubService, 'createPullRequest').mockImplementation(createPr);
     vi.spyOn(githubService, 'findOpenPullRequestForHead').mockImplementation(findExisting);
     vi.spyOn(prMonitorService, 'watchPullRequest').mockImplementation(watch);
+    prsForCommit.mockReset().mockResolvedValue([]);
+    prsForHead.mockReset().mockResolvedValue([]);
+    vi.spyOn(githubService, 'listPullRequestsForCommit').mockImplementation(prsForCommit);
+    vi.spyOn(githubService, 'listOpenPullRequestsForHead').mockImplementation(prsForHead);
 
     fleet = new FakeFleet();
     fleet.handler = async (script) => {
@@ -148,6 +182,11 @@ describe('workbench Create PR', () => {
       if (script.includes('git commit -m')) return world.commit ?? { exitCode: 0 };
       if (script.includes('rev-list --count')) return { stdout: world.ahead ?? '' };
       if (script.includes('git push -u origin HEAD')) return world.push ?? { exitCode: 0 };
+      if (script.includes('git ls-remote --heads origin refs/heads/')) return { stdout: world.remote ?? '' };
+      if (script.includes('merge-base --is-ancestor')) return world.contained ?? { exitCode: 0 };
+      if (script.includes('merge-base HEAD FETCH_HEAD')) return { stdout: world.mergeBase ?? `${BASE_SHA}\n` };
+      if (script.includes('fleet-publish --branch')) return world.publish ?? { exitCode: 0, stdout: 'published\n' };
+      if (script.includes('rev-parse --abbrev-ref HEAD')) return { stdout: world.head ?? `${HEAD_SHA}\nagent-branch\n` };
       if (script.includes('git commit-tree')) return { stdout: `${'c'.repeat(40)}\n` };
       return { exitCode: 0, stdout: '' };
     };
@@ -160,6 +199,7 @@ describe('workbench Create PR', () => {
       req.user = { id, email: `${id}@example.test`, isAdmin: false };
       next();
     });
+    app.use('/workbenches', wrapAsyncRoutes(workbenchPullRequestRoutes()));
     app.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
     app.use(apiErrorHandler);
     server = createServer(app);
@@ -188,7 +228,7 @@ describe('workbench Create PR', () => {
     const createPrMessage = { text: 'Create a pull request', intent: 'create_pr' };
     const prEvents = (events: Loose[]) => events.filter((e) => e.type === 'talyn_pr');
 
-    it('gives Claude the hidden instructions as a system prompt, keeps the short text, and opens the PR', async () => {
+    it('gives Claude the hidden instructions in the prompt and as a system prompt, keeps the short text, and opens the PR', async () => {
       const wb = await sandboxWorkbench();
       const chatId = (await listChats(wb.id))[0].id;
       mark = fleet.scripts.length;
@@ -197,9 +237,13 @@ describe('workbench Create PR', () => {
 
       const script = scriptsSinceMark().find((s) => isAgentTurn(s))!;
       expect(script).toContain('--append-system-prompt');
-      expect(script).toContain('Do not commit, push or open the pull request');
+      // Once in the system prompt, once in front of the prompt.
+      expect(script.split('Do not commit, push or open the pull request').length - 1).toBe(2);
+      expect(script).toContain(`Stay on branch \`${wb.branch}\``);
       expect(script).toContain('```talyn-pr');
-      expect(script.trimEnd().endsWith("-- 'Create a pull request'")).toBe(true);
+      const prompt = script.slice(script.lastIndexOf(' -- '));
+      expect(prompt).toContain('override the repository');
+      expect(prompt.trimEnd().endsWith("---\n\nCreate a pull request'")).toBe(true);
 
       const user = events.find((e) => e.type === 'user' && e.talyn?.kind === 'user_message');
       expect(user.message.content).toEqual([{ type: 'text', text: 'Create a pull request' }]);
@@ -261,7 +305,87 @@ describe('workbench Create PR', () => {
         expect.objectContaining({ ok: false, message: 'The agent did not return a pull request title. Press Create PR to try again.' }),
       ]);
       expect(createPr).not.toHaveBeenCalled();
-      expect(scriptsSinceMark().some((s) => s.includes('git push'))).toBe(false);
+      expect(scriptsSinceMark().some((s) => !isAgentTurn(s) && s.includes('git push'))).toBe(false);
+      // It looked for a PR the agent opened itself, by the box's HEAD, and found none.
+      expect(prsForCommit).toHaveBeenCalledWith('ws-a', 'acme', 'app', HEAD_SHA);
+      expect((await getWorkbench(wb.id))?.pullRequestId).toBeNull();
+    });
+
+    describe('when the agent opened the PR itself', () => {
+      const NO_BLOCK = 'Opened https://github.com/acme/app/pull/999 as a draft.';
+
+      it('links the open PR at the box HEAD, moves the session to its branch and says so', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(NO_BLOCK) };
+        prsForCommit.mockResolvedValue([ghPr(120958)]);
+        const events = await sendAndSettle(chatId, createPrMessage);
+
+        expect(prEvents(events)).toEqual([
+          expect.objectContaining({
+            ok: true, adopted: true, existing: true, number: 120958, url: 'https://github.com/acme/app/pull/120958',
+          }),
+        ]);
+        expect(watch).toHaveBeenCalledWith(expect.objectContaining({ number: 120958 }));
+        const row = await getWorkbench(wb.id);
+        expect(row?.pullRequestId).toBe('pr-120958');
+        expect(row?.branch).toBe('agent-branch');
+        expect(createPr).not.toHaveBeenCalled();
+        expect(emitted.some((e) => e.type === 'workbench:updated' && (e.payload as Loose).workbench.pullRequestId === 'pr-120958')).toBe(true);
+        // Never from the agent's words: #999 is in the reply and is not linked.
+        expect(watch).not.toHaveBeenCalledWith(expect.objectContaining({ number: 999 }));
+      });
+
+      it('finds a fleet-publish PR by the branch the box is on, when no PR has the box HEAD', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(NO_BLOCK) };
+        world.head = `${HEAD_SHA}\nwarehouse-sources/chdb-no-redirects\n`;
+        prsForHead.mockResolvedValue([ghPr(120958, { sha: REMOTE_SHA, ref: 'warehouse-sources/chdb-no-redirects' })]);
+        const events = await sendAndSettle(chatId, createPrMessage);
+
+        expect(prsForHead).toHaveBeenCalledWith('ws-a', 'acme', 'app', 'warehouse-sources/chdb-no-redirects');
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: true, adopted: true, number: 120958 })]);
+        expect((await getWorkbench(wb.id))?.branch).toBe('warehouse-sources/chdb-no-redirects');
+      });
+
+      it.each<[string, Loose[]]>([
+        ['several open PRs at the commit', [ghPr(1), ghPr(2)]],
+        ['only a closed PR', [ghPr(3, { state: 'closed' })]],
+        ['an open PR whose head is another commit', [ghPr(4, { sha: REMOTE_SHA })]],
+        ['an open PR from a fork', [ghPr(5, { repo: 'someone/app' })]],
+      ])('keeps the missing-block message for %s', async (_name, prs) => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(NO_BLOCK) };
+        world.head = `${HEAD_SHA}\nHEAD\n`;
+        prsForCommit.mockResolvedValue(prs);
+        const events = await sendAndSettle(chatId, createPrMessage);
+        expect(prEvents(events)).toEqual([
+          expect.objectContaining({ ok: false, message: 'The agent did not return a pull request title. Press Create PR to try again.' }),
+        ]);
+        expect(watch).not.toHaveBeenCalled();
+        expect((await getWorkbench(wb.id))?.pullRequestId).toBeNull();
+      });
+
+      it('keeps the missing-block message for several open PRs from the branch', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(NO_BLOCK) };
+        prsForHead.mockResolvedValue([ghPr(6), ghPr(7)]);
+        const events = await sendAndSettle(chatId, createPrMessage);
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: false })]);
+      });
+
+      it('keeps the missing-block message when GitHub fails', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(NO_BLOCK) };
+        prsForCommit.mockRejectedValue(new Error('network down'));
+        const events = await sendAndSettle(chatId, createPrMessage);
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: false })]);
+        expect((await getChat(chatId))?.status).toBe('idle');
+      });
     });
 
     it('opens nothing from a failed turn', async () => {
@@ -272,7 +396,7 @@ describe('workbench Create PR', () => {
       const events = await sendAndSettle(chatId, createPrMessage);
       expect(prEvents(events)).toEqual([]);
       expect(createPr).not.toHaveBeenCalled();
-      expect(scriptsSinceMark().some((s) => s.includes('git push'))).toBe(false);
+      expect(scriptsSinceMark().some((s) => !isAgentTurn(s) && s.includes('git push'))).toBe(false);
       expect((await getChat(chatId))?.status).toBe('error');
     });
 
@@ -354,7 +478,7 @@ describe('workbench Create PR', () => {
       const res = await call('POST', `/workbenches/${wb.id}/pull-request`, { ...input, base: 'develop' });
       expect([res.status, res.body.code]).toEqual([409, 'nothing_to_open']);
       expect(res.body.error).toBe('There is nothing to open a pull request for: the branch has no commits ahead of develop.');
-      expect(scriptsSinceMark().some((s) => s.includes('git push'))).toBe(false);
+      expect(scriptsSinceMark().some((s) => !isAgentTurn(s) && s.includes('git push'))).toBe(false);
       expect(createPr).not.toHaveBeenCalled();
     });
 
@@ -370,6 +494,90 @@ describe('workbench Create PR', () => {
       expect(res.body.error).toMatch(/^GitHub refused the push\. The Talyn GitHub App needs Contents: Read & write on acme\/app\.\n/);
       expect(res.body.error).toContain('returned error: 403');
       expect(createPr).not.toHaveBeenCalled();
+    });
+
+    describe('on a repository that requires signed commits', () => {
+      const publishScript = () => scriptsSinceMark().find((s) => s.includes('fleet-publish --branch'));
+
+      it('publishes a new branch with fleet-publish from the merge-base, then opens the PR', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.status = ' M src/a.ts\n';
+        world.push = { exitCode: 1, stderr: GH013 };
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect(res.status).toBe(200);
+
+        const scripts = scriptsSinceMark();
+        const order = ['git commit -m', 'git push -u origin HEAD', 'git ls-remote', 'merge-base HEAD FETCH_HEAD', 'fleet-publish --branch', 'git reset --soft FETCH_HEAD'].map(
+          (needle) => scripts.findIndex((s) => s.includes(needle)),
+        );
+        expect(order.every((i) => i >= 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
+        expect(publishScript()).toContain(`fleet-publish --branch ${wb.branch} --message 'feat: add the thing' --base ${BASE_SHA}`);
+        expect(scripts.some((s) => s.includes('merge-base --is-ancestor'))).toBe(false);
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: wb.branch }));
+        expect(res.body.data.workbench.pullRequestId).toBe('pr-7');
+      });
+
+      it('publishes on top of the branch head when the branch is already on GitHub', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.push = { exitCode: 1, stderr: GH013 };
+        world.remote = `${REMOTE_SHA}\trefs/heads/${wb.branch}\n`;
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect(res.status).toBe(200);
+        expect(scriptsSinceMark().find((s) => s.includes('merge-base --is-ancestor'))).toContain(`--is-ancestor ${REMOTE_SHA} HEAD`);
+        expect(publishScript()).toContain(`--base ${REMOTE_SHA}`);
+        expect(scriptsSinceMark().some((s) => s.includes('merge-base HEAD FETCH_HEAD'))).toBe(false);
+      });
+
+      it('refuses when GitHub has commits on the branch that the session does not', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.push = { exitCode: 1, stderr: GH013 };
+        world.remote = `${REMOTE_SHA}\trefs/heads/${wb.branch}\n`;
+        world.contained = { exitCode: 1 };
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect([res.status, res.body.code]).toEqual([409, 'push_failed']);
+        expect(res.body.error).toMatch(/^GitHub has commits on this branch/);
+        expect(publishScript()).toBeUndefined();
+        expect(createPr).not.toHaveBeenCalled();
+      });
+
+      it.each<[string, ExecReply, RegExp]>([
+        ['a refused publish', { exitCode: 1, stderr: 'fleet-publish: the fleet refused the commit (HTTP 422)' }, /could not publish the branch with `fleet-publish`\.\nfleet-publish: the fleet refused/],
+        ['an old sandbox with no fleet-publish', { exitCode: 127, stderr: 'bash: fleet-publish: command not found' }, /no `fleet-publish`/],
+      ])('says why when %s', async (_name, publish, expected) => {
+        const wb = await sandboxWorkbench();
+        world.push = { exitCode: 1, stderr: GH013 };
+        world.publish = publish;
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect([res.status, res.body.code]).toEqual([409, 'push_failed']);
+        expect(res.body.error).toMatch(expected);
+        expect(createPr).not.toHaveBeenCalled();
+      });
+
+      it('does not use fleet-publish for any other push failure', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.push = { exitCode: 1, stderr: ' ! [rejected]        HEAD -> x (fetch first)' };
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect([res.status, res.body.code]).toEqual([409, 'push_failed']);
+        expect(publishScript()).toBeUndefined();
+      });
+
+      it('opens the PR from a Create PR turn through the same fallback', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        world.push = { exitCode: 1, stderr: GH013 };
+        const res = await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Create a pull request', intent: 'create_pr' });
+        expect(res.status).toBe(200);
+        await vi.waitFor(async () => expect((await getChat(chatId))?.status).toBe('idle'), { timeout: 5000 });
+        const events = (await listEvents(chatId, 0, 200)).events.map((e: Loose) => e.event);
+        expect(events.filter((e: Loose) => e.type === 'talyn_pr')).toEqual([expect.objectContaining({ ok: true, number: 7 })]);
+        expect(publishScript()).toBeDefined();
+      });
     });
 
     it('says why a commit failed', async () => {
@@ -460,6 +668,60 @@ describe('workbench Create PR', () => {
       const wb = await localWorkbench();
       const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
       expect([res.status, res.body.code]).toEqual([409, 'local_runtime']);
+    });
+
+    describe('adopting a PR the agent opened (local sessions)', () => {
+      it('links the one open PR at the sent commit and moves the session to its branch', async () => {
+        const wb = await localWorkbench();
+        prsForCommit.mockResolvedValue([ghPr(31, { ref: 'agent-branch' }), ghPr(30, { state: 'closed' })]);
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request/adopt`, { sha: HEAD_SHA, branch: wb.branch });
+        expect(res.status).toBe(200);
+        expect(res.body.data.pullRequest).toEqual({ number: 31, url: 'https://github.com/acme/app/pull/31', headRef: 'agent-branch' });
+        expect(res.body.data.workbench).toMatchObject({ pullRequestId: 'pr-31', branch: 'agent-branch' });
+        expect(prsForCommit).toHaveBeenCalledWith('ws-a', 'acme', 'app', HEAD_SHA);
+        expect(fleet.scripts.some((s) => s.includes('rev-parse --abbrev-ref HEAD'))).toBe(false);
+      });
+
+      it('answers null and links nothing when no open PR matches', async () => {
+        const wb = await localWorkbench();
+        prsForCommit.mockResolvedValue([ghPr(30, { state: 'closed' })]);
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request/adopt`, { sha: HEAD_SHA });
+        expect(res.status).toBe(200);
+        expect(res.body.data.pullRequest).toBeNull();
+        expect(res.body.data.workbench.pullRequestId).toBeNull();
+        expect(watch).not.toHaveBeenCalled();
+      });
+
+      it.each<[string, Record<string, unknown>, string]>([
+        ['nothing to look up', {}, 'bad_head'],
+        ['a short sha', { sha: 'abc123' }, 'bad_sha'],
+        ['a bad branch', { branch: 'a..b' }, 'bad_branch'],
+      ])('answers 400 for %s', async (_name, body, code) => {
+        const wb = await localWorkbench();
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request/adopt`, body);
+        expect([res.status, res.body.code]).toEqual([400, code]);
+      });
+
+      it('refuses a caller without access to the workspace', async () => {
+        const wb = await localWorkbench();
+        await seedUser(testDb.db, { id: 'owner-b' });
+        const resp = await fetch(`${base}/workbenches/${wb.id}/pull-request/adopt`, {
+          method: 'POST',
+          headers: { 'x-user': 'owner-b', 'content-type': 'application/json' },
+          body: JSON.stringify({ sha: HEAD_SHA }),
+        });
+        expect([403, 404]).toContain(resp.status);
+        expect(prsForCommit).not.toHaveBeenCalled();
+      });
+
+      it('reads HEAD in the box for a sandbox session', async () => {
+        const wb = await sandboxWorkbench();
+        prsForCommit.mockResolvedValue([ghPr(40, { ref: wb.branch })]);
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request/adopt`, {});
+        expect(res.status).toBe(200);
+        expect(res.body.data.pullRequest.number).toBe(40);
+        expect(res.body.data.workbench.branch).toBe(wb.branch);
+      });
     });
 
     it('is no longer a prompt action', async () => {

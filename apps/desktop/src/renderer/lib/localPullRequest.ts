@@ -3,11 +3,14 @@ import {
   commitsAheadSteps,
   describePushFailure,
   gitStderrTail,
+  headCommitSteps,
   nothingToOpenMessage,
   parseCommitsAhead,
+  parseHeadCommit,
   prCommitMessage,
   pushHeadStep,
   workingTreeStatus,
+  type AdoptWorkbenchPullRequestResult,
   type CreateWorkbenchPullRequestInput,
   type CreateWorkbenchPullRequestResult,
   type Workbench,
@@ -47,4 +50,30 @@ export async function openLocalPullRequest(
     throw new Error(describePushFailure({ stderr: push.stderr, runtime: 'local', repoFullName: workbench.repoFullName }));
   }
   return api.createPullRequest(workbench.id, { ...input, pushed: true });
+}
+
+export interface AdoptPullRequestApi {
+  adoptPullRequest(id: string, head: { sha?: string; branch?: string }): Promise<AdoptWorkbenchPullRequestResult>;
+}
+
+/**
+ * The safety net after a Create PR turn with no talyn-pr block: the agent may
+ * have opened the PR itself. Read the worktree's HEAD and ask the backend for
+ * the one open PR at that commit (or from that branch). Null when none matched.
+ */
+export async function adoptLocalPullRequest(
+  bridge: Pick<WorkbenchLocalBridge, 'exec'>,
+  api: AdoptPullRequestApi,
+  workbench: Pick<Workbench, 'id' | 'localPath'>
+): Promise<AdoptWorkbenchPullRequestResult | null> {
+  const path = workbench.localPath;
+  if (!path) return null;
+  const res = await bridge.exec(path, headCommitSteps());
+  const head = parseHeadCommit(res.stdout);
+  if (!head.sha && !head.branch) return null;
+  const adopted = await api.adoptPullRequest(workbench.id, {
+    ...(head.sha ? { sha: head.sha } : {}),
+    ...(head.branch ? { branch: head.branch } : {}),
+  });
+  return adopted.pullRequest ? adopted : null;
 }

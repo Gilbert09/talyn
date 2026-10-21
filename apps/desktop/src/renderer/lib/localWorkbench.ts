@@ -23,7 +23,7 @@ import { api } from './api';
 import { getDeviceId, getWorkbenchBridge, newClientId } from './workbenchBridge';
 import { ensureChatHistory } from './workbenchData';
 import { makeUserMessageEvent } from './workbenchFormat';
-import { openLocalPullRequest } from './localPullRequest';
+import { adoptLocalPullRequest, openLocalPullRequest } from './localPullRequest';
 import { toast } from '../stores/toast';
 import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 
@@ -41,7 +41,7 @@ import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 export const LOCAL_UPLOAD_INTERVAL_MS = 1000;
 
 type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'> &
-  Partial<Pick<typeof api.workbenches, 'update'>>;
+  Partial<Pick<typeof api.workbenches, 'update' | 'adoptPullRequest'>>;
 
 export interface LocalControllerDeps {
   bridge: WorkbenchLocalBridge;
@@ -314,7 +314,7 @@ export class LocalTurnController {
     const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
     const parsed = parsePrDetails(finalText);
     let outcome: PullRequestOutcome;
-    if (!parsed.ok) outcome = { ok: false, message: parsed.error };
+    if (!parsed.ok) outcome = (workbench && (await this.adoptPullRequest(workbench))) || { ok: false, message: parsed.error };
     else if (!workbench) outcome = { ok: false, message: 'The session is no longer loaded.' };
     else {
       try {
@@ -330,6 +330,25 @@ export class LocalTurnController {
     }
     this.record(chatId, run.turn, pullRequestOutcomeEvent(outcome) as AgentEventDraft);
     if (!outcome.ok) toast.error('Could not open the pull request', outcome.message);
+  }
+
+  /**
+   * No talyn-pr block: the agent may have opened the PR itself, against the
+   * instructions. Link the one open PR at the worktree's HEAD, if there is one.
+   * Never throws; null means "keep the missing-block message".
+   */
+  private async adoptPullRequest(workbench: Workbench): Promise<PullRequestOutcome | null> {
+    const adoptApi = this.deps.api.adoptPullRequest;
+    if (!adoptApi) return null;
+    try {
+      const adopted = await adoptLocalPullRequest(this.deps.bridge, { adoptPullRequest: adoptApi }, workbench);
+      if (!adopted?.pullRequest) return null;
+      useWorkbenchStore.getState().upsertWorkbench(adopted.workbench);
+      const { number, url } = adopted.pullRequest;
+      return { ok: true, number, url, existing: true, adopted: true };
+    } catch {
+      return null;
+    }
   }
 
   async cancel(chatId: string): Promise<void> {

@@ -17,6 +17,7 @@
  * layer must not decide how text becomes markup.
  */
 import type { AgentEvent } from './index.js';
+import { adoptedPullRequestMessage } from './workbenchPullRequest.js';
 
 // ---------------------------------------------------------------------------
 // Block model — the transcript is event-stream shaped; the renderer wants a
@@ -219,15 +220,24 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
     // What a workbench's Create PR turn did, as one line.
     if (event.type === 'talyn_pr') {
-      const pr = event as { ok?: unknown; number?: unknown; url?: unknown; existing?: unknown; message?: unknown };
+      const pr = event as {
+        ok?: unknown;
+        number?: unknown;
+        url?: unknown;
+        existing?: unknown;
+        adopted?: unknown;
+        message?: unknown;
+      };
       const ok = pr.ok === true && typeof pr.number === 'number';
       blocks.push({
         kind: 'system',
         key: seqKey,
         subtype: 'talyn_pr',
-        text: ok
-          ? `${pr.existing === true ? 'Linked the open pull request' : 'Opened pull request'} #${pr.number}`
-          : String(pr.message ?? 'Could not open the pull request.'),
+        text: !ok
+          ? String(pr.message ?? 'Could not open the pull request.')
+          : pr.adopted === true
+            ? adoptedPullRequestMessage(pr.number as number)
+            : `${pr.existing === true ? 'Linked the open pull request' : 'Opened pull request'} #${pr.number}`,
         ...(ok && typeof pr.url === 'string' ? { url: pr.url } : {}),
         isError: !ok,
       });
