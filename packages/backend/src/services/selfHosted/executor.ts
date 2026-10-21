@@ -13,6 +13,7 @@ import { mcpServerIdsFromMetadata } from '../mcpServers/dispatch.js';
 import { cloudStatusForSandbox } from './poller.js';
 import { agentLabel, failoverSummary } from './exhaustedQuota.js';
 import { dispatchSandboxRun, type SandboxRunHandle } from './sandboxRun.js';
+import { accountIdsFromHops } from './accountSelection.js';
 import { TASK_SYSTEM_PROMPT } from './systemPrompts.js';
 
 // Re-exported, not redeclared. A second definition of this contract is how the
@@ -89,6 +90,9 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     // different box from the one being replaced.
     internetAccess: internetAccessFromTask(task),
     mcpServerIds: mcpServerIdsFromMetadata(task.metadata),
+    // Accounts a failover already tried on this task: the next run of it must
+    // not land on one of them while another account is free.
+    avoidAccountIds: triedAccountIds(task),
     // No budget. Talyn has never sent the fleet a turn, spend or time cap on a
     // task run, and adding one here would be a tightening nobody asked for —
     // the caps belong to callers that can justify a number.
@@ -100,7 +104,8 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       : { ok: false, error: dispatched.error };
   }
 
-  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap } = dispatched.handle;
+  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap, accountId } =
+    dispatched.handle;
 
   // The bookkeeping is inside a boundary of its own, and it matters that it is.
   // The sandbox is already booted by this point, so a failure here is not a
@@ -120,6 +125,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       host,
       repoSlug,
       quotaSwap,
+      accountId,
     });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -141,10 +147,10 @@ async function recordDispatch(
   env: Environment,
   handle: Pick<
     SandboxRunHandle,
-    'sandbox' | 'provider' | 'model' | 'endpoint' | 'host' | 'repoSlug' | 'quotaSwap'
+    'sandbox' | 'provider' | 'model' | 'endpoint' | 'host' | 'repoSlug' | 'quotaSwap' | 'accountId'
   >,
 ): Promise<void> {
-  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap } = handle;
+  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap, accountId } = handle;
 
   const cloudTask: CloudTaskMetadata = {
     provider: 'selfhosted',
@@ -167,6 +173,9 @@ async function recordDispatch(
       // rest of its deadline. It is also what the operator console's host
       // column and host filter read.
       ...(host ? { host } : {}),
+      // WHICH ACCOUNT of that vendor. The re-credential push, the host pull and
+      // the hot-swap check all serve this one, and a hot-swap rewrites it.
+      ...(accountId ? { accountId } : {}),
     },
   };
 
@@ -198,6 +207,16 @@ async function recordDispatch(
     .where(eq(tasksTable.id, task.id));
   emitTaskStatus(task.workspaceId, task.id, 'in_progress');
 
+}
+
+function triedAccountIds(task: Task): string[] {
+  const failover = (task.metadata as Record<string, unknown> | null)?.quotaFailover as
+    | { tried?: unknown }
+    | undefined;
+  const tried = Array.isArray(failover?.tried)
+    ? failover.tried.filter((h): h is string => typeof h === 'string')
+    : [];
+  return accountIdsFromHops(tried);
 }
 
 function modelFromTask(task: Task): string | undefined {

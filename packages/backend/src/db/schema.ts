@@ -1719,8 +1719,13 @@ export const prCodeReviewRuns = pgTable(
     failureCode: text('failure_code'),
     /** The provider's own error sentence for a failed run. Capped at 500. */
     failureDetail: text('failure_detail'),
-    /** The fleet agent this unit moved away from. Set at most once. */
+    /**
+     * Where this unit moved away from. Set at most once: a fleet agent
+     * (`claude`), or one fleet account as `fleet:<agent>:<accountId>`.
+     */
     failedOverFrom: text('failed_over_from'),
+    /** The fleet account (`fleet_accounts.id`) the unit's run used. Not a foreign key: an account can be removed while its runs stay. */
+    fleetAccountId: text('fleet_account_id'),
     provider: text('provider'),
     model: text('model'),
     sandboxId: text('sandbox_id'),

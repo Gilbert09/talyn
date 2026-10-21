@@ -33,6 +33,7 @@ import {
   runGitSteps,
   runStream,
   sandboxScriptEnv,
+  startAccountWatch,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { startTitleGeneration } from './title.js';
@@ -271,6 +272,11 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
   };
 }
 
+/** A transcript line saying the session moved to another fleet account. */
+function accountSwitchEvent(note: string): Record<string, unknown> {
+  return { type: 'system', subtype: 'fleet_account_switched', text: note };
+}
+
 function errorResultEvent(subtype: string, text: string): Record<string, unknown> {
   return { type: 'result', subtype, is_error: true, result: text };
 }
@@ -296,7 +302,10 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     await createCheckpoint(wb, chatId, turn).catch((err) =>
       console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err),
     );
-    await refreshSandboxCredentials(wb);
+    const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
+    // The session's account, or the next one when it has crossed the threshold.
+    const refreshed = await refreshSandboxCredentials(wb, { model: turnModel });
+    if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
     // The box is awake and has its credentials: name the session beside the turn.
     if (turn === 1) startTitleGeneration(wb, message.text);
@@ -312,7 +321,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
 
     const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
     const planMode = message.planMode ?? chat.planMode;
-    const model = message.model ?? chat.model ?? wb.model ?? undefined;
+    const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     const resumeSessionId = chat.agentSessionId ?? undefined;
     const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
@@ -355,13 +364,16 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         void saveSessionId(chatId, sessionId);
       }
     };
+    // A turn can run for a long time: its account is checked while it runs,
+    // and moved to the next one as soon as it crosses the threshold.
+    const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
     const outcome = await runStream(wb, argv.map(shellQuote).join(' '), {
       marker: turnMarker(chatId),
       cwd: repoDirFor(wb),
       env,
       signal: live.controller.signal,
       onStdoutLine: onLine,
-    });
+    }).finally(stopAccountWatch);
     parserResult = parser.result;
 
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);

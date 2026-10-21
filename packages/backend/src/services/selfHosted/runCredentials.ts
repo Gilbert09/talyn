@@ -3,7 +3,7 @@ import { ACTIVE_TASK_STATUSES, readCloudTaskMeta, type Task } from '@talyn/share
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
-import { getSelfHostedCredentials } from './credentials.js';
+import { resolveRunCredential } from './accountSelection.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 
 /**
@@ -117,7 +117,13 @@ export async function resolveRunCredentials(
   }
 
   const cloud = readCloudTaskMeta({ metadata: row.metadata as Record<string, unknown> | null });
-  const extra = (cloud?.extra ?? {}) as { host?: string; repo?: string; llm?: string };
+  const extra = (cloud?.extra ?? {}) as {
+    host?: string;
+    repo?: string;
+    llm?: string;
+    model?: string;
+    accountId?: string;
+  };
 
   // The host must be the one this run was dispatched to. A run with no recorded
   // host is refused rather than allowed: an unknown host is not a match, and
@@ -130,7 +136,6 @@ export async function resolveRunCredentials(
   }
 
   const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
-  const creds = await getSelfHostedCredentials(row.workspaceId);
   // No GitHub token means the workspace disconnected GitHub mid-run. Refusing
   // is right: an answer with an empty token would close the proxy's
   // credentials-ready gate on nothing, turning its wait into an immediate
@@ -155,8 +160,17 @@ export async function resolveRunCredentials(
   // A row with no `llm` predates the field and is an Anthropic run — nothing
   // could dispatch an OpenAI model before it existed. Answering with the Claude
   // key is therefore the fact, not a fallback.
+  //
+  // And the ACCOUNT the run was dispatched on (or hot-swapped to), so a host
+  // that lost its credentials gets back the one it was holding. Only a deleted
+  // account, or one that needs a reconnect, is chosen again.
   const openai = extra.llm === 'openai';
-  const agentKey = openai ? creds?.openaiKey : creds?.claudeToken;
+  const agentKey = (
+    await resolveRunCredential(row.workspaceId, openai ? 'codex' : 'claude', {
+      recordedAccountId: extra.accountId,
+      model: extra.model,
+    })
+  )?.token;
 
   // No credential is a REFUSAL, not an answer without one. The gateway fills an
   // absent key from its tenant's sealed custody, so answering `ok` with the key

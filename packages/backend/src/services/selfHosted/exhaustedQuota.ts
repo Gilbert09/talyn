@@ -387,7 +387,9 @@ export async function noteExhaustedAgent(
   detail: string | null,
   accountId?: string,
 ): Promise<boolean> {
-  const verdict = await verifyAgentQuota(workspaceId, agent).catch(() => 'unknown' as const);
+  const verdict = await verifyAgentQuota(workspaceId, agent, accountId).catch(
+    () => 'unknown' as const,
+  );
   if (verdict === 'available') {
     console.warn(
       `[exhaustedQuota] ${workspaceId}: a run reported ${agentLabel(agent)} usage exhausted, ` +

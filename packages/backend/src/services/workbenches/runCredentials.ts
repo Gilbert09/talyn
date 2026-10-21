@@ -1,8 +1,8 @@
 import { githubService } from '../github.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
-import { getSelfHostedCredentials } from '../selfHosted/credentials.js';
+import { resolveRunCredential } from '../selfHosted/accountSelection.js';
 import type { RunCredentialsResult } from '../selfHosted/runCredentials.js';
-import { providerForAgent } from './sandboxRuntime.js';
+import { providerForAgent, setWorkbenchFleetAccount, workbenchFleetAccountId } from './sandboxRuntime.js';
 import { workbenchBySandboxId } from './store.js';
 
 /** Every workbench sandbox id starts with this (`sandboxIdFor`). */
@@ -15,7 +15,8 @@ export const WORKBENCH_SANDBOX_PREFIX = 'talyn-wb-';
  * to the host it was created on, only while it is still in use, and only the
  * key for the vendor the box is wired to. No credential is a refusal, never an
  * answer with the key left out — the gateway would fill the gap from its own
- * custody.
+ * custody. The key is the session's CURRENT account's (`settings.fleetAccountId`),
+ * chosen again only when that account was deleted or needs a reconnect.
  */
 export async function resolveWorkbenchRunCredentials(host: string, sandboxId: string): Promise<RunCredentialsResult> {
   const row = await workbenchBySandboxId(sandboxId);
@@ -25,10 +26,17 @@ export async function resolveWorkbenchRunCredentials(host: string, sandboxId: st
 
   const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
   if (!githubToken) return { ok: false, reason: 'credentials_unavailable' };
-  const creds = await getSelfHostedCredentials(row.workspaceId);
   const openai = providerForAgent(row.agent) === 'openai';
-  const agentKey = openai ? creds?.openaiKey : creds?.claudeToken;
+  const recorded = workbenchFleetAccountId(row);
+  const credential = await resolveRunCredential(row.workspaceId, openai ? 'codex' : 'claude', {
+    recordedAccountId: recorded,
+    model: row.model ?? undefined,
+  });
+  const agentKey = credential?.token;
   if (!agentKey) return { ok: false, reason: 'credentials_unavailable' };
+  if (credential.accountId && credential.accountId !== recorded) {
+    await setWorkbenchFleetAccount(row, credential.accountId).catch(() => undefined);
+  }
   const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
   return {
     ok: true,

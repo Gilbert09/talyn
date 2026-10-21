@@ -11,6 +11,11 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { workspaceAgentModel } from '../selfHosted/fleetModel.js';
 import {
+  accountIdsFromHops,
+  chooseFleetAccount,
+  fleetAccountHop,
+} from '../selfHosted/accountSelection.js';
+import {
   agentLabel,
   exhaustedDeadEndSummary,
   failoverSummary,
@@ -57,7 +62,11 @@ import { TRANSCRIPT_FINAL_KEY } from './transcriptStore.js';
  * its first API call, before it does any work.
  */
 
-/** A hop already attempted on THIS run. Agents are `fleet:<agent>`. */
+/**
+ * A hop already attempted on THIS run. A fleet account is
+ * `fleet:<agent>:<accountId>`; the bare `fleet:<agent>` means every account of
+ * that agent (older rows, or a run whose account was not recorded).
+ */
 type Hop = string;
 
 interface FailoverState {
@@ -147,6 +156,13 @@ export async function failoverExhaustedRun(opts: {
   const row = rows[0];
   if (!row) return false;
 
+  // The ACCOUNT that failed and the model it ran, as the dispatch recorded them.
+  const ranExtra = ((row.metadata as Record<string, unknown> | null)?.cloudTask as
+    | { extra?: { accountId?: unknown; model?: unknown } }
+    | undefined)?.extra;
+  const failedAccountId = typeof ranExtra?.accountId === 'string' ? ranExtra.accountId : undefined;
+  const ranModel = typeof ranExtra?.model === 'string' ? ranExtra.model : undefined;
+
   // Remember it BEFORE choosing where to go. This is what stops the next task
   // paying the same discovery cost — dispatch reads the hold and skips the
   // spent agent without booting a microVM to be refused again.
@@ -163,17 +179,25 @@ export async function failoverExhaustedRun(opts: {
   // Skipped entirely for a rate limit: there is nothing exhausted to remember,
   // and a hold would keep later tasks off a subscription that is fine again in
   // minutes. `confirmed` is then vacuously true — nothing was claimed.
+  // With the account known, only that account is held: the agent's other
+  // accounts may be fine, and they are the next hop.
   const confirmed = rateLimited
     ? true
-    : await noteExhaustedAgent(workspaceId, exhausted, detail);
+    : await noteExhaustedAgent(workspaceId, exhausted, detail, failedAccountId);
 
   const state = readState(row.metadata);
   const tried = new Set<Hop>(state.tried ?? []);
-  // The agent that just died counts as tried even on the first hop — the run
-  // that failed IS the attempt.
-  tried.add(FLEET_HOP(exhausted));
+  // The account that just died counts as tried even on the first hop — the run
+  // that failed IS the attempt. Without its id, the whole agent does.
+  tried.add(failedAccountId ? fleetAccountHop(exhausted, failedAccountId) : FLEET_HOP(exhausted));
 
-  const next = await nextHop(workspaceId, tried, { fleetOnly: rateLimited });
+  // The same agent's next account first, for an exhaustion and a rate limit
+  // alike: another subscription of the same vendor is the closest substitute.
+  const next = await nextHop(workspaceId, tried, {
+    fleetOnly: rateLimited,
+    sameAgent: exhausted,
+    model: ranModel,
+  });
   if (!next) {
     // A rate limit with nowhere free to go is NOT a dead end of this module's
     // kind. `settleDeadEnd` tells the user their subscription is spent and to
@@ -187,14 +211,20 @@ export async function failoverExhaustedRun(opts: {
 
   const movedTo =
     next.kind === 'fleet'
-      ? `${agentLabel(next.agent)} on Talyn Fleet`
+      ? next.accountLabel && next.agent === exhausted
+        ? `${next.accountLabel} (${agentLabel(next.agent)}) on Talyn Fleet`
+        : `${agentLabel(next.agent)} on Talyn Fleet`
       : (getCloudProvider(next.providerType)?.displayName ?? next.providerType);
 
   // Resolved BEFORE the patch: `patchTaskMetadata` takes a synchronous
   // transform (it runs inside the metadata mutex), so a query cannot happen in
-  // there.
+  // there. A move to the SAME agent keeps the model the run had.
   const nextModel =
-    next.kind === 'fleet' ? await workspaceAgentModel(workspaceId, next.agent) : null;
+    next.kind === 'fleet'
+      ? next.agent === exhausted && ranModel
+        ? ranModel
+        : await workspaceAgentModel(workspaceId, next.agent)
+      : null;
 
   await patchTaskMetadata(taskId, (existing: Record<string, unknown>) => {
     const meta = { ...existing };
@@ -227,7 +257,10 @@ export async function failoverExhaustedRun(opts: {
     // record" and never fetches its own.
     delete meta[TRANSCRIPT_FINAL_KEY];
     meta.quotaFailover = {
-      tried: [...tried, next.kind === 'fleet' ? FLEET_HOP(next.agent) : next.providerType],
+      // A fleet hop is not recorded here: the run it starts records its own
+      // account if it fails, and recording the target now would make the
+      // dispatch avoid the very account it is moving to.
+      tried: next.kind === 'fleet' ? [...tried] : [...tried, next.providerType],
       exhausted,
       movedTo,
       note: rateLimited
@@ -276,6 +309,7 @@ export async function failoverExhaustedRun(opts: {
     // this they are one number.
     reason,
     to: next.kind === 'fleet' ? `fleet:${next.agent}` : next.providerType,
+    same_agent: next.kind === 'fleet' && next.agent === exhausted,
     // Whether the vendor stood behind the refusal when asked directly. An
     // unconfirmed one is a fleet-path failure wearing a quota error's words,
     // and the two need telling apart in the funnel — otherwise a day of them
@@ -292,16 +326,18 @@ export async function failoverExhaustedRun(opts: {
 }
 
 export type NextHop =
-  | { kind: 'fleet'; agent: FleetAgent }
+  | { kind: 'fleet'; agent: FleetAgent; accountId?: string; accountLabel?: string }
   | { kind: 'provider'; providerType: string; envId: string };
 
 /**
  * Where the work goes next, or null when nothing is left.
  *
- * The fleet's OTHER connected agent first — same hardware, same custody, a
- * subscription the workspace has already paid for. An agent needing reauth is
- * skipped: its credential exists but the vendor will not renew it, so moving
- * an exhausted run onto it trades one dead end for another.
+ * `sameAgent` first: that agent's next account that is not over and not tried
+ * on this run. Then the fleet's OTHER connected agent — same hardware, same
+ * custody, a subscription the workspace has already paid for. An agent needing
+ * reauth is skipped: its credential exists but the vendor will not renew it, so
+ * moving an exhausted run onto it trades one dead end for another. So is an
+ * agent whose every untried account is over.
  *
  * Exported for the code-review pipeline. A review unit is not a task and
  * cannot use `failoverExhaustedRun`, but the rule for where it may move must
@@ -310,7 +346,7 @@ export type NextHop =
 export async function nextHop(
   workspaceId: string,
   tried: Set<Hop>,
-  opts: { fleetOnly?: boolean } = {},
+  opts: { fleetOnly?: boolean; sameAgent?: FleetAgent; model?: string } = {},
 ): Promise<NextHop | null> {
   const { connectedAgents, reauthAgents } = await fleetAgentStatus(workspaceId).catch(() => ({
     connectedAgents: [] as FleetAgent[],
@@ -320,11 +356,30 @@ export async function nextHop(
   // have discovered this agent was spent minutes ago, and moving onto it now
   // would buy one more refusal.
   const held = await heldBackAgents(workspaceId).catch(() => ({}) as Record<string, unknown>);
-  for (const agent of connectedAgents) {
+  const triedAccounts = accountIdsFromHops(tried);
+  const order =
+    opts.sameAgent && connectedAgents.includes(opts.sameAgent)
+      ? [opts.sameAgent, ...connectedAgents.filter((a) => a !== opts.sameAgent)]
+      : connectedAgents;
+  for (const agent of order) {
     if (tried.has(FLEET_HOP(agent))) continue;
     if (reauthAgents.includes(agent)) continue;
     if (held[agent]) continue;
-    return { kind: 'fleet', agent };
+    const model =
+      agent === opts.sameAgent
+        ? opts.model
+        : await workspaceAgentModel(workspaceId, agent).catch(() => undefined);
+    // `undefined` = the accounts could not be read: the agent as a whole, as before.
+    const account = await chooseFleetAccount(workspaceId, agent, {
+      model,
+      avoidAccountIds: triedAccounts,
+    }).catch(() => undefined);
+    if (account === null) continue;
+    return {
+      kind: 'fleet',
+      agent,
+      ...(account ? { accountId: account.id, accountLabel: account.label } : {}),
+    };
   }
 
   // A rate limit stops here. The subscriptions are the free hops; the rest of

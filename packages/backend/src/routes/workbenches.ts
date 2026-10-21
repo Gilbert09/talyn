@@ -579,6 +579,10 @@ export function workbenchRoutes(): Router {
       patch.settings = {
         ...settings,
         ...(row.settings?.prUnlinked !== undefined ? { prUnlinked: row.settings.prUnlinked } : {}),
+        // Written by the server only (the box's current fleet account); a client never sends it.
+        ...(typeof (row.settings as Record<string, unknown> | null)?.fleetAccountId === 'string'
+          ? { fleetAccountId: (row.settings as Record<string, unknown>).fleetAccountId }
+          : {}),
         ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
           ? { internetAccess: row.settings.internetAccess }
           : {}),

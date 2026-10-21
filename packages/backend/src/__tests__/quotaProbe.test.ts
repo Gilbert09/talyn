@@ -161,4 +161,40 @@ describe('verifying an exhaustion with the vendor', () => {
       expect(await storedHold()).toMatchObject({ codex: {} });
     });
   });
+  describe('probing one account', () => {
+    async function twoClaudeKeys() {
+      const { addFleetAccount, listFleetAccounts } = await import('../services/selfHosted/accounts.js');
+      const { encryptString } = await import('../services/tokenCrypto.js');
+      // The integration's legacy key is adopted first, as the priority-1 account.
+      const [first] = await listFleetAccounts('ws1', 'claude');
+      const second = await addFleetAccount('ws1', {
+        kind: 'anthropic_key',
+        credential: { keyEnc: encryptString('sk-ant-api-second') },
+      });
+      return { first: first!, second };
+    }
+
+    it.each([
+      ['the named account', 'second', 'sk-ant-api-second'],
+      ['the first account when none is named', undefined, 'sk-ant-api-test'],
+    ] as const)('sends %s’s token', async (_label, which, expected) => {
+      const ids = await twoClaudeKeys();
+      const spy = vendorAnswers(new Response('{}', { status: 200 }));
+      const accountId = which ? ids[which].id : undefined;
+      expect(await verifyAgentQuota('ws1', 'claude', accountId)).toBe('available');
+      const headers = (spy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+      expect(headers.authorization).toBe(`Bearer ${expected}`);
+    });
+
+    it('holds only the account the run used', async () => {
+      const ids = await twoClaudeKeys();
+      vendorAnswers(new Response(EXHAUSTED_BODY, { status: 400 }));
+      expect(await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.", ids.second.id)).toBe(true);
+      const rows = await db
+        .select({ id: fleetAccounts.id, hold: fleetAccounts.quotaExhausted })
+        .from(fleetAccounts)
+        .where(eq(fleetAccounts.workspaceId, 'ws1'));
+      expect(rows.filter((r) => r.hold).map((r) => r.id)).toEqual([ids.second.id]);
+    });
+  });
 });

@@ -426,7 +426,7 @@ describe('moving a unit to the other fleet agent', () => {
 
     await reconcile(run);
 
-    expect(verifyAgentQuota).toHaveBeenCalledWith('ws1', 'claude');
+    expect(verifyAgentQuota).toHaveBeenCalledWith('ws1', 'claude', undefined);
     expect(Object.keys(await heldBackAgents('ws1'))).toEqual(['claude']);
     expect(await getRun(run.id)).toMatchObject({
       status: 'requeued',
@@ -745,5 +745,106 @@ describe('what the review says when a usage limit stopped it', () => {
     expect(await cycleFailureMessage((await getReview('rev1'))!, code, 'fallback', now)).toBe(
       'fallback'
     );
+  });
+});
+
+describe('moving a unit to another account of the same agent', () => {
+  async function accountsFor(agent: FleetAgent, labels: string[]) {
+    const { addFleetAccount } = await import('../services/selfHosted/accounts.js');
+    const out = [];
+    for (const label of labels) {
+      out.push(
+        await addFleetAccount('ws1', {
+          kind: agent === 'claude' ? 'anthropic_key' : 'openai_key',
+          credential: { keyEnc: encrypted(`key-${label}`) as never },
+          label,
+        })
+      );
+    }
+    return out;
+  }
+
+  beforeEach(async () => {
+    await connect({});
+  });
+
+  it('records the account a unit ran on', async () => {
+    const [c1] = await accountsFor('codex', ['C1', 'C2']);
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    const body = createSandbox.mock.calls[0]![0] as { openaiKey?: string };
+    expect(body.openaiKey).toBe('key-C1');
+    const [row] = await db.select().from(prCodeReviewRuns);
+    expect(row!.fleetAccountId).toBe(c1!.id);
+  });
+
+  it('moves a rate-limited unit to the next account of the same agent before the other agent', async () => {
+    const [c1, c2] = await accountsFor('codex', ['C1', 'C2']);
+    await accountsFor('claude', ['A1']);
+    const run = await runningUnit({ fleetAccountId: c1!.id });
+    sandboxEnded('failed', INCIDENT);
+
+    await reconcile(run);
+
+    expect(await getRun(run.id)).toMatchObject({
+      status: 'requeued',
+      failedOverFrom: `fleet:codex:${c1!.id}`,
+      failureCode: 'usage_limit',
+    });
+    expect(failoverEvents()[0]).toMatchObject({ from_agent: 'codex', to_agent: 'codex' });
+
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    const body = createSandbox.mock.calls[0]![0] as { openaiKey?: string; task: { model: string } };
+    expect(body.openaiKey).toBe('key-C2');
+    expect(body.task.model).toBe(CODEX_MODEL);
+    expect(await getRun(run.id)).toMatchObject({ status: 'running', fleetAccountId: c2!.id });
+  });
+
+  it('keeps the next unit of the cycle off the limited account, and on the same agent', async () => {
+    const [c1, c2] = await accountsFor('codex', ['C1', 'C2']);
+    await accountsFor('claude', ['A1']);
+    await runningUnit({
+      status: 'failed',
+      failureCode: 'usage_limit',
+      fleetAccountId: c1!.id,
+    });
+
+    await dispatchUnit((await getReview('rev1'))!, { kind: 'lens', lens: 'security', chunkIndex: 0 });
+    const body = createSandbox.mock.calls[0]![0] as { openaiKey?: string; task: { model: string } };
+    expect(body.openaiKey).toBe('key-C2');
+    expect(body.task.model).toBe(CODEX_MODEL);
+    const rows = await db.select().from(prCodeReviewRuns).where(eq(prCodeReviewRuns.lens, 'security'));
+    expect(rows[0]!.fleetAccountId).toBe(c2!.id);
+  });
+
+  it('moves to the other agent when the same agent has no other account', async () => {
+    const [c1] = await accountsFor('codex', ['C1']);
+    await accountsFor('claude', ['A1']);
+    const run = await runningUnit({ fleetAccountId: c1!.id });
+    sandboxEnded('failed', INCIDENT);
+
+    await reconcile(run);
+    expect(await getRun(run.id)).toMatchObject({ status: 'requeued', failedOverFrom: 'codex' });
+  });
+
+  it('holds only the exhausted account, not the agent', async () => {
+    const [a1, a2] = await accountsFor('claude', ['A1', 'A2']);
+    const run = await runningUnit({ model: CLAUDE_MODEL, fleetAccountId: a1!.id });
+    sandboxEnded('failed', CLAUDE_SPENT);
+
+    await reconcile(run);
+
+    expect(verifyAgentQuota).toHaveBeenCalledWith('ws1', 'claude', a1!.id);
+    const { heldBackAccounts } = await import('../services/selfHosted/exhaustedQuota.js');
+    expect(Object.keys(await heldBackAccounts('ws1'))).toEqual([a1!.id]);
+    expect(await heldBackAgents('ws1')).toEqual({});
+    expect(await getRun(run.id)).toMatchObject({
+      status: 'requeued',
+      failedOverFrom: `fleet:claude:${a1!.id}`,
+      failureCode: 'quota_exhausted',
+    });
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    const body = createSandbox.mock.calls[0]![0] as { anthropicKey?: string };
+    expect(body.anthropicKey).toBe('key-A2');
+    expect((await getRun(run.id))!.fleetAccountId).toBe(a2!.id);
   });
 });

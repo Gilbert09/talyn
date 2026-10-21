@@ -21,13 +21,16 @@ import { clearWatched } from '../cloudProviders/taskWatch.js';
 import { markTranscriptFinal, TranscriptCursors } from '../cloudProviders/transcriptStore.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 import { githubService } from '../github.js';
-import { getSelfHostedClient, getSelfHostedCredentials } from './credentials.js';
+import { getSelfHostedClient } from './credentials.js';
+import { resolveRunCredential } from './accountSelection.js';
+import { findHotSwap, forgetHotSwapRun, recordHotSwap } from './hotSwap.js';
 import { finalTextFromEvents, toAgentEvent } from './eventCursor.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
 import {
+  clearExhaustedAccount,
   clearExhaustedAgent,
   exhaustedAgentFrom,
   rateLimitedAgentFrom,
@@ -244,6 +247,9 @@ class SelfHostedPoller {
     if (sandbox.adopted && !terminal) {
       await this.recredential(row, client, runId, sandbox.adoptedAt);
     }
+    // A run whose account crossed the threshold moves to the next account of
+    // the same agent now, not at its next dispatch. Rate limited per run.
+    if (!terminal) await this.hotSwap(row, client, runId);
 
     // Cursor-based, unlike the other providers: the fleet assigns `seq`
     // host-side and serves events past a cursor, so we never refetch the whole
@@ -342,19 +348,11 @@ class SelfHostedPoller {
     if (adoptedAt && this.recredentialed.get(row.id) === key) return;
     try {
       const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
-      const creds = await getSelfHostedCredentials(row.workspaceId);
-      if (!githubToken || !creds) {
-        // Silent returns here were invisible for two sessions: the run went on
-        // failing every LLM call and nothing said why.
-        console.warn(
-          `[selfhosted] cannot re-supply credentials to ${runId}: ` +
-            `${!githubToken ? 'no GitHub token' : 'no agent credential'} for workspace ${row.workspaceId}`,
-        );
-        return;
-      }
       const extra = (readCloudTaskMeta({ metadata: row.metadata })?.extra ?? {}) as {
         repo?: string;
         llm?: string;
+        model?: string;
+        accountId?: string;
       };
       // THE VENDOR THIS RUN WAS DISPATCHED ON, not whatever the workspace has.
       //
@@ -368,14 +366,27 @@ class SelfHostedPoller {
       // (nothing could dispatch an OpenAI model before it existed), so that is
       // a fact rather than a default.
       const openai = extra.llm === 'openai';
-      const agentKey = openai ? creds.openaiKey : creds.claudeToken;
-      if (!agentKey) {
+      const agent = openai ? 'codex' : 'claude';
+      // And the ACCOUNT it was on. Chosen again only when that account was
+      // deleted or needs a reconnect.
+      const credential = githubToken
+        ? await resolveRunCredential(row.workspaceId, agent, {
+            recordedAccountId: extra.accountId,
+            model: extra.model,
+          })
+        : null;
+      if (!githubToken || !credential) {
+        // Silent returns here were invisible for two sessions: the run went on
+        // failing every LLM call and nothing said why.
         console.warn(
-          `[selfhosted] cannot re-supply credentials to ${runId}: workspace ${row.workspaceId} ` +
-            `no longer holds a ${openai ? 'Codex' : 'Claude'} credential`,
+          `[selfhosted] cannot re-supply credentials to ${runId}: ` +
+            (!githubToken
+              ? `no GitHub token for workspace ${row.workspaceId}`
+              : `workspace ${row.workspaceId} no longer holds a ${openai ? 'Codex' : 'Claude'} credential`),
         );
         return;
       }
+      const agentKey = credential.token;
       // THE TOOL SERVERS' CREDENTIALS TOO, and this is the whole reason the
       // fleet's /credentials endpoint takes them.
       //
@@ -401,12 +412,103 @@ class SelfHostedPoller {
       });
       // Marked only on success, so a failed attempt is retried next tick.
       this.recredentialed.set(row.id, key);
+      if (credential.accountId && credential.accountId !== extra.accountId) {
+        await this.recordAccount(row, credential.accountId);
+      }
       console.log(`[selfhosted] re-supplied credentials to adopted sandbox ${runId}`);
     } catch (err) {
       console.warn(
         `[selfhosted] could not re-supply credentials to ${runId}:`,
         err instanceof Error ? err.message : err,
       );
+    }
+  }
+
+  /**
+   * Move a running run to the next account of the same agent when its account
+   * has crossed the workspace's threshold.
+   *
+   * The push REPLACES the box's whole credential set, so it carries exactly
+   * what `recredential` sends: GitHub, the key for the run's vendor, the repo
+   * scope and every MCP secret. Never across vendors: the model chose the
+   * vendor, and the box has no route to the other one.
+   *
+   * Best effort, like `recredential`: a failed check or push leaves the run on
+   * the account it has, and the next tick tries again.
+   */
+  private async hotSwap(row: CloudTaskRow, client: FleetClient, runId: string): Promise<void> {
+    try {
+      const extra = (readCloudTaskMeta({ metadata: row.metadata })?.extra ?? {}) as {
+        repo?: string;
+        llm?: string;
+        model?: string;
+        accountId?: string;
+      };
+      const openai = extra.llm === 'openai';
+      const decision = await findHotSwap({
+        key: row.id,
+        workspaceId: row.workspaceId,
+        agent: openai ? 'codex' : 'claude',
+        model: extra.model,
+        currentAccountId: extra.accountId,
+      });
+      if (!decision) return;
+      const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
+      if (!githubToken) return;
+      const mcpSecrets = await mcpIntegrationSecrets(row);
+      await client.setSandboxCredentials(runId, {
+        githubToken,
+        ...(openai ? { openaiKey: decision.token } : { anthropicKey: decision.token }),
+        ...(extra.repo ? { repo: extra.repo } : {}),
+        ...(Object.keys(mcpSecrets).length > 0 ? { integrations: mcpSecrets } : {}),
+      });
+      await this.recordAccount(row, decision.to.id, {
+        from: decision.from.id,
+        to: decision.to.id,
+        note: decision.note,
+        at: new Date().toISOString(),
+      });
+      recordHotSwap(row.workspaceId, `task ${row.id.slice(0, 8)}`, decision);
+      console.log(`[selfhosted] task ${row.id.slice(0, 8)}: ${decision.note}`);
+    } catch (err) {
+      console.warn(
+        `[selfhosted] account hot-swap check for ${runId} failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * Record the account a running task is now on, and the note that explains a
+   * switch. The note goes on `metadata.accountSwitch`, not on the transcript:
+   * the transcript is the fleet's event log, numbered by the fleet.
+   */
+  private async recordAccount(
+    row: CloudTaskRow,
+    accountId: string,
+    note?: { from: string; to: string; note: string; at: string },
+  ): Promise<void> {
+    await patchTaskMetadata(row.id, (existing) => {
+      const prev = existing.cloudTask as CloudTaskMetadata | undefined;
+      if (!prev) return existing;
+      return {
+        ...existing,
+        cloudTask: { ...prev, extra: { ...(prev.extra ?? {}), accountId } },
+        ...(note ? { accountSwitch: note } : {}),
+      };
+    });
+    // The poller's own row copy is reused within this tick.
+    const cloud = readCloudTaskMeta({ metadata: row.metadata });
+    if (cloud) {
+      row.metadata = {
+        ...(row.metadata ?? {}),
+        cloudTask: { ...cloud, extra: { ...(cloud.extra ?? {}), accountId } },
+      };
+    }
+    if (note) {
+      emitTaskUpdate(row.workspaceId, row.id, {
+        metadata: { accountSwitch: note } as Record<string, unknown>,
+      });
     }
   }
 
@@ -482,6 +584,7 @@ class SelfHostedPoller {
     this.stopFollow(taskId);
     this.cursor.delete(taskId);
     this.recredentialed.delete(taskId);
+    forgetHotSwapRun(taskId);
     this.transcripts.delete(taskId);
     this.cursors.forget(taskId);
   }
@@ -832,7 +935,12 @@ class SelfHostedPoller {
       // model at all, and clearing on those would undo a hold another task had
       // just paid a microVM to discover.
       const ranModel = (cloud?.extra as { model?: string } | undefined)?.model ?? null;
-      if (status === 'completed' && ranModel) {
+      // One account's success says nothing about the others, so the account
+      // that ran is cleared when it is known.
+      const ranAccount = (cloud?.extra as { accountId?: string } | undefined)?.accountId;
+      if (status === 'completed' && ranAccount) {
+        void clearExhaustedAccount(ranAccount);
+      } else if (status === 'completed' && ranModel) {
         void clearExhaustedAgent(workspaceId, fleetAgentForModel(ranModel));
       }
       captureWorkspaceEvent(

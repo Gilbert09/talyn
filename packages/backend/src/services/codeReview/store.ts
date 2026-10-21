@@ -102,6 +102,7 @@ export const RUN_COLUMNS = {
   // dispatch path and the cycle's failure message both read it.
   failureDetail: prCodeReviewRuns.failureDetail,
   failedOverFrom: prCodeReviewRuns.failedOverFrom,
+  fleetAccountId: prCodeReviewRuns.fleetAccountId,
   provider: prCodeReviewRuns.provider,
   model: prCodeReviewRuns.model,
   sandboxId: prCodeReviewRuns.sandboxId,
@@ -535,6 +536,7 @@ export interface RunPatch {
   failureCode?: RunFailureCode | null;
   failureDetail?: string | null;
   failedOverFrom?: string | null;
+  fleetAccountId?: string | null;
   provider?: string | null;
   model?: string | null;
   sandboxId?: string | null;
