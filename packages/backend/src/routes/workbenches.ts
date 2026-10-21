@@ -389,6 +389,9 @@ export function workbenchRoutes(): Router {
     if (!(await gate(req, res, workspaceId))) return;
     if (body.runtime !== 'sandbox' && body.runtime !== 'local') return bad(res, 400, 'runtime must be "sandbox" or "local"');
     if (body.agent !== 'claude' && body.agent !== 'codex') return bad(res, 400, 'agent must be "claude" or "codex"');
+    if (body.internetAccess !== undefined && typeof body.internetAccess !== 'boolean') {
+      return bad(res, 400, 'internetAccess must be a boolean');
+    }
 
     const db = getPoolDbClient();
     const repo = (
@@ -511,6 +514,7 @@ export function workbenchRoutes(): Router {
           status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
           statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
           pullRequestId,
+          settings: body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess },
         });
       } catch (err) {
         if (!/uq_workbenches_workspace_name_live|duplicate key/i.test(String((err as Error)?.message ?? err)) || requestedName) {
@@ -565,7 +569,12 @@ export function workbenchRoutes(): Router {
     if (body.settings !== undefined) {
       const settings = validateSettings(body.settings);
       if (typeof settings === 'string') return bad(res, 400, settings);
-      patch.settings = settings;
+      patch.settings = {
+        ...settings,
+        ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
+          ? { internetAccess: row.settings.internetAccess }
+          : {}),
+      };
     }
     const onlyGenerated = body.generatedTitle !== undefined && Object.keys(patch).length === 0;
     let updated = onlyGenerated ? row : ((await updateWorkbench(row.id, patch)) ?? row);
@@ -863,6 +872,10 @@ function validateSettings(input: unknown): WorkbenchSettings | string {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return 'settings must be an object';
   const raw = input as WorkbenchSettings;
   const out: WorkbenchSettings = {};
+  if (raw.internetAccess !== undefined) {
+    if (typeof raw.internetAccess !== 'boolean') return 'settings.internetAccess must be a boolean';
+    out.internetAccess = raw.internetAccess;
+  }
   if (raw.scripts !== undefined) {
     const s = raw.scripts;
     if (!s || typeof s !== 'object' || Array.isArray(s)) return 'settings.scripts must be an object';

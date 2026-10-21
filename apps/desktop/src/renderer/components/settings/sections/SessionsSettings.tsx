@@ -204,6 +204,12 @@ export function SessionsSettings() {
           checked={defaults.planMode}
           onChange={(planMode) => writeSessionDefaults({ planMode })}
         />
+        <SettingToggle
+          label="Internet access"
+          description="Sandbox sessions can reach any website, for example to install tools or read docs. When it is off, a session reaches only its repository, the package registries and the agent's API."
+          checked={defaults.internetAccess}
+          onChange={(internetAccess) => writeSessionDefaults({ internetAccess })}
+        />
       </SettingsSection>
       <SettingsSection title="Branches">
         <BranchPrefixRow />

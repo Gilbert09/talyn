@@ -16,6 +16,7 @@ describe('session defaults', () => {
       agent: 'claude',
       effort: 'high',
       planMode: false,
+      internetAccess: true,
       notifyOnFinish: true,
     });
   });
@@ -43,7 +44,7 @@ describe('session defaults', () => {
   it('keeps the valid fields of a partly corrupt value', () => {
     localStorage.setItem(
       SESSION_DEFAULTS_KEY,
-      JSON.stringify({ runtime: 'moon', agent: 'codex', effort: 'extreme', planMode: 'yes', notifyOnFinish: false })
+      JSON.stringify({ runtime: 'moon', agent: 'codex', effort: 'extreme', planMode: 'yes', internetAccess: 'no', notifyOnFinish: false })
     );
     expect(readSessionDefaults()).toEqual({
       ...DEFAULT_SESSION_DEFAULTS,
@@ -58,6 +59,7 @@ describe('session defaults', () => {
     [{ effort: 'high' as const }],
     [{ effort: 'low' as const }],
     [{ planMode: true }],
+    [{ internetAccess: false }],
     [{ notifyOnFinish: false }],
   ])('round-trips %j', (patch) => {
     writeSessionDefaults(patch);

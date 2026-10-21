@@ -77,6 +77,8 @@ export interface WorkbenchDiffStat {
  * the repository's config file" (scripts) or "use Talyn's default" (prompts).
  */
 export interface WorkbenchSettings {
+  /** Absent means internet access is on. */
+  internetAccess?: boolean;
   scripts?: {
     setup?: string | null;
     /** One command, or named run scripts. */
@@ -280,6 +282,7 @@ export interface CreateWorkbenchInput {
   repositoryId: string;
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
+  internetAccess?: boolean;
   model?: string;
   baseBranch?: string;
   /** An existing branch to check out. Absent: a new branch named after the workbench. */

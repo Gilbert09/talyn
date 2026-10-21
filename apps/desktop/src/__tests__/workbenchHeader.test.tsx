@@ -85,6 +85,15 @@ afterEach(() => {
 });
 
 describe('WorkbenchHeader action cycle', () => {
+  it.each([
+    ['sandbox', false, true],
+    ['sandbox', true, false],
+    ['local', false, false],
+  ] as const)('shows the network hint for %s with access %s: %s', (runtime, internetAccess, shown) => {
+    render(<WorkbenchHeader workbench={{ ...WB, runtime, settings: { internetAccess } }} pr={null} chat={chat} ops={ops()} />);
+    expect(Boolean(screen.queryByText('No internet'))).toBe(shown);
+  });
+
   // nextWorkbenchAction → the primary button's label, its shortcut and what a click does.
   it.each<[string, PRRow | null, Partial<Workbench>, string, string | null, 'prompt' | 'confirm' | 'send', string]>([
     ['no PR, with changes', null, {}, 'Create PR', 'Ctrl+Shift+P', 'send', 'create_pr'],

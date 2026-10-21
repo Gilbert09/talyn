@@ -57,6 +57,7 @@ const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../serv
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
 const { FleetCapacityError, FleetHttpError } = await import('../services/selfHosted/client.js');
+const { buildSandboxCreateBody } = await import('../services/selfHosted/sandboxRun.js');
 
 /** A response body read loosely: these tests assert on shapes the routes define, field by field. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -286,7 +287,7 @@ describe('workbench routes', () => {
         const body = fleet.created[0];
         expect(body).toMatchObject({ id: `${sandboxIdFor(wb.id)}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', ...key });
         expect(body).not.toHaveProperty(otherKey);
-        expect(body.policy).toEqual({ credentials: suppressed });
+        expect(body.policy).toEqual({ credentials: suppressed, egress: { mode: 'open' } });
         // Bare and long-lived: no task, and no `ephemeral` to stop it after one.
         expect(body).not.toHaveProperty('task');
         expect(body).not.toHaveProperty('ephemeral');
@@ -296,6 +297,49 @@ describe('workbench routes', () => {
         expect(body.repo).toBe('acme/app');
       },
     );
+
+    it("names the repository's DEFAULT branch for the golden, never the session's base", async () => {
+      await testDb.db.update(repositories).set({ defaultBranch: 'trunk' }).where(eq(repositories.id, 'repo-a'));
+      const wb = await createSandboxWorkbench({ baseBranch: 'release/2' });
+      expect((await getWorkbench(wb.id))?.baseBranch).toBe('release/2');
+      const body = fleet.created[0];
+      expect(body.repo).toBe('acme/app');
+      expect(body.baseBranch).toBe('trunk');
+      expect(body).not.toHaveProperty('task');
+    });
+
+    it.each([
+      ['a bare box with a repo', { repo: 'acme/app' }, 'trunk'],
+      ['a bare box with no repo', {}, undefined],
+      ['a task dispatch', { repo: 'acme/app', task: { taskType: 'code_writing', prompt: 'x', repo: { slug: 'acme/app', baseBranch: 'trunk' } } }, undefined],
+    ] as const)('sends a top-level baseBranch only for %s', async (_name, extra, expected) => {
+      const built = await buildSandboxCreateBody({
+        id: 'sb-1', workspaceId: 'ws-a', provider: 'anthropic', model: 'Claude',
+        creds: { claudeToken: 'sk-ant-oat-claude' }, githubToken: 'gh', mcpServerIds: null,
+        baseBranch: 'trunk', ...extra,
+      });
+      if (!built.ok) throw new Error(built.error);
+      expect(built.body.baseBranch).toBe(expected);
+    });
+
+    it.each([
+      [undefined, true],
+      [true, true],
+      [false, false],
+    ] as const)('stores internetAccess %s and creates the box with access %s', async (flag, open) => {
+      const wb = await createSandboxWorkbench(flag === undefined ? {} : { internetAccess: flag });
+      expect((await getWorkbench(wb.id))?.settings).toEqual(flag === undefined ? {} : { internetAccess: flag });
+      expect(fleet.created[0].policy?.egress).toEqual(open ? { mode: 'open' } : undefined);
+    });
+
+    it.each(['false', 1, null, {}])('rejects a non-boolean internetAccess value: %s', async (internetAccess) => {
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude', internetAccess,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('internetAccess must be a boolean');
+      expect(fleet.created).toEqual([]);
+    });
 
     it.each([
       ['claude', { openaiKey: 'oa-codex' }],
@@ -662,7 +706,7 @@ describe('workbench routes', () => {
     });
 
     it('restores onto a new box, forgets the old sessions, and puts the saved work back', async () => {
-      const wb = await createSandboxWorkbench();
+      const wb = await createSandboxWorkbench({ internetAccess: false });
       const chatId = await chatIdOf(wb.id);
       await updateChat(chatId, { agentSessionId: 'old-session' });
       await call('POST', `/workbenches/${wb.id}/archive`);
@@ -672,6 +716,7 @@ describe('workbench routes', () => {
       expect(res.body.data).toMatchObject({ status: 'provisioning', archivedAt: null, sandboxId: `${sandboxIdFor(wb.id, 1)}` });
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
       expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id)}`, `${sandboxIdFor(wb.id, 1)}`]);
+      expect(fleet.created.map((c) => c.policy?.egress)).toEqual([undefined, undefined]);
       expect(fleet.scripts.some((s) => s.includes(`git fetch origin refs/talyn/archive/${wb.id}`))).toBe(true);
       expect((await getChat(chatId))?.agentSessionId).toBeNull();
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);

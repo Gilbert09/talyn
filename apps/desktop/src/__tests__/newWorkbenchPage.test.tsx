@@ -215,6 +215,19 @@ describe('NewWorkbenchPage', () => {
     expect(localStorage.getItem('talyn-new-workbench-repo:ws1')).toBe('r2');
   });
 
+  it('starts with the stored internet default and sends a sandbox override', async () => {
+    localStorage.setItem('talyn.session.defaults', JSON.stringify({ internetAccess: false }));
+    mockCreate.mockResolvedValue(wb('offline'));
+    await renderPage();
+    const toggle = screen.getByRole('switch', { name: 'Internet access' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    fireEvent.change(textarea(), { target: { value: 'Read the code' } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+    });
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ internetAccess: false }));
+  });
+
   it.each([
     ['Shift+Enter', { key: 'Enter', shiftKey: true }],
     ['Enter on an empty composer', { key: 'Enter' }],

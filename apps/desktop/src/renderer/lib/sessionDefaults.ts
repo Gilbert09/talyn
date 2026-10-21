@@ -18,6 +18,7 @@ export interface SessionDefaults {
   agent: WorkbenchAgent;
   effort: WorkbenchEffort;
   planMode: boolean;
+  internetAccess: boolean;
   notifyOnFinish: boolean;
 }
 
@@ -26,6 +27,7 @@ export const DEFAULT_SESSION_DEFAULTS: SessionDefaults = {
   agent: 'claude',
   effort: DEFAULT_WORKBENCH_EFFORT,
   planMode: false,
+  internetAccess: true,
   notifyOnFinish: true,
 };
 
@@ -51,6 +53,7 @@ function parse(raw: string | null | undefined): SessionDefaults {
       agent: AGENTS.includes(p.agent as WorkbenchAgent) ? (p.agent as WorkbenchAgent) : d.agent,
       effort: WORKBENCH_EFFORTS.includes(p.effort as WorkbenchEffort) ? (p.effort as WorkbenchEffort) : d.effort,
       planMode: typeof p.planMode === 'boolean' ? p.planMode : d.planMode,
+      internetAccess: typeof p.internetAccess === 'boolean' ? p.internetAccess : d.internetAccess,
       notifyOnFinish: typeof p.notifyOnFinish === 'boolean' ? p.notifyOnFinish : d.notifyOnFinish,
     };
   } catch {

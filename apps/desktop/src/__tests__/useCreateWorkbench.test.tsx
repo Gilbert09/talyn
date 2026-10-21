@@ -90,6 +90,7 @@ function spec(over: Partial<NewWorkbenchSpec> = {}): NewWorkbenchSpec {
     model: 'claude-sonnet',
     effort: 'high',
     planMode: false,
+    internetAccess: true,
     prompt: '  Fix the login redirect  ',
     ...over,
   };
@@ -132,6 +133,7 @@ describe('useCreateWorkbench: sandbox', () => {
       branch: undefined,
       fromPullRequestId: undefined,
       prompt: 'Fix the login redirect',
+      internetAccess: true,
     });
     expect(created?.id).toBe('wb1');
     expect(useWorkbenchStore.getState().workbenches.wb1).toBeDefined();

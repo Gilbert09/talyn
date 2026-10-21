@@ -223,6 +223,11 @@ export function WorkbenchHeader({
             <RuntimeIcon className="h-3 w-3" />
             {workbench.runtime === 'local' ? 'Local' : 'Sandbox'}
           </span>
+          {workbench.runtime === 'sandbox' && workbench.settings?.internetAccess === false && (
+            <span className="shrink-0 text-[10px] text-muted-foreground" title="This sandbox has limited network access">
+              No internet
+            </span>
+          )}
           {pr && (
             <a
               href={pr.summary.url}

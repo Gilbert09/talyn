@@ -121,6 +121,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       creds: resolved.creds,
       githubToken: resolved.githubToken,
       mcpServerIds: null,
+      internetAccess: row.settings?.internetAccess !== false,
       gitAuthor: await gitAuthorFor(row.workspaceId),
       // No `task` and no `ephemeral`: a bare box that outlives every turn.
       // So the scope goes at the top level: the fleet proxy's commit, checks

@@ -17,6 +17,7 @@ export interface NewWorkbenchSpec {
   model: string;
   effort: WorkbenchEffort;
   planMode: boolean;
+  internetAccess: boolean;
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
   baseBranch?: string;
@@ -103,6 +104,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     branch,
     fromPullRequestId: spec.fromPullRequestId,
     prompt: prompt || undefined,
+    internetAccess: spec.internetAccess,
   });
   // The queued first message takes the chat's plan mode and effort when it
   // runs, and the box takes far longer to boot than this one request.

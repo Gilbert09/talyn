@@ -114,3 +114,14 @@ describe('SessionsSettings model', () => {
     await waitFor(() => expect(setWorkspaces).toHaveBeenCalled());
   });
 });
+
+describe('SessionsSettings internet access', () => {
+  it('starts on and saves changes for new sessions', () => {
+    render(<SessionsSettings />);
+    const toggle = screen.getByRole('checkbox', { name: /^Internet access / });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(JSON.parse(localStorage.getItem(SESSION_DEFAULTS_KEY) ?? '{}')).toMatchObject({ internetAccess: false });
+  });
+});

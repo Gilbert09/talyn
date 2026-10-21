@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, FolderOpen, Loader2 } from 'lucide-react';
+import { ArrowUp, FolderOpen, Globe2, Loader2 } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
   storedFleetModelForAgent,
@@ -74,6 +74,7 @@ export function NewWorkbenchPage() {
   const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
   const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
+  const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
   const [pathError, setPathError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -211,6 +212,7 @@ export function NewWorkbenchPage() {
       model,
       effort,
       planMode,
+      internetAccess,
       prompt: text,
       baseBranch: baseBranch.trim() || (source.kind === 'pr' ? source.baseBranch : undefined),
       branch: source.kind === 'branch' ? source.branch : source.kind === 'pr' ? source.headBranch || undefined : undefined,
@@ -342,6 +344,18 @@ export function NewWorkbenchPage() {
                 }}
                 choices={runtimes}
               />
+              {runtime === 'sandbox' && (
+                <ControlChip
+                  role="switch"
+                  aria-checked={internetAccess}
+                  aria-label="Internet access"
+                  title={internetAccess ? 'Internet access on' : 'Internet access off'}
+                  onClick={() => setInternetAccess((value) => !value)}
+                >
+                  <Globe2 className="h-3.5 w-3.5" />
+                  <span>Internet {internetAccess ? 'on' : 'off'}</span>
+                </ControlChip>
+              )}
               {runtime === 'local' && repo && runtimes.local.available && (
                 <ControlChip
                   onClick={() => void chooseFolder()}
