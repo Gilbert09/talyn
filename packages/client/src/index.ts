@@ -666,7 +666,7 @@ export const cloudProviders = {
   list: (workspaceId: string) =>
     request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
   /** Validate + store credentials for a provider, then auto-provision its env. */
-  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexAccountId?: string; codexLabel?: string }) =>
+  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexFleetAccountId?: string; codexLabel?: string }) =>
     request<{ connected: boolean }>('PUT', `/cloud-providers/${type}/config`, {
       workspaceId,
       ...config,

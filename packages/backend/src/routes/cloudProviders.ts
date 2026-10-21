@@ -283,19 +283,20 @@ export function cloudProviderRoutes(): Router {
 
     let providerBody = req.body;
     if (provider.type === 'selfhosted') {
-      const body = req.body as { claudeToken?: string; codexAccessToken?: string; openaiKey?: string; codexAccountId?: string; codexLabel?: string };
-      if ((body.codexAccountId !== undefined && typeof body.codexAccountId !== 'string') ||
+      // `codexAccountId` is the ChatGPT account id inside the credential; the
+      // fleet account to reconnect is `codexFleetAccountId`. The provider writes
+      // straight to that row, so it is checked against the workspace here, always.
+      const body = req.body as { claudeToken?: string; codexAccessToken?: string; openaiKey?: string; codexFleetAccountId?: unknown; codexLabel?: string };
+      if ((body.codexFleetAccountId !== undefined && typeof body.codexFleetAccountId !== 'string') ||
           (body.codexLabel !== undefined && (typeof body.codexLabel !== 'string' || !body.codexLabel.trim()))) {
         return res.status(400).json({ success: false, error: 'Invalid Codex account target' });
       }
-      if (body.codexAccessToken && body.codexAccountId) {
-        const target = await getFleetAccount(body.codexAccountId);
-        if (target) {
-          if (target.workspaceId !== workspaceId || target.agent !== 'codex' || target.kind !== 'codex_oauth') {
-            return res.status(404).json({ success: false, error: 'Account not found' });
-          }
-          providerBody = { ...body, codexAccountId: undefined, codexFleetAccountId: target.id };
+      if (typeof body.codexFleetAccountId === 'string') {
+        const target = await getFleetAccount(body.codexFleetAccountId);
+        if (!body.codexAccessToken || !target || target.workspaceId !== workspaceId || target.agent !== 'codex' || target.kind !== 'codex_oauth') {
+          return res.status(404).json({ success: false, error: 'Account not found' });
         }
+        providerBody = { ...body, codexFleetAccountId: target.id };
       }
       if (body.codexAccessToken && body.codexLabel && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId &&
           !(await mayAddAccount(workspaceId, 'codex'))) {
