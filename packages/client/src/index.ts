@@ -24,6 +24,9 @@ import type {
   McpProbeResult,
   McpServerDefinition,
   McpServerInput,
+  FleetAccountView,
+  FleetAccountsResponse,
+  FleetAgent,
   WorkflowCounts,
   WorkflowInput,
   WorkflowRun,
@@ -663,10 +666,11 @@ export const cloudProviders = {
   list: (workspaceId: string) =>
     request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
   /** Validate + store credentials for a provider, then auto-provision its env. */
-  saveConfig: (type: string, workspaceId: string, config: Record<string, string>) =>
+  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexAccountId?: string; codexLabel?: string }) =>
     request<{ connected: boolean }>('PUT', `/cloud-providers/${type}/config`, {
       workspaceId,
       ...config,
+      ...options,
     }),
   /**
    * Start a Claude sign-in and get the URL to open.
@@ -677,17 +681,34 @@ export const cloudProviders = {
    * Works on BOTH front ends, unlike the Codex flow: Anthropic redirects to a
    * page it hosts rather than to a loopback, so nothing has to listen on a port.
    */
-  startClaudeSignIn: (workspaceId: string) =>
+  startClaudeSignIn: (workspaceId: string, options?: { accountId?: string; label?: string }) =>
     request<{ url: string }>('POST', '/cloud-providers/selfhosted/claude/authorize', {
       workspaceId,
+      ...options,
     }),
 
   /** Finish it with the code copied off Anthropic's page (`code#state`). */
-  completeClaudeSignIn: (workspaceId: string, code: string) =>
+  completeClaudeSignIn: (workspaceId: string, code: string, options?: { accountId?: string; label?: string }) =>
     request<{ connected: boolean }>('POST', '/cloud-providers/selfhosted/claude/complete', {
       workspaceId,
       code,
+      ...options,
     }),
+
+  fleetAccounts: {
+    list: (workspaceId: string) =>
+      request<FleetAccountsResponse>('GET', `/cloud-providers/selfhosted/accounts?workspaceId=${encodeURIComponent(workspaceId)}`),
+    add: (workspaceId: string, agent: FleetAgent, kind: 'anthropic_key' | 'openai_key', key: string, label?: string) =>
+      request<FleetAccountView>('POST', '/cloud-providers/selfhosted/accounts', { workspaceId, agent, kind, key, label }),
+    rename: (id: string, label: string) =>
+      request<void>('PATCH', `/cloud-providers/selfhosted/accounts/${encodeURIComponent(id)}`, { label }),
+    reorder: (workspaceId: string, agent: FleetAgent, ids: string[]) =>
+      request<FleetAccountView[]>('PUT', '/cloud-providers/selfhosted/accounts/order', { workspaceId, agent, ids }),
+    remove: (id: string) =>
+      request<void>('DELETE', `/cloud-providers/selfhosted/accounts/${encodeURIComponent(id)}`),
+    refreshUsage: (id: string) =>
+      request<FleetAccountView['usage']>('POST', `/cloud-providers/selfhosted/accounts/${encodeURIComponent(id)}/usage/refresh`),
+  },
 
   test: (type: string, workspaceId: string) =>
     request<{ connected: boolean; error?: string }>('POST', `/cloud-providers/${type}/test`, {
