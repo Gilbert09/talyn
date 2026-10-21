@@ -256,6 +256,13 @@ export interface SandboxCreateBodySpec {
    * when `task` is set, because the task's own repo is the scope there.
    */
   repo?: string;
+  /**
+   * A bare box with `repo` only: the repository's DEFAULT branch, which picks
+   * the golden the fleet boots from (goldens are keyed on `(repo, default
+   * branch)`, never on a session's own base). Ignored when `task` is set,
+   * because `task.repo.baseBranch` already says it.
+   */
+  baseBranch?: string;
   /** Who the box's commits are by. Omitted leaves the guest's baked default. */
   gitAuthor?: { name: string; email: string };
 }
@@ -309,6 +316,7 @@ export async function buildSandboxCreateBody(
     // level; a task's repo already is the scope, and a second copy could only
     // disagree with it.
     ...(!spec.task && spec.repo ? { repo: spec.repo } : {}),
+    ...(!spec.task && spec.repo && spec.baseBranch ? { baseBranch: spec.baseBranch } : {}),
     githubToken: spec.githubToken,
     // The credential for this dispatch's vendor, and only that one.
     ...(provider === 'openai' ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
@@ -568,7 +576,7 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
  * already exists is wrong, and a migration cannot ask GitHub. The first
  * dispatch after this ships repairs the row.
  */
-async function resolveRepository(
+export async function resolveRepository(
   repositoryId: string,
   workspaceId: string,
 ): Promise<{ slug: string; defaultBranch: string } | null> {

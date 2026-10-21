@@ -11,7 +11,7 @@ import { FleetHttpError } from '../selfHosted/client.js';
 import { WorkbenchError } from './errors.js';
 import { parseSections, sectionsScript } from './execFraming.js';
 import { publicWorkbench } from './prLink.js';
-import { fleetClientFor, repoDirFor, runCapture } from './sandboxRuntime.js';
+import { fleetClientFor, MERGE_BASE_DEEPEN_BY, repoDirFor, runCapture } from './sandboxRuntime.js';
 import { updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -47,9 +47,26 @@ function baseRef(row: WorkbenchRow): string {
   return `origin/${row.baseBranch}`;
 }
 
-/** Shell that sets `$mb` to the merge-base with the base branch (HEAD itself on a branch with no base). */
-function mergeBaseLine(row: WorkbenchRow): string {
-  return `mb=$(git merge-base HEAD ${shellQuote(baseRef(row))} 2>/dev/null || git rev-parse HEAD)`;
+/**
+ * Shell that sets `$mb` to the merge-base with the base branch.
+ *
+ * A golden-booted box is a shallow clone, where a missing merge base usually
+ * means the history is too short, not that there is none. So a shallow repo
+ * deepens ONCE here before giving up (the clone script already deepened at
+ * provision; this covers a base that moved since). Only then does it fall back
+ * to HEAD, and says so on stderr, as an unshallow fetch inside a diff read
+ * could take minutes.
+ */
+export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
+  const base = shellQuote(`origin/${row.baseBranch}`);
+  const spec = shellQuote(`+refs/heads/${row.baseBranch}:refs/remotes/origin/${row.baseBranch}`);
+  return [
+    `mb=$(git merge-base HEAD ${base} 2>/dev/null`,
+    `|| { [ "$(git rev-parse --is-shallow-repository)" = true ]`,
+    `&& git fetch -q --deepen=${MERGE_BASE_DEEPEN_BY} origin ${spec} >/dev/null 2>&1`,
+    `&& git merge-base HEAD ${base} 2>/dev/null; }`,
+    `|| { echo ${shellQuote(`talyn: no merge base with origin/${row.baseBranch}; diffing against HEAD`)} >&2; git rev-parse HEAD; })`,
+  ].join(' ');
 }
 
 export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {

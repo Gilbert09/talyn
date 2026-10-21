@@ -11,6 +11,7 @@ import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
   buildSandboxCreateBody,
   createSandboxRetryingUncertain,
+  resolveRepository,
   resolveSandboxCredentials,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
@@ -113,6 +114,13 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     if (!resolved.ok) return await fail(resolved.error);
     const provider = providerForAgent(row.agent);
     const sandboxId = row.sandboxId ?? sandboxIdFor(row.id);
+    // The repository's DEFAULT branch, not the session's base: goldens are
+    // keyed on it. Best effort — without it the box boots the base image and
+    // the clone script clones as it always did.
+    const repository = await resolveRepository(row.repositoryId, row.workspaceId).catch((err) => {
+      console.warn(`[workbench] resolving the default branch for ${workbenchId} failed:`, err);
+      return null;
+    });
     const built = await buildSandboxCreateBody({
       id: sandboxId,
       workspaceId: row.workspaceId,
@@ -127,6 +135,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       // So the scope goes at the top level: the fleet proxy's commit, checks
       // and review-thread endpoints refuse a box that names no repository.
       repo: row.repoFullName,
+      ...(repository ? { baseBranch: repository.defaultBranch } : {}),
     });
     if (!built.ok) return await fail(built.error);
     const target = await fleetCreateTarget(row.workspaceId);

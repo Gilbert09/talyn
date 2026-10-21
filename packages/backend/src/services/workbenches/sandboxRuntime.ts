@@ -496,6 +496,13 @@ export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<
 // Clone, config, credentials
 // ============================================================================
 
+/** Where a golden-booted box already has the repository checked out. */
+export const GOLDEN_REPO_DIR = `${SANDBOX_WORK_ROOT}/repo`;
+
+/** `git fetch --deepen` steps tried for a merge base in a shallow clone before `--unshallow`. */
+export const MERGE_BASE_DEEPEN_TRIES = 4;
+export const MERGE_BASE_DEEPEN_BY = 500;
+
 /**
  * Clone the repository (once) and put the workbench's branch in place.
  *
@@ -506,33 +513,82 @@ export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<
  *   2. it exists on origin (pushed before, or a PR's head) — track it;
  *   3. neither — create it from `origin/<base>`.
  *
+ * A box booted from the repository's golden already holds a shallow,
+ * single-branch checkout at `/work/repo` with dependencies installed. That is
+ * LINKED into place rather than moved, because installs and venv shebangs
+ * hold its absolute path. Only when its origin is this repository: anything
+ * else clones as before.
+ *
+ * The fetch names its two branches explicitly, so a shallow golden never pulls
+ * the whole repository's pack. A shallow clone then deepens in steps until
+ * `origin/<base>` and HEAD share a merge base, which the diff needs.
+ *
  * `git` reaches GitHub through the guest's proxy rewrite, which attaches the
- * credential host-side; the token never enters the box. The clone is blobless,
- * so a large repository is usable in seconds and blobs arrive as read.
+ * credential host-side; the token never enters the box. The fallback clone is
+ * blobless, so a large repository is usable in seconds and blobs arrive as read.
  */
 export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>): string {
   const dir = shellQuote(repoDirFor(row));
+  const golden = shellQuote(GOLDEN_REPO_DIR);
   const url = shellQuote(`https://github.com/${row.repoFullName}.git`);
+  const slug = shellQuote(row.repoFullName.toLowerCase());
   const branch = shellQuote(row.branch);
-  const base = shellQuote(row.baseBranch);
   const remoteBranch = shellQuote(`origin/${row.branch}`);
   const remoteBase = shellQuote(`origin/${row.baseBranch}`);
   const localRef = shellQuote(`refs/heads/${row.branch}`);
+  const baseSpec = shellQuote(`+refs/heads/${row.baseBranch}:refs/remotes/origin/${row.baseBranch}`);
+  const branchSpec = shellQuote(`+refs/heads/${row.branch}:refs/remotes/origin/${row.branch}`);
   return [
     'set -e',
     `mkdir -p ${SANDBOX_WORK_ROOT}`,
-    `if [ ! -d ${dir}/.git ]; then git clone --filter=blob:none ${url} ${dir}; fi`,
+    `if [ ! -d ${dir}/.git ]; then`,
+    `  origin_url=$(git -C ${golden} remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)`,
+    '  golden_match=',
+    '  case "$origin_url" in',
+    `    */${slug}|*/${slug}.git|*:${slug}|*:${slug}.git) golden_match=1 ;;`,
+    '  esac',
+    `  if [ -n "$golden_match" ] && [ -d ${golden}/.git ] && [ ! -e ${dir} ]; then`,
+    `    ln -s ${golden} ${dir}`,
+    '  else',
+    `    git clone --filter=blob:none ${url} ${dir}`,
+    '  fi',
+    'fi',
     `cd ${dir}`,
-    'git fetch --prune origin',
+    // A single-branch clone only tracks what its fetch refspecs name, and
+    // `--track` refuses a remote branch no refspec covers. Add exactly these
+    // two, never the wildcard, so a later plain `git fetch` stays this small.
+    'ensure_refspec() {',
+    `  git config --get-all remote.origin.fetch | grep -qxF -e ${shellQuote('+refs/heads/*:refs/remotes/origin/*')} -e "$1" ||`,
+    '    git config --add remote.origin.fetch "$1"',
+    '}',
+    `ensure_refspec ${baseSpec}`,
+    `set -- ${baseSpec}`,
+    'remote_branch=',
+    `if git ls-remote --exit-code --heads origin ${branch} >/dev/null 2>&1; then`,
+    '  remote_branch=1',
+    `  ensure_refspec ${branchSpec}`,
+    `  set -- "$@" ${branchSpec}`,
+    'fi',
+    'shallow=',
+    'if [ "$(git rev-parse --is-shallow-repository)" = true ]; then shallow=1; fi',
+    `if [ -n "$shallow" ]; then git fetch --depth=200 origin "$@"; else git fetch origin "$@"; fi`,
     `if git show-ref --verify --quiet ${localRef}; then`,
     `  git checkout ${branch}`,
-    `elif git ls-remote --exit-code --heads origin ${branch} >/dev/null 2>&1; then`,
-    `  git fetch origin ${branch}`,
+    'elif [ -n "$remote_branch" ]; then',
     `  git checkout -b ${branch} --track ${remoteBranch}`,
     'else',
-    `  git fetch origin ${base}`,
     `  git checkout --no-track -b ${branch} ${remoteBase}`,
     'fi',
+    // The diff is against the merge base, and a shallow history may not reach
+    // it. Deepen in bounded steps, then unshallow as the last resort.
+    // A history that became complete stops the loop: no merge base there means
+    // unrelated histories, and `--unshallow` on a complete repo is an error.
+    'tries=0',
+    `while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD ${remoteBase} >/dev/null 2>&1; do`,
+    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --unshallow origin "$@"; break; fi`,
+    `  git fetch --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
+    '  tries=$((tries + 1))',
+    'done',
     'git rev-parse HEAD',
   ].join('\n');
 }

@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   aliveMarkerScript,
@@ -14,8 +17,15 @@ import {
 } from '../services/workbenches/execFraming.js';
 import { encodePtyFrame, matchTerminalPath, PtyFrameDecoder } from '../services/workbenches/terminalBridge.js';
 import { archiveRef, archiveSaveScript, restoreSavedWorkScript } from '../services/workbenches/lifecycle.js';
-import { cloneScript, repoDirFor, sandboxGeneration, sandboxIdFor } from '../services/workbenches/sandboxRuntime.js';
-import { assertRepoPath, looksBinary } from '../services/workbenches/changes.js';
+import {
+  cloneScript,
+  GOLDEN_REPO_DIR,
+  MERGE_BASE_DEEPEN_TRIES,
+  repoDirFor,
+  sandboxGeneration,
+  sandboxIdFor,
+} from '../services/workbenches/sandboxRuntime.js';
+import { assertRepoPath, looksBinary, mergeBaseLine } from '../services/workbenches/changes.js';
 import { toPrSummary } from '../services/workbenches/prLink.js';
 import { PTY_FRAME, QUIET_EXEC } from '../services/selfHosted/client.js';
 
@@ -235,14 +245,128 @@ describe('sandbox naming and scripts', () => {
     const script = cloneScript({ repoFullName: 'a/b', branch: "fe'at", baseBranch: 'main' });
     expect(script).toContain('git clone --filter=blob:none https://github.com/a/b.git /work/b');
     const local = script.indexOf('git show-ref --verify --quiet');
-    const remote = script.indexOf('git ls-remote --exit-code --heads origin');
+    const remote = script.indexOf('elif [ -n "$remote_branch" ]');
     const create = script.indexOf('git checkout --no-track -b');
+    expect(script.indexOf('git ls-remote --exit-code --heads origin')).toBeLessThan(local);
     expect(local).toBeGreaterThan(0);
     expect(remote).toBeGreaterThan(local);
     expect(create).toBeGreaterThan(remote);
     // A quote in a branch name is data, never shell.
     expect(script).toContain(`'fe'\\''at'`);
     expect(script).toContain('origin/main');
+  });
+
+  it('links the golden checkout only when its origin is this repository, and before any checkout', () => {
+    const script = cloneScript({ repoFullName: 'Acme/App', branch: 'feat', baseBranch: 'main' });
+    expect(GOLDEN_REPO_DIR).toBe('/work/repo');
+    expect(script).toContain('git -C /work/repo remote get-url origin');
+    // Lower-cased on both sides, with or without `.git`, https or scp form.
+    expect(script).toContain(`tr '[:upper:]' '[:lower:]'`);
+    expect(script).toContain(`*/acme/app|*/acme/app.git|*:acme/app|*:acme/app.git) golden_match=1`);
+    expect(script).toContain('ln -s /work/repo /work/App');
+    expect(script).not.toMatch(/\bmv\b/);
+    const link = script.indexOf('ln -s');
+    expect(link).toBeGreaterThan(-1);
+    expect(link).toBeLessThan(script.indexOf('git clone --filter=blob:none'));
+    expect(link).toBeLessThan(script.indexOf('git checkout'));
+  });
+
+  it('fetches the base and the session branch by explicit refspec, never the whole remote', () => {
+    const script = cloneScript({ repoFullName: 'a/b', branch: 'feat/x', baseBranch: 'release' });
+    expect(script).not.toContain('git fetch --prune origin');
+    expect(script).not.toMatch(/git fetch origin\s*$/m);
+    expect(script).toContain('ensure_refspec +refs/heads/release:refs/remotes/origin/release');
+    expect(script).toContain('ensure_refspec +refs/heads/feat/x:refs/remotes/origin/feat/x');
+    // The wildcard is recognised as covering, never added.
+    expect(script).not.toMatch(/git config --add remote\.origin\.fetch '?\+refs\/heads\/\*/);
+    expect(script).toContain('git checkout -b feat/x --track origin/feat/x');
+    expect(script).toContain('git fetch --depth=200 origin "$@"');
+    expect(script).toContain('git fetch origin "$@"');
+  });
+
+  it('deepens a shallow clone in bounded steps until the merge base appears, then unshallows', () => {
+    const script = cloneScript({ repoFullName: 'a/b', branch: 'feat', baseBranch: 'main' });
+    expect(script).toContain(`while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD origin/main`);
+    expect(script).toContain(`if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --unshallow origin "$@"; break; fi`);
+    expect(script).toContain('git fetch --deepen=500 origin "$@"');
+    // After the checkout, so the merge base is HEAD's.
+    expect(script.indexOf('git merge-base')).toBeGreaterThan(script.indexOf('git checkout --no-track'));
+  });
+
+  it('the diff merge base deepens a shallow repo once, then falls back to HEAD out loud', () => {
+    const line = mergeBaseLine({ baseBranch: 'main' });
+    expect(line).toMatch(/^mb=\$\(git merge-base HEAD origin\/main 2>\/dev\/null/);
+    expect(line).toContain('git fetch -q --deepen=500 origin +refs/heads/main:refs/remotes/origin/main');
+    expect(line).not.toContain('--unshallow');
+    expect(line).toContain('no merge base with origin/main; diffing against HEAD');
+    expect(line.indexOf('--deepen')).toBeLessThan(line.indexOf('git rev-parse HEAD'));
+  });
+
+  describe.skipIf(process.platform === 'win32')('the clone script against real git', () => {
+    /** An origin with 400 commits on main, `feat` forked at 100 and `release` at 20. */
+    function fixture(): { root: string; origin: string; run: (script: string, cwd?: string) => ReturnType<typeof spawnSync> } {
+      const root = mkdtempSync(join(tmpdir(), 'talyn-clone-'));
+      const origin = join(root, 'gh', 'acme', 'app.git');
+      const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+      const run = (script: string, cwd = root) => spawnSync('bash', ['-c', script], { cwd, encoding: 'utf8', env });
+      const out: string[] = [];
+      const commit = (ref: string, mark: number, parent: number | null, file: string) => {
+        out.push(`commit ${ref}\nmark :${mark}\ncommitter t <t@t> ${1700000000 + mark} +0000\ndata 1\nc\n`);
+        if (parent) out.push(`from :${parent}\n`);
+        out.push(`M 644 inline ${file}\ndata ${String(mark).length + 1}\n${mark}\n\n`);
+      };
+      for (let i = 1; i <= 400; i++) commit('refs/heads/main', i, i > 1 ? i - 1 : null, 'f');
+      commit('refs/heads/feat', 5000, 100, 'g');
+      commit('refs/heads/release', 6000, 20, 'h');
+      writeFileSync(join(root, 'stream'), out.join(''));
+      expect(run(`git init -q --bare ${origin} && git -C ${origin} fast-import --quiet < stream`).status).toBe(0);
+      return { root, origin, run };
+    }
+
+    function localScript(root: string, origin: string, branch: string, baseBranch: string): string {
+      return cloneScript({ repoFullName: 'Acme/App', branch, baseBranch })
+        .replaceAll('https://github.com/Acme/App.git', `file://${origin}`)
+        .replaceAll('/work', join(root, 'work'));
+    }
+
+    it.each([
+      ['a new branch from the default branch', 'newb', 'main', null],
+      ['a pushed branch forked 300 commits back', 'feat', 'main', 'origin/feat'],
+      ['a new branch from a non-default base', 'newc', 'release', null],
+    ])('links a matching golden: %s', (_name, branch, baseBranch, upstream) => {
+      const { root, origin, run } = fixture();
+      try {
+        expect(run(`git clone -q --depth 1 --branch main --single-branch file://${origin} work/repo`).status).toBe(0);
+        const res = run(localScript(root, origin, branch, baseBranch));
+        expect(res.status, String(res.stderr)).toBe(0);
+        const dir = join(root, 'work', 'App');
+        expect(run(`test -L ${dir}`).status).toBe(0);
+        expect(run('git rev-parse --abbrev-ref HEAD', dir).stdout.trim()).toBe(branch);
+        expect(run(`git merge-base HEAD origin/${baseBranch}`, dir).status).toBe(0);
+        const specs = run('git config --get-all remote.origin.fetch', dir).stdout.trim().split('\n');
+        expect(specs).not.toContain('+refs/heads/*:refs/remotes/origin/*');
+        expect(specs).toContain(`+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`);
+        if (upstream) expect(run('git rev-parse --abbrev-ref @{u}', dir).stdout.trim()).toBe(upstream);
+        // A second run (a re-provision) is a no-op that still succeeds.
+        expect(run(localScript(root, origin, branch, baseBranch)).status).toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('clones instead when the golden is another repository', () => {
+      const { root, origin, run } = fixture();
+      try {
+        expect(run(`git clone -q --depth 1 file://${origin} work/repo`).status).toBe(0);
+        expect(run('git -C work/repo remote set-url origin https://github.com/acme/other.git').status).toBe(0);
+        expect(run(localScript(root, origin, 'newd', 'main')).status).toBe(0);
+        const dir = join(root, 'work', 'App');
+        expect(run(`test -L ${dir}`).status).not.toBe(0);
+        expect(run('git rev-parse --is-shallow-repository', dir).stdout.trim()).toBe('false');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it('saves work on archive without ever forcing the branch', () => {
