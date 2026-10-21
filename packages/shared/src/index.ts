@@ -93,6 +93,7 @@ export * from './reviewFixPrompt.js';
 // The agent picker — which agents a workspace can start a task on. One pure
 // derivation, shared by the per-PR task menu and the Loop editor on both forks.
 export * from './cloudAgents.js';
+export * from './fleetAccounts.js';
 
 // The operator console's contract (admin.talyn.dev ⇄ /api/v1/admin).
 export * from './admin.js';

@@ -2,7 +2,6 @@ import { readCloudTaskMeta, type Environment, type Task } from '@talyn/shared';
 import { FleetClient } from '../../selfHosted/client.js';
 import { pickFleetHost } from '../../fleetHosts.js';
 import {
-  getSelfHostedCredentials,
   getSelfHostedClient,
   fleetAgentStatus,
   storeSelfHostedCredentials,
@@ -14,6 +13,7 @@ import {
   FleetNotDeployedError,
 } from '../../selfHosted/credentials.js';
 import { codexCredentialFrom } from '../../selfHosted/codexOauth.js';
+import { addFleetAccount, updateFleetAccountCredential } from '../../selfHosted/accounts.js';
 import { dispatchTaskToFleet } from '../../selfHosted/executor.js';
 import { selfHostedPoller } from '../../selfHosted/poller.js';
 import type { CloudTaskProvider, CloudTaskRow, DispatchResult } from '../types.js';
@@ -35,11 +35,24 @@ interface SelfHostedCredInput {
   codexRefreshToken?: string;
   /** Optional — read off the access token's claims when absent. */
   codexAccountId?: string;
+  /** Fleet account to reconnect. The old ChatGPT account-id field still works. */
+  codexFleetAccountId?: string;
+  codexLabel?: string;
   codexExpiresIn?: number;
   /** An OpenAI PLATFORM key (`sk-…`), for metered billing instead of a subscription. */
   openaiKey?: string;
   clearClaude?: boolean;
   clearCodex?: boolean;
+}
+
+export function fleetApiKeyError(kind: 'anthropic_key' | 'openai_key', key: string): string | null {
+  if (kind === 'anthropic_key' && !/^sk-ant-\S+$/.test(key)) {
+    return 'That does not look like a Claude credential. Expected an OAuth token (sk-ant-oat…) from a Claude subscription, or a Console API key (sk-ant-api…).';
+  }
+  if (kind === 'openai_key' && !/^sk-\S+$/.test(key)) {
+    return 'That does not look like an OpenAI platform key. Expected sk-….';
+  }
+  return null;
 }
 
 /**
@@ -74,7 +87,7 @@ export const selfHostedProvider: CloudTaskProvider = {
     // a run, as a task failure with nothing in it naming the cause. A pasted
     // GitHub PAT or a truncated copy is caught in the form instead, where the
     // fix is obvious.
-    if (claudeToken && !/^sk-ant-\S+$/.test(claudeToken)) {
+    if (claudeToken && fleetApiKeyError('anthropic_key', claudeToken)) {
       return {
         ok: false,
         error:
@@ -108,7 +121,7 @@ export const selfHostedProvider: CloudTaskProvider = {
       }
     }
 
-    if (openaiKey && !/^sk-\S+$/.test(openaiKey)) {
+    if (openaiKey && fleetApiKeyError('openai_key', openaiKey)) {
       return {
         ok: false,
         error: 'That does not look like an OpenAI platform key. Expected sk-….',
@@ -165,39 +178,34 @@ export const selfHostedProvider: CloudTaskProvider = {
     // Connecting Codex as a subscription clears any platform key beside it and
     // vice versa: a leftover credential the user believes they replaced is one
     // the dispatch path could silently fall back to.
-    await storeSelfHostedCredentials(workspaceId, {
+    const targetedCodex = Boolean(codex && (body.codexFleetAccountId || body.codexLabel));
+    if (targetedCodex && codex) {
+      if (body.codexFleetAccountId) {
+        await updateFleetAccountCredential(body.codexFleetAccountId, codex);
+      } else {
+        await addFleetAccount(workspaceId, {
+          kind: 'codex_oauth', credential: codex, label: body.codexLabel,
+        });
+      }
+    }
+    if (!targetedCodex || claudeToken || openaiKey || clearClaude || clearCodex) {
+      await storeSelfHostedCredentials(workspaceId, {
       ...(clearClaude ? { claudeToken: null } : claudeToken ? { claudeToken } : {}),
       ...(clearCodex
         ? { codex: null, openaiKey: null }
-        : codex
+        : codex && !targetedCodex
           ? { codex, openaiKey: null }
           : openaiKey
             ? { openaiKey, codex: null }
             : {}),
-    });
+      });
+    }
     return { ok: true };
   },
 
   async hasCredentials(workspaceId) {
-    try {
-      return Boolean(await getSelfHostedCredentials(workspaceId));
-    } catch {
-      // A question about STORAGE, answered without asking a vendor anything.
-      //
-      // Resolving credentials refreshes an expiring subscription token, and a
-      // revoked grant makes that throw. This is the call `GET /cloud-providers`
-      // makes for every provider, so the throw took out the whole listing with
-      // a 500 — and that listing is the Settings cards, the "Default for new
-      // tasks" menu and the per-task agent picker. A dead Claude grant blanked
-      // the one screen with the button to fix it on.
-      //
-      // The honest answer is also the simple one: a workspace with a rejected
-      // grant still HAS credentials. They need reconnecting, which is a
-      // different question, and `fleetAgentStatus` is what answers it — reading
-      // the row, never the vendor.
-      const status = await fleetAgentStatus(workspaceId).catch(() => null);
-      return Boolean(status?.connectedAgents.length);
-    }
+    const status = await fleetAgentStatus(workspaceId);
+    return status.connectedAgents.length > 0;
   },
 
   async testConnection(workspaceId) {

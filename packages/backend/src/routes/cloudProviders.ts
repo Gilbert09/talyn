@@ -1,6 +1,9 @@
-import { Router } from 'express';
-import { cloudProviderRank, type CloudProviderType, type ApiResponse, type FleetAgent } from '@talyn/shared';
+import { Router, type Request, type Response } from 'express';
+import { DEFAULT_FLEET_SWITCH_AT_PERCENT, cloudProviderRank, type CloudProviderType, type ApiResponse, type FleetAgent, type FleetAccountView, type FleetAccountsResponse } from '@talyn/shared';
 import { randomBytes } from 'crypto';
+import { eq, sql } from 'drizzle-orm';
+import { getDbClient } from '../db/client.js';
+import { workspaces as workspacesTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { buildAuthorizeUrl, exchangeCode, splitPastedCode } from '../services/selfHosted/claudeOauth.js';
 import {
@@ -40,6 +43,46 @@ import {
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
 import { fleetAgentStatus } from '../services/selfHosted/credentials.js';
 import { clearExhaustedAgent } from '../services/selfHosted/exhaustedQuota.js';
+import { clearExhaustedAccount, isHeldBack, probeAfter } from '../services/selfHosted/exhaustedQuota.js';
+import { addFleetAccount, getFleetAccount, listFleetAccounts, removeFleetAccount, reorderFleetAccounts, updateFleetAccountCredential, updateFleetAccountLabel, FleetAccountError, type FleetAccount } from '../services/selfHosted/accounts.js';
+import { refreshFleetAccountUsage } from '../services/selfHosted/accountUsage.js';
+import { isOverThreshold } from '../services/selfHosted/usage.js';
+import { workspaceHasFeature } from '../services/featureFlags.js';
+import { fleetApiKeyError } from '../services/cloudProviders/selfhosted/provider.js';
+
+async function mayAddAccount(workspaceId: string, agent: FleetAgent): Promise<boolean> {
+  const existing = await listFleetAccounts(workspaceId, agent);
+  return existing.length === 0 || (await workspaceHasFeature('fleetMultiAccount', workspaceId)).enabled;
+}
+
+async function accountForCaller(req: Request, res: Response): Promise<FleetAccount | null> {
+  const account = await getFleetAccount(req.params.id);
+  if (account) {
+    try {
+      await requireWorkspaceAccess(req, account.workspaceId);
+      return account;
+    } catch { /* Hide account ids from other workspaces. */ }
+  }
+  res.status(404).json({ success: false, error: 'Account not found' });
+  return null;
+}
+
+function toFleetAccountView(account: FleetAccount, threshold: number): FleetAccountView {
+  const held = account.quotaExhausted && isHeldBack(account.quotaExhausted)
+    ? { until: new Date(probeAfter(account.quotaExhausted)).toISOString() }
+    : null;
+  const usage = account.usage && 'windows' in account.usage
+    ? { fetchedAt: account.usage.fetchedAt, windows: account.usage.windows.map(({ key, label, usedPercent, resetsAt }) => ({ key, label, usedPercent, resetsAt })) }
+    : account.usage;
+  const needsReauth = Boolean(account.reauthRequiredAt);
+  return {
+    id: account.id, agent: account.agent, kind: account.kind, label: account.label,
+    priority: account.priority, needsReauth, held, usage,
+    over: needsReauth || Boolean(held) || Boolean(account.usage && 'windows' in account.usage && isOverThreshold(account.usage.windows, threshold)),
+  };
+}
+
+const usageRefreshAt = new Map<string, number>();
 
 interface CloudProviderInfo {
   type: CloudProviderType;
@@ -75,6 +118,108 @@ interface CloudProviderInfo {
  */
 export function cloudProviderRoutes(): Router {
   const router = Router();
+
+  router.get('/selfhosted/accounts', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string | undefined;
+    if (!workspaceId) return res.status(400).json({ success: false, error: 'workspaceId is required' });
+    try { await requireWorkspaceAccess(req, workspaceId); }
+    catch (err) { return handleAccessError(err, res); }
+    if (!(await workspaceMayUseFleet(workspaceId))) {
+      return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    }
+    const [row] = await getDbClient().select({ threshold: sql<number | null>`(${workspacesTable.settings} ->> 'fleetSwitchAtPercent')::int` })
+      .from(workspacesTable).where(eq(workspacesTable.id, workspaceId)).limit(1);
+    const threshold = row?.threshold ?? DEFAULT_FLEET_SWITCH_AT_PERCENT;
+    const accounts = await listFleetAccounts(workspaceId);
+    const refreshed = await Promise.all(accounts.map(async (account) => ({
+      ...account,
+      usage: await refreshFleetAccountUsage(account).catch(() => account.usage),
+    })));
+    const views = refreshed.map((account) => toFleetAccountView(account, threshold));
+    const active: FleetAccountsResponse['active'] = { claude: null, codex: null };
+    for (const account of views) {
+      if (!account.over && !active[account.agent]) active[account.agent] = account.id;
+    }
+    res.json({ success: true, data: { accounts: views, switchAtPercent: threshold, active } satisfies FleetAccountsResponse });
+  });
+
+  router.post('/selfhosted/accounts', async (req, res) => {
+    const { workspaceId, agent, kind, key, label } = req.body as {
+      workspaceId?: string; agent?: FleetAgent; kind?: 'anthropic_key' | 'openai_key'; key?: string; label?: string;
+    };
+    if (!workspaceId || (agent !== 'claude' && agent !== 'codex') ||
+        (kind !== 'anthropic_key' && kind !== 'openai_key') ||
+        (agent === 'claude' ? kind !== 'anthropic_key' : kind !== 'openai_key') ||
+        typeof key !== 'string' || (label !== undefined && typeof label !== 'string')) {
+      return res.status(400).json({ success: false, error: 'Invalid account' });
+    }
+    try { await requireWorkspaceAccess(req, workspaceId); }
+    catch (err) { return handleAccessError(err, res); }
+    if (!(await workspaceMayUseFleet(workspaceId))) {
+      return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    }
+    const keyError = fleetApiKeyError(kind, key);
+    if (keyError) return res.status(400).json({ success: false, error: keyError });
+    if (!(await mayAddAccount(workspaceId, agent))) {
+      return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
+    }
+    const account = await addFleetAccount(workspaceId, { kind, credential: { keyEnc: encryptString(key) }, label });
+    await ensureCloudEnvironment(assertUser(req).id, 'selfhosted');
+    res.status(201).json({ success: true, data: toFleetAccountView(account, DEFAULT_FLEET_SWITCH_AT_PERCENT) });
+  });
+
+  router.put('/selfhosted/accounts/order', async (req, res) => {
+    const { workspaceId, agent, ids } = req.body as { workspaceId?: string; agent?: FleetAgent; ids?: string[] };
+    if (!workspaceId || (agent !== 'claude' && agent !== 'codex') || !Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+      return res.status(400).json({ success: false, error: 'Invalid account order' });
+    }
+    try { await requireWorkspaceAccess(req, workspaceId); }
+    catch (err) { return handleAccessError(err, res); }
+    if (!(await workspaceMayUseFleet(workspaceId))) return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    try {
+      const ordered = await reorderFleetAccounts(workspaceId, agent, ids);
+      res.json({ success: true, data: ordered.map((account) => toFleetAccountView(account, DEFAULT_FLEET_SWITCH_AT_PERCENT)) });
+    } catch (err) {
+      if (err instanceof FleetAccountError) return res.status(400).json({ success: false, error: err.message });
+      throw err;
+    }
+  });
+
+  router.patch('/selfhosted/accounts/:id', async (req, res) => {
+    const account = await accountForCaller(req, res);
+    if (!account) return;
+    if (!(await workspaceMayUseFleet(account.workspaceId))) return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    const { label } = req.body as { label?: string };
+    if (typeof label !== 'string') return res.status(400).json({ success: false, error: 'label is required' });
+    try {
+      await updateFleetAccountLabel(account.workspaceId, account.id, label);
+      res.json({ success: true });
+    } catch (err) {
+      if (err instanceof FleetAccountError) return res.status(400).json({ success: false, error: err.message });
+      throw err;
+    }
+  });
+
+  router.delete('/selfhosted/accounts/:id', async (req, res) => {
+    const account = await accountForCaller(req, res);
+    if (!account) return;
+    if (!(await workspaceMayUseFleet(account.workspaceId))) return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    await removeFleetAccount(account.workspaceId, account.id);
+    res.json({ success: true });
+  });
+
+  router.post('/selfhosted/accounts/:id/usage/refresh', async (req, res) => {
+    const account = await accountForCaller(req, res);
+    if (!account) return;
+    if (!(await workspaceMayUseFleet(account.workspaceId))) return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    const now = Date.now();
+    if (now - (usageRefreshAt.get(account.id) ?? 0) < 30_000) {
+      return res.status(429).json({ success: false, error: 'Try again in 30 seconds' });
+    }
+    usageRefreshAt.set(account.id, now);
+    const usage = await refreshFleetAccountUsage(account, 60_000, true);
+    res.json({ success: true, data: usage });
+  });
 
   // List providers + connected status for a workspace.
   router.get('/', async (req, res) => {
@@ -136,7 +281,40 @@ export function cloudProviderRoutes(): Router {
       return res.status(403).json({ success: false, error: fleetRefusalReason() });
     }
 
-    const result = await provider.validateCredentials(workspaceId, req.body);
+    let providerBody = req.body;
+    if (provider.type === 'selfhosted') {
+      const body = req.body as { claudeToken?: string; codexAccessToken?: string; openaiKey?: string; codexAccountId?: string; codexLabel?: string };
+      if ((body.codexAccountId !== undefined && typeof body.codexAccountId !== 'string') ||
+          (body.codexLabel !== undefined && (typeof body.codexLabel !== 'string' || !body.codexLabel.trim()))) {
+        return res.status(400).json({ success: false, error: 'Invalid Codex account target' });
+      }
+      if (body.codexAccessToken && body.codexAccountId) {
+        const target = await getFleetAccount(body.codexAccountId);
+        if (target) {
+          if (target.workspaceId !== workspaceId || target.agent !== 'codex' || target.kind !== 'codex_oauth') {
+            return res.status(404).json({ success: false, error: 'Account not found' });
+          }
+          providerBody = { ...body, codexAccountId: undefined, codexFleetAccountId: target.id };
+        }
+      }
+      if (body.codexAccessToken && body.codexLabel && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId &&
+          !(await mayAddAccount(workspaceId, 'codex'))) {
+        return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
+      }
+      for (const [agent, kind, supplied] of [
+        ['claude', 'anthropic_key', body.claudeToken],
+        ['codex', 'codex_oauth', body.codexAccessToken && !body.codexLabel && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId],
+        ['codex', 'openai_key', body.openaiKey],
+      ] as const) {
+        if (!supplied) continue;
+        const existing = await listFleetAccounts(workspaceId, agent);
+        if (existing.length > 0 && !existing.some((account) => account.kind === kind) &&
+            !(await workspaceHasFeature('fleetMultiAccount', workspaceId)).enabled) {
+          return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
+        }
+      }
+    }
+    const result = await provider.validateCredentials(workspaceId, providerBody);
     if (!result.ok) {
       return res.status(400).json({ success: false, error: result.error });
     }
@@ -195,7 +373,7 @@ export function cloudProviderRoutes(): Router {
    * nothing here that a browser cannot do.
    */
   router.post('/selfhosted/claude/authorize', async (req, res) => {
-    const { workspaceId } = req.body as { workspaceId?: string };
+    const { workspaceId, accountId, label } = req.body as { workspaceId?: string; accountId?: string; label?: string };
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
     }
@@ -207,6 +385,22 @@ export function cloudProviderRoutes(): Router {
     if (!(await workspaceMayUseFleet(workspaceId))) {
       return res.status(403).json({ success: false, error: fleetRefusalReason() });
     }
+    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string')) {
+      return res.status(400).json({ success: false, error: 'Invalid account target' });
+    }
+    if (accountId && label) return res.status(400).json({ success: false, error: 'Choose an account or a new label' });
+    if (accountId) {
+      const target = await getFleetAccount(accountId);
+      if (!target || target.workspaceId !== workspaceId || target.kind !== 'claude_oauth') {
+        return res.status(404).json({ success: false, error: 'Account not found' });
+      }
+    }
+    if (label !== undefined) {
+      if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ success: false, error: 'label is required' });
+      if (!(await mayAddAccount(workspaceId, 'claude'))) {
+        return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
+      }
+    }
 
     const { verifier, challenge } = createPkcePair();
     const state = randomState();
@@ -217,8 +411,10 @@ export function cloudProviderRoutes(): Router {
         state,
         codeVerifierEnc: encryptString(verifier),
         expiresAt: new Date(Date.now() + PENDING_AUTH_TTL_MS).toISOString(),
+        ...(accountId ? { accountId } : {}),
+        ...(label ? { label: label.trim() } : {}),
       },
-    });
+    } as Parameters<typeof patchSelfHostedConfig>[1]);
 
     res.json({
       success: true,
@@ -228,7 +424,7 @@ export function cloudProviderRoutes(): Router {
 
   /** Finish it: exchange the pasted code, store the pair, clear the pending row. */
   router.post('/selfhosted/claude/complete', async (req, res) => {
-    const { workspaceId, code } = req.body as { workspaceId?: string; code?: string };
+    const { workspaceId, code, accountId, label } = req.body as { workspaceId?: string; code?: string; accountId?: string; label?: string };
     if (!workspaceId || !code?.trim()) {
       return res.status(400).json({ success: false, error: 'workspaceId and code are required' });
     }
@@ -238,12 +434,17 @@ export function cloudProviderRoutes(): Router {
       return handleAccessError(err, res);
     }
 
-    const pending = (await readSelfHostedConfig(workspaceId))?.claudePendingAuth;
+    const pending = (await readSelfHostedConfig(workspaceId))?.claudePendingAuth as
+      | ({ state: string; codeVerifierEnc: Parameters<typeof decryptString>[0]; expiresAt: string; accountId?: string; label?: string })
+      | undefined;
     if (!pending) {
       return res.status(400).json({
         success: false,
         error: 'Start the Claude sign-in again — this one was not found.',
       });
+    }
+    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string')) {
+      return res.status(400).json({ success: false, error: 'Invalid account target' });
     }
     if (Date.parse(pending.expiresAt) <= Date.now()) {
       await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
@@ -251,6 +452,18 @@ export function cloudProviderRoutes(): Router {
         success: false,
         error: 'That sign-in expired. Start it again.',
       });
+    }
+    if ((accountId && accountId !== pending.accountId) || (label && label !== pending.label)) {
+      return res.status(400).json({ success: false, error: 'This sign-in targets a different account' });
+    }
+    if (pending.accountId) {
+      const target = await getFleetAccount(pending.accountId);
+      if (!target || target.workspaceId !== workspaceId || target.kind !== 'claude_oauth') {
+        return res.status(404).json({ success: false, error: 'Account not found' });
+      }
+    }
+    if (pending.label && !(await mayAddAccount(workspaceId, 'claude'))) {
+      return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
     }
 
     const { code: authCode, state } = splitPastedCode(code);
@@ -269,15 +482,21 @@ export function cloudProviderRoutes(): Router {
         codeVerifier: decryptString(pending.codeVerifierEnc),
         ...(state ? { state } : {}),
       });
-      await patchSelfHostedConfig(workspaceId, {
-        claudeOAuth: credential,
-        claudePendingAuth: undefined,
-      });
+      if (pending.accountId) {
+        await updateFleetAccountCredential(pending.accountId, credential);
+        await clearExhaustedAccount(pending.accountId);
+        await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
+      } else if (pending.label) {
+        await addFleetAccount(workspaceId, { kind: 'claude_oauth', credential, label: pending.label });
+        await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
+      } else {
+        await patchSelfHostedConfig(workspaceId, { claudeOAuth: credential, claudePendingAuth: undefined });
+        await clearExhaustedAgent(workspaceId, 'claude');
+      }
       // A fresh sign-in is the one moment we can infer a topped-up quota. The
       // vendor never tells us somebody bought more usage, and the hold would
       // otherwise keep work off the agent they just came back to reconnect.
       // Cheap to be wrong: if it is still spent, the next run re-arms the hold.
-      await clearExhaustedAgent(workspaceId, 'claude');
       await ensureCloudEnvironment(assertUser(req).id, 'selfhosted');
       notifyProviderConnected({
         workspaceId,
