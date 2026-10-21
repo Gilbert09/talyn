@@ -402,6 +402,9 @@ export async function exchangeCode(input: {
   };
 }
 
+/** The `reauthRequiredAt` already logged per workspace, so the warning is said once. */
+const reauthWarned = new Map<string, string>();
+
 const inflight = new Map<string, Promise<ClaudeTokenPair>>();
 
 /** Test hook — the in-process half of the single-flight. */
@@ -425,10 +428,15 @@ export async function resolveClaudeAccessToken(
 ): Promise<string | null> {
   if (!stored || !isEncryptedEnvelope(stored.accessTokenEnc)) return null;
   if (stored.reauthRequiredAt) {
-    console.warn(
-      `[claude] workspace ${workspaceId.slice(0, 8)} needs to reconnect Claude — ` +
-        'the stored authorization was rejected, so nothing is being retried.',
-    );
+    // Every poll tick and every host credential pull lands here, so say it
+    // once per rejection rather than every ten seconds per running sandbox.
+    if (reauthWarned.get(workspaceId) !== stored.reauthRequiredAt) {
+      reauthWarned.set(workspaceId, stored.reauthRequiredAt);
+      console.warn(
+        `[claude] workspace ${workspaceId.slice(0, 8)} needs to reconnect Claude — ` +
+          'the stored authorization was rejected, so nothing is being retried.',
+      );
+    }
     return null;
   }
   if (!isExpiring(stored.expiresAt)) return decryptString(stored.accessTokenEnc);
