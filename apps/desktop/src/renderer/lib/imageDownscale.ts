@@ -7,7 +7,7 @@
  * scheme. The browser refused every blob: object URL, so the image never
  * loaded and each upload failed with "Could not read that image."
  */
-export function downscaleImage(file: File, maxDim: number): Promise<string> {
+export function downscaleImage(file: File, maxDim: number, format: 'image/png' | 'image/jpeg' = 'image/png', quality?: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('could not read file'));
@@ -23,7 +23,7 @@ export function downscaleImage(file: File, maxDim: number): Promise<string> {
         const ctx = canvas.getContext('2d');
         if (!ctx) return reject(new Error('no canvas context'));
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
+        resolve(canvas.toDataURL(format, quality));
       };
       img.onerror = () => reject(new Error('could not load image'));
       img.src = reader.result as string;

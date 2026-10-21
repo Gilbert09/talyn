@@ -102,6 +102,7 @@ import type {
   CreateWorkbenchPullRequestInput,
   CreateWorkbenchPullRequestResult,
   SendWorkbenchMessageInput,
+  WorkbenchAttachment,
   UpdateLocalWorkbenchChatInput,
   UpdateWorkbenchChatInput,
   UpdateWorkbenchInput,
@@ -257,22 +258,24 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  isRetry = false
+  isRetry = false,
+  raw?: { file: Blob; name: string }
 ): Promise<T> {
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    'Content-Type': raw ? raw.file.type : 'application/json',
     // Identifies the build to the backend, for logs and support. It carries
     // NO entitlement any more: the free-plan gates used to exempt builds that
     // predated the upgrade UI, and that exemption is deleted — every caller is
     // enforced alike, whatever it claims here.
     'X-Talyn-Client-Version': getConfig().clientVersion,
   };
+  if (raw) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetchOrThrow(method, path, {
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: raw ? raw.file : body ? JSON.stringify(body) : undefined,
   });
 
   if (response.status === 401 && token && !isRetry) {
@@ -280,7 +283,7 @@ async function request<T>(
     // recoverSession) and replay the request once with the fresh token;
     // a second 401 falls through to the normal error path.
     if (await recoverSession()) {
-      return request<T>(method, path, body, true);
+      return request<T>(method, path, body, true, raw);
     }
   }
 
@@ -2633,6 +2636,8 @@ export const workbenches = {
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
+  uploadAttachment: (workbenchId: string, file: Blob, name: string): Promise<WorkbenchAttachment> =>
+    request<WorkbenchAttachment>('POST', `/workbenches/${enc(workbenchId)}/attachments`, undefined, false, { file, name }),
 
   // ---- The user's own instruction files, copied into sandbox sessions ----
   instructions: {

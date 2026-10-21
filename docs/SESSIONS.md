@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Images in sandbox sessions (2026-10-21)
+
+The desktop can upload pasted, dropped, and selected images to a ready sandbox.
+The backend checks each image type and writes the file under `.context/attachments/` in the clone.
+The clone's Git exclude file hides `.context/` from Changes and commits.
+Messages carry a repository path. They do not carry image bytes through the database or chat updates.
+Large PNG images become JPEG files before upload. Codex receives their paths through `-i`.
+
 ## Link an existing session to a pull request (2026-10-21)
 
 The session Actions menu can link or unlink an open PR from its repository.

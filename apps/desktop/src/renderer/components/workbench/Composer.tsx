@@ -21,8 +21,7 @@ import { createChatTab } from './ChatTabs';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from './ComposerPopover';
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 
-const SANDBOX_ATTACHMENT_NOTE =
-  '(I pasted an image here, but sandbox sessions cannot take attachments yet, so it was not sent.)';
+const LARGE_PNG_BYTES = 1.5 * 1024 * 1024;
 
 export function Composer({
   workbench,
@@ -44,10 +43,12 @@ export function Composer({
   const setDraft = useWorkbenchStore((s) => s.setDraft);
   const localQueue = useWorkbenchStore((s) => (chat ? s.localQueues[chat.id] : undefined));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
-  const [droppedImage, setDroppedImage] = useState(false);
+  const [imageNotReady, setImageNotReady] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState(0);
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
   const [active, setActive] = useState(0);
   const [paths, setPaths] = useState<string[] | null>(null);
@@ -62,6 +63,10 @@ export function Composer({
   useEffect(() => {
     setPaths(null);
   }, [workbench.id]);
+
+  useEffect(() => {
+    if (workbench.status === 'ready') setImageNotReady(false);
+  }, [workbench.status]);
 
   // Autosize: grow with the text up to a third of the window, then scroll.
   useLayoutEffect(() => {
@@ -139,18 +144,17 @@ export function Composer({
 
   const send = async () => {
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || sending || ops.unavailable) return;
+    if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || ops.unavailable) return;
     setSending(true);
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
-      const body = droppedImage ? `${text}\n\n${SANDBOX_ATTACHMENT_NOTE}` : text;
       setDraft(draftKey, '');
       setAttachments([]);
-      setDroppedImage(false);
+      setImageNotReady(false);
       setTrigger(null);
       const res = await ops.send(target, {
-        text: body,
+        text,
         attachments: attachments.length ? attachments : undefined,
         planMode,
         model,
@@ -183,27 +187,44 @@ export function Composer({
     }
   };
 
-  const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const attachFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (ops.unavailable || !ops.canAttach) {
+      if (ops.runtime === 'sandbox' && workbench.status === 'provisioning') setImageNotReady(true);
+      else toast.error('Could not attach the image', ops.unavailable ?? 'Attachments are unavailable.');
+      return;
+    }
+    setImageNotReady(false);
+    setPendingUploads((count) => count + files.length);
+    for (const file of files) {
+      try {
+        let dataUrl = await downscaleImage(file, 1600);
+        let mimeType = 'image/png';
+        let name = file.name || 'pasted.png';
+        if (ops.runtime === 'sandbox' && atob(dataUrl.slice(dataUrl.indexOf(',') + 1)).length > LARGE_PNG_BYTES) {
+          dataUrl = await downscaleImage(file, 1600, 'image/jpeg', 0.85);
+          mimeType = 'image/jpeg';
+          name = name.replace(/\.[^.]+$/, '') + '.jpg';
+        }
+        const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+        const attachment = await ops.attach({ name, mimeType, dataBase64 });
+        setAttachments((cur) => [...cur, attachment]);
+      } catch (err) {
+        toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);
+      } finally {
+        setPendingUploads((count) => count - 1);
+      }
+    }
+  };
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = [...e.clipboardData.items]
       .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
       .map((item) => item.getAsFile())
       .filter((f): f is File => f !== null);
     if (files.length === 0) return;
     e.preventDefault();
-    if (!ops.canAttach) {
-      setDroppedImage(true);
-      return;
-    }
-    for (const file of files) {
-      try {
-        const dataUrl = await downscaleImage(file, 1600);
-        const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-        const attachment = await ops.attach({ name: file.name || 'pasted.png', mimeType: 'image/png', dataBase64 });
-        setAttachments((cur) => [...cur, attachment]);
-      } catch (err) {
-        toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);
-      }
-    }
+    void attachFiles(files);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -241,7 +262,10 @@ export function Composer({
   };
 
   return (
-    <div className="border-t bg-background px-3 pb-3 pt-2">
+    <div className="border-t bg-background px-3 pb-3 pt-2" onDragOver={(e) => e.preventDefault()} onDrop={(e) => {
+      e.preventDefault();
+      void attachFiles([...e.dataTransfer.files].filter((file) => file.type.startsWith('image/')));
+    }}>
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
           {queue.map((m) => (
@@ -267,7 +291,7 @@ export function Composer({
         {trigger && (
           <ComposerPopover kind={trigger.kind} items={items} active={active} loading={pathsLoading} onPick={pick} onHover={setActive} />
         )}
-        {(attachments.length > 0 || droppedImage) && (
+        {(attachments.length > 0 || pendingUploads > 0 || imageNotReady) && (
           <div className="flex flex-wrap gap-1 px-2 pt-2">
             {attachments.map((a, i) => (
               <span key={`${a.path}-${i}`} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
@@ -282,9 +306,14 @@ export function Composer({
                 </button>
               </span>
             ))}
-            {droppedImage && (
+            {pendingUploads > 0 && (
+              <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                <Loader2 className="h-3 w-3 animate-spin" /> Uploading image…
+              </span>
+            )}
+            {imageNotReady && (
               <span className="text-[11px] text-amber-700 dark:text-amber-400">
-                Sandbox sessions cannot take images yet. The message will say so.
+                Images can be attached once the sandbox is ready.
               </span>
             )}
           </div>
@@ -293,14 +322,14 @@ export function Composer({
           ref={textareaRef}
           value={draft}
           rows={1}
-          disabled={Boolean(ops.unavailable)}
+          disabled={Boolean(ops.unavailable && workbench.status !== 'provisioning')}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
             updateTrigger(e.target.value, e.target.selectionStart);
           }}
           onClick={(e) => updateTrigger(draft, e.currentTarget.selectionStart)}
           onKeyDown={onKeyDown}
-          onPaste={(e) => void onPaste(e)}
+          onPaste={onPaste}
           onBlur={() => setTrigger(null)}
           placeholder={
             ops.unavailable ??
@@ -310,6 +339,13 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
+          <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple className="hidden" aria-label="Choose images" onChange={(e) => {
+            void attachFiles([...e.target.files ?? []]);
+            e.target.value = '';
+          }} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="rounded p-1 hover:bg-accent" aria-label="Attach images" title="Attach images">
+            <ImageIcon className="h-4 w-4" />
+          </button>
           <ModelPicker agent={workbench.agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!chat || Boolean(ops.unavailable)} />
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!chat || Boolean(ops.unavailable)} />
           <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!chat || Boolean(ops.unavailable)} />
@@ -331,7 +367,7 @@ export function Composer({
           <button
             type="button"
             onClick={() => void send()}
-            disabled={sending || Boolean(ops.unavailable) || (!draft.trim() && attachments.length === 0)}
+            disabled={sending || pendingUploads > 0 || Boolean(ops.unavailable) || (!draft.trim() && attachments.length === 0)}
             className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
             title={running ? 'Queue (Enter)' : 'Send (Enter)'}
             aria-label={running ? 'Queue the message' : 'Send the message'}

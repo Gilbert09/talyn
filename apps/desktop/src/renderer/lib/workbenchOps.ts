@@ -91,7 +91,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     runtime: 'sandbox',
     unavailable: sandboxUnavailableReason(workbench),
     canRemoveQueued: true,
-    canAttach: false,
+    canAttach: true,
     send: (chat, input) => api.workbenches.sendMessage(chat.id, input),
     cancel: (chatId) => api.workbenches.cancel(chatId),
     removeQueued: (chatId, messageId) => {
@@ -115,9 +115,11 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     runAction: async (action, chat) => {
       await api.workbenches.action(id, action, chat?.id);
     },
-    attach: async () => {
-      throw new Error('Attachments are not supported in sandbox sessions yet.');
-    },
+    attach: (file) => api.workbenches.uploadAttachment(
+      id,
+      new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
+      file.name
+    ),
   };
 }
 

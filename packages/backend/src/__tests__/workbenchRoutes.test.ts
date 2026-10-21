@@ -422,6 +422,17 @@ describe('workbench routes', () => {
   });
 
   describe('a turn', () => {
+    it.each(['claude', 'codex'] as const)('resolves a repo image for %s', async (agent) => {
+      const wb = await createSandboxWorkbench({ agent });
+      const chatId = await chatIdOf(wb.id);
+      const attachment = { name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/shot.png' };
+      expect((await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Review this', attachments: [attachment] })).status).toBe(200);
+      await idle(chatId);
+      const turn = fleet.execs.find((entry) => isAgentTurn(entry.script, agent))!;
+      if (agent === 'codex') expect(turn.script).toContain('-i /work/app/.context/attachments/shot.png');
+      else expect(turn.script).toContain('/work/app/.context/attachments/shot.png (image/png)');
+    });
+
     it.each([1, 2, 50])('stores the stream in order with %i event(s) per frame, ignoring other commands', async (frameSize) => {
       fleet.frameSize = frameSize;
       const wb = await createSandboxWorkbench();

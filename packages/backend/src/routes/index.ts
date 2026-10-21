@@ -18,6 +18,7 @@ import { systemRoutes } from './system.js';
 import { loopRoutes } from './loops.js';
 import { workbenchRoutes } from './workbenches.js';
 import { workbenchPullRequestRoutes } from './workbenchPullRequests.js';
+import { workbenchAttachmentRoutes } from './workbenchAttachments.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
@@ -225,6 +226,7 @@ export function setupRoutes(app: Express): void {
   // gates on the `workbenches` flag itself. See routes/workbenches.ts.
   // The PR routes that are not in routes/workbenches.ts. Same prefix and gate, mounted first.
   app.use(`${api}/workbenches`, mount(workbenchPullRequestRoutes()));
+  app.use(`${api}/workbenches`, mount(workbenchAttachmentRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchRoutes()));
 
   // Owner-scoped DB enforcement for the data routers below: runs each request
