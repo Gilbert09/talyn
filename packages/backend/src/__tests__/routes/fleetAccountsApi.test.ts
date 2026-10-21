@@ -201,11 +201,35 @@ describe('fleet accounts API', () => {
     const [account] = await listFleetAccounts(WS, 'codex');
     expect(account.label).toBe('Codex work');
     const next = await api('/selfhosted/config', 'PUT', {
-      workspaceId: WS, codexAccessToken: jwt('second'), codexRefreshToken: 'fake-refresh', codexAccountId: account.id,
+      workspaceId: WS, codexAccessToken: jwt('second'), codexRefreshToken: 'fake-refresh',
+      codexAccountId: 'chatgpt-1', codexFleetAccountId: account.id,
     });
     expect(next.status).toBe(200);
     expect(await listFleetAccounts(WS, 'codex')).toHaveLength(1);
     const stored = await getFleetAccountWithCredential(account.id);
-    expect(decryptString((stored!.credential as { accessTokenEnc: ReturnType<typeof encryptString> }).accessTokenEnc)).toBe(jwt('second'));
+    const credential = stored!.credential as { accessTokenEnc: ReturnType<typeof encryptString>; accountId?: string };
+    expect(decryptString(credential.accessTokenEnc)).toBe(jwt('second'));
+    // The ChatGPT account id is a different field from the fleet account target.
+    expect(credential.accountId).toBe('chatgpt-1');
+  });
+
+  it.each([
+    ['an unknown id', '00000000-0000-0000-0000-000000000000'],
+    ['a Codex target with no token', 'own'],
+  ])('refuses a Codex reconnect to %s with 404', async (_name, target) => {
+    vi.stubEnv('FLEET_PINNED_ENDPOINT', 'https://fleet.example');
+    vi.stubEnv('FLEET_GATEWAY_TOKEN', 'fake-gateway-key');
+    vi.spyOn(FleetClient.prototype, 'listGatewaySandboxes').mockResolvedValue([]);
+    const jwt = (value: string) => `x.${Buffer.from(JSON.stringify({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'chatgpt-1' }, value,
+    })).toString('base64url')}.signature`;
+    await api('/selfhosted/config', 'PUT', {
+      workspaceId: WS, codexAccessToken: jwt('first'), codexRefreshToken: 'fake-refresh', codexLabel: 'Codex work',
+    });
+    const [account] = await listFleetAccounts(WS, 'codex');
+    const res = await api('/selfhosted/config', 'PUT', target === 'own'
+      ? { workspaceId: WS, codexFleetAccountId: account.id }
+      : { workspaceId: WS, codexAccessToken: jwt('second'), codexRefreshToken: 'fake-refresh', codexFleetAccountId: target });
+    expect(res.status).toBe(404);
   });
 });
