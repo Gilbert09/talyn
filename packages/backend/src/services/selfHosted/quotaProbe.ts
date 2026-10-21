@@ -4,10 +4,13 @@
 // # Why this exists
 //
 // `exhaustedQuota.ts` learns "this subscription has nothing left" from the
-// words a failed run came back with, because neither vendor exposes a
-// "how much is left" endpoint. That inference is load-bearing — it parks the
-// agent, moves the work to the other vendor and tells the user to go and top
-// up — and on 2026-09-21 it was WRONG for a whole day.
+// words a failed run came back with. Both vendors do have a private usage
+// endpoint for a signed-in subscription (`usage.ts` reads them to choose an
+// account), but a pasted key has none, a reading can lag or fail, and a usage
+// figure is not the same as the vendor refusing a request. So the failure path
+// still decides from the run's words, and that inference is load-bearing — it
+// parks the account, moves the work and tells the user to go and top up — and
+// on 2026-09-21 it was WRONG for a whole day.
 //
 // Anthropic answered every fleet run with a 400 `invalid_request_error`:
 // "You're out of extra usage. Add more at claude.ai/settings/usage and keep
@@ -120,7 +123,8 @@ async function probeClaude(workspaceId: string, token: string): Promise<QuotaVer
 }
 
 /**
- * Ask the vendor whether `agent`'s subscription is spent.
+ * Ask the vendor whether `agent`'s subscription is spent — one account's, when
+ * `accountId` is given, else the first usable one.
  *
  * Claude only, for now. Codex on the fleet runs on a ChatGPT subscription
  * through OpenAI's Codex backend, which wants an account id parsed out of the
@@ -131,11 +135,21 @@ async function probeClaude(workspaceId: string, token: string): Promise<QuotaVer
  */
 export async function verifyAgentQuota(
   workspaceId: string,
-  agent: FleetAgent
+  agent: FleetAgent,
+  /** The account the run used. Probed alone: another account says nothing about it. */
+  accountId?: string
 ): Promise<QuotaVerdict> {
   if (agent !== 'claude') return 'unknown';
 
-  const creds = await getSelfHostedCredentials(workspaceId).catch(() => null);
+  const creds = await getSelfHostedCredentials(
+    workspaceId,
+    accountId
+      ? {
+          claudeAccountId: accountId,
+          accountFilter: (a) => a.agent !== 'claude' || a.id === accountId,
+        }
+      : {}
+  ).catch(() => null);
   const token = creds?.claudeToken;
   // No credential is not a quota answer: the dispatch path refuses such a run
   // long before this, and pretending to know would park an agent over a
@@ -146,7 +160,7 @@ export async function verifyAgentQuota(
   debugBus.recordEvent({
     service: 'fleet',
     action: 'quota_probe',
-    summary: `${agent} quota probe → ${verdict}`,
+    summary: `${agent} quota probe${accountId ? ` (account ${accountId.slice(0, 8)})` : ''} → ${verdict}`,
     workspaceId,
     ok: verdict !== 'spent',
   });

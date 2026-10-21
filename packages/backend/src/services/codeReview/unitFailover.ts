@@ -6,6 +6,11 @@ import {
 } from '@talyn/shared';
 import { FLEET_HOP, nextHop } from '../cloudProviders/quotaFailover.js';
 import {
+  accountIdsFromHops,
+  chooseFleetAccount,
+  fleetAccountHop,
+} from '../selfHosted/accountSelection.js';
+import {
   agentLabel,
   exhaustedAgentFrom,
   noteExhaustedAgent,
@@ -24,6 +29,11 @@ import {
 
 /**
  * What a review unit does when its fleet run failed.
+ *
+ * - The same agent's next ACCOUNT is tried first: one that is not over the
+ *   workspace's threshold and that no unit of this cycle hit a limit on. Such a
+ *   move is recorded as `fleet:<agent>:<accountId>` in `failed_over_from`, so
+ *   it does not mark the whole agent limited.
  *
  * The task path has this already (`selfHosted/poller.ts` `finalize` and
  * `quotaFailover.ts`). A review unit is not a `tasks` row and cannot use that
@@ -122,6 +132,56 @@ export function limitedAgentsInCycle(runs: readonly RunRow[]): Map<FleetAgent, L
   return limited;
 }
 
+/** The account a `fleet:<agent>:<accountId>` move came from, or null for an agent move. */
+export function movedFromAccount(failedOverFrom: string | null | undefined): string | null {
+  return failedOverFrom ? (accountIdsFromHops([failedOverFrom])[0] ?? null) : null;
+}
+
+/**
+ * The fleet ACCOUNTS this cycle knows are limited: a unit that settled failed
+ * with a limit code on a recorded account, and an account a unit moved away from.
+ */
+export function limitedAccountsInCycle(runs: readonly RunRow[]): Set<string> {
+  const accounts = new Set<string>();
+  for (const run of runs) {
+    const movedFrom = movedFromAccount(run.failedOverFrom);
+    if (movedFrom) accounts.add(movedFrom);
+    if (run.status === 'failed' && isLimitReason(run.failureCode) && run.fleetAccountId) {
+      accounts.add(run.fleetAccountId);
+    }
+  }
+  return accounts;
+}
+
+/**
+ * The agents a new unit of this cycle must avoid, once account-level knowledge
+ * is counted: an agent still limited by `limitedAgentsInCycle`, unless every
+ * limit seen on it was on a known account and it has another account that is
+ * free. A limit with no account recorded keeps the whole agent avoided.
+ */
+export async function limitedAgentsAfterAccounts(
+  workspaceId: string,
+  runs: readonly RunRow[]
+): Promise<Map<FleetAgent, LimitReason>> {
+  const limited = limitedAgentsInCycle(runs);
+  if (limited.size === 0) return limited;
+  const accounts = limitedAccountsInCycle(runs);
+  for (const agent of [...limited.keys()]) {
+    const unknownAccount = runs.some((run) => {
+      if (run.provider !== 'selfhosted' || !run.model) return false;
+      if (fleetAgentForModel(run.model) !== agent) return false;
+      const limitFailure = run.status === 'failed' && isLimitReason(run.failureCode);
+      return limitFailure && !run.fleetAccountId;
+    }) || runs.some((run) => run.failedOverFrom === agent);
+    if (unknownAccount) continue;
+    const free = await chooseFleetAccount(workspaceId, agent, {
+      avoidAccountIds: [...accounts],
+    }).catch(() => null);
+    if (free) limited.delete(agent);
+  }
+  return limited;
+}
+
 /**
  * The workspace's other fleet agent, when a unit may move to it.
  *
@@ -131,11 +191,21 @@ export function limitedAgentsInCycle(runs: readonly RunRow[]): Map<FleetAgent, L
  */
 export async function eligibleFleetAgent(
   workspaceId: string,
-  exclude: Iterable<FleetAgent>
+  exclude: Iterable<FleetAgent>,
+  avoidAccountIds: Iterable<string> = []
 ): Promise<FleetAgent | null> {
-  const tried = new Set([...exclude].map(FLEET_HOP));
+  const tried = new Set<string>([...exclude].map(FLEET_HOP));
+  // Placeholder agent: only the account id is read back from the hop.
+  for (const id of avoidAccountIds) tried.add(fleetAccountHop('claude', id));
   const hop = await nextHop(workspaceId, tried, { fleetOnly: true }).catch(() => null);
   return hop?.kind === 'fleet' ? hop.agent : null;
+}
+
+/** The timeline line for a move to another account of the same agent. */
+export function accountFailoverMessage(agent: FleetAgent, toLabel: string, reason: LimitReason): string {
+  return reason === 'quota_exhausted'
+    ? `One ${agentLabel(agent)} account's usage is exhausted, so this reviewer moved to ${toLabel}.`
+    : `One ${agentLabel(agent)} account reported a usage limit, so this reviewer moved to ${toLabel}.`;
 }
 
 /** The timeline line for a move. */
@@ -189,7 +259,13 @@ export async function settleFailedFleetUnit(
     // The same call the task path makes. It asks the vendor, and writes the
     // workspace hold only when the vendor agrees. A rate limit writes no hold:
     // the subscription is fine and works again without anybody acting.
-    const confirmed = await noteExhaustedAgent(run.workspaceId, agent, detail);
+    // With the account known, only that account is held.
+    const confirmed = await noteExhaustedAgent(
+      run.workspaceId,
+      agent,
+      detail,
+      run.fleetAccountId ?? undefined
+    );
     // The vendor served a probe on this credential, so the subscription is not
     // spent. The unit still moves, but it must not tell anyone to add usage.
     if (!confirmed) reason = 'usage_limit';
@@ -204,12 +280,59 @@ export async function settleFailedFleetUnit(
 
   let target: FleetAgent | null = null;
   if (live && !run.failedOverFrom) {
+    const cycleRuns = await runsForCycle(run.reviewId, run.cycle);
+    const limitedAccounts = limitedAccountsInCycle(cycleRuns);
+
+    // The same agent's next account first. Only with the failed account known:
+    // without it the next choice could be the same account again.
+    if (run.fleetAccountId) {
+      limitedAccounts.add(run.fleetAccountId);
+      const sameAgent = await chooseFleetAccount(run.workspaceId, agent, {
+        ...(run.model ? { model: run.model } : {}),
+        avoidAccountIds: [...limitedAccounts],
+      }).catch(() => null);
+      if (
+        sameAgent &&
+        (await requeueRun(run.id, {
+          failedOverFrom: fleetAccountHop(agent, run.fleetAccountId),
+          failureCode: reason,
+          failureDetail: detail,
+        }))
+      ) {
+        await appendReviewEvent(run.reviewId, {
+          toPhase: phase,
+          trigger: 'poller',
+          code: 'unit_failed_over',
+          message: accountFailoverMessage(agent, sameAgent.label, reason),
+          detail: {
+            kind: run.kind,
+            lens: run.lens,
+            from: agent,
+            to: agent,
+            fromAccountId: run.fleetAccountId,
+            toAccountId: sameAgent.id,
+            reason,
+          },
+        });
+        captureUnitFailedOver(run.workspaceId, {
+          from_agent: agent,
+          to_agent: agent,
+          reason,
+          kind: run.kind,
+          lens: run.lens,
+          cycle: run.cycle,
+          at: 'failure',
+        });
+        return 'moved';
+      }
+    }
+
     // Every agent this cycle knows is limited is excluded, not only the one
     // that just failed. A unit must not move onto an agent another unit has
     // just been refused by.
-    const limited = limitedAgentsInCycle(await runsForCycle(run.reviewId, run.cycle));
+    const limited = limitedAgentsInCycle(cycleRuns);
     limited.set(agent, reason);
-    target = await eligibleFleetAgent(run.workspaceId, limited.keys());
+    target = await eligibleFleetAgent(run.workspaceId, limited.keys(), limitedAccounts);
   }
 
   if (

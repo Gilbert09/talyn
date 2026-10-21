@@ -121,11 +121,16 @@ describe('a revoked fleet subscription records itself', () => {
       const { selfHostedProvider } = await import(
         '../services/cloudProviders/selfhosted/provider.js'
       );
-      // The listing must SURVIVE. Before, this threw and took `/cloud-providers`
-      // down with it — the screen carrying the reconnect button.
-      await expect(selfHostedProvider.hasCredentials(ws)).resolves.toBe(true);
-
+      const { getSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
+      // Dispatch is what refreshes a token, so it is what meets the rejection.
+      await getSelfHostedCredentials(ws).catch(() => undefined);
       expect(await storedFlag(agent)).toBeDefined();
+
+      // The listing must SURVIVE, and answer from storage without asking the
+      // vendor: `GET /cloud-providers` calls this for every provider.
+      const calls = fetchWithTimeout.mock.calls.length;
+      await expect(selfHostedProvider.hasCredentials(ws)).resolves.toBe(true);
+      expect(fetchWithTimeout.mock.calls.length).toBe(calls);
 
       const { fleetAgentStatus } = await import('../services/selfHosted/credentials.js');
       const status = await fleetAgentStatus(ws);
@@ -141,16 +146,14 @@ describe('a revoked fleet subscription records itself', () => {
     async (agent) => {
       await seed(agent);
       fetchWithTimeout.mockResolvedValue(REJECTED);
-      const { selfHostedProvider } = await import(
-        '../services/cloudProviders/selfhosted/provider.js'
-      );
+      const { getSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
 
-      await selfHostedProvider.hasCredentials(ws);
+      await getSelfHostedCredentials(ws).catch(() => undefined);
       const afterFirst = fetchWithTimeout.mock.calls.length;
       expect(afterFirst).toBeGreaterThan(0);
 
-      await selfHostedProvider.hasCredentials(ws);
-      await selfHostedProvider.hasCredentials(ws);
+      await getSelfHostedCredentials(ws).catch(() => undefined);
+      await getSelfHostedCredentials(ws).catch(() => undefined);
       // The whole point of recording it: the vendor is not asked again. A Loop
       // firing hourly against a revoked subscription used to re-attempt on
       // every single firing.
@@ -163,11 +166,9 @@ describe('a revoked fleet subscription records itself', () => {
     async (agent) => {
       await seed(agent);
       fetchWithTimeout.mockResolvedValue(TRANSIENT);
-      const { selfHostedProvider } = await import(
-        '../services/cloudProviders/selfhosted/provider.js'
-      );
+      const { getSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
 
-      await selfHostedProvider.hasCredentials(ws).catch(() => undefined);
+      await getSelfHostedCredentials(ws).catch(() => undefined);
       // Marking a live subscription as revoked because the vendor had a bad
       // minute would stop every run and demand a reconnection that fixes
       // nothing. Only an explicit rejection counts.

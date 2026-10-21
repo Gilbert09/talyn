@@ -25,9 +25,15 @@ import { mcpServersForDispatch, type McpServerWithSecret } from '../mcpServers/s
 import {
   getSelfHostedCredentials,
   resolveFleetTarget,
+  type SelfHostedCredentialOptions,
   type SelfHostedCredentials,
 } from './credentials.js';
 import { heldBackAgents, heldBackReason } from './exhaustedQuota.js';
+import {
+  credentialOptionsFor,
+  selectFleetAccount,
+  type FleetAccountSelection,
+} from './accountSelection.js';
 import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
 
 /**
@@ -109,6 +115,11 @@ export interface SandboxRunSpec {
    */
   avoidAgents?: FleetAgent[];
   /**
+   * Fleet ACCOUNTS already tried on this run (a failover hop, a review unit's
+   * limited account). Never chosen while another account of the agent is free.
+   */
+  avoidAccountIds?: string[];
+  /**
    * A ref to check out instead of the repository's default branch — how a review
    * run reads the pull request rather than trunk.
    *
@@ -161,6 +172,12 @@ export interface SandboxRunHandle {
    * the caller can record the explanation wherever it keeps run history.
    */
   quotaSwap: { from: FleetAgent; to: FleetAgent } | null;
+  /**
+   * The fleet account (`fleet_accounts.id`) whose credential the run got.
+   * Recorded so a re-credential, a host pull and a hot-swap all serve the same
+   * account. Absent only when no account id could be resolved.
+   */
+  accountId?: string;
 }
 
 export type SandboxRunResult =
@@ -215,8 +232,11 @@ export type SandboxCredentialsResult =
  * one is current. It goes backend -> fleetd only; the fleet's credential proxy
  * injects it host-side and it never enters the microVM (fleet spec §8).
  */
-export async function resolveSandboxCredentials(workspaceId: string): Promise<SandboxCredentialsResult> {
-  const creds = await getSelfHostedCredentials(workspaceId);
+export async function resolveSandboxCredentials(
+  workspaceId: string,
+  accounts?: SelfHostedCredentialOptions,
+): Promise<SandboxCredentialsResult> {
+  const creds = await getSelfHostedCredentials(workspaceId, accounts);
   if (!creds) {
     return {
       ok: false,
@@ -434,7 +454,27 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
     let quotaSwap: { from: FleetAgent; to: FleetAgent } | null = null;
     let model = catalogued;
     const avoided = new Set<FleetAgent>(spec.avoidAgents ?? []);
-    if (held[wanted] || avoided.has(wanted)) {
+    const avoidAccountIds = spec.avoidAccountIds ?? [];
+
+    // WHICH ACCOUNT of the agent, by usage: the first one in priority order that
+    // is not over the workspace's threshold. When every account is over only by
+    // usage (none held, none needing a reconnect), the agent is treated like an
+    // avoided one: the other agent takes the run when it can, and otherwise the
+    // run goes ahead on the least-bad account rather than to a metered provider.
+    const select = (agent: FleetAgent, forModel: string): Promise<FleetAccountSelection | null> =>
+      selectFleetAccount(spec.workspaceId, agent, { model: forModel, avoidAccountIds }).catch(
+        (err) => {
+          console.warn(
+            `[fleet] run ${spec.runId}: choosing a ${agent} account failed, using the first one:`,
+            err instanceof Error ? err.message : err,
+          );
+          return null;
+        },
+      );
+    let selection = held[wanted] ? null : await select(wanted, catalogued);
+    const allOverByUsage = Boolean(selection && !selection.account && selection.fallback);
+
+    if (held[wanted] || avoided.has(wanted) || allOverByUsage) {
       const other: FleetAgent = wanted === 'claude' ? 'codex' : 'claude';
       // The RESOLVED credential, not merely "is one configured". `creds` has
       // already refreshed what it could, so this asks the question that
@@ -443,26 +483,36 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       // instead of being swapped onto and then refused for a missing key,
       // which is a hard failure a chain does not route around.
       const otherToken = other === 'codex' ? creds.openaiKey : creds.claudeToken;
-      const otherUsable = !held[other] && !avoided.has(other) && Boolean(otherToken);
+      let otherUsable = !held[other] && !avoided.has(other) && Boolean(otherToken);
+      // The workspace's OWN choice for that agent, not the shipped default.
+      // A swap is a vendor change, not a licence to ignore the setting: this
+      // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
+      // workspace whose Codex model was gpt-5.6-sol, every task, all day
+      // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
+      // default, so a workspace that has chosen nothing is unaffected.
+      //
+      // The tier is applied again, because the swap replaced the model the
+      // tier was applied to. Without it a judging unit that moved would run
+      // below the tier its kind asks for.
+      let swappedModel: string | null = null;
+      let otherSelection: FleetAccountSelection | null = null;
+      if (otherUsable) {
+        const swapped = await workspaceAgentModel(spec.workspaceId, other);
+        swappedModel = spec.modelTier === 'top' ? topFleetModelForModel(swapped) : swapped;
+        otherSelection = await select(other, swappedModel);
+        // The other agent is over too: no better off there, so stay.
+        if (otherSelection && !otherSelection.account) otherUsable = false;
+      }
       if (!otherUsable && held[wanted]) {
         return { ok: false, capacity: true, error: heldBackReason(wanted, held[wanted]!) };
       }
-      if (otherUsable) {
-        // The workspace's OWN choice for that agent, not the shipped default.
-        // A swap is a vendor change, not a licence to ignore the setting: this
-        // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
-        // workspace whose Codex model was gpt-5.6-sol, every task, all day
-        // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
-        // default, so a workspace that has chosen nothing is unaffected.
-        //
-        // The tier is applied again, because the swap replaced the model the
-        // tier was applied to. Without it a judging unit that moved would run
-        // below the tier its kind asks for.
-        const swapped = await workspaceAgentModel(spec.workspaceId, other);
-        model = spec.modelTier === 'top' ? topFleetModelForModel(swapped) : swapped;
+      if (otherUsable && swappedModel) {
+        model = swappedModel;
+        selection = otherSelection;
         quotaSwap = { from: wanted, to: other };
         console.warn(
-          `[fleet] run ${spec.runId}: ${wanted} usage is held back or limited, so it dispatches at ${other}`,
+          `[fleet] run ${spec.runId}: ${wanted} usage is held back, limited or over the ` +
+            `threshold, so it dispatches at ${other}`,
         );
       }
     }
@@ -473,13 +523,32 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
     // Sent explicitly rather than left to the host's default — the route table
     // should be the one this dispatch chose.
     const provider = fleetProviderForModel(model);
+    const runAgent = fleetAgentForModel(model);
+
+    // The chosen account's token, falling through only to that agent's other
+    // accounts that are not over. No selection (it failed, or the agent is held
+    // with nowhere to go) keeps the first-usable credential resolved above.
+    let runCreds: SelfHostedCredentials = creds;
+    const account = selection ? (selection.account ?? selection.fallback) : null;
+    if (selection && account) {
+      const chosen = await getSelfHostedCredentials(
+        spec.workspaceId,
+        credentialOptionsFor(runAgent, account.id, {
+          threshold: selection.threshold,
+          model,
+          avoidAccountIds,
+        }),
+      );
+      if (chosen) runCreds = chosen;
+    }
+    const accountId = runAgent === 'claude' ? runCreds.claudeAccountId : runCreds.codexAccountId;
 
     const built = await buildSandboxCreateBody({
       id: spec.runId,
       workspaceId: spec.workspaceId,
       provider,
       model,
-      creds,
+      creds: runCreds,
       githubToken,
       internetAccess: spec.internetAccess,
       mcpServerIds: spec.mcpServerIds ?? null,
@@ -537,6 +606,7 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
         repoSlug: repo.slug,
         baseBranch: repo.defaultBranch,
         quotaSwap,
+        ...(accountId ? { accountId } : {}),
       },
     };
   } catch (err) {

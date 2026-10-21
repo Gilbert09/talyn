@@ -72,7 +72,9 @@ import {
   eligibleFleetAgent,
   failoverMessage,
   isLimitReason,
-  limitedAgentsInCycle,
+  limitedAccountsInCycle,
+  limitedAgentsAfterAccounts,
+  movedFromAccount,
 } from './unitFailover.js';
 import { heldBackAgents } from '../selfHosted/exhaustedQuota.js';
 import { workspaceReviewSettings } from './cycle.js';
@@ -479,11 +481,19 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   // another fleet agent can take the unit. With no alternative a first
   // dispatch goes where it was going, and fails saying why if the limit is
   // still there.
-  const limited = limitedAgentsInCycle(cycleRuns);
+  //
+  // The same for ACCOUNTS: an account a unit of this cycle hit a limit on is
+  // never chosen while another account of that agent is free, and an agent
+  // stays avoided only when it has no such account left.
+  const limitedAccounts = limitedAccountsInCycle(cycleRuns);
+  const limited = await limitedAgentsAfterAccounts(review.workspaceId, cycleRuns);
+  // A unit that moved to another account of the SAME agent dispatches there,
+  // whatever the other agent can do.
+  const movedToAccount = moved ? movedFromAccount(moved.failedOverFrom) !== null : false;
   const alternative = limited.size
-    ? await eligibleFleetAgent(review.workspaceId, limited.keys())
+    ? await eligibleFleetAgent(review.workspaceId, limited.keys(), limitedAccounts)
     : null;
-  if (moved && !alternative) {
+  if (moved && !movedToAccount && !alternative) {
     await settleRun(claim.id, { status: 'failed', failureCode: movedReason });
     await appendReviewEvent(review.id, {
       toPhase: review.phase as CodeReviewPhase,
@@ -494,7 +504,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     });
     return;
   }
-  const avoidAgents = alternative ? [...limited.keys()] : [];
+  const avoidAgents = alternative && !movedToAccount ? [...limited.keys()] : [];
 
   await patchRun(claim.id, { status: 'dispatching' });
 
@@ -520,6 +530,10 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
         ),
         budget: { timeoutSec: UNIT_TIMEOUT_SEC[unit.kind] ?? 900 },
         avoidAgents,
+        avoidAccountIds: [...limitedAccounts],
+        // A move to another account keeps the vendor, so it keeps the model the
+        // first run had. The ladder could otherwise land on the other agent.
+        ...(movedToAccount && moved?.model ? { model: moved.model } : {}),
       });
       if (result.ok) {
         // A swap on a FIRST dispatch: the unit never tried the limited agent.
@@ -530,6 +544,8 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
           status: 'running',
           provider: 'selfhosted',
           model: result.handle.model,
+          // Which account it ran on, so a limit moves the unit to the next one.
+          fleetAccountId: result.handle.accountId ?? null,
           sandboxId: result.handle.sandbox.id,
           host: result.handle.host ?? null,
           endpoint: result.handle.endpoint,
