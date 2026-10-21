@@ -20,6 +20,7 @@ import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   integrations as integrationsTable,
+  fleetAccounts,
 } from '../db/schema.js';
 
 const { noteExhaustedAgent } = await import('../services/selfHosted/exhaustedQuota.js');
@@ -72,13 +73,14 @@ describe('verifying an exhaustion with the vendor', () => {
     else process.env.TALYN_TOKEN_KEY = priorTokenKey;
   });
 
+  /** The holds on the workspace's fleet accounts, by agent, or null when none. */
   async function storedHold(): Promise<unknown> {
-    const [row] = await db
-      .select({ config: integrationsTable.config })
-      .from(integrationsTable)
-      .where(eq(integrationsTable.workspaceId, 'ws1'))
-      .limit(1);
-    return (row!.config as { quotaExhausted?: Record<string, unknown> }).quotaExhausted ?? null;
+    const rows = await db
+      .select({ agent: fleetAccounts.agent, hold: fleetAccounts.quotaExhausted })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'));
+    const held = Object.fromEntries(rows.filter((r) => r.hold).map((r) => [r.agent, r.hold]));
+    return Object.keys(held).length ? held : null;
   }
 
   it('asks the vendor with a request it will actually serve', async () => {
@@ -151,6 +153,9 @@ describe('verifying an exhaustion with the vendor', () => {
     });
 
     it('still writes the hold for an agent it cannot probe', async () => {
+      const { addFleetAccount } = await import('../services/selfHosted/accounts.js');
+      const { encryptString } = await import('../services/tokenCrypto.js');
+      await addFleetAccount('ws1', { kind: 'openai_key', credential: { keyEnc: encryptString('sk-test') } });
       vendorAnswers(new Response('{}', { status: 200 }));
       expect(await noteExhaustedAgent('ws1', 'codex', 'insufficient_quota')).toBe(true);
       expect(await storedHold()).toMatchObject({ codex: {} });

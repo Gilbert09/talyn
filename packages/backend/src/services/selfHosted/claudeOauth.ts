@@ -409,37 +409,44 @@ export function _resetClaudeOauthInflight(): void {
   inflight.clear();
 }
 
+/**
+ * How the refresh reads and writes ONE fleet account's credential.
+ *
+ * Keyed by account id, not workspace: a workspace may hold several Claude
+ * subscriptions, and each one is refreshed, locked and marked dead on its own.
+ * `reauthRequiredAt` on the credential maps to the account's own column.
+ */
 export interface ClaudeCredentialStore {
-  read: (workspaceId: string) => Promise<ClaudeOAuthCredential | undefined>;
-  patch: (workspaceId: string, next: ClaudeOAuthCredential) => Promise<void>;
+  read: (accountId: string) => Promise<ClaudeOAuthCredential | undefined>;
+  patch: (accountId: string, next: ClaudeOAuthCredential) => Promise<void>;
 }
 
 /**
- * The freshest access token for this workspace, refreshing if it is close to
- * expiry. Null when there is nothing usable and the user must sign in again.
+ * The freshest access token for this fleet account, refreshing if it is close
+ * to expiry. Null when there is nothing usable and the user must sign in again.
  */
 export async function resolveClaudeAccessToken(
-  workspaceId: string,
+  accountId: string,
   stored: ClaudeOAuthCredential | undefined,
   store: ClaudeCredentialStore,
 ): Promise<string | null> {
   if (!stored || !isEncryptedEnvelope(stored.accessTokenEnc)) return null;
   if (stored.reauthRequiredAt) {
     console.warn(
-      `[claude] workspace ${workspaceId.slice(0, 8)} needs to reconnect Claude — ` +
+      `[claude] account ${accountId.slice(0, 8)} needs to reconnect Claude — ` +
         'the stored authorization was rejected, so nothing is being retried.',
     );
     return null;
   }
   if (!isExpiring(stored.expiresAt)) return decryptString(stored.accessTokenEnc);
 
-  const existing = inflight.get(workspaceId);
+  const existing = inflight.get(accountId);
   if (existing) return (await existing).accessToken;
 
-  const attempt = refreshWithLock(workspaceId, stored, store).finally(() =>
-    inflight.delete(workspaceId),
+  const attempt = refreshWithLock(accountId, stored, store).finally(() =>
+    inflight.delete(accountId),
   );
-  inflight.set(workspaceId, attempt);
+  inflight.set(accountId, attempt);
   try {
     return (await attempt).accessToken;
   } catch (err) {
@@ -450,7 +457,7 @@ export async function resolveClaudeAccessToken(
     if (err instanceof ClaudeReauthRequiredError) throw err;
     if (!isExpired(stored.expiresAt)) {
       console.warn(
-        `[claude] preemptive refresh for workspace ${workspaceId.slice(0, 8)} failed; ` +
+        `[claude] preemptive refresh for account ${accountId.slice(0, 8)} failed; ` +
           `using the token in hand (${err instanceof Error ? err.message : String(err)})`,
       );
       return decryptString(stored.accessTokenEnc);
@@ -460,7 +467,7 @@ export async function resolveClaudeAccessToken(
 }
 
 async function refreshWithLock(
-  workspaceId: string,
+  accountId: string,
   hint: ClaudeOAuthCredential,
   store: ClaudeCredentialStore,
 ): Promise<ClaudeTokenPair> {
@@ -468,7 +475,7 @@ async function refreshWithLock(
     // Re-read INSIDE the lock: the instance that held it before us may already
     // have rotated the pair, and replaying a spent refresh token is exactly
     // what `invalid_grant` is for.
-    const fresh = (await store.read(workspaceId)) ?? hint;
+    const fresh = (await store.read(accountId)) ?? hint;
     if (fresh.reauthRequiredAt) {
       throw new ClaudeReauthRequiredError(
         'Sign in to Claude again — the stored authorization was rejected.',
@@ -482,7 +489,7 @@ async function refreshWithLock(
       };
     }
     try {
-      return await performRefresh(workspaceId, fresh, store);
+      return await performRefresh(accountId, fresh, store);
     } catch (err) {
       // RECORD the death, do not merely report it.
       //
@@ -499,7 +506,7 @@ async function refreshWithLock(
       // every run and demand a sign-in that was never needed.
       if (err instanceof ClaudeReauthRequiredError) {
         await store
-          .patch(workspaceId, { ...fresh, reauthRequiredAt: new Date().toISOString() })
+          .patch(accountId, { ...fresh, reauthRequiredAt: new Date().toISOString() })
           .catch(() => {
             // The write is best-effort: failing it would replace a clear
             // "sign in again" with whatever went wrong writing the flag.
@@ -515,11 +522,11 @@ async function refreshWithLock(
   // through the same client, so wrapping it self-deadlocks. Same shape as
   // codexOauth.ts and posthogCode/oauth.ts.
   if (!isRealPostgres()) return run();
-  return withBlockingAdvisoryLock(getPoolDbClient(), `claude-oauth-refresh:${workspaceId}`, run);
+  return withBlockingAdvisoryLock(getPoolDbClient(), `claude-oauth-refresh:${accountId}`, run);
 }
 
 async function performRefresh(
-  workspaceId: string,
+  accountId: string,
   current: ClaudeOAuthCredential,
   store: ClaudeCredentialStore,
 ): Promise<ClaudeTokenPair> {
@@ -549,7 +556,7 @@ async function performRefresh(
   const refreshToken = body.refresh_token ?? decryptString(current.refreshTokenEnc);
   const expiresAt = expiryFrom(body.expires_in);
 
-  await store.patch(workspaceId, {
+  await store.patch(accountId, {
     accessTokenEnc: encryptString(accessToken),
     refreshTokenEnc: encryptString(refreshToken),
     expiresAt,

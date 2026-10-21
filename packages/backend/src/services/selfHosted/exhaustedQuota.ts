@@ -1,21 +1,23 @@
 import type { FleetAgent } from '@talyn/shared';
+import type { ExhaustedQuotaRecord } from './credentials.js';
 import {
-  readSelfHostedConfig,
-  patchSelfHostedConfig,
-  type ExhaustedQuotaRecord,
-} from './credentials.js';
+  clearFleetAccountExhausted,
+  listFleetAccounts,
+  setFleetAccountExhausted,
+} from './accounts.js';
 import { verifyAgentQuota } from './quotaProbe.js';
 import { debugBus } from '../debugBus.js';
 
 /**
  * Learning, at run time, that a workspace's own subscription has nothing left.
  *
- * The fleet runs on the user's Claude or Codex subscription, and neither vendor
- * exposes "how much is left" to a server. The only place the truth appears is
- * the failure itself: the sandbox boots, the agent's FIRST API call is refused,
- * and the run dies having done nothing. So the failure is the feed — the same
- * shape as `withdrawnModels.ts` next door, learned by observation because
- * there is no endpoint to ask.
+ * The fleet runs on the user's Claude or Codex subscription. Both vendors have a
+ * private usage endpoint for a signed-in subscription (`usage.ts`), but a
+ * pasted key has none, and a reading can fail or lag. The failure itself is the
+ * one signal every account gives: the sandbox boots, the agent's FIRST API call
+ * is refused, and the run dies having done nothing. So the failure is a feed
+ * too — the same shape as `withdrawnModels.ts` next door, learned by
+ * observation.
  *
  * What makes this worth acting on rather than just reporting: the work is still
  * wanted, and the workspace usually has somewhere else to run it. A Claude
@@ -332,13 +334,26 @@ export function heldBackReason(agent: FleetAgent, record: { at: string; resetsAt
 // The durable record
 // ---------------------------------------------------------------------------
 
+function holdRecord(detail: string | null): ExhaustedQuotaRecord {
+  const resetsAt = resetInstantFrom(detail);
+  return {
+    at: new Date().toISOString(),
+    ...(resetsAt ? { resetsAt } : {}),
+    ...(detail ? { detail: detail.slice(0, 500) } : {}),
+  };
+}
+
 /**
  * Remember that `agent` is spent for this workspace — once the vendor has
  * CONFIRMED it.
  *
- * Stored on the fleet integration row, not in memory: the in-memory version
- * dies at the next deploy, which for this repo is every push to main, and a
- * loop firing hourly would then re-discover the same exhaustion all day.
+ * Stored on the fleet account rows, not in memory: the in-memory version dies
+ * at the next deploy, which for this repo is every push to main, and a loop
+ * firing hourly would then re-discover the same exhaustion all day.
+ *
+ * With `accountId` only that account is held. Without it every account of the
+ * agent is held, which is what the agent-wide hold always meant; callers that
+ * know which account ran should pass it.
  *
  * # Why the sentence is no longer enough on its own
  *
@@ -370,6 +385,7 @@ export async function noteExhaustedAgent(
   workspaceId: string,
   agent: FleetAgent,
   detail: string | null,
+  accountId?: string,
 ): Promise<boolean> {
   const verdict = await verifyAgentQuota(workspaceId, agent).catch(() => 'unknown' as const);
   if (verdict === 'available') {
@@ -390,15 +406,10 @@ export async function noteExhaustedAgent(
     return false;
   }
   try {
-    const config = await readSelfHostedConfig(workspaceId);
-    const record: ExhaustedQuotaRecord = {
-      at: new Date().toISOString(),
-      ...(resetInstantFrom(detail) ? { resetsAt: resetInstantFrom(detail)! } : {}),
-      ...(detail ? { detail: detail.slice(0, 500) } : {}),
-    };
-    await patchSelfHostedConfig(workspaceId, {
-      quotaExhausted: { ...(config?.quotaExhausted ?? {}), [agent]: record },
-    });
+    await setFleetAccountExhausted(
+      accountId ? { accountId } : { workspaceId, agent },
+      holdRecord(detail),
+    );
   } catch (err) {
     console.error(`[exhaustedQuota] could not record ${agent} exhaustion:`, err);
   }
@@ -406,8 +417,36 @@ export async function noteExhaustedAgent(
 }
 
 /**
- * Forget that `agent` was spent — it just ran something successfully, or the
- * user reconnected it.
+ * Hold ONE account back, without asking the vendor first.
+ *
+ * For a caller that already has the evidence — a usage reading at 100%, or a
+ * confirmation of its own. Best-effort, like {@link noteExhaustedAgent}.
+ */
+export async function noteExhaustedAccount(accountId: string, detail: string | null): Promise<void> {
+  try {
+    await setFleetAccountExhausted({ accountId }, holdRecord(detail));
+  } catch (err) {
+    console.error(`[exhaustedQuota] could not record exhaustion on account ${accountId}:`, err);
+  }
+}
+
+/**
+ * Forget that one account was spent — it just ran something successfully, or
+ * the user reconnected it.
+ */
+export async function clearExhaustedAccount(accountId: string): Promise<void> {
+  try {
+    await clearFleetAccountExhausted({ accountId });
+  } catch (err) {
+    console.error(`[exhaustedQuota] could not clear exhaustion on account ${accountId}:`, err);
+  }
+}
+
+/**
+ * Forget that `agent` was spent — every account of it. Kept for callers that
+ * do not know which account ran; one that does should use
+ * {@link clearExhaustedAccount}, because one account's success says nothing
+ * about the others.
  *
  * The success path matters as much as the failure one. Without it a hold set
  * at 09:00 keeps its agent out until the probe window elapses even though the
@@ -419,40 +458,55 @@ export async function clearExhaustedAgent(
   agent: FleetAgent,
 ): Promise<void> {
   try {
-    const config = await readSelfHostedConfig(workspaceId);
-    const held = config?.quotaExhausted;
-    if (!held?.[agent]) return;
-    const next = { ...held };
-    delete next[agent];
-    await patchSelfHostedConfig(workspaceId, {
-      // `undefined` DELETES the key in patchSelfHostedConfig, which is what an
-      // empty map should become — a row carrying `quotaExhausted: {}` reads as
-      // a workspace that has a hold recorded, just an empty one.
-      quotaExhausted: Object.keys(next).length ? next : undefined,
-    });
+    await clearFleetAccountExhausted({ workspaceId, agent });
   } catch (err) {
     console.error(`[exhaustedQuota] could not clear ${agent} exhaustion:`, err);
   }
 }
 
 /**
- * Which of this workspace's fleet agents are currently held back, and why.
+ * Which of this workspace's accounts are currently held back, by account id.
  *
  * A record whose probe window has elapsed is NOT returned — the next dispatch
- * should try that agent again. The stale row is left on disk rather than
+ * should try that account again. The stale record is left on disk rather than
  * cleaned up here: this is read on the dispatch path, and a read that writes
  * turns every dispatch into a write.
+ */
+export async function heldBackAccounts(
+  workspaceId: string,
+  now: Date = new Date(),
+): Promise<Record<string, ExhaustedQuotaRecord>> {
+  const accounts = await listFleetAccounts(workspaceId).catch(() => []);
+  const out: Record<string, ExhaustedQuotaRecord> = {};
+  for (const account of accounts) {
+    if (account.quotaExhausted && isHeldBack(account.quotaExhausted, now)) {
+      out[account.id] = account.quotaExhausted;
+    }
+  }
+  return out;
+}
+
+/**
+ * Which of this workspace's fleet AGENTS are held back: those whose every
+ * account is. The record returned is the one that lapses FIRST, because that is
+ * when the agent can run again.
  */
 export async function heldBackAgents(
   workspaceId: string,
   now: Date = new Date(),
 ): Promise<Partial<Record<FleetAgent, ExhaustedQuotaRecord>>> {
-  const config = await readSelfHostedConfig(workspaceId).catch(() => null);
-  const held = config?.quotaExhausted ?? {};
+  const accounts = await listFleetAccounts(workspaceId).catch(() => []);
   const out: Partial<Record<FleetAgent, ExhaustedQuotaRecord>> = {};
   for (const agent of ['claude', 'codex'] as FleetAgent[]) {
-    const record = held[agent];
-    if (record && isHeldBack(record, now)) out[agent] = record;
+    const own = accounts.filter((a) => a.agent === agent);
+    if (own.length === 0) continue;
+    const records = own.map((a) =>
+      a.quotaExhausted && isHeldBack(a.quotaExhausted, now) ? a.quotaExhausted : null,
+    );
+    if (records.some((r) => r === null)) continue;
+    out[agent] = (records as ExhaustedQuotaRecord[]).reduce((soonest, r) =>
+      probeAfter(r) < probeAfter(soonest) ? r : soonest,
+    );
   }
   return out;
 }

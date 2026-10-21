@@ -3,10 +3,16 @@ import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
-import { integrations as integrationsTable, workspaces as workspacesTable } from '../db/schema.js';
+import {
+  fleetAccounts,
+  integrations as integrationsTable,
+  workspaces as workspacesTable,
+} from '../db/schema.js';
 
 /**
- * Two agents behind one provider, stored on one integration row.
+ * Two agents behind one provider. Since migration 0079 each credential is a
+ * `fleet_accounts` row; the old single-credential save still works on top of
+ * them (it writes the agent's first account).
  *
  * The write used to be WHOLE — the config was rebuilt from the patch and
  * everything else dropped — and that was deliberate: a workspace configured
@@ -43,6 +49,16 @@ describe('fleet credential storage', () => {
   });
   afterEach(async () => cleanup());
 
+  /** `agent:kind` of every stored account, in priority order. */
+  async function accounts(): Promise<string[]> {
+    const rows = await db
+      .select({ agent: fleetAccounts.agent, kind: fleetAccounts.kind })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'))
+      .orderBy(fleetAccounts.agent, fleetAccounts.priority);
+    return rows.map((r) => `${r.agent}:${r.kind}`);
+  }
+
   async function config(): Promise<Record<string, unknown>> {
     const rows = await db
       .select({ config: integrationsTable.config })
@@ -67,16 +83,54 @@ describe('fleet credential storage', () => {
     const { storeSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
 
     await storeSelfHostedCredentials('ws1', { claudeToken: 'sk-ant-oat01-mine' });
-    expect(await config()).toHaveProperty('anthropicKeyEnc');
+    expect(await accounts()).toEqual(['claude:anthropic_key']);
 
     await storeSelfHostedCredentials('ws1', { codex: codexFixture() });
-    const both = await config();
-    expect(both).toHaveProperty('anthropicKeyEnc');
-    expect(both).toHaveProperty('codexOAuth');
+    expect(await accounts()).toEqual(['claude:anthropic_key', 'codex:codex_oauth']);
 
+    // A second save REPLACES the account of that kind rather than adding one.
     await storeSelfHostedCredentials('ws1', { claudeToken: 'sk-ant-oat01-rotated' });
-    const after = await config();
-    expect(after).toHaveProperty('codexOAuth');
+    expect(await accounts()).toEqual(['claude:anthropic_key', 'codex:codex_oauth']);
+  });
+
+  // Before 0079 a pasted key sat BESIDE a sign-in and the sign-in won. The
+  // compat save keeps both, sign-in first, whichever order they arrive in.
+  it.each([
+    ['sign-in first', true],
+    ['key first', false],
+  ])('a Claude key and a Claude sign-in are both kept (%s)', async (_name, signInFirst) => {
+    const { storeSelfHostedCredentials, patchSelfHostedConfig, getSelfHostedCredentials } =
+      await import('../services/selfHosted/credentials.js');
+    const { encryptString } = await import('../services/tokenCrypto.js');
+    const signIn = () =>
+      patchSelfHostedConfig('ws1', {
+        claudeOAuth: {
+          accessTokenEnc: encryptString('sk-ant-oat01-signed-in'),
+          refreshTokenEnc: encryptString('rt'),
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      });
+    const paste = () => storeSelfHostedCredentials('ws1', { claudeToken: 'sk-ant-api-pasted' });
+    if (signInFirst) {
+      await signIn();
+      await paste();
+    } else {
+      await paste();
+      await signIn();
+    }
+    expect(await accounts()).toEqual(['claude:claude_oauth', 'claude:anthropic_key']);
+    expect((await getSelfHostedCredentials('ws1'))?.claudeToken).toBe('sk-ant-oat01-signed-in');
+  });
+
+  // The provider sends `openaiKey: null` beside a new Codex sign-in: that is
+  // how the old config replaced a key with a subscription, and it still does.
+  it('a Codex sign-in sent with openaiKey: null replaces the key', async () => {
+    const { storeSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
+    await storeSelfHostedCredentials('ws1', { openaiKey: 'sk-openai' });
+    await storeSelfHostedCredentials('ws1', { codex: codexFixture(), openaiKey: null });
+    expect(await accounts()).toEqual(['codex:codex_oauth']);
+    await storeSelfHostedCredentials('ws1', { openaiKey: 'sk-openai-2' });
+    expect(await accounts()).toEqual(['codex:codex_oauth', 'codex:openai_key']);
   });
 
   it('clearing one vendor leaves the other alone', async () => {
@@ -87,11 +141,44 @@ describe('fleet credential storage', () => {
     });
 
     await storeSelfHostedCredentials('ws1', { codex: null, openaiKey: null });
-    const left = await config();
-    expect(left).toHaveProperty('anthropicKeyEnc');
-    expect(left).not.toHaveProperty('codexOAuth');
+    expect(await accounts()).toEqual(['claude:anthropic_key']);
 
     await storeSelfHostedCredentials('ws1', { claudeToken: null });
+    expect(await accounts()).toEqual([]);
+  });
+
+  it('a clear removes EVERY account of that agent, not only the first', async () => {
+    const { storeSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
+    const { addFleetAccount } = await import('../services/selfHosted/accounts.js');
+    const { encryptString } = await import('../services/tokenCrypto.js');
+    await storeSelfHostedCredentials('ws1', { claudeToken: 'sk-ant-api-one' });
+    await addFleetAccount('ws1', {
+      kind: 'anthropic_key',
+      credential: { keyEnc: encryptString('sk-ant-api-two') },
+    });
+
+    await storeSelfHostedCredentials('ws1', { claudeToken: null });
+    expect(await accounts()).toEqual([]);
+  });
+
+  // The legacy keys stay on old rows, and a removed account must not come back
+  // from them on the next read.
+  it('a cleared agent is not adopted back from its legacy config keys', async () => {
+    const { storeSelfHostedCredentials, getSelfHostedCredentials } = await import(
+      '../services/selfHosted/credentials.js'
+    );
+    const { encryptString } = await import('../services/tokenCrypto.js');
+    await db.insert(integrationsTable).values({
+      id: 'int-legacy',
+      workspaceId: 'ws1',
+      type: 'selfhosted',
+      enabled: true,
+      config: { anthropicKeyEnc: encryptString('sk-ant-api-legacy') },
+    });
+    expect((await getSelfHostedCredentials('ws1'))?.claudeToken).toBe('sk-ant-api-legacy');
+
+    await storeSelfHostedCredentials('ws1', { claudeToken: null });
+    expect(await getSelfHostedCredentials('ws1')).toBeNull();
     expect(await config()).not.toHaveProperty('anthropicKeyEnc');
   });
 
@@ -110,7 +197,7 @@ describe('fleet credential storage', () => {
     const after = await config();
     expect(after).not.toHaveProperty('fleetTokenEnc');
     expect(after).not.toHaveProperty('fleetEndpoint');
-    expect(after).toHaveProperty('anthropicKeyEnc');
+    expect(await accounts()).toEqual(['claude:anthropic_key']);
   });
 
   /**

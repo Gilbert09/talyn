@@ -158,6 +158,9 @@ describe('Data API database boundary', () => {
       workbench_events: ['DELETE', 'INSERT', 'SELECT'],
       // Instruction files (migration 0077): the user's own CLAUDE.md and friends.
       workbench_instruction_files: crud,
+      // Fleet accounts (migration 0079): encrypted Claude and Codex credentials,
+      // one row per account.
+      fleet_accounts: crud,
     });
     await testDb.pglite.exec('SET ROLE talyn_backend');
     for (const table of ['settings', 'admin_audit_log', 'billing_events', 'fleet_hosts', 'github_installations']) {

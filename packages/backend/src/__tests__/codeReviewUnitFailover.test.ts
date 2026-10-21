@@ -6,6 +6,7 @@ import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
   integrations,
+  fleetAccounts,
   prCodeReviewEvents,
   prCodeReviewRuns,
   prCodeReviews,
@@ -123,6 +124,7 @@ async function connect(agents: Partial<Record<FleetAgent, Connection>>): Promise
     config.codexOAuth = { reauthRequiredAt: new Date().toISOString() };
   }
   await db.delete(integrations).where(eq(integrations.workspaceId, 'ws1'));
+  await db.delete(fleetAccounts).where(eq(fleetAccounts.workspaceId, 'ws1'));
   await db.insert(integrations).values({
     id: 'int1',
     workspaceId: 'ws1',
@@ -133,12 +135,9 @@ async function connect(agents: Partial<Record<FleetAgent, Connection>>): Promise
 }
 
 async function hold(agent: FleetAgent): Promise<void> {
-  const rows = await db.select().from(integrations).where(eq(integrations.id, 'int1'));
-  const config = (rows[0]!.config ?? {}) as Record<string, unknown>;
-  await db
-    .update(integrations)
-    .set({ config: { ...config, quotaExhausted: { [agent]: { at: new Date().toISOString() } } } })
-    .where(eq(integrations.id, 'int1'));
+  // On the fleet accounts, where the hold lives since migration 0079.
+  const { setFleetAccountExhausted } = await import('../services/selfHosted/accounts.js');
+  await setFleetAccountExhausted({ workspaceId: 'ws1', agent }, { at: new Date().toISOString() });
 }
 
 let seq = 0;
