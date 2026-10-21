@@ -12,11 +12,12 @@ import {
   type WorkbenchTodo,
 } from '@talyn/shared';
 import type { PRRow, PRState, PRSummaryShape } from './api';
+import { knownContextWindow, rememberContextWindow } from './contextWindows';
 import { isInjectedUserMessage } from './skillInstructions';
 
 /**
- * Pure helpers for the Workbenches panel. Nothing here touches React, the
- * store or the network, so all of it is unit-tested directly.
+ * Helpers for the Workbenches panel. Chat insights stores reported context
+ * windows in localStorage.
  */
 
 // ============================================================================
@@ -145,7 +146,23 @@ export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
       .map((name) => name.replace(/^\/+/, ''))
       .filter(Boolean))].sort()
     : null;
-  return { todos: parser.todos, contextUsage: parser.contextUsage, slashCommands };
+  let contextUsage = parser.contextUsage;
+  if (contextUsage && parser.model) {
+    if (contextUsage.windowKnown) {
+      rememberContextWindow(parser.model, contextUsage.contextWindow);
+    } else {
+      const contextWindow = knownContextWindow(parser.model);
+      if (contextWindow !== null) {
+        contextUsage = {
+          ...contextUsage,
+          contextWindow,
+          fraction: Math.min(1, contextUsage.usedTokens / contextWindow),
+          windowKnown: true,
+        };
+      }
+    }
+  }
+  return { todos: parser.todos, contextUsage, slashCommands };
 }
 
 export interface ChatTotals {

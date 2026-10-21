@@ -1,4 +1,5 @@
 import type { AgentEvent, Workbench, WorkbenchEvent } from '@talyn/shared';
+import { knownContextWindow, rememberContextWindow } from '../renderer/lib/contextWindows';
 import {
   buildFileTree,
   chatInsights,
@@ -193,6 +194,8 @@ describe('chatTotals', () => {
 });
 
 describe('chatInsights', () => {
+  afterEach(() => window.localStorage.clear());
+
   const we = (seq: number, event: Record<string, unknown>): WorkbenchEvent => ({
     chatId: 'c1',
     seq,
@@ -238,7 +241,43 @@ describe('chatInsights', () => {
       we(6, { type: 'assistant', message: { content: [], usage: { input_tokens: 1000, cache_creation_input_tokens: 1000 } } }),
     ]);
     expect(insights.todos?.map((t) => t.content)).toEqual(['a', 'b']);
-    expect(insights.contextUsage).toEqual({ usedTokens: 2000, contextWindow: 200_000, fraction: 0.01 });
+    expect(insights.contextUsage).toEqual({ usedTokens: 2000, contextWindow: 200_000, windowKnown: false, fraction: 0.01 });
+  });
+
+  it('uses a reported window for later turns with the same model', () => {
+    const init = we(1, { type: 'system', subtype: 'init', model: 'claude-opus-4-8' });
+    const assistant = we(2, { type: 'assistant', message: { content: [], usage: { input_tokens: 140_000 } } });
+    expect(chatInsights([init, assistant]).contextUsage).toEqual({
+      usedTokens: 140_000, contextWindow: 200_000, windowKnown: false, fraction: 0.7,
+    });
+
+    const result = we(3, { type: 'result', subtype: 'success', result: '', modelUsage: { 'claude-opus-4-8': { contextWindow: 1_000_000 } } });
+    expect(chatInsights([init, assistant, result]).contextUsage).toEqual({
+      usedTokens: 140_000, contextWindow: 1_000_000, windowKnown: true, fraction: 0.14,
+    });
+    expect(window.localStorage.getItem('talyn.context.windows')).toBe('{"claude-opus-4-8":1000000}');
+
+    expect(chatInsights([init, assistant]).contextUsage).toEqual({
+      usedTokens: 140_000, contextWindow: 1_000_000, windowKnown: true, fraction: 0.14,
+    });
+    const otherModel = we(4, { type: 'system', subtype: 'init', model: 'claude-sonnet-5-5' });
+    expect(chatInsights([otherModel, assistant]).contextUsage?.windowKnown).toBe(false);
+  });
+});
+
+describe('context windows', () => {
+  afterEach(() => window.localStorage.clear());
+
+  it('ignores bad values and keeps the latest 50 models', () => {
+    window.localStorage.setItem('talyn.context.windows', '{"broken":-1,"valid":1000000}');
+    expect(knownContextWindow('broken')).toBeNull();
+    expect(knownContextWindow('toString')).toBeNull();
+    expect(knownContextWindow('valid')).toBe(1_000_000);
+    rememberContextWindow('invalid', 0);
+    for (let i = 0; i < 51; i++) rememberContextWindow(`model-${i}`, 200_000 + i);
+    expect(knownContextWindow('model-0')).toBeNull();
+    expect(knownContextWindow('model-50')).toBe(200_050);
+    expect(Object.keys(JSON.parse(window.localStorage.getItem('talyn.context.windows') ?? '{}'))).toHaveLength(50);
   });
 });
 

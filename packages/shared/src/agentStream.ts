@@ -207,6 +207,7 @@ export interface AgentStreamParser {
   /** The agent's latest to-do list, or null if it never wrote one. */
   readonly todos: WorkbenchTodo[] | null;
   readonly contextUsage: WorkbenchContextUsage | null;
+  readonly model: string | null;
   /** Lines that were not a JSON object — CLI warnings, a crash trace. Counted, not emitted. */
   readonly nonJsonLines: number;
 }
@@ -224,9 +225,9 @@ function parseJsonObject(line: string): Record<string, unknown> | null {
   }
 }
 
-function contextUsageOf(usedTokens: number, contextWindow: number): WorkbenchContextUsage {
+function contextUsageOf(usedTokens: number, contextWindow: number, windowKnown: boolean): WorkbenchContextUsage {
   const fraction = contextWindow > 0 ? Math.min(1, Math.max(0, usedTokens / contextWindow)) : 0;
-  return { usedTokens, contextWindow, fraction };
+  return { usedTokens, contextWindow, windowKnown, fraction };
 }
 
 const TODO_STATUSES = new Set(['pending', 'in_progress', 'completed']);
@@ -343,7 +344,11 @@ export function createClaudeStreamParser(): AgentStreamParser {
     },
     get contextUsage() {
       if (usedTokens === null) return null;
-      return contextUsageOf(usedTokens, contextWindow ?? claudeWindowForModel(model));
+      const windowKnown = contextWindow !== null || Boolean(model && /\[1m\]/i.test(model));
+      return contextUsageOf(usedTokens, contextWindow ?? claudeWindowForModel(model), windowKnown);
+    },
+    get model() {
+      return model;
     },
     get nonJsonLines() {
       return nonJsonLines;
@@ -599,7 +604,14 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}): 
     },
     get contextUsage() {
       if (usedTokens === null) return null;
-      return contextUsageOf(usedTokens, opts.contextWindow ?? CODEX_DEFAULT_CONTEXT_WINDOW);
+      return contextUsageOf(
+        usedTokens,
+        opts.contextWindow ?? CODEX_DEFAULT_CONTEXT_WINDOW,
+        opts.contextWindow !== undefined
+      );
+    },
+    get model() {
+      return null;
     },
     get nonJsonLines() {
       return nonJsonLines;

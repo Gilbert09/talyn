@@ -294,7 +294,7 @@ describe('createClaudeStreamParser', () => {
     ]);
     // Last top-level assistant WITH usage: 5 + 200 + 18000. The subagent is ignored,
     // and the last message without usage does not reset it.
-    expect(parser.contextUsage).toEqual({ usedTokens: 18205, contextWindow: 1_000_000, fraction: 0.018205 });
+    expect(parser.contextUsage).toEqual({ usedTokens: 18205, contextWindow: 1_000_000, windowKnown: true, fraction: 0.018205 });
     expect(parser.result).toEqual({
       isError: false,
       subtype: 'success',
@@ -313,11 +313,11 @@ describe('createClaudeStreamParser', () => {
     expect(bash).toMatchObject({ settled: true, output: '3 passing', isError: false });
   });
 
-  it.each<[string, Record<string, unknown>, number]>([
-    ['the main model when modelUsage names it', { 'claude-opus-4-8': { contextWindow: 500000 }, other: { contextWindow: 900000 } }, 500000],
-    ['the largest window otherwise', { a: { contextWindow: 100000 }, b: { contextWindow: 300000 } }, 300000],
-    ['the default when none is given', { a: {} }, CLAUDE_DEFAULT_CONTEXT_WINDOW],
-  ])('context window: %s', (_name, modelUsage, expected) => {
+  it.each<[string, Record<string, unknown>, number, boolean]>([
+    ['the main model when modelUsage names it', { 'claude-opus-4-8': { contextWindow: 500000 }, other: { contextWindow: 900000 } }, 500000, true],
+    ['the largest window otherwise', { a: { contextWindow: 100000 }, b: { contextWindow: 300000 } }, 300000, true],
+    ['the default when none is given', { a: {} }, CLAUDE_DEFAULT_CONTEXT_WINDOW, false],
+  ])('context window: %s', (_name, modelUsage, expected, known) => {
     const parser = createClaudeStreamParser();
     feed(parser, [
       claudeInit,
@@ -325,6 +325,19 @@ describe('createClaudeStreamParser', () => {
       { type: 'result', subtype: 'success', result: '', modelUsage },
     ]);
     expect(parser.contextUsage?.contextWindow).toBe(expected);
+    expect(parser.contextUsage?.windowKnown).toBe(known);
+  });
+
+  it('marks the default window unknown until the result reports it', () => {
+    const parser = createClaudeStreamParser();
+    feed(parser, [
+      claudeInit,
+      { type: 'assistant', message: { content: [], usage: { input_tokens: 140_000 } } },
+    ]);
+    expect(parser.model).toBe('claude-opus-4-8');
+    expect(parser.contextUsage).toEqual({ usedTokens: 140_000, contextWindow: 200_000, windowKnown: false, fraction: 0.7 });
+    feed(parser, [{ type: 'result', subtype: 'success', result: '', modelUsage: { 'claude-opus-4-8': { contextWindow: 1_000_000 } } }]);
+    expect(parser.contextUsage).toEqual({ usedTokens: 140_000, contextWindow: 1_000_000, windowKnown: true, fraction: 0.14 });
   });
 
   it('a [1m] model defaults to a 1M window before the result arrives', () => {
@@ -333,7 +346,7 @@ describe('createClaudeStreamParser', () => {
       { ...claudeInit, model: 'claude-opus-4-8[1m]' },
       { type: 'assistant', message: { content: [], usage: { input_tokens: 500000 } } },
     ]);
-    expect(parser.contextUsage).toEqual({ usedTokens: 500000, contextWindow: 1_000_000, fraction: 0.5 });
+    expect(parser.contextUsage).toEqual({ usedTokens: 500000, contextWindow: 1_000_000, windowKnown: true, fraction: 0.5 });
   });
 
   it('clamps the fraction to 1', () => {
@@ -457,6 +470,7 @@ describe('createCodexStreamParser', () => {
     expect(parser.contextUsage).toEqual({
       usedTokens: 24763,
       contextWindow: CODEX_DEFAULT_CONTEXT_WINDOW,
+      windowKnown: false,
       fraction: 24763 / CODEX_DEFAULT_CONTEXT_WINDOW,
     });
     expect(parser.todos).toEqual([
@@ -586,7 +600,7 @@ describe('createCodexStreamParser', () => {
   it('honours a custom context window', () => {
     const parser = createCodexStreamParser({ contextWindow: 100_000 });
     feed(parser, [{ type: 'turn.completed', usage: { input_tokens: 50_000, output_tokens: 1 } }]);
-    expect(parser.contextUsage).toEqual({ usedTokens: 50_000, contextWindow: 100_000, fraction: 0.5 });
+    expect(parser.contextUsage).toEqual({ usedTokens: 50_000, contextWindow: 100_000, windowKnown: true, fraction: 0.5 });
   });
 });
 

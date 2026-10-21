@@ -125,12 +125,22 @@ export function PlanToggle({ on, onToggle, disabled }: { on: boolean; onToggle: 
 
 export function ContextMeter({ usage }: { usage: WorkbenchContextUsage | null }) {
   if (!usage) return null;
+  if (!usage.windowKnown) {
+    return (
+      <div
+        className="text-[11px] text-muted-foreground tabular-nums"
+        title="The context window size is not known until the first turn finishes."
+      >
+        {formatTokens(usage.usedTokens)} tokens
+      </div>
+    );
+  }
   const pct = Math.round(usage.fraction * 100);
   const tone = usage.fraction >= 0.85 ? 'bg-red-500' : usage.fraction >= 0.6 ? 'bg-amber-500' : 'bg-emerald-500';
   return (
     <div
       className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-      title={`Context: ${formatTokens(usage.usedTokens)} of ${formatTokens(usage.contextWindow)} tokens`}
+      title={`${formatTokens(usage.usedTokens)} of ${formatTokens(usage.contextWindow)} tokens`}
       aria-label={`Context ${pct}% full`}
     >
       <div className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">

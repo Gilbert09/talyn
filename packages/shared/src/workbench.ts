@@ -265,6 +265,8 @@ export interface WorkbenchTodo {
 export interface WorkbenchContextUsage {
   usedTokens: number;
   contextWindow: number;
+  /** True when the window is known. False when it is an estimate. */
+  windowKnown: boolean;
   /** usedTokens / contextWindow, clamped to [0, 1]. */
   fraction: number;
 }
