@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, BarChart3, Check, Loader2, Pencil, RefreshCw, Server, Unlink } from 'lucide-react';
-import { DEFAULT_POSTHOG_CODE_MODEL_ID, POSTHOG_CODE_MODELS } from '@talyn/shared';
+import { DEFAULT_POSTHOG_CODE_MODEL_ID, POSTHOG_CODE_MODELS, type FleetAccountsResponse } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
@@ -18,6 +18,7 @@ import {
   POSTHOG_KEY_SCOPE_NOTE,
 } from '../widgets/GetKeyLink';
 import { WorkspaceModelSelector } from './WorkspaceModelSelector';
+import { FleetAccountsList } from './FleetAccountsList';
 
 /**
  * The two provider connect cards (PostHog Code + Claude Code), shared by the
@@ -71,8 +72,41 @@ export function ProviderConnectCards() {
  */
 function SelfHostedFleetCard() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
+  const [fleetAccounts, setFleetAccounts] = useState<FleetAccountsResponse | null>(null);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const workspaceIdRef = useRef(currentWorkspaceId);
+  workspaceIdRef.current = currentWorkspaceId;
   const entry = (cloudProviders ?? []).find((p) => p.type === 'selfhosted');
-  if (!cloudProviderOffered(cloudProviders, 'selfhosted')) return null;
+  const offered = cloudProviderOffered(cloudProviders, 'selfhosted');
+
+  const refreshAccounts = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    try {
+      const result = await api.cloudProviders.fleetAccounts.list(currentWorkspaceId);
+      if (workspaceIdRef.current === currentWorkspaceId) {
+        setFleetAccounts(result);
+        setAccountsError(null);
+      }
+    } catch (e) {
+      if (workspaceIdRef.current === currentWorkspaceId) {
+        setAccountsError(e instanceof Error ? e.message : 'Could not load accounts');
+      }
+    }
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    setFleetAccounts(null);
+    if (!offered || !currentWorkspaceId) return;
+    void refreshAccounts();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshAccounts();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [offered, currentWorkspaceId, refreshAccounts]);
+
+  if (!offered) return null;
 
   const agents = entry?.connectedAgents ?? [];
   const reauth = entry?.reauthAgents ?? [];
@@ -110,16 +144,36 @@ function SelfHostedFleetCard() {
       </div>
 
       <div className="mt-3 space-y-2 border-t pt-3">
-        <FleetAgentRow
-          agent="claude"
-          connected={agents.includes('claude')}
-          needsReauth={reauth.includes('claude')}
-        />
-        <FleetAgentRow
-          agent="codex"
-          connected={agents.includes('codex')}
-          needsReauth={reauth.includes('codex')}
-        />
+        {(['claude', 'codex'] as const).map((agent) => {
+          const accounts = fleetAccounts?.accounts.filter((account) => account.agent === agent) ?? [];
+          return accounts.length > 0 && currentWorkspaceId && fleetAccounts ? (
+            <FleetAccountsList
+              key={agent}
+              agent={agent}
+              workspaceId={currentWorkspaceId}
+              accounts={accounts}
+              activeId={fleetAccounts.active[agent]}
+              switchAtPercent={fleetAccounts.switchAtPercent}
+              onChanged={async () => {
+                await refreshAccounts();
+                try {
+                  setCloudProviders(await api.cloudProviders.list(currentWorkspaceId));
+                } catch {
+                  // The account list still refreshes if provider status is unavailable.
+                }
+              }}
+            />
+          ) : (
+            <FleetAgentRow
+              key={agent}
+              agent={agent}
+              connected={agents.includes(agent)}
+              needsReauth={reauth.includes(agent)}
+              onChanged={refreshAccounts}
+            />
+          );
+        })}
+        {accountsError && <p role="alert" className="text-xs text-destructive">{accountsError}</p>}
       </div>
     </Card>
   );
@@ -137,10 +191,12 @@ export function FleetAgentRow({
   agent,
   connected,
   needsReauth,
+  onChanged,
 }: {
   agent: 'claude' | 'codex';
   connected: boolean;
   needsReauth: boolean;
+  onChanged?: () => Promise<void>;
 }) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
@@ -178,13 +234,14 @@ export function FleetAgentRow({
         setClaudeToken('');
         setEditing(false);
         await refresh();
+        await onChanged?.();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to save credentials');
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh]
+    [agent, currentWorkspaceId, refresh, onChanged]
   );
 
   const disconnect = useCallback(async () => {
@@ -249,12 +306,13 @@ export function FleetAgentRow({
       // Re-read rather than guess: the card renders off `connectedAgents`,
       // which only the backend can compute.
       await refresh();
+      await onChanged?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh]);
+  }, [currentWorkspaceId, claudeCode, refresh, onChanged]);
 
   const showForm = editing || !connected;
 
