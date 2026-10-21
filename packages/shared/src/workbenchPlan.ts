@@ -31,8 +31,10 @@ export function buildPlanTurnInstructions(): string {
 
 /**
  * The prompt for one turn, with the hidden instructions it needs. Claude takes
- * them as an appended system prompt. Codex has no such flag, so they go in
- * front of the prompt. The stored, visible message is `text` either way.
+ * them as an appended system prompt, and on a Create PR turn also in front of
+ * the prompt. Codex has no such flag, so they go in front of the prompt. The
+ * stored, visible message is `text` either way: the runtimes store the user
+ * message from `text`, never from the prompt this returns.
  */
 export function workbenchTurnPrompt(input: {
   agent: WorkbenchAgent;
@@ -40,15 +42,26 @@ export function workbenchTurnPrompt(input: {
   planMode: boolean;
   intent?: WorkbenchMessageIntent;
   createPr: { branch: string; baseBranch: string; extra?: string | null };
+  internetAccess?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
-  const instructions =
+  const actionInstructions =
     input.intent === 'create_pr'
       ? buildCreatePrTurnInstructions(input.createPr)
       : input.planMode
         ? buildPlanTurnInstructions()
         : null;
+  const networkNote = input.internetAccess === false
+    ? 'This sandbox reaches only its repository, the package registries (npm, PyPI, apt), and the agent API.'
+    : null;
+  const instructions = [actionInstructions, networkNote].filter(Boolean).join('\n\n');
   if (!instructions) return { prompt: input.text };
   if (input.agent === 'codex') return { prompt: `${instructions}\n\n---\n\n${input.text}` };
+  // A Create PR turn also puts its instructions in Claude's prompt. In a system
+  // prompt alone they lost to the repository's own pull-request process: the
+  // agent made a new branch, published it and opened the PR itself.
+  if (input.intent === 'create_pr') {
+    return { prompt: `${instructions}\n\n---\n\n${input.text}`, appendSystemPrompt: instructions };
+  }
   return { prompt: input.text, appendSystemPrompt: instructions };
 }
 

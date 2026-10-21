@@ -323,6 +323,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       planMode,
       intent: message.intent,
       createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
+      internetAccess: wb.settings?.internetAccess,
     });
     const argv =
       agent === 'codex'

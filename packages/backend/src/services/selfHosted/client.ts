@@ -289,6 +289,16 @@ export interface CreateSandboxInput {
    * fleet that predates the field ignores it rather than refusing the create.
    */
   repo?: string;
+  /**
+   * A BARE sandbox with `repo` only: the repository's default branch. The
+   * fleet boots from the golden for `(repo, baseBranch)` when one exists, with
+   * the repository already checked out at `/work/repo`, and queues a bake when
+   * none does. A dispatch names its branch in `task.repo.baseBranch` instead.
+   *
+   * Lenient decode again: a fleet that predates the field ignores it and boots
+   * the base image, which the workbench clone script handles as before.
+   */
+  baseBranch?: string;
   /** Who the box's commits are by. Written into the guest's ~/.gitconfig; not a secret. */
   gitAuthorName?: string;
   gitAuthorEmail?: string;

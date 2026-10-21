@@ -79,6 +79,13 @@ describe('workbenchTurnPrompt', () => {
     expect(workbenchTurnPrompt({ agent: 'codex', text: 'hi', planMode: false, createPr })).toEqual({ prompt: 'hi' });
   });
 
+  it.each(['claude', 'codex'] as const)('tells %s about limited access only when it is off', (agent) => {
+    const off = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr, internetAccess: false });
+    const on = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr, internetAccess: true });
+    expect(off.appendSystemPrompt ?? off.prompt).toContain('the package registries (npm, PyPI, apt), and the agent API');
+    expect(on).toEqual({ prompt: 'hi' });
+  });
+
   it('Claude in plan mode: the plan instructions are an appended system prompt', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'Plan the change', planMode: true, createPr });
     expect(turn.prompt).toBe('Plan the change');
@@ -98,5 +105,7 @@ describe('workbenchTurnPrompt', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'Create a pull request', planMode: true, intent: 'create_pr', createPr });
     expect(turn.appendSystemPrompt).toContain('talyn-pr');
     expect(turn.appendSystemPrompt).not.toContain('talyn-plan');
+    expect(turn.prompt).toContain('talyn-pr');
+    expect(turn.prompt).not.toContain('talyn-plan');
   });
 });

@@ -330,6 +330,21 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Kill switch for adding a second fleet account per agent.
+   *
+   * Fails OPEN, like `workflows`: it is released to everyone, and it gates only
+   * the ADDING of a second account. Existing accounts always keep working.
+   */
+  fleetMultiAccount: {
+    posthogKey: 'fleet-multi-account',
+    envOverride: 'FLEET_MULTI_ACCOUNT_ENABLED',
+    fallback: true,
+    description: 'Talyn Fleet — more than one Claude or Codex account per workspace',
+    availability: 'general',
+    releaseScopes: [],
+  },
+
+  /**
    * Team plan — one buyer pays for seats, and each seat gives a GitHub account
    * Unlimited on its own account. Consolidated billing only; nothing is shared.
    *

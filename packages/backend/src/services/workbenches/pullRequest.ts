@@ -1,21 +1,33 @@
 import {
+  afterSignedPublishSteps,
   commitAllSteps,
   commitsAheadSteps,
   describePushFailure,
+  describeSignedPublishFailure,
   gitStderrTail,
+  headCommitSteps,
+  isSignedCommitRefusal,
   isValidBranchName,
+  newBranchBaseSteps,
   nothingToOpenMessage,
   parseCommitsAhead,
+  parseHeadCommit,
   parsePrDetails,
+  parseRemoteBranchHead,
+  parseSha,
   PR_TITLE_MAX,
   prCommitMessage,
   pullRequestOutcomeEvent,
   pushHeadStep,
+  remoteBranchHeadStep,
+  remoteHeadContainedSteps,
+  signedPublishStep,
   workingTreeStatus,
+  type AdoptWorkbenchPullRequestResult,
   type CreateWorkbenchPullRequestInput,
   type CreateWorkbenchPullRequestResult,
 } from '@talyn/shared';
-import { GitHubApiError, GitHubNotConnectedError, githubService } from '../github.js';
+import { GitHubApiError, GitHubNotConnectedError, githubService, type GitHubCommitPullRequest } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
@@ -95,12 +107,63 @@ async function commitAndPush(row: WorkbenchRow, input: { title: string; commitMe
   const ahead = parseCommitsAhead((await runGitSteps(row, commitsAheadSteps(input.base), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
   if (ahead === 0) throw new WorkbenchError(nothingToOpenMessage(input.base), 409, 'nothing_to_open');
   const push = await runGitSteps(row, [pushHeadStep()], { timeoutMs: PUSH_TIMEOUT_MS });
-  if (push.exitCode !== 0) {
+  if (push.exitCode === 0) return;
+  if (isSignedCommitRefusal(push.stderr)) {
+    await publishSigned(row, { message: input.title, base: input.base });
+    return;
+  }
+  throw new WorkbenchError(
+    describePushFailure({ stderr: push.stderr, runtime: 'sandbox', repoFullName: row.repoFullName }),
+    409,
+    'push_failed',
+  );
+}
+
+/**
+ * The repository requires verified signatures and the sandbox has no key, so
+ * publish the branch with `fleet-publish`: one commit, made and signed by
+ * GitHub, on top of the branch's head on GitHub (or where HEAD left the base,
+ * for a new branch). Then point the local branch at it.
+ */
+async function publishSigned(row: WorkbenchRow, input: { message: string; base: string }): Promise<void> {
+  const remote = await runGitSteps(row, [remoteBranchHeadStep(row.branch)], { timeoutMs: GIT_TIMEOUT_MS });
+  const remoteSha = parseRemoteBranchHead(remote.stdout, row.branch);
+  let baseOid: string | null;
+  if (remoteSha) {
+    const contained = await runGitSteps(row, remoteHeadContainedSteps(row.branch, remoteSha), { timeoutMs: GIT_TIMEOUT_MS });
+    if (contained.exitCode !== 0) {
+      throw new WorkbenchError(
+        'GitHub has commits on this branch that the session does not have. Pull or merge them first.',
+        409,
+        'push_failed',
+      );
+    }
+    baseOid = remoteSha;
+  } else {
+    baseOid = parseSha((await runGitSteps(row, newBranchBaseSteps(input.base), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
+  }
+  if (!baseOid) {
     throw new WorkbenchError(
-      describePushFailure({ stderr: push.stderr, runtime: 'sandbox', repoFullName: row.repoFullName }),
+      `The repository requires signed commits, and Talyn could not find where the branch starts on ${input.base}.`,
       409,
       'push_failed',
     );
+  }
+  const publish = await runGitSteps(row, [signedPublishStep({ branch: row.branch, message: input.message, baseOid })], {
+    timeoutMs: PUSH_TIMEOUT_MS,
+  });
+  if (publish.exitCode !== 0) {
+    throw new WorkbenchError(
+      describeSignedPublishFailure({ stderr: publish.stderr || publish.stdout, exitCode: publish.exitCode }),
+      409,
+      'push_failed',
+    );
+  }
+  recordWorkbenchEvent(row, 'pr_publish', `published ${row.branch} with fleet-publish`);
+  // The branch is on GitHub now. A failure here leaves only the local history behind.
+  const synced = await runGitSteps(row, afterSignedPublishSteps(row.branch), { timeoutMs: GIT_TIMEOUT_MS });
+  if (synced.exitCode !== 0) {
+    console.warn(`[workbench] syncing ${row.id} to its published branch failed: ${gitStderrTail(synced.stderr)}`);
   }
 }
 
@@ -214,6 +277,8 @@ async function trackAndLink(row: WorkbenchRow, number: number): Promise<Workbenc
 export async function openPullRequestFromTurn(row: WorkbenchRow, finalText: string): Promise<Record<string, unknown>> {
   const parsed = parsePrDetails(finalText);
   if (!parsed.ok) {
+    const adopted = await adoptFromSandbox(row);
+    if (adopted) return pullRequestOutcomeEvent({ ok: true, ...adopted, existing: true, adopted: true });
     recordWorkbenchEvent(row, 'pr_create', 'no pull request block in the reply', false);
     return pullRequestOutcomeEvent({ ok: false, message: parsed.error });
   }
@@ -225,5 +290,120 @@ export async function openPullRequestFromTurn(row: WorkbenchRow, finalText: stri
     if (!(err instanceof WorkbenchError)) console.warn(`[workbench] opening a PR for ${row.id} failed:`, err);
     recordWorkbenchEvent(row, 'pr_create', `failed: ${message.slice(0, 120)}`, false);
     return pullRequestOutcomeEvent({ ok: false, message });
+  }
+}
+
+// ============================================================================
+// A PR the agent opened itself
+// ============================================================================
+
+/**
+ * The open PR the agent opened itself, against the Create PR instructions.
+ * Matched by structured GitHub data only, never by a URL in the agent's text:
+ *
+ * 1. an open PR in this repository whose head commit is the box's HEAD;
+ * 2. else an open PR in this repository from the branch the box is on. This
+ *    is the `fleet-publish` case: GitHub made a new commit, so the PR's head
+ *    is not a commit the box has.
+ *
+ * Exactly one match, or null. Several open PRs are a guess, and a wrong link
+ * reads as fact.
+ */
+export async function findAgentPullRequest(
+  row: Pick<WorkbenchRow, 'workspaceId' | 'repoFullName'>,
+  head: { sha: string | null; branch: string | null },
+): Promise<GitHubCommitPullRequest | null> {
+  const [owner, repo] = row.repoFullName.split('/');
+  const sameRepo = (pr: GitHubCommitPullRequest) =>
+    !pr.head.repo || pr.head.repo.full_name.toLowerCase() === row.repoFullName.toLowerCase();
+  const unique = (prs: GitHubCommitPullRequest[]) => [...new Map(prs.map((pr) => [pr.number, pr])).values()];
+
+  if (head.sha) {
+    const sha = head.sha.toLowerCase();
+    const byCommit = unique(
+      (await githubService.listPullRequestsForCommit(row.workspaceId, owner, repo, sha)).filter(
+        (pr) => pr.state === 'open' && pr.head.sha.toLowerCase() === sha && sameRepo(pr),
+      ),
+    );
+    if (byCommit.length > 0) return byCommit.length === 1 ? byCommit[0] : null;
+  }
+  if (head.branch && isValidBranchName(head.branch)) {
+    const byBranch = unique(
+      (await githubService.listOpenPullRequestsForHead(row.workspaceId, owner, repo, head.branch)).filter(
+        (pr) => pr.state === 'open' && pr.head.ref === head.branch && sameRepo(pr),
+      ),
+    );
+    if (byBranch.length === 1) return byBranch[0];
+  }
+  return null;
+}
+
+/**
+ * Link the PR the agent opened itself, the way a Create PR success links one,
+ * and move the workbench to that PR's branch when the agent made a new one.
+ * `pullRequest` is null when no single open PR matched.
+ */
+export async function adoptAgentPullRequest(
+  row: WorkbenchRow,
+  head: { sha: string | null; branch: string | null },
+): Promise<AdoptWorkbenchPullRequestResult> {
+  if (row.archivedAt) throw notReadyError('archived');
+  let found: GitHubCommitPullRequest | null;
+  try {
+    found = await findAgentPullRequest(row, head);
+  } catch (err) {
+    if (err instanceof GitHubNotConnectedError) {
+      throw new WorkbenchError('GitHub is not connected for this workspace. Connect it in Settings.', 409, 'github_not_connected');
+    }
+    throw err;
+  }
+  if (!found) return { workbench: await publicWorkbench(row), pullRequest: null };
+
+  let current = row;
+  if (found.head.ref !== row.branch && isValidBranchName(found.head.ref)) {
+    current = (await updateWorkbench(row.id, { branch: found.head.ref })) ?? row;
+  }
+  recordWorkbenchEvent(current, 'pr_create', `adopted #${found.number} the agent opened`);
+  const linked = await trackAndLink(current, found.number);
+  const workbench = await publicWorkbench(linked);
+  emitWorkbenchUpdated(workbench);
+  return { workbench, pullRequest: { number: found.number, url: found.html_url, headRef: found.head.ref } };
+}
+
+/**
+ * `POST /workbenches/:id/pull-request/adopt`. A local session sends its
+ * worktree's HEAD (`sha`, `branch`); a sandbox session's HEAD is read in the box.
+ */
+export async function adoptPullRequestForWorkbench(
+  row: WorkbenchRow,
+  raw: { sha?: unknown; branch?: unknown } | undefined,
+): Promise<AdoptWorkbenchPullRequestResult> {
+  if (row.archivedAt) throw notReadyError('archived');
+  let head: { sha: string | null; branch: string | null };
+  if (row.runtime === 'local') {
+    const sha = typeof raw?.sha === 'string' ? raw.sha.trim().toLowerCase() : '';
+    const branch = typeof raw?.branch === 'string' ? raw.branch.trim() : '';
+    if (sha && !/^[0-9a-f]{40}$/.test(sha)) throw new WorkbenchError('sha must be a full commit sha.', 400, 'bad_sha');
+    if (branch && !isValidBranchName(branch)) throw new WorkbenchError('branch is not a valid branch name.', 400, 'bad_branch');
+    if (!sha && !branch) throw new WorkbenchError('Send the sha or the branch of HEAD.', 400, 'bad_head');
+    head = { sha: sha || null, branch: branch || null };
+  } else {
+    requireReadySandbox(row);
+    head = parseHeadCommit((await runGitSteps(row, headCommitSteps(), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
+  }
+  return adoptAgentPullRequest(row, head);
+}
+
+/** The sandbox side of the safety net: read the box's HEAD, then adopt. Null on no match or any failure. */
+async function adoptFromSandbox(row: WorkbenchRow): Promise<{ number: number; url: string } | null> {
+  if (row.runtime === 'local' || row.archivedAt || !row.sandboxId) return null;
+  try {
+    const head = parseHeadCommit((await runGitSteps(row, headCommitSteps(), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
+    if (!head.sha && !head.branch) return null;
+    const adopted = await adoptAgentPullRequest(row, head);
+    return adopted.pullRequest ? { number: adopted.pullRequest.number, url: adopted.pullRequest.url } : null;
+  } catch (err) {
+    console.warn(`[workbench] looking for a PR the agent opened for ${row.id} failed:`, err);
+    return null;
   }
 }

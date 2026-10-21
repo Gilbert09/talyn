@@ -11,6 +11,7 @@
 import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
+import type { WorkbenchConfig } from './workbenchConfig.js';
 
 // ============================================================================
 // Vocabulary
@@ -76,6 +77,8 @@ export interface WorkbenchDiffStat {
  * the repository's config file" (scripts) or "use Talyn's default" (prompts).
  */
 export interface WorkbenchSettings {
+  /** Absent means internet access is on. */
+  internetAccess?: boolean;
   scripts?: {
     setup?: string | null;
     /** One command, or named run scripts. */
@@ -264,6 +267,8 @@ export interface WorkbenchTodo {
 export interface WorkbenchContextUsage {
   usedTokens: number;
   contextWindow: number;
+  /** True when the window is known. False when it is an estimate. */
+  windowKnown: boolean;
   /** usedTokens / contextWindow, clamped to [0, 1]. */
   fraction: number;
 }
@@ -277,6 +282,7 @@ export interface CreateWorkbenchInput {
   repositoryId: string;
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
+  internetAccess?: boolean;
   model?: string;
   baseBranch?: string;
   /** An existing branch to check out. Absent: a new branch named after the workbench. */
@@ -514,6 +520,8 @@ export interface WorkbenchLocalBridge {
     steps: Array<{ argv: string[]; env?: Record<string, string>; allowFailure?: boolean; capture?: string }>
   ): Promise<WorkbenchExecResult>;
   readFile(path: string, relativePath: string): Promise<{ content: string; binary: boolean }>;
+  readConfig(path: string): Promise<WorkbenchConfig>;
+  saveDetectedConfig(path: string): Promise<void>;
   listFiles(path: string): Promise<string[]>;
   terminal: {
     open(input: { workbenchId: string; path: string; kind: 'shell' | 'agent' }): Promise<string>;
