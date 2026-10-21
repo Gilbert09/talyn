@@ -528,8 +528,38 @@ export function isStoredFleetModelId(value: unknown): value is StoredFleetModelI
   );
 }
 
+export const DEFAULT_FLEET_SWITCH_AT_PERCENT = 100;
+export const MIN_FLEET_SWITCH_AT_PERCENT = 50;
+
+/**
+ * Check a `fleetSwitchAtPercent` value from a client. Whole numbers from
+ * MIN_FLEET_SWITCH_AT_PERCENT to 100 only.
+ */
+export function normaliseFleetSwitchAtPercent(
+  value: unknown
+): { ok: true; value: number } | { ok: false; error: string } {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < MIN_FLEET_SWITCH_AT_PERCENT ||
+    value > 100
+  ) {
+    return {
+      ok: false,
+      error: `settings.fleetSwitchAtPercent must be a whole number from ${MIN_FLEET_SWITCH_AT_PERCENT} to 100`,
+    };
+  }
+  return { ok: true, value };
+}
+
 export interface WorkspaceSettings {
   continuousBuild?: ContinuousBuildSettings;
+  /**
+   * The usage level, in percent, at which a fleet account counts as spent and
+   * the next account of the same agent takes over. Unset means
+   * DEFAULT_FLEET_SWITCH_AT_PERCENT (100).
+   */
+  fleetSwitchAtPercent?: number;
   /**
    * Which model Talyn Fleet runs use.
    *

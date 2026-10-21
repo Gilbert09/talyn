@@ -87,6 +87,10 @@ const SERVICE_INFO: Record<string, string> = {
     'Polar billing API — hosted checkout + customer-portal sessions for the Unlimited plan.',
   billing:
     'Billing domain events — inbound Polar subscription webhooks and the plan changes they apply.',
+  anthropic:
+    'Anthropic\u2019s private usage endpoint \u2014 how much of a connected Claude subscription is used, read so the fleet can move to the next account before one runs out.',
+  chatgpt:
+    'ChatGPT\u2019s private usage endpoint \u2014 how much of a connected Codex subscription is used, read so the fleet can move to the next account before one runs out.',
   workflows:
     'User-defined PR automation — one event per workflow that matched a webhook delivery, plus the two refusals worth seeing: a self-echo (Talyn hearing its own label back) and a per-PR rate cap.',
 };

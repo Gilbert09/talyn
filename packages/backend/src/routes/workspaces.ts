@@ -36,6 +36,7 @@ import {
   codeReviewReviewersProblem,
   codeReviewSettingsPatch,
   normaliseBranchPrefix,
+  normaliseFleetSwitchAtPercent,
   resolveCodeReviewSettings,
   type CodeReviewSettings,
   type PromptTemplateSettings,
@@ -394,6 +395,10 @@ export function workspaceRoutes(): Router {
         const prefix = normaliseBranchPrefix(body.settings.sessionBranchPrefix);
         if (!prefix.ok) return res.status(400).json({ success: false, error: prefix.error });
         body.settings.sessionBranchPrefix = prefix.value;
+      }
+      if (body.settings.fleetSwitchAtPercent !== undefined) {
+        const switchAt = normaliseFleetSwitchAtPercent(body.settings.fleetSwitchAtPercent);
+        if (!switchAt.ok) return res.status(400).json({ success: false, error: switchAt.error });
       }
       if (body.settings.visualReview !== undefined) {
         try {
