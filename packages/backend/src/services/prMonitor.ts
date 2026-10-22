@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { getPoolDbClient, type Database } from '../db/client.js';
+import { getPoolDbClient, runWithoutScope, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
@@ -55,6 +55,25 @@ interface BatchedRelationshipSearch extends RelationshipSearch {
   sawResults: boolean;
 }
 
+interface PollRepoOptions {
+  /** The workspace's batched search answer for this repo, if it has one. */
+  batched?: BatchedRelationshipSearch;
+  /** Searches already run for this repo (pass 1 of a Refresh); used as they are. */
+  searches?: RelationshipSearch;
+  /** Write each fetched chunk at once; see `refetchAndUpsert`. */
+  streaming?: boolean;
+}
+
+/** What pass 1 of a Refresh found, handed to pass 2 so nothing is searched twice. */
+interface WorkspaceDiscovery {
+  login: string;
+  repos: WatchedRepo[];
+  /** Per repository id. A repo missing here searches again in pass 2. */
+  searches: Map<string, RelationshipSearch>;
+  newPrs: number;
+  ms: number;
+}
+
 export interface WorkspacePollResult {
   failedRepos: number;
   repoTimings: Array<{ repo: string; ms: number }>;
@@ -99,15 +118,20 @@ export function chunkReposForSearch<T extends { fullName: string }>(
 }
 
 /** The summary line a forced poll logs: total, search share, slowest repos. */
-export function describeForcedPoll(workspaceId: string, result: WorkspacePollResult): string {
+export function describeForcedPoll(
+  workspaceId: string,
+  result: WorkspacePollResult,
+  discovery?: { newPrs: number; ms: number }
+): string {
   const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const slowest = [...result.repoTimings]
     .sort((a, b) => b.ms - a.ms)
     .slice(0, 3)
     .map((t) => `${t.repo} ${secs(t.ms)}`)
     .join(', ');
+  const ready = discovery ? `list ready in ${secs(discovery.ms)} (${discovery.newPrs} new PRs), then ` : '';
   return (
-    `PR monitor: forced poll of workspace ${workspaceId.slice(0, 8)} took ${secs(result.totalMs)}` +
+    `PR monitor: forced poll of workspace ${workspaceId.slice(0, 8)}: ${ready}refresh took ${secs(result.totalMs)}` +
     ` (${result.repoTimings.length} repos, searches ${secs(result.searchMs)}` +
     `${slowest ? `, slowest: ${slowest}` : ''}${result.failedRepos ? `, ${result.failedRepos} failed` : ''})`
   );
@@ -413,16 +437,64 @@ class PRMonitorService extends EventEmitter {
     return this.pollWorkspace(workspaceId);
   }
 
-  private async pollWorkspace(workspaceId: string): Promise<WorkspacePollResult> {
+  /**
+   * Pass 1 of a user Refresh: put the PRs the user does not have yet on the
+   * list, and nothing else. Runs the searches, then fetches and writes only the
+   * PR numbers with no open row, chunk by chunk, leaving mergeability to the
+   * deferred settler. The searches are kept for pass 2 ({@link pollWorkspace}),
+   * which refreshes the rows already there and closes the ones that went.
+   *
+   * A repo whose searches or fetch fail here is left for pass 2, which runs its
+   * own searches and owns the error handling (access, rename, counting).
+   */
+  private async discoverWorkspace(workspaceId: string): Promise<WorkspaceDiscovery | null> {
+    const startedAt = Date.now();
+    const login = await this.resolveCurrentUser(workspaceId);
+    if (!login) return null;
+    const repos = await this.getWatchedRepos(workspaceId);
+    const batched = await this.searchRelationshipsBatched(workspaceId, repos, login);
+    const searches = new Map<string, RelationshipSearch>();
+    let newPrs = 0;
+    for (const repo of repos) {
+      try {
+        const found = (await this.usableBatchedSearch(workspaceId, repo, batched.get(repo.id)))
+          ?? (await this.searchRelationships(workspaceId, repo.fullName, login));
+        searches.set(repo.id, found);
+        const tracked = new Set(await this.getTrackedOpenNumbers(workspaceId, repo.id));
+        const fresh = [...new Set([...found.authoredNums, ...found.requestedNums, ...found.directRequestedNums])]
+          .filter((n) => !tracked.has(n));
+        if (fresh.length === 0) continue;
+        newPrs += fresh.length;
+        await this.refetchAndUpsert(
+          workspaceId,
+          repo,
+          fresh,
+          { authoredSet: found.authoredSet, pendingSet: found.pendingSet },
+          { streaming: true }
+        );
+      } catch {
+        // Pass 2 searches this repo again and reports what is wrong with it.
+        searches.delete(repo.id);
+      }
+    }
+    return { login, repos, searches, newPrs, ms: Date.now() - startedAt };
+  }
+
+  private async pollWorkspace(
+    workspaceId: string,
+    opts: { discovery?: WorkspaceDiscovery; streaming?: boolean } = {}
+  ): Promise<WorkspacePollResult> {
     const startedAt = Date.now();
     const repoTimings: Array<{ repo: string; ms: number }> = [];
-    const login = await this.resolveCurrentUser(workspaceId);
+    const login = opts.discovery?.login ?? (await this.resolveCurrentUser(workspaceId));
     if (!login) return { failedRepos: 0, repoTimings, searchMs: 0, totalMs: Date.now() - startedAt };
-    const repos = await this.getWatchedRepos(workspaceId);
+    const repos = opts.discovery?.repos ?? (await this.getWatchedRepos(workspaceId));
     let failedRepos = 0;
 
     const searchStartedAt = Date.now();
-    const batched = await this.searchRelationshipsBatched(workspaceId, repos, login);
+    const batched = opts.discovery
+      ? new Map<string, BatchedRelationshipSearch>()
+      : await this.searchRelationshipsBatched(workspaceId, repos, login);
     const searchMs = Date.now() - searchStartedAt;
 
     for (const repo of repos) {
@@ -430,7 +502,11 @@ class PRMonitorService extends EventEmitter {
       const repoStartedAt = Date.now();
       try {
         try {
-          await this.pollRepo(workspaceId, repo, login, batched.get(repo.id));
+          await this.pollRepo(workspaceId, repo, login, {
+            batched: batched.get(repo.id),
+            searches: opts.discovery?.searches.get(repo.id),
+            streaming: opts.streaming,
+          });
           // Recovered (e.g. the App was just granted access) — note it once.
           if (this.inaccessibleRepos.delete(accessKey)) {
             console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
@@ -530,7 +606,7 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string,
     repo: WatchedRepo,
     currentUserLogin: string,
-    batched?: BatchedRelationshipSearch
+    opts: PollRepoOptions = {}
   ): Promise<void> {
     const full = `${repo.owner}/${repo.repo}`;
     // The searches share a 30/min budget per account and are the likeliest
@@ -541,7 +617,8 @@ class PRMonitorService extends EventEmitter {
     // report the failure.
     let searches: RelationshipSearch;
     try {
-      searches = (await this.usableBatchedSearch(workspaceId, repo, batched))
+      searches = opts.searches
+        ?? (await this.usableBatchedSearch(workspaceId, repo, opts.batched))
         ?? (await this.searchRelationships(workspaceId, full, currentUserLogin));
     } catch (searchError) {
       const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
@@ -588,7 +665,13 @@ class PRMonitorService extends EventEmitter {
     let refetchError: unknown = null;
     if (staleNumbers.length > 0) {
       try {
-        await this.refetchAndUpsert(workspaceId, repo, staleNumbers, { authoredSet, pendingSet });
+        await this.refetchAndUpsert(
+          workspaceId,
+          repo,
+          staleNumbers,
+          { authoredSet, pendingSet },
+          { streaming: opts.streaming }
+        );
       } catch (err) {
         refetchError = err;
       }
@@ -723,13 +806,64 @@ class PRMonitorService extends EventEmitter {
     return tracked.length === 0 ? batched : null;
   }
 
-  /** Refetch `numbers` and upsert them; `flags` null leaves relationship columns alone. */
+  /**
+   * Refetch `numbers` and upsert them; `flags` null leaves relationship columns
+   * alone.
+   *
+   * `streaming` is for a person waiting on Refresh: each chunk is written as it
+   * arrives instead of after the whole repo, and a PR GitHub has not computed
+   * mergeability for is written as UNKNOWN and handed to the deferred settler,
+   * instead of holding every row of the repo through the inline retries.
+   */
   private async refetchAndUpsert(
     workspaceId: string,
     repo: WatchedRepo,
     numbers: number[],
-    flags: { authoredSet: Set<number>; pendingSet: Set<number> } | null
+    flags: { authoredSet: Set<number>; pendingSet: Set<number> } | null,
+    opts: { streaming?: boolean } = {}
   ): Promise<void> {
+    const upsert = async (summary: PRSummary): Promise<void> => {
+      if (flags) await this.annotateReviewRequest(workspaceId, summary);
+      await upsertFromBatchResult({
+        workspaceId,
+        repositoryId: repo.id,
+        summary,
+        ...(flags
+          ? {
+              reviewRequested: flags.pendingSet.has(summary.number),
+              authored: flags.authoredSet.has(summary.number),
+            }
+          : {}),
+      });
+    };
+
+    if (opts.streaming) {
+      await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers,
+        dedupeWindowMs: BULK_POLL_DEDUPE_MS,
+        dedupeIdentity: githubService.credentialIdentityFor(workspaceId),
+        onChunk: async (results) => {
+          for (const result of results) {
+            if (!result.pr) continue;
+            await upsert(result.pr);
+            if (result.pr.state === 'open' && result.pr.mergeable === 'UNKNOWN') {
+              scheduleMergeableSettle({
+                workspaceId,
+                repositoryId: repo.id,
+                owner: repo.owner,
+                repo: repo.repo,
+                number: result.pr.number,
+              });
+            }
+          }
+        },
+      });
+      return;
+    }
+
     const results = await this.resolveUnknownMergeable(
       workspaceId,
       repo,
@@ -747,19 +881,7 @@ class PRMonitorService extends EventEmitter {
       })
     );
     for (const result of results) {
-      if (!result.pr) continue;
-      if (flags) await this.annotateReviewRequest(workspaceId, result.pr);
-      await upsertFromBatchResult({
-        workspaceId,
-        repositoryId: repo.id,
-        summary: result.pr,
-        ...(flags
-          ? {
-              reviewRequested: flags.pendingSet.has(result.pr.number),
-              authored: flags.authoredSet.has(result.pr.number),
-            }
-          : {}),
-      });
+      if (result.pr) await upsert(result.pr);
     }
   }
 
@@ -1392,16 +1514,32 @@ class PRMonitorService extends EventEmitter {
    * Refresh just the given workspaces' PRs. Drains any in-flight full tick
    * first (and holds the same guard) so it can't race the background poll.
    */
-  async forcePollWorkspaces(workspaceIds: string[]): Promise<void> {
+  async forcePollWorkspaces(
+    workspaceIds: string[],
+    opts: { onListReady?: () => void } = {}
+  ): Promise<void> {
     if (workspaceIds.length === 0) return;
     if (!(await this.drainInFlightTick())) return;
     if (!this.pollGuard.tryBegin()) return;
     try {
+      // Pass 1 for EVERY workspace before pass 2 for any: new PRs first.
+      const discoveries = new Map<string, WorkspaceDiscovery>();
       for (const workspaceId of workspaceIds) {
         try {
+          const discovery = await this.discoverWorkspace(workspaceId);
+          if (discovery) discoveries.set(workspaceId, discovery);
+        } catch (err) {
+          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} refresh discovery failed:`, describeError(err));
+        }
+      }
+      opts.onListReady?.();
+      for (const workspaceId of workspaceIds) {
+        try {
+          const discovery = discoveries.get(workspaceId);
+          const result = await this.pollWorkspace(workspaceId, { discovery, streaming: true });
           // One line per forced poll, because that is a person waiting on a
           // button: it says whether the time went on the searches or on a repo.
-          console.log(describeForcedPoll(workspaceId, await this.pollWorkspace(workspaceId)));
+          console.log(describeForcedPoll(workspaceId, result, discovery));
         } catch (err) {
           console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, describeError(err));
         }
@@ -1417,13 +1555,39 @@ class PRMonitorService extends EventEmitter {
    * across every tenant's repos (that's what the unscoped {@link forcePoll}
    * does, which is why it's background/test-only).
    */
-  async forcePollForOwner(ownerId: string): Promise<void> {
+  async forcePollForOwner(ownerId: string, opts: { untilListReady?: boolean } = {}): Promise<void> {
+    // Off the request's owner-scoped transaction, onto the pool, as every other
+    // poll runs. The upserts reach the DB through `getDbClient()`, which inside
+    // a request IS that transaction: one Refresh held a row lock on every PR it
+    // wrote until the response, stalled other writers of those rows on the 30 s
+    // statement timeout, and lost its writes when the client gave up and the
+    // scope closed (or a 30 s GitHub wait tripped the idle-in-transaction
+    // timeout). The owner check is the workspace list below, not RLS.
+    return runWithoutScope(() => this.forcePollForOwnerOnPool(ownerId, opts));
+  }
+
+  private async forcePollForOwnerOnPool(ownerId: string, opts: { untilListReady?: boolean }): Promise<void> {
     const connected = new Set(githubService.getConnectedWorkspaces());
     const owned = await this.db
       .select({ id: workspacesTable.id })
       .from(workspacesTable)
       .where(eq(workspacesTable.ownerId, ownerId));
-    await this.forcePollWorkspaces(owned.map((r) => r.id).filter((id) => connected.has(id)));
+    const ids = owned.map((r) => r.id).filter((id) => connected.has(id));
+    if (!opts.untilListReady) return this.forcePollWorkspaces(ids);
+    // Answer once the new PRs are on the list. The rest of the refresh updates
+    // rows the client already holds, and reaches it as `pull_request:updated`.
+    return new Promise<void>((resolve, reject) => {
+      let ready = false;
+      this.forcePollWorkspaces(ids, {
+        onListReady: () => {
+          ready = true;
+          resolve();
+        },
+      }).then(resolve, (err: unknown) => {
+        if (!ready) reject(err);
+        else console.error('PR monitor: forced poll failed after the list was ready:', describeError(err));
+      });
+    });
   }
 
   /**

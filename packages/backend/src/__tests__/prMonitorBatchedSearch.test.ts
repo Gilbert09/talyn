@@ -79,12 +79,19 @@ function mockBatchedSearch(
     });
 }
 
-function mockGraphql() {
+/** PR numbers of 100 and up are someone else's; the rest are mine. */
+function mockGraphql(over: (pr: PRSummary) => Partial<PRSummary> = () => ({})) {
   return vi
     .spyOn(graphqlModule, 'batchPullRequestsByNumber')
-    .mockImplementation(async ({ owner, repo, numbers }) =>
-      numbers.map((n) => ({ number: n, pr: fakeSummary(owner, repo, n, n >= 100 ? 'someone-else' : 'me') }))
-    );
+    .mockImplementation(async ({ owner, repo, numbers, onChunk }) => {
+      const results = numbers.map((n) => {
+        const pr = fakeSummary(owner, repo, n, n >= 100 ? 'someone-else' : 'me');
+        return { number: n, pr: { ...pr, ...over(pr) } };
+      });
+      // The real fetch hands each chunk over as it lands; one chunk is enough here.
+      if (onChunk) await onChunk(results);
+      return results;
+    });
 }
 
 async function seed(db: Database, repos: Array<{ id: string; fullName: string }>): Promise<void> {
@@ -290,7 +297,117 @@ describe('prMonitor — batched relationship search', () => {
 
     const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('forced poll of workspace'));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/took \d+\.\ds \(2 repos, searches \d+\.\ds, slowest: /);
+    expect(lines[0]).toMatch(
+      /: list ready in \d+\.\ds \(1 new PRs\), then refresh took \d+\.\ds \(2 repos, searches \d+\.\ds, slowest: /
+    );
+  });
+});
+
+describe('prMonitor — Refresh puts new PRs on the list first', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seed(db, TWO_REPOS);
+    vi.spyOn(githubService, 'getConnectedWorkspaces').mockReturnValue(['ws1']);
+    vi.spyOn(githubService, 'getUser').mockResolvedValue({
+      id: 1,
+      login: 'me',
+      name: 'Me',
+      avatar_url: 'x',
+      email: null,
+    });
+    vi.spyOn(githubService, 'searchPullRequestNumbers').mockResolvedValue([]);
+    prMonitorService.invalidateUserLogin('ws1');
+    _resetPrFocus();
+  });
+
+  afterEach(async () => {
+    await cleanup?.();
+    vi.restoreAllMocks();
+  });
+
+  async function trackOpen(id: string, repositoryId: string, repo: string, number: number, polledAgoMs: number) {
+    await db.insert(pullRequestsTable).values({
+      id,
+      workspaceId: 'ws1',
+      repositoryId,
+      owner: 'acme',
+      repo,
+      number,
+      state: 'open',
+      authored: true,
+      reviewRequested: false,
+      lastPolledAt: new Date(Date.now() - polledAgoMs),
+      lastSummary: {},
+    });
+  }
+
+  it('answers once the new PRs are written, before the existing ones are refreshed', async () => {
+    // #5 is already tracked and stale; #1 and #2 are new.
+    await trackOpen('pr-old', 'repo1', 'widgets', 5, 3_600_000);
+    mockBatchedSearch({ authored: { 'acme/widgets': [1, 5], 'acme/gadgets': [2] } });
+    let releasePass2: () => void = () => {};
+    const pass2Gate = new Promise<void>((r) => (releasePass2 = r));
+    const fetched: number[][] = [];
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockImplementation(async ({ owner, repo, numbers, onChunk }) => {
+      fetched.push([...numbers]);
+      // Pass 2 refetches the tracked #5; hold it so the test can look in between.
+      if (numbers.includes(5)) await pass2Gate;
+      const results = numbers.map((n) => ({ number: n, pr: fakeSummary(owner, repo, n) }));
+      if (onChunk) await onChunk(results);
+      return results;
+    });
+
+    await prMonitorService.forcePollForOwner(TEST_USER_ID, { untilListReady: true });
+
+    const rows = await db.select().from(pullRequestsTable);
+    expect(rows.map((r) => r.number).sort()).toEqual([1, 2, 5]);
+    // Pass 1 fetched only the new numbers, one repo at a time.
+    expect(fetched.slice(0, 2)).toEqual([[1], [2]]);
+
+    releasePass2();
+    await vi.waitFor(() => expect(fetched.some((n) => n.includes(5))).toBe(true));
+    await prMonitorService.forcePollForOwner(TEST_USER_ID); // waits for the guard, so pass 2 is done
+  });
+
+  it('does not hold a Refresh on mergeability GitHub has not computed', async () => {
+    mockBatchedSearch({ authored: { 'acme/widgets': [1], 'acme/gadgets': [2] } });
+    const graphql = mockGraphql(() => ({ mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', blockingReason: 'unknown' }));
+
+    await prMonitorService.forcePollForOwner(TEST_USER_ID);
+
+    // One fetch per new PR and no inline retries (the inline loop would re-ask
+    // each one 3 times). The deferred settler asks again later.
+    expect(graphql.mock.calls.map(([o]) => o.numbers)).toEqual([[1], [2]]);
+    const rows = await db.select().from(pullRequestsTable);
+    expect(rows.map((r) => r.number).sort()).toEqual([1, 2]);
+  });
+
+  it('still answers when pass 1 fails for a repo, and pass 2 searches it again', async () => {
+    mockBatchedSearch({ authored: { 'acme/widgets': [1], 'acme/gadgets': [2] } });
+    let failGadgetsOnce = true;
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockImplementation(async ({ owner, repo, numbers, onChunk }) => {
+      if (repo === 'gadgets' && failGadgetsOnce) {
+        failGadgetsOnce = false;
+        throw new Error('HTTP 502');
+      }
+      const results = numbers.map((n) => ({ number: n, pr: fakeSummary(owner, repo, n) }));
+      if (onChunk) await onChunk(results);
+      return results;
+    });
+    const perRepo = vi.spyOn(githubService, 'searchPullRequestNumbers').mockImplementation(
+      async (_ws: string, q: string) => (q.includes('author:') && q.includes('repo:acme/gadgets') ? [2] : [])
+    );
+
+    await prMonitorService.forcePollForOwner(TEST_USER_ID);
+
+    expect(new Set(perRepo.mock.calls.map(([, q]) => /repo:(\S+)/.exec(q)?.[1]))).toEqual(new Set(['acme/gadgets']));
+    const rows = await db.select().from(pullRequestsTable);
+    expect(rows.map((r) => r.number).sort()).toEqual([1, 2]);
   });
 });
 
@@ -403,19 +520,31 @@ describe('describeForcedPoll', () => {
       { failedRepos: 0, searchMs: 1_200, totalMs: 9_000, repoTimings: [
         { repo: 'a/1', ms: 100 }, { repo: 'a/2', ms: 4_000 }, { repo: 'a/3', ms: 2_500 }, { repo: 'a/4', ms: 900 },
       ] },
-      'PR monitor: forced poll of workspace abcdefgh took 9.0s (4 repos, searches 1.2s, slowest: a/2 4.0s, a/3 2.5s, a/4 0.9s)',
+      'PR monitor: forced poll of workspace abcdefgh: refresh took 9.0s (4 repos, searches 1.2s, slowest: a/2 4.0s, a/3 2.5s, a/4 0.9s)',
     ],
     [
       'says how many failed',
       { failedRepos: 1, searchMs: 0, totalMs: 500, repoTimings: [{ repo: 'a/1', ms: 500 }] },
-      'PR monitor: forced poll of workspace abcdefgh took 0.5s (1 repos, searches 0.0s, slowest: a/1 0.5s, 1 failed)',
+      'PR monitor: forced poll of workspace abcdefgh: refresh took 0.5s (1 repos, searches 0.0s, slowest: a/1 0.5s, 1 failed)',
     ],
     [
       'has no repos',
       { failedRepos: 0, searchMs: 0, totalMs: 10, repoTimings: [] },
-      'PR monitor: forced poll of workspace abcdefgh took 0.0s (0 repos, searches 0.0s)',
+      'PR monitor: forced poll of workspace abcdefgh: refresh took 0.0s (0 repos, searches 0.0s)',
     ],
   ])('%s', (_label, result, expected) => {
     expect(describeForcedPoll('abcdefgh-1234', result)).toBe(expected);
+  });
+
+  it('leads with when the list was ready', () => {
+    expect(
+      describeForcedPoll(
+        'abcdefgh-1234',
+        { failedRepos: 0, searchMs: 0, totalMs: 40_000, repoTimings: [{ repo: 'a/1', ms: 40_000 }] },
+        { newPrs: 3, ms: 6_500 }
+      )
+    ).toBe(
+      'PR monitor: forced poll of workspace abcdefgh: list ready in 6.5s (3 new PRs), then refresh took 40.0s (1 repos, searches 0.0s, slowest: a/1 40.0s)'
+    );
   });
 });

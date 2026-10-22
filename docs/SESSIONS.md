@@ -35,6 +35,32 @@ poll's error logs now print `describeError(err)`. Each forced poll logs one line
 (`forced poll of workspace … took …, searches …, slowest: …`). The next slow
 Refresh will show where the time went.
 
+**Later that day: the Refresh wrote through the request's transaction.** With
+the batched searches deployed, a Refresh still ran for minutes and never logged
+its timing line. `upsertFromBatchResult` reaches the DB through `getDbClient()`,
+and inside a request that is the owner-scoped TRANSACTION, not the pool. So one
+Refresh held a row lock on every PR it wrote until the response. Other writers
+of those rows waited up to the 30 s statement timeout, which is probably the
+failed `UPDATE` above. When the client gave up at 300 s, the scope closed and the
+poll went on writing through a finished transaction. A GitHub wait over 30 s
+could also trip the idle-in-transaction timeout and roll the writes back. Either
+way the list did not change. `forcePollForOwner` now runs in `runWithoutScope`,
+as every other poll does. The owner check is the workspace list it polls, not RLS.
+
+**A Refresh now answers when the NEW PRs are on the list** (Tom's ask: "prioritise
+getting the PRs into the list, even if they're in an unknown state"). Pass 1
+(`discoverWorkspace`) runs the searches and fetches only the PR numbers with no
+open row. It writes each GraphQL chunk as it lands (`onChunk` on
+`batchPullRequestsByNumber`) and hands UNKNOWN mergeability to the deferred
+settler instead of retrying inline. The HTTP request returns after pass 1 for
+every workspace. Pass 2 is the old full poll (refresh, close-out, flags), reusing
+pass 1's searches. It runs in the background under the same poll guard, writes
+chunks as they land, and reaches the client as `pull_request:updated`. The
+reconcile sweep is unchanged: it still resolves mergeability inline, because no
+person waits on it. Measured for scale: one 5-PR batch against PostHog/posthog
+takes about 5.3 s, and Tom has about 124 open PRs there (34 authored, 90
+review-requested).
+
 ## No code review ever finished, and the judge could not keep two lenses (2026-10-13)
 
 Tom saw a Deep review drop all 15 findings. Two separate faults came out of it.

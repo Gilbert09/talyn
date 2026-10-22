@@ -82,7 +82,7 @@ export function repositoryRoutes(): Router {
   // workspaces — never a fleet-wide poll across every tenant's repos.
   router.post('/poll', async (req, res) => {
     try {
-      await prMonitorService.forcePollForOwner(assertUser(req).id);
+      await prMonitorService.forcePollForOwner(assertUser(req).id, { untilListReady: true });
       res.json({ success: true, data: { message: 'Poll triggered' } });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'unknown error';
