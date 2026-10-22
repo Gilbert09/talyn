@@ -6,6 +6,7 @@ import { renderMarkdownish } from '../../lib/markdown';
 import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PlanCard, type PlanCardState } from './PlanCard';
+import { MessageAttachments } from './MessageAttachments';
 import { toast } from '../../stores/toast';
 
 /**
@@ -114,7 +115,7 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       const last = turn.events.length ? turn.events[turn.events.length - 1].seq : -1;
       const prev = cache.current.get(key);
       const kept =
-        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText
+        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length
           ? prev.turn
           : turn;
       next.set(key, { size: turn.events.length, last, turn: kept });
@@ -163,7 +164,7 @@ const TurnView = React.memo(function TurnView({
   return (
     <div className="space-y-3">
       {turn.userText !== null && (
-        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} ops={ops} canRevert={canRevert} />
+        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} />
       )}
       {turn.events.length > 0 && (
         <AgentBlocks events={turn.events} scopeId={`${chatId}:${turn.turn}`} hideCompletedResults />
@@ -177,12 +178,14 @@ function UserMessage({
   chatId,
   turn,
   text,
+  attachments,
   ops,
   canRevert,
 }: {
   chatId: string;
   turn: number;
   text: string;
+  attachments: TranscriptTurn['attachments'];
   ops: WorkbenchOps;
   canRevert: boolean;
 }) {
@@ -207,6 +210,7 @@ function UserMessage({
       <div className="max-w-[85%] space-y-1">
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
           {renderMarkdownish(text, 'surface')}
+          {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}
         </div>
         {canRevert && (
           <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">

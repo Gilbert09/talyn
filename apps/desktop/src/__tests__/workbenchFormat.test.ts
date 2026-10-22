@@ -8,6 +8,7 @@ import {
   formatCommentsMessage,
   fuzzyMatchPaths,
   makeUserMessageEvent,
+  messageAttachments,
   nextActionInput,
   slashCommandsFrom,
   splitTurns,
@@ -21,6 +22,14 @@ import { groupByRepository } from '../renderer/components/workbench/workbenchSel
 import { portFor } from '../renderer/lib/workbenchOps';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+
+test('messageAttachments reads both stored event shapes', () => {
+  const attachment = { name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/shot.png' };
+  expect(messageAttachments({ type: 'user', talyn: { attachments: [attachment] } } as unknown as AgentEvent)).toEqual([attachment]);
+  expect(messageAttachments({ type: 'user', talyn_attachments: [attachment] } as unknown as AgentEvent)).toEqual([attachment]);
+  expect(messageAttachments({ type: 'user', talyn: { attachments: [{ name: 'old.png', mimeType: 'image/png' }] } } as unknown as AgentEvent))
+    .toEqual([{ name: 'old.png', mimeType: 'image/png' }]);
+});
 
 function pr(over: Partial<WorkbenchPrLike['summary']> & { state?: WorkbenchPrLike['state'] } = {}): WorkbenchPrLike {
   const { state = 'open', ...summary } = over;

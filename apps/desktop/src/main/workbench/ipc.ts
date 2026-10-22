@@ -9,6 +9,7 @@ import {
   git,
   listFiles,
   readFile,
+  readFileBase64,
   stopGitProcesses,
   WorktreeManager,
 } from './git';
@@ -138,6 +139,7 @@ export function registerWorkbenchIpc(
     }
   });
   handle('read-file', readFile);
+  handle('read-file-base64', readFileBase64);
   handle('read-config', readConfigWithDetection);
   handle('save-detected-config', saveDetectedConfig);
   handle('list-files', listFiles);

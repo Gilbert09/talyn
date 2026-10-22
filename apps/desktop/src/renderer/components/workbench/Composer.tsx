@@ -12,6 +12,7 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { downscaleImage } from '../../lib/imageDownscale';
+import { rememberAttachmentPreview } from '../../lib/attachmentPreviews';
 import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -208,6 +209,7 @@ export function Composer({
         }
         const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
         const attachment = await ops.attach({ name, mimeType, dataBase64 });
+        if (attachment.path) rememberAttachmentPreview(attachment.path, dataUrl);
         setAttachments((cur) => [...cur, attachment]);
       } catch (err) {
         toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);

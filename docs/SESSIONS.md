@@ -2,6 +2,12 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Image previews in session chat (2026-10-22)
+
+User message events now keep each attachment path. The transcript shows image previews and file chips below the user's text.
+The composer caches new previews. Older sandbox images load through a private, authenticated route with a 10 MB limit.
+Local images load through a restricted desktop bridge read. Clicking a preview opens a dialog.
+
 ## Link merged and closed pull requests to sessions (2026-10-22)
 
 The session link route accepts open, merged, and closed PRs from its repository.

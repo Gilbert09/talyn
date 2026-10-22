@@ -9,6 +9,12 @@ import { writeSandboxFiles } from '../services/workbenches/sandboxFiles.js';
 import { getWorkbench } from '../services/workbenches/store.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const ATTACHMENT_PATH = /^\.context\/attachments\/[A-Za-z0-9._-]+$/;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const READ_CHUNK_BYTES = 2 * 1024 * 1024;
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+};
 
 function matchesImage(type: string, data: Buffer): boolean {
   if (type === 'image/png') return data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -20,6 +26,58 @@ function matchesImage(type: string, data: Buffer): boolean {
 
 export function workbenchAttachmentRoutes(): Router {
   const router = Router();
+  router.get('/:id/attachments/raw', async (req: Request, res: Response) => {
+    const bad = (status: number, error: string, code?: string) =>
+      res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
+    const row = await getWorkbench(req.params.id);
+    if (!row) return bad(404, 'Session not found');
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const user = assertUser(req);
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      return bad(403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+    }
+    try {
+      if (row.runtime === 'local') throw new WorkbenchError('This session runs on your machine.', 400, 'local_runtime');
+      if (row.archivedAt) throw notReadyError('archived');
+      if (row.status !== 'ready' || !row.sandboxId) throw notReadyError(row.status);
+      const path = req.query.path;
+      if (typeof path !== 'string' || !ATTACHMENT_PATH.test(path) || path.includes('..')) return bad(400, 'Invalid attachment path.');
+      const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+      const mimeType = IMAGE_EXTENSIONS[extension];
+      if (!mimeType) return bad(400, 'Unsupported image type.');
+      const target = shellQuote(path);
+      const stat = await runCapture(row, `[ -f ${target} ] || exit 3\nwc -c < ${target}`, { quiet: true, timeoutMs: 60_000 });
+      if (stat.exitCode === 3) return bad(404, 'Attachment not found.');
+      if (stat.exitCode !== 0) throw new Error(`Reading attachment size failed (exit ${stat.exitCode}).`);
+      const size = Number(stat.stdout.trim());
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error('Invalid attachment size.');
+      if (size > MAX_ATTACHMENT_BYTES) return bad(413, 'Attachment exceeds 10 MB.');
+      const chunks: Buffer[] = [];
+      for (let offset = 0; offset < size; offset += READ_CHUNK_BYTES) {
+        const index = offset / READ_CHUNK_BYTES;
+        const read = await runCapture(row, `dd if=${target} bs=${READ_CHUNK_BYTES} skip=${index} count=1 status=none | base64 | tr -d '\\n'`, { quiet: true, timeoutMs: 60_000 });
+        if (read.exitCode !== 0) throw new Error(`Reading attachment failed (exit ${read.exitCode}).`);
+        const chunk = Buffer.from(read.stdout, 'base64');
+        if (chunk.length !== Math.min(READ_CHUNK_BYTES, size - offset)) throw new Error('Attachment changed while it was read.');
+        chunks.push(chunk);
+      }
+      const bytes = Buffer.concat(chunks);
+      res.set('Content-Type', mimeType);
+      res.set('Cache-Control', 'private, max-age=86400');
+      res.set('X-Content-Type-Options', 'nosniff');
+      return res.send(bytes);
+    } catch (err) {
+      if (err instanceof WorkbenchError) return bad(err.status, err.message, err.code);
+      const refusal = fleetErrorAsRefusal(err);
+      if (refusal) return bad(refusal.status, refusal.message, refusal.code);
+      console.error(`[workbench] attachment read for ${row.id} failed:`, err);
+      return bad(500, 'Could not read the image from the sandbox.');
+    }
+  });
   router.post('/:id/attachments', express.raw({ type: IMAGE_TYPES, limit: '10mb' }), async (req: Request, res: Response) => {
     const bad = (status: number, error: string, code?: string) =>
       res.status(status).json({ success: false, error, ...(code ? { code } : {}) });

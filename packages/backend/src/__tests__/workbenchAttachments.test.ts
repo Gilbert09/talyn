@@ -32,6 +32,24 @@ const ready = { id: 'wb-1', workspaceId: 'ws-a', runtime: 'sandbox', status: 're
 describe('workbench image uploads', () => {
   const router = wrapAsyncRoutes(workbenchAttachmentRoutes());
 
+  async function raw(path: string, user = 'owner-a') {
+    return new Promise<{ status: number; body: Buffer | { code?: string }; headers: Record<string, string> }>((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      const req = Object.assign(Readable.from([]), {
+        method: 'GET', url: '/wb-1/attachments/raw', originalUrl: '/wb-1/attachments/raw',
+        query: { path }, headers: {}, user: { id: user, email: 'user@example.test', isAdmin: false },
+      }) as unknown as Request;
+      const res = {
+        statusCode: 200,
+        status(status: number) { this.statusCode = status; return this; },
+        set(name: string, value: string) { headers[name.toLowerCase()] = value; return this; },
+        json(body: unknown) { resolve({ status: this.statusCode, body: body as { code?: string }, headers }); return this; },
+        send(body: Buffer) { resolve({ status: this.statusCode, body, headers }); return this; },
+      } as Response;
+      router(req, res, (routeError?: unknown) => reject(routeError ?? new Error('No route matched')));
+    });
+  }
+
   async function upload(body: Buffer, type = 'image/png', user = 'owner-a') {
     return new Promise<{ status: number; body: { success: boolean; data?: { path: string; mimeType: string; name: string }; code?: string } }>((resolve, reject) => {
       const headers = { 'content-type': type, 'content-length': String(body.length), 'x-attachment-name': 'my shot.png' };
@@ -105,5 +123,51 @@ describe('workbench image uploads', () => {
   it('enforces the feature flag', async () => {
     flag = false;
     expect((await upload(png)).status).toBe(403);
+  });
+
+  it('serves a sandbox PNG with private cache headers', async () => {
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(png.length), stderr: '' });
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: png.toString('base64'), stderr: '' });
+    const response = await raw('.context/attachments/shot.png');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(png);
+    expect(response.headers).toMatchObject({
+      'content-type': 'image/png', 'cache-control': 'private, max-age=86400',
+      'x-content-type-options': 'nosniff',
+    });
+    expect(runCapture.mock.calls[1][1]).toContain('base64');
+  });
+
+  it.each(['../secret.png', '.context/attachments/../secret.png', '.context/attachments/a/b.png'])('rejects unsafe path %s', async (path) => {
+    expect((await raw(path)).status).toBe(400);
+    expect(runCapture).not.toHaveBeenCalled();
+  });
+
+  it('refuses local and unready sessions', async () => {
+    getWorkbench.mockResolvedValueOnce({ ...ready, runtime: 'local' });
+    expect((await raw('.context/attachments/a.png')).status).toBe(400);
+    getWorkbench.mockResolvedValueOnce({ ...ready, status: 'provisioning' });
+    expect((await raw('.context/attachments/a.png')).status).toBe(409);
+  });
+
+  it('hides another workspace from attachment reads', async () => {
+    expect((await raw('.context/attachments/a.png', 'owner-b')).status).toBe(404);
+  });
+
+  it('refuses an attachment over 10 MB before reading bytes', async () => {
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(10 * 1024 * 1024 + 1), stderr: '' });
+    expect((await raw('.context/attachments/large.png')).status).toBe(413);
+    expect(runCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads images over 2 MB in bounded chunks', async () => {
+    const large = Buffer.alloc(2 * 1024 * 1024 + 1, 42);
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(large.length), stderr: '' });
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: large.subarray(0, 2 * 1024 * 1024).toString('base64'), stderr: '' });
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: large.subarray(2 * 1024 * 1024).toString('base64'), stderr: '' });
+    const response = await raw('.context/attachments/large.png');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(large);
+    expect(runCapture).toHaveBeenCalledTimes(3);
   });
 });

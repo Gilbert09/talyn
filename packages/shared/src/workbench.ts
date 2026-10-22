@@ -523,6 +523,7 @@ export interface WorkbenchLocalBridge {
     steps: Array<{ argv: string[]; env?: Record<string, string>; allowFailure?: boolean; capture?: string }>
   ): Promise<WorkbenchExecResult>;
   readFile(path: string, relativePath: string): Promise<{ content: string; binary: boolean }>;
+  readFileBase64(path: string, relativePath: string): Promise<string>;
   readConfig(path: string): Promise<WorkbenchConfig>;
   saveDetectedConfig(path: string): Promise<void>;
   listFiles(path: string): Promise<string[]>;

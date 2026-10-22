@@ -44,6 +44,18 @@ export function makeUserMessageEvent(text: string, attachments?: WorkbenchAttach
   return draft;
 }
 
+export function messageAttachments(event: AgentEvent): Array<{ name: string; mimeType: string; path?: string }> {
+  const talyn = event.talyn as { attachments?: unknown } | undefined;
+  const raw = talyn?.attachments ?? event.talyn_attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item: unknown) => {
+    if (!item || typeof item !== 'object') return [];
+    const a = item as Record<string, unknown>;
+    if (typeof a.name !== 'string' || typeof a.mimeType !== 'string') return [];
+    return [{ name: a.name, mimeType: a.mimeType, ...(typeof a.path === 'string' ? { path: a.path } : {}) }];
+  });
+}
+
 /**
  * The text of a user message event, or null for any other event.
  *
@@ -73,6 +85,7 @@ export interface TranscriptTurn {
   /** The user's message for this turn, when one was recorded. */
   userText: string | null;
   userSeq: number | null;
+  attachments: ReturnType<typeof messageAttachments>;
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
 }
@@ -84,12 +97,13 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   for (const e of events) {
     const text = userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, events: [] };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], events: [] };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
       current.userText = text;
       current.userSeq = e.seq;
+      current.attachments = messageAttachments(e.event);
     } else {
       current.events.push(e.event);
     }

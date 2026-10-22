@@ -2693,6 +2693,8 @@ export const workbenches = {
     ),
   file: (id: string, path: string) =>
     request<{ content: string; binary: boolean }>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}`),
+  attachmentBlob: async (id: string, path: string): Promise<Blob> =>
+    (await rawRequest('GET', `/workbenches/${enc(id)}/attachments/raw?path=${enc(path)}`)).blob(),
   files: (id: string) => request<{ paths: string[] }>('GET', `/workbenches/${enc(id)}/files`),
   /**
    * The preview proxy for a port a script listens on in the sandbox. Bearer

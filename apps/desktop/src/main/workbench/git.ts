@@ -15,6 +15,25 @@ import { WorkbenchPaths } from './paths';
 
 const children = new Set<ChildProcess>();
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+export async function readFileBase64(root: string, relative: string): Promise<string> {
+  if (!/^\.context\/attachments\/[A-Za-z0-9._-]+$/.test(relative) || relative.includes('..')) {
+    throw new Error('Invalid attachment path');
+  }
+  const target = await safeFilePath(root, relative);
+  const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error('Path is not a regular file');
+    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+    const data = await handle.readFile();
+    if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+    return data.toString('base64');
+  } finally {
+    await handle.close();
+  }
+}
 
 export async function exec(
   cwd: string,

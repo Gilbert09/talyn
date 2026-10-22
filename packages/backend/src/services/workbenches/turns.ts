@@ -267,7 +267,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
       messageId: message.id,
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
-      ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType })) } : {}),
+      ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
     },
   };
 }

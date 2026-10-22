@@ -69,6 +69,7 @@ export interface WorkbenchOps {
   /** Fix checks / Resolve conflicts — a prompt to the agent. */
   runAction(action: WorkbenchPromptActionKind, chat: WorkbenchChat | null): Promise<void>;
   attach(file: PastedFile): Promise<WorkbenchAttachment>;
+  attachmentBlob(path: string, mimeType: string): Promise<Blob>;
 }
 
 // ============================================================================
@@ -120,6 +121,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
       new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
       file.name
     ),
+    attachmentBlob: (path) => api.workbenches.attachmentBlob(id, path),
   };
 }
 
@@ -270,6 +272,10 @@ export function localOps(
         ]),
       ]);
       return { name: file.name, mimeType: file.mimeType, path: rel };
+    },
+    attachmentBlob: async (rel, mimeType) => {
+      const base64 = await need().readFileBase64(path, rel);
+      return new Blob([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], { type: mimeType });
     },
   };
   return ops;
