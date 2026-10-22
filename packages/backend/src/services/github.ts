@@ -2477,8 +2477,15 @@ class GitHubService extends EventEmitter {
         });
         const res = await this.apiRequest<{
           total_count: number;
+          incomplete_results?: boolean;
           items: Array<{ number: number }>;
         }>(workspaceId, `/search/issues?${params}`);
+        // A partial answer is not "these are all of them". The caller rewrites
+        // relationship flags from it, so during a GitHub search incident it
+        // took every authored PR of a repo off the list (2026-10-22).
+        if (res.incomplete_results) {
+          throw new Error(`GitHub search returned incomplete results for: ${query}`);
+        }
         out.push(...res.items.map((i) => i.number));
         if (res.items.length < 100) break;
       }

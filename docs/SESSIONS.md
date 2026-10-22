@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A GitHub search incident took the authored PRs off the list (2026-10-22)
+
+During a GitHub incident ("Errors loading Issues, Pull Requests, and search results"), most of the authored PRs left the PR list. They came back when GitHub recovered.
+
+**Cause.** The poll rewrites the `authored` and `reviewRequested` flags from the search results. The per-repo search ignored `incomplete_results`, so a partial answer counted as the full list. `reconcileRelationshipFlags` then set `authored` to false on every PR the search left out. The sweep did not close the rows, because a GraphQL lookup protects it. The rows stayed open but left the "PRs" tab.
+
+**Fix.**
+- `searchPullRequestNumbers` now throws on `incomplete_results`. `pollRepo` then refreshes the tracked rows and keeps their flags, as for any search failure. The batched search already skipped an incomplete chunk.
+- A PR whose summary author is the viewer keeps `authored`, whatever the search says, in the reconcile pass and in the upsert. The author of a PR does not change. The login comes from `last_summary ->> 'author'` in SQL, so the summary blob does not ship.
+
+**Still open.** `reviewRequested` has no equivalent guard. A degraded search that answers 200 with no `incomplete_results` flag can still clear review requests until the next good poll.
+
 ## A spent REST budget paused every GitHub call, and Refresh said nothing (2026-10-22)
 
 Tom's PR PostHog/secrets#77 opened at 11:34 and did not reach the list, even

@@ -510,7 +510,7 @@ class PRMonitorService extends EventEmitter {
           workspaceId,
           repo,
           fresh,
-          { authoredSet: found.authoredSet, pendingSet: found.pendingSet },
+          { authoredSet: found.authoredSet, pendingSet: found.pendingSet, login },
           { streaming: true }
         );
       } catch (err) {
@@ -711,7 +711,7 @@ class PRMonitorService extends EventEmitter {
           workspaceId,
           repo,
           staleNumbers,
-          { authoredSet, pendingSet },
+          { authoredSet, pendingSet, login: currentUserLogin },
           { streaming: opts.streaming }
         );
       } catch (err) {
@@ -725,7 +725,7 @@ class PRMonitorService extends EventEmitter {
     // PR whose flag should change but which didn't need a summary refetch
     // (e.g. it fell out of review-requested, or the user just reviewed it)
     // still flips. Without this an approved PR lingers on the Review list.
-    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet);
+    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet, currentUserLogin);
     if (refetchError) throw refetchError;
   }
 
@@ -861,7 +861,7 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string,
     repo: WatchedRepo,
     numbers: number[],
-    flags: { authoredSet: Set<number>; pendingSet: Set<number> } | null,
+    flags: { authoredSet: Set<number>; pendingSet: Set<number>; login: string } | null,
     opts: { streaming?: boolean } = {}
   ): Promise<void> {
     const upsert = async (summary: PRSummary): Promise<void> => {
@@ -873,7 +873,10 @@ class PRMonitorService extends EventEmitter {
         ...(flags
           ? {
               reviewRequested: flags.pendingSet.has(summary.number),
-              authored: flags.authoredSet.has(summary.number),
+              // See reconcileRelationshipFlags: authorship outlives a degraded search.
+              authored:
+                flags.authoredSet.has(summary.number) ||
+                summary.author.toLowerCase() === flags.login.toLowerCase(),
             }
           : {}),
       });
@@ -937,7 +940,8 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string,
     repositoryId: string,
     authoredSet: Set<number>,
-    pendingSet: Set<number>
+    pendingSet: Set<number>,
+    currentUserLogin: string
   ): Promise<void> {
     // Note: `lastSummary` is deliberately NOT selected here — most ticks
     // change zero rows, so pulling the ~2KB summary jsonb for every open PR
@@ -957,6 +961,8 @@ class PRMonitorService extends EventEmitter {
         // excludes — see the note above.
         reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
         authored: pullRequestsTable.authored,
+        // Only the login, derived in SQL, so the summary blob does not ship.
+        authorLogin: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'author'`,
       })
       .from(pullRequestsTable)
       .where(
@@ -967,8 +973,13 @@ class PRMonitorService extends EventEmitter {
         )
       );
 
+    const login = currentUserLogin.toLowerCase();
     for (const row of rows) {
-      const authored = authoredSet.has(row.number);
+      // Who opened a PR never changes. A search that leaves out a PR the
+      // viewer opened is a degraded search, not a change of author, and
+      // trusting it hid every authored PR during a GitHub incident.
+      const authored =
+        authoredSet.has(row.number) || (row.authorLogin ?? '').toLowerCase() === login;
       const reviewRequested = pendingSet.has(row.number);
       if (authored === row.authored && reviewRequested === row.reviewRequested) {
         continue;
