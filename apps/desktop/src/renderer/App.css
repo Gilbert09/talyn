@@ -34,6 +34,7 @@
     --warning-foreground: 0 0% 100%;
     --info: 217 80% 44%;
     --info-foreground: 0 0% 100%;
+    --merged: 266 51% 43%;
     --radius: 0.625rem;
   }
 
@@ -66,6 +67,7 @@
     --warning-foreground: 32 18% 9%;
     --info: 213 90% 70%;
     --info-foreground: 32 18% 9%;
+    --merged: 267 63% 75%;
   }
 }
 

@@ -48,6 +48,7 @@ import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { timeAgo } from './new/RecentWorkbenches';
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -223,6 +224,7 @@ export function WorkbenchHeader({
 
   const PrimaryIcon = primary ? ACTION_ICON[primary] : null;
   const primaryKeys = primary ? keysLabel(primary) : null;
+  const mergedAgo = pr?.mergedAt ? timeAgo(pr.mergedAt) : null;
 
   return (
     <div className="app-region-drag flex items-center gap-2 border-b px-3 py-1.5">
@@ -253,6 +255,18 @@ export function WorkbenchHeader({
             </a>
           )}
         </div>
+        {pr?.state === 'merged' && (
+          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="shrink-0 rounded bg-merged/15 px-1.5 py-0.5 font-medium text-merged">Merged</span>
+            <span className="truncate">PR #{pr.number} merged into {pr.summary.baseBranch || workbench.baseBranch}</span>
+            {mergedAgo && (
+              <span className="shrink-0">· {mergedAgo === 'now' ? 'just now' : `${mergedAgo} ago`}</span>
+            )}
+          </div>
+        )}
+        {pr?.state === 'closed' && (
+          <div className="text-xs text-muted-foreground">PR #{pr.number} was closed without merging</div>
+        )}
         <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
           <GitBranch className="h-3 w-3 shrink-0" />
           <span className="truncate">{workbench.branch}</span>
@@ -314,7 +328,7 @@ export function WorkbenchHeader({
               data-testid="workbench-primary-action"
             >
               {busy === primary ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PrimaryIcon className="h-3.5 w-3.5" />}
-              {NEXT_ACTION_LABEL[primary]}
+              {primary === 'archive' && pr?.state === 'merged' ? 'Archive session' : NEXT_ACTION_LABEL[primary]}
               {primaryKeys && <span className="ml-0.5 text-[10px] opacity-70">{primaryKeys}</span>}
             </Button>
           )}

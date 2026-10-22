@@ -83,6 +83,14 @@ function ops(): WorkbenchOps & { runAction: jest.Mock; send: jest.Mock } {
 const chat = { id: 'c1' } as WorkbenchChat;
 const CREATE_PR = { text: 'Create a pull request', intent: 'create_pr', planMode: false };
 
+beforeAll(() => {
+  (global as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
+
 afterEach(() => {
   cleanup();
   jest.clearAllMocks();
@@ -105,7 +113,7 @@ describe('WorkbenchHeader action cycle', () => {
     ['failing required checks', prRow({ ciStatus: 'failing_required' }), {}, 'Fix checks', 'Ctrl+Shift+X', 'prompt', 'fix_checks'],
     ['green PR', prRow({}), {}, 'Merge', 'Ctrl+Shift+M', 'confirm', 'merge'],
     ['failing optional checks read as green', prRow({ ciStatus: 'failing_optional' }), {}, 'Merge', 'Ctrl+Shift+M', 'confirm', 'merge'],
-    ['merged PR', prRow({}, 'merged'), {}, 'Archive', 'Ctrl+Shift+A', 'confirm', 'archive'],
+    ['merged PR', prRow({}, 'merged'), {}, 'Archive session', 'Ctrl+Shift+A', 'confirm', 'archive'],
     ['closed PR', prRow({}, 'closed'), {}, 'Archive', 'Ctrl+Shift+A', 'confirm', 'archive'],
   ])('%s', async (_name, pr, over, label, keys, kind, action) => {
     const o = ops();
@@ -201,8 +209,8 @@ describe('WorkbenchHeader action cycle', () => {
     render(<WorkbenchHeader workbench={{ ...WB, pullRequestId: null }} pr={null} chat={chat} ops={ops()} />);
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Link pull request…' }));
-    expect(await screen.findByLabelText('PR number or URL')).toBeInTheDocument();
-    await waitFor(() => expect(openPullRequests).toHaveBeenCalledWith(WB.id));
+    expect(await screen.findByRole('combobox', { name: 'Search pull requests' })).toBeInTheDocument();
+    await waitFor(() => expect(openPullRequests).toHaveBeenCalledWith(WB.id, { state: 'open' }));
   });
 
   it('unlinks a PR from the menu', async () => {
@@ -255,6 +263,21 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: 'Archive' }).pop()!);
     await waitFor(() => expect(archive).toHaveBeenCalledWith('wb1'));
+  });
+
+  it('shows the merged status and purple PR pill', () => {
+    const row = { ...prRow({}, 'merged'), mergedAt: new Date(Date.now() - 3_600_000).toISOString() };
+    render(<WorkbenchHeader workbench={WB} pr={row} chat={chat} ops={ops()} />);
+    expect(screen.getByText('Merged')).toHaveClass('bg-merged/15', 'text-merged');
+    expect(screen.getByText('PR #42 merged into main')).toBeInTheDocument();
+    expect(screen.getByText('· 1h ago')).toBeInTheDocument();
+    expect(screen.getByText('#42')).toHaveClass('bg-merged/15', 'text-merged');
+    expect(screen.getByTestId('workbench-primary-action')).toHaveTextContent('Archive session');
+  });
+
+  it('shows why a closed PR ended', () => {
+    render(<WorkbenchHeader workbench={WB} pr={prRow({}, 'closed')} chat={chat} ops={ops()} />);
+    expect(screen.getByText('PR #42 was closed without merging')).toBeInTheDocument();
   });
 
   describe('requests from shortcuts and the palette', () => {

@@ -17,7 +17,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
-import { sessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
 /**
@@ -74,15 +74,16 @@ function WorkbenchRow({
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const state = sessionState(workbench, chats ?? [], unread, pr ?? null);
+  const pullRequest = sessionPr(workbench, pr);
+  const state = sessionState(workbench, chats ?? [], unread, pullRequest);
   const isUnread = state.kind === 'needs_reply';
-  const done = state.kind === 'merged' || state.kind === 'closed';
+  const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : suspended ? 'Sandbox (asleep)' : 'Sandbox';
   const diff = workbench.diffStat && workbench.diffStat.files > 0 ? workbench.diffStat : null;
 
-  const prUrl = pr?.summary.url;
+  const prUrl = pr?.summary.url ?? workbench.pr?.url;
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
 
@@ -117,7 +118,7 @@ function WorkbenchRow({
               <SessionStateIcon state={state} />
             </span>
             <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbenchDisplayName(workbench)}</span>
-            {diff && (
+            {diff && !done && (
               <span className="shrink-0 font-mono text-[11px] tabular-nums">
                 <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
               </span>

@@ -152,6 +152,21 @@ describe('AppSidebar', () => {
     expect(within(screen.getByRole('button', { name: /lisbon/ })).getByLabelText(/^Done: #\d+ merged$/)).toBeInTheDocument();
   });
 
+  it.each(['merged', 'closed'] as const)('uses the embedded %s PR and hides the diff stat', (state) => {
+    useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
+      repoFullName: 'acme/web',
+      pullRequestId: 'p9',
+      diffStat: { added: 12, removed: 3, files: 2 },
+      pr: { number: 9, url: 'https://github.com/acme/web/pull/9', state, mergeable: 'unknown', ciStatus: 'none' },
+    }));
+    render(<AppSidebar />);
+    const row = screen.getByRole('button', { name: /lisbon/ });
+    expect(within(row).getByLabelText(state === 'merged' ? 'Done: #9 merged' : '#9 closed')).toHaveClass(state === 'merged' ? 'text-merged' : 'text-muted-foreground');
+    expect(row).not.toHaveTextContent('+12');
+    expect(row).not.toHaveTextContent('−3');
+    expect(row).toHaveClass('opacity-60');
+  });
+
   it('clicking a row opens the workbench route and marks it current', () => {
     render(<AppSidebar />);
     fireEvent.click(screen.getByRole('button', { name: /rome/ }));

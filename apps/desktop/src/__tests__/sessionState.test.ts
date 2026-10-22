@@ -1,6 +1,6 @@
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../renderer/lib/api';
-import { sessionState, type SessionStateKind } from '../renderer/lib/sessionState';
+import { sessionPr, sessionState, type SessionStateKind } from '../renderer/lib/sessionState';
 
 type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
@@ -39,5 +39,14 @@ describe('sessionState', () => {
   it('names the PR in the label', () => {
     expect(sessionState(WB, [], {}, pr('open', { mergeable: 'CONFLICTING' })).label).toBe('#7 has conflicts');
     expect(sessionState(WB, [], {}, pr('merged')).label).toBe('Done: #7 merged');
+  });
+
+  it('uses the embedded merged PR when the open PR store has no row', () => {
+    const workbench = {
+      ...WB,
+      pr: { number: 42, url: 'https://github.com/a/b/pull/42', state: 'merged', mergeable: 'unknown', ciStatus: 'none' },
+    } as Workbench;
+    expect(sessionState(workbench, [], {}, sessionPr(workbench, null))).toEqual({ kind: 'merged', label: 'Done: #42 merged' });
+    expect(sessionPr(workbench, pr('open') as PRRow)?.state).toBe('open');
   });
 });

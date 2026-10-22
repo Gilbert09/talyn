@@ -36,7 +36,7 @@ export function PrPill({ number, state, draft }: { number: number; state: string
       className={cn(
         'shrink-0 rounded px-1 font-mono text-[10px] font-medium',
         state === 'merged'
-          ? 'bg-primary/15 text-primary'
+          ? 'bg-merged/15 text-merged'
           : state === 'closed'
             ? 'bg-destructive/15 text-destructive'
             : draft
@@ -77,7 +77,7 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
     case 'draft':
       return <span className={cn(dot, 'border-[1.5px] border-muted-foreground/60')} aria-label={label} />;
     case 'merged':
-      return <GitMerge className={cn(icon, 'text-violet-500')} aria-label={label} />;
+      return <GitMerge className={cn(icon, 'text-merged')} aria-label={label} />;
     case 'closed':
       return <XCircle className={cn(icon, 'text-muted-foreground')} aria-label={label} />;
     case 'unshipped':

@@ -1,6 +1,24 @@
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from './api';
+import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
+
+type SessionPr = Pick<PRRow, 'number' | 'state'> & { summary: WorkbenchPrLike['summary'] };
+
+export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | null | undefined): SessionPr | null {
+  if (storeRow) return storeRow;
+  const pr = workbench.pr;
+  if (!pr) return null;
+  return {
+    number: pr.number,
+    state: pr.state,
+    summary: {
+      url: pr.url,
+      mergeable: pr.mergeable === 'conflicting' ? 'CONFLICTING' : pr.mergeable === 'mergeable' ? 'MERGEABLE' : 'UNKNOWN',
+      ciStatus: pr.ciStatus === 'success' ? 'passing' : pr.ciStatus === 'failure' ? 'failing_required' : pr.ciStatus === 'pending' ? 'running' : 'none',
+    },
+  };
+}
 
 /**
  * One answer to "what is this session doing, and does it need me?", for the
@@ -35,7 +53,7 @@ export function sessionState(
   workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'archivedAt'>,
   chats: Pick<WorkbenchChat, 'id' | 'status'>[],
   unread: Record<string, true>,
-  pr: Pick<PRRow, 'number' | 'state' | 'summary'> | null
+  pr: SessionPr | null
 ): SessionState {
   if (workbench.status === 'error' || workbench.sandboxState === 'error') {
     return { kind: 'failed', label: 'Failed to start' };

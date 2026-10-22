@@ -59,7 +59,10 @@ export function ChangesTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [showMergedDiff, setShowMergedDiff] = useState(false);
   const loadingRef = useRef(false);
+  const merged = workbench.pr?.state === 'merged';
+  const showChanges = !merged || showMergedDiff;
 
   const refresh = useCallback(async () => {
     if (ops.unavailable || loadingRef.current) return;
@@ -80,22 +83,34 @@ export function ChangesTab({
   useEffect(() => {
     setChanges(null);
     setSelectedPath(null);
+    setShowMergedDiff(false);
   }, [workbench.id]);
 
   useEffect(() => {
-    if (visible && !ops.unavailable) void refresh();
-  }, [visible, turnsEnded, refresh, ops.unavailable]);
+    if (visible && showChanges && !ops.unavailable) void refresh();
+  }, [visible, showChanges, turnsEnded, refresh, ops.unavailable]);
 
   useEffect(() => {
-    if (!visible || ops.unavailable) return undefined;
+    if (!visible || !showChanges || ops.unavailable) return undefined;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, CHANGES_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [visible, refresh, ops.unavailable]);
+  }, [visible, showChanges, refresh, ops.unavailable]);
 
   const files = changes?.files ?? [];
   const selected = files.find((f) => f.path === selectedPath) ?? null;
+
+  if (merged && !showMergedDiff) {
+    return (
+      <div className="space-y-2 p-3 text-xs text-muted-foreground">
+        <p>PR #{workbench.pr?.number} merged. Its changes are in {workbench.baseBranch}.</p>
+        <Button variant="outline" size="sm" onClick={() => setShowMergedDiff(true)}>
+          Show the branch diff anyway
+        </Button>
+      </div>
+    );
+  }
 
   if (ops.unavailable) return <p className="p-3 text-xs text-muted-foreground">{ops.unavailable}</p>;
 

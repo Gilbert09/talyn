@@ -5,7 +5,7 @@ import { useNavigationStore } from '../../../stores/navigation';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useWorkbenchStore } from '../../../stores/workbenches';
 import { SessionStateIcon } from '../WorkbenchBadges';
-import { sessionState } from '../../../lib/sessionState';
+import { sessionPr, sessionState } from '../../../lib/sessionState';
 import { isArchived } from '../workbenchSelectors';
 
 export const RECENT_LIMIT = 8;
@@ -68,7 +68,7 @@ function RecentRow({ workbench, onOpen }: { workbench: Workbench; onOpen: () => 
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const state = sessionState(workbench, chats ?? [], unread, pr ?? null);
+  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr));
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   return (
     <button

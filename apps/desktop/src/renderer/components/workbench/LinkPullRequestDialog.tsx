@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 const stateClasses: Record<WorkbenchPullRequestChoice['state'] | 'draft', string> = {
   draft: 'bg-muted text-muted-foreground',
   open: 'bg-success/15 text-success',
-  merged: 'bg-primary/15 text-primary',
+  merged: 'bg-merged/15 text-merged',
   closed: 'bg-destructive/15 text-destructive',
 };
 

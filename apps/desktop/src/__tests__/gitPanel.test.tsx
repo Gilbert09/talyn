@@ -218,6 +218,49 @@ describe('Checks tab', () => {
 });
 
 describe('Changes tab', () => {
+  it('does not refresh a merged branch while the notice is shown', () => {
+    jest.useFakeTimers();
+    try {
+      const ops = makeOps();
+      render(
+        <ChangesTab
+          workbench={{ ...WB, pr: { number: 42, url: 'https://github.com/acme/app/pull/42', state: 'merged', mergeable: 'unknown', ciStatus: 'none' } }}
+          chat={chat}
+          ops={ops}
+          visible
+          turnsEnded={0}
+          comments={[]}
+          setComments={jest.fn()}
+        />
+      );
+      act(() => jest.advanceTimersByTime(30_000));
+      expect(ops.changes).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows a merged notice and loads the branch diff only after a click', async () => {
+    const ops = makeOps();
+    render(
+      <ChangesTab
+        workbench={{ ...WB, pr: { number: 42, url: 'https://github.com/acme/app/pull/42', state: 'merged', mergeable: 'unknown', ciStatus: 'none' } }}
+        chat={chat}
+        ops={ops}
+        visible
+        turnsEnded={0}
+        comments={[]}
+        setComments={jest.fn()}
+      />
+    );
+    expect(screen.getByText('PR #42 merged. Its changes are in main.')).toBeInTheDocument();
+    expect(ops.changes).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /a\.ts/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show the branch diff anyway' }));
+    expect(await screen.findByRole('button', { name: /a\.ts/ })).toBeInTheDocument();
+    expect(ops.changes).toHaveBeenCalledTimes(1);
+  });
+
   it('a second click on a file row collapses its diff', async () => {
     const ops = makeOps();
     render(
