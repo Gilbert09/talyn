@@ -17,11 +17,13 @@
 export const REST_USAGE_WINDOW_MS = 5 * 60_000;
 
 /**
- * Report an account once its pace reaches this many calls an hour: half of the
- * 5,000 an hour GitHub gives a user. Below that the budget is not at risk and
- * there is nothing for anyone to act on.
+ * Report an account once its pace reaches this many calls an hour: a fifth of
+ * the 5,000 an hour GitHub gives a user. Other tools spend the same budget (the
+ * `gh` CLI, local agents), so Talyn's share can drain it while it stays well
+ * under half. At 2,500 this never logged on 2026-10-22 while the account spent
+ * about 2,700 an hour.
  */
-export const REST_USAGE_REPORT_PER_HOUR = 2_500;
+export const REST_USAGE_REPORT_PER_HOUR = 1_000;
 
 /** Endpoint shapes named in one report line; the rest are summed. */
 const SHAPES_PER_LINE = 10;
