@@ -1,25 +1,35 @@
 import { useEffect, useState } from 'react';
-import type { OpenWorkbenchPullRequest, Workbench } from '@talyn/shared';
+import { Loader2 } from 'lucide-react';
+import type { Workbench, WorkbenchPullRequestChoice } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { linkSessionPullRequest, parsePullRequestNumber } from '../../lib/linkWorkbenchPullRequest';
 import { getWorkbenchBridge } from '../../lib/workbenchBridge';
-import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
-import { Button } from '../ui/button';
+import { Command, CommandInput, CommandItem, CommandList } from '../ui/command';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
-import { Input } from '../ui/input';
+
+const stateClasses: Record<WorkbenchPullRequestChoice['state'] | 'draft', string> = {
+  draft: 'bg-muted text-muted-foreground',
+  open: 'bg-success/15 text-success',
+  merged: 'bg-primary/15 text-primary',
+  closed: 'bg-destructive/15 text-destructive',
+};
 
 export function LinkPullRequestDialog({ workbench, onClose }: { workbench: Workbench; onClose: () => void }) {
-  const [prs, setPrs] = useState<OpenWorkbenchPullRequest[]>([]);
+  const [prs, setPrs] = useState<WorkbenchPullRequestChoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState('');
-  const [input, setInput] = useState('');
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkingNumber, setLinkingNumber] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [showClosed, setShowClosed] = useState(false);
+
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError(null);
     void api.workbenches
-      .openPullRequests(workbench.id)
+      .openPullRequests(workbench.id, { state: showClosed ? 'all' : 'open' })
       .then((rows) => {
         if (active) setPrs(rows);
       })
@@ -32,94 +42,112 @@ export function LinkPullRequestDialog({ workbench, onClose }: { workbench: Workb
     return () => {
       active = false;
     };
-  }, [workbench.id]);
+  }, [workbench.id, showClosed]);
 
   const link = async (number: number) => {
-    setBusy(true);
+    if (linkingNumber !== null) return;
+    setLinkError(null);
+    setLinkingNumber(number);
     try {
       const updated = await linkSessionPullRequest(api.workbenches, getWorkbenchBridge(), workbench, number);
       useWorkbenchStore.getState().upsertWorkbench(updated);
       onClose();
     } catch (err) {
-      toast.error('Could not link the pull request', err instanceof Error ? err.message : undefined);
+      setLinkError(err instanceof Error ? err.message : 'Could not link the pull request.');
       const current = await api.workbenches.get(workbench.id).catch(() => null);
       if (current) useWorkbenchStore.getState().upsertWorkbench(current);
     } finally {
-      setBusy(false);
+      setLinkingNumber(null);
     }
   };
-  const number = parsePullRequestNumber(input, workbench.repoFullName);
+
+  const number = parsePullRequestNumber(search, workbench.repoFullName);
   const visible = prs.filter((pr) =>
-    `${pr.number} ${pr.title} ${pr.headRef} ${pr.author}`.toLowerCase().includes(filter.toLowerCase())
+    pr.number !== number && `${pr.number} ${pr.title} ${pr.headRef} ${pr.author}`.toLowerCase().includes(search.toLowerCase())
   );
+  const badge = (pr: WorkbenchPullRequestChoice) => {
+    const state = pr.draft && pr.state === 'open' ? 'draft' : pr.state;
+    return (
+      <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ${stateClasses[state]}`}>
+        {state[0].toUpperCase() + state.slice(1)}
+      </span>
+    );
+  };
+
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose();
-      }}
-    >
-      <DialogContent onClose={busy ? undefined : onClose} className="app-region-no-drag">
-        <DialogHeader>
+    <Dialog open onOpenChange={(open) => { if (!open && linkingNumber === null) onClose(); }}>
+      <DialogContent
+        onClose={linkingNumber === null ? onClose : undefined}
+        onKeyDown={(event) => { if (event.key === 'Escape' && linkingNumber === null) onClose(); }}
+        className="app-region-no-drag max-w-lg overflow-hidden"
+      >
+        <DialogHeader className="mb-3 gap-1 text-left">
           <DialogTitle>Link pull request</DialogTitle>
+          <p className="text-xs text-muted-foreground">{workbench.repoFullName}</p>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">{workbench.repoFullName}</p>
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (number && !busy) void link(number);
-          }}
-        >
-          <Input
-            aria-label="PR number or URL"
-            placeholder="PR number or URL"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            disabled={busy}
+        <Command label="Search pull requests" shouldFilter={false} className="border border-border">
+          <CommandInput
+            autoFocus
+            aria-label="Search pull requests"
+            placeholder="Search, or paste a PR number or URL"
+            value={search}
+            onValueChange={(value) => { setSearch(value); setLinkError(null); }}
+            disabled={linkingNumber !== null}
           />
-          <Button type="submit" disabled={!number || busy}>
-            Link
-          </Button>
-        </form>
-        {input && !number && (
-          <p className="text-sm text-muted-foreground">Enter a PR number or a URL for this repository.</p>
-        )}
-        <Input
-          aria-label="Filter pull requests"
-          placeholder="Filter pull requests"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        />
-        <div className="max-h-72 overflow-y-auto" aria-busy={loading || busy}>
-          {loading ? (
-            <p className="text-sm">Loading…</p>
-          ) : loadError ? (
-            <p role="alert" className="text-sm text-destructive">
-              Could not load the open pull requests: {loadError}. You can still enter a number or URL.
-            </p>
-          ) : visible.length === 0 ? (
-            <p className="text-sm">{filter && prs.length > 0 ? 'No pull requests match.' : 'No open pull requests found.'}</p>
-          ) : (
-            visible.map((pr) => (
-              <button
-                key={pr.number}
-                type="button"
-                disabled={busy}
-                onClick={() => void link(pr.number)}
-                className="block w-full rounded p-2 text-left hover:bg-accent disabled:opacity-50"
+          {linkError && <p role="alert" className="px-3 py-2 text-xs text-destructive">{linkError}</p>}
+          <label className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(event) => setShowClosed(event.target.checked)}
+              disabled={linkingNumber !== null}
+              className="accent-primary"
+            />
+            Show merged and closed
+          </label>
+          <CommandList className="min-h-40 max-h-72" aria-busy={loading || linkingNumber !== null}>
+            {number !== null && (
+              <CommandItem
+                value={`link-${number}`}
+                disabled={linkingNumber !== null && linkingNumber !== number}
+                onSelect={() => void link(number)}
+                className="text-sm"
               >
-                <span className="text-sm">
-                  #{pr.number} {pr.title}
-                </span>
-                {pr.draft && <span className="ml-2 rounded bg-muted px-1 text-xs">Draft</span>}
-                <span className="block text-xs text-muted-foreground">
-                  {pr.headRef} · {pr.author}
-                </span>
-              </button>
-            ))
-          )}
-        </div>
+                {linkingNumber === number && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="Linking" />}
+                Link #{number}
+              </CommandItem>
+            )}
+            {loading ? (
+              <p className="px-3 py-5 text-center text-xs text-muted-foreground">Loading…</p>
+            ) : loadError ? (
+              <p role="alert" className="px-3 py-3 text-xs text-destructive">
+                Could not load pull requests: {loadError}. You can still enter a number or URL.
+              </p>
+            ) : visible.length === 0 && number === null ? (
+              <p className="px-3 py-5 text-center text-xs text-muted-foreground">
+                {search && prs.length > 0 ? 'No pull requests match.' : 'No pull requests found.'}
+              </p>
+            ) : (
+              visible.map((pr) => (
+                <CommandItem
+                  key={pr.number}
+                  value={`pr-${pr.number}`}
+                  disabled={linkingNumber !== null && linkingNumber !== pr.number}
+                  onSelect={() => void link(pr.number)}
+                  className="block py-1.5 text-sm"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    {linkingNumber === pr.number && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-label="Linking" />}
+                    <span className="shrink-0 tabular-nums text-muted-foreground">#{pr.number}</span>
+                    <span className="min-w-0 flex-1 truncate">{pr.title}</span>
+                    {badge(pr)}
+                  </span>
+                  <span className="block truncate pl-7 text-xs text-muted-foreground">{pr.headRef} · {pr.author}</span>
+                </CommandItem>
+              ))
+            )}
+          </CommandList>
+        </Command>
       </DialogContent>
     </Dialog>
   );

@@ -29,7 +29,7 @@ import {
   type CreateWorkbenchPullRequestInput,
   type CreateWorkbenchPullRequestResult,
   type LinkWorkbenchPullRequestResult,
-  type OpenWorkbenchPullRequest,
+  type WorkbenchPullRequestChoice,
 } from '@talyn/shared';
 import { GitHubApiError, GitHubNotConnectedError, githubService, type GitHubCommitPullRequest } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
@@ -263,11 +263,12 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
         defaultBranch: row.baseBranch,
       },
       number,
+      allowClosed: strict,
     });
     if (watched.ok) {
       return (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
     }
-    if (strict) throw new WorkbenchError('Open pull request not found in this repository.', 404, 'pr_not_found');
+    if (strict) throw new WorkbenchError('Pull request not found in this repository.', 404, 'pr_not_found');
   } catch (err) {
     if (strict) throw err;
     console.warn(`[workbench] tracking #${number} for ${row.id} failed:`, err);
@@ -414,16 +415,20 @@ async function adoptFromSandbox(row: WorkbenchRow): Promise<{ number: number; ur
   }
 }
 
-export async function openPullRequestsForWorkbench(row: WorkbenchRow): Promise<OpenWorkbenchPullRequest[]> {
+export async function openPullRequestsForWorkbench(
+  row: WorkbenchRow,
+  state: 'open' | 'all' = 'open',
+): Promise<WorkbenchPullRequestChoice[]> {
   const [owner, repo] = row.repoFullName.split('/');
   const prs = await githubService.listPullRequests(row.workspaceId, owner, repo, {
-    state: 'open', per_page: 50, sort: 'updated', direction: 'desc',
+    state, per_page: 50, sort: 'updated', direction: 'desc',
   });
-  return prs.filter((pr) => pr.state === 'open')
+  return prs.filter((pr) => state === 'all' || pr.state === 'open')
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50)
     .map((pr) => ({
       number: pr.number, title: pr.title, headRef: pr.head.ref,
       author: pr.user.login, updatedAt: pr.updated_at, draft: pr.draft,
+      state: pr.merged_at ? 'merged' : pr.state,
     }));
 }
 
@@ -444,20 +449,21 @@ export async function linkWorkbenchPullRequest(row: WorkbenchRow, number: unknow
     throw new WorkbenchError('Enter a pull request number.', 400, 'bad_number');
   }
   const [owner, repo] = row.repoFullName.split('/');
-  const missing = () => new WorkbenchError('Open pull request not found in this repository.', 404, 'pr_not_found');
+  const missing = () => new WorkbenchError('Pull request not found in this repository.', 404, 'pr_not_found');
   const pr = await githubService.getPullRequest(row.workspaceId, owner, repo, number).catch((err: unknown) => {
     if (err instanceof GitHubApiError && err.status === 404) throw missing();
     throw err;
   });
-  if (pr.state !== 'open' || pr.base.repo?.full_name.toLowerCase() !== row.repoFullName.toLowerCase()) throw missing();
-  if (!isValidBranchName(pr.head.ref)) throw new WorkbenchError('The PR branch name is not valid.', 409, 'bad_branch');
+  if (pr.base.repo?.full_name.toLowerCase() !== row.repoFullName.toLowerCase()) throw missing();
+  const isOpen = pr.state === 'open' && !pr.merged_at;
+  if (isOpen && !isValidBranchName(pr.head.ref)) throw new WorkbenchError('The PR branch name is not valid.', 409, 'bad_branch');
   const checkout = {
     branch: pr.head.ref,
     remoteRef: pr.head.repo?.full_name.toLowerCase() === row.repoFullName.toLowerCase()
       ? `refs/heads/${pr.head.ref}` : `refs/pull/${number}/head`,
   };
   let current = row;
-  const changesBranch = pr.head.ref !== row.branch;
+  const changesBranch = isOpen && pr.head.ref !== row.branch;
   if (changesBranch && (await listChats(row.id)).some((chat) => chat.status === 'running')) {
     throw new WorkbenchError('Wait for the current turn to finish first.', 409, 'turn_running');
   }

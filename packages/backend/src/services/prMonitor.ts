@@ -1613,6 +1613,7 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string;
     repo: WatchedRepo;
     number: number;
+    allowClosed?: boolean;
   }): Promise<
     | { ok: true; rowId: string; alreadyTracked: boolean; summary: PRSummary }
     | { ok: false; reason: 'not_found' | 'not_open'; summary: PRSummary | null }
@@ -1630,9 +1631,9 @@ class PRMonitorService extends EventEmitter {
     });
     const summary = result?.pr ?? null;
     if (!summary) return { ok: false, reason: 'not_found', summary: null };
-    // The list holds open rows only (the desktop store drops any non-open row
-    // on the WS echo), so watching a merged PR would silently do nothing.
-    if (summary.state !== 'open' || summary.mergedAt) {
+    // The general PR list holds open rows only. An explicit session link can
+    // track a closed PR because the session reads its row directly.
+    if (!opts.allowClosed && (summary.state !== 'open' || summary.mergedAt)) {
       return { ok: false, reason: 'not_open', summary };
     }
 

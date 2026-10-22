@@ -19,20 +19,19 @@ export async function linkSessionPullRequest(
   workbench: Workbench,
   number: number
 ): Promise<Workbench> {
-  if (workbench.runtime === 'local' && workbench.deviceId && workbench.deviceId !== getDeviceId()) {
-    throw new Error('This session lives on another computer. Open it there.');
-  }
-  if (workbench.runtime === 'local' && (!bridge || !workbench.localPath)) {
-    throw new Error('This session has no local worktree on this device.');
-  }
   const result = await api.linkPullRequest(workbench.id, number);
   if (!result.needsCheckout) return result.workbench;
-  const path = workbench.localPath!;
   try {
-    const status = await bridge!.exec(path, [workingTreeStatus()]);
+    if (workbench.deviceId && workbench.deviceId !== getDeviceId()) {
+      throw new Error('This session lives on another computer. Open it there.');
+    }
+    if (!bridge || !workbench.localPath) {
+      throw new Error('This session has no local worktree on this device.');
+    }
+    const status = await bridge.exec(workbench.localPath, [workingTreeStatus()]);
     if (status.exitCode !== 0) throw new Error('Could not read the git status.');
     if (status.stdout.trim()) throw new Error('Commit or discard the changes in this session first.');
-    const checked = await bridge!.exec(path, pullRequestCheckoutSteps(result.needsCheckout));
+    const checked = await bridge.exec(workbench.localPath, pullRequestCheckoutSteps(result.needsCheckout));
     if (checked.exitCode !== 0) throw new Error('Could not check out the PR branch.');
   } catch (err) {
     await api.unlinkPullRequest(workbench.id);

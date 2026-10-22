@@ -64,7 +64,12 @@ export function workbenchPullRequestRoutes(): Router {
   });
 
   const handlers = [
-    ['get', '/:id/pull-requests/open', (row: WorkbenchRow) => openPullRequestsForWorkbench(row)],
+    ['get', '/:id/pull-requests/open', (row: WorkbenchRow, req: Request) => {
+      if (req.query.state !== undefined && req.query.state !== 'open' && req.query.state !== 'all') {
+        throw new WorkbenchError('Choose open or all pull requests.', 400, 'bad_state');
+      }
+      return openPullRequestsForWorkbench(row, req.query.state === 'all' ? 'all' : 'open');
+    }],
     ['post', '/:id/pull-request/link', (row: WorkbenchRow, req: Request) => linkWorkbenchPullRequest(row, req.body?.number)],
     ['post', '/:id/pull-request/unlink', (row: WorkbenchRow) => unlinkWorkbenchPullRequest(row)],
   ] as const;

@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Link merged and closed pull requests to sessions (2026-10-22)
+
+The session link route accepts open, merged, and closed PRs from its repository.
+It tracks each PR with its real state and merge time.
+Open PRs keep their branch checkout rules. Closed PRs leave the session branch and worktree unchanged.
+The link dialog now has one search field, a filter for closed PRs, and keyboard selection.
+Link errors appear in the dialog so the user can try again.
+
 ## Images in sandbox sessions (2026-10-21)
 
 The desktop can upload pasted, dropped, and selected images to a ready sandbox.

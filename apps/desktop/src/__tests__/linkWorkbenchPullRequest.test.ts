@@ -75,6 +75,24 @@ describe('linkSessionPullRequest', () => {
     expect(api.update).not.toHaveBeenCalled();
   });
 
+  it.each(['merged', 'closed'] as const)('links a %s PR without local git work', async (state) => {
+    const { exec, api } = setup();
+    const linked = { ...wb, pullRequestId: 'pr1', pr: { number: 7, state } } as Workbench;
+    api.linkPullRequest.mockResolvedValue({ workbench: linked });
+    const result = await linkSessionPullRequest(api, { exec }, wb, 7);
+    expect(result).toBe(linked);
+    expect(exec).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
+  });
+
+  it('links a merged PR without a local worktree', async () => {
+    const { api } = setup();
+    const linked = { ...wb, pullRequestId: 'pr1' } as Workbench;
+    api.linkPullRequest.mockResolvedValue({ workbench: linked });
+    await expect(linkSessionPullRequest(api, null, { ...wb, localPath: null }, 7)).resolves.toBe(linked);
+    expect(api.unlinkPullRequest).not.toHaveBeenCalled();
+  });
+
   it('links sandbox sessions without a local bridge', async () => {
     const { api } = setup();
     api.linkPullRequest.mockResolvedValue({ workbench: wb });
@@ -85,7 +103,7 @@ describe('linkSessionPullRequest', () => {
   it('refuses a local session without its bridge', async () => {
     const { api } = setup();
     await expect(linkSessionPullRequest(api, null, wb, 7)).rejects.toThrow('no local worktree');
-    expect(api.linkPullRequest).not.toHaveBeenCalled();
+    expect(api.unlinkPullRequest).toHaveBeenCalledWith('wb1');
   });
 });
 
