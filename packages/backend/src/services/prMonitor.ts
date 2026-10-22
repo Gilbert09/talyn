@@ -30,6 +30,7 @@ import {
   QUEUE_RESET_COLUMNS,
 } from './mergeQueueBroadcast.js';
 import { TickGuard } from './tickGuard.js';
+import { GitHubRateLimitError } from './githubRateGate.js';
 import { describeError } from './debugBus.js';
 
 interface WatchedRepo {
@@ -70,8 +71,47 @@ interface WorkspaceDiscovery {
   repos: WatchedRepo[];
   /** Per repository id. A repo missing here searches again in pass 2. */
   searches: Map<string, RelationshipSearch>;
+  /** Repos pass 1 could not search or fetch. */
+  failures: RefreshFailure[];
   newPrs: number;
   ms: number;
+}
+
+interface RefreshFailure {
+  repo: string;
+  error: unknown;
+}
+
+/** What a user Refresh found by the time it answered, for the button to report. */
+export interface RefreshOutcome {
+  repos: number;
+  failedRepos: number;
+  /** A sentence for a person about the first failure, when there was one. */
+  failure: string | null;
+}
+
+/**
+ * The reason a Refresh failed, in words for the person who pressed it. A rate
+ * limit says when to try again, because that is the one thing they can act on.
+ * Not the cause chain: that is for the logs, and this goes in an API response.
+ */
+export function describeRefreshFailure(failure: RefreshFailure): string {
+  const { error } = failure;
+  if (error instanceof GitHubRateLimitError) {
+    const minutes = Math.max(1, Math.ceil(error.retryAfterMs / 60_000));
+    return `GitHub is rate-limiting your account. Try again in about ${minutes} min.`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return `${failure.repo}: ${message}`;
+}
+
+export function refreshOutcome(discoveries: Array<{ repos: unknown[]; failures: RefreshFailure[] }>): RefreshOutcome {
+  const failures = discoveries.flatMap((d) => d.failures);
+  return {
+    repos: discoveries.reduce((n, d) => n + d.repos.length, 0),
+    failedRepos: failures.length,
+    failure: failures.length > 0 ? describeRefreshFailure(failures[0]) : null,
+  };
 }
 
 export interface WorkspacePollResult {
@@ -454,6 +494,7 @@ class PRMonitorService extends EventEmitter {
     const repos = await this.getWatchedRepos(workspaceId);
     const batched = await this.searchRelationshipsBatched(workspaceId, repos, login);
     const searches = new Map<string, RelationshipSearch>();
+    const failures: RefreshFailure[] = [];
     let newPrs = 0;
     for (const repo of repos) {
       try {
@@ -472,12 +513,13 @@ class PRMonitorService extends EventEmitter {
           { authoredSet: found.authoredSet, pendingSet: found.pendingSet },
           { streaming: true }
         );
-      } catch {
+      } catch (err) {
         // Pass 2 searches this repo again and reports what is wrong with it.
         searches.delete(repo.id);
+        failures.push({ repo: repo.fullName, error: err });
       }
     }
-    return { login, repos, searches, newPrs, ms: Date.now() - startedAt };
+    return { login, repos, searches, failures, newPrs, ms: Date.now() - startedAt };
   }
 
   private async pollWorkspace(
@@ -1516,7 +1558,7 @@ class PRMonitorService extends EventEmitter {
    */
   async forcePollWorkspaces(
     workspaceIds: string[],
-    opts: { onListReady?: () => void } = {}
+    opts: { onListReady?: (outcome: RefreshOutcome) => void } = {}
   ): Promise<void> {
     if (workspaceIds.length === 0) return;
     if (!(await this.drainInFlightTick())) return;
@@ -1532,7 +1574,7 @@ class PRMonitorService extends EventEmitter {
           console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} refresh discovery failed:`, describeError(err));
         }
       }
-      opts.onListReady?.();
+      opts.onListReady?.(refreshOutcome([...discoveries.values()]));
       for (const workspaceId of workspaceIds) {
         try {
           const discovery = discoveries.get(workspaceId);
@@ -1555,7 +1597,15 @@ class PRMonitorService extends EventEmitter {
    * across every tenant's repos (that's what the unscoped {@link forcePoll}
    * does, which is why it's background/test-only).
    */
-  async forcePollForOwner(ownerId: string, opts: { untilListReady?: boolean } = {}): Promise<void> {
+  /**
+   * Resolves with what pass 1 found when `untilListReady`, or with null when
+   * the Refresh did not run (another poll held the guard past the drain window,
+   * or there was nothing to poll).
+   */
+  async forcePollForOwner(
+    ownerId: string,
+    opts: { untilListReady?: boolean } = {}
+  ): Promise<RefreshOutcome | null> {
     // Off the request's owner-scoped transaction, onto the pool, as every other
     // poll runs. The upserts reach the DB through `getDbClient()`, which inside
     // a request IS that transaction: one Refresh held a row lock on every PR it
@@ -1566,24 +1616,32 @@ class PRMonitorService extends EventEmitter {
     return runWithoutScope(() => this.forcePollForOwnerOnPool(ownerId, opts));
   }
 
-  private async forcePollForOwnerOnPool(ownerId: string, opts: { untilListReady?: boolean }): Promise<void> {
+  private async forcePollForOwnerOnPool(
+    ownerId: string,
+    opts: { untilListReady?: boolean }
+  ): Promise<RefreshOutcome | null> {
     const connected = new Set(githubService.getConnectedWorkspaces());
     const owned = await this.db
       .select({ id: workspacesTable.id })
       .from(workspacesTable)
       .where(eq(workspacesTable.ownerId, ownerId));
     const ids = owned.map((r) => r.id).filter((id) => connected.has(id));
-    if (!opts.untilListReady) return this.forcePollWorkspaces(ids);
+    if (ids.length === 0) return { repos: 0, failedRepos: 0, failure: null };
+    if (!opts.untilListReady) {
+      let outcome: RefreshOutcome | null = null;
+      await this.forcePollWorkspaces(ids, { onListReady: (o) => (outcome = o) });
+      return outcome;
+    }
     // Answer once the new PRs are on the list. The rest of the refresh updates
     // rows the client already holds, and reaches it as `pull_request:updated`.
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<RefreshOutcome | null>((resolve, reject) => {
       let ready = false;
       this.forcePollWorkspaces(ids, {
-        onListReady: () => {
+        onListReady: (outcome) => {
           ready = true;
-          resolve();
+          resolve(outcome);
         },
-      }).then(resolve, (err: unknown) => {
+      }).then(() => resolve(null), (err: unknown) => {
         if (!ready) reject(err);
         else console.error('PR monitor: forced poll failed after the list was ready:', describeError(err));
       });

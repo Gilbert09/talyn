@@ -5,8 +5,11 @@ import {
   needsDirectRequestSearch,
   relationshipSearch,
   describeForcedPoll,
+  describeRefreshFailure,
+  refreshOutcome,
   BATCH_SEARCH_MAX_QUERY_BYTES,
 } from '../services/prMonitor.js';
+import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { githubService, repoKeyFromApiUrl } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
 import { _resetPrFocus } from '../services/prFocus.js';
@@ -387,6 +390,37 @@ describe('prMonitor — Refresh puts new PRs on the list first', () => {
     expect(rows.map((r) => r.number).sort()).toEqual([1, 2]);
   });
 
+  it('reports a refresh that reached GitHub for no repo', async () => {
+    vi.spyOn(githubService, 'searchPullRequestNumbersByRepo').mockRejectedValue(
+      new GitHubRateLimitError('GitHub rate-limited; retry in 240s', 240_000)
+    );
+    vi.spyOn(githubService, 'searchPullRequestNumbers').mockRejectedValue(
+      new GitHubRateLimitError('GitHub rate-limited; retry in 240s', 240_000)
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGraphql();
+
+    const outcome = await prMonitorService.forcePollForOwner(TEST_USER_ID, { untilListReady: true });
+
+    expect(outcome).toEqual({
+      repos: 2,
+      failedRepos: 2,
+      failure: 'GitHub is rate-limiting your account. Try again in about 4 min.',
+    });
+    await prMonitorService.forcePollForOwner(TEST_USER_ID); // let pass 2 finish
+  });
+
+  it('reports a clean refresh', async () => {
+    mockBatchedSearch({ authored: { 'acme/widgets': [1] } });
+    mockGraphql();
+
+    const outcome = await prMonitorService.forcePollForOwner(TEST_USER_ID, { untilListReady: true });
+
+    expect(outcome).toEqual({ repos: 2, failedRepos: 0, failure: null });
+    await prMonitorService.forcePollForOwner(TEST_USER_ID);
+  });
+
   it('still answers when pass 1 fails for a repo, and pass 2 searches it again', async () => {
     mockBatchedSearch({ authored: { 'acme/widgets': [1], 'acme/gadgets': [2] } });
     let failGadgetsOnce = true;
@@ -546,5 +580,33 @@ describe('describeForcedPoll', () => {
     ).toBe(
       'PR monitor: forced poll of workspace abcdefgh: list ready in 6.5s (3 new PRs), then refresh took 40.0s (1 repos, searches 0.0s, slowest: a/1 40.0s)'
     );
+  });
+});
+
+describe('describeRefreshFailure', () => {
+  it.each<[string, unknown, string]>([
+    ['a short rate limit rounds up to a minute', new GitHubRateLimitError('x', 5_000), 'GitHub is rate-limiting your account. Try again in about 1 min.'],
+    ['a long rate limit', new GitHubRateLimitError('x', 16 * 60_000 + 1), 'GitHub is rate-limiting your account. Try again in about 17 min.'],
+    ['any other error names the repo', new Error('HTTP 502'), 'acme/widgets: HTTP 502'],
+    ['a thrown string', 'boom', 'acme/widgets: boom'],
+  ])('%s', (_label, error, expected) => {
+    expect(describeRefreshFailure({ repo: 'acme/widgets', error })).toBe(expected);
+  });
+});
+
+describe('refreshOutcome', () => {
+  it.each<[string, Array<{ repos: unknown[]; failures: Array<{ repo: string; error: unknown }> }>, ReturnType<typeof refreshOutcome>]>([
+    ['no workspaces', [], { repos: 0, failedRepos: 0, failure: null }],
+    ['clean', [{ repos: [1, 2], failures: [] }], { repos: 2, failedRepos: 0, failure: null }],
+    [
+      'failures across workspaces, first one described',
+      [
+        { repos: [1, 2], failures: [{ repo: 'a/b', error: new Error('HTTP 502') }] },
+        { repos: [3], failures: [{ repo: 'c/d', error: new Error('HTTP 504') }] },
+      ],
+      { repos: 3, failedRepos: 2, failure: 'a/b: HTTP 502' },
+    ],
+  ])('%s', (_label, discoveries, expected) => {
+    expect(refreshOutcome(discoveries)).toEqual(expected);
   });
 });

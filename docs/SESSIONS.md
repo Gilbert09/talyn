@@ -2,6 +2,46 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A spent REST budget paused every GitHub call, and Refresh said nothing (2026-10-22)
+
+Tom's PR PostHog/secrets#77 opened at 11:34 and did not reach the list, even
+after a Refresh. His `core` REST budget had run out at about 11:33. A REST
+403 with `x-ratelimit-remaining: 0` set the account's rate gate to `'all'`, so
+GraphQL (4,499 points left) and search (30 left) were refused too. The
+webhook refresh for #77, one GraphQL call, was among them. The Refresh failed on
+all 13 repos in 0.3 s and the button still reported success.
+
+**The gate now pauses only the budget that ran out.** `parseRateLimitResponse`
+returns a `scope`: `x-ratelimit-resource` names a primary budget (`core` →
+`'rest'`, `search` → `'search'`, `graphql` → `'graphql'`). A secondary limit
+(429, `retry-after`, or the "secondary rate limit" body) is still `'all'`, and so
+is a primary limit with a missing or unfamiliar resource name. `search` is a new
+scope because `/search/*` is REST on the wire with its own budget.
+`apiKindForEndpoint` picks the kind in `apiRequest`. Settings → Developer still
+shows only the REST and GraphQL pauses, not search.
+
+**A Refresh now says when it did not work.** Pass 1 records each repo it could
+not search or fetch. `POST /repositories/poll` answers 503 with a sentence when
+it reached GitHub for NO repo (a rate limit says when to try again), 200 with
+`failedRepos` and the first reason when some failed, and `skipped: true` when
+another poll held the guard. Both apps show it as a toast.
+
+**What spends the budget is not known yet.** Measured at 11:50–11:52: about 75
+REST calls a minute, about 4,500 an hour. Reading the code ranked the merge
+queue's group walks first (`rerequest_failed_checks` and `fire_fix_run` repeat
+REST with no cooldown when the result is a no-op or a task-limit deferral), then
+the webhook access index (`canAccessRepository`, cached 60 s, about 750 an hour
+for 13 repos), then the auto-keep watcher's `readFailingChecks` before a
+deferred dispatch. `githubRestUsage.ts` now logs, every 5 minutes, the top REST
+endpoint shapes for any account on pace for half its hourly budget
+(`[github-rest] …`). Fix the real top consumer from that line, not from the
+ranking above.
+
+Two related decisions are Tom's and were left alone. The access cache's 60 s
+lifetime is a security bound (a revoked permission must stop admitting webhook
+data within a minute). And while REST is paused, `canAccessRepository` fails as
+"unavailable", so every webhook for the account is dropped until the pause ends.
+
 ## Refresh ran past the client timeout after a restart (2026-10-22)
 
 After a production restart, Tom pressed Refresh. `POST /repositories/poll` ran

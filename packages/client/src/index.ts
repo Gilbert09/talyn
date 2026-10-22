@@ -1508,8 +1508,19 @@ export const repositories = {
     request<WatchedRepo>('POST', '/repositories', { workspaceId, owner, repo }),
   remove: (id: string) =>
     request<void>('DELETE', `/repositories/${id}`),
+  /**
+   * The Refresh button. Answers once the new PRs are written; throws when it
+   * reached GitHub for none of the repos. `failedRepos` counts the repos it
+   * could not refresh, and `failure` says why for the first one.
+   */
   forcePoll: () =>
-    request<{ message: string }>('POST', '/repositories/poll'),
+    request<{
+      message: string;
+      skipped?: boolean;
+      repos?: number;
+      failedRepos?: number;
+      failure?: string | null;
+    }>('POST', '/repositories/poll'),
 };
 
 // Debug tooling (developer-only internals view)

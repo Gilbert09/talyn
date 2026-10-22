@@ -5,6 +5,10 @@ import {
   parseRateLimitResponse,
   graphqlPrimaryLimitResetMs,
   MAX_GATE_WAIT_MS,
+  scopeForResource,
+  apiKindForEndpoint,
+  type ApiKind,
+  type GateScope,
 } from '../services/githubRateGate.js';
 import { debugBus } from '../services/debugBus.js';
 
@@ -224,5 +228,68 @@ describe('scoped gate — REST vs GraphQL budgets are independent', () => {
     vi.setSystemTime(NOW + 6_000); // 'all' expired, 'graphql' still live
     expect(githubRateGate.isBlocked('acct', 'rest')).toBe(false);
     expect(githubRateGate.isBlocked('acct', 'graphql')).toBe(true);
+  });
+});
+
+describe('which budget a rate limit pauses', () => {
+  it.each<[string, number, Record<string, string>, string, GateScope]>([
+    // A spent primary budget pauses only itself, named by x-ratelimit-resource.
+    ['a spent core budget', 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-resource': 'core' }, '', 'rest'],
+    ['a spent search budget', 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-resource': 'search' }, '', 'search'],
+    ['a spent GraphQL budget over HTTP', 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-resource': 'graphql' }, '', 'graphql'],
+    // Not knowing which budget ran out pauses everything, as before scopes.
+    ['a spent budget with no resource header', 403, { 'x-ratelimit-remaining': '0' }, '', 'all'],
+    ['a spent budget GitHub names unfamiliarly', 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-resource': 'code_search' }, '', 'all'],
+    // A secondary limit is one throttle across every API, whatever else it says.
+    ['a 429', 429, { 'x-ratelimit-resource': 'core' }, '', 'all'],
+    ['a retry-after', 403, { 'retry-after': '30', 'x-ratelimit-resource': 'core' }, '', 'all'],
+    ['a secondary-limit body', 403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-resource': 'core' }, 'You have exceeded a secondary rate limit.', 'all'],
+  ])('%s → %s', (_label, status, headers, body, expected) => {
+    const rl = parseRateLimitResponse(resp(status, headers), body, NOW);
+    expect(rl.isRateLimited).toBe(true);
+    expect(rl.scope).toBe(expected);
+  });
+
+  it.each<[string | null, GateScope]>([
+    ['core', 'rest'],
+    ['search', 'search'],
+    ['graphql', 'graphql'],
+    ['integration_manifest', 'all'],
+    ['', 'all'],
+    [null, 'all'],
+  ])('scopeForResource(%s) → %s', (resource, expected) => {
+    expect(scopeForResource(resource)).toBe(expected);
+  });
+
+  it.each<[string, ApiKind]>([
+    ['/search/issues?q=x', 'search'],
+    ['/search/code?q=x', 'search'],
+    ['/repos/acme/widgets/pulls/1', 'rest'],
+    ['/user', 'rest'],
+    ['/repos/acme/search/pulls', 'rest'],
+  ])('apiKindForEndpoint(%s) → %s', (endpoint, expected) => {
+    expect(apiKindForEndpoint(endpoint)).toBe(expected);
+  });
+});
+
+describe('scoped gate — each budget pauses only its own calls', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each<[GateScope, Record<ApiKind, boolean>]>([
+    ['rest', { rest: true, search: false, graphql: false }],
+    ['search', { rest: false, search: true, graphql: false }],
+    ['graphql', { rest: false, search: false, graphql: true }],
+    ['all', { rest: true, search: true, graphql: true }],
+  ])('a %s block', (scope, expected) => {
+    githubRateGate.block('acct', NOW + 60_000, 'test', scope);
+    for (const kind of ['rest', 'search', 'graphql'] as const) {
+      expect(githubRateGate.isBlocked('acct', kind)).toBe(expected[kind]);
+    }
   });
 });
