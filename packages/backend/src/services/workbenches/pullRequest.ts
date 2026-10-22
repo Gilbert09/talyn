@@ -17,23 +17,27 @@ import {
   parseSha,
   PR_TITLE_MAX,
   prCommitMessage,
+  pullRequestCheckoutSteps,
   pullRequestOutcomeEvent,
   pushHeadStep,
   remoteBranchHeadStep,
   remoteHeadContainedSteps,
   signedPublishStep,
+  toShellScript,
   workingTreeStatus,
   type AdoptWorkbenchPullRequestResult,
   type CreateWorkbenchPullRequestInput,
   type CreateWorkbenchPullRequestResult,
+  type LinkWorkbenchPullRequestResult,
+  type OpenWorkbenchPullRequest,
 } from '@talyn/shared';
 import { GitHubApiError, GitHubNotConnectedError, githubService, type GitHubCommitPullRequest } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
-import { emitWorkbenchUpdated } from './emit.js';
+import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
-import { linkPullRequest, publicWorkbench } from './prLink.js';
-import { recordWorkbenchEvent, refreshSandboxCredentials, runGitSteps } from './sandboxRuntime.js';
-import { updateWorkbench, type WorkbenchRow } from './store.js';
+import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
+import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps } from './sandboxRuntime.js';
+import { appendEvents, listChats, updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
  * Create PR: the chat's agent writes the words in a Create PR turn, and Talyn
@@ -245,7 +249,7 @@ export async function createWorkbenchPullRequest(
  * link it. Best effort: the PR is open either way, and the next GET or turn
  * links it by branch.
  */
-async function trackAndLink(row: WorkbenchRow, number: number): Promise<WorkbenchRow> {
+async function trackAndLink(row: WorkbenchRow, number: number, strict = false): Promise<WorkbenchRow> {
   const [owner, repo] = row.repoFullName.split('/');
   try {
     const watched = await prMonitorService.watchPullRequest({
@@ -263,7 +267,9 @@ async function trackAndLink(row: WorkbenchRow, number: number): Promise<Workbenc
     if (watched.ok) {
       return (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
     }
+    if (strict) throw new WorkbenchError('Open pull request not found in this repository.', 404, 'pr_not_found');
   } catch (err) {
+    if (strict) throw err;
     console.warn(`[workbench] tracking #${number} for ${row.id} failed:`, err);
   }
   return linkPullRequest(row).catch(() => row);
@@ -406,4 +412,86 @@ async function adoptFromSandbox(row: WorkbenchRow): Promise<{ number: number; ur
     console.warn(`[workbench] looking for a PR the agent opened for ${row.id} failed:`, err);
     return null;
   }
+}
+
+export async function openPullRequestsForWorkbench(row: WorkbenchRow): Promise<OpenWorkbenchPullRequest[]> {
+  const [owner, repo] = row.repoFullName.split('/');
+  const prs = await githubService.listPullRequests(row.workspaceId, owner, repo, {
+    state: 'open', per_page: 50, sort: 'updated', direction: 'desc',
+  });
+  return prs.filter((pr) => pr.state === 'open')
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50)
+    .map((pr) => ({
+      number: pr.number, title: pr.title, headRef: pr.head.ref,
+      author: pr.user.login, updatedAt: pr.updated_at, draft: pr.draft,
+    }));
+}
+
+async function recordPrLink(row: WorkbenchRow, number: number, linked: boolean): Promise<void> {
+  recordWorkbenchEvent(row, linked ? 'pr_link' : 'pr_unlink', `${linked ? 'Linked' : 'Unlinked'} PR #${number}`);
+  for (const chat of (await listChats(row.id)).filter((item) => !item.closedAt)) {
+    const events = await appendEvents(chat.id, [{
+      turn: chat.turnCount, event: { type: 'talyn_pr_link', number, linked },
+    }]);
+    emitWorkbenchEvents(row.workspaceId, chat.id, events);
+  }
+}
+
+export async function linkWorkbenchPullRequest(row: WorkbenchRow, number: unknown): Promise<LinkWorkbenchPullRequestResult> {
+  if (row.pullRequestId) throw new WorkbenchError('Unlink the current pull request first.', 409, 'pr_already_linked');
+  if (row.archivedAt) throw notReadyError('archived');
+  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) {
+    throw new WorkbenchError('Enter a pull request number.', 400, 'bad_number');
+  }
+  const [owner, repo] = row.repoFullName.split('/');
+  const missing = () => new WorkbenchError('Open pull request not found in this repository.', 404, 'pr_not_found');
+  const pr = await githubService.getPullRequest(row.workspaceId, owner, repo, number).catch((err: unknown) => {
+    if (err instanceof GitHubApiError && err.status === 404) throw missing();
+    throw err;
+  });
+  if (pr.state !== 'open' || pr.base.repo?.full_name.toLowerCase() !== row.repoFullName.toLowerCase()) throw missing();
+  if (!isValidBranchName(pr.head.ref)) throw new WorkbenchError('The PR branch name is not valid.', 409, 'bad_branch');
+  const checkout = {
+    branch: pr.head.ref,
+    remoteRef: pr.head.repo?.full_name.toLowerCase() === row.repoFullName.toLowerCase()
+      ? `refs/heads/${pr.head.ref}` : `refs/pull/${number}/head`,
+  };
+  let current = row;
+  const changesBranch = pr.head.ref !== row.branch;
+  if (changesBranch && (await listChats(row.id)).some((chat) => chat.status === 'running')) {
+    throw new WorkbenchError('Wait for the current turn to finish first.', 409, 'turn_running');
+  }
+  if (changesBranch && row.runtime !== 'local') {
+    requireReadySandbox(row);
+    await refreshSandboxCredentials(row);
+    const status = await runCapture(row, toShellScript([workingTreeStatus()]), { timeoutMs: GIT_TIMEOUT_MS });
+    if (status.exitCode !== 0) throw new WorkbenchError('Could not read the git status.', 409, 'git_failed');
+    if (status.stdout.trim()) {
+      throw new WorkbenchError('Commit or discard the changes in this session first.', 409, 'dirty_worktree');
+    }
+    const result = await runCapture(row, toShellScript(pullRequestCheckoutSteps(checkout)), { timeoutMs: PUSH_TIMEOUT_MS });
+    if (result.exitCode !== 0) throw new WorkbenchError('Could not check out the PR branch.', 409, 'checkout_failed');
+    current = (await updateWorkbench(row.id, { branch: checkout.branch })) ?? row;
+  }
+  current = await trackAndLink(current, number, true);
+  const settings = { ...current.settings };
+  delete settings.prUnlinked;
+  current = (await updateWorkbench(row.id, { settings })) ?? current;
+  await recordPrLink(current, number, true);
+  const workbench = await publicWorkbench(current);
+  emitWorkbenchUpdated(workbench);
+  return { workbench, ...(changesBranch && row.runtime === 'local' ? { needsCheckout: checkout } : {}) };
+}
+
+export async function unlinkWorkbenchPullRequest(row: WorkbenchRow) {
+  if (!row.pullRequestId) return publicWorkbench(row);
+  const pr = (await prSummaries([row.pullRequestId])).get(row.pullRequestId);
+  const current = (await updateWorkbench(row.id, {
+    pullRequestId: null,
+    settings: { ...row.settings, ...(pr ? { prUnlinked: pr.number } : {}) },
+  })) ?? row;
+  if (pr) await recordPrLink(current, pr.number, false);
+  const workbench = await publicWorkbench(current);
+  emitWorkbenchUpdated(workbench);
+  return workbench;
 }

@@ -77,6 +77,7 @@ export interface WorkbenchDiffStat {
  * the repository's config file" (scripts) or "use Talyn's default" (prompts).
  */
 export interface WorkbenchSettings {
+  prUnlinked?: number;
   /** Absent means internet access is on. */
   internetAccess?: boolean;
   scripts?: {
@@ -297,6 +298,8 @@ export interface CreateWorkbenchInput {
 }
 
 export interface UpdateWorkbenchInput {
+  /** The local runtime reports a branch after checkout. */
+  branch?: string;
   /** A rename. Also sets `title` to the new name, so a generated title cannot replace it. */
   name?: string;
   /** A display title a person chose. Null or blank clears it. */

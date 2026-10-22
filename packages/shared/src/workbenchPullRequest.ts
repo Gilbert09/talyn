@@ -420,3 +420,37 @@ export function describePushFailure(input: { stderr: string; runtime: 'sandbox' 
   }
   return detail ? `${head}\n${detail}` : head;
 }
+
+export interface OpenWorkbenchPullRequest {
+  number: number;
+  title: string;
+  headRef: string;
+  author: string;
+  updatedAt: string;
+  draft: boolean;
+}
+
+export interface PullRequestCheckout {
+  branch: string;
+  /** The source ref on origin. Forks use refs/pull/<number>/head. */
+  remoteRef: string;
+}
+
+export interface LinkWorkbenchPullRequestResult {
+  workbench: Workbench;
+  needsCheckout?: PullRequestCheckout;
+}
+
+/** Both runtimes fetch the same ref and keep the PR's head branch name. */
+export function pullRequestCheckoutSteps({ branch, remoteRef }: PullRequestCheckout): GitStep[] {
+  const pull = /^refs\/pull\/(\d+)\/head$/.exec(remoteRef);
+  const remoteBranch = pull ? `pr-${pull[1]}` : branch;
+  const target = `refs/remotes/origin/${remoteBranch}`;
+  const refspec = `+${remoteRef}:${target}`;
+  return [
+    { argv: ['git', 'fetch', 'origin', refspec], env: { GIT_TERMINAL_PROMPT: '0' } },
+    { argv: ['git', 'config', '--fixed-value', '--replace-all', 'remote.origin.fetch', refspec, refspec] },
+    { argv: ['git', 'checkout', '-B', branch, `origin/${remoteBranch}`] },
+    { argv: ['git', 'branch', '--set-upstream-to', `origin/${remoteBranch}`, branch] },
+  ];
+}

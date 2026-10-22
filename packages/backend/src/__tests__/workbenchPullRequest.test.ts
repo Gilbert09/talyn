@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { createServer, type Server } from 'http';
-import type { AddressInfo } from 'net';
+import { Router, type Request, type Response } from 'express';
+import { eq } from 'drizzle-orm';
+import { buildBlocks } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
@@ -27,6 +27,11 @@ vi.mock('../services/selfHosted/credentials.js', async (importOriginal) => ({
   fleetAgentStatus: async () => ({ connectedAgents: ['claude', 'codex'], reauthAgents: [] }),
 }));
 
+vi.mock('../services/selfHosted/accountSelection.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/selfHosted/accountSelection.js')>()),
+  resolveRunCredential: async () => ({ accountId: null, token: 'test-agent-token' }),
+}));
+
 vi.mock('../services/cloudProviders/registry.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/cloudProviders/registry.js')>()),
   getCloudProvider: () => ({ type: 'selfhosted' }),
@@ -45,7 +50,7 @@ const { GitHubApiError, githubService } = await import('../services/github.js');
 const { prMonitorService } = await import('../services/prMonitor.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
-const { getChat, getWorkbench, listChats, listEvents } = await import('../services/workbenches/store.js');
+const { getChat, getWorkbench, listChats, listEvents, updateWorkbench } = await import('../services/workbenches/store.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -102,19 +107,30 @@ function ghPr(number: number, over: { state?: 'open' | 'closed'; sha?: string; r
 
 describe('workbench Create PR', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
-  let server: Server;
-  let base: string;
+  let router: Router;
   let fleet: FakeFleet;
   let world: GitWorld;
   let turnReply: ExecReply;
 
-  async function call(method: string, path: string, body?: unknown): Promise<Json> {
-    const resp = await fetch(`${base}${path}`, {
-      method,
-      headers: { 'x-user': 'owner-a', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  /** Exercise the routers without opening a local listener. */
+  async function call(method: string, path: string, body?: unknown, userId = 'owner-a'): Promise<Json> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(path, 'http://test.local');
+      const req = {
+        method, url: path, originalUrl: path, body,
+        headers: {}, query: Object.fromEntries(url.searchParams),
+        user: { id: userId, email: `${userId}@example.test`, isAdmin: false },
+      } as unknown as Request;
+      const res = {
+        statusCode: 200,
+        status(status: number) { this.statusCode = status; return this; },
+        json(data: Json['body']) { resolve({ status: this.statusCode, body: data }); return this; },
+      } as Response;
+      router(req, res, (err?: unknown) => {
+        if (err) apiErrorHandler(err, req, res, reject);
+        else reject(new Error(`No route matched ${method} ${path}`));
+      });
     });
-    return { status: resp.status, body: (await resp.json()) as Json['body'] };
   }
 
   async function sandboxWorkbench(agent: 'claude' | 'codex' = 'claude'): Promise<Loose> {
@@ -192,28 +208,181 @@ describe('workbench Create PR', () => {
     };
     setWorkbenchFleetClientForTests(async () => fleet.asClient());
 
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => {
-      const id = req.headers['x-user'] as string;
-      req.user = { id, email: `${id}@example.test`, isAdmin: false };
-      next();
-    });
-    app.use('/workbenches', wrapAsyncRoutes(workbenchPullRequestRoutes()));
-    app.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
-    app.use(apiErrorHandler);
-    server = createServer(app);
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    router = Router();
+    router.use('/workbenches', wrapAsyncRoutes(workbenchPullRequestRoutes()));
+    router.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
   });
 
   afterEach(async () => {
     setWorkbenchFleetClientForTests(null);
-    await new Promise((resolve) => server.close(resolve));
     await testDb.cleanup();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     resetFeatureFlagsForTests();
+  });
+
+  describe('explicit PR links', () => {
+    function mockPr(number = 7, branch = 'feature') {
+      const pr = {
+        ...ghPr(number, { ref: branch }), id: number, title: 'Add search',
+        user: { login: 'alice', avatar_url: '' }, created_at: '2026-10-01T00:00:00Z',
+        updated_at: '2026-10-21T00:00:00Z', draft: true,
+        mergeable: null, mergeable_state: 'unknown',
+        base: { ref: 'main', repo: { full_name: 'acme/app' } },
+      };
+      vi.spyOn(githubService, 'getPullRequest').mockResolvedValue(pr);
+      return pr;
+    }
+
+    it('lists open PRs by update time with a limit of 50', async () => {
+      const wb = await localWorkbench();
+      const pr = mockPr();
+      const list = vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
+        { ...pr, number: 2, updated_at: '2026-10-01T00:00:00Z' }, pr,
+      ]);
+      const res = await call('GET', `/workbenches/${wb.id}/pull-requests/open`);
+      expect(res.status).toBe(200);
+      expect(list).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
+        state: 'open', per_page: 50, sort: 'updated', direction: 'desc',
+      });
+      expect(res.body.data).toEqual([
+        { number: 7, title: 'Add search', headRef: 'feature', author: 'alice', updatedAt: pr.updated_at, draft: true },
+        expect.objectContaining({ number: 2 }),
+      ]);
+    });
+
+    it('links the same branch without git and records a transcript event', async () => {
+      const wb = await sandboxWorkbench();
+      mockPr(7, wb.branch);
+      mark = fleet.scripts.length;
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(200);
+      expect(res.body.data.workbench).toMatchObject({ pullRequestId: 'pr-7', branch: wb.branch });
+      expect(res.body.data.needsCheckout).toBeUndefined();
+      expect(scriptsSinceMark()).toEqual([]);
+      const chat = (await listChats(wb.id))[0];
+      const events = (await listEvents(chat.id, 0, 100)).events;
+      expect(events.map((e) => e.event)).toContainEqual(expect.objectContaining({ type: 'talyn_pr_link', number: 7, linked: true }));
+      expect(buildBlocks(events.map((e) => e.event))).toContainEqual(expect.objectContaining({ text: 'Linked PR #7' }));
+    });
+
+    it.each([false, true])('checks out another branch in the sandbox (fork: %s)', async (fork) => {
+      const wb = await sandboxWorkbench();
+      const pr = mockPr();
+      if (fork) pr.head.repo = { full_name: 'alice/app' };
+      mark = fleet.scripts.length;
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(200);
+      const script = scriptsSinceMark().find((value) => value.includes('git checkout -B'))!;
+      const refspec = fork ? '+refs/pull/7/head:refs/remotes/origin/pr-7' : '+refs/heads/feature:refs/remotes/origin/feature';
+      expect(script).toContain(`git fetch origin ${refspec}`);
+      expect(script).toContain(`git config --fixed-value --replace-all remote.origin.fetch ${refspec} ${refspec}`);
+      expect(script).toContain(`git checkout -B feature origin/${fork ? 'pr-7' : 'feature'}`);
+      expect(script).toContain(`git branch --set-upstream-to origin/${fork ? 'pr-7' : 'feature'} feature`);
+      expect((await getWorkbench(wb.id))?.branch).toBe('feature');
+    });
+
+    it('refuses a dirty sandbox before checkout or tracking', async () => {
+      const wb = await sandboxWorkbench();
+      mockPr();
+      world.status = '?? new.txt\n';
+      mark = fleet.scripts.length;
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('Commit or discard the changes in this session first.');
+      expect(watch).not.toHaveBeenCalled();
+      expect(scriptsSinceMark().some((script) => script.includes('git checkout'))).toBe(false);
+      expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
+    });
+
+    it.each(['closed', 'other repo', 'missing'])('returns 404 for %s', async (reason) => {
+      const wb = await localWorkbench();
+      const pr = mockPr();
+      if (reason === 'closed') pr.state = 'closed';
+      if (reason === 'other repo') pr.base.repo.full_name = 'other/repo';
+      if (reason === 'missing') vi.mocked(githubService.getPullRequest).mockRejectedValue(new GitHubApiError('Not found', 404));
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(404);
+      expect(watch).not.toHaveBeenCalled();
+    });
+
+    it('requires an unlink before replacing a linked PR', async () => {
+      const wb = await localWorkbench();
+      mockPr(7, wb.branch);
+      await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      vi.mocked(githubService.getPullRequest).mockClear();
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 8 });
+      expect(res.status).toBe(409);
+      expect(githubService.getPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns a local checkout plan and accepts the branch report', async () => {
+      const wb = await localWorkbench();
+      mockPr();
+      mark = fleet.scripts.length;
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        workbench: { branch: wb.branch, pullRequestId: 'pr-7' },
+        needsCheckout: { branch: 'feature', remoteRef: 'refs/heads/feature' },
+      });
+      expect(scriptsSinceMark()).toEqual([]);
+      const updated = await call('PATCH', `/workbenches/${wb.id}`, { branch: 'feature' });
+      expect(updated.status).toBe(200);
+      expect((await getWorkbench(wb.id))?.branch).toBe('feature');
+    });
+
+    it('unlinks without changing the branch and skips that PR on later reads', async () => {
+      const wb = await localWorkbench();
+      mockPr(7, wb.branch);
+      await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      await testDb.db.update(pullRequests).set({ lastSummary: { headBranch: wb.branch } }).where(eq(pullRequests.id, 'pr-7'));
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/unlink`);
+      expect(res.body.data).toMatchObject({ pullRequestId: null, branch: wb.branch, settings: { prUnlinked: 7 } });
+      const read = await call('GET', `/workbenches/${wb.id}`);
+      expect(read.body.data.pullRequestId).toBeNull();
+      await call('PATCH', `/workbenches/${wb.id}`, { settings: { internetAccess: false } });
+      expect((await getWorkbench(wb.id))?.settings?.prUnlinked).toBe(7);
+      const chat = (await listChats(wb.id))[0];
+      const events = (await listEvents(chat.id, 0, 100)).events;
+      expect(buildBlocks(events.map((e) => e.event))).toContainEqual(expect.objectContaining({ text: 'Unlinked PR #7' }));
+      watch.mockResolvedValue({ ok: true, rowId: 'pr-7' });
+      const linked = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(linked.body.data.workbench.pullRequestId).toBe('pr-7');
+      expect((await getWorkbench(wb.id))?.settings).not.toHaveProperty('prUnlinked');
+    });
+
+    it.each([0, -1, 1.5, '7', null])('refuses an invalid PR number: %s', async (number) => {
+      const wb = await localWorkbench();
+      mockPr();
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number });
+      expect(res.status).toBe(400);
+      expect(githubService.getPullRequest).not.toHaveBeenCalled();
+    });
+
+    it.each(['pull-requests/open', 'pull-request/link', 'pull-request/unlink'])('checks workspace access for %s', async (path) => {
+      const wb = await localWorkbench();
+      await seedUser(testDb.db, { id: 'owner-b' });
+      const res = await call(path.endsWith('/open') ? 'GET' : 'POST', `/workbenches/${wb.id}/${path}`, undefined, 'owner-b');
+      expect([403, 404]).toContain(res.status);
+    });
+
+    it('does not claim success when tracking fails', async () => {
+      const wb = await localWorkbench();
+      mockPr(7, wb.branch);
+      watch.mockResolvedValue({ ok: false, reason: 'not_open' });
+      expect((await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 })).status).toBe(404);
+      expect((await getWorkbench(wb.id))?.pullRequestId).toBeNull();
+    });
+
+    it('preserves other settings on unlink', async () => {
+      const wb = await localWorkbench();
+      await updateWorkbench(wb.id, { settings: { internetAccess: false } });
+      mockPr(7, wb.branch);
+      await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/unlink`);
+      expect(res.body.data.settings).toEqual({ internetAccess: false, prUnlinked: 7 });
+    });
   });
 
   describe('a Create PR turn', () => {
@@ -705,11 +874,7 @@ describe('workbench Create PR', () => {
       it('refuses a caller without access to the workspace', async () => {
         const wb = await localWorkbench();
         await seedUser(testDb.db, { id: 'owner-b' });
-        const resp = await fetch(`${base}/workbenches/${wb.id}/pull-request/adopt`, {
-          method: 'POST',
-          headers: { 'x-user': 'owner-b', 'content-type': 'application/json' },
-          body: JSON.stringify({ sha: HEAD_SHA }),
-        });
+        const resp = await call('POST', `/workbenches/${wb.id}/pull-request/adopt`, { sha: HEAD_SHA }, 'owner-b');
         expect([403, 404]).toContain(resp.status);
         expect(prsForCommit).not.toHaveBeenCalled();
       });
