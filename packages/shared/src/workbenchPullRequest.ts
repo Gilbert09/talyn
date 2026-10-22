@@ -421,14 +421,17 @@ export function describePushFailure(input: { stderr: string; runtime: 'sandbox' 
   return detail ? `${head}\n${detail}` : head;
 }
 
-export interface OpenWorkbenchPullRequest {
+export interface WorkbenchPullRequestChoice {
   number: number;
   title: string;
   headRef: string;
   author: string;
   updatedAt: string;
   draft: boolean;
+  state: 'open' | 'closed' | 'merged';
 }
+
+export type OpenWorkbenchPullRequest = WorkbenchPullRequestChoice;
 
 export interface PullRequestCheckout {
   branch: string;

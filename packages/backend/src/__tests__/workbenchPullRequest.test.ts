@@ -226,7 +226,7 @@ describe('workbench Create PR', () => {
       const pr = {
         ...ghPr(number, { ref: branch }), id: number, title: 'Add search',
         user: { login: 'alice', avatar_url: '' }, created_at: '2026-10-01T00:00:00Z',
-        updated_at: '2026-10-21T00:00:00Z', draft: true,
+        updated_at: '2026-10-21T00:00:00Z', draft: true, merged_at: null as string | null,
         mergeable: null, mergeable_state: 'unknown',
         base: { ref: 'main', repo: { full_name: 'acme/app' } },
       };
@@ -246,9 +246,25 @@ describe('workbench Create PR', () => {
         state: 'open', per_page: 50, sort: 'updated', direction: 'desc',
       });
       expect(res.body.data).toEqual([
-        { number: 7, title: 'Add search', headRef: 'feature', author: 'alice', updatedAt: pr.updated_at, draft: true },
+        { number: 7, title: 'Add search', headRef: 'feature', author: 'alice', updatedAt: pr.updated_at, draft: true, state: 'open' },
         expect.objectContaining({ number: 2 }),
       ]);
+    });
+
+    it('lists open, merged, and closed PRs when state is all', async () => {
+      const wb = await localWorkbench();
+      const pr = mockPr();
+      const list = vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
+        { ...pr, number: 8, state: 'closed', merged_at: '2026-10-20T00:00:00Z' },
+        { ...pr, number: 9, state: 'closed', merged_at: null },
+        pr,
+      ]);
+      const res = await call('GET', `/workbenches/${wb.id}/pull-requests/open?state=all`);
+      expect(res.status).toBe(200);
+      expect(list).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
+        state: 'all', per_page: 50, sort: 'updated', direction: 'desc',
+      });
+      expect(res.body.data.map((item: { state: string }) => item.state)).toEqual(['merged', 'closed', 'open']);
     });
 
     it('links the same branch without git and records a transcript event', async () => {
@@ -295,15 +311,42 @@ describe('workbench Create PR', () => {
       expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
     });
 
-    it.each(['closed', 'other repo', 'missing'])('returns 404 for %s', async (reason) => {
+    it.each(['other repo', 'missing'])('returns 404 for %s', async (reason) => {
       const wb = await localWorkbench();
       const pr = mockPr();
-      if (reason === 'closed') pr.state = 'closed';
       if (reason === 'other repo') pr.base.repo.full_name = 'other/repo';
       if (reason === 'missing') vi.mocked(githubService.getPullRequest).mockRejectedValue(new GitHubApiError('Not found', 404));
       const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
       expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Pull request not found in this repository.');
       expect(watch).not.toHaveBeenCalled();
+    });
+
+    it.each(['merged', 'closed'] as const)('links a %s PR without changing the branch', async (state) => {
+      const wb = await sandboxWorkbench();
+      const pr = mockPr();
+      pr.state = 'closed';
+      pr.merged_at = state === 'merged' ? '2026-10-20T00:00:00Z' : null;
+      world.status = '?? uncommitted.txt\n';
+      watch.mockImplementationOnce(async ({ number, allowClosed }: { number: number; allowClosed: boolean }) => {
+        expect(allowClosed).toBe(true);
+        await testDb.db.insert(pullRequests).values({
+          id: `pr-${number}`, workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number,
+          state, mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+        });
+        return { ok: true, rowId: `pr-${number}`, alreadyTracked: false, summary: {} };
+      });
+      mark = fleet.scripts.length;
+      const res = await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
+      expect(res.status).toBe(200);
+      expect(res.body.data.workbench).toMatchObject({ branch: wb.branch, pr: { number: 7, state } });
+      expect(res.body.data.needsCheckout).toBeUndefined();
+      expect(scriptsSinceMark()).toEqual([]);
+      expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
+      const tracked = await testDb.db.select({ state: pullRequests.state, mergedAt: pullRequests.mergedAt })
+        .from(pullRequests).where(eq(pullRequests.id, 'pr-7'));
+      expect(tracked[0].state).toBe(state);
+      expect(Boolean(tracked[0].mergedAt)).toBe(state === 'merged');
     });
 
     it('requires an unlink before replacing a linked PR', async () => {

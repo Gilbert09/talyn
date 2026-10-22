@@ -2701,8 +2701,10 @@ export const workbenches = {
    */
   createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
     request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),
-  openPullRequests: (id: string) =>
-    request<import('@talyn/shared').OpenWorkbenchPullRequest[]>('GET', `/workbenches/${enc(id)}/pull-requests/open`),
+  openPullRequests: (id: string, options: { state?: 'open' | 'all' } = {}) =>
+    request<import('@talyn/shared').WorkbenchPullRequestChoice[]>(
+      'GET', `/workbenches/${enc(id)}/pull-requests/open${options.state ? `?state=${options.state}` : ''}`
+    ),
   linkPullRequest: (id: string, number: number) =>
     request<import('@talyn/shared').LinkWorkbenchPullRequestResult>(
       'POST', `/workbenches/${enc(id)}/pull-request/link`, { number }
