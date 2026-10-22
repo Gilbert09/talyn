@@ -66,3 +66,18 @@ it('rejects a URL for another repository', async () => {
   });
   expect(screen.getByRole('button', { name: 'Link' })).toBeDisabled();
 });
+
+it('shows a failed list load as an error, not as an empty list', async () => {
+  jest.mocked(api.workbenches.openPullRequests).mockRejectedValue(new Error('Not found'));
+  render(<LinkPullRequestDialog workbench={wb} onClose={jest.fn()} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the open pull requests: Not found.');
+  expect(screen.queryByText('No open pull requests found.')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('PR number or URL')).toBeEnabled();
+});
+
+it('says nothing matches when the filter hides every PR', async () => {
+  render(<LinkPullRequestDialog workbench={wb} onClose={jest.fn()} />);
+  await screen.findByText('#7 Add search');
+  fireEvent.change(screen.getByLabelText('Filter pull requests'), { target: { value: 'missing' } });
+  expect(screen.getByText('No pull requests match.')).toBeInTheDocument();
+});

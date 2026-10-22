@@ -12,6 +12,7 @@ import { Input } from '../ui/input';
 export function LinkPullRequestDialog({ workbench, onClose }: { workbench: Workbench; onClose: () => void }) {
   const [prs, setPrs] = useState<OpenWorkbenchPullRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('');
   const [input, setInput] = useState('');
@@ -23,7 +24,7 @@ export function LinkPullRequestDialog({ workbench, onClose }: { workbench: Workb
         if (active) setPrs(rows);
       })
       .catch((err: unknown) => {
-        if (active) toast.error('Could not load pull requests', err instanceof Error ? err.message : undefined);
+        if (active) setLoadError(err instanceof Error ? err.message : 'Unknown error');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -93,8 +94,12 @@ export function LinkPullRequestDialog({ workbench, onClose }: { workbench: Workb
         <div className="max-h-72 overflow-y-auto" aria-busy={loading || busy}>
           {loading ? (
             <p className="text-sm">Loading…</p>
+          ) : loadError ? (
+            <p role="alert" className="text-sm text-destructive">
+              Could not load the open pull requests: {loadError}. You can still enter a number or URL.
+            </p>
           ) : visible.length === 0 ? (
-            <p className="text-sm">No open pull requests found.</p>
+            <p className="text-sm">{filter && prs.length > 0 ? 'No pull requests match.' : 'No open pull requests found.'}</p>
           ) : (
             visible.map((pr) => (
               <button
