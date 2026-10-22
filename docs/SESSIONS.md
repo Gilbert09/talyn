@@ -2,6 +2,39 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Refresh ran past the client timeout after a restart (2026-10-22)
+
+After a production restart, Tom pressed Refresh. `POST /repositories/poll` ran
+for 300 s and the client gave up (`499 300010ms` in the Railway HTTP log). The
+button then re-read the cached list, so nothing changed. Other requests in that
+window were fast, so the time was inside the poll of his own workspaces.
+
+**The searches were one known cost.** The poll ran 3 or 4 GitHub searches per
+watched repo, one after another, against a budget of 30 a minute per account.
+Tom's 13 repos cost about 40–50 searches, which is about 1.5 minutes at the limit.
+`searchRelationshipsBatched` now runs each search once per workspace, with one
+`repo:` qualifier per watched repo. `searchPullRequestNumbersByRepo` groups the
+results by `repository_url`. Three rules carry it:
+- **A chunk falls back to the per-repo searches** when its search fails, comes back
+  partial (`incomplete_results`), or has more than GitHub's 1,000 results.
+- **A repo with no results and tracked open rows asks per repo.** GitHub silently
+  leaves out a repo the credential cannot see when a query names several. Reading
+  that silence as "no open PRs" would clear Mine / Review on every tracked row.
+- **The limit is the URL, not the qualifier count.** Measured: a 200-repo query
+  (about 7.2 KB encoded) worked, and a 300-repo one returned 414.
+  `BATCH_SEARCH_MAX_QUERY_BYTES` is 6 KB.
+
+What is lost: a repo the App cannot see, with no tracked rows, no longer logs the
+"grant access" notice. It had nothing on the list either way.
+
+**The searches do not explain 5 minutes, and the cause of the rest is not known.**
+One poll write failed at 10:01:01 (`update "pull_requests" set "state" …`), and
+the log line had dropped its cause. The likely suspect is the row-lock wait of
+2026-10-12, with a webhook backlog after the outage. That is not confirmed. The
+poll's error logs now print `describeError(err)`. Each forced poll logs one line
+(`forced poll of workspace … took …, searches …, slowest: …`). The next slow
+Refresh will show where the time went.
+
 ## No code review ever finished, and the judge could not keep two lenses (2026-10-13)
 
 Tom saw a Deep review drop all 15 findings. Two separate faults came out of it.

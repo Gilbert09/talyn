@@ -241,6 +241,15 @@ export function resolveRepoRelativePath(symlinkPath: string, target: string): st
   return parts.length > 0 ? parts.join('/') : null;
 }
 
+/**
+ * The lower-cased `owner/repo` of a search item's `repository_url`
+ * (`https://api.github.com/repos/{owner}/{repo}`), or null for anything else.
+ */
+export function repoKeyFromApiUrl(url: string | undefined): string | null {
+  const match = url ? /\/repos\/([^/]+)\/([^/]+)\/?$/.exec(url) : null;
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
 /** How many chained symlinks the contents helpers will traverse. */
 const SYMLINK_FOLLOW_DEPTH = 3;
 
@@ -2464,6 +2473,54 @@ class GitHubService extends EventEmitter {
         if (res.items.length < 100) break;
       }
       return out;
+    });
+  }
+
+  /**
+   * The same search across SEVERAL repos at once (a query with many `repo:`
+   * qualifiers), with the numbers grouped by the repo each came from. The key
+   * is the lower-cased `owner/repo`, because GitHub's casing need not match the
+   * watched row's.
+   *
+   * `complete` is false when GitHub says the answer may be partial: a search
+   * that timed out (`incomplete_results`), or one with more matches than the
+   * 1,000 it will return. A caller must not read a missing number as "not open"
+   * then. Note what this does NOT report: GitHub silently leaves out a repo the
+   * credential cannot see when a query names several, so no results for a repo
+   * is not proof the repo is reachable.
+   */
+  async searchPullRequestNumbersByRepo(
+    workspaceId: string,
+    query: string
+  ): Promise<{ byRepo: Map<string, number[]>; complete: boolean }> {
+    return this.serializeByAccount(this.accountKeyFor(workspaceId), async () => {
+      const byRepo = new Map<string, number[]>();
+      let complete = true;
+      for (let page = 1; page <= 10; page++) {
+        const params = new URLSearchParams({
+          q: query,
+          per_page: '100',
+          page: String(page),
+        });
+        const res = await this.apiRequest<{
+          total_count: number;
+          incomplete_results?: boolean;
+          items: Array<{ number: number; repository_url?: string }>;
+        }>(workspaceId, `/search/issues?${params}`);
+        if (res.incomplete_results || res.total_count > 1000) complete = false;
+        for (const item of res.items) {
+          const key = repoKeyFromApiUrl(item.repository_url);
+          if (!key) {
+            complete = false;
+            continue;
+          }
+          const list = byRepo.get(key);
+          if (list) list.push(item.number);
+          else byRepo.set(key, [item.number]);
+        }
+        if (res.items.length < 100) break;
+      }
+      return { byRepo, complete };
     });
   }
 

@@ -30,6 +30,7 @@ import {
   QUEUE_RESET_COLUMNS,
 } from './mergeQueueBroadcast.js';
 import { TickGuard } from './tickGuard.js';
+import { describeError } from './debugBus.js';
 
 interface WatchedRepo {
   id: string;
@@ -38,6 +39,116 @@ interface WatchedRepo {
   repo: string;
   fullName: string;
   defaultBranch: string;
+}
+
+/** The viewer's relationship to each open PR in one repo, from the searches. */
+interface RelationshipSearch {
+  authoredNums: number[];
+  requestedNums: number[];
+  directRequestedNums: number[];
+  authoredSet: Set<number>;
+  pendingSet: Set<number>;
+}
+
+interface BatchedRelationshipSearch extends RelationshipSearch {
+  /** Any search named this repo. False is ambiguous — see `usableBatchedSearch`. */
+  sawResults: boolean;
+}
+
+export interface WorkspacePollResult {
+  failedRepos: number;
+  repoTimings: Array<{ repo: string; ms: number }>;
+  /** The batched relationship searches, before any repo is polled. */
+  searchMs: number;
+  totalMs: number;
+}
+
+/**
+ * The longest search query, URL-encoded, that one batched search may send.
+ * GitHub publishes no limit on `repo:` qualifiers; the limit is the request
+ * URL, which it refuses with a 414. Measured 2026-10-22: a 200-repo query of
+ * about 7.2 KB encoded worked and a 300-repo one of about 10.8 KB did not.
+ */
+export const BATCH_SEARCH_MAX_QUERY_BYTES = 6_000;
+
+/**
+ * Split repos into groups whose `repo:` qualifiers, added to `base`, stay under
+ * {@link BATCH_SEARCH_MAX_QUERY_BYTES} once encoded. `base` must be the longest
+ * query the groups will be used with.
+ */
+export function chunkReposForSearch<T extends { fullName: string }>(
+  base: string,
+  repos: T[],
+  maxBytes: number = BATCH_SEARCH_MAX_QUERY_BYTES
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let bytes = encodeURIComponent(base).length;
+  for (const repo of repos) {
+    const cost = encodeURIComponent(` repo:${repo.fullName}`).length;
+    if (current.length > 0 && bytes + cost > maxBytes) {
+      chunks.push(current);
+      current = [];
+      bytes = encodeURIComponent(base).length;
+    }
+    current.push(repo);
+    bytes += cost;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** The summary line a forced poll logs: total, search share, slowest repos. */
+export function describeForcedPoll(workspaceId: string, result: WorkspacePollResult): string {
+  const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const slowest = [...result.repoTimings]
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 3)
+    .map((t) => `${t.repo} ${secs(t.ms)}`)
+    .join(', ');
+  return (
+    `PR monitor: forced poll of workspace ${workspaceId.slice(0, 8)} took ${secs(result.totalMs)}` +
+    ` (${result.repoTimings.length} repos, searches ${secs(result.searchMs)}` +
+    `${slowest ? `, slowest: ${slowest}` : ''}${result.failedRepos ? `, ${result.failedRepos} failed` : ''})`
+  );
+}
+
+/**
+ * Whether the `user-review-requested:` search is needed: only when a review
+ * request coincides with a prior review, which a team request alone cannot
+ * tell apart from a fresh direct one.
+ */
+export function needsDirectRequestSearch(
+  authoredNums: number[],
+  requestedNums: number[],
+  reviewedNums: number[]
+): boolean {
+  const authored = new Set(authoredNums);
+  const reviewed = new Set(reviewedNums);
+  return requestedNums.some((n) => reviewed.has(n) && !authored.has(n));
+}
+
+/**
+ * Who the viewer is to each open PR. A prior review clears a lingering team
+ * request; an active direct request still needs attention, including one made
+ * after an earlier review.
+ */
+export function relationshipSearch(
+  authoredNums: number[],
+  requestedNums: number[],
+  reviewedNums: number[],
+  directRequestedNums: number[]
+): RelationshipSearch {
+  const authoredSet = new Set(authoredNums);
+  const reviewedSet = new Set(reviewedNums);
+  const directRequestedSet = new Set(directRequestedNums);
+  const pendingSet = new Set<number>();
+  for (const n of [...requestedNums, ...directRequestedNums]) {
+    if ((!reviewedSet.has(n) || directRequestedSet.has(n)) && !authoredSet.has(n)) {
+      pendingSet.add(n);
+    }
+  }
+  return { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet };
 }
 
 /** The minimal tracked-open row shape the close-out paths carry (no lastSummary blob). */
@@ -302,53 +413,64 @@ class PRMonitorService extends EventEmitter {
     return this.pollWorkspace(workspaceId);
   }
 
-  private async pollWorkspace(workspaceId: string): Promise<{ failedRepos: number }> {
+  private async pollWorkspace(workspaceId: string): Promise<WorkspacePollResult> {
+    const startedAt = Date.now();
+    const repoTimings: Array<{ repo: string; ms: number }> = [];
     const login = await this.resolveCurrentUser(workspaceId);
-    if (!login) return { failedRepos: 0 };
+    if (!login) return { failedRepos: 0, repoTimings, searchMs: 0, totalMs: Date.now() - startedAt };
     const repos = await this.getWatchedRepos(workspaceId);
     let failedRepos = 0;
 
+    const searchStartedAt = Date.now();
+    const batched = await this.searchRelationshipsBatched(workspaceId, repos, login);
+    const searchMs = Date.now() - searchStartedAt;
+
     for (const repo of repos) {
       const accessKey = `${workspaceId}:${repo.fullName}`;
+      const repoStartedAt = Date.now();
       try {
-        await this.pollRepo(workspaceId, repo, login);
-        // Recovered (e.g. the App was just granted access) — note it once.
-        if (this.inaccessibleRepos.delete(accessKey)) {
-          console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'unknown error';
-        // A watched repo the App can't reach (private repo not in the
-        // installation's selected list): no token can read it until access is
-        // granted on GitHub. Log the actionable notice ONCE, then stay quiet —
-        // don't spam this every 5-min sweep.
-        if (isRepoAccessError(msg)) {
-          // "Cannot see it" and "it moved" are indistinguishable from the
-          // error alone, and they need opposite responses: one waits for a
-          // human to grant access, the other fixes itself. Ask before assuming.
-          const renamedTo = await this.detectRename(workspaceId, repo);
-          if (renamedTo) {
-            await this.applyRename(repo, renamedTo);
-            this.inaccessibleRepos.delete(accessKey);
+        try {
+          await this.pollRepo(workspaceId, repo, login, batched.get(repo.id));
+          // Recovered (e.g. the App was just granted access) — note it once.
+          if (this.inaccessibleRepos.delete(accessKey)) {
+            console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          // A watched repo the App can't reach (private repo not in the
+          // installation's selected list): no token can read it until access is
+          // granted on GitHub. Log the actionable notice ONCE, then stay quiet —
+          // don't spam this every 5-min sweep.
+          if (isRepoAccessError(msg)) {
+            // "Cannot see it" and "it moved" are indistinguishable from the
+            // error alone, and they need opposite responses: one waits for a
+            // human to grant access, the other fixes itself. Ask before assuming.
+            const renamedTo = await this.detectRename(workspaceId, repo);
+            if (renamedTo) {
+              await this.applyRename(repo, renamedTo);
+              this.inaccessibleRepos.delete(accessKey);
+              continue;
+            }
+            if (!this.inaccessibleRepos.has(accessKey)) {
+              this.inaccessibleRepos.add(accessKey);
+              console.warn(
+                `PR monitor: the GitHub App has no access to ${repo.fullName} — grant it on GitHub (org → Installed GitHub Apps → Repository access). Skipping until then.`
+              );
+            }
             continue;
           }
-          if (!this.inaccessibleRepos.has(accessKey)) {
-            this.inaccessibleRepos.add(accessKey);
-            console.warn(
-              `PR monitor: the GitHub App has no access to ${repo.fullName} — grant it on GitHub (org → Installed GitHub Apps → Repository access). Skipping until then.`
-            );
-          }
-          continue;
+          // Counted only here: a rename is a recovery, and a repo the App can't
+          // read is permanently unreachable by REST too, so neither is worth
+          // waking the caller's fallback for. This branch is the transient one
+          // (rate-limit gate, 5xx) where a cheaper retry can still succeed.
+          failedRepos++;
+          console.error(`PR monitor: ${repo.fullName} poll failed:`, describeError(err));
         }
-        // Counted only here: a rename is a recovery, and a repo the App can't
-        // read is permanently unreachable by REST too, so neither is worth
-        // waking the caller's fallback for. This branch is the transient one
-        // (rate-limit gate, 5xx) where a cheaper retry can still succeed.
-        failedRepos++;
-        console.error(`PR monitor: ${repo.fullName} poll failed:`, msg);
+      } finally {
+        repoTimings.push({ repo: repo.fullName, ms: Date.now() - repoStartedAt });
       }
     }
-    return { failedRepos };
+    return { failedRepos, repoTimings, searchMs, totalMs: Date.now() - startedAt };
   }
 
   /**
@@ -407,7 +529,8 @@ class PRMonitorService extends EventEmitter {
   private async pollRepo(
     workspaceId: string,
     repo: WatchedRepo,
-    currentUserLogin: string
+    currentUserLogin: string,
+    batched?: BatchedRelationshipSearch
   ): Promise<void> {
     const full = `${repo.owner}/${repo.repo}`;
     // The searches share a 30/min budget per account and are the likeliest
@@ -416,9 +539,10 @@ class PRMonitorService extends EventEmitter {
     // check pill on a TRACKED PR then waited for a sweep that never reached it.
     // A tracked row needs no search to be refreshed, so refresh those and then
     // report the failure.
-    let searches: Awaited<ReturnType<typeof this.searchRelationships>>;
+    let searches: RelationshipSearch;
     try {
-      searches = await this.searchRelationships(workspaceId, full, currentUserLogin);
+      searches = (await this.usableBatchedSearch(workspaceId, repo, batched))
+        ?? (await this.searchRelationships(workspaceId, full, currentUserLogin));
     } catch (searchError) {
       const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
       const stale = tracked.length
@@ -486,7 +610,11 @@ class PRMonitorService extends EventEmitter {
    * an active direct request still needs attention, including one made after an
    * earlier review.
    */
-  private async searchRelationships(workspaceId: string, full: string, currentUserLogin: string) {
+  private async searchRelationships(
+    workspaceId: string,
+    full: string,
+    currentUserLogin: string
+  ): Promise<RelationshipSearch> {
     const authoredNums = await githubService.searchPullRequestNumbers(
       workspaceId,
       `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -499,24 +627,100 @@ class PRMonitorService extends EventEmitter {
       workspaceId,
       `repo:${full} is:pr is:open reviewed-by:${currentUserLogin}`
     );
-    const authoredSet = new Set(authoredNums);
-    const reviewedSet = new Set(reviewedNums);
-    const directRequestedNums = requestedNums.some(
-      (n) => reviewedSet.has(n) && !authoredSet.has(n),
-    )
+    const directRequestedNums = needsDirectRequestSearch(authoredNums, requestedNums, reviewedNums)
       ? await githubService.searchPullRequestNumbers(
           workspaceId,
           `repo:${full} is:pr is:open user-review-requested:${currentUserLogin}`,
         )
       : [];
-    const directRequestedSet = new Set(directRequestedNums);
-    const pendingSet = new Set<number>();
-    for (const n of [...requestedNums, ...directRequestedNums]) {
-      if ((!reviewedSet.has(n) || directRequestedSet.has(n)) && !authoredSet.has(n)) {
-        pendingSet.add(n);
+    return relationshipSearch(authoredNums, requestedNums, reviewedNums, directRequestedNums);
+  }
+
+  /**
+   * The same searches for EVERY watched repo of a workspace, run once with many
+   * `repo:` qualifiers instead of once per repo. GitHub allows 30 searches a
+   * minute per account and the per-repo shape costs 3 or 4 per repo, so a
+   * 13-repo workspace spent most of a minute and a half of that budget, and a
+   * user Refresh queued behind it.
+   *
+   * Returns the answer per repository id. A repo it cannot answer for is left
+   * out, and `pollRepo` then runs the per-repo searches as before: a chunk whose
+   * search failed, came back partial, or hit GitHub's 1,000-result cap.
+   */
+  private async searchRelationshipsBatched(
+    workspaceId: string,
+    repos: WatchedRepo[],
+    login: string
+  ): Promise<Map<string, BatchedRelationshipSearch>> {
+    const out = new Map<string, BatchedRelationshipSearch>();
+    // One repo is one search either way, and the per-repo path keeps its errors.
+    if (repos.length < 2) return out;
+
+    const longestBase = `is:pr is:open user-review-requested:${login}`;
+    for (const chunk of chunkReposForSearch(longestBase, repos)) {
+      const scope = (rs: WatchedRepo[]) => rs.map((r) => `repo:${r.fullName}`).join(' ');
+      try {
+        const [authored, requested, reviewed] = [
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open author:${login} ${scope(chunk)}`),
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open review-requested:${login} ${scope(chunk)}`),
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open reviewed-by:${login} ${scope(chunk)}`),
+        ];
+        if (!authored.complete || !requested.complete || !reviewed.complete) continue;
+
+        const numsFor = (byRepo: Map<string, number[]>, repo: WatchedRepo) =>
+          byRepo.get(repo.fullName.toLowerCase()) ?? [];
+        const needDirect = chunk.filter((r) =>
+          needsDirectRequestSearch(numsFor(authored.byRepo, r), numsFor(requested.byRepo, r), numsFor(reviewed.byRepo, r))
+        );
+        const direct = needDirect.length > 0
+          ? await githubService.searchPullRequestNumbersByRepo(
+              workspaceId,
+              `is:pr is:open user-review-requested:${login} ${scope(needDirect)}`
+            )
+          : { byRepo: new Map<string, number[]>(), complete: true };
+        if (!direct.complete) continue;
+
+        for (const repo of chunk) {
+          const authoredNums = numsFor(authored.byRepo, repo);
+          const requestedNums = numsFor(requested.byRepo, repo);
+          const reviewedNums = numsFor(reviewed.byRepo, repo);
+          out.set(repo.id, {
+            ...relationshipSearch(authoredNums, requestedNums, reviewedNums, numsFor(direct.byRepo, repo)),
+            sawResults: authoredNums.length + requestedNums.length + reviewedNums.length > 0,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `PR monitor: batched search failed for ${chunk.length} repo(s) in workspace ${workspaceId.slice(0, 8)}, searching each repo instead:`,
+          describeError(err)
+        );
       }
     }
-    return { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet };
+    return out;
+  }
+
+  /**
+   * The batched answer for one repo, or null when it cannot be trusted and the
+   * per-repo searches must run.
+   *
+   * A batched search silently leaves out a repo the credential cannot see. With
+   * no results for the repo, "nobody has an open PR here" and "the App lost
+   * access" look the same — and reading it as the first would clear the
+   * Mine / Review flags on every tracked row. The per-repo search fails loudly
+   * on the second, so a repo with no results AND tracked open rows asks it.
+   * With no tracked rows there is nothing for a wrong answer to change. A repo
+   * already known to be unreachable asks too, so its recovery is still noticed.
+   */
+  private async usableBatchedSearch(
+    workspaceId: string,
+    repo: WatchedRepo,
+    batched: BatchedRelationshipSearch | undefined
+  ): Promise<RelationshipSearch | null> {
+    if (!batched) return null;
+    if (batched.sawResults) return batched;
+    if (this.inaccessibleRepos.has(`${workspaceId}:${repo.fullName}`)) return null;
+    const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
+    return tracked.length === 0 ? batched : null;
   }
 
   /** Refetch `numbers` and upsert them; `flags` null leaves relationship columns alone. */
@@ -1195,10 +1399,11 @@ class PRMonitorService extends EventEmitter {
     try {
       for (const workspaceId of workspaceIds) {
         try {
-          await this.pollWorkspace(workspaceId);
+          // One line per forced poll, because that is a person waiting on a
+          // button: it says whether the time went on the searches or on a repo.
+          console.log(describeForcedPoll(workspaceId, await this.pollWorkspace(workspaceId)));
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'unknown error';
-          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, msg);
+          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, describeError(err));
         }
       }
     } finally {
