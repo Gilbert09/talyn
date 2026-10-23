@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
-import { workspaces as workspacesTable, integrations as integrationsTable } from '../db/schema.js';
+import {
+  workspaces as workspacesTable,
+  integrations as integrationsTable,
+  fleetAccounts,
+} from '../db/schema.js';
 
 /**
  * What happens when a fleet subscription's grant DIES — revoked at the vendor,
@@ -74,15 +78,16 @@ describe('a revoked fleet subscription records itself', () => {
     });
   }
 
-  async function storedFlag(agent: 'claude' | 'codex'): Promise<string | undefined> {
+  /**
+   * The flag on the account row. The seed is the PRE-0079 config shape, so this
+   * also proves a legacy credential is adopted as an account on first read.
+   */
+  async function storedFlag(agent: 'claude' | 'codex'): Promise<Date | undefined> {
     const rows = await db
-      .select({ config: integrationsTable.config })
-      .from(integrationsTable)
-      .where(
-        and(eq(integrationsTable.workspaceId, ws), eq(integrationsTable.type, 'selfhosted')),
-      );
-    const cfg = rows[0]?.config as Record<string, { reauthRequiredAt?: string } | undefined>;
-    return cfg?.[agent === 'claude' ? 'claudeOAuth' : 'codexOAuth']?.reauthRequiredAt;
+      .select({ agent: fleetAccounts.agent, reauthRequiredAt: fleetAccounts.reauthRequiredAt })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, ws));
+    return rows.find((r) => r.agent === agent)?.reauthRequiredAt ?? undefined;
   }
 
   beforeEach(async () => {

@@ -1,11 +1,15 @@
-import { and, eq } from 'drizzle-orm';
-import { getDbClient, getPoolDbClient, isRealPostgres } from '../../db/client.js';
-import { integrations as integrationsTable } from '../../db/schema.js';
+import { getPoolDbClient, isRealPostgres } from '../../db/client.js';
 import { withBlockingAdvisoryLock } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
 import { fetchWithTimeout } from '../httpTimeout.js';
 import { decryptString, encryptString, isEncryptedEnvelope } from '../tokenCrypto.js';
 import type { CodexOAuthCredential } from './credentials.js';
+import {
+  getFleetAccountWithCredential,
+  setFleetAccountReauth,
+  updateFleetAccountCredential,
+  type StoredCodexOAuth,
+} from './accounts.js';
 
 /**
  * The ChatGPT-subscription credential lifecycle for Talyn Fleet.
@@ -38,8 +42,6 @@ import type { CodexOAuthCredential } from './credentials.js';
  * the instances. Both halves matter — OpenAI rotates the refresh token on every
  * use, so two concurrent refreshes mean one of them replays a spent token.
  */
-
-const INTEGRATION_TYPE = 'selfhosted';
 
 /**
  * OpenAI's own Codex CLI client id, and the loopback it redirects to.
@@ -166,16 +168,16 @@ export function codexCredentialFrom(input: {
 
 // ---------------------------------------------------------------------------
 
-/** In-flight refreshes keyed by workspace — the cheap half of the single-flight. */
-/** The `reauthRequiredAt` already logged per workspace, so the warning is said once. */
+/** The `reauthRequiredAt` already logged per fleet account, so the warning is said once. */
 const reauthWarned = new Map<string, string>();
 
+/** In-flight refreshes keyed by fleet account — the cheap half of the single-flight. */
 const inflight = new Map<string, Promise<CodexTokenPair>>();
 
 /**
- * A usable Codex access token for a workspace, refreshed if it is due.
+ * A usable Codex access token for one fleet account, refreshed if it is due.
  *
- * Returns null when the workspace has no Codex credential at all, which is the
+ * Returns null when there is no Codex credential at all, which is the
  * ordinary case for a Claude-only workspace and is NOT an error. Throws only
  * when a credential exists and cannot be made usable.
  *
@@ -184,17 +186,17 @@ const inflight = new Map<string, Promise<CodexTokenPair>>();
  * requests to be told the same thing.
  */
 export async function resolveCodexAccessToken(
-  workspaceId: string,
+  fleetAccountId: string,
   stored: CodexOAuthCredential | undefined,
 ): Promise<{ accessToken: string; accountId: string } | null> {
   if (!stored || !isEncryptedEnvelope(stored.accessTokenEnc)) return null;
   if (stored.reauthRequiredAt) {
     // Every poll tick and every host credential pull lands here, so say it
     // once per rejection rather than every ten seconds per running sandbox.
-    if (reauthWarned.get(workspaceId) !== stored.reauthRequiredAt) {
-      reauthWarned.set(workspaceId, stored.reauthRequiredAt);
+    if (reauthWarned.get(fleetAccountId) !== stored.reauthRequiredAt) {
+      reauthWarned.set(fleetAccountId, stored.reauthRequiredAt);
       console.warn(
-        `[codex] workspace ${workspaceId.slice(0, 8)} needs to reconnect Codex — ` +
+        `[codex] account ${fleetAccountId.slice(0, 8)} needs to reconnect Codex — ` +
           'the stored authorization was rejected, so nothing is being retried.',
       );
     }
@@ -204,14 +206,16 @@ export async function resolveCodexAccessToken(
     return { accessToken: decryptString(stored.accessTokenEnc), accountId: stored.accountId };
   }
 
-  const existing = inflight.get(workspaceId);
+  const existing = inflight.get(fleetAccountId);
   if (existing) {
     const pair = await existing;
     return { accessToken: pair.accessToken, accountId: pair.accountId };
   }
 
-  const attempt = refreshWithLock(workspaceId, stored).finally(() => inflight.delete(workspaceId));
-  inflight.set(workspaceId, attempt);
+  const attempt = refreshWithLock(fleetAccountId, stored).finally(() =>
+    inflight.delete(fleetAccountId),
+  );
+  inflight.set(fleetAccountId, attempt);
   try {
     const pair = await attempt;
     return { accessToken: pair.accessToken, accountId: pair.accountId };
@@ -227,7 +231,7 @@ export async function resolveCodexAccessToken(
     if (err instanceof CodexReauthRequiredError) throw err;
     if (!isExpired(stored.expiresAt)) {
       console.warn(
-        `[codex] preemptive refresh for workspace ${workspaceId.slice(0, 8)} failed; ` +
+        `[codex] preemptive refresh for account ${fleetAccountId.slice(0, 8)} failed; ` +
           `using the token in hand (${err instanceof Error ? err.message : String(err)})`,
       );
       return { accessToken: decryptString(stored.accessTokenEnc), accountId: stored.accountId };
@@ -237,14 +241,14 @@ export async function resolveCodexAccessToken(
 }
 
 async function refreshWithLock(
-  workspaceId: string,
+  fleetAccountId: string,
   hint: CodexOAuthCredential,
 ): Promise<CodexTokenPair> {
   const run = async (): Promise<CodexTokenPair> => {
     // Re-read INSIDE the lock. The instance that held it before us may already
     // have rotated the pair, and OpenAI rotates on every use — replaying the
     // copy we walked in with would spend a token that is already spent.
-    const fresh = (await readCodexCredential(workspaceId)) ?? hint;
+    const fresh = (await readCodexCredential(fleetAccountId)) ?? hint;
     if (fresh.reauthRequiredAt) {
       throw new CodexReauthRequiredError('Reconnect Codex to continue — the stored sign-in was rejected.');
     }
@@ -257,7 +261,7 @@ async function refreshWithLock(
       };
     }
     try {
-      return await performRefresh(workspaceId, fresh);
+      return await performRefresh(fleetAccountId, fresh);
     } catch (err) {
       // The same gap Claude had: `markCodexReauthRequired` existed, was
       // exported, was covered by its own test — and no production path ever
@@ -268,7 +272,7 @@ async function refreshWithLock(
       // Only for a grant OpenAI has REJECTED; a transient failure must not
       // demand a sign-in that was never needed.
       if (err instanceof CodexReauthRequiredError) {
-        await markCodexReauthRequired(workspaceId).catch(() => {
+        await markCodexReauthRequired(fleetAccountId).catch(() => {
           // Best-effort: see the note in claudeOauth's twin.
         });
       }
@@ -283,11 +287,11 @@ async function refreshWithLock(
   // wrapping it self-deadlocks. Cross-replica exclusion is meaningless in a
   // single-process test anyway. Same shape as posthogCode/oauth.ts.
   if (!isRealPostgres()) return run();
-  return withBlockingAdvisoryLock(getPoolDbClient(), `codex-oauth-refresh:${workspaceId}`, run);
+  return withBlockingAdvisoryLock(getPoolDbClient(), `codex-oauth-refresh:${fleetAccountId}`, run);
 }
 
 async function performRefresh(
-  workspaceId: string,
+  fleetAccountId: string,
   current: CodexOAuthCredential,
 ): Promise<CodexTokenPair> {
   const body = await postToken({
@@ -304,7 +308,7 @@ async function performRefresh(
   const accountId = chatgptAccountIdFrom(accessToken) ?? current.accountId;
   const expiresAt = expiryFrom(body.expires_in);
 
-  await patchCodexCredential(workspaceId, {
+  await patchCodexCredential(fleetAccountId, {
     accessTokenEnc: encryptString(accessToken),
     refreshTokenEnc: encryptString(refreshToken),
     accountId,
@@ -379,85 +383,33 @@ function parseOAuthError(body: string): { error?: string; description?: string }
 }
 
 // ---------------------------------------------------------------------------
-// Row access. Deliberately narrow: this module reads and writes ONE key of the
-// selfhosted integration's config, so it never has to know the rest of the
-// shape and can never clobber the Claude credential beside it.
+// Row access, through the account store. One fleet account per credential, so
+// this can never clobber another account of the same workspace.
 
-async function readCodexCredential(workspaceId: string): Promise<CodexOAuthCredential | null> {
-  const rows = await getDbClient()
-    .select({ config: integrationsTable.config })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    )
-    .limit(1);
-  const config = rows[0]?.config as { codexOAuth?: CodexOAuthCredential } | null;
-  return config?.codexOAuth ?? null;
-}
-
-async function patchCodexCredential(
-  workspaceId: string,
-  patch: Partial<CodexOAuthCredential>,
-): Promise<void> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ id: integrationsTable.id, config: integrationsTable.config })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return;
-  const config = (row.config as Record<string, unknown> | null) ?? {};
-  const current = (config.codexOAuth as CodexOAuthCredential | undefined) ?? undefined;
-  if (!current) return;
-  await db
-    .update(integrationsTable)
-    .set({
-      // A rotation CLEARS reauthRequiredAt: the pair we just wrote works, so
-      // leaving the flag would keep every later dispatch skipping a live
-      // credential.
-      config: { ...config, codexOAuth: { ...current, ...patch, reauthRequiredAt: undefined } },
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationsTable.id, row.id));
+async function readCodexCredential(fleetAccountId: string): Promise<CodexOAuthCredential | null> {
+  const account = await getFleetAccountWithCredential(fleetAccountId);
+  if (!account || account.kind !== 'codex_oauth') return null;
+  return {
+    ...(account.credential as StoredCodexOAuth),
+    ...(account.reauthRequiredAt ? { reauthRequiredAt: account.reauthRequiredAt } : {}),
+  };
 }
 
 /**
- * Flag the connection as needing re-consent. On the row, so it survives a
- * restart and every surface agrees — dispatch, the poller, the settings card.
+ * Write a rotated pair. CLEARS the reauth flag: the pair we just wrote works,
+ * so leaving the flag would keep every later dispatch skipping a live
+ * credential.
  */
-export async function markCodexReauthRequired(workspaceId: string): Promise<void> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ id: integrationsTable.id, config: integrationsTable.config })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return;
-  const config = (row.config as Record<string, unknown> | null) ?? {};
-  const current = config.codexOAuth as CodexOAuthCredential | undefined;
-  if (!current) return;
-  await db
-    .update(integrationsTable)
-    .set({
-      config: { ...config, codexOAuth: { ...current, reauthRequiredAt: new Date().toISOString() } },
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationsTable.id, row.id));
+async function patchCodexCredential(fleetAccountId: string, next: StoredCodexOAuth): Promise<void> {
+  await updateFleetAccountCredential(fleetAccountId, next);
+}
+
+/**
+ * Flag the account as needing re-consent. On the row, so it survives a restart
+ * and every surface agrees — dispatch, the poller, the settings card.
+ */
+export async function markCodexReauthRequired(fleetAccountId: string): Promise<void> {
+  await setFleetAccountReauth(fleetAccountId);
 }
 
 /** Test seam — the promise map is module state and would leak between cases. */

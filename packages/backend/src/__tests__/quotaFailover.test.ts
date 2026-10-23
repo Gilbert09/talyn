@@ -18,6 +18,7 @@ import {
   environments as environmentsTable,
   repositories as repositoriesTable,
   integrations as integrationsTable,
+  fleetAccounts,
   tasks as tasksTable,
 } from '../db/schema.js';
 
@@ -66,6 +67,7 @@ async function connectAgents(
   await db
     .delete(integrationsTable)
     .where(eq(integrationsTable.workspaceId, 'ws1'));
+  await db.delete(fleetAccounts).where(eq(fleetAccounts.workspaceId, 'ws1'));
   await db.insert(integrationsTable).values({
     id: 'int-fleet',
     workspaceId: 'ws1',
@@ -323,12 +325,12 @@ describe('quota failover', () => {
     expect(t.assignedEnvironmentId).toBe('fleet1');
     // No hold: the next task asks Claude again instead of inheriting a claim
     // nothing could verify.
-    const [row] = await db
-      .select({ config: integrationsTable.config })
-      .from(integrationsTable)
-      .where(eq(integrationsTable.workspaceId, 'ws1'))
-      .limit(1);
-    expect((row!.config as { quotaExhausted?: unknown }).quotaExhausted).toBeUndefined();
+    const holds = await db
+      .select({ hold: fleetAccounts.quotaExhausted })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'));
+    expect(holds.length).toBeGreaterThan(0);
+    expect(holds.every((r) => r.hold === null)).toBe(true);
     if (prior === undefined) delete process.env.TALYN_TOKEN_KEY;
     else process.env.TALYN_TOKEN_KEY = prior;
     // And the note says what actually happened.

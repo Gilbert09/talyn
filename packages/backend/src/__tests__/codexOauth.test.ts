@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
-import { integrations as integrationsTable, workspaces as workspacesTable } from '../db/schema.js';
+import { fleetAccounts, workspaces as workspacesTable } from '../db/schema.js';
 
 /**
  * The ChatGPT-subscription token lifecycle.
@@ -78,15 +78,31 @@ describe('Codex OAuth refresh', () => {
     });
   }
 
+  /** The Codex account's stored credential, with its reauth column folded in. */
   async function storedCodex(): Promise<Record<string, unknown>> {
     const rows = await db
-      .select({ config: integrationsTable.config })
-      .from(integrationsTable)
-      .where(
-        and(eq(integrationsTable.workspaceId, 'ws1'), eq(integrationsTable.type, 'selfhosted')),
-      )
+      .select({
+        credential: fleetAccounts.credential,
+        reauthRequiredAt: fleetAccounts.reauthRequiredAt,
+      })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'))
       .limit(1);
-    return ((rows[0]?.config as Record<string, unknown>)?.codexOAuth ?? {}) as Record<string, unknown>;
+    const row = rows[0];
+    if (!row) return {};
+    return {
+      ...(row.credential as unknown as Record<string, unknown>),
+      ...(row.reauthRequiredAt ? { reauthRequiredAt: row.reauthRequiredAt } : {}),
+    };
+  }
+
+  async function codexAccountId(): Promise<string> {
+    const rows = await db
+      .select({ id: fleetAccounts.id })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'))
+      .limit(1);
+    return rows[0]!.id;
   }
 
   it('does not refresh a token with time left on it', async () => {
@@ -130,6 +146,36 @@ describe('Codex OAuth refresh', () => {
     for (const r of [a, b, c]) expect(r?.openaiKey).toBe(jwt('acct-3'));
   });
 
+  // The single-flight and the lock are per ACCOUNT. Keyed by workspace, a
+  // second account's refresh would wait on the first one's and get its token.
+  it('refreshes two accounts of one workspace separately', async () => {
+    await seedCodex(60_000);
+    const { addFleetAccount } = await import('../services/selfHosted/accounts.js');
+    const second = codexCredentialFrom({ accessToken: jwt('acct-b'), refreshToken: 'rt-b', expiresIn: 3600 });
+    const added = await addFleetAccount('ws1', {
+      kind: 'codex_oauth',
+      credential: { ...second, expiresAt: new Date(Date.now() + 60_000).toISOString() },
+    });
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const rt = new URLSearchParams(init.body).get('refresh_token');
+      return tokenResponse({
+        access_token: jwt(rt === 'rt-b' ? 'acct-b2' : 'acct-a2'),
+        refresh_token: `${rt}-next`,
+        expires_in: 3600,
+      });
+    });
+
+    const [first, other] = await Promise.all([
+      getSelfHostedCredentials('ws1'),
+      getSelfHostedCredentials('ws1', { codexAccountId: added.id }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(first?.openaiKey).toBe(jwt('acct-a2'));
+    expect(other?.openaiKey).toBe(jwt('acct-b2'));
+    expect(other?.codexAccountId).toBe(added.id);
+    expect(first?.codexAccountId).not.toBe(added.id);
+  });
+
   /**
    * We refresh five minutes early, so the token in hand is normally still good.
    * Failing the caller here would turn a brief OpenAI wobble into failed
@@ -166,7 +212,7 @@ describe('Codex OAuth refresh', () => {
   it('stops retrying once reauth is flagged, and reports it', async () => {
     await seedCodex(60_000);
     const { markCodexReauthRequired } = await import('../services/selfHosted/codexOauth.js');
-    await markCodexReauthRequired('ws1');
+    await markCodexReauthRequired(await codexAccountId());
 
     // No credential is served and NOTHING is retried.
     expect(await getSelfHostedCredentials('ws1')).toBeNull();
@@ -184,7 +230,7 @@ describe('Codex OAuth refresh', () => {
   it('clears the reauth flag once a refresh succeeds again', async () => {
     await seedCodex(60_000);
     const { markCodexReauthRequired } = await import('../services/selfHosted/codexOauth.js');
-    await markCodexReauthRequired('ws1');
+    await markCodexReauthRequired(await codexAccountId());
     // Reconnecting writes a fresh credential with no flag on it.
     await storeSelfHostedCredentials('ws1', {
       codex: codexCredentialFrom({ accessToken: jwt(), refreshToken: 'rt-9', expiresIn: 3600 }),

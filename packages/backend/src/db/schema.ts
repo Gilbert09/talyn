@@ -27,6 +27,11 @@ import type {
 // shared/ because the key handling is the backend's alone — tokenCrypto
 // imports nothing but node:crypto, so this is a type edge and not a cycle.
 import type { EncryptedEnvelope } from '../services/tokenCrypto.js';
+import type {
+  FleetAccountCredential,
+  FleetAccountUsage,
+} from '../services/selfHosted/accounts.js';
+import type { ExhaustedQuotaRecord } from '../services/selfHosted/credentials.js';
 import {
   pgTable,
   text,
@@ -301,6 +306,42 @@ export const integrations = pgTable(
   },
   (t) => ({
     workspaceTypeUq: uniqueIndex('uq_integrations_workspace_type').on(t.workspaceId, t.type),
+  })
+);
+
+// ---------- Fleet accounts ----------
+//
+// One Claude or Codex credential of a workspace's Talyn Fleet, in priority
+// order (migration 0079). `credential` holds encrypted envelopes only and is
+// never selected by a list: read it through `services/selfHosted/accounts.ts`,
+// whose status projection leaves it out.
+export const fleetAccounts = pgTable(
+  'fleet_accounts',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** 'claude' | 'codex'. */
+    agent: text('agent').notNull(),
+    /** 'claude_oauth' | 'anthropic_key' | 'codex_oauth' | 'openai_key'. */
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    /** 1 is tried first. Not unique, so a reorder can rewrite every row in one statement. */
+    priority: integer('priority').notNull(),
+    credential: jsonb('credential').$type<FleetAccountCredential>().notNull(),
+    reauthRequiredAt: timestamp('reauth_required_at', { withTimezone: true }),
+    quotaExhausted: jsonb('quota_exhausted').$type<ExhaustedQuotaRecord | null>(),
+    usage: jsonb('usage').$type<FleetAccountUsage | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceAgentPriorityIdx: index('idx_fleet_accounts_workspace_agent_priority').on(
+      t.workspaceId,
+      t.agent,
+      t.priority,
+    ),
   })
 );
 

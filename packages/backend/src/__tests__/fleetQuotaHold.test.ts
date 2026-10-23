@@ -9,6 +9,7 @@ import {
   environments as environmentsTable,
   repositories as repositoriesTable,
   integrations as integrationsTable,
+  fleetAccounts,
 } from '../db/schema.js';
 
 /**
@@ -97,6 +98,7 @@ async function connect(db: Database, agents: FleetAgent[]): Promise<void> {
   if (agents.includes('claude')) config.anthropicKeyEnc = encrypted('sk-ant-api-test');
   if (agents.includes('codex')) config.openaiKeyEnc = encrypted('sk-test-openai');
   await db.delete(integrationsTable).where(eq(integrationsTable.workspaceId, 'ws1'));
+  await db.delete(fleetAccounts).where(eq(fleetAccounts.workspaceId, 'ws1'));
   await db.insert(integrationsTable).values({
     id: 'int1',
     workspaceId: 'ws1',
@@ -221,17 +223,17 @@ describe('a held-back agent never boots a sandbox', () => {
     // hours this used to use: the window is now a burst-collapsing five
     // minutes, and a test that overshoots it by hours stops proving where the
     // boundary is.
-    const rows = await db
-      .select({ id: integrationsTable.id, config: integrationsTable.config })
-      .from(integrationsTable)
-      .where(eq(integrationsTable.workspaceId, 'ws1'))
-      .limit(1);
-    const config = rows[0]!.config as { quotaExhausted?: Record<string, { at: string }> };
-    config.quotaExhausted!.claude!.at = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-    await db
-      .update(integrationsTable)
-      .set({ config })
-      .where(eq(integrationsTable.id, rows[0]!.id));
+    const held = await db
+      .select({ id: fleetAccounts.id, hold: fleetAccounts.quotaExhausted })
+      .from(fleetAccounts)
+      .where(eq(fleetAccounts.workspaceId, 'ws1'));
+    expect(held.every((r) => r.hold)).toBe(true);
+    for (const row of held) {
+      await db
+        .update(fleetAccounts)
+        .set({ quotaExhausted: { ...row.hold!, at: new Date(Date.now() - 6 * 60 * 1000).toISOString() } })
+        .where(eq(fleetAccounts.id, row.id));
+    }
 
     await dispatchTaskToFleet(taskAt('claude-sonnet-5'), ENV);
 

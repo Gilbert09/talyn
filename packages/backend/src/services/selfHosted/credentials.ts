@@ -16,6 +16,23 @@ import {
   type ClaudeOAuthCredential,
 } from './claudeOauth.js';
 import { resolveCodexAccessToken } from './codexOauth.js';
+import {
+  FLEET_ACCOUNT_KINDS,
+  getFleetAccountWithCredential,
+  listFleetAccounts,
+  listFleetAccountsWithCredential,
+  orderFleetAccounts,
+  removeAllFleetAccounts,
+  removeFleetAccountsForAgent,
+  setFleetAccountReauth,
+  updateFleetAccountCredential,
+  upsertPrimaryFleetAccount,
+  type FleetAccountFilter,
+  type FleetAccountWithCredential,
+  type FleetApiKeyCredential,
+  type StoredClaudeOAuth,
+  type StoredCodexOAuth,
+} from './accounts.js';
 import { pickFleetHost } from '../fleetHosts.js';
 
 const INTEGRATION_TYPE = 'selfhosted';
@@ -58,6 +75,16 @@ export interface ExhaustedQuotaRecord {
   detail?: string;
 }
 
+/**
+ * The selfhosted integration row's config.
+ *
+ * The four CREDENTIAL keys (`claudeOAuth`, `anthropicKeyEnc`, `codexOAuth`,
+ * `openaiKeyEnc`) and `quotaExhausted` are LEGACY since migration 0079: the
+ * credentials live on `fleet_accounts` now, one row per account. They stay on
+ * old rows until a later migration strips them, are read only to adopt a key an
+ * old instance wrote during the deploy overlap (see `accounts.ts`), and are
+ * written by nothing here. `claudePendingAuth` is still live.
+ */
 interface SelfHostedIntegrationConfig {
   /**
    * The workspace's Claude SUBSCRIPTION credential, signed in through OAuth and
@@ -146,6 +173,13 @@ export interface SelfHostedCredentials {
   /** `sk-ant-oat…` (OAuth) or `sk-ant-api…` (Console key) — the fleet's
    *  credential proxy accepts either and picks the right auth header. */
   claudeToken?: string;
+  /** The FLEET ACCOUNT `claudeToken` came from (a `fleet_accounts.id`). */
+  claudeAccountId?: string;
+  /**
+   * The FLEET ACCOUNT `openaiKey` came from (a `fleet_accounts.id`). Not the
+   * ChatGPT account id, which stays a claim inside the token.
+   */
+  codexAccountId?: string;
   /**
    * A ChatGPT-subscription access token (already refreshed if it was due), or an
    * OpenAI platform key. Same story: the proxy classifies it by shape.
@@ -251,19 +285,42 @@ function readEnc(env: EncryptedEnvelope | undefined, label: string): string | nu
   return null;
 }
 
-/** Resolve a workspace's fleet credentials, or null if unset. */
 /**
- * How `claudeOauth.ts` reads and writes the stored pair.
+ * How `claudeOauth.ts` reads and writes one account's stored pair.
  *
  * Passed in rather than imported there, so the OAuth module owns the protocol
- * and this module owns the row — and so its tests need no database.
+ * and this module owns the row — and so its tests need no database. The
+ * account's `reauth_required_at` column travels as the credential's
+ * `reauthRequiredAt`.
  */
 export const claudeStore: ClaudeCredentialStore = {
-  read: async (workspaceId) => (await readSelfHostedConfig(workspaceId))?.claudeOAuth,
-  patch: async (workspaceId, next) => {
-    await patchSelfHostedConfig(workspaceId, { claudeOAuth: next });
+  read: async (accountId) => {
+    const account = await getFleetAccountWithCredential(accountId);
+    if (!account || account.kind !== 'claude_oauth') return undefined;
+    return toClaudeCredential(account);
+  },
+  patch: async (accountId, next) => {
+    const { reauthRequiredAt, ...credential } = next;
+    // Marking a dead grant leaves the pair as it is; writing a new pair clears
+    // the mark, because a pair that was just issued works.
+    if (reauthRequiredAt) await setFleetAccountReauth(accountId, new Date(reauthRequiredAt));
+    else await updateFleetAccountCredential(accountId, credential);
   },
 };
+
+function toClaudeCredential(account: FleetAccountWithCredential): ClaudeOAuthCredential {
+  return {
+    ...(account.credential as StoredClaudeOAuth),
+    ...(account.reauthRequiredAt ? { reauthRequiredAt: account.reauthRequiredAt } : {}),
+  };
+}
+
+function toCodexCredential(account: FleetAccountWithCredential): CodexOAuthCredential {
+  return {
+    ...(account.credential as StoredCodexOAuth),
+    ...(account.reauthRequiredAt ? { reauthRequiredAt: account.reauthRequiredAt } : {}),
+  };
+}
 
 /** The raw integration config for a workspace, or undefined when unconfigured. */
 async function readSelfHostedConfig(
@@ -319,6 +376,24 @@ async function patchSelfHostedConfig(
   workspaceId: string,
   patch: Partial<SelfHostedIntegrationConfig>,
 ): Promise<void> {
+  // A finished Claude sign-in is an ACCOUNT now, not a config key. The sign-in
+  // route still hands it over this way, so it lands on the Claude sign-in account
+  // here — the same compat rule as `storeSelfHostedCredentials`.
+  if (patch.claudeOAuth) {
+    const { claudeOAuth, ...rest } = patch;
+    await writeConfigPatch(workspaceId, { ...rest, enabledRow: true });
+    const { reauthRequiredAt: _dropped, ...credential } = claudeOAuth;
+    await upsertPrimaryFleetAccount(workspaceId, 'claude_oauth', credential);
+    return;
+  }
+  await writeConfigPatch(workspaceId, patch);
+}
+
+async function writeConfigPatch(
+  workspaceId: string,
+  input: Partial<SelfHostedIntegrationConfig> & { enabledRow?: boolean },
+): Promise<void> {
+  const { enabledRow, ...patch } = input;
   const db = getDbClient();
   const rows = await db
     .select({ id: integrationsTable.id, config: integrationsTable.config })
@@ -346,8 +421,9 @@ async function patchSelfHostedConfig(
       .where(eq(integrationsTable.id, row.id));
     return;
   }
-  // Nothing to store and nothing to store it in.
-  if (Object.keys(next).length === 0) return;
+  // Nothing to store and nothing to store it in — unless an account is about
+  // to be written, which needs the row to say the fleet is on.
+  if (Object.keys(next).length === 0 && !enabledRow) return;
   await db.insert(integrationsTable).values({
     id: uuid(),
     workspaceId,
@@ -361,62 +437,90 @@ async function patchSelfHostedConfig(
 
 export { readSelfHostedConfig, patchSelfHostedConfig };
 
+/** What `getSelfHostedCredentials` may be told about which accounts to use. */
+export interface SelfHostedCredentialOptions {
+  /** Try this Claude account first (a running task's pinned account). */
+  claudeAccountId?: string;
+  /** Try this Codex account first. */
+  codexAccountId?: string;
+  /**
+   * Which accounts may be used at all. The seam for the usage threshold: an
+   * account the filter refuses is never resolved. Absent = every account.
+   */
+  accountFilter?: FleetAccountFilter;
+}
+
+/**
+ * Resolve a workspace's fleet credentials, or null when it holds none.
+ *
+ * AN AGENT CREDENTIAL is what makes a workspace configured — EITHER vendor's. A
+ * Codex-only workspace is fully configured and must not read as "the fleet is
+ * not set up", which would send the user back to a form they already filled in.
+ *
+ * Each agent's accounts are tried in priority order (the preferred id first,
+ * when given). An account that cannot give a token — a grant that needs
+ * reauth — falls through to the next, which is what a signed-in subscription
+ * with a pasted key behind it always did. When no account gives a token and one
+ * of them THREW, that error is thrown: a refresh that failed on an expired
+ * token must not read as "not connected".
+ */
 export async function getSelfHostedCredentials(
   workspaceId: string,
+  opts: SelfHostedCredentialOptions = {},
 ): Promise<SelfHostedCredentials | null> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ config: integrationsTable.config, enabled: integrationsTable.enabled })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row || !row.enabled) return null;
+  const accounts = await listFleetAccountsWithCredential(workspaceId);
+  if (accounts.length === 0) return null;
 
-  const config = (row.config as SelfHostedIntegrationConfig | null) ?? {};
-
-  // AN AGENT CREDENTIAL is what makes a workspace configured — EITHER vendor's.
-  //
-  // It used to be the Claude token specifically, because every fleet model was
-  // Anthropic's, so a workspace holding only an OpenAI key could not dispatch
-  // anything. Codex models moved that gate: a Codex-only workspace is fully
-  // configured and must not read as "the fleet is not set up", which would send
-  // the user back to a form they have already filled in.
-  //
-  // Nothing else in this config could play that role. The fleet bearer is
-  // identical for every workspace so it distinguishes nothing, and the endpoint
-  // answers "which host", which the registry answers better. A row written
-  // before either existed carries only `fleetTokenEnc`/`fleetEndpoint` and
-  // still reads as unconfigured, which is accurate.
-  // A SIGNED-IN SUBSCRIPTION WINS OVER A PASTED KEY, the same way `codexOAuth`
-  // wins over `openaiKeyEnc`: it is what the user already pays for, and it is
-  // the one that can be renewed instead of expiring mid-run.
-  const claudeOAuthToken = await resolveClaudeAccessToken(
-    workspaceId,
-    config.claudeOAuth,
-    claudeStore,
+  const claude = await resolveAgentToken(
+    orderFleetAccounts(
+      accounts.filter((a) => a.agent === 'claude'),
+      { preferId: opts.claudeAccountId, usable: opts.accountFilter },
+    ),
   );
-  const pastedClaude = readEnc(config.anthropicKeyEnc, 'Claude token');
-  const claudeToken = claudeOAuthToken ?? pastedClaude;
-
-  // A SUBSCRIPTION WINS OVER A PLATFORM KEY when a workspace holds both: the
-  // subscription is the thing the user is already paying for, and the platform
-  // key would bill them a second time for the same work.
-  const codex = await resolveCodexAccessToken(workspaceId, config.codexOAuth);
-  const platformKey = readEnc(config.openaiKeyEnc, 'OpenAI key');
-  const openaiKey = codex?.accessToken ?? platformKey ?? undefined;
-
-  if (!claudeToken && !openaiKey) return null;
+  const codex = await resolveAgentToken(
+    orderFleetAccounts(
+      accounts.filter((a) => a.agent === 'codex'),
+      { preferId: opts.codexAccountId, usable: opts.accountFilter },
+    ),
+  );
+  if (!claude && !codex) return null;
 
   return {
-    ...(claudeToken ? { claudeToken } : {}),
-    ...(openaiKey ? { openaiKey } : {}),
+    ...(claude ? { claudeToken: claude.token, claudeAccountId: claude.accountId } : {}),
+    ...(codex ? { openaiKey: codex.token, codexAccountId: codex.accountId } : {}),
   };
+}
+
+async function resolveAgentToken(
+  candidates: FleetAccountWithCredential[],
+): Promise<{ token: string; accountId: string } | null> {
+  let firstError: unknown;
+  for (const account of candidates) {
+    try {
+      const token = await resolveAccountToken(account);
+      if (token) return { token, accountId: account.id };
+    } catch (err) {
+      firstError ??= err;
+    }
+  }
+  if (firstError !== undefined) throw firstError;
+  return null;
+}
+
+/** One account's usable token, refreshed if it was due. Null = nothing usable. */
+async function resolveAccountToken(account: FleetAccountWithCredential): Promise<string | null> {
+  switch (account.kind) {
+    case 'claude_oauth':
+      return resolveClaudeAccessToken(account.id, toClaudeCredential(account), claudeStore);
+    case 'codex_oauth':
+      return (await resolveCodexAccessToken(account.id, toCodexCredential(account)))?.accessToken ?? null;
+    case 'anthropic_key':
+      return readEnc((account.credential as FleetApiKeyCredential).keyEnc, 'Claude token');
+    case 'openai_key':
+      return readEnc((account.credential as FleetApiKeyCredential).keyEnc, 'OpenAI key');
+    default:
+      return null;
+  }
 }
 
 /** Build a client for a workspace, or null if it isn't configured. */
@@ -517,21 +621,23 @@ export interface SelfHostedCredentialPatch {
 }
 
 /**
- * Upsert a workspace's fleet credentials (secrets encrypted at rest).
+ * Save a workspace's fleet credentials the single-credential way — the old
+ * `PUT /cloud-providers/selfhosted/config` body, which old desktop builds still
+ * send.
  *
- * MERGES, but by enumerating the fields it knows rather than by spreading the
- * stored object. That distinction is the whole function.
+ * Each credential maps onto ACCOUNTS, by kind (see `upsertPrimaryFleetAccount`):
+ *   - a credential writes the first account of ITS kind, or adds one — a
+ *     sign-in first, a pasted key last; other accounts are left alone;
+ *   - `claudeToken: null` removes every Claude account;
+ *   - `codex: null` with `openaiKey: null` removes every Codex account, and
+ *     either one alone removes only the accounts of that kind. The provider
+ *     sends `openaiKey: null` beside a new Codex sign-in, which is how the old
+ *     config replaced a key with a subscription; that is kept.
  *
- * It used to write the config WHOLE, deliberately: a workspace configured
- * before the fleet bearer and endpoint left the card still has
- * `fleetTokenEnc`/`fleetEndpoint` on disk, and carrying them forward would keep
- * a dead per-workspace endpoint alive as a silent routing override. A blind
- * `{...existing, ...patch}` would resurrect exactly that.
- *
- * A whole-write cannot survive two vendors, though — saving Codex would wipe
- * Claude. So this reads the row, picks out ONLY the credential fields, and
- * writes those: the legacy keys are still dropped because nothing here copies
- * them, and each vendor survives a save of the other.
+ * It also makes sure the integration row exists and is enabled, and drops the
+ * dead `fleetTokenEnc`/`fleetEndpoint` keys from it: a workspace configured
+ * before those left the card still carries them, and keeping them would look
+ * like a per-workspace routing override that nothing honours.
  */
 export async function storeSelfHostedCredentials(
   workspaceId: string,
@@ -549,30 +655,13 @@ export async function storeSelfHostedCredentials(
     )
     .limit(1);
 
-  const prior = (existing[0]?.config as SelfHostedIntegrationConfig | null) ?? {};
-
-  const claudeEnc =
-    patch.claudeToken === undefined
-      ? prior.anthropicKeyEnc
-      : patch.claudeToken === null
-        ? undefined
-        : encryptString(patch.claudeToken);
-  const codex = patch.codex === undefined ? prior.codexOAuth : (patch.codex ?? undefined);
-  const openaiEnc =
-    patch.openaiKey === undefined
-      ? prior.openaiKeyEnc
-      : patch.openaiKey === null
-        ? undefined
-        : encryptString(patch.openaiKey);
-
-  const config: SelfHostedIntegrationConfig = {
-    ...(claudeEnc ? { anthropicKeyEnc: claudeEnc } : {}),
-    ...(codex ? { codexOAuth: codex } : {}),
-    ...(openaiEnc ? { openaiKeyEnc: openaiEnc } : {}),
-  };
-
   const now = new Date();
   if (existing[0]) {
+    const {
+      fleetTokenEnc: _token,
+      fleetEndpoint: _endpoint,
+      ...config
+    } = (existing[0].config as SelfHostedIntegrationConfig | null) ?? {};
     await db
       .update(integrationsTable)
       .set({ config, enabled: true, updatedAt: now })
@@ -583,10 +672,38 @@ export async function storeSelfHostedCredentials(
       workspaceId,
       type: INTEGRATION_TYPE,
       enabled: true,
-      config,
+      config: {},
       createdAt: now,
       updatedAt: now,
     });
+  }
+
+  if (patch.claudeToken === null) {
+    await removeFleetAccountsForAgent(workspaceId, 'claude');
+  } else if (patch.claudeToken !== undefined) {
+    await upsertPrimaryFleetAccount(workspaceId, 'anthropic_key', {
+      keyEnc: encryptString(patch.claudeToken),
+    });
+  }
+
+  if (patch.codex === null && patch.openaiKey === null) {
+    await removeFleetAccountsForAgent(workspaceId, 'codex');
+    return;
+  }
+  // Each field on its own, as the old config keys were: a set writes that
+  // kind's account, a null removes that kind's accounts and nothing else.
+  if (patch.codex) {
+    const { reauthRequiredAt: _dropped, ...credential } = patch.codex;
+    await upsertPrimaryFleetAccount(workspaceId, 'codex_oauth', credential);
+  } else if (patch.codex === null) {
+    await removeFleetAccountsForAgent(workspaceId, 'codex', ['codex_oauth']);
+  }
+  if (patch.openaiKey) {
+    await upsertPrimaryFleetAccount(workspaceId, 'openai_key', {
+      keyEnc: encryptString(patch.openaiKey),
+    });
+  } else if (patch.openaiKey === null) {
+    await removeFleetAccountsForAgent(workspaceId, 'codex', ['openai_key']);
   }
 }
 
@@ -602,45 +719,25 @@ export async function storeSelfHostedCredentials(
 export async function fleetAgentStatus(
   workspaceId: string,
 ): Promise<{ connectedAgents: ('claude' | 'codex')[]; reauthAgents: ('claude' | 'codex')[] }> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ config: integrationsTable.config, enabled: integrationsTable.enabled })
-    .from(integrationsTable)
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row || !row.enabled) return { connectedAgents: [], reauthAgents: [] };
-  const config = (row.config as SelfHostedIntegrationConfig | null) ?? {};
+  const accounts = await listFleetAccounts(workspaceId);
   const connectedAgents: ('claude' | 'codex')[] = [];
   const reauthAgents: ('claude' | 'codex')[] = [];
-  // A signed-in subscription counts as connected exactly as a pasted key does —
-  // and, like Codex, it can additionally need REAUTH, which is a different
-  // state from disconnected: the workspace still holds a credential, it is just
-  // one Anthropic will no longer renew.
-  if (config.claudeOAuth || config.anthropicKeyEnc) {
-    connectedAgents.push('claude');
-    if (config.claudeOAuth?.reauthRequiredAt && !config.anthropicKeyEnc) {
-      // Only when there is nothing to fall back to. A workspace that also
-      // pasted a Console key is still able to run, so nagging it to sign in
-      // again would be asking for something it does not need.
-      reauthAgents.push('claude');
-    }
-  }
-  if (config.codexOAuth || config.openaiKeyEnc) {
-    connectedAgents.push('codex');
-    if (config.codexOAuth?.reauthRequiredAt) reauthAgents.push('codex');
+  for (const agent of Object.keys(FLEET_ACCOUNT_KINDS) as ('claude' | 'codex')[]) {
+    const own = accounts.filter((a) => a.agent === agent);
+    if (own.length === 0) continue;
+    connectedAgents.push(agent);
+    // Only when EVERY account needs it. A workspace with one account still able
+    // to run has nothing it must do, so asking it to sign in again would be
+    // asking for something it does not need.
+    if (own.every((a) => a.reauthRequiredAt)) reauthAgents.push(agent);
   }
   return { connectedAgents, reauthAgents };
 }
 
-/** Remove a workspace's fleet credentials. */
+/** Remove a workspace's fleet credentials: every account and the integration row. */
 export async function removeSelfHostedCredentials(workspaceId: string): Promise<void> {
   const db = getDbClient();
+  await removeAllFleetAccounts(workspaceId);
   await db
     .delete(integrationsTable)
     .where(
