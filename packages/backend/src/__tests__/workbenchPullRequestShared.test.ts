@@ -5,6 +5,8 @@ import {
   buildBlocks,
   buildClaudeArgv,
   buildCreatePrTurnInstructions,
+  parseAutoPrDetails,
+  stripAutoPrBlock,
   commitAllSteps,
   commitsAheadSteps,
   CREATE_PR_MESSAGE,
@@ -84,6 +86,16 @@ describe('parsePrDetails', () => {
   ])('refuses %s', (_name, text) => {
     expect(parsePrDetails(text)).toEqual({ ok: false, error: MISSING_PR_BLOCK_MESSAGE });
   });
+
+  it('requires a valid final talyn-pr block for automatic creation', () => {
+    const final = `Done.\n${block(json)}`;
+    expect(parseAutoPrDetails(final)).toEqual({ ok: true, details: expected });
+    expect(stripAutoPrBlock(final)).toBe('Done.');
+    for (const text of [block(json, 'json'), `${block(json)}\nMore text`, `${block(json)}\n${block('{broken}')}`]) {
+      expect(parseAutoPrDetails(text).ok).toBe(false);
+      if (!text.includes('```talyn-pr') || !text.endsWith('```')) expect(stripAutoPrBlock(text)).toBe(text);
+    }
+  });
 });
 
 describe('buildCreatePrTurnInstructions', () => {
@@ -144,8 +156,9 @@ describe('workbenchTurnPrompt for a Create PR turn', () => {
     expect(argv.slice(-2)).toEqual(['--', turn.prompt]);
   });
 
-  it.each(['claude', 'codex'] as const)('%s: an ordinary turn gets the visible text only', (agent) => {
-    expect(workbenchTurnPrompt({ agent, text: 'Tidy up', planMode: false, createPr })).toEqual({ prompt: 'Tidy up' });
+  it.each(['claude', 'codex'] as const)('%s: an ordinary turn gets the standing PR instruction', (agent) => {
+    const turn = workbenchTurnPrompt({ agent, text: 'Tidy up', planMode: false, createPr });
+    expect(turn.appendSystemPrompt ?? turn.prompt).toContain('```talyn-pr');
   });
 
   it('Codex: the instructions go in front of the text, with no system prompt', () => {

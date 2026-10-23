@@ -13,6 +13,7 @@ const archive = jest.fn();
 const createChat = jest.fn();
 const unlinkPullRequest = jest.fn();
 const openPullRequests = jest.fn().mockResolvedValue([]);
+const updateWorkbench = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   api: {
     pullRequests: { merge: (...a: unknown[]) => merge(...a) },
@@ -21,6 +22,7 @@ jest.mock('../renderer/lib/api', () => ({
       unlinkPullRequest: (...a: unknown[]) => unlinkPullRequest(...a),
       openPullRequests: (...a: unknown[]) => openPullRequests(...a),
       createChat: (...a: unknown[]) => createChat(...a),
+      update: (...a: unknown[]) => updateWorkbench(...a),
     },
   },
 }));
@@ -97,6 +99,13 @@ afterEach(() => {
 });
 
 describe('WorkbenchHeader action cycle', () => {
+  it('changes the automatic PR setting from Actions', async () => {
+    updateWorkbench.mockResolvedValue({ ...WB, settings: { autoCreatePr: false } });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open a PR when done: on' }));
+    await waitFor(() => expect(updateWorkbench).toHaveBeenCalledWith('wb1', { settings: { autoCreatePr: false } }));
+  });
   it.each([
     ['sandbox', false, true],
     ['sandbox', true, false],
@@ -183,7 +192,7 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Unlink pull request', 'Copy branch name']);
+    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Open a PR when done: on', 'Unlink pull request', 'Copy branch name']);
   });
 
   it('the menu lists every action that applies, in cycle order', () => {
@@ -200,6 +209,7 @@ describe('WorkbenchHeader action cycle', () => {
       'Resolve conflicts',
       'Fix checksCtrl+Shift+X',
       'ArchiveCtrl+Shift+A',
+      'Open a PR when done: on',
       'Unlink pull request',
       'Copy branch name',
     ]);

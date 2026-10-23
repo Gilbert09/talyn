@@ -49,6 +49,8 @@ export interface PullRequestUpdatePayload {
    * leaves a stale review pinned to a commit that no longer exists.
    */
   codeReview?: CodeReviewPublic | null;
+  /** The live session on this PR. Null clears it; absent preserves. */
+  session?: PRRow['session'];
 }
 
 interface PullRequestState {
@@ -117,6 +119,7 @@ const MERGED_ROW_FIELDS = [
   'mergeQueued',
   'mergeQueue',
   'codeReview',
+  'session',
 ] as const satisfies readonly (keyof PRRow)[];
 
 /**
@@ -166,6 +169,8 @@ function mergeRowUpdate(row: PRRow, p: PullRequestUpdatePayload): PRRow {
     // from null because absent means "this emitter did not know" and null means
     // "there is none".
     codeReview: p.codeReview !== undefined ? p.codeReview : row.codeReview,
+    // Explicit undefined for the same reason: null is "the session is gone".
+    session: p.session !== undefined ? p.session : row.session,
   };
   const changed = MERGED_ROW_FIELDS.some((k) => !jsonEqual(row[k], next[k]));
   return changed ? next : row;

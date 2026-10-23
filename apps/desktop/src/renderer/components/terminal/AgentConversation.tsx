@@ -17,6 +17,8 @@ import {
   groupToolRuns,
   groupedBlockSignature,
   mergeToolBlocks,
+  parseAutoPrDetails,
+  stripAutoPrBlock,
   stripPlanBlocks,
 } from '@talyn/shared';
 
@@ -243,15 +245,22 @@ function BlockViewImpl({
 
 function TextBlock({ text }: { text: string }) {
   // A session draws a plan block as its own card, under the turn.
-  const shown = stripPlanBlocks(text);
-  if (!shown) return null;
+  const pr = parseAutoPrDetails(text);
+  const shown = stripPlanBlocks(stripAutoPrBlock(text));
+  if (!shown && !pr.ok) return null;
   return (
     // Paragraph spacing is renderMarkdownish's own (`my-1 leading-relaxed` on
     // its `p`), so this sets size and colour only. Overriding it from here
     // would be two single-class rules at equal specificity fighting over
     // stylesheet order.
     <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {renderMarkdownish(shown, 'surface')}
+      {shown ? renderMarkdownish(shown, 'surface') : null}
+      {pr.ok && (
+        <div className="mt-2 flex items-start gap-1.5 rounded border border-border px-3 py-2 text-xs" data-testid="pull-request-card">
+          <GitPullRequest className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>Pull request ready: {pr.details.title}</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { WorkbenchError } from './errors.js';
 import { parseSections, sectionsScript } from './execFraming.js';
 import { publicWorkbench } from './prLink.js';
 import { fleetClientFor, MERGE_BASE_DEEPEN_BY, repoDirFor, runCapture } from './sandboxRuntime.js';
+import { withLostRecovery } from './recovery.js';
 import { updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -71,7 +72,7 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
 
 export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await client.getDiff(row.sandboxId!, { base: baseRef(row), cwd: repoDirFor(row) });
+  const fleet = await withLostRecovery(row, () => client.getDiff(row.sandboxId!, { base: baseRef(row), cwd: repoDirFor(row) }));
   if (fleet.supported && fleet.data) {
     return {
       files: fleet.data.files.map((f) => ({
@@ -129,12 +130,12 @@ export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
 export async function getPatch(row: WorkbenchRow, path?: string): Promise<{ patch: string }> {
   const safePath = path ? assertRepoPath(path) : undefined;
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await client.getDiff(row.sandboxId!, {
+  const fleet = await withLostRecovery(row, () => client.getDiff(row.sandboxId!, {
     base: baseRef(row),
     patch: true,
     cwd: repoDirFor(row),
     ...(safePath ? { path: safePath } : {}),
-  });
+  }));
   if (fleet.supported && fleet.data) return { patch: fleet.data.patch ?? '' };
 
   const quotedPath = safePath ? shellQuote(safePath) : '';
@@ -166,7 +167,7 @@ export function looksBinary(bytes: Buffer): boolean {
 export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ content: string; binary: boolean }> {
   const safePath = assertRepoPath(path);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await client.readFile(row.sandboxId!, safePath, { cwd: repoDirFor(row) }).catch((err: unknown) => {
+  const fleet = await withLostRecovery(row, () => client.readFile(row.sandboxId!, safePath, { cwd: repoDirFor(row) })).catch((err: unknown) => {
     if (err instanceof FleetHttpError && err.code === 'no_such_file') {
       throw new WorkbenchError(`${safePath} does not exist.`, 404, 'file_not_found');
     }
@@ -199,7 +200,7 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
 /** Tracked and untracked files, gitignored ones excluded. */
 export async function listRepoFiles(row: WorkbenchRow): Promise<{ paths: string[] }> {
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await client.listFiles(row.sandboxId!, { cwd: repoDirFor(row) });
+  const fleet = await withLostRecovery(row, () => client.listFiles(row.sandboxId!, { cwd: repoDirFor(row) }));
   if (fleet.supported && fleet.data) return { paths: fleet.data.paths };
   const r = await runCapture(row, 'git ls-files --cached --others --exclude-standard -z', {
     quiet: true,
@@ -224,7 +225,7 @@ export async function refreshDiffStat(row: WorkbenchRow): Promise<WorkbenchRow> 
     const stat = diffStatOf(changes.files);
     if (sameStat(row.diffStat ?? null, stat)) return row;
     const updated = (await updateWorkbench(row.id, { diffStat: stat })) ?? row;
-    emitWorkbenchUpdated(await publicWorkbench(updated));
+    await emitWorkbenchUpdated(await publicWorkbench(updated));
     return updated;
   } catch (err) {
     console.warn(`[workbench] diff stat for ${row.id} failed:`, err instanceof Error ? err.message : err);

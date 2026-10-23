@@ -18,6 +18,7 @@ export interface NewWorkbenchSpec {
   effort: WorkbenchEffort;
   planMode: boolean;
   internetAccess: boolean;
+  autoCreatePr?: boolean;
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
   baseBranch?: string;
@@ -91,6 +92,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
       takenNames: Object.values(useWorkbenchStore.getState().workbenches).map((w) => w.name),
       branchPrefix: useWorkspaceStore.getState().workspaces.find((w) => w.id === spec.workspaceId)?.settings?.sessionBranchPrefix,
       prompt,
+      autoCreatePr: spec.autoCreatePr ?? true,
     });
   }
 
@@ -105,6 +107,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     fromPullRequestId: spec.fromPullRequestId,
     prompt: prompt || undefined,
     internetAccess: spec.internetAccess,
+    autoCreatePr: spec.autoCreatePr ?? true,
   });
   // The queued first message takes the chat's plan mode and effort when it
   // runs, and the box takes far longer to boot than this one request.

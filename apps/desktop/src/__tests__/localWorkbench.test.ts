@@ -346,10 +346,35 @@ describe('LocalTurnController Create PR', () => {
     expect(userMessageText(useWorkbenchStore.getState().chatEvents.c1.events[0].event)).toBe('Create a pull request');
   });
 
-  it('an ordinary message gets no hidden instructions', async () => {
+  it('an ordinary message gets the standing PR instruction', async () => {
     const { controller, bridge } = setup();
     await controller.send(WB, chat(), { text: 'go' });
-    expect(bridge.startTurn).toHaveBeenCalledWith(expect.not.objectContaining({ appendSystemPrompt: expect.anything() }));
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({ appendSystemPrompt: expect.stringContaining('```talyn-pr') }));
+  });
+
+  it('opens a PR after a successful ordinary turn', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    await controller.send(WB, chat(), { text: 'go' });
+    await controller.handleTurnEnd('c1', ok());
+    expect(api.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(prEvents()).toEqual([expect.objectContaining({ ok: true, number: 12 })]);
+  });
+
+  it.each(['off', 'linked', 'invalid', 'cancelled', 'error', 'awaiting_input'] as const)('skips an ordinary PR when %s', async (reason) => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    const wb = reason === 'off' ? { ...WB, settings: { autoCreatePr: false } } :
+      reason === 'linked' ? { ...WB, pullRequestId: 'pr-1' } : WB;
+    useWorkbenchStore.getState().upsertWorkbench(wb);
+    await controller.send(wb, chat(), { text: 'go' });
+    if (reason === 'awaiting_input') useWorkbenchStore.getState().upsertChat(chat({ status: 'awaiting_input' }));
+    await controller.handleTurnEnd('c1', {
+      ...ok(reason === 'invalid' ? 'Done.\n```talyn-pr\n{broken}\n```' : REPLY),
+      cancelled: reason === 'cancelled', isError: reason === 'error',
+    });
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(prEvents()).toEqual([]);
   });
 
   it('at the end of the turn commits, pushes and asks the backend to open the PR, then says so in the thread', async () => {

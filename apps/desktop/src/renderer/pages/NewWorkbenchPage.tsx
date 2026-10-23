@@ -75,6 +75,7 @@ export function NewWorkbenchPage() {
   const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
+  const autoCreatePr = defaults.autoCreatePr;
   const [pathError, setPathError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -213,6 +214,7 @@ export function NewWorkbenchPage() {
       effort,
       planMode,
       internetAccess,
+      autoCreatePr,
       prompt: text,
       baseBranch: baseBranch.trim() || (source.kind === 'pr' ? source.baseBranch : undefined),
       branch: source.kind === 'branch' ? source.branch : source.kind === 'pr' ? source.headBranch || undefined : undefined,

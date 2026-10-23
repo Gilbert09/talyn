@@ -210,6 +210,12 @@ export function SessionsSettings() {
           checked={defaults.internetAccess}
           onChange={(internetAccess) => writeSessionDefaults({ internetAccess })}
         />
+        <SettingToggle
+          label="Open a pull request when the agent is done"
+          description="When the agent says the task is finished, Talyn commits, pushes and opens a pull request for this session. Only while the session has no pull request yet."
+          checked={defaults.autoCreatePr}
+          onChange={(autoCreatePr) => writeSessionDefaults({ autoCreatePr })}
+        />
       </SettingsSection>
       <SettingsSection title="Branches">
         <BranchPrefixRow />

@@ -214,6 +214,7 @@ describe('sandboxOps', () => {
   it.each([
     ['ready', { status: 'ready' }, null],
     ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],
+    ['lost', { status: 'provisioning', sandboxState: 'lost', statusMessage: 'The sandbox was lost. Talyn is starting a new one.' }, 'The sandbox was lost. Talyn is starting a new one.'],
     ['error with message', { status: 'error', error: 'clone failed' }, 'clone failed'],
     ['error with status message', { status: 'error', statusMessage: 'no fleet' }, 'no fleet'],
     ['archived', { status: 'archived' }, 'This session is archived.'],

@@ -16,6 +16,7 @@ describe('isStarting', () => {
     ['provisioning', { status: 'provisioning', sandboxState: 'creating' }, true],
     ['ready but the box is still creating', { status: 'ready', sandboxState: 'creating' }, true],
     ['ready', { status: 'ready', sandboxState: 'running' }, false],
+    ['lost', { status: 'provisioning', sandboxState: 'lost' }, true],
     ['failed while the box says creating', { status: 'error', sandboxState: 'creating' }, false],
     ['provisioning with a failed box', { status: 'provisioning', sandboxState: 'error' }, false],
   ])('%s → %s', (_name, over, expected) => {
@@ -43,5 +44,11 @@ describe('StartingHint', () => {
     render(<StartingHint workbench={wb({ runtime: 'local' })} queued={1} />);
     expect(screen.getByText('Creating the worktree')).toBeInTheDocument();
     expect(screen.getByText(/when the worktree is ready/)).toBeInTheDocument();
+  });
+
+  it('shows the recovery message', () => {
+    render(<StartingHint workbench={wb({ status: 'provisioning', sandboxState: 'lost', statusMessage: 'The sandbox was lost. Talyn is starting a new one.' })} queued={0} />);
+    expect(screen.getByText('Starting a new sandbox')).toBeInTheDocument();
+    expect(screen.getByText('The sandbox was lost. Talyn is starting a new one.')).toBeInTheDocument();
   });
 });

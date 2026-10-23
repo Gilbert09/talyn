@@ -17,6 +17,7 @@ describe('session defaults', () => {
       effort: 'high',
       planMode: false,
       internetAccess: true,
+      autoCreatePr: true,
       notifyOnFinish: true,
     });
   });
@@ -60,6 +61,7 @@ describe('session defaults', () => {
     [{ effort: 'low' as const }],
     [{ planMode: true }],
     [{ internetAccess: false }],
+    [{ autoCreatePr: false }],
     [{ notifyOnFinish: false }],
   ])('round-trips %j', (patch) => {
     writeSessionDefaults(patch);

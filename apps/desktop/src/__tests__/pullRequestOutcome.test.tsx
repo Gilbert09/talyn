@@ -22,6 +22,12 @@ afterEach(() => {
 });
 
 describe('the Create PR outcome in the transcript', () => {
+  it('draws a PR block as a card and hides its JSON', () => {
+    const reply = 'Done.\n\n```talyn-pr\n{"title":"feat: done","body":"Body","commitMessage":"feat: done","draft":false}\n```';
+    render(<AgentBlocks events={[at(1, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } })]} />);
+    expect(screen.getByTestId('pull-request-card')).toHaveTextContent('feat: done');
+    expect(screen.queryByText(/commitMessage/)).not.toBeInTheDocument();
+  });
   it('links the PR it opened', () => {
     render(
       <AgentBlocks

@@ -31,6 +31,7 @@ export type WorkbenchSandboxState =
   | 'creating'
   | 'running'
   | 'suspended'
+  | 'lost'
   | 'deleted'
   | 'error';
 
@@ -78,8 +79,11 @@ export interface WorkbenchDiffStat {
  */
 export interface WorkbenchSettings {
   prUnlinked?: number;
+  fleetSandboxId?: string;
   /** Absent means internet access is on. */
   internetAccess?: boolean;
+  /** Absent uses the device default. */
+  autoCreatePr?: boolean;
   scripts?: {
     setup?: string | null;
     /** One command, or named run scripts. */
@@ -284,6 +288,7 @@ export interface CreateWorkbenchInput {
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
   internetAccess?: boolean;
+  autoCreatePr?: boolean;
   model?: string;
   baseBranch?: string;
   /** An existing branch to check out. Absent: a new branch named after the workbench. */

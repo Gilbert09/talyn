@@ -64,6 +64,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { stackSelection } from '../panels/github/stacks';
 import { OpenInWorkbenchButton } from '../workbench/OpenInWorkbenchButton';
+import { PrSessionChip } from '../workbench/PrSessionChip';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -582,6 +583,7 @@ export function PRDetailSheet({
             >
               <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
             </Button>
+            {view && <PrSessionChip session={view.row.session} onOpened={onClose} />}
             {view && <OpenInWorkbenchButton row={view.row} onOpened={onClose} />}
             {view && (
               <Button

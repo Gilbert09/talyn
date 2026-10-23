@@ -25,7 +25,7 @@ export function OpenInWorkbenchButton({
   onOpened?: () => void;
 }) {
   const features = useWorkspaceStore((s) => s.features);
-  if (!workbenchesOffered(features) || row.state !== 'open') return null;
+  if (!workbenchesOffered(features) || row.state !== 'open' || row.session) return null;
   const open = (e: MouseEvent) => {
     e.stopPropagation();
     openPrInWorkbench(row);

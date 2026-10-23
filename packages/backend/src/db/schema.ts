@@ -1955,6 +1955,9 @@ export const workbenches = pgTable(
     sandboxIdx: index('idx_workbenches_sandbox')
       .on(t.sandboxId)
       .where(sql`${t.sandboxId} IS NOT NULL`),
+    pullRequestIdx: index('idx_workbenches_pull_request')
+      .on(t.pullRequestId)
+      .where(sql`${t.archivedAt} IS NULL`),
   })
 );
 

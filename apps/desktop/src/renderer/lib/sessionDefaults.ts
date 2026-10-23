@@ -19,6 +19,7 @@ export interface SessionDefaults {
   effort: WorkbenchEffort;
   planMode: boolean;
   internetAccess: boolean;
+  autoCreatePr: boolean;
   notifyOnFinish: boolean;
 }
 
@@ -28,6 +29,7 @@ export const DEFAULT_SESSION_DEFAULTS: SessionDefaults = {
   effort: DEFAULT_WORKBENCH_EFFORT,
   planMode: false,
   internetAccess: true,
+  autoCreatePr: true,
   notifyOnFinish: true,
 };
 
@@ -54,6 +56,7 @@ function parse(raw: string | null | undefined): SessionDefaults {
       effort: WORKBENCH_EFFORTS.includes(p.effort as WorkbenchEffort) ? (p.effort as WorkbenchEffort) : d.effort,
       planMode: typeof p.planMode === 'boolean' ? p.planMode : d.planMode,
       internetAccess: typeof p.internetAccess === 'boolean' ? p.internetAccess : d.internetAccess,
+      autoCreatePr: typeof p.autoCreatePr === 'boolean' ? p.autoCreatePr : d.autoCreatePr,
       notifyOnFinish: typeof p.notifyOnFinish === 'boolean' ? p.notifyOnFinish : d.notifyOnFinish,
     };
   } catch {

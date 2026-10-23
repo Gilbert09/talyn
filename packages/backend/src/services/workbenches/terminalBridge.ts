@@ -14,6 +14,7 @@ import {
 } from '../selfHosted/client.js';
 import { userMayUseWorkbenches } from './access.js';
 import { fleetClientFor, recordWorkbenchEvent, repoDirFor } from './sandboxRuntime.js';
+import { recoverLostSandbox } from './recovery.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -183,6 +184,7 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
 
   async function authorise(token: string): Promise<void> {
     let user: AuthUser | null = null;
+    let row: WorkbenchRow | null = null;
     try {
       user = await verifyTokenAndGetUser(token);
     } catch (err) {
@@ -193,7 +195,7 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
       if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
         return close(4403, 'sessions are not available for this account');
       }
-      const row = await getWorkbench(workbenchId);
+      row = await getWorkbench(workbenchId);
       // Not found and not yours are one answer, as on every route.
       if (!row || !(await ownsWorkspace(user.id, row.workspaceId))) return close(4404, 'session not found');
       if (row.runtime !== 'sandbox') return close(4403, 'a local session has its terminal in the desktop app');
@@ -224,6 +226,7 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
       recordWorkbenchEvent(row, 'terminal_open', `terminal session ${opts.session}`);
       for (const chunk of backlog.splice(0)) opened.write(chunk);
     } catch (err) {
+      if (row) await recoverLostSandbox(row, err).catch(() => undefined);
       console.warn(`[workbench] terminal for ${workbenchId} failed to open:`, err);
       close(1011, 'could not open the terminal');
     }

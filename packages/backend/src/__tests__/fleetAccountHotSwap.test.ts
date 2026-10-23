@@ -539,13 +539,22 @@ describe('fleet accounts on a running run', () => {
       expect(fleet.setSandboxCredentials).not.toHaveBeenCalled();
     });
 
-    it('serves a host pull the session account', async () => {
+    it.each([
+      ['recorded derived id', 'talyn-wb-e6f8c6534f5342308a5d3f8e--3542ee', 'talyn-wb-e6f8c6534f5342308a5d3f8e--3542ee', true],
+      ['unrecorded derived id', 'talyn-wb-e6f8c6534f5342308a5d3f8e--3542ee', null, false],
+      ['different derived id', 'talyn-wb-e6f8c6534f5342308a5d3f8e--3542ee', 'talyn-wb-e6f8c6534f5342308a5d3f8e--abcdef', false],
+      ['literal id', 'talyn-wb-e6f8c6534f5342308a5d3f8e', null, true],
+    ] as const)('serves a host pull for %s', async (_case, runId, recordedId, allowed) => {
       await add('claude_oauth', 'A', 10);
       const b = await add('claude_oauth', 'B', 10);
-      await seedWorkbench('claude', { fleetAccountId: b.id });
-      await db.update(workbenchesTable).set({ fleetHost: 'host-1' }).where(eq(workbenchesTable.id, 'wb1'));
-      const answer = await resolveWorkbenchRunCredentials('host-1', 'talyn-wb-wb1');
-      expect(answer).toMatchObject({ ok: true, credentials: { anthropicKey: 'tok-B' } });
+      await seedWorkbench('claude', { fleetAccountId: b.id, ...(recordedId ? { fleetSandboxId: recordedId } : {}) });
+      await db.update(workbenchesTable).set({
+        sandboxId: 'talyn-wb-e6f8c6534f5342308a5d3f8e',
+        fleetHost: 'host-1',
+      }).where(eq(workbenchesTable.id, 'wb1'));
+      const answer = await resolveWorkbenchRunCredentials('host-1', runId);
+      if (allowed) expect(answer).toMatchObject({ ok: true, credentials: { anthropicKey: 'tok-B' } });
+      else expect(answer).toEqual({ ok: false, reason: 'unknown_run' });
     });
   });
 });

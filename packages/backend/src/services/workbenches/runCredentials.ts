@@ -19,7 +19,15 @@ export const WORKBENCH_SANDBOX_PREFIX = 'talyn-wb-';
  * chosen again only when that account was deleted or needs a reconnect.
  */
 export async function resolveWorkbenchRunCredentials(host: string, sandboxId: string): Promise<RunCredentialsResult> {
-  const row = await workbenchBySandboxId(sandboxId);
+  let row = await workbenchBySandboxId(sandboxId);
+  if (!row) {
+    const derived = /^(talyn-wb-[a-z0-9-]+?)--[0-9a-f]{6}$/.exec(sandboxId);
+    if (derived) {
+      const candidate = await workbenchBySandboxId(derived[1]);
+      // The gateway derives bare box IDs per tenant, so require the exact recorded ID.
+      if (candidate?.settings?.fleetSandboxId === sandboxId) row = candidate;
+    }
+  }
   if (!row) return { ok: false, reason: 'unknown_run' };
   if (!row.fleetHost || row.fleetHost !== host) return { ok: false, reason: 'wrong_host' };
   if (row.archivedAt || row.sandboxState === 'deleted') return { ok: false, reason: 'run_not_live' };

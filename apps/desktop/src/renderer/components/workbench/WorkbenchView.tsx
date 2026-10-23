@@ -129,16 +129,16 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       />
     );
   }
-  if (ops.unavailable && workbench.status !== 'provisioning') {
+  if (ops.unavailable && workbench.status !== 'provisioning' && workbench.sandboxState !== 'lost') {
     return <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={ops.unavailable} />;
   }
-  if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating') {
+  if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating' || workbench.sandboxState === 'lost') {
     return (
       <Banner
         tone="muted"
         icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}
         text={
-          workbench.statusMessage ||
+          (workbench.sandboxState === 'lost' ? 'The sandbox was lost. Talyn is starting a new one.' : workbench.statusMessage) ||
           (workbench.runtime === 'sandbox' ? 'Starting the sandbox and cloning the repository…' : 'Creating the worktree…')
         }
         action={

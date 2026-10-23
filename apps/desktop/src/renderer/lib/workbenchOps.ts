@@ -82,6 +82,7 @@ export function sandboxUnavailableReason(workbench: Workbench): string | null {
   if (workbench.status === 'error' || workbench.sandboxState === 'error') {
     return workbench.error || workbench.statusMessage || 'The sandbox failed to start.';
   }
+  if (workbench.sandboxState === 'lost') return 'The sandbox was lost. Talyn is starting a new one.';
   if (workbench.status === 'provisioning') return 'The sandbox is starting.';
   return null;
 }

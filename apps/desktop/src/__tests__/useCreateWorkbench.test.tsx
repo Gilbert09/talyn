@@ -134,6 +134,7 @@ describe('useCreateWorkbench: sandbox', () => {
       fromPullRequestId: undefined,
       prompt: 'Fix the login redirect',
       internetAccess: true,
+      autoCreatePr: true,
     });
     expect(created?.id).toBe('wb1');
     expect(useWorkbenchStore.getState().workbenches.wb1).toBeDefined();
@@ -225,7 +226,9 @@ describe('useCreateWorkbench: local', () => {
       fromPullRequestId: 'pr1',
       repoPath: '/code/app',
       takenNames: ['lisbon'],
+      branchPrefix: undefined,
       prompt: 'Fix the login redirect',
+      autoCreatePr: true,
     });
     expect(mockApi.create).not.toHaveBeenCalled();
     expect(created?.id).toBe('wb1');

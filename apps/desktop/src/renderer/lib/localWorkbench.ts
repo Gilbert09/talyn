@@ -3,6 +3,7 @@ import {
   workbenchTurnPrompt,
   DEFAULT_WORKBENCH_EFFORT,
   parsePrDetails,
+  parseAutoPrDetails,
   pickWorkbenchName,
   pullRequestOutcomeEvent,
   withSeq,
@@ -204,6 +205,8 @@ export class LocalTurnController {
       planMode,
       intent: input.intent,
       createPr: { branch: workbench.branch, baseBranch: workbench.baseBranch, extra: workbench.settings?.prompts?.create_pr },
+      autoCreatePr: workbench.settings?.autoCreatePr,
+      hasPullRequest: Boolean(workbench.pullRequestId),
     });
     try {
       await this.deps.bridge.startTurn({
@@ -280,7 +283,12 @@ export class LocalTurnController {
     const wasRunning = this.running.get(chatId);
     // While the PR is opened the turn still holds the chat, so a message sent
     // meanwhile queues instead of editing what is being committed.
-    if (wasRunning?.intent === 'create_pr' && !wasRunning.pullRequestStarted && !outcome.isError && !outcome.cancelled) {
+    const workbench = wasRunning ? useWorkbenchStore.getState().workbenches[wasRunning.workbenchId] : undefined;
+    const autoPr = wasRunning?.intent !== 'create_pr' && findChat(chatId)?.status !== 'awaiting_input' && Boolean(workbench) &&
+      workbench?.settings?.autoCreatePr !== false && !workbench?.pullRequestId &&
+      parseAutoPrDetails(outcome.resultText).ok;
+    if (wasRunning && (wasRunning.intent === 'create_pr' || autoPr) && !wasRunning.pullRequestStarted &&
+        !outcome.isError && !outcome.cancelled) {
       wasRunning.pullRequestStarted = true;
       await this.openPullRequest(chatId, wasRunning, outcome.resultText);
     }
@@ -303,13 +311,13 @@ export class LocalTurnController {
     const next = useWorkbenchStore.getState().dequeueLocal(chatId);
     if (!next) return;
     const workbenchId = wasRunning?.workbenchId ?? chat?.workbenchId;
-    const workbench = workbenchId ? useWorkbenchStore.getState().workbenches[workbenchId] : undefined;
+    const nextWorkbench = workbenchId ? useWorkbenchStore.getState().workbenches[workbenchId] : undefined;
     const fresh = findChat(chatId);
-    if (!workbench || !fresh) return;
-    await this.startTurn(workbench, { ...fresh, status: 'idle' }, next);
+    if (!nextWorkbench || !fresh) return;
+    await this.startTurn(nextWorkbench, { ...fresh, status: 'idle' }, next);
   }
 
-  /** The end of a Create PR turn: open the PR from the agent's block, and say what happened in the thread. */
+  /** Open the PR from the agent's block, and record the result. */
   private async openPullRequest(chatId: string, run: RunningTurn, finalText: string): Promise<void> {
     const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
     const parsed = parsePrDetails(finalText);
@@ -412,6 +420,7 @@ export interface CreateLocalWorkbenchInput {
   repoFullName: string;
   agent: WorkbenchAgent;
   model?: string;
+  autoCreatePr?: boolean;
   baseBranch?: string;
   /** An existing branch (from a PR). Absent: a new branch named after the workbench. */
   branch?: string;
@@ -460,6 +469,7 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
     // first message through the controller once the chat exists.
     deviceId: getDeviceId(),
     localPath: path,
+    autoCreatePr: input.autoCreatePr,
   });
 }
 

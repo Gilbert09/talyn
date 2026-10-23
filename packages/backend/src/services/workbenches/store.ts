@@ -187,6 +187,43 @@ export async function updateWorkbench(
   return row ?? null;
 }
 
+/** Claim a lost box once. The old sandbox id keeps late calls from replacing its new box. */
+export async function claimLostWorkbench(id: string, sandboxId: string, replacementId: string, message: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      status: 'provisioning',
+      statusMessage: message,
+      sandboxState: 'lost',
+      sandboxId: replacementId,
+      fleetHost: null,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.sandboxId, sandboxId),
+      eq(workbenchesTable.status, 'ready'),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Stop an automatic loop when a second box is lost inside the retry window. */
+export async function failLostWorkbench(id: string, sandboxId: string, message: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ status: 'error', statusMessage: message, sandboxState: 'error', updatedAt: new Date() })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.sandboxId, sandboxId),
+      eq(workbenchesTable.status, 'ready'),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
 /**
  * Set a generated title, but only while the workbench has none. One
  * statement, so a title a person sets at the same moment always wins.

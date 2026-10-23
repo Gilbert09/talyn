@@ -4,7 +4,7 @@ import type { Workbench } from '@talyn/shared';
 /** Still being set up, and not failed. An error wins, as in the banner. */
 export function isStarting(workbench: Workbench): boolean {
   if (workbench.status === 'error' || workbench.sandboxState === 'error') return false;
-  return workbench.status === 'provisioning' || workbench.sandboxState === 'creating';
+  return workbench.status === 'provisioning' || workbench.sandboxState === 'creating' || workbench.sandboxState === 'lost';
 }
 
 /**
@@ -19,7 +19,7 @@ export function StartingHint({ workbench, queued }: { workbench: Workbench; queu
     <div className="flex max-w-sm flex-col items-center gap-1.5" data-attr="workbench-starting">
       <Loader2 className="mb-1 h-4 w-4 animate-spin" />
       <p className="text-[13px] font-medium text-foreground">
-        {sandbox ? 'Starting the sandbox' : 'Creating the worktree'}
+        {workbench.sandboxState === 'lost' ? 'Starting a new sandbox' : sandbox ? 'Starting the sandbox' : 'Creating the worktree'}
       </p>
       {workbench.statusMessage && <p>{workbench.statusMessage}</p>}
       <p>

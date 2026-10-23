@@ -632,6 +632,10 @@ export function emitPullRequestUpdated(
     // `??` form swallows the clear and leaves a stale review attached to a commit
     // that no longer exists.
     codeReview?: Record<string, unknown> | null;
+    // The live session working this pull request. OPTIONAL and `null` means
+    // "no session" (a clear), so the client preserves on absent only and never
+    // with `??`.
+    session?: { id: string; name: string; status: string } | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {

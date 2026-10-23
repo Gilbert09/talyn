@@ -74,6 +74,32 @@ const TEMPLATE_PATHS = [
   'docs/pull_request_template.md',
 ];
 
+function prBlockInstructions(): string[] {
+  return [
+    `End the reply with one \`\`\`${PR_BLOCK_FENCE} fenced block that holds one JSON object, and write nothing after it:`,
+    '',
+    `\`\`\`${PR_BLOCK_FENCE}`,
+    '{"title": "...", "body": "...", "commitMessage": "...", "draft": false}',
+    '```',
+    '',
+    '   - "title": a conventional-commit summary of the change (`feat: …`, `fix: …`, `chore: …`), under 72 characters.',
+    '   - "body": the description, in Markdown, as a JSON string. If there is a template, fill it in and keep its headings.',
+    '     Otherwise say what changed and why, how it was tested, and anything a reviewer must know.',
+    '   - "commitMessage": a conventional commit message for the uncommitted changes, or "" when there are none.',
+    '   - "draft": true only when the person asked for a draft pull request.',
+  ];
+}
+
+export function buildAutoCreatePrInstructions(): string {
+  return [
+    'When the whole task the person asked for is finished and ready for review, prepare a pull request.',
+    'Do not do this when you ask a question, wait for input, or finish only part of the task.',
+    'Do not commit, push, or open the pull request yourself. Talyn does that after your reply.',
+    'Check the repository for a pull request template and fill it in for the body.',
+    ...prBlockInstructions(),
+  ].join('\n');
+}
+
 /**
  * What the agent is told on a Create PR turn. It must not commit, push or open
  * the PR: Talyn does that from the block at the end of the reply. `extra` is
@@ -109,17 +135,8 @@ export function buildCreatePrTurnInstructions(input: {
     '2. Look for a pull request template. Check these paths, in any letter case:',
     ...TEMPLATE_PATHS.map((p) => `   - \`${p}\``),
     '3. Reply with a short summary for the person: two or three sentences on what the pull request contains.',
-    `4. End the reply with one \`\`\`${PR_BLOCK_FENCE} fenced block that holds one JSON object, and write nothing after it:`,
-    '',
-    `\`\`\`${PR_BLOCK_FENCE}`,
-    '{"title": "...", "body": "...", "commitMessage": "...", "draft": false}',
-    '```',
-    '',
-    '   - "title": a conventional-commit summary of the change (`feat: …`, `fix: …`, `chore: …`), under 72 characters.',
-    '   - "body": the description, in Markdown, as a JSON string. If there is a template, fill it in and keep its headings.',
-    '     Otherwise say what changed and why, how it was tested, and anything a reviewer must know.',
-    '   - "commitMessage": a conventional commit message for the uncommitted changes, or "" when there are none.',
-    '   - "draft": true only when the person asked for a draft pull request.',
+    '4. Prepare the final reply:',
+    ...prBlockInstructions(),
     '',
     `Without the \`\`\`${PR_BLOCK_FENCE} block, Talyn cannot open the pull request. Always end with it.`,
   ];
@@ -198,6 +215,39 @@ export function parsePrDetails(text: string): { ok: true; details: WorkbenchPrDe
     if (found.length > 0) return { ok: true, details: found[found.length - 1] };
   }
   return { ok: false, error: MISSING_PR_BLOCK_MESSAGE };
+}
+
+/** Normal turns accept only a final talyn-pr block, never a generic JSON block. */
+function finalPrBlock(text: string): { start: number; block: string } | null {
+  const matches = [...(text ?? '').matchAll(/(?:^|\n)```talyn-pr[^\S\n]*\n/g)];
+  const last = matches[matches.length - 1];
+  if (!last) return null;
+  const start = (last.index ?? 0) + (last[0].startsWith('\n') ? 1 : 0);
+  const block = text.slice(start);
+  return /^```talyn-pr[^\S\n]*\n[\s\S]*\n```\s*$/.test(block) ? { start, block } : null;
+}
+
+export function parseAutoPrDetails(text: string): { ok: true; details: WorkbenchPrDetails } | { ok: false; error: string } {
+  const block = finalPrBlock(text)?.block ?? '';
+  const match = /^```talyn-pr[^\S\n]*\n([\s\S]*)\n```\s*$/.exec(block);
+  if (match) {
+    try {
+      const value: unknown = JSON.parse(match[1]);
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const details = detailsFrom(value as Record<string, unknown>);
+        if (details) return { ok: true, details };
+      }
+    } catch {
+      // An invalid block does not trigger automatic PR creation.
+    }
+  }
+  return { ok: false, error: MISSING_PR_BLOCK_MESSAGE };
+}
+
+/** Remove a final PR block before the transcript draws the title card. */
+export function stripAutoPrBlock(text: string): string {
+  const final = finalPrBlock(text);
+  return final ? text.slice(0, final.start).trimEnd() : text;
 }
 
 // ============================================================================

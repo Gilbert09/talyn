@@ -46,6 +46,7 @@ import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { OpenInWorkbenchButton } from '../../workbench/OpenInWorkbenchButton';
+import { PrSessionChip } from '../../workbench/PrSessionChip';
 import { CodeReviewRowChip } from '../../widgets/codeReview/CodeReviewRowChip';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
@@ -944,6 +945,7 @@ const PRTableRow = React.memo(function PRTableRow({
               {variant !== 'queue' && row.codeReview && (
                 <CodeReviewRowChip review={row.codeReview} onOpen={onSelect} />
               )}
+              <PrSessionChip session={row.session} />
               {/* Merge-queue indicator. The membership badge ("Queued #N") stays
                   visible the whole time the PR is in the queue; an activity badge
                   (Merging / Blocked) sits alongside it. We deliberately DON'T show

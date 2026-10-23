@@ -25,6 +25,7 @@ import {
   FleetCapacityError,
   FleetClient,
   FleetHttpError,
+  FleetRunNotFoundError,
   type FleetExecFrame,
   type FleetExecRequest,
 } from '../selfHosted/client.js';
@@ -53,6 +54,7 @@ import {
   sectionsScript,
 } from './execFraming.js';
 import { WorkbenchError } from './errors.js';
+import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -317,41 +319,43 @@ export async function runCapture(
   script: string,
   opts: SandboxExecOptions = {},
 ): Promise<SandboxExecResult> {
-  const sandboxId = requireSandbox(row);
-  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const framed = frameCommand(script, { mode: 'capture', marker: opts.marker, env: opts.env });
-  const req: FleetExecRequest = {
-    cmd: framed.cmd,
-    env: framed.env,
-    cwd: opts.cwd ?? repoDirFor(row),
-    ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-  };
-  const demux = new FrameDemux(framed.nonce);
-  let frame: FleetExecFrame;
-  if (opts.quiet) {
-    const outcome = await client.quietExec(sandboxId, req);
-    if (outcome.kind === 'quiet') {
-      demux.pushText(outcome.result.stdout);
-      demux.pushText(outcome.result.stderr);
-      return resultOf(demux, outcome.result.exitCode);
+  return withLostRecovery(row, async () => {
+    const sandboxId = requireSandbox(row);
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const framed = frameCommand(script, { mode: 'capture', marker: opts.marker, env: opts.env });
+    const req: FleetExecRequest = {
+      cmd: framed.cmd,
+      env: framed.env,
+      cwd: opts.cwd ?? repoDirFor(row),
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    };
+    const demux = new FrameDemux(framed.nonce);
+    let frame: FleetExecFrame;
+    if (opts.quiet) {
+      const outcome = await client.quietExec(sandboxId, req);
+      if (outcome.kind === 'quiet') {
+        demux.pushText(outcome.result.stdout);
+        demux.pushText(outcome.result.stderr);
+        return resultOf(demux, outcome.result.exitCode);
+      }
+      frame = outcome.frame;
+    } else {
+      frame = await client.exec(sandboxId, req);
     }
-    frame = outcome.frame;
-  } else {
-    frame = await client.exec(sandboxId, req);
-  }
-  demux.pushEvents(frame.events);
-  // A wait-mode answer is capped at one page. Our trailer is the last thing we
-  // print, so until it is in hand there is more to read.
-  let cursor = frame.cursor;
-  let events = frame.events.length;
-  while (!demux.done && events >= EVENTS_PAGE) {
-    const page = await client.getEvents(sandboxId, cursor, EVENTS_PAGE);
-    if (page.events.length === 0) break;
-    demux.pushEvents(page.events);
-    cursor = page.cursor;
-    events = page.events.length;
-  }
-  return resultOf(demux, lastExitCode(frame));
+    demux.pushEvents(frame.events);
+    // A wait-mode answer is capped at one page. Our trailer is the last thing we
+    // print, so until it is in hand there is more to read.
+    let cursor = frame.cursor;
+    let events = frame.events.length;
+    while (!demux.done && events >= EVENTS_PAGE) {
+      const page = await client.getEvents(sandboxId, cursor, EVENTS_PAGE);
+      if (page.events.length === 0) break;
+      demux.pushEvents(page.events);
+      cursor = page.cursor;
+      events = page.events.length;
+    }
+    return resultOf(demux, lastExitCode(frame));
+  });
 }
 
 function resultOf(demux: FrameDemux, fallbackExit: number | null): SandboxExecResult {
@@ -445,6 +449,10 @@ export async function runStream(
     }
   } catch (err) {
     if (opts.signal?.aborted) return outcomeOf(demux);
+    if (err instanceof FleetRunNotFoundError) {
+      await recoverLostSandbox(row, err).catch(() => undefined);
+      throw err;
+    }
     // Before the first frame nothing is known to have started; that is a
     // failure to run, not a stream to recover.
     if (cursor === 0) throw err;
@@ -476,7 +484,13 @@ async function recoverStream(
   let lastAliveCheck = Date.now();
   let deadSeen = false;
   while (!demux.done && !signal?.aborted) {
-    const page = await client.getEvents(sandboxId, cursor, EVENTS_PAGE).catch(() => null);
+    const page = await client.getEvents(sandboxId, cursor, EVENTS_PAGE).catch(async (err: unknown) => {
+      if (err instanceof FleetRunNotFoundError) {
+        await recoverLostSandbox(row, err).catch(() => undefined);
+        throw err;
+      }
+      return null;
+    });
     if (page && page.events.length > 0) {
       demux.pushEvents(page.events);
       cursor = page.cursor;
@@ -784,12 +798,12 @@ export async function refreshSandboxCredentials(
   }
   const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  await client.setSandboxCredentials(sandboxId, {
+  await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, {
     githubToken: resolved.githubToken,
     ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),
     repo: row.repoFullName,
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
-  });
+  }));
 
   let note: string | null = null;
   if (credential.accountId && credential.accountId !== recorded) {
@@ -828,12 +842,12 @@ export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string): Pr
   if (!githubToken) return null;
   const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  await client.setSandboxCredentials(row.sandboxId, {
+  await withLostRecovery(row, () => client.setSandboxCredentials(row.sandboxId!, {
     githubToken,
     ...(agent === 'codex' ? { openaiKey: decision.token } : { anthropicKey: decision.token }),
     repo: row.repoFullName,
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
-  });
+  }));
   await setWorkbenchFleetAccount(row, decision.to.id);
   recordHotSwap(row.workspaceId, `workbench ${row.id.slice(0, 8)}`, decision);
   return decision.note;

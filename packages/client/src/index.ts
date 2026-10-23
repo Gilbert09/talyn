@@ -1083,6 +1083,12 @@ export interface PRRow {
    * pull-request store.
    */
   codeReview?: CodeReviewPublic | null;
+  /**
+   * The live (non-archived) session working this pull request. Null when none;
+   * absent on an older backend and on a websocket echo that did not change it,
+   * so merge it on explicit undefined, never `??`.
+   */
+  session?: { id: string; name: string; status: string } | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Open a pull request when the agent finishes (2026-10-22)
+
+New sessions enable automatic PR creation by default. The person can change the device default in Settings.
+The session Actions menu changes the setting for one session.
+Both runtimes give the agent a standing instruction while the session has no linked PR.
+A successful turn opens a PR when its final reply contains valid PR details. Talyn commits and pushes the branch.
+The transcript shows a PR card in place of the JSON block. Explicit Create PR turns keep their existing path.
+
 ## Image previews in session chat (2026-10-22)
 
 User message events now keep each attachment path. The transcript shows image previews and file chips below the user's text.

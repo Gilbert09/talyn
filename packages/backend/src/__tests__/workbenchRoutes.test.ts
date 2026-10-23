@@ -250,6 +250,19 @@ describe('workbench routes', () => {
   });
 
   describe('creating', () => {
+    it('records the fleet sandbox id and keeps other settings', async () => {
+      const createSandbox = fleet.createSandbox.bind(fleet);
+      fleet.createSandbox = async (input) => {
+        const created = await createSandbox(input);
+        return { ...created, sandbox: { ...created.sandbox, id: `${input.id}--3542ee` } };
+      };
+      const wb = await createSandboxWorkbench({ internetAccess: false });
+      expect((await getWorkbench(wb.id))?.settings).toEqual({
+        internetAccess: false,
+        fleetSandboxId: `${sandboxIdFor(wb.id)}--3542ee`,
+      });
+    });
+
     it('answers at once as provisioning, then clones and becomes ready', async () => {
       let release!: () => void;
       const held = new Promise<void>((r) => (release = r));

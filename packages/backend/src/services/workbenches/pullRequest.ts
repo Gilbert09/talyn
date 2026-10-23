@@ -34,6 +34,7 @@ import {
 import { GitHubApiError, GitHubNotConnectedError, githubService, type GitHubCommitPullRequest } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
 import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
+import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
 import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps } from './sandboxRuntime.js';
@@ -240,7 +241,7 @@ export async function createWorkbenchPullRequest(
   recordWorkbenchEvent(row, 'pr_create', `${opened.existing ? 'linked' : 'opened'} #${opened.number}`);
   const linked = await trackAndLink(row, opened.number);
   const workbench = await publicWorkbench(linked);
-  emitWorkbenchUpdated(workbench);
+  await emitWorkbenchUpdated(workbench);
   return { workbench, pullRequest: { number: opened.number, url: opened.url }, existing: opened.existing };
 }
 
@@ -373,7 +374,7 @@ export async function adoptAgentPullRequest(
   recordWorkbenchEvent(current, 'pr_create', `adopted #${found.number} the agent opened`);
   const linked = await trackAndLink(current, found.number);
   const workbench = await publicWorkbench(linked);
-  emitWorkbenchUpdated(workbench);
+  await emitWorkbenchUpdated(workbench);
   return { workbench, pullRequest: { number: found.number, url: found.html_url, headRef: found.head.ref } };
 }
 
@@ -485,7 +486,7 @@ export async function linkWorkbenchPullRequest(row: WorkbenchRow, number: unknow
   current = (await updateWorkbench(row.id, { settings })) ?? current;
   await recordPrLink(current, number, true);
   const workbench = await publicWorkbench(current);
-  emitWorkbenchUpdated(workbench);
+  await emitWorkbenchUpdated(workbench);
   return { workbench, ...(changesBranch && row.runtime === 'local' ? { needsCheckout: checkout } : {}) };
 }
 
@@ -498,6 +499,7 @@ export async function unlinkWorkbenchPullRequest(row: WorkbenchRow) {
   })) ?? row;
   if (pr) await recordPrLink(current, pr.number, false);
   const workbench = await publicWorkbench(current);
-  emitWorkbenchUpdated(workbench);
+  await emitWorkbenchUpdated(workbench);
+  await emitPrSession(row.workspaceId, row.pullRequestId);
   return workbench;
 }
