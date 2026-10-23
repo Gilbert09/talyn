@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, BarChart3, Check, Loader2, Pencil, RefreshCw, Server, Unlink } from 'lucide-react';
 import { DEFAULT_POSTHOG_CODE_MODEL_ID, POSTHOG_CODE_MODELS, type FleetAccountsResponse } from '@talyn/shared';
-import { api } from '../../lib/api';
+import { ApiError, api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { FleetAgentMark } from '../../lib/providerMeta';
@@ -75,7 +75,7 @@ function SelfHostedFleetCard() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
   const [fleetAccounts, setFleetAccounts] = useState<FleetAccountsResponse | null>(null);
-  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountsError, setAccountsError] = useState<'unsupported' | 'failed' | null>(null);
   const workspaceIdRef = useRef(currentWorkspaceId);
   workspaceIdRef.current = currentWorkspaceId;
   const entry = (cloudProviders ?? []).find((p) => p.type === 'selfhosted');
@@ -83,6 +83,7 @@ function SelfHostedFleetCard() {
 
   const refreshAccounts = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    setAccountsError(null);
     try {
       const result = await api.cloudProviders.fleetAccounts.list(currentWorkspaceId);
       if (workspaceIdRef.current === currentWorkspaceId) {
@@ -91,13 +92,14 @@ function SelfHostedFleetCard() {
       }
     } catch (e) {
       if (workspaceIdRef.current === currentWorkspaceId) {
-        setAccountsError(e instanceof Error ? e.message : 'Could not load accounts');
+        setAccountsError(e instanceof ApiError && e.status === 404 ? 'unsupported' : 'failed');
       }
     }
   }, [currentWorkspaceId]);
 
   useEffect(() => {
     setFleetAccounts(null);
+    setAccountsError(null);
     if (!offered || !currentWorkspaceId) return;
     void refreshAccounts();
     const timer = window.setInterval(() => {
@@ -144,36 +146,40 @@ function SelfHostedFleetCard() {
       </div>
 
       <div className="mt-3 space-y-2 border-t pt-3">
-        {(['claude', 'codex'] as const).map((agent) => {
-          const accounts = fleetAccounts?.accounts.filter((account) => account.agent === agent) ?? [];
-          return accounts.length > 0 && currentWorkspaceId && fleetAccounts ? (
-            <FleetAccountsList
-              key={agent}
-              agent={agent}
-              workspaceId={currentWorkspaceId}
-              accounts={accounts}
-              activeId={fleetAccounts.active[agent]}
-              switchAtPercent={fleetAccounts.switchAtPercent}
-              onChanged={async () => {
-                await refreshAccounts();
-                try {
-                  setCloudProviders(await api.cloudProviders.list(currentWorkspaceId));
-                } catch {
-                  // The account list still refreshes if provider status is unavailable.
-                }
-              }}
-            />
-          ) : (
-            <FleetAgentRow
-              key={agent}
-              agent={agent}
-              connected={agents.includes(agent)}
-              needsReauth={reauth.includes(agent)}
-              onChanged={refreshAccounts}
-            />
-          );
-        })}
-        {accountsError && <p role="alert" className="text-xs text-destructive">{accountsError}</p>}
+        {accountsError === 'unsupported' && <p className="text-xs text-muted-foreground">Accounts need a newer Talyn backend.</p>}
+        {accountsError === 'failed' && <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <span>Could not load accounts.</span>
+          <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => void refreshAccounts()}>Retry</Button>
+        </div>}
+        {(accountsError === 'unsupported' || (!accountsError && fleetAccounts)) && (['claude', 'codex'] as const).map((agent) =>
+          accountsError === 'unsupported' ? <FleetAgentRow
+            key={agent}
+            agent={agent}
+            connected={agents.includes(agent)}
+            needsReauth={reauth.includes(agent)}
+            onChanged={refreshAccounts}
+          /> : currentWorkspaceId && fleetAccounts && <FleetAccountsList
+            key={agent}
+            agent={agent}
+            workspaceId={currentWorkspaceId}
+            accounts={fleetAccounts.accounts.filter((account) => account.agent === agent)}
+            activeId={fleetAccounts.active[agent]}
+            switchAtPercent={fleetAccounts.switchAtPercent}
+            onChanged={async () => {
+              await refreshAccounts();
+              try {
+                setCloudProviders(await api.cloudProviders.list(currentWorkspaceId));
+              } catch {
+                // The account list still refreshes if provider status is unavailable.
+              }
+            }}
+          />
+        )}
+        {!accountsError && !fleetAccounts && (['claude', 'codex'] as const).map((agent) => <div key={agent} role="status" aria-label={`Loading ${agent} accounts`} className="flex items-center gap-2 py-1.5 animate-pulse">
+          <div className="h-4 w-4 rounded bg-muted" />
+          <div className="h-3 w-16 rounded bg-muted" />
+          <div className="h-3 w-24 rounded bg-muted" />
+        </div>)}
       </div>
     </Card>
   );

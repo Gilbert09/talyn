@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
 import { AgentProcesses } from './agentProcess';
 import { readConfigWithDetection, saveDetectedConfig } from './config';
+import { detectCheckouts, uniqueMainCheckouts } from './detectCheckouts';
 import { detectAgents, localReadiness, loginPath } from './environment';
 import {
   exec,
@@ -175,9 +176,26 @@ export function registerWorkbenchIpc(
   );
   handle('readiness', (force?: boolean) => localReadiness(force === true));
   handle('repo-paths:get', () => repoPaths.get());
+  handle('repo-paths:detect', async (input: { repoFullNames: string[] }) =>
+    detectCheckouts(input.repoFullNames, { extraRoots: await repoPaths.getScanRoots() }),
+  );
+  handle('repo-paths:scan-roots:get', () => repoPaths.getScanRoots());
+  handle('repo-paths:scan-roots:add', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: 'Select a folder to scan',
+    });
+    return result.canceled || !result.filePaths[0]
+      ? null
+      : repoPaths.addScanRoot(result.filePaths[0]);
+  });
+  handle('repo-paths:scan-roots:remove', (root: string) => repoPaths.removeScanRoot(root));
+  handle('repo-paths:unique-main', (candidates: Record<string, string[]>) =>
+    uniqueMainCheckouts(candidates),
+  );
   handle(
     'repo-paths:set',
-    (input: { repoFullName: string; path: string }) => repoPaths.set(input),
+    (input: { repoFullName: string; path: string; ifMissing?: boolean }) => repoPaths.set(input),
   );
   handle('repo-paths:remove', (repoFullName: string) =>
     repoPaths.remove(repoFullName),

@@ -28,7 +28,7 @@ export function RepositoriesSettings() {
   const watchedRepos = useWorkspaceStore((s) => s.repositories);
   const setRepositories = useWorkspaceStore((s) => s.setRepositories);
   const { refreshWorkspaces } = useWorkspaceActions();
-  const local = useLocalCheckouts();
+  const local = useLocalCheckouts(watchedRepos);
 
   // Repository state. The watched-repo list lives in the shared workspace
   // store (not local state) so adds/removes here propagate immediately to
@@ -174,18 +174,38 @@ export function RepositoriesSettings() {
       <SettingsSection
         title="Watched repositories"
         actions={
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0"
-            onClick={handleForcePoll}
-            disabled={loadingRepos || watchedRepos.length === 0}
-            title="Check for updates now"
-          >
-            <RefreshCw className={cn('w-3.5 h-3.5', loadingRepos && 'animate-spin')} />
-          </Button>
+          <div className="flex items-center gap-1">
+            {local.available && (
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => void local.addScanRoot()}>
+                Scan another folder…
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={() => { void handleForcePoll(); void local.refresh(); }}
+              disabled={loadingRepos || watchedRepos.length === 0}
+              title="Check for updates now"
+            >
+              <RefreshCw className={cn('w-3.5 h-3.5', (loadingRepos || local.detecting) && 'animate-spin')} />
+            </Button>
+          </div>
         }
       >
+        {local.scanRoots.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 px-3 py-1 text-[11px] text-muted-foreground">
+            <span>Also scanning:</span>
+            {local.scanRoots.map((root) => (
+              <span key={root} className="inline-flex items-center gap-1" title={root}>
+                {local.displayPath(root)}
+                <button type="button" aria-label={`Stop scanning ${root}`} onClick={() => void local.removeScanRoot(root)}>
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {watchedRepos.length === 0 ? (
           <p className="px-3 py-2 text-[13px] text-muted-foreground">
             No repositories being watched.
@@ -351,7 +371,16 @@ export function RepositoriesSettings() {
 
 interface LocalCheckouts {
   available: boolean;
+  detecting: boolean;
+  scanRoots: string[];
+  addScanRoot: () => Promise<void>;
+  removeScanRoot: (root: string) => Promise<void>;
   pathFor: (repoFullName: string) => string | null;
+  candidatesFor: (repoFullName: string) => string[];
+  displayPath: (path: string) => string;
+  foundAutomatically: (repoFullName: string) => boolean;
+  refresh: () => Promise<void>;
+  select: (repoFullName: string, path: string) => Promise<void>;
   choose: (repoFullName: string) => Promise<string | null>;
   clear: (repoFullName: string) => Promise<void>;
 }
@@ -360,10 +389,76 @@ interface LocalCheckouts {
  * `useRepoPaths` plus Clear. After a clear the hook's own map is stale until
  * the next pick (which re-reads it), so the bridge's answer is kept here.
  */
-function useLocalCheckouts(): LocalCheckouts {
+function useLocalCheckouts(watchedRepos: WatchedRepo[]): LocalCheckouts {
   const repoPaths = useRepoPaths();
   const [afterClear, setAfterClear] = useState<Record<string, string> | null>(null);
+  const [candidates, setCandidates] = useState<Record<string, string[]>>({});
+  const [found, setFound] = useState<Record<string, string>>({});
+  const [detecting, setDetecting] = useState(false);
+  const [scanRoots, setScanRoots] = useState<string[]>([]);
   const paths = afterClear ?? repoPaths.paths;
+  const names = watchedRepos.map((repo) => repo.fullName).join('\n');
+
+  const refresh = useCallback(async () => {
+    const bridge = getWorkbenchBridge();
+    if (!bridge?.repoPaths?.detect || !repoPaths.ready) return;
+    const saved = await bridge.repoPaths.get();
+    const missing = names.split('\n').filter((name) => name && !localPathFor(saved, name));
+    if (missing.length === 0) {
+      setCandidates({});
+      return;
+    }
+    setDetecting(true);
+    try {
+      const detected = await bridge.repoPaths.detect({ repoFullNames: missing });
+      const multiple = Object.fromEntries(Object.entries(detected).filter(([, values]) => values.length > 1));
+      const main: Record<string, string> = Object.keys(multiple).length && bridge.repoPaths.uniqueMain
+        ? await bridge.repoPaths.uniqueMain(multiple).catch(() => ({}))
+        : {};
+      const choices: Record<string, string[]> = {};
+      for (const name of missing) {
+        const options = detected[name] ?? [];
+        const automatic = options.length === 1 ? options[0] : main[name];
+        if (automatic) {
+          const map = await bridge.repoPaths.set({ repoFullName: name, path: automatic, ifMissing: true });
+          setAfterClear(map);
+          if (localPathFor(map, name) === automatic) {
+            setFound((previous) => ({ ...previous, [name.toLowerCase()]: automatic }));
+          }
+        } else if (options.length > 1) {
+          choices[name.toLowerCase()] = options;
+        }
+      }
+      setCandidates(choices);
+    } catch {
+      setCandidates({});
+    } finally {
+      setDetecting(false);
+    }
+  }, [names, repoPaths.ready]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const bridge = getWorkbenchBridge();
+    if (!bridge?.repoPaths?.scanRoots) return;
+    let active = true;
+    void bridge.repoPaths.scanRoots.get().then((roots) => {
+      if (active) setScanRoots(roots);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  const addScanRoot = async () => {
+    const roots = await getWorkbenchBridge()?.repoPaths?.scanRoots?.add();
+    if (!roots) return;
+    setScanRoots(roots);
+    await refresh();
+  };
+
+  const removeScanRoot = async (root: string) => {
+    const roots = await getWorkbenchBridge()?.repoPaths?.scanRoots?.remove(root);
+    if (roots) setScanRoots(roots);
+  };
 
   const pathFor = (repoFullName: string) => localPathFor(paths, repoFullName);
 
@@ -373,7 +468,20 @@ function useLocalCheckouts(): LocalCheckouts {
     if (picked?.repoFullName && picked.repoFullName.toLowerCase() !== repoFullName.toLowerCase()) {
       return `That folder is a checkout of ${picked.repoFullName}, not ${repoFullName}.`;
     }
+    if (picked) {
+      setCandidates((previous) => ({ ...previous, [repoFullName.toLowerCase()]: [] }));
+      setFound((previous) => ({ ...previous, [repoFullName.toLowerCase()]: '' }));
+    }
     return null;
+  };
+
+  const select = async (repoFullName: string, path: string) => {
+    const bridge = getWorkbenchBridge();
+    if (!bridge?.repoPaths) return;
+    const map = await bridge.repoPaths.set({ repoFullName, path });
+    setAfterClear(map);
+    setCandidates((previous) => ({ ...previous, [repoFullName.toLowerCase()]: [] }));
+    setFound((previous) => ({ ...previous, [repoFullName.toLowerCase()]: '' }));
   };
 
   const clear = async (repoFullName: string) => {
@@ -382,9 +490,31 @@ function useLocalCheckouts(): LocalCheckouts {
     const want = repoFullName.toLowerCase();
     const key = Object.keys(paths).find((k) => k.toLowerCase() === want) ?? repoFullName;
     setAfterClear(await bridge.repoPaths.remove(key));
+    setFound((previous) => ({ ...previous, [want]: '' }));
   };
 
-  return { available: repoPaths.available, pathFor, choose, clear };
+  return {
+    available: repoPaths.available,
+    detecting,
+    scanRoots,
+    addScanRoot,
+    removeScanRoot,
+    pathFor,
+    candidatesFor: (name) => candidates[name.toLowerCase()] ?? [],
+    displayPath: (candidate) => {
+      const home = getWorkbenchBridge()?.repoPaths?.homeDir;
+      if (!home) return candidate;
+      const separator = home.includes('\\') ? '\\' : '/';
+      return candidate === home || candidate.startsWith(`${home}${separator}`)
+        ? `~${candidate.slice(home.length)}`
+        : candidate;
+    },
+    foundAutomatically: (name) => found[name.toLowerCase()] === pathFor(name),
+    refresh,
+    select,
+    choose,
+    clear,
+  };
 }
 
 function RepoRow({
@@ -399,6 +529,7 @@ function RepoRow({
   onRemove: () => void;
 }) {
   const path = local.pathFor(repo.fullName);
+  const candidates = path ? [] : local.candidatesFor(repo.fullName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -434,9 +565,30 @@ function RepoRow({
       {local.available && (
         <div className="flex items-center gap-2 pl-[22px]">
           {path ? (
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" title={path}>
-              {path}
-            </span>
+            <>
+              <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" title={path}>
+                {path}
+              </span>
+              {local.foundAutomatically(repo.fullName) && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">Found automatically</span>
+              )}
+            </>
+          ) : candidates.length > 1 ? (
+            <>
+              <span className="shrink-0 text-[11px] text-muted-foreground">Found {candidates.length} checkouts</span>
+              <select
+                aria-label={`Choose checkout for ${repo.fullName}`}
+                className="min-w-0 max-w-48 rounded border border-input bg-background px-1 py-0.5 text-[11px] text-foreground"
+                defaultValue=""
+                onChange={(event) => void run(() => local.select(repo.fullName, event.target.value))}
+                disabled={busy}
+              >
+                <option value="" disabled>Choose checkout</option>
+                {candidates.map((candidate) => (
+                  <option key={candidate} value={candidate}>{local.displayPath(candidate)}</option>
+                ))}
+              </select>
+            </>
           ) : (
             <span className="text-[11px] text-muted-foreground">No local checkout on this computer</span>
           )}

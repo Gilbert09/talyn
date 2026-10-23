@@ -4,6 +4,7 @@ import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
 export interface RepoPathsState {
   /** `owner/name` → local checkout. Empty outside the desktop app. */
   paths: Record<string, string>;
+  ready: boolean;
   /** Null when there is no local bridge (an older main process, or a test). */
   available: boolean;
   /**
@@ -18,6 +19,7 @@ export interface RepoPathsState {
 export function useRepoPaths(): RepoPathsState {
   const bridge = getWorkbenchBridge();
   const [paths, setPaths] = useState<Record<string, string>>({});
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!bridge?.repoPaths) return undefined;
@@ -25,9 +27,12 @@ export function useRepoPaths(): RepoPathsState {
     bridge.repoPaths
       .get()
       .then((map) => {
-        if (!cancelled) setPaths(map);
+        if (!cancelled) {
+          setPaths(map);
+          setReady(true);
+        }
       })
-      .catch(() => {});
+      .catch(() => { if (!cancelled) setReady(true); });
     return () => {
       cancelled = true;
     };
@@ -51,5 +56,5 @@ export function useRepoPaths(): RepoPathsState {
     [bridge]
   );
 
-  return { paths, available: Boolean(bridge), pickFolder };
+  return { paths, ready, available: Boolean(bridge?.repoPaths), pickFolder };
 }

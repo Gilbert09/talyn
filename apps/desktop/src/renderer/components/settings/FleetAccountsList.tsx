@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
 import type { FleetAccountView, FleetAgent } from '@talyn/shared';
 import { ApiError, api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
@@ -53,21 +53,18 @@ function kindLabel(kind: Account['kind']): string {
 
 type UsageWindow = Extract<NonNullable<Account['usage']>, { windows: unknown }>['windows'][number];
 
-function UsageWindowRow({ window, switchAtPercent, summary = false }: {
+function UsageWindowRow({ window, switchAtPercent }: {
   window: UsageWindow;
   switchAtPercent: number;
-  summary?: boolean;
 }) {
-  const color = window.usedPercent >= switchAtPercent ? 'bg-red-500'
-    : window.usedPercent >= switchAtPercent - 10 ? 'bg-amber-500' : 'bg-primary';
+  const color = window.usedPercent >= switchAtPercent ? 'bg-destructive'
+    : window.usedPercent >= switchAtPercent - 10 ? 'bg-warning' : 'bg-primary';
   return <div className="text-xs">
     <div className="flex justify-between gap-2">
-      {summary ? <span>{window.label} {window.usedPercent}%{window.resetsAt ? ` · ${formatResetAt(window.resetsAt)}` : ''}</span> : <>
-        <span>{window.label}</span>
-        <span>{window.usedPercent}%{window.resetsAt ? ` · ${formatResetAt(window.resetsAt)}` : ''}</span>
-      </>}
+      <span>{window.label}</span>
+      <span>{window.usedPercent}%{window.resetsAt ? ` · ${formatResetAt(window.resetsAt)}` : ''}</span>
     </div>
-    <div role="progressbar" aria-label={`${window.label} ${summary ? 'summary ' : ''}usage`} aria-valuenow={window.usedPercent} aria-valuemin={0} aria-valuemax={100} className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+    <div role="progressbar" aria-label={`${window.label} usage`} aria-valuenow={window.usedPercent} aria-valuemin={0} aria-valuemax={100} className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
       <div className={`h-full ${color}`} style={{ width: `${Math.max(0, Math.min(100, window.usedPercent))}%` }} />
     </div>
   </div>;
@@ -157,10 +154,12 @@ export function FleetAccountRow({
   };
 
   return (
-    <div className="rounded-md border p-2.5 space-y-2" data-testid={`fleet-account-${account.id}`}>
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="rounded-md border px-2 py-1.5 space-y-1" data-testid={`fleet-account-${account.id}`}>
+      <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
         {renaming ? (
           <Input
+            className="h-6 min-w-0"
             aria-label={`Name for ${account.label}`}
             value={label}
             onChange={(e) => setLabel(e.target.value)}
@@ -171,7 +170,7 @@ export function FleetAccountRow({
             disabled={busy}
           />
         ) : (
-          <button type="button" className="text-xs font-medium hover:underline" onClick={() => setRenaming(true)}>
+          <button type="button" className="truncate text-xs font-medium hover:underline" onClick={() => setRenaming(true)}>
             {account.label}
           </button>
         )}
@@ -180,29 +179,28 @@ export function FleetAccountRow({
         {account.needsReauth ? <Badge variant="destructive">Reconnect needed</Badge>
           : account.held ? <Badge variant="secondary">Limit reached{account.held.until ? `, ${formatResetAt(account.held.until)}` : ''}</Badge>
             : account.over ? <Badge variant="destructive">{switchAtPercent === 100 ? 'Limit reached' : `Over ${switchAtPercent}%`}</Badge> : null}
-      </div>
-      {account.kind === 'anthropic_key' || account.kind === 'openai_key' ? (
-        <p className="text-xs text-muted-foreground">No usage data for API keys</p>
-      ) : summaryWindow ? (
-        <div className="space-y-2">
-          <UsageWindowRow window={summaryWindow} switchAtPercent={switchAtPercent} summary />
-          <Button size="sm" variant="ghost" aria-expanded={usageExpanded} onClick={() => setUsageExpanded((expanded) => !expanded)} className="h-6 px-1 text-xs">
-            {usageExpanded ? <ChevronDown className="mr-1 h-3.5 w-3.5" /> : <ChevronRight className="mr-1 h-3.5 w-3.5" />}
-            {usageExpanded ? 'Hide usage' : 'Show usage'}
-          </Button>
-          {usageExpanded && <div className="space-y-2">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
         </div>
-      ) : account.usage && 'error' in account.usage ? (
-        <p className="text-xs text-muted-foreground">Usage unavailable: {account.usage.error}</p>
-      ) : <p className="text-xs text-muted-foreground">Usage not checked yet</p>}
-      <div className="flex flex-wrap items-center gap-1">
-        <span className="text-xs text-muted-foreground mr-1">Updated {account.usage ? updatedTime(account.usage.fetchedAt) : 'never'}</span>
-        <Button size="sm" variant="ghost" aria-label={`Refresh ${account.label} usage`} disabled={busy} onClick={() => void run(() => api.cloudProviders.fleetAccounts.refreshUsage(account.id))}><RefreshCw className="h-3.5 w-3.5" /></Button>
-        <Button size="sm" variant="ghost" aria-label={`Move ${account.label} up`} disabled={busy || index === 0} onClick={() => move(-1)}><ArrowUp className="h-3.5 w-3.5" /></Button>
-        <Button size="sm" variant="ghost" aria-label={`Move ${account.label} down`} disabled={busy || index === ids.length - 1} onClick={() => move(1)}><ArrowDown className="h-3.5 w-3.5" /></Button>
-        {account.needsReauth && (account.kind === 'claude_oauth' || account.kind === 'codex_oauth') && <Button size="sm" variant="outline" disabled={busy} onClick={() => void reconnect()}>Reconnect</Button>}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {account.needsReauth && (account.kind === 'claude_oauth' || account.kind === 'codex_oauth') && <Button size="sm" variant="outline" className="h-6" disabled={busy} onClick={() => void reconnect()}>Reconnect</Button>}
+          <Button size="icon" variant="ghost" className="h-6 w-6" title="Refresh usage" aria-label={`Refresh ${account.label} usage`} disabled={busy} onClick={() => void run(() => api.cloudProviders.fleetAccounts.refreshUsage(account.id))}><RefreshCw className="h-3.5 w-3.5" /></Button>
+          <Button size="icon" variant="ghost" className="h-6 w-6" title="Move up" aria-label={`Move ${account.label} up`} disabled={busy || index === 0} onClick={() => move(-1)}><ArrowUp className="h-3.5 w-3.5" /></Button>
+          <Button size="icon" variant="ghost" className="h-6 w-6" title="Move down" aria-label={`Move ${account.label} down`} disabled={busy || index === ids.length - 1} onClick={() => move(1)}><ArrowDown className="h-3.5 w-3.5" /></Button>
+          <Button size="icon" variant="ghost" className="h-6 w-6" title="Remove" aria-label={`Remove ${account.label}`} disabled={busy} onClick={() => setConfirmRemove(true)}><Trash2 className="h-3.5 w-3.5" /></Button>
+        </div>
       </div>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate">
+          {account.kind === 'anthropic_key' || account.kind === 'openai_key' ? 'No usage data for API keys'
+            : summaryWindow ? `${summaryWindow.label} ${summaryWindow.usedPercent}%${summaryWindow.resetsAt ? ` · ${formatResetAt(summaryWindow.resetsAt)}` : ''}`
+              : account.usage && 'error' in account.usage ? `Usage unavailable: ${account.usage.error}` : 'Usage not checked yet'}
+          {' · Updated '}{account.usage ? updatedTime(account.usage.fetchedAt) : 'never'}
+        </span>
+        {windows.length > 0 && <Button size="sm" variant="ghost" aria-expanded={usageExpanded} onClick={() => setUsageExpanded((expanded) => !expanded)} className="h-5 shrink-0 gap-0.5 px-1 text-xs">
+          {usageExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          Usage
+        </Button>}
+      </div>
+      {usageExpanded && <div className="space-y-2 pt-1">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
       {codeStep && <div className="flex gap-2">
         <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
         <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id }); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
@@ -282,7 +280,8 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
   return <div className="space-y-2">
     <div className="flex items-center gap-2"><FleetAgentMark agent={agent} className="h-4 w-4 rounded-[3px]" /><span className="text-[13px] font-medium">{agentLabel}</span></div>
     {ordered.map((account, index) => <FleetAccountRow key={account.id} account={account} active={activeId === account.id} switchAtPercent={switchAtPercent} index={index} ids={ids} workspaceId={workspaceId} onChanged={onChanged} />)}
-    {!adding ? <Button size="sm" variant="outline" onClick={() => { setLabel(`${agentLabel} ${accounts.length + 1}`); setAdding(true); }}>Add another {agentLabel} account</Button> : (
+    {ordered.length === 0 && <p className="text-xs text-muted-foreground">Not connected</p>}
+    {!adding ? <Button size="sm" variant="outline" onClick={() => { setLabel(`${agentLabel} ${accounts.length + 1}`); setAdding(true); }}>{ordered.length === 0 ? `Connect ${agentLabel}` : `Add another ${agentLabel} account`}</Button> : (
       <div className="rounded-md border p-2.5 space-y-2">
         <Input label="Account name" aria-label="Account name" value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} />
         {!method && <div className="flex gap-2">

@@ -102,7 +102,7 @@ it('shows account status and API key usage text', () => {
   expect(screen.getByText('Reconnect needed')).toBeInTheDocument();
   expect(screen.getByText(/Limit reached, resets/)).toBeInTheDocument();
   expect(screen.getByText('Over 95%')).toBeInTheDocument();
-  expect(screen.getByText('No usage data for API keys')).toBeInTheDocument();
+  expect(screen.getByText(/No usage data for API keys/)).toBeInTheDocument();
 });
 
 it('shows a single kind label only when it differs from the account name', () => {
@@ -125,19 +125,19 @@ it('shows the weekly summary and reveals every window for one card', () => {
   renderList([account('1', { usage }), account('2', { usage })]);
   const first = screen.getByTestId('fleet-account-1');
   const second = screen.getByTestId('fleet-account-2');
-  expect(within(first).getByText('Weekly 85%')).toBeInTheDocument();
-  expect(within(first).getAllByRole('progressbar')).toHaveLength(1);
+  expect(within(first).getByText(/Weekly 85%/)).toBeInTheDocument();
+  expect(within(first).queryByRole('progressbar')).not.toBeInTheDocument();
   expect(within(first).queryByText('Weekly (Fable)')).not.toBeInTheDocument();
-  const toggle = within(first).getByRole('button', { name: 'Show usage' });
+  const toggle = within(first).getByRole('button', { name: 'Usage' });
   expect(toggle).toHaveAttribute('aria-expanded', 'false');
   fireEvent.click(toggle);
-  expect(within(first).getByRole('button', { name: 'Hide usage' })).toHaveAttribute('aria-expanded', 'true');
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
   expect(within(first).getByText('5-hour')).toBeInTheDocument();
   expect(within(first).getByText('Weekly (Fable)')).toBeInTheDocument();
-  expect(within(first).getAllByRole('progressbar')).toHaveLength(4);
-  expect(within(second).getAllByRole('progressbar')).toHaveLength(1);
-  fireEvent.click(within(first).getByRole('button', { name: 'Hide usage' }));
-  expect(within(first).getAllByRole('progressbar')).toHaveLength(1);
+  expect(within(first).getAllByRole('progressbar')).toHaveLength(3);
+  expect(within(second).queryByRole('progressbar')).not.toBeInTheDocument();
+  fireEvent.click(toggle);
+  expect(within(first).queryByRole('progressbar')).not.toBeInTheDocument();
 });
 
 it('uses the highest window when no all-model weekly window exists', () => {
@@ -145,7 +145,7 @@ it('uses the highest window when no all-model weekly window exists', () => {
     { key: 'session', label: '5-hour', usedPercent: 35, resetsAt: null },
     { key: 'weekly_scoped:fable', label: 'Weekly (Fable)', usedPercent: 80, resetsAt: null },
   ] } })]);
-  expect(screen.getByText('Weekly (Fable) 80%')).toBeInTheDocument();
+  expect(screen.getByText(/Weekly \(Fable\) 80%/)).toBeInTheDocument();
 });
 
 it.each([
@@ -163,12 +163,13 @@ it.each([
 });
 
 it.each([
-  [84, 'bg-primary'], [85, 'bg-amber-500'], [94, 'bg-amber-500'], [95, 'bg-red-500'],
+  [84, 'bg-primary'], [85, 'bg-warning'], [94, 'bg-warning'], [95, 'bg-destructive'],
 ])('uses %s%% bar color %s at a 95%% threshold', (percent, color) => {
   renderList([account('1', { usage: { fetchedAt: new Date().toISOString(), windows: [
     { key: 'week', label: 'Weekly', usedPercent: percent, resetsAt: null },
   ] } })]);
-  expect(screen.getByRole('progressbar', { name: 'Weekly summary usage' }).firstElementChild).toHaveClass(color);
+  fireEvent.click(screen.getByRole('button', { name: 'Usage' }));
+  expect(screen.getByRole('progressbar', { name: 'Weekly usage' }).firstElementChild).toHaveClass(color);
 });
 
 it('reorders with the complete account id list', async () => {
@@ -181,11 +182,11 @@ it('reorders with the complete account id list', async () => {
 
 it('requires an inline confirmation before removal', async () => {
   renderList([account('1')]);
-  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Claude 1' }));
   expect(remove).not.toHaveBeenCalled();
   const row = screen.getByTestId('fleet-account-1');
   expect(within(row).getByText('Remove Claude 1?')).toBeInTheDocument();
-  fireEvent.click(within(row).getAllByRole('button', { name: 'Remove' })[1]);
+  fireEvent.click(within(row).getByRole('button', { name: 'Remove' }));
   await waitFor(() => expect(remove).toHaveBeenCalledWith('1'));
 });
 
@@ -224,7 +225,8 @@ it('starts Claude sign-in after one click and shows the code step', async () => 
 it('starts Codex sign-in after one click', async () => {
   render(<FleetAccountsList agent="codex" workspaceId="ws1" accounts={[]} activeId={null}
     switchAtPercent={95} onChanged={onChanged} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Add another Codex account' }));
+  expect(screen.getByText('Not connected')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Codex' }));
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   await waitFor(() => expect(codexSignIn).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(saveConfig).toHaveBeenCalledWith('selfhosted', 'ws1', {
@@ -236,7 +238,7 @@ it('starts Codex sign-in after one click', async () => {
 it('keeps Claude sign-in errors visible and permits another attempt', async () => {
   startClaudeSignIn.mockRejectedValueOnce(new Error('Sign-in failed'));
   renderList([]);
-  fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Claude' }));
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Sign-in failed');
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));

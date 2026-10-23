@@ -3,6 +3,10 @@ import path from 'path';
 import { git } from './git';
 
 export type RepoPathMap = Record<string, string>;
+interface RepoPathState {
+  paths: RepoPathMap;
+  scanRoots: string[];
+}
 
 /** `owner/name` from an https or ssh GitHub remote URL, or null. */
 export function repoFullNameFromRemote(remoteUrl: string): string | null {
@@ -22,26 +26,42 @@ export class RepoPaths {
     this.file = path.join(userData, 'workbench-repo-paths.json');
   }
 
-  async get(): Promise<RepoPathMap> {
+  private async read(): Promise<RepoPathState> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.file, 'utf8'));
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as RepoPathMap)
-        : {};
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        return { paths: {}, scanRoots: [] };
+      if (parsed.paths && typeof parsed.paths === 'object' && !Array.isArray(parsed.paths)) {
+        return {
+          paths: parsed.paths as RepoPathMap,
+          scanRoots: Array.isArray(parsed.scanRoots)
+            ? parsed.scanRoots.filter((root: unknown) => typeof root === 'string' && path.isAbsolute(root))
+            : [],
+        };
+      }
+      return { paths: parsed as RepoPathMap, scanRoots: [] };
     } catch {
-      return {};
+      return { paths: {}, scanRoots: [] };
     }
   }
 
-  private mutate(change: (map: RepoPathMap) => void): Promise<RepoPathMap> {
+  async get(): Promise<RepoPathMap> {
+    return (await this.read()).paths;
+  }
+
+  async getScanRoots(): Promise<string[]> {
+    return (await this.read()).scanRoots;
+  }
+
+  private mutate<T>(change: (state: RepoPathState) => T): Promise<T> {
     const run = async () => {
-      const map = await this.get();
-      change(map);
+      const state = await this.read();
+      const result = change(state);
       await fs.mkdir(path.dirname(this.file), { recursive: true });
-      await fs.writeFile(this.file, JSON.stringify(map, null, 2), {
+      await fs.writeFile(this.file, JSON.stringify(state, null, 2), {
         mode: 0o600,
       });
-      return map;
+      return result;
     };
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
@@ -53,7 +73,7 @@ export class RepoPaths {
     return Object.keys(map).find((key) => key.toLowerCase() === lower) ?? repoFullName;
   }
 
-  async set(input: { repoFullName: string; path: string }): Promise<RepoPathMap> {
+  async set(input: { repoFullName: string; path: string; ifMissing?: boolean }): Promise<RepoPathMap> {
     const repoFullName = input.repoFullName.trim();
     if (!/^[^/\s]+\/[^/\s]+$/.test(repoFullName))
       throw new Error('Invalid repository name');
@@ -69,21 +89,55 @@ export class RepoPaths {
     try {
       remote = await git(root, 'remote', 'get-url', 'origin');
     } catch {
-      throw new Error('That repository has no origin remote');
+      remote = '';
     }
-    const actual = repoFullNameFromRemote(remote);
-    if (!actual || actual.toLowerCase() !== repoFullName.toLowerCase())
+    const actual = remote ? repoFullNameFromRemote(remote) : null;
+    let matches = actual?.toLowerCase() === repoFullName.toLowerCase();
+    if (!matches) {
+      const remotes = (await git(root, 'remote')).split(/\r?\n/).filter(Boolean);
+      for (const name of remotes) {
+        if (name === 'origin') continue;
+        const url = await git(root, 'remote', 'get-url', name);
+        const candidate = repoFullNameFromRemote(url);
+        if (candidate?.toLowerCase() === repoFullName.toLowerCase()) {
+          matches = true;
+          break;
+        }
+      }
+    }
+    if (!matches) {
+      if (!remote) throw new Error('That repository has no origin or matching remote');
       throw new Error(
         `That repository's origin is ${actual ?? remote}, not ${repoFullName}`,
       );
-    return this.mutate((map) => {
-      map[this.keyFor(map, repoFullName)] = root;
+    }
+    return this.mutate(({ paths }) => {
+      const key = this.keyFor(paths, repoFullName);
+      if (!input.ifMissing || !paths[key]) paths[key] = root;
+      return paths;
     });
   }
 
   remove(repoFullName: string): Promise<RepoPathMap> {
-    return this.mutate((map) => {
-      delete map[this.keyFor(map, repoFullName)];
+    return this.mutate(({ paths }) => {
+      delete paths[this.keyFor(paths, repoFullName)];
+      return paths;
+    });
+  }
+
+  addScanRoot(root: string): Promise<string[]> {
+    if (!path.isAbsolute(root)) throw new Error('The path must be absolute');
+    const absolute = path.resolve(root);
+    return this.mutate(({ scanRoots }) => {
+      if (!scanRoots.includes(absolute)) scanRoots.push(absolute);
+      return scanRoots;
+    });
+  }
+
+  removeScanRoot(root: string): Promise<string[]> {
+    return this.mutate((state) => {
+      state.scanRoots = state.scanRoots.filter((saved) => saved !== root);
+      return state.scanRoots;
     });
   }
 }

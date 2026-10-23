@@ -1,7 +1,8 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import type { WorkbenchLocalBridge } from '@talyn/shared';
+import os from 'os';
+import type { DesktopWorkbenchBridge } from '../workbenchBridgeTypes';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
 import type { ReviewRankingExportResult } from './reviewRankingExport';
@@ -34,7 +35,7 @@ function subscribe<T>(channel: string, callback: (frame: T) => void): () => void
   return () => { ipcRenderer.removeListener(channel, handler); };
 }
 
-const workbench: WorkbenchLocalBridge = {
+const workbench: DesktopWorkbenchBridge = {
   createWorktree: (input) => ipcRenderer.invoke('workbench:create-worktree', input),
   removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
   startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
@@ -64,9 +65,17 @@ const workbench: WorkbenchLocalBridge = {
   pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
   readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
   repoPaths: {
+    homeDir: os.homedir(),
     get: () => ipcRenderer.invoke('workbench:repo-paths:get'),
     set: (input) => ipcRenderer.invoke('workbench:repo-paths:set', input),
+    detect: (input) => ipcRenderer.invoke('workbench:repo-paths:detect', input),
+    uniqueMain: (candidates) => ipcRenderer.invoke('workbench:repo-paths:unique-main', candidates),
     remove: (repoFullName) => ipcRenderer.invoke('workbench:repo-paths:remove', repoFullName),
+    scanRoots: {
+      get: () => ipcRenderer.invoke('workbench:repo-paths:scan-roots:get'),
+      add: () => ipcRenderer.invoke('workbench:repo-paths:scan-roots:add'),
+      remove: (root) => ipcRenderer.invoke('workbench:repo-paths:scan-roots:remove', root),
+    },
   },
   instructionFiles: () => ipcRenderer.invoke('workbench:instruction-files'),
 };

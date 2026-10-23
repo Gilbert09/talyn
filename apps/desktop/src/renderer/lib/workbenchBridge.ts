@@ -1,4 +1,4 @@
-import type { WorkbenchLocalBridge } from '@talyn/shared';
+import type { DesktopWorkbenchBridge } from '../../workbenchBridgeTypes';
 
 /**
  * The local workbench runtime the preload exposes as `window.electron.workbench`.
@@ -8,9 +8,9 @@ import type { WorkbenchLocalBridge } from '@talyn/shared';
  * the main process happens to declare it. Null when the preload has no bridge
  * (an older main process, or a test) — sandbox workbenches never need it.
  */
-export function getWorkbenchBridge(): WorkbenchLocalBridge | null {
+export function getWorkbenchBridge(): DesktopWorkbenchBridge | null {
   if (typeof window === 'undefined') return null;
-  const electron = (window as unknown as { electron?: { workbench?: WorkbenchLocalBridge } }).electron;
+  const electron = (window as unknown as { electron?: { workbench?: DesktopWorkbenchBridge } }).electron;
   return electron?.workbench ?? null;
 }
 
