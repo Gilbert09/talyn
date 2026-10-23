@@ -302,18 +302,9 @@ export function cloudProviderRoutes(): Router {
           !(await mayAddAccount(workspaceId, 'codex'))) {
         return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
       }
-      for (const [agent, kind, supplied] of [
-        ['claude', 'anthropic_key', body.claudeToken],
-        ['codex', 'codex_oauth', body.codexAccessToken && !body.codexLabel && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId],
-        ['codex', 'openai_key', body.openaiKey],
-      ] as const) {
-        if (!supplied) continue;
-        const existing = await listFleetAccounts(workspaceId, agent);
-        if (existing.length > 0 && !existing.some((account) => account.kind === kind) &&
-            !(await workspaceHasFeature('fleetMultiAccount', workspaceId)).enabled) {
-          return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
-        }
-      }
+      // The old single-credential body is NOT gated by the multi-account flag.
+      // It upserts by kind, so it can never make more than one sign-in and one
+      // pasted key per agent, which is what every workspace could hold before.
     }
     const result = await provider.validateCredentials(workspaceId, providerBody);
     if (!result.ok) {

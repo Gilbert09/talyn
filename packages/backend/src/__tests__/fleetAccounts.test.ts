@@ -364,13 +364,14 @@ describe('fleet accounts', () => {
 
     it('is null when the integration row is switched off', async () => {
       await add('anthropic_key', 'sk-ant-api-one');
-      await db.insert(integrationsTable).values({
-        id: 'int1',
-        workspaceId: WS,
-        type: 'selfhosted',
-        enabled: false,
-        config: {},
-      });
+      // The add already wrote the row: it mirrors the account onto the legacy keys.
+      await db
+        .insert(integrationsTable)
+        .values({ id: 'int1', workspaceId: WS, type: 'selfhosted', enabled: false, config: {} })
+        .onConflictDoUpdate({
+          target: [integrationsTable.workspaceId, integrationsTable.type],
+          set: { enabled: false },
+        });
       expect(await getSelfHostedCredentials(WS)).toBeNull();
       expect(await fleetAgentStatus(WS)).toEqual({ connectedAgents: [], reauthAgents: [] });
     });

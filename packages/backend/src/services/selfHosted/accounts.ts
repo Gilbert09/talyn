@@ -281,27 +281,91 @@ async function prepareWorkspace(workspaceId: string): Promise<boolean> {
   return true;
 }
 
+const LEGACY_KEYS: Record<FleetAgent, { oauth: string; key: string; oauthKind: FleetAccountKind; keyKind: FleetAccountKind }> = {
+  claude: { oauth: 'claudeOAuth', key: 'anthropicKeyEnc', oauthKind: 'claude_oauth', keyKind: 'anthropic_key' },
+  codex: { oauth: 'codexOAuth', key: 'openaiKeyEnc', oauthKind: 'codex_oauth', keyKind: 'openai_key' },
+};
+
 /**
- * Remove an agent's legacy config keys, once the agent has no accounts left.
+ * Write an agent's accounts back onto the legacy config keys, in the shape a
+ * backend from before migration 0079 reads. Call it after every write to an
+ * agent's accounts.
  *
- * Without this, adoption would bring a removed credential back on the next
- * read: the keys stay on the row until a later migration strips them.
+ * This is what makes a rollback safe. An OAuth refresh rotates the refresh
+ * token, so a legacy key that kept the pre-migration pair would be dead within
+ * hours, and an old backend would then mark every subscription for reauth.
+ *
+ *   - `claudeOAuth` / `codexOAuth`: the first sign-in account by priority, with
+ *     its `reauthRequiredAt`.
+ *   - `anthropicKeyEnc` / `openaiKeyEnc`: the first pasted-key account.
+ *   - `quotaExhausted.<agent>`: the first account's hold, only when EVERY
+ *     account of the agent is held. The old backend reads it as "this agent
+ *     cannot run".
+ *
+ * An agent with no accounts loses all three keys. Without that, adoption would
+ * bring a removed credential back on the next read. Adoption cannot copy a
+ * mirrored key twice: it runs only for an agent that has no accounts.
+ *
+ * One statement, so two concurrent writes cannot leave a mix of their reads.
  */
-async function stripLegacyKeys(workspaceId: string, agent: FleetAgent): Promise<void> {
-  const keys = agent === 'claude' ? ['claudeOAuth', 'anthropicKeyEnc'] : ['codexOAuth', 'openaiKeyEnc'];
-  await getDbClient()
-    .update(integrationsTable)
-    .set({
-      config: sql`(${integrationsTable.config} - ${keys[0]}::text - ${keys[1]}::text) #- ${`{quotaExhausted,${agent}}`}::text[]`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, INTEGRATION_TYPE),
-      ),
-    );
+async function mirrorLegacyKeys(workspaceId: string, agent: FleetAgent): Promise<void> {
+  const { oauth, key, oauthKind, keyKind } = LEGACY_KEYS[agent];
+  const config = sql`CASE WHEN jsonb_typeof(i."config") = 'object' THEN i."config" ELSE '{}'::jsonb END`;
+  const holds = sql`(
+    (CASE WHEN jsonb_typeof(i."config" -> 'quotaExhausted') = 'object'
+      THEN i."config" -> 'quotaExhausted' ELSE '{}'::jsonb END) - ${agent}::text
+  ) || CASE WHEN s.hold IS NULL THEN '{}'::jsonb ELSE jsonb_build_object(${agent}::text, s.hold) END`;
+  // Accounts can exist before anything wrote the integration row (the accounts
+  // API adds one directly). An old backend needs the row to see any credential.
+  await getDbClient().execute(sql`
+    INSERT INTO "integrations" ("id", "workspace_id", "type", "enabled", "config", "created_at", "updated_at")
+    SELECT ${uuid()}, ${workspaceId}, ${INTEGRATION_TYPE}, true, '{}'::jsonb, now(), now()
+    WHERE EXISTS (
+      SELECT 1 FROM "fleet_accounts" fa WHERE fa."workspace_id" = ${workspaceId} AND fa."agent" = ${agent}
+    )
+    ON CONFLICT ("workspace_id", "type") DO NOTHING
+  `);
+  await getDbClient().execute(sql`
+    UPDATE "integrations" AS i
+    SET
+      "config" = (${config} - ${oauth}::text - ${key}::text - 'quotaExhausted'::text)
+        || CASE WHEN s.oauth IS NULL THEN '{}'::jsonb ELSE jsonb_build_object(${oauth}::text, s.oauth) END
+        || CASE WHEN s.apikey IS NULL THEN '{}'::jsonb ELSE jsonb_build_object(${key}::text, s.apikey) END
+        || CASE WHEN ${holds} = '{}'::jsonb THEN '{}'::jsonb ELSE jsonb_build_object('quotaExhausted', ${holds}) END,
+      "updated_at" = now()
+    FROM (
+      SELECT
+        (SELECT fa."credential" || CASE WHEN fa."reauth_required_at" IS NULL THEN '{}'::jsonb
+            ELSE jsonb_build_object('reauthRequiredAt',
+              to_char(fa."reauth_required_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) END
+          FROM "fleet_accounts" fa
+          WHERE fa."workspace_id" = ${workspaceId} AND fa."kind" = ${oauthKind}
+          ORDER BY fa."priority", fa."created_at" LIMIT 1) AS oauth,
+        (SELECT fa."credential" -> 'keyEnc'
+          FROM "fleet_accounts" fa
+          WHERE fa."workspace_id" = ${workspaceId} AND fa."kind" = ${keyKind}
+          ORDER BY fa."priority", fa."created_at" LIMIT 1) AS apikey,
+        (SELECT CASE WHEN count(*) > 0 AND bool_and(fa."quota_exhausted" IS NOT NULL)
+            THEN (array_agg(fa."quota_exhausted" ORDER BY fa."priority", fa."created_at"))[1] END
+          FROM "fleet_accounts" fa
+          WHERE fa."workspace_id" = ${workspaceId} AND fa."agent" = ${agent}) AS hold
+    ) s
+    WHERE i."workspace_id" = ${workspaceId} AND i."type" = ${INTEGRATION_TYPE}
+  `);
 }
+
+/** Mirror each (workspace, agent) pair that a write touched, once. */
+async function mirrorTouched(rows: readonly { workspaceId: string; agent: string }[]): Promise<void> {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const pair = `${row.workspaceId}\u0000${row.agent}`;
+    if (seen.has(pair)) continue;
+    seen.add(pair);
+    await mirrorLegacyKeys(row.workspaceId, row.agent as FleetAgent);
+  }
+}
+
+const TOUCHED_COLUMNS = { workspaceId: fleetAccounts.workspaceId, agent: fleetAccounts.agent } as const;
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -441,6 +505,7 @@ export async function addFleetAccount(
       updatedAt: now,
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
+  await mirrorLegacyKeys(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -470,6 +535,7 @@ export async function upsertPrimaryFleetAccount(
       .set({ credential, reauthRequiredAt: null, updatedAt: new Date() })
       .where(eq(fleetAccounts.id, sameKind.id))
       .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
+    await mirrorLegacyKeys(workspaceId, agent);
     return toAccount(rows[0]!);
   }
   if (kind === 'anthropic_key' || kind === 'openai_key' || own.length === 0) {
@@ -496,6 +562,7 @@ export async function upsertPrimaryFleetAccount(
       updatedAt: now,
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
+  await mirrorLegacyKeys(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -507,10 +574,12 @@ export async function updateFleetAccountCredential(
   accountId: string,
   credential: FleetAccountCredential,
 ): Promise<void> {
-  await getDbClient()
+  const rows = await getDbClient()
     .update(fleetAccounts)
     .set({ credential, reauthRequiredAt: null, updatedAt: new Date() })
-    .where(eq(fleetAccounts.id, accountId));
+    .where(eq(fleetAccounts.id, accountId))
+    .returning(TOUCHED_COLUMNS);
+  await mirrorTouched(rows);
 }
 
 /** Rename an account. False when the workspace has no such account. */
@@ -565,6 +634,7 @@ export async function reorderFleetAccounts(
         inArray(fleetAccounts.id, [...orderedIds]),
       ),
     );
+  await mirrorLegacyKeys(workspaceId, agent);
   return listFleetAccounts(workspaceId, agent);
 }
 
@@ -576,13 +646,7 @@ export async function removeFleetAccount(workspaceId: string, accountId: string)
     .returning({ agent: fleetAccounts.agent });
   const removed = rows[0];
   if (!removed) return false;
-  const agent = removed.agent as FleetAgent;
-  const left = await getDbClient()
-    .select({ id: fleetAccounts.id })
-    .from(fleetAccounts)
-    .where(and(eq(fleetAccounts.workspaceId, workspaceId), eq(fleetAccounts.agent, agent)))
-    .limit(1);
-  if (left.length === 0) await stripLegacyKeys(workspaceId, agent);
+  await mirrorLegacyKeys(workspaceId, removed.agent as FleetAgent);
   return true;
 }
 
@@ -603,12 +667,7 @@ export async function removeFleetAccountsForAgent(
         kinds ? inArray(fleetAccounts.kind, [...kinds]) : undefined,
       ),
     );
-  const left = await getDbClient()
-    .select({ id: fleetAccounts.id })
-    .from(fleetAccounts)
-    .where(and(eq(fleetAccounts.workspaceId, workspaceId), eq(fleetAccounts.agent, agent)))
-    .limit(1);
-  if (left.length === 0) await stripLegacyKeys(workspaceId, agent);
+  await mirrorLegacyKeys(workspaceId, agent);
 }
 
 /** Remove every account of a workspace. The integration row is the caller's. */
@@ -629,17 +688,21 @@ export async function setFleetAccountUsage(
 
 /** Record that the vendor rejected this account's grant. */
 export async function setFleetAccountReauth(accountId: string, at: Date = new Date()): Promise<void> {
-  await getDbClient()
+  const rows = await getDbClient()
     .update(fleetAccounts)
     .set({ reauthRequiredAt: at, updatedAt: new Date() })
-    .where(eq(fleetAccounts.id, accountId));
+    .where(eq(fleetAccounts.id, accountId))
+    .returning(TOUCHED_COLUMNS);
+  await mirrorTouched(rows);
 }
 
 export async function clearFleetAccountReauth(accountId: string): Promise<void> {
-  await getDbClient()
+  const rows = await getDbClient()
     .update(fleetAccounts)
     .set({ reauthRequiredAt: null, updatedAt: new Date() })
-    .where(and(eq(fleetAccounts.id, accountId), isNotNull(fleetAccounts.reauthRequiredAt)));
+    .where(and(eq(fleetAccounts.id, accountId), isNotNull(fleetAccounts.reauthRequiredAt)))
+    .returning(TOUCHED_COLUMNS);
+  await mirrorTouched(rows);
 }
 
 /** Write a quota hold on accounts — one id, or every account of an agent. */
@@ -649,14 +712,16 @@ export async function setFleetAccountExhausted(
 ): Promise<void> {
   // By agent, adopt first: a legacy key not yet adopted has no row to hold.
   if (!('accountId' in target)) await prepareWorkspace(target.workspaceId);
-  await getDbClient()
+  const rows = await getDbClient()
     .update(fleetAccounts)
     .set({ quotaExhausted: record, updatedAt: new Date() })
     .where(
       'accountId' in target
         ? eq(fleetAccounts.id, target.accountId)
         : and(eq(fleetAccounts.workspaceId, target.workspaceId), eq(fleetAccounts.agent, target.agent)),
-    );
+    )
+    .returning(TOUCHED_COLUMNS);
+  await mirrorTouched(rows);
 }
 
 /** Clear a quota hold — one id, or every account of an agent. Rows with none are not written. */
@@ -665,7 +730,7 @@ export async function clearFleetAccountExhausted(
 ): Promise<void> {
   // By agent, adopt first, or a later adoption would copy the legacy hold back.
   if (!('accountId' in target)) await prepareWorkspace(target.workspaceId);
-  await getDbClient()
+  const rows = await getDbClient()
     .update(fleetAccounts)
     .set({ quotaExhausted: null, updatedAt: new Date() })
     .where(
@@ -678,5 +743,7 @@ export async function clearFleetAccountExhausted(
               eq(fleetAccounts.agent, target.agent),
             ),
       ),
-    );
+    )
+    .returning(TOUCHED_COLUMNS);
+  await mirrorTouched(rows);
 }
