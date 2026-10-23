@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { integrations as integrationsTable } from '../../db/schema.js';
@@ -80,10 +80,11 @@ export interface ExhaustedQuotaRecord {
  *
  * The four CREDENTIAL keys (`claudeOAuth`, `anthropicKeyEnc`, `codexOAuth`,
  * `openaiKeyEnc`) and `quotaExhausted` are LEGACY since migration 0079: the
- * credentials live on `fleet_accounts` now, one row per account. They stay on
- * old rows until a later migration strips them, are read only to adopt a key an
- * old instance wrote during the deploy overlap (see `accounts.ts`), and are
- * written by nothing here. `claudePendingAuth` is still live.
+ * credentials live on `fleet_accounts` now, one row per account. They are read
+ * only to adopt a key an old instance wrote during the deploy overlap, and every
+ * account write mirrors the accounts back onto them (`mirrorLegacyKeys` in
+ * `accounts.ts`), so a rolled-back backend still finds working credentials.
+ * `claudePendingAuth` is still live.
  */
 interface SelfHostedIntegrationConfig {
   /**
@@ -415,9 +416,15 @@ async function writeConfigPatch(
 
   const now = new Date();
   if (row) {
+    // Only the patched keys change. Writing back the whole config read above
+    // would overwrite the legacy keys a concurrent account write mirrored.
+    const removed = Object.entries(patch).filter(([, value]) => value === undefined).map(([key]) => key);
+    const set = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+    const base = sql`CASE WHEN jsonb_typeof(${integrationsTable.config}) = 'object' THEN ${integrationsTable.config} ELSE '{}'::jsonb END`;
+    const stripped = removed.reduce((acc, key) => sql`(${acc} - ${key}::text)`, base);
     await db
       .update(integrationsTable)
-      .set({ config: next, updatedAt: now })
+      .set({ config: sql`${stripped} || ${JSON.stringify(set)}::jsonb`, updatedAt: now })
       .where(eq(integrationsTable.id, row.id));
     return;
   }
@@ -645,7 +652,7 @@ export async function storeSelfHostedCredentials(
 ): Promise<void> {
   const db = getDbClient();
   const existing = await db
-    .select({ id: integrationsTable.id, config: integrationsTable.config })
+    .select({ id: integrationsTable.id })
     .from(integrationsTable)
     .where(
       and(
@@ -657,14 +664,15 @@ export async function storeSelfHostedCredentials(
 
   const now = new Date();
   if (existing[0]) {
-    const {
-      fleetTokenEnc: _token,
-      fleetEndpoint: _endpoint,
-      ...config
-    } = (existing[0].config as SelfHostedIntegrationConfig | null) ?? {};
+    // Remove the two keys in SQL rather than writing back the config read
+    // above, which would overwrite keys a concurrent write changed.
     await db
       .update(integrationsTable)
-      .set({ config, enabled: true, updatedAt: now })
+      .set({
+        config: sql`(CASE WHEN jsonb_typeof(${integrationsTable.config}) = 'object' THEN ${integrationsTable.config} ELSE '{}'::jsonb END) - 'fleetTokenEnc'::text - 'fleetEndpoint'::text`,
+        enabled: true,
+        updatedAt: now,
+      })
       .where(eq(integrationsTable.id, existing[0].id));
   } else {
     await db.insert(integrationsTable).values({
