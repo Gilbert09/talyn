@@ -3,7 +3,7 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FleetAccountView, Workspace } from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
-import { FleetAccountsList } from '../renderer/components/settings/FleetAccountsList';
+import { FleetAccountsList, formatResetAt } from '../renderer/components/settings/FleetAccountsList';
 import { FleetSwitchThresholdRow } from '../renderer/components/settings/sections/AgentsSettings';
 
 const list = jest.fn();
@@ -13,20 +13,32 @@ const reorder = jest.fn();
 const remove = jest.fn();
 const refreshUsage = jest.fn();
 const update = jest.fn();
+const startClaudeSignIn = jest.fn();
+const completeClaudeSignIn = jest.fn();
+const saveConfig = jest.fn();
+const openExternal = jest.fn();
+const codexSignIn = jest.fn();
+
+jest.mock('../renderer/lib/openExternal', () => ({ openExternal: (...args: unknown[]) => openExternal(...args) }));
 
 jest.mock('../renderer/lib/api', () => ({
   ApiError: class extends Error {
     constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
   },
   api: {
-    cloudProviders: { fleetAccounts: {
-      list: (...args: unknown[]) => list(...args),
-      add: (...args: unknown[]) => add(...args),
-      rename: (...args: unknown[]) => rename(...args),
-      reorder: (...args: unknown[]) => reorder(...args),
-      remove: (...args: unknown[]) => remove(...args),
-      refreshUsage: (...args: unknown[]) => refreshUsage(...args),
-    } },
+    cloudProviders: {
+      startClaudeSignIn: (...args: unknown[]) => startClaudeSignIn(...args),
+      completeClaudeSignIn: (...args: unknown[]) => completeClaudeSignIn(...args),
+      saveConfig: (...args: unknown[]) => saveConfig(...args),
+      fleetAccounts: {
+        list: (...args: unknown[]) => list(...args),
+        add: (...args: unknown[]) => add(...args),
+        rename: (...args: unknown[]) => rename(...args),
+        reorder: (...args: unknown[]) => reorder(...args),
+        remove: (...args: unknown[]) => remove(...args),
+        refreshUsage: (...args: unknown[]) => refreshUsage(...args),
+      },
+    },
     workspaces: { update: (...args: unknown[]) => update(...args) },
   },
 }));
@@ -58,6 +70,12 @@ beforeEach(() => {
   remove.mockResolvedValue(undefined);
   refreshUsage.mockResolvedValue(null);
   update.mockResolvedValue({});
+  startClaudeSignIn.mockResolvedValue({ url: 'https://example.com/sign-in' });
+  completeClaudeSignIn.mockResolvedValue(undefined);
+  saveConfig.mockResolvedValue(undefined);
+  openExternal.mockResolvedValue(undefined);
+  codexSignIn.mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' });
+  Object.defineProperty(window, 'electron', { configurable: true, value: { codex: { signIn: codexSignIn } } });
 });
 
 afterEach(() => { cleanup(); jest.clearAllMocks(); });
@@ -87,13 +105,70 @@ it('shows account status and API key usage text', () => {
   expect(screen.getByText('No usage data for API keys')).toBeInTheDocument();
 });
 
+it('shows a single kind label only when it differs from the account name', () => {
+  renderList([account('1', { label: 'cLaUdE SuBsCrIpTiOn' })]);
+  expect(screen.getAllByText(/claude subscription/i)).toHaveLength(1);
+});
+
+it('shows Limit reached when the switch threshold is 100%', () => {
+  renderList([account('1', { over: true })], 100);
+  expect(screen.getByText('Limit reached')).toBeInTheDocument();
+  expect(screen.queryByText('Over 100%')).not.toBeInTheDocument();
+});
+
+it('shows the weekly summary and reveals every window for one card', () => {
+  const usage = { fetchedAt: new Date().toISOString(), windows: [
+    { key: 'session', label: '5-hour', usedPercent: 90, resetsAt: null },
+    { key: 'weekly_scoped:fable', label: 'Weekly (Fable)', usedPercent: 99, resetsAt: null },
+    { key: 'weekly_all', label: 'Weekly', usedPercent: 85, resetsAt: null },
+  ] };
+  renderList([account('1', { usage }), account('2', { usage })]);
+  const first = screen.getByTestId('fleet-account-1');
+  const second = screen.getByTestId('fleet-account-2');
+  expect(within(first).getByText('Weekly 85%')).toBeInTheDocument();
+  expect(within(first).getAllByRole('progressbar')).toHaveLength(1);
+  expect(within(first).queryByText('Weekly (Fable)')).not.toBeInTheDocument();
+  const toggle = within(first).getByRole('button', { name: 'Show usage' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(toggle);
+  expect(within(first).getByRole('button', { name: 'Hide usage' })).toHaveAttribute('aria-expanded', 'true');
+  expect(within(first).getByText('5-hour')).toBeInTheDocument();
+  expect(within(first).getByText('Weekly (Fable)')).toBeInTheDocument();
+  expect(within(first).getAllByRole('progressbar')).toHaveLength(4);
+  expect(within(second).getAllByRole('progressbar')).toHaveLength(1);
+  fireEvent.click(within(first).getByRole('button', { name: 'Hide usage' }));
+  expect(within(first).getAllByRole('progressbar')).toHaveLength(1);
+});
+
+it('uses the highest window when no all-model weekly window exists', () => {
+  renderList([account('1', { usage: { fetchedAt: new Date().toISOString(), windows: [
+    { key: 'session', label: '5-hour', usedPercent: 35, resetsAt: null },
+    { key: 'weekly_scoped:fable', label: 'Weekly (Fable)', usedPercent: 80, resetsAt: null },
+  ] } })]);
+  expect(screen.getByText('Weekly (Fable) 80%')).toBeInTheDocument();
+});
+
+it.each([
+  [new Date(2026, 9, 23, 20), 'today', false],
+  [new Date(2026, 9, 24, 20, 30), 'tomorrow', true],
+  [new Date(2026, 9, 26, 20), 'weekday', false],
+  [new Date(2026, 9, 31, 20, 30), 'date', true],
+] as const)('formats reset time for %s as %s', (reset, dayLabel, hasMinutes) => {
+  const now = new Date(2026, 9, 23, 12);
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', ...(hasMinutes ? { minute: '2-digit' } : {}) }).format(reset);
+  const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(reset);
+  const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(reset);
+  const suffix = dayLabel === 'weekday' ? weekday : dayLabel === 'date' ? `${weekday} ${date}` : dayLabel;
+  expect(formatResetAt(reset.toISOString(), now)).toBe(`resets ${time} ${suffix}`);
+});
+
 it.each([
   [84, 'bg-primary'], [85, 'bg-amber-500'], [94, 'bg-amber-500'], [95, 'bg-red-500'],
 ])('uses %s%% bar color %s at a 95%% threshold', (percent, color) => {
   renderList([account('1', { usage: { fetchedAt: new Date().toISOString(), windows: [
     { key: 'week', label: 'Weekly', usedPercent: percent, resetsAt: null },
   ] } })]);
-  expect(screen.getByRole('progressbar', { name: 'Weekly usage' }).firstElementChild).toHaveClass(color);
+  expect(screen.getByRole('progressbar', { name: 'Weekly summary usage' }).firstElementChild).toHaveClass(color);
 });
 
 it('reorders with the complete account id list', async () => {
@@ -134,6 +209,45 @@ it('adds a labeled API key', async () => {
   fireEvent.change(screen.getByLabelText('Claude API key'), { target: { value: 'fake-key' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add account' }));
   await waitFor(() => expect(add).toHaveBeenCalledWith('ws1', 'claude', 'anthropic_key', 'fake-key', 'Claude 2'));
+});
+
+it('starts Claude sign-in after one click and shows the code step', async () => {
+  renderList([account('1')]);
+  fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  await waitFor(() => expect(startClaudeSignIn).toHaveBeenCalledWith('ws1', { label: 'Claude 2' }));
+  await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://example.com/sign-in'));
+  expect(await screen.findByLabelText('Code from Anthropic')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Sign in with Claude' })).not.toBeInTheDocument();
+});
+
+it('starts Codex sign-in after one click', async () => {
+  render(<FleetAccountsList agent="codex" workspaceId="ws1" accounts={[]} activeId={null}
+    switchAtPercent={95} onChanged={onChanged} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Add another Codex account' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  await waitFor(() => expect(codexSignIn).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(saveConfig).toHaveBeenCalledWith('selfhosted', 'ws1', {
+    codexAccessToken: 'access', codexRefreshToken: 'refresh',
+  }, { codexLabel: 'Codex 1' }));
+  expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).not.toBeInTheDocument();
+});
+
+it('keeps Claude sign-in errors visible and permits another attempt', async () => {
+  startClaudeSignIn.mockRejectedValueOnce(new Error('Sign-in failed'));
+  renderList([]);
+  fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Sign-in failed');
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  expect(await screen.findByLabelText('Code from Anthropic')).toBeInTheDocument();
+});
+
+it('keeps per-account Claude reconnect working', async () => {
+  renderList([account('1', { needsReauth: true })]);
+  fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+  await waitFor(() => expect(startClaudeSignIn).toHaveBeenCalledWith('ws1', { accountId: '1' }));
+  expect(await screen.findByLabelText('Code for Claude 1')).toBeInTheDocument();
 });
 
 it('shows the kill switch message when a second account is refused', async () => {

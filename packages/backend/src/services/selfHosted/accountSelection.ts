@@ -365,7 +365,7 @@ function agentCredentialFrom(
 export async function resolveRunCredential(
   workspaceId: string,
   agent: FleetAgent,
-  opts: { recordedAccountId?: string | null; model?: string; switchWhenOver?: boolean } = {},
+  opts: { recordedAccountId?: string | null; model?: string; switchWhenOver?: boolean; avoidAccountIds?: readonly string[] } = {},
 ): Promise<AgentCredential | null> {
   const recorded = opts.recordedAccountId ? await getFleetAccount(opts.recordedAccountId) : null;
   const recordedLive =
@@ -373,7 +373,7 @@ export async function resolveRunCredential(
       ? recorded
       : null;
 
-  if (recordedLive && !opts.switchWhenOver) {
+  if (recordedLive && !opts.switchWhenOver && !opts.avoidAccountIds?.includes(recordedLive.id)) {
     const own = agentCredentialFrom(
       agent,
       await getSelfHostedCredentials(workspaceId, onlyAccountOptions(agent, recordedLive.id)),
@@ -383,23 +383,28 @@ export async function resolveRunCredential(
 
   const selection = await selectFleetAccount(workspaceId, agent, {
     model: opts.model,
+    avoidAccountIds: opts.avoidAccountIds,
     ...(recordedLive ? { preferAccountId: recordedLive.id } : {}),
   });
   // All over: a recorded account that is merely over stays, rather than moving
   // a running run onto an account that is just as full.
-  const account = selection.account ?? recordedLive ?? selection.fallback;
+  const account = opts.avoidAccountIds?.length
+    ? selection.account
+    : selection.account ?? recordedLive ?? selection.fallback;
   if (account) {
     const picked = agentCredentialFrom(
       agent,
       await getSelfHostedCredentials(
         workspaceId,
-        credentialOptionsFor(agent, account.id, { threshold: selection.threshold, model: opts.model }),
+        credentialOptionsFor(agent, account.id, { threshold: selection.threshold, model: opts.model, avoidAccountIds: opts.avoidAccountIds }),
       ),
     );
     if (picked) return picked;
   }
   // Nothing chosen could give a token: any account at all, the old behaviour.
-  return agentCredentialFrom(agent, await getSelfHostedCredentials(workspaceId));
+  return opts.avoidAccountIds?.length
+    ? null
+    : agentCredentialFrom(agent, await getSelfHostedCredentials(workspaceId));
 }
 
 /** "the 5-hour limit", "the weekly (Opus) limit" — a window label inside a sentence. */

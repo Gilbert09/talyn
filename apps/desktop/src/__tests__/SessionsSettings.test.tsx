@@ -125,12 +125,3 @@ describe('SessionsSettings internet access', () => {
     expect(JSON.parse(localStorage.getItem(SESSION_DEFAULTS_KEY) ?? '{}')).toMatchObject({ internetAccess: false });
   });
 });
-
-it('starts automatic pull requests on and saves the new default', () => {
-  render(<SessionsSettings />);
-  const toggle = screen.getByRole('checkbox', { name: /^Open a pull request when the agent is done/ });
-  expect(toggle).toBeChecked();
-  fireEvent.click(toggle);
-  expect(toggle).not.toBeChecked();
-  expect(JSON.parse(localStorage.getItem(SESSION_DEFAULTS_KEY) ?? '{}')).toMatchObject({ autoCreatePr: false });
-});

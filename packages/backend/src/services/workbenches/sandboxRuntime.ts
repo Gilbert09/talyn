@@ -773,7 +773,7 @@ function agentOf(row: Pick<WorkbenchRow, 'agent'>): FleetAgent {
  */
 export async function refreshSandboxCredentials(
   row: WorkbenchRow,
-  opts: { model?: string } = {},
+  opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
 ): Promise<{ accountId: string | null; note: string | null }> {
   const sandboxId = requireSandbox(row);
   const resolved = await resolveSandboxCredentials(row.workspaceId);
@@ -786,6 +786,7 @@ export async function refreshSandboxCredentials(
     recordedAccountId: recorded,
     model,
     switchWhenOver: true,
+    avoidAccountIds: opts.avoidAccountIds,
   });
   const key = credential?.token;
   if (!key) {

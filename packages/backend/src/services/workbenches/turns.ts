@@ -28,6 +28,8 @@ import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { selectFleetAccount } from '../selfHosted/accountSelection.js';
+import { exhaustedAgentFrom, noteExhaustedAgent, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
 import {
   killMarker,
   recordWorkbenchEvent,
@@ -37,6 +39,7 @@ import {
   runStream,
   sandboxScriptEnv,
   startAccountWatch,
+  workbenchFleetAccountId,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { startTitleGeneration } from './title.js';
@@ -361,31 +364,62 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
     const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) };
 
-    const parser = createAgentStreamParser(agent);
     let sessionId = chat.agentSessionId;
-    // The guest sends one frame per line and the demux hands back whole lines,
-    // so each goes straight to the parser — no line buffer is needed here.
-    const onLine = (line: string) => {
-      for (const draft of parser.push(line)) {
-        if (draft.type === 'result') sawResult = true;
-        events.add(draft);
-      }
-      if (parser.sessionId && parser.sessionId !== sessionId) {
-        sessionId = parser.sessionId;
-        void saveSessionId(chatId, sessionId);
-      }
-    };
-    // A turn can run for a long time: its account is checked while it runs,
-    // and moved to the next one as soon as it crosses the threshold.
-    const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
-    const outcome = await runStream(wb, argv.map(shellQuote).join(' '), {
-      marker: turnMarker(chatId),
-      cwd: repoDirFor(wb),
-      env,
-      signal: live.controller.signal,
-      onStdoutLine: onLine,
-    }).finally(stopAccountWatch);
-    parserResult = parser.result;
+    let accountId = refreshed.accountId;
+    let outcome!: Awaited<ReturnType<typeof runStream>>;
+    let attemptSawResult = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const parser = createAgentStreamParser(agent);
+      attemptSawResult = false;
+      // The guest sends one frame per line and the demux hands back whole lines.
+      const onLine = (line: string) => {
+        for (const draft of parser.push(line)) {
+          if (draft.type === 'result') {
+            sawResult = true;
+            attemptSawResult = true;
+          }
+          events.add(draft);
+        }
+        if (parser.sessionId && parser.sessionId !== sessionId) {
+          sessionId = parser.sessionId;
+          void saveSessionId(chatId, sessionId);
+        }
+      };
+      const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
+      outcome = await runStream(wb, argv.map(shellQuote).join(' '), {
+        marker: turnMarker(chatId),
+        cwd: repoDirFor(wb),
+        env,
+        signal: live.controller.signal,
+        onStdoutLine: onLine,
+      }).finally(stopAccountWatch);
+      parserResult = parser.result;
+
+      if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || attempt > 0) break;
+      // The account this attempt ran on. The row can still name the one from before the turn-start switch.
+      const failedAccountId = accountId ?? workbenchFleetAccountId(wb);
+      if (!failedAccountId) break;
+      const why = parserResult?.text?.trim() || outcome.stderrTail.trim();
+      const detail = [parserResult?.text, outcome.stderrTail].filter(Boolean).join('\n');
+      const exhausted = exhaustedAgentFrom(detail) === agent;
+      if (!exhausted && rateLimitedAgentFrom(detail) !== agent) break;
+      if (exhausted) await noteExhaustedAgent(wb.workspaceId, agent, detail, failedAccountId);
+      const selection = await selectFleetAccount(wb.workspaceId, agent, {
+        model,
+        avoidAccountIds: [failedAccountId],
+      });
+      if (!selection.account || selection.account.id === failedAccountId) break;
+      if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
+      await events.flush();
+      if (live.cancelRequested) break;
+      const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;
+      const next = await refreshSandboxCredentials(wb, { model, avoidAccountIds: [failedAccountId] });
+      if (!next.accountId || next.accountId === failedAccountId) break;
+      const nextLabel = selection.accounts.find((a) => a.id === next.accountId)?.label ?? next.accountId;
+      const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
+      events.add(accountSwitchEvent(`${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`));
+      accountId = next.accountId;
+    }
 
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (outcome.exitCode === 0 && !parserResult?.isError) {
@@ -412,7 +446,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       (outcome.exitCode === null
         ? 'The agent process ended without reporting an exit code.'
         : `The agent exited with code ${outcome.exitCode}.`);
-    if (!sawResult) events.add(errorResultEvent('error_during_execution', why));
+    if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
     await events.flush();
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
   } catch (err) {

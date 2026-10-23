@@ -133,7 +133,6 @@ export function WorkbenchHeader({
   const [copied, setCopied] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkBusy, setLinkBusy] = useState(false);
-  const [autoPrBusy, setAutoPrBusy] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
   const unlink = async () => {
@@ -146,18 +145,6 @@ export function WorkbenchHeader({
       setLinkBusy(false);
     }
   };
-  const toggleAutoPr = async () => {
-    setAutoPrBusy(true);
-    try {
-      const settings = { ...workbench.settings, autoCreatePr: workbench.settings?.autoCreatePr === false };
-      useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.update(workbench.id, { settings }));
-    } catch (err) {
-      toast.error('Could not change the pull request setting', err instanceof Error ? err.message : undefined);
-    } finally {
-      setAutoPrBusy(false);
-    }
-  };
-
   const prLike = pr ? prRowAsLike(pr) : null;
   const primary = primaryWorkbenchAction(workbench, prLike);
   const available = availableWorkbenchActions(workbench, prLike);
@@ -378,10 +365,6 @@ export function WorkbenchHeader({
                 );
               })}
               <DropdownMenuSeparator />
-              <DropdownMenuItem disabled={autoPrBusy} onSelect={() => void toggleAutoPr()}>
-                <GitPullRequest className="mr-2 h-3.5 w-3.5" />
-                Open a PR when done: {workbench.settings?.autoCreatePr !== false ? 'on' : 'off'}
-              </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={linkBusy}
                 onSelect={() => workbench.pullRequestId ? void unlink() : setLinkOpen(true)}

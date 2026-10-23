@@ -47,6 +47,7 @@ describe('exhaustedAgentFrom', () => {
   it.each([
     ['a rate limit', 'rate_limited: Rate limited by the Anthropic API — the account\'s limit'],
     ['a five-hour window', 'You have reached your usage limit. Your limit resets at 3pm.'],
+    ['a rejected 429 request', "API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later."],
     ['an overloaded vendor', '529 {"type":"overloaded_error"}'],
     ['an unrelated harness failure', 'harness_no_output: the harness produced no agent turn'],
     ['a merge conflict', 'could not apply patch: conflict in src/app.ts'],
@@ -61,6 +62,7 @@ describe('exhaustedAgentFrom', () => {
     ['the fleet\'s own code', "rate_limited: Rate limited by the Anthropic API — the account's limit"],
     ['the vendor error type', '429 {"type":"rate_limit_error"}'],
     ['a five-hour window', 'You have reached your usage limit. Your limit resets at 3pm.'],
+    ['a rejected 429 request', "API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later."],
   ])('reads %s as a rate limit, which moves ONE hop rather than none', (_label, detail) => {
     // `exhaustedAgentFrom` still leaves these alone — see the cases above. They
     // are recognised separately so a run can swap onto the workspace's other

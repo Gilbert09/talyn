@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { DEFAULT_FLEET_SWITCH_AT_PERCENT, normaliseFleetSwitchAtPercent, type Workspace } from '@talyn/shared';
 import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
 import { api } from '../../../lib/api';
+import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { LocalAgentStatus } from '../../onboarding/steps/LocalAgentStatus';
-import { SettingRow, SettingsPage, SettingsSection } from '../../ui/settings';
+import { SettingRow, SettingToggle, SettingsPage, SettingsSection } from '../../ui/settings';
 import { SettingsGroup } from '../SettingsGroup';
 import { ProviderConnectCards } from '../providerCards';
 
@@ -62,14 +63,23 @@ export function FleetSwitchThresholdRow() {
 }
 
 export function AgentsSettings() {
+  const defaults = useSessionDefaults();
+
   return (
     <SettingsPage title="Agents" description="Where your agents run: in Talyn's cloud, or on this computer.">
-      <SettingsGroup
-        title="Cloud providers"
-        description="Vendors that run your tasks and open PRs. Connect one or more."
-      >
-        <ProviderConnectCards />
-      </SettingsGroup>
+      <section className="space-y-2">
+        <h2 className="text-[13px] font-medium">Cloud agents</h2>
+        <p className="text-xs text-muted-foreground">Run tasks and open PRs in the cloud. Connect one or more.</p>
+        <div className="space-y-3"><ProviderConnectCards /></div>
+      </section>
+      <SettingsSection title="Pull requests">
+        <SettingToggle
+          label="Open a PR when the agent is done"
+          description="The agent opens a pull request when it thinks the work is finished. New sessions use this."
+          checked={defaults.autoCreatePr}
+          onChange={(autoCreatePr) => writeSessionDefaults({ autoCreatePr })}
+        />
+      </SettingsSection>
       <SettingsSection title="Fleet switching">
         <FleetSwitchThresholdRow />
       </SettingsSection>

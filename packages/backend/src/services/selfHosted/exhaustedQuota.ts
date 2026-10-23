@@ -110,6 +110,7 @@ const RATE_LIMITED = [
   /reached your usage limit/i,
   /usage limit reached/i,
   /\bhit your (?:\w+ )?usage limit/i,
+  /exceed your account['’]s rate limit/i,
 ] as const;
 
 /**
