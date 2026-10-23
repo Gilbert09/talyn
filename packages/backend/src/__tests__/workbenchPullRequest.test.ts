@@ -50,7 +50,7 @@ const { GitHubApiError, githubService } = await import('../services/github.js');
 const { prMonitorService } = await import('../services/prMonitor.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
-const { getChat, getWorkbench, listChats, listEvents, updateWorkbench } = await import('../services/workbenches/store.js');
+const { getChat, getWorkbench, listChats, listEvents, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -440,6 +440,23 @@ describe('workbench Create PR', () => {
     const createPrMessage = { text: 'Create a pull request', intent: 'create_pr' };
     const prEvents = (events: Loose[]) => events.filter((e) => e.type === 'talyn_pr');
 
+    it('stores the automatic PR setting and validates it on create and update', async () => {
+      const created = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'claude',
+        deviceId: 'dev-1', localPath: '/tmp/wt', autoCreatePr: false,
+      });
+      expect(created.status).toBe(200);
+      const id = created.body.data.id;
+      expect((await getWorkbench(id))?.settings?.autoCreatePr).toBe(false);
+      expect((await call('PATCH', `/workbenches/${id}`, { settings: { autoCreatePr: true } })).status).toBe(200);
+      expect((await getWorkbench(id))?.settings?.autoCreatePr).toBe(true);
+      expect((await call('PATCH', `/workbenches/${id}`, { settings: { autoCreatePr: 'no' } })).status).toBe(400);
+      expect((await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'claude',
+        deviceId: 'dev-1', localPath: '/tmp/wt', autoCreatePr: 'no',
+      })).status).toBe(400);
+    });
+
     it('gives Claude the hidden instructions in the prompt and as a system prompt, keeps the short text, and opens the PR', async () => {
       const wb = await sandboxWorkbench();
       const chatId = (await listChats(wb.id))[0].id;
@@ -624,14 +641,45 @@ describe('workbench Create PR', () => {
       expect((await getChat(chatId))?.status).toBe('idle');
     });
 
-    it('leaves an ordinary message alone, even when its reply holds a talyn-pr block', async () => {
+    it('opens a PR from an ordinary message when the setting is on', async () => {
       const wb = await sandboxWorkbench();
       const chatId = (await listChats(wb.id))[0].id;
       mark = fleet.scripts.length;
       const events = await sendAndSettle(chatId, { text: 'Tidy up the tests' });
-      expect(scriptsSinceMark().find((s) => isAgentTurn(s))).not.toContain('--append-system-prompt');
+      expect(scriptsSinceMark().find((s) => isAgentTurn(s))).toContain('```talyn-pr');
+      expect(prEvents(events)).toEqual([expect.objectContaining({ ok: true, number: 7 })]);
+      expect(createPr).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['off', 'linked', 'invalid', 'failed'] as const)('skips an automatic PR when %s', async (reason) => {
+      const wb = await sandboxWorkbench();
+      if (reason === 'off') await updateWorkbench(wb.id, { settings: { autoCreatePr: false } });
+      if (reason === 'linked') {
+        await testDb.db.insert(pullRequests).values({ id: 'pr-7', workspaceId: 'ws-a', repositoryId: 'repo-a',
+          owner: 'acme', repo: 'app', number: 7, state: 'open' });
+        await updateWorkbench(wb.id, { pullRequestId: 'pr-7' });
+      }
+      if (reason === 'invalid') turnReply = { stdout: claudeResult('Done.\n```talyn-pr\n{broken}\n```') };
+      if (reason === 'failed') turnReply = { stdout: claudeResult(PR_TEXT, true), exitCode: 1 };
+      const chatId = (await listChats(wb.id))[0].id;
+      const events = await sendAndSettle(chatId, { text: 'Tidy up the tests' });
       expect(prEvents(events)).toEqual([]);
       expect(createPr).not.toHaveBeenCalled();
+    });
+
+    it.each(['cancelled', 'awaiting_input'] as const)('skips an automatic PR when %s', async (reason) => {
+      const wb = await sandboxWorkbench();
+      const chatId = (await listChats(wb.id))[0].id;
+      let release!: () => void;
+      turnReply = { stdout: claudeResult(PR_TEXT), hold: new Promise<void>((resolve) => { release = resolve; }) };
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Tidy up the tests' });
+      await vi.waitFor(() => expect(fleet.scripts.some((s) => isAgentTurn(s))).toBe(true));
+      if (reason === 'cancelled') await call('POST', `/workbenches/chats/${chatId}/cancel`);
+      else await updateChat(chatId, { status: 'awaiting_input' });
+      release();
+      await vi.waitFor(async () => expect((await getChat(chatId))?.status).toBe('idle'), { timeout: 5000 });
+      expect(createPr).not.toHaveBeenCalled();
+      expect(prEvents((await listEvents(chatId, 0, 200)).events.map((e: Loose) => e.event))).toEqual([]);
     });
 
     it('refuses an unknown intent', async () => {

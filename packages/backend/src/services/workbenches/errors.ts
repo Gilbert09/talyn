@@ -11,6 +11,7 @@ import {
   FleetNotDeployedError,
   fleetPinnedEndpoint,
 } from '../selfHosted/credentials.js';
+import { SANDBOX_LOST_MESSAGE } from './recovery.js';
 
 /**
  * A refusal the routes turn into a status and a machine code. Thrown by the
@@ -73,7 +74,7 @@ export function userFacingError(err: unknown): string {
       ? 'The sandbox runners are not reachable right now. Try again shortly.'
       : 'The sandbox runners are all busy. Try again shortly.';
   }
-  if (err instanceof FleetRunNotFoundError) return 'The sandbox no longer exists. Archive and restore this session to get a new one.';
+  if (err instanceof FleetRunNotFoundError) return SANDBOX_LOST_MESSAGE;
   if (err instanceof FleetThrottleError) return 'Talyn Fleet is rate limiting requests. Try again shortly.';
   if (err instanceof FleetDispatchUncertainError) return 'Talyn Fleet did not answer in time. Try again shortly.';
   // The fleet's own error text: it names the problem and carries no endpoint.

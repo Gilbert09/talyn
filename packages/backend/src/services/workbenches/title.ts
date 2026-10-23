@@ -69,6 +69,6 @@ export async function generateSandboxTitle(
   const updated = await setGeneratedTitle(row.id, title);
   if (!updated) return null;
   recordWorkbenchEvent(row, 'title', 'title set');
-  emitWorkbenchUpdated(await publicWorkbench(updated));
+  await emitWorkbenchUpdated(await publicWorkbench(updated));
   return updated;
 }

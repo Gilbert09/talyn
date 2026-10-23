@@ -75,15 +75,23 @@ describe('workbenchTurnPrompt', () => {
   const createPr = { branch: 'tom/x', baseBranch: 'main' };
 
   it('adds nothing to an ordinary turn', () => {
-    expect(workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr })).toEqual({ prompt: 'hi' });
-    expect(workbenchTurnPrompt({ agent: 'codex', text: 'hi', planMode: false, createPr })).toEqual({ prompt: 'hi' });
+    for (const agent of ['claude', 'codex'] as const) {
+      const turn = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr });
+      expect(turn.appendSystemPrompt ?? turn.prompt).toContain('```talyn-pr');
+    }
+  });
+
+  it.each([[false, false], [true, true]] as const)('omits the standing PR instruction when on=%s, linked=%s', (autoCreatePr, hasPullRequest) => {
+    const turn = workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr,
+      autoCreatePr, hasPullRequest });
+    expect(turn).toEqual({ prompt: 'hi' });
   });
 
   it.each(['claude', 'codex'] as const)('tells %s about limited access only when it is off', (agent) => {
     const off = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr, internetAccess: false });
     const on = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr, internetAccess: true });
     expect(off.appendSystemPrompt ?? off.prompt).toContain('the package registries (npm, PyPI, apt), and the agent API');
-    expect(on).toEqual({ prompt: 'hi' });
+    expect(on.appendSystemPrompt ?? on.prompt).toContain('```talyn-pr');
   });
 
   it('Claude in plan mode: the plan instructions are an appended system prompt', () => {

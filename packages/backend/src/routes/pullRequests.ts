@@ -28,6 +28,7 @@ import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
+import { liveWorkbenchForPr, liveWorkbenchesForPrs, type PrSession } from '../services/workbenches/prSessions.js';
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { noteHeadSha } from '../services/webhookHeadIndex.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
@@ -322,6 +323,11 @@ export function pullRequestRoutes(): Router {
     // them on the app's most-loaded endpoint. Degrades to an empty map, so a
     // failure here costs a chip rather than the list.
     const reviewByPrId = await codeReviewsForPrs(rows.map((r) => r.id));
+    // The live session on each row: one indexed query over the returned ids.
+    const sessionByPrId = await liveWorkbenchesForPrs(
+      workspaceId,
+      rows.map((r) => r.id)
+    );
 
     // Merge queue v2 payloads for the initial paint (the WS echoes keep them
     // live afterwards): one indexed query over the workspace's active entries.
@@ -375,6 +381,7 @@ export function pullRequestRoutes(): Router {
         ...rowToPublicShape(r),
         mergeQueue: v2ByPrId.get(r.id) ?? null,
         codeReview: reviewByPrId.get(r.id) ?? null,
+        session: sessionByPrId.get(r.id) ?? null,
         // Absent for a row outside the cohort, and absent on an older backend.
         // The client keeps its own copy of the same shared function and falls
         // back to it, so a rollback degrades the ranking's freshness rather
@@ -2141,14 +2148,19 @@ async function mergeQueueForPr(
 export type PublicPRRow = ReturnType<typeof rowToPublicShape> & {
   mergeQueue: Record<string, unknown> | null;
   codeReview: unknown;
+  session: PrSession | null;
 };
 
 async function publicPrRow(
   row: PublicShapeRow,
   db: ReturnType<typeof getDbClient>
 ): Promise<PublicPRRow> {
-  const [queue, review] = await Promise.all([mergeQueueForPr(row.id, db), codeReviewForPr(row.id)]);
-  return { ...rowToPublicShape(row), mergeQueue: queue.payload, codeReview: review };
+  const [queue, review, session] = await Promise.all([
+    mergeQueueForPr(row.id, db),
+    codeReviewForPr(row.id),
+    liveWorkbenchForPr(row.workspaceId, row.id),
+  ]);
+  return { ...rowToPublicShape(row), mergeQueue: queue.payload, codeReview: review, session };
 }
 
 /**

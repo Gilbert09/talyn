@@ -6,6 +6,7 @@ import {
   checkpointRestoreSteps,
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
+  parseAutoPrDetails,
   workbenchTurnPrompt,
   shellQuote,
   DEFAULT_WORKBENCH_EFFORT,
@@ -25,6 +26,8 @@ import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
+import { SANDBOX_LOST_MESSAGE } from './recovery.js';
+import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import {
   killMarker,
   recordWorkbenchEvent,
@@ -189,6 +192,10 @@ async function runTurnLoop(
     });
     if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
     void afterTurn(fin?.chat ?? null);
+    if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
+      const wb = await getWorkbench(fin.chat.workbenchId);
+      if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
+    }
     next = fin?.started ?? null;
   }
 }
@@ -201,7 +208,7 @@ async function afterTurn(chat: ChatRow | null): Promise<void> {
     if (!wb) return;
     wb = await refreshDiffStat(wb);
     const linked = await linkPullRequest(wb);
-    if (linked.pullRequestId !== wb.pullRequestId) emitWorkbenchUpdated(await publicWorkbench(linked));
+    if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
   } catch (err) {
     console.warn(`[workbench] after-turn refresh for chat ${chat.id} failed:`, err);
   }
@@ -299,9 +306,10 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
 
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs.
-    await createCheckpoint(wb, chatId, turn).catch((err) =>
-      console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err),
-    );
+    await createCheckpoint(wb, chatId, turn).catch((err) => {
+      if (err instanceof FleetRunNotFoundError) throw err;
+      console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
+    });
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.
     const refreshed = await refreshSandboxCredentials(wb, { model: turnModel });
@@ -314,6 +322,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // A reboot rewrites the agent's home files, so this runs every turn. A
     // failure costs the user's instructions for one turn, not the turn.
     await syncInstructionFiles(wb, agent).catch((err) => {
+      if (err instanceof FleetRunNotFoundError) throw err;
       console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
       recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
     });
@@ -333,6 +342,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       intent: message.intent,
       createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
       internetAccess: wb.settings?.internetAccess,
+      autoCreatePr: wb.settings?.autoCreatePr,
+      hasPullRequest: Boolean(wb.pullRequestId),
     });
     const argv =
       agent === 'codex'
@@ -385,6 +396,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         const fresh = (await getWorkbench(wb.id)) ?? wb;
         events.add(await openPullRequestFromTurn(fresh, parserResult?.text ?? ''));
         await events.flush();
+      } else if (message.intent !== 'create_pr' && !live.cancelRequested && wb.settings?.autoCreatePr !== false &&
+          (await getChat(chatId))?.status !== 'awaiting_input') {
+        const fresh = (await getWorkbench(wb.id)) ?? wb;
+        if (!fresh.pullRequestId && parseAutoPrDetails(parserResult?.text ?? '').ok) {
+          events.add(await openPullRequestFromTurn(fresh, parserResult?.text ?? ''));
+          await events.flush();
+        }
       }
       return { status: 'idle', statusMessage: null, cancelled: false };
     }
@@ -399,6 +417,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
   } catch (err) {
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
+    if (err instanceof FleetRunNotFoundError) {
+      events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
+      await events.flush();
+      return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
+    }
     const why = err instanceof Error ? err.message : String(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
     events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));

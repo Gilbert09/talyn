@@ -84,7 +84,7 @@ describe('fleet client: workbench methods', () => {
 
   it.each([
     [404, { error: 'not_found', message: 'no such sandbox' }, FleetRunNotFoundError],
-    [409, { error: 'sandbox_not_live', message: 'not running' }, FleetHttpError],
+    [409, { error: 'sandbox_not_live', message: 'not running' }, FleetRunNotFoundError],
   ])('throws on a follow answered %i', async (status, body, type) => {
     respond = () => json(body, status);
     await expect(client.execFollow('sb', { cmd: ['x'] }, new AbortController().signal).next()).rejects.toBeInstanceOf(type);
@@ -129,6 +129,11 @@ describe('fleet client: workbench methods', () => {
       expect((await client.quietExec('sb', { cmd: ['x'] })).kind).toBe('quiet');
     });
 
+    it('reports a lost sandbox from the fleet code', async () => {
+      respond = () => json({ error: 'sandbox_not_live', message: 'this sandbox is not running on this host; create a new one' }, 409);
+      await expect(client.quietExec('sb', { cmd: ['x'] })).rejects.toBeInstanceOf(FleetRunNotFoundError);
+    });
+
     it.each([500, 502])('does not fall back on %i', async (status) => {
       respond = () => json({ error: 'exec_failed', message: 'boom' }, status);
       await expect(client.quietExec('sb', { cmd: ['x'] })).rejects.toThrow('boom');
@@ -163,6 +168,7 @@ describe('fleet client: workbench methods', () => {
 
     it.each([
       [404, { error: 'not_found', message: 'no such sandbox' }, FleetRunNotFoundError, undefined],
+      [409, { error: 'sandbox_not_live', message: 'not running' }, FleetRunNotFoundError, undefined],
       [409, { error: 'not_a_repository', message: 'not a git repository' }, FleetHttpError, 'not_a_repository'],
       [400, { error: 'bad_ref', message: 'unknown ref' }, FleetHttpError, 'bad_ref'],
       // A missing FILE is not a missing sandbox.

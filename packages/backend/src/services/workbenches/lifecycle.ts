@@ -16,8 +16,10 @@ import {
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchDeleted, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
+import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
+import { recordRecoveredTranscript } from './recovery.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -72,8 +74,14 @@ const provisioning = new Set<string>();
 
 async function setRow(row: WorkbenchRow, patch: Parameters<typeof updateWorkbench>[1]): Promise<WorkbenchRow> {
   const updated = (await updateWorkbench(row.id, patch)) ?? row;
-  emitWorkbenchUpdated(await publicWorkbench(updated));
+  await emitWorkbenchUpdated(await publicWorkbench(updated));
   return updated;
+}
+
+function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['settings'] {
+  const settings = { ...row.settings };
+  delete settings.fleetSandboxId;
+  return settings;
 }
 
 /**
@@ -89,7 +97,7 @@ async function failProvision(workbenchId: string, message: string): Promise<void
   await setRow(row, {
     status: 'error',
     statusMessage: message,
-    ...(row.sandboxState === 'creating' || row.sandboxState === 'none' ? { sandboxState: 'error' } : {}),
+    sandboxState: 'error',
   });
   await failQueued(row.id, message);
 }
@@ -106,6 +114,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
   let row = await getWorkbench(workbenchId);
   try {
     if (!row || row.runtime !== 'sandbox' || row.archivedAt) return;
+    const replacingLostSandbox = row.sandboxState === 'lost';
     const fail = (message: string) => failProvision(workbenchId, message);
 
     // 1. The box. The create body comes from the ONE builder task dispatch
@@ -140,10 +149,15 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     if (!built.ok) return await fail(built.error);
     const target = await fleetCreateTarget(row.workspaceId);
     const created = await createSandboxRetryingUncertain(target.client, built.body);
+    const settings = settingsWithoutFleetSandboxId(row);
+    if (typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId) {
+      settings.fleetSandboxId = created.sandbox.id;
+    }
     row = await setRow(row, {
       sandboxId,
-      sandboxState: 'running',
+      sandboxState: replacingLostSandbox ? 'lost' : 'running',
       fleetHost: target.host ?? created.host ?? row.fleetHost ?? null,
+      settings,
       statusMessage: 'Cloning the repository',
     });
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
@@ -177,9 +191,11 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
 
     row = await linkPullRequest(row);
-    row = await setRow(row, { status: 'ready', statusMessage: setupNote });
+    row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
     void refreshDiffStat(row);
+
+    if (replacingLostSandbox) await recordRecoveredTranscript(row);
 
     // 4. Messages sent while the box was coming up.
     for (const chat of await listChats(row.id)) {
@@ -351,6 +367,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
     sandboxId: row.sandboxId ? sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1) : sandboxIdFor(row.id),
     sandboxState: 'creating',
     fleetHost: null,
+    settings: settingsWithoutFleetSandboxId(row),
   });
   recordWorkbenchEvent(row, 'provision_retry', `retrying on ${row.sandboxId}`);
   await resetFailedChats(row.id);
@@ -393,6 +410,7 @@ export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRo
     sandboxId: sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1),
     sandboxState: 'creating',
     fleetHost: null,
+    settings: settingsWithoutFleetSandboxId(row),
   });
   for (const chat of await clearAgentSessions(row.id)) {
     const stored = await appendEvents(chat.id, [
@@ -429,6 +447,7 @@ export async function deleteWorkbench(workbenchId: string): Promise<void> {
   }
   await deleteWorkbenchRow(row.id);
   emitWorkbenchDeleted(row.workspaceId, row.id);
+  if (row.pullRequestId) await emitPrSession(row.workspaceId, row.pullRequestId);
 }
 
 /**

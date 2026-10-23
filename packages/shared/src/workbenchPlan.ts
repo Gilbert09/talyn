@@ -8,7 +8,7 @@
  */
 import type { AgentEvent } from './index.js';
 import type { WorkbenchAgent, WorkbenchMessageIntent } from './workbench.js';
-import { buildCreatePrTurnInstructions } from './workbenchPullRequest.js';
+import { buildAutoCreatePrInstructions, buildCreatePrTurnInstructions } from './workbenchPullRequest.js';
 
 export const PLAN_BLOCK_FENCE = 'talyn-plan';
 
@@ -43,6 +43,8 @@ export function workbenchTurnPrompt(input: {
   intent?: WorkbenchMessageIntent;
   createPr: { branch: string; baseBranch: string; extra?: string | null };
   internetAccess?: boolean;
+  autoCreatePr?: boolean;
+  hasPullRequest?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -53,7 +55,10 @@ export function workbenchTurnPrompt(input: {
   const networkNote = input.internetAccess === false
     ? 'This sandbox reaches only its repository, the package registries (npm, PyPI, apt), and the agent API.'
     : null;
-  const instructions = [actionInstructions, networkNote].filter(Boolean).join('\n\n');
+  const autoPrNote = input.autoCreatePr !== false && !input.hasPullRequest && input.intent !== 'create_pr'
+    ? buildAutoCreatePrInstructions()
+    : null;
+  const instructions = [actionInstructions, networkNote, autoPrNote].filter(Boolean).join('\n\n');
   if (!instructions) return { prompt: input.text };
   if (input.agent === 'codex') return { prompt: `${instructions}\n\n---\n\n${input.text}` };
   // A Create PR turn also puts its instructions in Claude's prompt. In a system

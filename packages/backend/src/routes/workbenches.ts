@@ -206,7 +206,7 @@ export function workbenchRoutes(): Router {
     await updateChat(found.chat.id, { closedAt: new Date(), queuedMessages: [] });
     // The embedded list is how a client learns a chat is gone.
     const workbench = await getWorkbench(found.workbench.id);
-    if (workbench) emitWorkbenchUpdated(await publicWorkbench(workbench));
+    if (workbench) await emitWorkbenchUpdated(await publicWorkbench(workbench));
     ok(res, null);
   });
 
@@ -392,6 +392,9 @@ export function workbenchRoutes(): Router {
     if (body.internetAccess !== undefined && typeof body.internetAccess !== 'boolean') {
       return bad(res, 400, 'internetAccess must be a boolean');
     }
+    if (body.autoCreatePr !== undefined && typeof body.autoCreatePr !== 'boolean') {
+      return bad(res, 400, 'autoCreatePr must be a boolean');
+    }
 
     const db = getPoolDbClient();
     const repo = (
@@ -514,7 +517,10 @@ export function workbenchRoutes(): Router {
           status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
           statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
           pullRequestId,
-          settings: body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess },
+          settings: {
+            ...(body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess }),
+            ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),
+          },
         });
       } catch (err) {
         if (!/uq_workbenches_workspace_name_live|duplicate key/i.test(String((err as Error)?.message ?? err)) || requestedName) {
@@ -537,7 +543,7 @@ export function workbenchRoutes(): Router {
       queuedMessages: firstMessage ? [firstMessage] : [],
     });
     const data = await publicWorkbench(row);
-    emitWorkbenchUpdated(data);
+    await emitWorkbenchUpdated(data);
     if (row.runtime === 'sandbox') scheduleProvision(row.id);
     ok(res, data);
   });
@@ -583,8 +589,13 @@ export function workbenchRoutes(): Router {
         ...(typeof (row.settings as Record<string, unknown> | null)?.fleetAccountId === 'string'
           ? { fleetAccountId: (row.settings as Record<string, unknown>).fleetAccountId }
           : {}),
+        // Also server-only: the id the fleet gave the box, which its credential pull carries.
+        ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
         ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
           ? { internetAccess: row.settings.internetAccess }
+          : {}),
+        ...(settings.autoCreatePr === undefined && row.settings?.autoCreatePr !== undefined
+          ? { autoCreatePr: row.settings.autoCreatePr }
           : {}),
       };
     }
@@ -597,7 +608,7 @@ export function workbenchRoutes(): Router {
       if (title) updated = (await setGeneratedTitle(row.id, title)) ?? updated;
     }
     const data = await publicWorkbench(updated);
-    emitWorkbenchUpdated(data);
+    await emitWorkbenchUpdated(data);
     ok(res, data);
   });
 
@@ -887,6 +898,10 @@ function validateSettings(input: unknown): WorkbenchSettings | string {
   if (raw.internetAccess !== undefined) {
     if (typeof raw.internetAccess !== 'boolean') return 'settings.internetAccess must be a boolean';
     out.internetAccess = raw.internetAccess;
+  }
+  if (raw.autoCreatePr !== undefined) {
+    if (typeof raw.autoCreatePr !== 'boolean') return 'settings.autoCreatePr must be a boolean';
+    out.autoCreatePr = raw.autoCreatePr;
   }
   if (raw.scripts !== undefined) {
     const s = raw.scripts;

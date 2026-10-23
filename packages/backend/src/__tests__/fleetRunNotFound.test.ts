@@ -55,6 +55,13 @@ describe('fleet run-not-found detection', () => {
     ])('leaves %s retryable', (_label, status, message) => {
       expect(isRunNotFoundResponse(status, message)).toBe(false);
     });
+
+    it.each([
+      [409, 'not running', 'sandbox_not_live'],
+      [409, 'this sandbox is not running on this host; create a new one', undefined],
+    ])('detects a lost sandbox from %i', (status, message, code) => {
+      expect(isRunNotFoundResponse(status, message, code)).toBe(true);
+    });
   });
 
   describe('FleetRunNotFoundError', () => {

@@ -431,10 +431,8 @@ export class FleetCapacityError extends Error {
  * them ran for 21 hours on 2026-08-06, reconciling every tick and failing
  * identically.
  *
- * Matched on the status AND the message on purpose: fleetd's source is not in
- * this repo, so which status it pairs with the message is unverified here, and
- * the message is the only part actually observed in production. Either signal
- * is enough; neither alone is trustworthy.
+ * A 409 `sandbox_not_live` is authoritative. Older hosts can answer with a
+ * missing-box message or a 404 instead.
  *
  * The name keeps "run" because the id this matches on is still the run id of
  * the credential wire (`talyn-<taskId>`), and every caller branches on the
@@ -448,12 +446,11 @@ export class FleetRunNotFoundError extends Error {
   }
 }
 
-/** Whether a fleet error response means "no such sandbox". Exported for the
- *  poller, which must distinguish terminal from retryable without
- *  string-matching at the call site. Accepts both the pre-merge "run" phrasings
- *  and the sandbox ones: a host mid-rollout can answer with either. */
-export function isRunNotFoundResponse(status: number, message: string): boolean {
+/** Whether a fleet error means "no such sandbox". Check the 409 code first;
+ * older hosts can send the same meaning as text. */
+export function isRunNotFoundResponse(status: number, message: string, code?: string): boolean {
   return (
+    (status === 409 && (code === 'sandbox_not_live' || /not running on this host/i.test(message))) ||
     status === 404 ||
     /no such run|run not found|unknown run|no such sandbox|sandbox not found|unknown sandbox/i.test(
       message,
@@ -720,7 +717,7 @@ export class FleetClient {
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
-      if (isRunNotFoundResponse(resp.status, message)) {
+      if (isRunNotFoundResponse(resp.status, message, code)) {
         throw new FleetRunNotFoundError(message);
       }
       throw new FleetHttpError(message, resp.status, code);
@@ -1075,7 +1072,7 @@ export class FleetClient {
     if (!resp.ok || !resp.body) {
       const { message, code } = await errorBody(resp, `exec ${id}: ${resp.status} ${resp.statusText}`);
       if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
-      if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
+      if (isRunNotFoundResponse(resp.status, message, code)) throw new FleetRunNotFoundError(message);
       throw new FleetHttpError(message, resp.status, code);
     }
     const reader = resp.body.getReader();
@@ -1251,7 +1248,7 @@ export class FleetClient {
             /* plain text */
           }
           if (status === 503) reject(new FleetCapacityError(message));
-          else if (status === 404 && code && isRunNotFoundResponse(status, message)) {
+          else if (isRunNotFoundResponse(status, message, code)) {
             reject(new FleetRunNotFoundError(message));
           } else reject(new FleetHttpError(`${path.split('?')[0]}: ${status} ${message}`, status, code));
         });
@@ -1394,7 +1391,7 @@ export class FleetClient {
     if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
     // A 404 about the THING asked for (a missing file) is not a missing sandbox.
     if (resp.status === 404 && fleetError?.error === 'no_such_file') throw new FleetHttpError(message, 404, 'no_such_file');
-    if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
+    if (isRunNotFoundResponse(resp.status, message, fleetError?.error)) throw new FleetRunNotFoundError(message);
     throw new FleetHttpError(message, resp.status, fleetError?.error);
   }
 }
