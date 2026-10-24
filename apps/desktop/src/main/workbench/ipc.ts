@@ -1,7 +1,9 @@
-import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
+import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
 import type { DesktopWorkbenchBridge } from '../../workbenchBridgeTypes';
+import { CoderCli } from './coder';
+import { CoderPreviews } from './coderPreview';
 import { AgentProcesses } from './agentProcess';
 import { readConfigWithDetection, saveDetectedConfig } from './config';
 import { detectCheckouts, uniqueMainCheckouts } from './detectCheckouts';
@@ -49,6 +51,8 @@ export function registerWorkbenchIpc(
   getWindow: () => BrowserWindow | null,
 ): void {
   const previews = new PreviewForwarder();
+  const coder = new CoderCli();
+  const coderPreviews = new CoderPreviews(coder, (url) => shell.openExternal(url));
   let previewToken: string | null = null;
   const paths = new WorkbenchPaths(app.getPath('userData'));
   const repoPaths = new RepoPaths(app.getPath('userData'));
@@ -179,6 +183,16 @@ export function registerWorkbenchIpc(
     async () => (await pickRepoFolder(repoPaths))?.path ?? null,
   );
   handle('readiness', (force?: boolean) => localReadiness(force === true));
+  handle('coder:status', (url?: string) => coder.status(url));
+  handle('coder:workspaces', () => coder.workspaces());
+  handle('coder-preview:prepare', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['prepare']>[0]) => coderPreviews.prepare(input));
+  handle('coder-preview:sync', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['sync']>[0]) => coderPreviews.sync(input));
+  handle('coder-preview:run', (id: string) => coderPreviews.run(id));
+  handle('coder-preview:stop', (id: string) => coderPreviews.stop(id));
+  handle('coder-preview:open', (id: string) => coderPreviews.open(id));
+  handle('coder-preview:remove', (id: string) => coderPreviews.remove(id));
+  handle('coder-preview:state', (id: string) => coderPreviews.state(id));
+
   handle('preview:start', (input: Parameters<DesktopWorkbenchBridge['preview']['start']>[0]) => {
     if (typeof input.token !== 'string' || !input.token || /[\r\n]/.test(input.token)) throw new Error('Invalid preview token.');
     previewToken = input.token;
@@ -187,7 +201,7 @@ export function registerWorkbenchIpc(
   handle('preview:set-token', async (token: string | null) => {
     if (token !== null && (typeof token !== 'string' || !token || /[\r\n]/.test(token))) throw new Error('Invalid preview token.');
     previewToken = token;
-    if (!token) await previews.stopAll();
+    if (!token) await Promise.all([previews.stopAll(), coderPreviews.shutdown()]);
   });
   handle('preview:stop', (workbenchId: string, port?: number) => previews.stop(workbenchId, port));
   handle('preview:list', () => previews.list());
@@ -233,6 +247,7 @@ export function registerWorkbenchIpc(
     previewToken = null;
     void Promise.allSettled([
       previews.stopAll(),
+      coderPreviews.shutdown(),
       agents.shutdown(),
       scripts.shutdown(),
       terminals.shutdown(),

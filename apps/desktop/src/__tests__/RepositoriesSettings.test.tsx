@@ -3,6 +3,10 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RepositoriesSettings } from '../renderer/components/settings/sections/RepositoriesSettings';
 
+let previewsEnabled = false;
+const previewGet = jest.fn();
+const previewPatch = jest.fn();
+const previewDetect = jest.fn();
 const detect = jest.fn();
 const uniqueMain = jest.fn();
 const set = jest.fn();
@@ -38,12 +42,13 @@ jest.mock('../renderer/components/widgets/PollingOnlyBadge', () => ({ PollingOnl
 jest.mock('../renderer/components/widgets/GithubInstallStatus', () => ({ GithubInstallStatus: () => null }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
-    repositories: { list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
+    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
     github: { getStatus: jest.fn().mockResolvedValue({ connected: false }) },
   },
 }));
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: unknown) => unknown) => selector({
+    features: { sessionPreviews: previewsEnabled },
     currentWorkspaceId: 'ws',
     repositories: [{ id: 'r1', owner: 'PostHog', fullName: 'PostHog/posthog' }],
     setRepositories: jest.fn(),
@@ -51,6 +56,7 @@ jest.mock('../renderer/stores/workspace', () => ({
 }));
 
 beforeEach(() => {
+  previewsEnabled = false;
   saved = {};
   get.mockImplementation(async () => ({ ...saved }));
   set.mockImplementation(async ({ repoFullName, path, ifMissing }) => {
@@ -140,4 +146,44 @@ test('removes a scan root', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Stop scanning /Users/tom/Documents/work' }));
   await waitFor(() => expect(removeScanRoot).toHaveBeenCalledWith('/Users/tom/Documents/work'));
   await waitFor(() => expect(screen.queryByText('Also scanning:')).not.toBeInTheDocument());
+});
+
+const previewConfig = {
+  target: 'coder', ports: [{ port: 8010 }], source: 'detected', user: {},
+  reasons: ['coder_url in hogli.yaml'], coder: { url: 'https://coder.example', workspace: 'dev', checkout: '~/posthog', run: 'hogli up' },
+};
+
+test('hides preview settings when the flag is off', async () => {
+  render(<RepositoriesSettings />);
+  await waitFor(() => expect(get).toHaveBeenCalled());
+  expect(screen.queryByText('Detect again')).not.toBeInTheDocument();
+  expect(previewGet).not.toHaveBeenCalled();
+});
+
+test('shows the target and reason, saves choices, and detects again', async () => {
+  previewsEnabled = true;
+  previewGet.mockResolvedValue(previewConfig);
+  previewPatch.mockResolvedValue({ ...previewConfig, target: 'off', user: { target: 'off' } });
+  previewDetect.mockResolvedValue(previewConfig);
+  render(<RepositoriesSettings />);
+  expect(await screen.findByText('Detected: coder_url in hogli.yaml')).toBeInTheDocument();
+  const target = screen.getByRole('combobox', { name: 'Preview target for PostHog/posthog' });
+  expect(target).toHaveValue('auto');
+  fireEvent.change(target, { target: { value: 'off' } });
+  await waitFor(() => expect(previewPatch).toHaveBeenCalledWith('r1', { target: 'off' }));
+  await waitFor(() => expect(screen.queryByLabelText('Coder workspace for PostHog/posthog')).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: 'Detect again' }));
+  await waitFor(() => expect(previewDetect).toHaveBeenCalledWith('r1'));
+});
+
+test.each(['workspace', 'checkout', 'run'])('saves the Coder %s field on blur', async (field) => {
+  previewsEnabled = true;
+  previewGet.mockResolvedValue(previewConfig);
+  previewPatch.mockResolvedValue(previewConfig);
+  render(<RepositoriesSettings />);
+  const input = await screen.findByLabelText(`Coder ${field} for PostHog/posthog`);
+  fireEvent.change(input, { target: { value: 'changed' } });
+  expect(previewPatch).not.toHaveBeenCalled();
+  fireEvent.blur(input);
+  await waitFor(() => expect(previewPatch).toHaveBeenCalledWith('r1', { coder: { [field]: 'changed' } }));
 });

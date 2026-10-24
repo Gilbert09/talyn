@@ -63,6 +63,19 @@ const workbench: DesktopWorkbenchBridge = {
   detectAgents: () => ipcRenderer.invoke('workbench:detect-agents'),
   pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
   readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
+  coder: {
+    status: (url) => ipcRenderer.invoke('workbench:coder:status', url),
+    workspaces: () => ipcRenderer.invoke('workbench:coder:workspaces'),
+  },
+  coderPreview: {
+    prepare: (input) => ipcRenderer.invoke('workbench:coder-preview:prepare', input),
+    sync: (input) => ipcRenderer.invoke('workbench:coder-preview:sync', input),
+    run: (id) => ipcRenderer.invoke('workbench:coder-preview:run', id),
+    stop: (id) => ipcRenderer.invoke('workbench:coder-preview:stop', id),
+    open: (id) => ipcRenderer.invoke('workbench:coder-preview:open', id),
+    remove: (id) => ipcRenderer.invoke('workbench:coder-preview:remove', id),
+    state: (id) => ipcRenderer.invoke('workbench:coder-preview:state', id),
+  },
   preview: {
     start: (input) => ipcRenderer.invoke('workbench:preview:start', input),
     stop: (workbenchId, port) => ipcRenderer.invoke('workbench:preview:stop', workbenchId, port),

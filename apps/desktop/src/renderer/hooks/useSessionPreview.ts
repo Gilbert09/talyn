@@ -34,7 +34,15 @@ export function useSessionPreview(workbench: Workbench) {
         if (!cancelled) toast.error('Could not load the preview config');
       });
     }
-    return () => { cancelled = true; };
+    const refresh = () => {
+      if (enabled && workbench.repositoryId) {
+        void api.repositories.preview.get(workbench.repositoryId).then((config) => {
+          if (!cancelled) setLoaded({ repositoryId: workbench.repositoryId, config });
+        }).catch(() => undefined);
+      }
+    };
+    window.addEventListener('repository-preview-changed', refresh);
+    return () => { cancelled = true; window.removeEventListener('repository-preview-changed', refresh); };
   }, [enabled, workbench.repositoryId]);
 
   const config = enabled && loaded?.repositoryId === workbench.repositoryId ? loaded.config : null;
@@ -68,5 +76,5 @@ export function useSessionPreview(workbench: Workbench) {
     }
   };
 
-  return { ports, busy, openPreview };
+  return { config, loading: enabled && Boolean(workbench.repositoryId) && !config, ports, busy, openPreview };
 }

@@ -7,6 +7,8 @@ import { clampDockHeight } from '../../../lib/workbenchLayout';
 import type { WorkbenchOps } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useWorkbenchStore, type WorkbenchTerminalTab } from '../../../stores/workbenches';
+import { useSessionPreview } from '../../../hooks/useSessionPreview';
+import { CoderPreviewPanel } from '../CoderPreviewPanel';
 import { SessionPreviewChips } from '../SessionPreviewChips';
 import { ShellTerminal } from './ShellTerminal';
 import { useXterm } from './useXterm';
@@ -36,7 +38,9 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const [saving, setSaving] = useState(false);
   const config = loaded?.id === workbench.id ? loaded.config : null;
   const detected = config?.source === 'none' ? config.detected : undefined;
-  const hideScripts = config?.source === 'none' && !detected?.setup && !detected?.run;
+  const { config: previewConfig, loading: previewLoading } = useSessionPreview(workbench);
+  const coderPreview = previewConfig?.target === 'coder';
+  const hideScripts = !previewLoading && !coderPreview && config?.source === 'none' && !detected?.setup && !detected?.run;
   const tab = hideScripts ? 'terminal' : storedTab;
 
   useEffect(() => {
@@ -137,8 +141,8 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           </button>
         ))}
         <div className="flex-1" />
-        {open && tab === 'run' && <SessionPreviewChips workbench={workbench} ops={ops} />}
-        {open && config && config.source !== 'none' && (tab === 'setup' || tab === 'run') && (
+        {open && tab === 'run' && !coderPreview && <SessionPreviewChips workbench={workbench} ops={ops} />}
+        {open && config && config.source !== 'none' && (tab === 'setup' || (tab === 'run' && !coderPreview)) && (
           <ScriptControls workbench={workbench} ops={ops} name={tab} />
         )}
         <button
@@ -152,7 +156,8 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
         </button>
       </div>
       <div className={cn('relative min-h-0 flex-1 border-t', !open && 'hidden')}>
-        {open && (tab === 'setup' || tab === 'run') && (
+        {open && tab === 'run' && coderPreview && previewConfig && <CoderPreviewPanel workbench={workbench} config={previewConfig} />}
+        {open && (tab === 'setup' || (tab === 'run' && !coderPreview)) && (
           detected?.[tab] ? (
             <div className="m-3 space-y-2 rounded border bg-muted p-3 text-xs">
               <p>

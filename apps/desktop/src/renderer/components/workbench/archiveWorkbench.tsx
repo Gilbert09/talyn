@@ -1,4 +1,5 @@
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
+import { stopCoderPreview } from '../../lib/coderPreview';
 import { getWorkbenchBridge } from '../../lib/workbenchBridge';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -10,6 +11,7 @@ export async function archiveWorkbench(id: string, leave: boolean): Promise<bool
   try {
     const wb = await api.workbenches.archive(id);
     useWorkbenchStore.getState().upsertWorkbench(wb);
+    stopCoderPreview(id);
     await getWorkbenchBridge()?.preview?.stop(id).catch(() => {
       toast.error('Could not stop the preview');
     });

@@ -178,3 +178,14 @@ it.each(['flag-off', 'coder', 'off', 'local'])('hides preview chips for %s', asy
   await act(async () => { render(<TerminalPanel workbench={{ ...WB, runtime: mode === 'local' ? 'local' : 'sandbox' }} ops={ops} />); });
   expect(screen.queryByRole('button', { name: /Open localhost/ })).not.toBeInTheDocument();
 });
+
+
+it('keeps the Run tab for Coder when the repository has no sandbox scripts', async () => {
+  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  previewGet.mockResolvedValue({ target: 'coder', ports: [{ port: 8010 }], coder: { url: 'https://coder.example' } });
+  readConfig.mockResolvedValue({ source: 'none', run: [], errors: [], filesToCopy: [], runMode: 'concurrent' });
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
+  await renderDock();
+  expect(screen.getByRole('tab', { name: 'Run' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('region', { name: 'Coder preview' })).toBeInTheDocument();
+});

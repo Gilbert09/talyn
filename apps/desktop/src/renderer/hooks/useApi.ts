@@ -1,4 +1,6 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
+import { stopCoderPreview, syncCoderTurn } from '../lib/coderPreview';
+import { isArchivedWorkbench } from '../lib/workbenchActions';
 import { api, wsClient } from '../lib/api';
 import { prefetchSkills } from '../lib/skillsData';
 import { useOnReconnect } from './useOnReconnect';
@@ -441,6 +443,7 @@ export function useApiConnection() {
     // merged once per frame, exactly like task:event.
     unsubscribers.push(
       wsClient.on<WorkbenchWsPayloads['workbench:updated']>('workbench:updated', (payload) => {
+        if (isArchivedWorkbench(payload.workbench)) stopCoderPreview(payload.workbench.id);
         const store = useWorkbenchStore.getState();
         store.upsertWorkbench(payload.workbench);
         // The row embeds its open chats; replacing the list is what makes a closed chat disappear.
@@ -454,6 +457,7 @@ export function useApiConnection() {
         }
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:deleted']>('workbench:deleted', (payload) => {
+        stopCoderPreview(payload.id);
         useWorkbenchStore.getState().removeWorkbench(payload.id);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:chat']>('workbench:chat', (payload) => {
@@ -461,6 +465,7 @@ export function useApiConnection() {
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:event']>('workbench:event', (payload) => {
         toastPullRequestFailures(payload.chatId, payload.events);
+        syncCoderTurn(payload.chatId, payload.events);
         const buf = pendingWorkbenchEvents.get(payload.chatId);
         if (buf) buf.push(...payload.events);
         else pendingWorkbenchEvents.set(payload.chatId, [...payload.events]);

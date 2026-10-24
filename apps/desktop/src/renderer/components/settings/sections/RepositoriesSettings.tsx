@@ -22,6 +22,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { SettingsPage, SettingsSection } from '../../ui/settings';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
+import { RepositoryPreviewSettings } from './RepositoryPreviewSettings';
 import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
 
 export function RepositoriesSettings() {
@@ -588,6 +589,7 @@ function RepoRow({
         </div>
       )}
       {error && <p className="pl-[22px] text-xs text-destructive">{error}</p>}
+      <RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} />
       {path && <RepoScripts path={path} />}
     </div>
   );
