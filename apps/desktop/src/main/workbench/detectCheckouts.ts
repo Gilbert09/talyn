@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -8,6 +9,46 @@ const SKIP = new Set([
   'Desktop', 'Documents', 'Downloads', 'go', 'venv', 'vendor', 'dist',
   'build', 'target', 'Pods', 'DerivedData',
 ]);
+
+// Network and removable volumes live here. Reading one can make macOS ask for permission.
+const VOLUME_PARENTS = ['/Volumes', '/Network', '/mnt', '/media', '/run/media'];
+
+function unescapeMountPath(value: string): string {
+  return value.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+}
+
+/**
+ * Mount points that do not hold the home folder. The scan never steps into one,
+ * so it does not touch a network share or an external disk. The list comes from
+ * the mount table, never from a stat of the mount point itself.
+ */
+export async function foreignMounts(home: string, platform = process.platform): Promise<Set<string>> {
+  let points: string[] = [];
+  try {
+    if (platform === 'linux') {
+      const table = await fs.readFile('/proc/self/mounts', 'utf8');
+      points = table.split('\n').map((line) => line.split(' ')[1]).filter(Boolean).map(unescapeMountPath);
+    } else if (platform === 'darwin') {
+      const table = await new Promise<string>((resolve, reject) => {
+        execFile('/sbin/mount', { timeout: 2000 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+      });
+      points = table.split('\n')
+        .map((line) => line.match(/ on (.+) \([^()]*\)$/)?.[1])
+        .filter((point): point is string => Boolean(point));
+    }
+  } catch {
+    points = [];
+  }
+  const holdsHome = (point: string) => point === '/' || home === point || home.startsWith(point.endsWith('/') ? point : `${point}/`);
+  return new Set(points.filter((point) => !holdsHome(point)).map((point) => path.resolve(point)));
+}
+
+function insideAny(dir: string, parents: Iterable<string>): boolean {
+  for (const parent of parents) {
+    if (dir === parent || dir.startsWith(`${parent}${path.sep}`)) return true;
+  }
+  return false;
+}
 
 interface Match {
   path: string;
@@ -59,7 +100,15 @@ function matchingRemote(config: string, wanted: Set<string>): Map<string, boolea
 
 export async function detectCheckouts(
   repoFullNames: string[],
-  opts: { roots?: string[]; extraRoots?: string[]; maxDepth?: number; timeBudgetMs?: number } = {},
+  opts: {
+    roots?: string[];
+    extraRoots?: string[];
+    maxDepth?: number;
+    timeBudgetMs?: number;
+    /** The unprompted startup scan: also skip a chosen folder on another volume. */
+    localOnly?: boolean;
+    mounts?: Set<string>;
+  } = {},
 ): Promise<Record<string, string[]>> {
   const wanted = new Map(repoFullNames.map((name) => [name.toLowerCase(), name]));
   const matches = new Map<string, Match[]>();
@@ -68,6 +117,7 @@ export async function detectCheckouts(
   const deadline = Date.now() + (opts.timeBudgetMs ?? 5000);
   const seen = new Map<string, number>();
   const maxDepth = Math.max(0, opts.maxDepth ?? 5);
+  const mounts = opts.mounts ?? await foreignMounts(home);
 
   async function walk(dir: string, depth: number, limit: number): Promise<void> {
     const remaining = limit - depth;
@@ -97,7 +147,9 @@ export async function detectCheckouts(
     for (const entry of entries) {
       if (Date.now() >= deadline) return;
       if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
-      await walk(path.join(dir, entry.name), depth + 1, limit);
+      const child = path.join(dir, entry.name);
+      if (mounts.has(child)) continue;
+      await walk(child, depth + 1, limit);
     }
   }
 
@@ -112,6 +164,7 @@ export async function detectCheckouts(
     if (chosen && (path.basename(absolute).startsWith('.')
         || (SKIP.has(path.basename(absolute))
           && !['Desktop', 'Documents', 'Downloads'].includes(path.basename(absolute))))) continue;
+    if ((!chosen || opts.localOnly) && (insideAny(absolute, mounts) || insideAny(absolute, VOLUME_PARENTS))) continue;
     try {
       if (!(await fs.lstat(absolute)).isDirectory()) continue;
     } catch {

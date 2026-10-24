@@ -36,7 +36,7 @@ test.each([
   'https://github.com/PostHog/posthog/',
 ])('finds a checkout with remote %s', async (url) => {
   const checkout = await mainCheckout('dev/posthog', `[remote "origin"]\n  url = ${url}\n`);
-  expect(await detectCheckouts(['posthog/POSTHOG'], { roots: [root] })).toEqual({
+  expect(await detectCheckouts(['posthog/POSTHOG'], { mounts: new Set(), roots: [root] })).toEqual({
     'posthog/POSTHOG': [checkout],
   });
 });
@@ -45,7 +45,7 @@ test('ranks main checkouts before worktrees, then uses origin and path length', 
   const short = await mainCheckout('dev/a', '[remote "upstream"]\n url = git@github.com:owner/repo.git\n');
   const origin = await mainCheckout('dev/longer-name', '[remote "origin"]\n url = https://github.com/OWNER/REPO.git\n');
   const tree = await worktree('work/repo-tree', short);
-  const found = await detectCheckouts(['Owner/Repo'], { roots: [root] });
+  const found = await detectCheckouts(['Owner/Repo'], { mounts: new Set(), roots: [root] });
   expect(found).toEqual({ 'Owner/Repo': [origin, short, tree] });
   expect(await uniqueMainCheckouts(found)).toEqual({});
 });
@@ -53,7 +53,7 @@ test('ranks main checkouts before worktrees, then uses origin and path length', 
 test('finds a worktree through its common config', async () => {
   const common = await mainCheckout('metadata/base', '[remote "origin"]\n url = ssh://git@github.com/a/b.git\n');
   const tree = await worktree('dev/tree', common);
-  expect(await detectCheckouts(['a/b'], { roots: [path.join(root, 'dev')] })).toEqual({ 'a/b': [tree] });
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [path.join(root, 'dev')] })).toEqual({ 'a/b': [tree] });
 });
 
 test.each([
@@ -62,7 +62,7 @@ test.each([
   'build', 'target', 'Pods', 'DerivedData', '.hidden',
 ])('skips %s under HOME', async (name) => {
   await mainCheckout(`${name}/repo`, '[remote "origin"]\n url = https://github.com/a/b\n');
-  expect(await detectCheckouts(['a/b'], { roots: [root] })).toEqual({});
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [root] })).toEqual({});
 });
 
 test.each([
@@ -71,14 +71,14 @@ test.each([
 ])('scans a chosen root at %s', async (chosen) => {
   const checkout = await mainCheckout('Documents/work/repo', '[remote "origin"]\n url = https://github.com/a/b\n');
   expect(await detectCheckouts(['a/b'], {
-    roots: [root], extraRoots: [path.join(root, chosen)],
+    mounts: new Set(), roots: [root], extraRoots: [path.join(root, chosen)],
   })).toEqual({ 'a/b': [checkout] });
 });
 
 test('scans overlapping chosen roots to their own depth limits', async () => {
   const checkout = await mainCheckout('projects/one/two/three/four/five/repo', '[remote "origin"]\n url = https://github.com/a/b\n');
   expect(await detectCheckouts(['a/b'], {
-    roots: [root], extraRoots: [path.join(root, 'projects'), path.join(root, 'projects', 'one')],
+    mounts: new Set(), roots: [root], extraRoots: [path.join(root, 'projects'), path.join(root, 'projects', 'one')],
   })).toEqual({ 'a/b': [checkout] });
 });
 
@@ -88,8 +88,8 @@ test('skips symlinks and checkout descendants, and respects depth', async () => 
   await mainCheckout('one/two/three/deeper', '[remote "origin"]\n url = https://github.com/a/b\n');
   await mainCheckout('other', '[remote "origin"]\n url = https://gitlab.com/a/b\n');
   await fs.symlink(visible, path.join(root, 'linked'));
-  expect(await detectCheckouts(['a/b'], { roots: [root], maxDepth: 2 })).toEqual({});
-  expect(await detectCheckouts(['a/b'], { roots: [root], maxDepth: 3 })).toEqual({ 'a/b': [visible] });
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [root], maxDepth: 2 })).toEqual({});
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [root], maxDepth: 3 })).toEqual({ 'a/b': [visible] });
 });
 
 test.each([
@@ -97,12 +97,27 @@ test.each([
   [6, false],
 ] as const)('default HOME depth stops before level %i: %s', async (depth, found) => {
   const checkout = await mainCheckout(`${'level/'.repeat(depth - 1)}repo`, '[remote "origin"]\n url = https://github.com/a/b\n');
-  expect(await detectCheckouts(['a/b'], { roots: [root] })).toEqual(
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [root] })).toEqual(
     found ? { 'a/b': [checkout] } : {},
   );
 });
 
 test('returns quickly when the time budget is spent', async () => {
   await mainCheckout('repo', '[remote "origin"]\n url = https://github.com/a/b\n');
-  expect(await detectCheckouts(['a/b'], { roots: [root], timeBudgetMs: 0 })).toEqual({});
+  expect(await detectCheckouts(['a/b'], { mounts: new Set(), roots: [root], timeBudgetMs: 0 })).toEqual({});
+});
+
+test('never steps into another mounted volume', async () => {
+  await mainCheckout('dev/share/repo', '[remote "origin"]\n url = git@github.com:o/r.git\n');
+  const local = await mainCheckout('dev/local/repo', '[remote "origin"]\n url = git@github.com:o/r.git\n');
+  const mounts = new Set([path.join(root, 'dev', 'share')]);
+  expect(await detectCheckouts(['o/r'], { mounts, roots: [root] })).toEqual({ 'o/r': [local] });
+});
+
+test('the startup scan skips a chosen folder on another volume, a manual scan reads it', async () => {
+  const checkout = await mainCheckout('disk/repo', '[remote "origin"]\n url = git@github.com:o/r.git\n');
+  const mounts = new Set([path.join(root, 'disk')]);
+  const opts = { mounts, roots: [], extraRoots: [path.join(root, 'disk')] };
+  expect(await detectCheckouts(['o/r'], { ...opts, localOnly: true })).toEqual({});
+  expect(await detectCheckouts(['o/r'], opts)).toEqual({ 'o/r': [checkout] });
 });

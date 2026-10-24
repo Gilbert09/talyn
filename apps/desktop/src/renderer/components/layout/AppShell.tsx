@@ -21,6 +21,7 @@ import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { usePullRequestSync } from '../../hooks/usePullRequestSync';
 import { useWhatsNew } from '../../hooks/useWhatsNew';
+import { useStartupCheckoutDetection } from '../../hooks/useStartupCheckoutDetection';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 import { useInstructionFileSync } from '../../hooks/useInstructionFileSync';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -49,6 +50,7 @@ export function AppShell() {
   useDeferredRuns();
   useWorkbenchList();
   useInstructionFileSync();
+  useStartupCheckoutDetection();
   useAppShortcuts();
   // Introduces code review once, to somebody who already uses Talyn. Deferred
   // while What's-New is open: the release that flips this feature's availability

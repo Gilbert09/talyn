@@ -177,8 +177,11 @@ export function registerWorkbenchIpc(
   handle('readiness', (force?: boolean) => localReadiness(force === true));
   handle('repo-paths:get', () => repoPaths.get());
   handle('repo-paths:home-dir', () => app.getPath('home'));
-  handle('repo-paths:detect', async (input: { repoFullNames: string[] }) =>
-    detectCheckouts(input.repoFullNames, { extraRoots: await repoPaths.getScanRoots() }),
+  handle('repo-paths:detect', async (input: { repoFullNames: string[]; startup?: boolean }) =>
+    detectCheckouts(input.repoFullNames, {
+      extraRoots: await repoPaths.getScanRoots(),
+      localOnly: input.startup === true,
+    }),
   );
   handle('repo-paths:scan-roots:get', () => repoPaths.getScanRoots());
   handle('repo-paths:scan-roots:add', async () => {

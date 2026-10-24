@@ -4,6 +4,7 @@ import type { WorkbenchConfig } from '@talyn/shared';
 import { api, GitHubRepo } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
 import { isOwnerCovered, parseRepoInput } from '../../../lib/githubInstall';
+import { autoDetectCheckouts } from '../../../lib/checkoutDetection';
 import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
 import {
   REPO_CACHE_TTL_MS,
@@ -404,36 +405,13 @@ function useLocalCheckouts(watchedRepos: WatchedRepo[]): LocalCheckouts {
   const names = watchedRepos.map((repo) => repo.fullName).join('\n');
 
   const refresh = useCallback(async () => {
-    const bridge = getWorkbenchBridge();
-    if (!bridge?.repoPaths?.detect || !repoPaths.ready) return;
-    const saved = await bridge.repoPaths.get();
-    const missing = names.split('\n').filter((name) => name && !localPathFor(saved, name));
-    if (missing.length === 0) {
-      setCandidates({});
-      return;
-    }
+    if (!repoPaths.ready) return;
     setDetecting(true);
     try {
-      const detected = await bridge.repoPaths.detect({ repoFullNames: missing });
-      const multiple = Object.fromEntries(Object.entries(detected).filter(([, values]) => values.length > 1));
-      const main: Record<string, string> = Object.keys(multiple).length && bridge.repoPaths.uniqueMain
-        ? await bridge.repoPaths.uniqueMain(multiple).catch(() => ({}))
-        : {};
-      const choices: Record<string, string[]> = {};
-      for (const name of missing) {
-        const options = detected[name] ?? [];
-        const automatic = options.length === 1 ? options[0] : main[name];
-        if (automatic) {
-          const map = await bridge.repoPaths.set({ repoFullName: name, path: automatic, ifMissing: true });
-          setAfterClear(map);
-          if (localPathFor(map, name) === automatic) {
-            setFound((previous) => ({ ...previous, [name.toLowerCase()]: automatic }));
-          }
-        } else if (options.length > 1) {
-          choices[name.toLowerCase()] = options;
-        }
-      }
-      setCandidates(choices);
+      const result = await autoDetectCheckouts(names.split('\n'));
+      if (result.map) setAfterClear(result.map);
+      setFound((previous) => ({ ...previous, ...result.found }));
+      setCandidates(result.choices);
     } catch {
       setCandidates({});
     } finally {
