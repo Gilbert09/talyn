@@ -2,12 +2,19 @@ import { create } from 'zustand';
 
 export type ToastVariant = 'success' | 'error' | 'info';
 
+/** One button on a toast. Clicking it runs `onClick` and dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: string;
   variant: ToastVariant;
   title: string;
   /** Optional second line — e.g. the reason a merge was rejected. */
   description?: string;
+  action?: ToastAction;
 }
 
 interface ToastState {
@@ -43,9 +50,10 @@ function show(
   variant: ToastVariant,
   title: string,
   description?: string,
-  ttl = DEFAULT_TTL_MS
+  ttl = DEFAULT_TTL_MS,
+  action?: ToastAction
 ): string {
-  const id = useToastStore.getState().add({ variant, title, description });
+  const id = useToastStore.getState().add({ variant, title, description, ...(action ? { action } : {}) });
   if (ttl > 0) {
     window.setTimeout(() => useToastStore.getState().dismiss(id), ttl);
   }
@@ -58,7 +66,9 @@ function show(
  * the app root to surface them.
  */
 export const toast = {
-  success: (title: string, description?: string) => show('success', title, description),
+  // A toast with a button stays long enough to reach the button.
+  success: (title: string, description?: string, action?: ToastAction) =>
+    show('success', title, description, action ? ERROR_TTL_MS : DEFAULT_TTL_MS, action),
   info: (title: string, description?: string) => show('info', title, description),
   error: (title: string, description?: string) =>
     show('error', title, description, ERROR_TTL_MS),

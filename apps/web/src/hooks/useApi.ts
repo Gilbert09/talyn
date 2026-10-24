@@ -23,8 +23,12 @@ import type {
   EnvironmentCreatedEvent,
   WorkspaceSettings,
 } from '@talyn/shared';
+import type { WorkbenchWsPayloads } from '@talyn/shared';
 import { toast } from '../stores/toast';
 import { trackEvent } from '../lib/analytics';
+import { useWorkbenchStore } from '../stores/workbenches';
+import { reconcileWorkbenches } from '../lib/workbenchData';
+import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 
 // ---------------------------------------------------------------------------
 // task:event coalescing
@@ -102,6 +106,31 @@ function scheduleTaskEventFlush() {
   // backgrounded — a continuous-build run shouldn't silently stall its
   // transcript just because the user tabbed away.
   taskEventFlushTimer = window.setTimeout(flushTaskEvents, 40);
+}
+
+// ---------------------------------------------------------------------------
+// workbench:event coalescing — the same shape as task:event above. A running
+// workbench turn emits an event per stream-json line, so the broadcasts are
+// buffered per chat and merged once per ~frame (dedup + ordering happen in
+// the store's mergeWorkbenchEvents).
+// ---------------------------------------------------------------------------
+
+let pendingWorkbenchEvents = new Map<string, WorkbenchWsPayloads['workbench:event']['events']>();
+let workbenchEventFlushTimer: number | null = null;
+
+function flushWorkbenchEvents() {
+  workbenchEventFlushTimer = null;
+  if (pendingWorkbenchEvents.size === 0) return;
+  // Reassign, never clear: see flushTaskEvents.
+  const batch = pendingWorkbenchEvents;
+  pendingWorkbenchEvents = new Map();
+  const store = useWorkbenchStore.getState();
+  for (const [chatId, events] of batch) store.appendEvents(chatId, events);
+}
+
+function scheduleWorkbenchEventFlush() {
+  if (workbenchEventFlushTimer !== null) return;
+  workbenchEventFlushTimer = window.setTimeout(flushWorkbenchEvents, 40);
 }
 
 // How many finished-history tasks to fetch per page (initial load + each
@@ -283,6 +312,12 @@ export function useApiConnection() {
     void reconcileTasksFromServer();
     void reconcileEnvironmentsFromServer();
     void useBillingStore.getState().refresh();
+    // Workbench broadcasts missed while offline: re-list, and fetch any events
+    // past the last seq held for chats whose history is open.
+    const workbenchWorkspace = useWorkbenchStore.getState().workspaceId;
+    if (workbenchWorkspace && workbenchWorkspace === useWorkspaceStore.getState().currentWorkspaceId) {
+      void reconcileWorkbenches(workbenchWorkspace);
+    }
   });
 
   // Billing snapshot: fetch once on mount, and re-fetch on window focus —
@@ -400,6 +435,42 @@ export function useApiConnection() {
       })
     );
 
+    // Workbenches. Rows and chats are upserted whole; a broadcast for another
+    // workspace is dropped by the store. Transcript events are buffered and
+    // merged once per frame, exactly like task:event.
+    unsubscribers.push(
+      wsClient.on<WorkbenchWsPayloads['workbench:updated']>('workbench:updated', (payload) => {
+        const store = useWorkbenchStore.getState();
+        store.upsertWorkbench(payload.workbench);
+        // The row embeds its open chats; replacing the list is what makes a closed chat disappear.
+        const embedded = payload.workbench.chats;
+        if (embedded) {
+          // Upsert (keeps the running-to-idle notification), then drop the chats the row no longer lists.
+          for (const c of embedded) store.upsertChat(c);
+          const open = new Set(embedded.map((c) => c.id));
+          const current = useWorkbenchStore.getState().chats[payload.workbench.id] ?? [];
+          if (current.some((c) => !open.has(c.id))) store.setChats(payload.workbench.id, current.filter((c) => open.has(c.id)));
+        }
+      }),
+      wsClient.on<WorkbenchWsPayloads['workbench:deleted']>('workbench:deleted', (payload) => {
+        useWorkbenchStore.getState().removeWorkbench(payload.id);
+      }),
+      wsClient.on<WorkbenchWsPayloads['workbench:chat']>('workbench:chat', (payload) => {
+        useWorkbenchStore.getState().upsertChat(payload.chat);
+      }),
+      wsClient.on<WorkbenchWsPayloads['workbench:event']>('workbench:event', (payload) => {
+        toastPullRequestFailures(payload.chatId, payload.events);
+        const buf = pendingWorkbenchEvents.get(payload.chatId);
+        if (buf) buf.push(...payload.events);
+        else pendingWorkbenchEvents.set(payload.chatId, [...payload.events]);
+        scheduleWorkbenchEventFlush();
+      }),
+      wsClient.on<WorkbenchWsPayloads['workbench:script']>('workbench:script', (payload) => {
+        useWorkbenchStore.getState().appendScriptFrame(payload);
+      })
+    );
+    unsubscribers.push(installWorkbenchNotifications());
+
     // Plan changes (Polar webhook applied server-side). Per-user event; also
     // ends the post-checkout poll burst early via setStatus.
     unsubscribers.push(
@@ -415,6 +486,10 @@ export function useApiConnection() {
       if (taskEventFlushTimer !== null) {
         window.clearTimeout(taskEventFlushTimer);
         flushTaskEvents();
+      }
+      if (workbenchEventFlushTimer !== null) {
+        window.clearTimeout(workbenchEventFlushTimer);
+        flushWorkbenchEvents();
       }
     };
   }, [updateTask, updateEnvironment, addEnvironment]);
