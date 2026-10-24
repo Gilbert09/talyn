@@ -313,7 +313,8 @@ export function PRTable({
             onSetReviewHidden={onSetReviewHidden}
             onCreatePostHogTask={onCreatePostHogTask}
             onOpenSkillPicker={onRunSkill ? setSkillPickerRowId : undefined}
-            taskAsk={taskAsk}
+            // A PR with a live session sends its fix to that session's agent, so there is no agent to pick.
+            taskAsk={taskAsk && !row.session}
             taskProviders={taskProviders}
             onOpenIntegrations={onOpenIntegrations}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
@@ -886,6 +887,16 @@ const PRTableRow = React.memo(function PRTableRow({
                   >
                     <UserRoundCheck className="h-2.5 w-2.5" />
                     Needs you
+                  </span>
+                ) : row.autoMergeState?.waitingOnSession ? (
+                  // Not a failure and not a slot problem: the PR's own session
+                  // is working it, and auto-keep picks it back up afterwards.
+                  <span
+                    className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                    title={row.autoMergeState.waitingOnSession.reason}
+                  >
+                    <PauseCircle className="h-2.5 w-2.5" />
+                    Waiting
                   </span>
                 ) : row.autoMergeState?.paused ? (
                   <span

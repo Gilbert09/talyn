@@ -28,7 +28,12 @@ import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
-import { liveWorkbenchForPr, liveWorkbenchesForPrs, type PrSession } from '../services/workbenches/prSessions.js';
+import {
+  liveWorkbenchForPr,
+  liveWorkbenchesForPrs,
+  prHasSessionBody,
+  type PrSession,
+} from '../services/workbenches/prSessions.js';
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { noteHeadSha } from '../services/webhookHeadIndex.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
@@ -883,6 +888,13 @@ export function pullRequestRoutes(): Router {
       await requireWorkspaceAccess(req, row.workspaceId);
     } catch (err) {
       return handleAccessError(err, res);
+    }
+    // A live session works this PR: the fix belongs in its chat, not in a
+    // second agent pushing to the same branch. Clients that know about
+    // sessions route there first; this answers the ones that do not.
+    const session = await liveWorkbenchForPr(row.workspaceId, row.id);
+    if (session) {
+      return res.status(409).json(prHasSessionBody(session));
     }
     const model =
       typeof req.body?.model === 'string' && req.body.model.trim()

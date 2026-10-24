@@ -3,6 +3,7 @@ import type { WorkbenchStatus } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches as workbenchesTable } from '../../db/schema.js';
 import { emitPullRequestUpdated } from '../websocket.js';
+import { domainEvents } from '../events.js';
 
 /** The live session on a pull request, as the pull-request payload carries it. */
 export interface PrSession {
@@ -62,11 +63,51 @@ export async function liveWorkbenchForPr(workspaceId: string, prId: string): Pro
 }
 
 /**
+ * Why a background fix run did not start. One sentence, shown as the merge
+ * queue's blocked reason, the auto-keep note and the workflow history.
+ */
+export function sessionHoldReason(name: string): string {
+  return (
+    `The session "${name}" is working on this pull request, so Talyn starts no fix run of its own. ` +
+    'Archive the session to hand the pull request back.'
+  );
+}
+
+/** Why a manual Fix was sent to the session rather than started as a task. */
+export function prHasSessionMessage(name: string): string {
+  return `The session "${name}" is working on this pull request. Send the fix from that session.`;
+}
+
+/** The 409 a manual fix gets when a live session works the PR. */
+export function prHasSessionBody(session: PrSession) {
+  return {
+    success: false as const,
+    code: 'pr_has_session',
+    error: prHasSessionMessage(session.name),
+    workbenchId: session.id,
+    name: session.name,
+  };
+}
+
+/**
+ * Ask the background fixers (merge queue, auto-keep) to look at a pull request
+ * again: a session's turn ended, or its hold on the PR changed.
+ */
+export function notifyPrSessionChanged(workspaceId: string, prId: string, trigger: string): void {
+  try {
+    domainEvents.emit('pr:session', { workspaceId, prId, trigger });
+  } catch (err) {
+    console.warn('[workbenches] pr:session listener failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
  * Tell the clients which session (if any) now works a pull request. Recomputed
  * from the table rather than taken from the caller, so two sessions on one PR
  * cannot disagree. `null` is a real value: it clears the chip.
  */
 export async function emitPrSession(workspaceId: string, prId: string): Promise<void> {
+  notifyPrSessionChanged(workspaceId, prId, 'session:changed');
   try {
     const [pr] = await getPoolDbClient()
       .select({

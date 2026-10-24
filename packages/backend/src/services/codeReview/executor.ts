@@ -78,6 +78,7 @@ import {
 } from './unitFailover.js';
 import { heldBackAgents } from '../selfHosted/exhaustedQuota.js';
 import { workspaceReviewSettings } from './cycle.js';
+import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 
 /**
  * Performing what `decide` asked for.
@@ -1144,6 +1145,20 @@ async function maybeAutoFix(review: ReviewRow): Promise<void> {
 
     const eligible = findingsEligibleForAutoFix(await listFindings(fresh.id), settings);
     if (!eligible.length) return;
+
+    // A live session works this PR: the findings stay for it, and nothing
+    // pushes beside it.
+    const session = await liveWorkbenchForPr(fresh.workspaceId, fresh.pullRequestId);
+    if (session) {
+      await appendReviewEvent(fresh.id, {
+        toPhase: fresh.phase as CodeReviewPhase,
+        trigger: 'executor',
+        code: 'auto_fix_session_active',
+        message: sessionHoldReason(session.name),
+        detail: { workbenchId: session.id },
+      });
+      return;
+    }
 
     const outcome = await startFixRun(
       fresh,

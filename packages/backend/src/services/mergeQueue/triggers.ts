@@ -14,6 +14,8 @@
 //                   The "checks settled → merge/arm now" moment.
 //   task:status   — a cloud task went terminal: account the queue's fix run,
 //                   and re-evaluate anything deferred on the task limit.
+//   pr:session    — a session's turn ended, or its hold on the PR changed:
+//                   release a `session_active` park, or merge what it fixed.
 //   route         — enqueue/dequeue call onQueueMembershipChanged directly.
 
 import { TERMINAL_TASK_STATUSES as SHARED_TERMINAL_TASK_STATUSES } from '@talyn/shared';
@@ -21,6 +23,7 @@ import { runWithoutScope } from '../../db/client.js';
 import {
   domainEvents,
   type DomainPrChecksEvent,
+  type DomainPrSessionEvent,
   type DomainPrSnapshotEvent,
   type DomainTaskStatusEvent,
 } from '../events.js';
@@ -53,6 +56,9 @@ export function initMergeQueueTriggers(): void {
   );
   domainEvents.on('task:status', (evt) =>
     runWithoutScope(() => void handleTaskStatus(evt).catch(swallow('task:status')))
+  );
+  domainEvents.on('pr:session', (evt) =>
+    runWithoutScope(() => void handlePrSession(evt).catch(swallow('pr:session')))
   );
 }
 
@@ -118,6 +124,11 @@ async function handleTaskStatus(evt: DomainTaskStatusEvent): Promise<void> {
   for (const entry of entries) {
     scheduleGroupEvaluation(entry.repositoryId, entry.baseBranch, 'task:terminal');
   }
+}
+
+async function handlePrSession(evt: DomainPrSessionEvent): Promise<void> {
+  const entry = await getActiveEntryForPr(evt.prId);
+  if (entry) scheduleGroupEvaluation(entry.repositoryId, entry.baseBranch, evt.trigger);
 }
 
 /** Direct hook for the enqueue/dequeue route (no event round-trip needed).

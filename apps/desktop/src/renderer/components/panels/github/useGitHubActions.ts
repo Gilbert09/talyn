@@ -17,6 +17,7 @@ import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { copyRich } from '../../../lib/prClipboard';
+import { sendPrFixToSession, sessionFromConflict } from '../../../lib/prSessionFix';
 import {
   buildCopyListPayload,
   stackAncestors,
@@ -381,9 +382,17 @@ export function useGitHubActions() {
   // provider is resolved from the workspace's default (which may prompt the
   // picker when set to "ask"); the run happens entirely in the cloud, so we stay
   // on the current page — the row's task badge is the user's signal it started.
+  //
+  // A PR with a live session gets the fix in that session's chat instead, and
+  // so does one the backend answers with `pr_has_session` (a row whose session
+  // link has not reached this client yet).
   const createPostHogTask = useCallback(
     async (row: PRRow, providerType?: string, model?: string): Promise<boolean> => {
       if (!currentWorkspaceId) return false;
+      if (row.session) {
+        await sendPrFixToSession(row, row.session);
+        return true;
+      }
       const envId = resolveTaskEnvId(providerType);
       if (!envId) {
         // No provider connected/resolvable. Prompt the user to connect one and
@@ -396,27 +405,35 @@ export function useGitHubActions() {
       const provider = (environments.find((e) => e.id === envId)?.type ??
         'posthog_code') as CloudProviderType;
       const ref = `${row.owner}/${row.repo}#${row.number}`;
-      const created = await createTask({
-        workspaceId: currentWorkspaceId,
-        type: 'pr_response',
-        title: `Get ${ref} mergeable`,
-        description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state.`,
-        prompt: buildMergeablePrompt({
-          owner: row.owner,
-          repo: row.repo,
-          number: row.number,
-          summary: row.summary,
-          provider,
-          template: promptTemplateFor(workspaceSettings, 'mergeable'),
-        }),
-        repositoryId: row.repositoryId,
-        assignedEnvironmentId: envId,
-        pullRequestId: row.id,
-        // Only set when the user picked an agent from the menu. Absent lets the
-        // backend resolve the workspace's own model, then the default for
-        // whichever credential it actually holds.
-        ...(model ? { model } : {}),
-      });
+      let created;
+      try {
+        created = await createTask({
+          workspaceId: currentWorkspaceId,
+          type: 'pr_response',
+          title: `Get ${ref} mergeable`,
+          description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state.`,
+          prompt: buildMergeablePrompt({
+            owner: row.owner,
+            repo: row.repo,
+            number: row.number,
+            summary: row.summary,
+            provider,
+            template: promptTemplateFor(workspaceSettings, 'mergeable'),
+          }),
+          repositoryId: row.repositoryId,
+          assignedEnvironmentId: envId,
+          pullRequestId: row.id,
+          // Only set when the user picked an agent from the menu. Absent lets the
+          // backend resolve the workspace's own model, then the default for
+          // whichever credential it actually holds.
+          ...(model ? { model } : {}),
+        });
+      } catch (err) {
+        const session = sessionFromConflict(err);
+        if (!session) throw err;
+        await sendPrFixToSession(row, session);
+        return true;
+      }
       trackEvent('pr_fix_task_started', {
         repo: `${row.owner}/${row.repo}`,
         pr_number: row.number,

@@ -66,6 +66,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'rate_gated',
   'no_cloud_provider',
   'task_already_running',
+  'session_active',
   'merge_queue_limit_reached',
   'not_open',
 ]);

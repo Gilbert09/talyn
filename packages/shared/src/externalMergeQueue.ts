@@ -717,6 +717,9 @@ export function coarseQueueStatus(status: QueueEntryStatus | string): CoarseQueu
  *     nobody has fixed or dismissed it. It qualifies for the same reason the two
  *     above do: the queue spent nothing on it, and it clears itself the moment
  *     the person acts, whichever way they act.
+ *   - `session_active` — the person's own session is working the PR, so the
+ *     queue starts no fix run beside it. Nothing was attempted, and it carries
+ *     on by itself once the session makes the PR clean or is archived.
  *
  * Deliberately NOT every cause a human could help with. `external_gate`,
  * `app_refused_hard` and `stack_cycle` also need somebody, but none of them
@@ -733,6 +736,7 @@ export function queueBlockNeedsHuman(blockedCode: string | null | undefined): bo
   return (
     blockedCode === 'awaiting_human_check' ||
     blockedCode === 'agent_needs_human' ||
-    blockedCode === 'code_review_blocker'
+    blockedCode === 'code_review_blocker' ||
+    blockedCode === 'session_active'
   );
 }

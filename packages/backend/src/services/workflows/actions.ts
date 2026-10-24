@@ -22,6 +22,7 @@ import { prMonitorService } from '../prMonitor.js';
 import { getOrFetchPRSummary } from '../prCache.js';
 import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
 import { createCloudTask } from '../taskCreate.js';
+import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 import { TaskLimitError } from '../billing/entitlements.js';
 import { MergeQueueLimitError } from '../billing/entitlements.js';
 import { setQueueMembership } from '../mergeQueue/membership.js';
@@ -610,6 +611,14 @@ async function startTask(
         'task_already_running',
         'a run is already working this PR'
       ),
+      pullRequestId: resolved.id,
+    };
+  }
+  // Nor a run beside a live session: both would push to the one branch.
+  const session = await liveWorkbenchForPr(ctx.workspaceId, resolved.id);
+  if (session) {
+    return {
+      outcome: no(action.type, 'session_active', sessionHoldReason(session.name)),
       pullRequestId: resolved.id,
     };
   }
