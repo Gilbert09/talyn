@@ -28,6 +28,13 @@
     --border: 37 22% 85%; /* line #ddd4c6 */
     --input: 37 22% 85%;
     --ring: 16 54% 49%; /* clay focus ring */
+    --success: 142 60% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 90% 36%;
+    --warning-foreground: 0 0% 100%;
+    --info: 217 80% 44%;
+    --info-foreground: 0 0% 100%;
+    --merged: 266 51% 43%;
     --radius: 0.625rem;
   }
 
@@ -54,6 +61,13 @@
     --border: 33 13% 18%;
     --input: 33 13% 18%;
     --ring: 18 58% 58%;
+    --success: 142 55% 56%;
+    --success-foreground: 32 18% 9%;
+    --warning: 43 92% 60%;
+    --warning-foreground: 32 18% 9%;
+    --info: 213 90% 70%;
+    --info-foreground: 32 18% 9%;
+    --merged: 267 63% 75%;
   }
 }
 

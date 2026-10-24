@@ -13,5 +13,6 @@ export type ActivePanel =
   | 'workflows'
   | 'loops'
   | 'code_reviews'
+  | 'workbenches'
   | 'mcp_servers'
   | 'settings';

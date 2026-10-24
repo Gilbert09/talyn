@@ -67,10 +67,27 @@ export const HISTORY_TASK_STATUSES: readonly TaskStatus[] = TERMINAL_TASK_STATUS
 export const ACTIVE_STATUS_PARAM = [...ACTIVE_TASK_STATUSES].join(',');
 export const HISTORY_STATUS_PARAM = HISTORY_TASK_STATUSES.join(',');
 
+/**
+ * Where `setActivePanel` / `openSettings` send the app. The navigation store installs
+ * it when it loads; without one the setters just write the fields.
+ */
+export interface PanelNavigator {
+  openPanel: (panel: ActivePanel) => void;
+  openSettings: (section: SettingsSection) => void;
+}
+
+let panelNavigator: PanelNavigator | null = null;
+
+export function setPanelNavigator(navigator: PanelNavigator | null): void {
+  panelNavigator = navigator;
+}
+
 /** Settings sub-sections — kept in the store so other surfaces (the sidebar
  *  provider status, the per-task "Set default" action) can deep-link into a
  *  specific section. */
 export type SettingsSection =
+  | 'sessions'
+  | 'shortcuts'
   | 'workspace'
   | 'integrations'
   | 'skills'
@@ -442,11 +459,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setSettingsSection: (settingsSection) => set({ settingsSection }),
 
-  openSettings: (section) =>
+  openSettings: (section) => {
+    if (panelNavigator) {
+      panelNavigator.openSettings(section ?? useWorkspaceStore.getState().settingsSection);
+      return;
+    }
     set((state) => ({
       activePanel: 'settings',
       settingsSection: section ?? state.settingsSection,
-    })),
+    }));
+  },
 
   setEnvironments: (environments) => set({ environments }),
 
@@ -563,7 +585,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   toggleSidebar: () =>
     set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
-  setActivePanel: (panel) => set({ activePanel: panel }),
+  setActivePanel: (panel) => {
+    if (panelNavigator) panelNavigator.openPanel(panel);
+    else set({ activePanel: panel });
+  },
 
   selectTask: (id) => set({ selectedTaskId: id }),
 

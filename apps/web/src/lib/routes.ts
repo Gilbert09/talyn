@@ -21,6 +21,7 @@ export const PANEL_PATHS = {
   workflows: '/workflows',
   loops: '/loops',
   code_reviews: '/code-reviews',
+  workbenches: '/workbenches',
   mcp_servers: '/mcp-servers',
   settings: '/settings',
 } as const satisfies Record<ActivePanel, string>;
