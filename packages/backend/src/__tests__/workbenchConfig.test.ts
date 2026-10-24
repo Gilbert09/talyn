@@ -24,6 +24,9 @@ describe('parseToml', () => {
     ['empty array', 'a = []', { a: [] }],
     ['multi-line array with comments and trailing comma', 'a = [\n  "x", # one\n  "y",\n  # gap\n]\n', { a: ['x', 'y'] }],
     ['nested arrays', 'a = [[1, 2], ["x"]]', { a: [[1, 2], ['x']] }],
+    ['integer array', 'ports = [8010, 8234]', { ports: [8010, 8234] }],
+    ['numeric key', '[preview.labels]\n8010 = "PostHog"', { preview: { labels: { '8010': 'PostHog' } } }],
+    ['array of inline tables', 'ports = [{ port = 8010, label = "PostHog", primary = true }]', { ports: [{ port: 8010, label: 'PostHog', primary: true }] }],
     ['inline table', 'a = { command = "npm run dev", default = true }', { a: { command: 'npm run dev', default: true } }],
     ['empty inline table', 'a = {}', { a: {} }],
     ['table header', '[scripts]\nsetup = "x"', { scripts: { setup: 'x' } }],
@@ -192,6 +195,54 @@ describe('resolveWorkbenchConfig', () => {
     const config = resolveWorkbenchConfig({ conductorJson: '[1,2]' });
     expect(config.source).toBe('none');
     expect(config.errors[0]).toMatch(/must be a JSON object/);
+  });
+
+  it.each([
+    {
+      name: 'valid preview with labels and Coder settings',
+      toml: '[preview]\ntarget = "coder"\nports = [8010, 8234]\n[preview.labels]\n8010 = "PostHog"\n[preview.coder]\nurl = "https://coder.dev.posthog.dev"\ntemplate = "posthog-linux"\ncheckout = "~/posthog"\nrun = "flox activate -- ./bin/hogli up -d"',
+      preview: {
+        target: 'coder',
+        ports: [{ port: 8010, label: 'PostHog', primary: true }, { port: 8234 }],
+        coder: { url: 'https://coder.dev.posthog.dev', template: 'posthog-linux', checkout: '~/posthog', run: 'flox activate -- ./bin/hogli up -d' },
+      },
+      errors: [],
+    },
+    {
+      name: 'inline port tables',
+      toml: '[preview]\nports = [{ port = 8010, label = "PostHog", primary = true }, { port = 8234 }]',
+      preview: { ports: [{ port: 8010, label: 'PostHog', primary: true }, { port: 8234 }] },
+      errors: [],
+    },
+    {
+      name: 'invalid ports and target',
+      toml: '[preview]\ntarget = "unknown"\nports = [80, 8010, 65536, 8234.5, "9000"]',
+      preview: { ports: [{ port: 8010, primary: true }] },
+      errors: [
+        '.talyn/settings.toml: [preview] unknown target "unknown"',
+        '.talyn/settings.toml: [preview] invalid port at ports[0]: 80',
+        '.talyn/settings.toml: [preview] invalid port at ports[2]: 65536',
+        '.talyn/settings.toml: [preview] invalid port at ports[3]: 8234.5',
+        '.talyn/settings.toml: [preview] invalid port at ports[4]: "9000"',
+      ],
+    },
+    {
+      name: 'invalid Coder URL',
+      toml: '[preview.coder]\nurl = "ftp://coder.example.com"\ntemplate = "posthog-linux"',
+      preview: { coder: { template: 'posthog-linux' } },
+      errors: ['.talyn/settings.toml: [preview.coder] url must start with http:// or https://'],
+    },
+  ])('$name', ({ toml: previewToml, preview, errors }) => {
+    const config = resolveWorkbenchConfig({ talynToml: previewToml });
+    expect(config.preview).toEqual(preview);
+    expect(config.errors).toEqual(errors);
+  });
+
+  it.each([
+    { conductorToml: '[preview]\ntarget = "coder"' },
+    { conductorJson: '{"preview":{"target":"coder"}}' },
+  ])('does not read preview settings from Conductor files: %j', (files) => {
+    expect(resolveWorkbenchConfig(files).preview).toBeUndefined();
   });
 });
 

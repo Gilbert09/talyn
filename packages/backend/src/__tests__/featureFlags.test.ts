@@ -482,6 +482,7 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'sessionPreviews',
       'teams',
       'workbenches',
       'workflows',
@@ -501,6 +502,7 @@ describe('featuresForUser', () => {
       reviewRankingExport: false,
       teams: false,
       workbenches: false,
+      sessionPreviews: false,
     });
   });
 
@@ -523,6 +525,7 @@ describe('featuresForUser', () => {
       reviewRankingExport: false,
       teams: false,
       workbenches: false,
+      sessionPreviews: false,
     });
   });
 
