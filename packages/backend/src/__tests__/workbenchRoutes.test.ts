@@ -123,6 +123,7 @@ describe('workbench routes', () => {
     reauth = [];
     fleetRegistered = true;
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
+    vi.stubEnv('SESSION_PREVIEWS_ENABLED', 'true');
     // A deployed fleet, by the registry path. Readiness reads only these.
     vi.stubEnv('FLEET_API_TOKEN', 'fleet-token');
     vi.stubEnv('FLEET_PINNED_ENDPOINT', '');

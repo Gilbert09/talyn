@@ -277,3 +277,27 @@ export function detectPreview(input: { files: Record<string, string | null>; pat
   }
   return result;
 }
+
+export interface RepositorySettings {
+  preview?: {
+    target?: 'auto' | PreviewTarget;
+    ports?: PreviewPort[];
+    coder?: { url?: string; workspace?: string; checkout?: string; run?: string };
+    detected?: DetectedPreview & { sha: string; at: string; file?: PreviewConfig };
+  };
+}
+
+export type RepositoryPreviewChoice = Omit<NonNullable<RepositorySettings['preview']>, 'detected'>;
+
+export interface EffectivePreview {
+  target: PreviewTarget | null;
+  ports: PreviewPort[];
+  coder?: PreviewCoderConfig & { workspace?: string };
+  reasons: string[];
+  source: 'user' | 'file' | 'detected' | 'none';
+}
+
+export interface RepositoryPreviewResponse extends EffectivePreview {
+  user: RepositoryPreviewChoice;
+  detected: NonNullable<RepositorySettings['preview']>['detected'] | null;
+}

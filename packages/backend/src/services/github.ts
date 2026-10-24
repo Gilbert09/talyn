@@ -1568,6 +1568,13 @@ class GitHubService extends EventEmitter {
     }
   }
 
+  async getRefSha(workspaceId: string, owner: string, repo: string, ref: string): Promise<string> {
+    const commit = await this.apiRequest<{ sha: string }>(
+      workspaceId, `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`,
+    );
+    return commit.sha;
+  }
+
   /**
    * Fetch a single file's text via the contents API. Returns null on 404.
    * File symlinks are followed (depth-limited). `maxBytes` guards decode/

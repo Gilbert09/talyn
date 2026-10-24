@@ -1,4 +1,7 @@
-import { Router } from 'express';
+import { runWithoutScope } from '../db/client.js';
+import { evaluateFlag } from '../services/featureFlags.js';
+import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
+import { Router, type Request, type Response } from 'express';
 import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
 import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
@@ -40,10 +43,16 @@ export function repositoryRoutes(): Router {
       return handleAccessError(err, res);
     }
     try {
-      const watched = await prMonitorService.addWatchedRepo(workspaceId, owner, repo, url);
+      const watched = await runWithoutScope(() => prMonitorService.addWatchedRepo(workspaceId, owner, repo, url));
       // Refresh the webhook fan-out index so deliveries for this repo match
       // immediately instead of waiting for the next periodic rebuild.
       void refreshWebhookIndex().catch(() => undefined);
+      void runWithoutScope(async () => {
+        const user = assertUser(req);
+        if (!(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) return;
+        const row = await getPreviewRepository(watched.id);
+        if (row) await detectRepoPreview(workspaceId, row);
+      }).catch((err) => console.warn('[preview] watch detection failed:', err));
       res.json({ success: true, data: watched });
     } catch (err: unknown) {
       if (err instanceof RepoNotReadableError) {
@@ -59,6 +68,46 @@ export function repositoryRoutes(): Router {
       const msg = err instanceof Error ? err.message : 'unknown error';
       res.status(500).json({ success: false, error: msg });
     }
+  });
+
+  async function previewGate(req: Request, res: Response): Promise<boolean> {
+    try { await requireRepositoryAccess(req, req.params.id); }
+    catch (err) { handleAccessError(err, res); return false; }
+    const user = assertUser(req);
+    if (!(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) {
+      res.status(403).json({ success: false, error: 'Session previews are not available for this account.' });
+      return false;
+    }
+    return true;
+  }
+
+  router.get('/:id/preview', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getPreviewRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    const detected = await detectRepoPreview(row.workspaceId, row);
+    row.settings = { ...row.settings, preview: { ...row.settings?.preview, ...(detected ? { detected } : {}) } };
+    res.json({ success: true, data: previewResponse(row) });
+  });
+
+  router.patch('/:id/preview', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    let choice;
+    try { choice = validatePreviewChoice(req.body); }
+    catch (err) { return res.status(400).json({ success: false, error: (err as Error).message }); }
+    await mergePreview(req.params.id, choice);
+    const row = await getPreviewRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    res.json({ success: true, data: previewResponse(row) });
+  });
+
+  router.post('/:id/preview/detect', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getPreviewRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    const detected = await detectRepoPreview(row.workspaceId, row, { force: true });
+    row.settings = { ...row.settings, preview: { ...row.settings?.preview, ...(detected ? { detected } : {}) } };
+    res.json({ success: true, data: previewResponse(row) });
   });
 
   router.delete('/:id', async (req, res) => {

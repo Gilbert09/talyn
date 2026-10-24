@@ -575,6 +575,13 @@
       "when": 1790900000000,
       "tag": "0081_workbenches_pull_request_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1790900000001,
+      "tag": "0082_repository_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import type { RepositoryPreviewChoice, RepositoryPreviewResponse } from '@talyn/shared';
 import {
   getApiRoot,
   getConfig,
@@ -1535,6 +1536,12 @@ export const pullRequests = {
 };
 
 export const repositories = {
+  preview: {
+    get: (id: string) => request<RepositoryPreviewResponse>('GET', `/repositories/${enc(id)}/preview`),
+    patch: (id: string, choice: RepositoryPreviewChoice) =>
+      request<RepositoryPreviewResponse>('PATCH', `/repositories/${enc(id)}/preview`, choice),
+    detect: (id: string) => request<RepositoryPreviewResponse>('POST', `/repositories/${enc(id)}/preview/detect`),
+  },
   list: (workspaceId: string) =>
     request<WatchedRepo[]>('GET', `/repositories?workspaceId=${workspaceId}`),
   add: (workspaceId: string, owner: string, repo: string) =>
@@ -2643,6 +2650,7 @@ export const mcpServers = {
 const enc = encodeURIComponent;
 
 export const workbenches = {
+  patch: (id: string) => request<{ base: string; patch: string }>('GET', `/workbenches/${enc(id)}/patch`),
   list: (workspaceId: string, opts: { includeArchived?: boolean } = {}) => {
     const qs = new URLSearchParams({ workspaceId });
     if (opts.includeArchived) qs.set('includeArchived', 'true');

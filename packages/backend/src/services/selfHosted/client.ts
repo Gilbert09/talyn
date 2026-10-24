@@ -6,6 +6,7 @@
  * SPEC §16.1 replaces it once the fleet publishes a tagged artifact.
  */
 
+import { WebSocket } from 'ws';
 import { createHash, randomBytes } from 'crypto';
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
@@ -1260,6 +1261,23 @@ export class FleetClient {
       });
       req.end();
     });
+  }
+
+  openPortWebSocket(id: string, port: number, pathAndQuery: string, protocol = ''): WebSocket {
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid preview port.');
+    const path = sandboxPath(id, `/ports/${port}/${pathAndQuery.replace(/^\/+/, '')}`);
+    const target = new URL(this.url(path));
+    target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+    const started = Date.now();
+    const ws = new WebSocket(target, protocol ? [protocol] : [], {
+      headers: { Authorization: `Bearer ${this.token}` },
+      handshakeTimeout: 20_000,
+      maxPayload: 1024 * 1024,
+      followRedirects: false,
+    });
+    ws.once('open', () => this.recordHttp('GET', path, 101, started, true));
+    ws.once('error', (err) => this.recordHttp('GET', path, 0, started, false, err));
+    return ws;
   }
 
   /**

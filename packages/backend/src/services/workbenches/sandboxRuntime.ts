@@ -297,6 +297,8 @@ export interface SandboxExecOptions {
    * reads — a diff, a file — that happen often and must not crowd the ring.
    */
   quiet?: boolean;
+  /** Follow large captures so the event ring cannot discard their first frames. */
+  follow?: boolean;
 }
 
 export interface SandboxExecResult {
@@ -330,6 +332,14 @@ export async function runCapture(
       ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
     };
     const demux = new FrameDemux(framed.nonce);
+    if (opts.follow) {
+      for await (const frame of client.execFollow(sandboxId, req, AbortSignal.timeout((opts.timeoutMs ?? 60_000) + 5_000))) {
+        demux.pushEvents(frame.events);
+        if (frame.terminal) break;
+      }
+      if (!demux.done) throw new Error('The sandbox capture is incomplete.');
+      return resultOf(demux, null);
+    }
     let frame: FleetExecFrame;
     if (opts.quiet) {
       const outcome = await client.quietExec(sandboxId, req);

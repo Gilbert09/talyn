@@ -19,6 +19,7 @@ import type {
   McpOAuthGrant,
   McpProbeResult,
   ReleaseHighlight,
+  RepositorySettings,
   WorkbenchDiffStat,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
@@ -282,6 +283,7 @@ export const repositories = pgTable(
     name: text('name').notNull(),
     url: text('url').notNull(),
     defaultBranch: text('default_branch').notNull().default('main'),
+    settings: jsonb('settings').$type<RepositorySettings>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
