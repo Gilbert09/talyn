@@ -35,6 +35,7 @@ import { initChecksGreenTrigger } from './services/workflows/checksGreen.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
 import { initWorkbenches, stopWorkbenches } from './services/workbenches/lifecycle.js';
+import { handlePreviewPortUpgrade, matchPreviewPortPath } from './services/preview/portsWs.js';
 import { handleTerminalUpgrade, matchTerminalPath } from './services/workbenches/terminalBridge.js';
 import { codeReviewPoller, initCodeReviewPoller } from './services/codeReview/poller.js';
 import {
@@ -399,6 +400,15 @@ async function main() {
         return;
       }
       handleTerminalUpgrade(req, socket, head, terminalWorkbenchId);
+      return;
+    }
+    const previewPort = matchPreviewPortPath(pathname);
+    if (previewPort) {
+      if (!allowWebSocketUpgrade(req)) {
+        socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
+        return;
+      }
+      handlePreviewPortUpgrade(req, socket, head, previewPort);
       return;
     }
     if (pathname === '/ws') {

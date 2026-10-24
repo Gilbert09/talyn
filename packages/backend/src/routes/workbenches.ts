@@ -1,3 +1,4 @@
+import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import { Router, type Request, type Response } from 'express';
 import { Readable } from 'stream';
 import { v4 as uuid } from 'uuid';
@@ -800,13 +801,22 @@ export function workbenchRoutes(): Router {
     }
   });
 
+  router.get('/:id/patch', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      requireReadySandbox(row);
+      ok(res, await getPreviewPatch(row));
+    } catch (err) { fail(res, err); }
+  });
+
   // ---- Preview: a port a script listens on in the sandbox, behind the same gate ----
 
   router.all('/:id/ports/:port/*', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     const port = Number(req.params.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return bad(res, 400, 'port must be 1-65535');
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
     try {
       requireReadySandbox(row);
       const body = await proxyBody(req);

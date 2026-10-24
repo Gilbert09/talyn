@@ -528,6 +528,7 @@ export interface WorkbenchLocalBridge {
     steps: Array<{ argv: string[]; env?: Record<string, string>; allowFailure?: boolean; capture?: string }>
   ): Promise<WorkbenchExecResult>;
   readFile(path: string, relativePath: string): Promise<{ content: string; binary: boolean }>;
+  readFileBase64(path: string, relativePath: string): Promise<string>;
   readConfig(path: string): Promise<WorkbenchConfig>;
   saveDetectedConfig(path: string): Promise<void>;
   listFiles(path: string): Promise<string[]>;
@@ -698,6 +699,41 @@ export interface WorkbenchNextActionInput {
     mergeable?: 'conflicting' | 'mergeable' | 'unknown';
     ciStatus?: 'success' | 'failure' | 'pending' | 'none';
   };
+}
+
+/** The PR fields {@link prSummaryToNextActionPr} reads, as the PR row stores them. */
+export interface NextActionPrSource {
+  state: string;
+  /** GitHub's enum: `MERGEABLE`, `CONFLICTING`, `UNKNOWN`. */
+  mergeable?: string | null;
+  /** Talyn's check verdict (`PRCiStatus`). */
+  ciStatus?: string | null;
+}
+
+/**
+ * Talyn's PR summary mapped onto the next-action vocabulary. The one copy the
+ * backend's workbench summary and the desktop header both read.
+ *
+ * `failing_optional` reads as green: a check GitHub does not require does not
+ * block the merge. `needs_human` reads as pending: only a person can clear it,
+ * so neither Merge nor Fix checks is right. A missing verdict stays absent, and
+ * each caller decides what an absent verdict means.
+ */
+export function prSummaryToNextActionPr(pr: NextActionPrSource): NonNullable<WorkbenchNextActionInput['pr']> {
+  const state = pr.state === 'merged' ? 'merged' : pr.state === 'closed' ? 'closed' : 'open';
+  const mergeable =
+    pr.mergeable === 'MERGEABLE' ? 'mergeable' : pr.mergeable === 'CONFLICTING' ? 'conflicting' : 'unknown';
+  const ci = pr.ciStatus;
+  if (ci === undefined || ci === null) return { state, mergeable };
+  const ciStatus =
+    ci === 'passing' || ci === 'failing_optional'
+      ? 'success'
+      : ci === 'failing_required'
+        ? 'failure'
+        : ci === 'none'
+          ? 'none'
+          : 'pending';
+  return { state, mergeable, ciStatus };
 }
 
 /**

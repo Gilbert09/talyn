@@ -8,6 +8,7 @@ import {
   isGatedFeature,
   nextWorkbenchAction,
   pickWorkbenchName,
+  prSummaryToNextActionPr,
   readFlagOverride,
   resolveWorkbenchActionPrompt,
   workbenchesOffered,
@@ -109,6 +110,39 @@ describe('nextWorkbenchAction', () => {
     ['merged even if reported conflicting', { hasChanges: false, pr: { state: 'merged', mergeable: 'conflicting' } }, 'archive'],
   ])('%s → %s', (_name, input, expected) => {
     expect(nextWorkbenchAction(input)).toBe(expected);
+  });
+});
+
+describe('prSummaryToNextActionPr', () => {
+  it.each<[string, Parameters<typeof prSummaryToNextActionPr>[0], ReturnType<typeof prSummaryToNextActionPr>]>([
+    ['green', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'passing' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'success' }],
+    ['only optional checks failing', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'failing_optional' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'success' }],
+    ['required check failing', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'failing_required' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'failure' }],
+    ['no checks configured', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'none' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'none' }],
+    ['checks running', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'running' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'pending' }],
+    ['a person must approve', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'needs_human' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'pending' }],
+    ['an unknown verdict waits', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'something_new' }, { state: 'open', mergeable: 'mergeable', ciStatus: 'pending' }],
+    ['conflicting', { state: 'open', mergeable: 'CONFLICTING', ciStatus: 'passing' }, { state: 'open', mergeable: 'conflicting', ciStatus: 'success' }],
+    ['mergeability unknown', { state: 'open', mergeable: 'UNKNOWN', ciStatus: 'passing' }, { state: 'open', mergeable: 'unknown', ciStatus: 'success' }],
+    ['mergeability null', { state: 'open', mergeable: null, ciStatus: 'passing' }, { state: 'open', mergeable: 'unknown', ciStatus: 'success' }],
+    ['no verdict (null) stays absent', { state: 'open', mergeable: 'MERGEABLE', ciStatus: null }, { state: 'open', mergeable: 'mergeable' }],
+    ['no verdict (undefined) stays absent', { state: 'open', mergeable: 'MERGEABLE' }, { state: 'open', mergeable: 'mergeable' }],
+    ['merged', { state: 'merged', mergeable: 'MERGEABLE', ciStatus: 'passing' }, { state: 'merged', mergeable: 'mergeable', ciStatus: 'success' }],
+    ['closed', { state: 'closed' }, { state: 'closed', mergeable: 'unknown' }],
+    ['an unknown state reads as open', { state: 'draft' }, { state: 'open', mergeable: 'unknown' }],
+  ])('%s', (_name, input, expected) => {
+    const out = prSummaryToNextActionPr(input);
+    expect(out).toEqual(expected);
+    expect('ciStatus' in out).toBe('ciStatus' in expected);
+  });
+
+  it.each<[string, Parameters<typeof prSummaryToNextActionPr>[0], WorkbenchNextAction]>([
+    ['optional failures still merge', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'failing_optional' }, 'merge'],
+    ['a human gate waits', { state: 'open', mergeable: 'MERGEABLE', ciStatus: 'needs_human' }, null],
+    ['an old row with no verdict merges', { state: 'open', mergeable: 'MERGEABLE' }, 'merge'],
+    ['conflicts before failing checks', { state: 'open', mergeable: 'CONFLICTING', ciStatus: 'failing_required' }, 'resolve_conflicts'],
+  ])('feeds nextWorkbenchAction: %s', (_name, input, expected) => {
+    expect(nextWorkbenchAction({ hasChanges: false, pr: prSummaryToNextActionPr(input) })).toBe(expected);
   });
 });
 

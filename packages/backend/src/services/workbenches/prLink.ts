@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
-import type { Workbench, WorkbenchPullRequestSummary } from '@talyn/shared';
+import { prSummaryToNextActionPr, type Workbench, type WorkbenchPullRequestSummary } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable } from '../../db/schema.js';
 import { openChatsByWorkbench, rowToChat, rowToWorkbench, updateWorkbench, type WorkbenchRow } from './store.js';
@@ -35,30 +35,12 @@ type PrSummaryRow = {
 };
 
 /**
- * GitHub's mergeable enum and the check verdict, mapped onto the three-way
- * vocabulary `nextWorkbenchAction` reads. `needs_human` is pending for the
- * button's purposes — a person has to clear it, so neither Merge nor Fix
- * checks is right. Optional failures do not block a merge, so they read green.
+ * The PR row as the header's next-action button reads it, through the shared
+ * mapping. A PR with no check verdict yet reads as pending: the summary has no
+ * absent value, and waiting is the safe answer.
  */
 export function toPrSummary(row: PrSummaryRow): WorkbenchPullRequestSummary {
-  const mergeable =
-    row.mergeable === 'MERGEABLE' ? 'mergeable' : row.mergeable === 'CONFLICTING' ? 'conflicting' : 'unknown';
-  let ciStatus: WorkbenchPullRequestSummary['ciStatus'];
-  switch (row.ciStatus) {
-    case 'passing':
-    case 'failing_optional':
-      ciStatus = 'success';
-      break;
-    case 'failing_required':
-      ciStatus = 'failure';
-      break;
-    case 'none':
-      ciStatus = 'none';
-      break;
-    default:
-      ciStatus = 'pending';
-  }
-  const state = row.state === 'merged' ? 'merged' : row.state === 'closed' ? 'closed' : 'open';
+  const { state, mergeable = 'unknown', ciStatus = 'pending' } = prSummaryToNextActionPr(row);
   return {
     number: row.number,
     url: `https://github.com/${row.owner}/${row.repo}/pull/${row.number}`,
