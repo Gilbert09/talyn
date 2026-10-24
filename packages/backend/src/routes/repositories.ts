@@ -1,5 +1,5 @@
 import { runWithoutScope } from '../db/client.js';
-import { evaluateFlag } from '../services/featureFlags.js';
+import { userMayUseWorkbenches } from '../services/workbenches/access.js';
 import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
 import { Router, type Request, type Response } from 'express';
 import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
@@ -49,7 +49,7 @@ export function repositoryRoutes(): Router {
       void refreshWebhookIndex().catch(() => undefined);
       void runWithoutScope(async () => {
         const user = assertUser(req);
-        if (!(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) return;
+        if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) return;
         const row = await getPreviewRepository(watched.id);
         if (row) await detectRepoPreview(workspaceId, row);
       }).catch((err) => console.warn('[preview] watch detection failed:', err));
@@ -74,8 +74,8 @@ export function repositoryRoutes(): Router {
     try { await requireRepositoryAccess(req, req.params.id); }
     catch (err) { handleAccessError(err, res); return false; }
     const user = assertUser(req);
-    if (!(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) {
-      res.status(403).json({ success: false, error: 'Session previews are not available for this account.' });
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      res.status(403).json({ success: false, error: 'Sessions are not available for this account.' });
       return false;
     }
     return true;

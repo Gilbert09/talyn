@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RepositoryPreviewChoice, RepositoryPreviewResponse } from '@talyn/shared';
+import { workbenchesOffered, type RepositoryPreviewChoice, type RepositoryPreviewResponse } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 
 export function RepositoryPreviewSettings({ repositoryId, repoName }: { repositoryId: string; repoName: string }) {
-  const enabled = useWorkspaceStore((s) => s.features?.sessionPreviews === true);
+  const enabled = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const [config, setConfig] = useState<RepositoryPreviewResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

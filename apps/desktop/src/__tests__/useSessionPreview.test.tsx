@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { Features, Workbench } from '@talyn/shared';
-import { sessionPreviewsOffered, useSessionPreview } from '../renderer/hooks/useSessionPreview';
+import { workbenchesOffered, type Features, type Workbench } from '@talyn/shared';
+import { useSessionPreview } from '../renderer/hooks/useSessionPreview';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
@@ -35,12 +35,12 @@ beforeEach(() => {
   stop.mockReset().mockResolvedValue(undefined);
   open.mockReset().mockResolvedValue(undefined);
   (ops.runScript as jest.Mock).mockReset().mockResolvedValue(undefined);
-  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: true } as Features });
   useWorkbenchStore.setState({ scriptOutput: {}, workbenches: {} });
 });
 
-it.each([undefined, null, {}, { sessionPreviews: false }])('hides previews without an enabled flag: %j', (features) => {
-  expect(sessionPreviewsOffered(features)).toBe(false);
+it.each([undefined, null, {}, { workbenches: false }])('hides previews without an enabled flag: %j', (features) => {
+  expect(workbenchesOffered(features)).toBe(false);
   useWorkspaceStore.setState({ features: features as Features | null });
   const { result } = renderHook(() => useSessionPreview(wb));
   expect(result.current.ports).toEqual([]);
@@ -118,7 +118,7 @@ it('does not run or open without an access token', async () => {
 it('hides ports as soon as the flag turns off', async () => {
   const { result } = renderHook(() => useSessionPreview(wb));
   await waitFor(() => expect(result.current.ports).toHaveLength(1));
-  act(() => useWorkspaceStore.setState({ features: { sessionPreviews: false } as Features }));
+  act(() => useWorkspaceStore.setState({ features: { workbenches: false } as Features }));
   expect(result.current.ports).toEqual([]);
 });
 

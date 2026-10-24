@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PreviewPort, RepositoryPreviewResponse, Workbench } from '@talyn/shared';
+import { workbenchesOffered, type PreviewPort, type RepositoryPreviewResponse, type Workbench } from '@talyn/shared';
 import { api, API_BASE_URL, getAccessToken } from '../lib/api';
 import { openExternal } from '../lib/openExternal';
 import { getWorkbenchBridge } from '../lib/workbenchBridge';
@@ -13,12 +13,8 @@ import { useWorkspaceStore } from '../stores/workspace';
 const DEFAULT_PORTS: PreviewPort[] = [{ port: 3000 }];
 const NO_PORTS: PreviewPort[] = [];
 
-export function sessionPreviewsOffered(features: { sessionPreviews?: boolean } | null | undefined): boolean {
-  return features?.sessionPreviews === true;
-}
-
 export function useSessionPreview(workbench: Workbench) {
-  const offered = useWorkspaceStore((s) => sessionPreviewsOffered(s.features));
+  const offered = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const enabled = offered && workbench.runtime === 'sandbox' && !isArchivedWorkbench(workbench);
   const [loaded, setLoaded] = useState<{ repositoryId: string; config: RepositoryPreviewResponse } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,7 +61,7 @@ export function useSessionPreview(workbench: Workbench) {
         if (!token) throw new Error('Sign in to open the preview.');
       }
       const current = useWorkbenchStore.getState().workbenches[workbench.id] ?? workbench;
-      if (isArchivedWorkbench(current) || !sessionPreviewsOffered(useWorkspaceStore.getState().features)) return;
+      if (isArchivedWorkbench(current) || !workbenchesOffered(useWorkspaceStore.getState().features)) return;
       const forward = await preview.start({ workbenchId: workbench.id, port, token, apiBaseUrl: API_BASE_URL });
       await openExternal(forward.url);
     } catch (error) {

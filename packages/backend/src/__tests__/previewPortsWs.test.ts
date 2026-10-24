@@ -60,7 +60,6 @@ beforeEach(() => {
   });
   setWorkbenchFleetClientForTests(async () => ({ openPortWebSocket: open } as unknown as FleetClient));
   vi.stubEnv('WORKBENCHES_ENABLED', 'true');
-  vi.stubEnv('SESSION_PREVIEWS_ENABLED', 'true');
   resetFeatureFlagsForTests();
 });
 
@@ -104,8 +103,8 @@ describe('preview socket authentication and relay', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it.each(['WORKBENCHES_ENABLED', 'SESSION_PREVIEWS_ENABLED'])('checks %s', async (flag) => {
-    vi.stubEnv(flag, 'false');
+  it('checks the workbenches flag', async () => {
+    vi.stubEnv('WORKBENCHES_ENABLED', 'false');
     resetFeatureFlagsForTests();
     const ws = connect('ready', 'Bearer owner');
     await vi.waitFor(() => expect(ws.closed?.code).toBe(4403));

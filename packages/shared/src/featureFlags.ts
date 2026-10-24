@@ -184,15 +184,6 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['workbenches'],
   },
 
-  sessionPreviews: {
-    posthogKey: 'session-previews',
-    envOverride: 'SESSION_PREVIEWS_ENABLED',
-    fallback: false,
-    description: "Session previews — run a session's app and open it in a browser, in the sandbox or in a Coder workspace",
-    availability: 'gated',
-    releaseScopes: ['preview'],
-  },
-
   /**
    * Code review — AI findings on a pull request, shown in the app.
    *
@@ -495,7 +486,6 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingExport',
   'teams',
   'workbenches',
-  'sessionPreviews',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

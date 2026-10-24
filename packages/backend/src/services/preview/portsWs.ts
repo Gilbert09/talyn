@@ -5,7 +5,6 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { workspaces } from '../../db/schema.js';
 import { AuthError, verifyTokenAndGetUser } from '../../middleware/auth.js';
-import { evaluateFlag } from '../featureFlags.js';
 import { userMayUseWorkbenches } from '../workbenches/access.js';
 import { fleetClientFor } from '../workbenches/sandboxRuntime.js';
 import { getWorkbench } from '../workbenches/store.js';
@@ -85,9 +84,8 @@ export function servePreviewPort(ws: WebSocket, authorization: string | undefine
       const user = await verifyTokenAndGetUser(token);
       if ((phase as string) === 'closed') return;
       if (!user) return finish(4401, 'invalid token');
-      if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email })) ||
-          !(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) {
-        return finish(4403, 'session previews are not available for this account');
+      if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+        return finish(4403, 'sessions are not available for this account');
       }
       const row = await getWorkbench(route.workbenchId);
       if (!row) return finish(4404, 'session not found');

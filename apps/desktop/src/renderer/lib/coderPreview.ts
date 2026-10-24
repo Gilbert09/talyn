@@ -1,4 +1,4 @@
-import type { EffectivePreview, Workbench, WorkbenchEvent } from '@talyn/shared';
+import { workbenchesOffered, type EffectivePreview, type Workbench, type WorkbenchEvent } from '@talyn/shared';
 import { api } from './api';
 import { getWorkbenchBridge } from './workbenchBridge';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -48,7 +48,7 @@ export function startCoderPreview(workbench: Workbench, config: EffectivePreview
 }
 
 export function syncCoderTurn(chatId: string, events: WorkbenchEvent[]): void {
-  if (!useWorkspaceStore.getState().features?.sessionPreviews) return;
+  if (!workbenchesOffered(useWorkspaceStore.getState().features)) return;
   const bridge = getWorkbenchBridge()?.coderPreview;
   if (!bridge) return;
   const ended = events.filter((item) => item.event.type === 'result');

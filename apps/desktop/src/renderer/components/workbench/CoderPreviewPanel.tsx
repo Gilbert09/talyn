@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { EffectivePreview, Workbench } from '@talyn/shared';
+import { workbenchesOffered, type EffectivePreview, type Workbench } from '@talyn/shared';
 import type { CoderPreviewState } from '../../../workbenchBridgeTypes';
 import { coderAction, coderPreviewBridge, startCoderPreview, syncCoderPreview } from '../../lib/coderPreview';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -8,7 +8,7 @@ import { isArchivedWorkbench } from '../../lib/workbenchActions';
 const buttonClass = 'rounded border bg-background px-2 py-1 text-xs text-foreground hover:bg-accent disabled:opacity-50';
 
 export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench; config: EffectivePreview }) {
-  const enabled = useWorkspaceStore((s) => s.features?.sessionPreviews === true);
+  const enabled = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const eligible = enabled && workbench.runtime === 'sandbox' && !isArchivedWorkbench(workbench) && config.target === 'coder';
   const [state, setState] = useState<CoderPreviewState | null>(null);
   const [busy, setBusy] = useState(false);

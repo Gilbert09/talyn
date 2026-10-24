@@ -48,7 +48,7 @@ jest.mock('../renderer/lib/api', () => ({
 }));
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: unknown) => unknown) => selector({
-    features: { sessionPreviews: previewsEnabled },
+    features: { workbenches: previewsEnabled },
     currentWorkspaceId: 'ws',
     repositories: [{ id: 'r1', owner: 'PostHog', fullName: 'PostHog/posthog' }],
     setRepositories: jest.fn(),

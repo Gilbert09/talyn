@@ -73,7 +73,6 @@ describe('preview workbench routes', () => {
   });
   beforeEach(() => {
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
-    vi.stubEnv('SESSION_PREVIEWS_ENABLED', 'true');
     resetFeatureFlagsForTests();
     vi.mocked(runCapture).mockReset();
   });
@@ -87,14 +86,12 @@ describe('preview workbench routes', () => {
     params: { id: 'wb', port }, user: { id: user, email: `${user}@test.invalid`, isAdmin: false },
   });
 
-  it.each(['/:id/patch', '/:id/ports/:port/*'])('requires access and both flags for %s', async (path) => {
+  it.each(['/:id/patch', '/:id/ports/:port/*'])('requires access and the workbenches flag for %s', async (path) => {
     expect((await call(path, 'other')).status).toBe(404);
-    for (const flag of ['WORKBENCHES_ENABLED', 'SESSION_PREVIEWS_ENABLED']) {
-      vi.stubEnv(flag, 'false');
-      resetFeatureFlagsForTests();
-      expect((await call(path)).status).toBe(403);
-      vi.stubEnv(flag, 'true');
-    }
+    vi.stubEnv('WORKBENCHES_ENABLED', 'false');
+    resetFeatureFlagsForTests();
+    expect((await call(path)).status).toBe(403);
+    vi.stubEnv('WORKBENCHES_ENABLED', 'true');
     expect(runCapture).not.toHaveBeenCalled();
   });
   it('returns the patch and maps the size refusal to 413', async () => {

@@ -30,7 +30,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.restoreAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-  vi.stubEnv('SESSION_PREVIEWS_ENABLED', 'true');
+  vi.stubEnv('WORKBENCHES_ENABLED', 'true');
   resetFeatureFlagsForTests();
   vi.spyOn(githubService, 'getRefSha').mockResolvedValue('new');
   vi.spyOn(githubService, 'getFileContent').mockImplementation(async (_ws, _owner, _repo, path) =>
@@ -101,7 +101,7 @@ describe('repository preview routes', () => {
   it.each([['GET', ''], ['PATCH', ''], ['POST', '/detect']])('%s requires access and the flag', async (method, suffix) => {
     expect((await call(method, suffix, method === 'PATCH' ? {} : undefined, 'other-repo')).status).toBe(404);
     expect((await call(method, suffix, method === 'PATCH' ? {} : undefined, 'missing')).status).toBe(404);
-    vi.stubEnv('SESSION_PREVIEWS_ENABLED', 'false');
+    vi.stubEnv('WORKBENCHES_ENABLED', 'false');
     resetFeatureFlagsForTests();
     expect((await call(method, suffix, method === 'PATCH' ? {} : undefined)).status).toBe(403);
     expect(githubService.getRefSha).not.toHaveBeenCalled();

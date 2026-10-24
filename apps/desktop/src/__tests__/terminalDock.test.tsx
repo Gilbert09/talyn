@@ -162,7 +162,7 @@ describe('terminal dock', () => {
 
 
 it('shows each preview port and label in the Run tab', async () => {
-  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: true } as Features });
   useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
   await renderDock();
   expect(await screen.findByRole('button', { name: 'Open localhost:5173 (App)' })).toBeInTheDocument();
@@ -172,7 +172,7 @@ it('shows each preview port and label in the Run tab', async () => {
 });
 
 it.each(['flag-off', 'coder', 'off', 'local'])('hides preview chips for %s', async (mode) => {
-  useWorkspaceStore.setState({ features: { sessionPreviews: mode !== 'flag-off' } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: mode !== 'flag-off' } as Features });
   previewGet.mockResolvedValue({ target: mode === 'coder' ? 'coder' : mode === 'off' ? 'off' : 'sandbox', ports: [{ port: 8010 }] });
   useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
   await act(async () => { render(<TerminalPanel workbench={{ ...WB, runtime: mode === 'local' ? 'local' : 'sandbox' }} ops={ops} />); });
@@ -181,7 +181,7 @@ it.each(['flag-off', 'coder', 'off', 'local'])('hides preview chips for %s', asy
 
 
 it('keeps the Run tab for Coder when the repository has no sandbox scripts', async () => {
-  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: true } as Features });
   previewGet.mockResolvedValue({ target: 'coder', ports: [{ port: 8010 }], coder: { url: 'https://coder.example' } });
   readConfig.mockResolvedValue({ source: 'none', run: [], errors: [], filesToCopy: [], runMode: 'concurrent' });
   useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });

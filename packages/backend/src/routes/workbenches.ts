@@ -1,4 +1,3 @@
-import { evaluateFlag } from '../services/featureFlags.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import { Router, type Request, type Response } from 'express';
 import { Readable } from 'stream';
@@ -802,18 +801,9 @@ export function workbenchRoutes(): Router {
     }
   });
 
-  async function previewGate(req: Request, res: Response): Promise<boolean> {
-    const user = assertUser(req);
-    if (!(await evaluateFlag('sessionPreviews', { distinctId: user.id, email: user.email })).enabled) {
-      bad(res, 403, 'Session previews are not available for this account.', 'previews_unavailable');
-      return false;
-    }
-    return true;
-  }
-
   router.get('/:id/patch', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row || !(await previewGate(req, res))) return;
+    if (!row) return;
     try {
       requireReadySandbox(row);
       ok(res, await getPreviewPatch(row));
@@ -824,7 +814,7 @@ export function workbenchRoutes(): Router {
 
   router.all('/:id/ports/:port/*', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row || !(await previewGate(req, res))) return;
+    if (!row) return;
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
     try {

@@ -29,7 +29,7 @@ beforeEach(() => {
   bridge.state.mockResolvedValue(null);
   patch.mockResolvedValue({ base: 'a'.repeat(40), patch: 'binary patch' });
   previewGet.mockResolvedValue(config);
-  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: true } as Features });
 });
 afterEach(cleanup);
 
@@ -65,7 +65,7 @@ it('shows the exact repair command', async () => {
   expect(bridge.run).not.toHaveBeenCalled();
 });
 it.each([false, undefined])('hides the panel when the flag is %s', (flag) => {
-  useWorkspaceStore.setState({ features: { sessionPreviews: flag } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: flag } as Features });
   render(<CoderPreviewPanel workbench={wb} config={config} />);
   expect(screen.queryByRole('region')).not.toBeInTheDocument();
   expect(bridge.state).not.toHaveBeenCalled();
