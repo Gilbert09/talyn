@@ -396,6 +396,10 @@ function useLocalCheckouts(watchedRepos: WatchedRepo[]): LocalCheckouts {
   const [found, setFound] = useState<Record<string, string>>({});
   const [detecting, setDetecting] = useState(false);
   const [scanRoots, setScanRoots] = useState<string[]>([]);
+  const [home, setHome] = useState<string | null>(null);
+  useEffect(() => {
+    void getWorkbenchBridge()?.repoPaths?.homeDir?.().then(setHome).catch(() => undefined);
+  }, []);
   const paths = afterClear ?? repoPaths.paths;
   const names = watchedRepos.map((repo) => repo.fullName).join('\n');
 
@@ -502,7 +506,6 @@ function useLocalCheckouts(watchedRepos: WatchedRepo[]): LocalCheckouts {
     pathFor,
     candidatesFor: (name) => candidates[name.toLowerCase()] ?? [],
     displayPath: (candidate) => {
-      const home = getWorkbenchBridge()?.repoPaths?.homeDir;
       if (!home) return candidate;
       const separator = home.includes('\\') ? '\\' : '/';
       return candidate === home || candidate.startsWith(`${home}${separator}`)

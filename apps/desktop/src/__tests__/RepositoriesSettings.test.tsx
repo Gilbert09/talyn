@@ -15,7 +15,7 @@ let saved: Record<string, string> = {};
 jest.mock('../renderer/lib/workbenchBridge', () => ({
   getWorkbenchBridge: () => ({
     repoPaths: {
-      get, set, detect, uniqueMain, remove: jest.fn(), homeDir: '/Users/tom',
+      get, set, detect, uniqueMain, remove: jest.fn(), homeDir: jest.fn().mockResolvedValue('/Users/tom'),
       scanRoots: { get: getScanRoots, add: addScanRoot, remove: removeScanRoot },
     },
     readConfig: jest.fn().mockResolvedValue(null),

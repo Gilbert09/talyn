@@ -1,7 +1,6 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import os from 'os';
 import type { DesktopWorkbenchBridge } from '../workbenchBridgeTypes';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
@@ -65,7 +64,8 @@ const workbench: DesktopWorkbenchBridge = {
   pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
   readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
   repoPaths: {
-    homeDir: os.homedir(),
+    // A sandboxed preload cannot load Node's os module, so the main process answers.
+    homeDir: () => ipcRenderer.invoke('workbench:repo-paths:home-dir'),
     get: () => ipcRenderer.invoke('workbench:repo-paths:get'),
     set: (input) => ipcRenderer.invoke('workbench:repo-paths:set', input),
     detect: (input) => ipcRenderer.invoke('workbench:repo-paths:detect', input),
