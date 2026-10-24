@@ -109,21 +109,28 @@ function WorkbenchRow({
             aria-current={selected ? 'page' : undefined}
             className={cn(
               'app-region-no-drag flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
-              selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
-              (suspended || done) && !selected && 'opacity-60'
+              selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'
             )}
             title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
           >
-            <span className="flex h-3 w-3 shrink-0 items-center justify-center">
+            {/* Only the name dims for a finished session: the state mark keeps its full colour. */}
+            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
             </span>
-            <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbenchDisplayName(workbench)}</span>
+            <span className={cn(
+              'min-w-0 flex-1 truncate',
+              isUnread ? 'font-semibold' : 'font-normal',
+              (suspended || done) && !selected && 'opacity-60'
+            )}>{workbenchDisplayName(workbench)}</span>
             {diff && !done && (
               <span className="shrink-0 font-mono text-[11px] tabular-nums">
                 <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
               </span>
             )}
-            <RuntimeIcon className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={runtimeLabel} />
+            <RuntimeIcon
+              className={cn('h-3 w-3 shrink-0 text-muted-foreground', (suspended || done) && !selected && 'opacity-60')}
+              aria-label={runtimeLabel}
+            />
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">

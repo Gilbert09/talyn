@@ -161,10 +161,14 @@ describe('AppSidebar', () => {
     }));
     render(<AppSidebar />);
     const row = screen.getByRole('button', { name: /lisbon/ });
-    expect(within(row).getByLabelText(state === 'merged' ? 'Done: #9 merged' : '#9 closed')).toHaveClass(state === 'merged' ? 'text-merged' : 'text-muted-foreground');
+    const mark = within(row).getByLabelText(state === 'merged' ? 'Done: #9 merged' : '#9 closed');
+    expect(mark).toHaveClass(state === 'merged' ? 'text-merged' : 'text-destructive');
     expect(row).not.toHaveTextContent('+12');
     expect(row).not.toHaveTextContent('−3');
-    expect(row).toHaveClass('opacity-60');
+    // The name dims; the state mark keeps its full colour.
+    expect(row).not.toHaveClass('opacity-60');
+    expect(within(row).getByText('lisbon')).toHaveClass('opacity-60');
+    expect(mark.closest('.opacity-60')).toBeNull();
   });
 
   it('clicking a row opens the workbench route and marks it current', () => {
