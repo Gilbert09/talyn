@@ -723,6 +723,43 @@ describe('prMonitor — poll orchestration', () => {
     expect(rows[0].state).toBe('open');
   });
 
+  // On 2026-10-22 a GitHub search incident answered the author search with
+  // nothing, and every authored PR left the list. Who opened a PR never
+  // changes, so a search that omits it must not clear the flag. Covers the
+  // reconcile pass (row still fresh) and the upsert (row due a refetch).
+  it.each([
+    ['my PR, reconciled', 'me', new Date(), true],
+    ['my PR, login in another case', 'ME', new Date(), true],
+    ['my PR, refetched', 'me', new Date(0), true],
+    ["someone else's PR, reconciled", 'someone-else', new Date(), false],
+    ["someone else's PR, refetched", 'someone-else', new Date(0), false],
+  ])('keeps the authored flag when the author search omits the PR: %s', async (_label, author, lastPolledAt, expected) => {
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-mine',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 7,
+      state: 'open',
+      authored: true,
+      lastPolledAt,
+      lastSummary: { headBranch: 'feature/m', author },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockSearch([]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 7, pr: fakeSummary({ number: 7, headBranch: 'feature/m', author }) },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    const [row] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-mine'));
+    expect(row.state).toBe('open');
+    expect(row.authored).toBe(expected);
+  });
+
   it('leaves a fallen-out row untouched when the sweep batch lookup fails (retries next tick, never mass-closes)', async () => {
     await db.insert(pullRequestsTable).values({
       id: 'pr-2',

@@ -424,6 +424,27 @@ describe('githubService', () => {
       expect(String(stub.mock.calls[0][0])).toContain('/search/issues?q=');
     });
 
+    // A partial answer must fail, not pass as the full list: the PR monitor
+    // clears relationship flags from it (GitHub search incident, 2026-10-22).
+    it.each([
+      [true, 'rejects'],
+      [false, 'resolves'],
+    ])('searchPullRequestNumbers with incomplete_results %s %s', async (incomplete, outcome) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          new Response(JSON.stringify({ total_count: 1, incomplete_results: incomplete, items: [{ number: 1 }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        )
+      );
+
+      const call = githubService.searchPullRequestNumbers('ws1', 'repo:acme/widgets is:pr is:open author:me');
+      if (outcome === 'rejects') await expect(call).rejects.toThrow(/incomplete results/);
+      else await expect(call).resolves.toEqual([1]);
+    });
+
     // PostHog/posthog defines 271 labels with `trunk-merge-queue-submit` at
     // position 254. A single page of 100 reported "this repo defines no submit
     // label" — the merge queue's most reliable door, invisible, and every PR on

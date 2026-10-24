@@ -61,7 +61,7 @@ export function parseRateLimitResponse(
   response: Pick<Response, 'status'> & { headers: Headers },
   bodyText: string,
   now: number = Date.now(),
-): { isRateLimited: boolean; retryAfterMs: number } {
+): { isRateLimited: boolean; retryAfterMs: number; scope: GateScope } {
   const status = response.status;
   const retryAfterHeader = response.headers.get('retry-after');
   const remaining = response.headers.get('x-ratelimit-remaining');
@@ -71,7 +71,17 @@ export function parseRateLimitResponse(
     status === 429 ||
     (status === 403 && (retryAfterHeader !== null || isSecondaryBody || remaining === '0'));
 
-  if (!isRateLimited) return { isRateLimited: false, retryAfterMs: 0 };
+  if (!isRateLimited) return { isRateLimited: false, retryAfterMs: 0, scope: 'all' };
+
+  // A secondary limit is one throttle across every API, so it gates them all.
+  // A primary limit is one budget running dry, and GitHub names it in
+  // `x-ratelimit-resource`. Gating everything on a spent `core` budget refused
+  // GraphQL calls that had thousands of points left — a new PR's webhook
+  // refresh among them, so the PR stayed off the list until the pause ended.
+  const isSecondary = status === 429 || retryAfterHeader !== null || isSecondaryBody;
+  const scope: GateScope = isSecondary
+    ? 'all'
+    : scopeForResource(response.headers.get('x-ratelimit-resource'));
 
   let retryAfterMs = DEFAULT_BACKOFF_MS;
   if (retryAfterHeader !== null) {
@@ -86,7 +96,26 @@ export function parseRateLimitResponse(
   }
 
   retryAfterMs = Math.max(0, Math.min(MAX_BACKOFF_MS, retryAfterMs));
-  return { isRateLimited: true, retryAfterMs };
+  return { isRateLimited: true, retryAfterMs, scope };
+}
+
+/**
+ * The gate scope for a primary budget GitHub named in `x-ratelimit-resource`.
+ * A missing or unfamiliar name gates everything, which is what every limit did
+ * before scopes existed: not knowing which budget ran out is not a reason to
+ * keep spending the others.
+ */
+export function scopeForResource(resource: string | null): GateScope {
+  switch (resource) {
+    case 'core':
+      return 'rest';
+    case 'search':
+      return 'search';
+    case 'graphql':
+      return 'graphql';
+    default:
+      return 'all';
+  }
 }
 
 /**
@@ -125,21 +154,28 @@ export function graphqlPrimaryLimitResetMs(
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * GitHub bills REST and GraphQL against **separate** primary budgets (each
- * 5,000/hr on an installation) but shares ONE secondary/abuse throttle across
- * both. So a block has a scope:
+ * GitHub bills REST (`core`), search and GraphQL against **separate** primary
+ * budgets but shares ONE secondary/abuse throttle across all of them. So a
+ * block has a scope:
  *   - `'all'` — the shared secondary limit (a 403/429 with retry-after or a
  *     "secondary rate limit" body). Gates every request on the account.
- *   - `'graphql'` / `'rest'` — a single API's *primary* point/request budget
- *     ran dry. Gates only that API; the other budget is untouched and must keep
- *     flowing. This is the fix for the recurring merge-queue freeze: GraphQL
- *     exhaustion (16 workspaces polling one huge repo through one installation)
- *     used to block the REST merge PUT for the full ~1h reset window, even
- *     though REST had plenty of budget.
+ *   - `'rest'` / `'search'` / `'graphql'` — one *primary* budget ran dry.
+ *     Gates only requests that draw on it; the others are untouched and must
+ *     keep flowing. This is the fix for the recurring merge-queue freeze:
+ *     GraphQL exhaustion (16 workspaces polling one huge repo through one
+ *     installation) used to block the REST merge PUT for the full ~1h reset
+ *     window, even though REST had plenty of budget. `search` is its own scope
+ *     because `/search/*` is REST on the wire but has its own 30-a-minute
+ *     budget, and a spent `core` must not stop the poll's searches.
  */
-export type GateScope = 'all' | 'rest' | 'graphql';
+export type GateScope = 'all' | 'rest' | 'search' | 'graphql';
 /** Which budget an outbound request draws on — what {@link GitHubRateGate.isBlocked} checks. */
-export type ApiKind = 'rest' | 'graphql';
+export type ApiKind = 'rest' | 'search' | 'graphql';
+
+/** The budget a REST-shaped request draws on: search endpoints have their own. */
+export function apiKindForEndpoint(endpoint: string): Exclude<ApiKind, 'graphql'> {
+  return endpoint.startsWith('/search/') ? 'search' : 'rest';
+}
 
 class GitHubRateGate {
   /** `${accountKey}::${scope}` → epoch ms until which that scope is gated. */

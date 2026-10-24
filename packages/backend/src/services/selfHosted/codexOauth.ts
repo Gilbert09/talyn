@@ -168,6 +168,9 @@ export function codexCredentialFrom(input: {
 
 // ---------------------------------------------------------------------------
 
+/** The `reauthRequiredAt` already logged per fleet account, so the warning is said once. */
+const reauthWarned = new Map<string, string>();
+
 /** In-flight refreshes keyed by fleet account — the cheap half of the single-flight. */
 const inflight = new Map<string, Promise<CodexTokenPair>>();
 
@@ -188,10 +191,15 @@ export async function resolveCodexAccessToken(
 ): Promise<{ accessToken: string; accountId: string } | null> {
   if (!stored || !isEncryptedEnvelope(stored.accessTokenEnc)) return null;
   if (stored.reauthRequiredAt) {
-    console.warn(
-      `[codex] account ${fleetAccountId.slice(0, 8)} needs to reconnect Codex — ` +
-        'the stored authorization was rejected, so nothing is being retried.',
-    );
+    // Every poll tick and every host credential pull lands here, so say it
+    // once per rejection rather than every ten seconds per running sandbox.
+    if (reauthWarned.get(fleetAccountId) !== stored.reauthRequiredAt) {
+      reauthWarned.set(fleetAccountId, stored.reauthRequiredAt);
+      console.warn(
+        `[codex] account ${fleetAccountId.slice(0, 8)} needs to reconnect Codex — ` +
+          'the stored authorization was rejected, so nothing is being retried.',
+      );
+    }
     return null;
   }
   if (!isExpiring(stored.expiresAt)) {

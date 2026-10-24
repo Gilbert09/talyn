@@ -416,8 +416,14 @@ export async function batchPullRequestsByNumber(opts: {
    * only ever answers a question asked with the same permissions.
    */
   dedupeIdentity?: string;
+  /**
+   * Called with each chunk's results as soon as that chunk is decoded (and once
+   * with any cache hits), so a caller can write rows while later chunks are
+   * still in flight. A throw fails the whole batch, as a fetch error does.
+   */
+  onChunk?: (results: BatchPRByNumberResult[]) => Promise<void>;
 }): Promise<BatchPRByNumberResult[]> {
-  const { workspaceId, owner, repo, numbers, dedupeWindowMs } = opts;
+  const { workspaceId, owner, repo, numbers, dedupeWindowMs, onChunk } = opts;
   // No identity means no sharing. Fall back to a key nothing else can match.
   const dedupeIdentity = opts.dedupeIdentity ?? `ws:${workspaceId}`;
   if (numbers.length === 0) return [];
@@ -434,6 +440,9 @@ export async function batchPullRequestsByNumber(opts: {
     }
   } else {
     toFetch.push(...numbers);
+  }
+  if (onChunk && hits.size > 0) {
+    await onChunk([...hits].map(([number, pr]) => ({ number, pr })));
   }
 
   const fetched: BatchPRByNumberResult[] = [];
@@ -459,9 +468,9 @@ export async function batchPullRequestsByNumber(opts: {
           owner,
           repo,
         });
-        fetched.push(
-          ...stampFetchStart(decodeBatchByNumberResponse(chunk, data, owner, repo), fetchStartedAt)
-        );
+        const decoded = stampFetchStart(decodeBatchByNumberResponse(chunk, data, owner, repo), fetchStartedAt);
+        fetched.push(...decoded);
+        if (onChunk) await onChunk(decoded);
       }
     };
     const workers = Array.from(

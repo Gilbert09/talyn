@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { getPoolDbClient, type Database } from '../db/client.js';
+import { getPoolDbClient, runWithoutScope, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
@@ -30,6 +30,8 @@ import {
   QUEUE_RESET_COLUMNS,
 } from './mergeQueueBroadcast.js';
 import { TickGuard } from './tickGuard.js';
+import { GitHubRateLimitError } from './githubRateGate.js';
+import { describeError } from './debugBus.js';
 
 interface WatchedRepo {
   id: string;
@@ -38,6 +40,179 @@ interface WatchedRepo {
   repo: string;
   fullName: string;
   defaultBranch: string;
+}
+
+/** The viewer's relationship to each open PR in one repo, from the searches. */
+interface RelationshipSearch {
+  authoredNums: number[];
+  requestedNums: number[];
+  directRequestedNums: number[];
+  authoredSet: Set<number>;
+  pendingSet: Set<number>;
+}
+
+interface BatchedRelationshipSearch extends RelationshipSearch {
+  /** Any search named this repo. False is ambiguous — see `usableBatchedSearch`. */
+  sawResults: boolean;
+}
+
+interface PollRepoOptions {
+  /** The workspace's batched search answer for this repo, if it has one. */
+  batched?: BatchedRelationshipSearch;
+  /** Searches already run for this repo (pass 1 of a Refresh); used as they are. */
+  searches?: RelationshipSearch;
+  /** Write each fetched chunk at once; see `refetchAndUpsert`. */
+  streaming?: boolean;
+}
+
+/** What pass 1 of a Refresh found, handed to pass 2 so nothing is searched twice. */
+interface WorkspaceDiscovery {
+  login: string;
+  repos: WatchedRepo[];
+  /** Per repository id. A repo missing here searches again in pass 2. */
+  searches: Map<string, RelationshipSearch>;
+  /** Repos pass 1 could not search or fetch. */
+  failures: RefreshFailure[];
+  newPrs: number;
+  ms: number;
+}
+
+interface RefreshFailure {
+  repo: string;
+  error: unknown;
+}
+
+/** What a user Refresh found by the time it answered, for the button to report. */
+export interface RefreshOutcome {
+  repos: number;
+  failedRepos: number;
+  /** A sentence for a person about the first failure, when there was one. */
+  failure: string | null;
+}
+
+/**
+ * The reason a Refresh failed, in words for the person who pressed it. A rate
+ * limit says when to try again, because that is the one thing they can act on.
+ * Not the cause chain: that is for the logs, and this goes in an API response.
+ */
+export function describeRefreshFailure(failure: RefreshFailure): string {
+  const { error } = failure;
+  if (error instanceof GitHubRateLimitError) {
+    const minutes = Math.max(1, Math.ceil(error.retryAfterMs / 60_000));
+    return `GitHub is rate-limiting your account. Try again in about ${minutes} min.`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return `${failure.repo}: ${message}`;
+}
+
+export function refreshOutcome(discoveries: Array<{ repos: unknown[]; failures: RefreshFailure[] }>): RefreshOutcome {
+  const failures = discoveries.flatMap((d) => d.failures);
+  return {
+    repos: discoveries.reduce((n, d) => n + d.repos.length, 0),
+    failedRepos: failures.length,
+    failure: failures.length > 0 ? describeRefreshFailure(failures[0]) : null,
+  };
+}
+
+export interface WorkspacePollResult {
+  failedRepos: number;
+  repoTimings: Array<{ repo: string; ms: number }>;
+  /** The batched relationship searches, before any repo is polled. */
+  searchMs: number;
+  totalMs: number;
+}
+
+/**
+ * The longest search query, URL-encoded, that one batched search may send.
+ * GitHub publishes no limit on `repo:` qualifiers; the limit is the request
+ * URL, which it refuses with a 414. Measured 2026-10-22: a 200-repo query of
+ * about 7.2 KB encoded worked and a 300-repo one of about 10.8 KB did not.
+ */
+export const BATCH_SEARCH_MAX_QUERY_BYTES = 6_000;
+
+/**
+ * Split repos into groups whose `repo:` qualifiers, added to `base`, stay under
+ * {@link BATCH_SEARCH_MAX_QUERY_BYTES} once encoded. `base` must be the longest
+ * query the groups will be used with.
+ */
+export function chunkReposForSearch<T extends { fullName: string }>(
+  base: string,
+  repos: T[],
+  maxBytes: number = BATCH_SEARCH_MAX_QUERY_BYTES
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let bytes = encodeURIComponent(base).length;
+  for (const repo of repos) {
+    const cost = encodeURIComponent(` repo:${repo.fullName}`).length;
+    if (current.length > 0 && bytes + cost > maxBytes) {
+      chunks.push(current);
+      current = [];
+      bytes = encodeURIComponent(base).length;
+    }
+    current.push(repo);
+    bytes += cost;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** The summary line a forced poll logs: total, search share, slowest repos. */
+export function describeForcedPoll(
+  workspaceId: string,
+  result: WorkspacePollResult,
+  discovery?: { newPrs: number; ms: number }
+): string {
+  const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const slowest = [...result.repoTimings]
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 3)
+    .map((t) => `${t.repo} ${secs(t.ms)}`)
+    .join(', ');
+  const ready = discovery ? `list ready in ${secs(discovery.ms)} (${discovery.newPrs} new PRs), then ` : '';
+  return (
+    `PR monitor: forced poll of workspace ${workspaceId.slice(0, 8)}: ${ready}refresh took ${secs(result.totalMs)}` +
+    ` (${result.repoTimings.length} repos, searches ${secs(result.searchMs)}` +
+    `${slowest ? `, slowest: ${slowest}` : ''}${result.failedRepos ? `, ${result.failedRepos} failed` : ''})`
+  );
+}
+
+/**
+ * Whether the `user-review-requested:` search is needed: only when a review
+ * request coincides with a prior review, which a team request alone cannot
+ * tell apart from a fresh direct one.
+ */
+export function needsDirectRequestSearch(
+  authoredNums: number[],
+  requestedNums: number[],
+  reviewedNums: number[]
+): boolean {
+  const authored = new Set(authoredNums);
+  const reviewed = new Set(reviewedNums);
+  return requestedNums.some((n) => reviewed.has(n) && !authored.has(n));
+}
+
+/**
+ * Who the viewer is to each open PR. A prior review clears a lingering team
+ * request; an active direct request still needs attention, including one made
+ * after an earlier review.
+ */
+export function relationshipSearch(
+  authoredNums: number[],
+  requestedNums: number[],
+  reviewedNums: number[],
+  directRequestedNums: number[]
+): RelationshipSearch {
+  const authoredSet = new Set(authoredNums);
+  const reviewedSet = new Set(reviewedNums);
+  const directRequestedSet = new Set(directRequestedNums);
+  const pendingSet = new Set<number>();
+  for (const n of [...requestedNums, ...directRequestedNums]) {
+    if ((!reviewedSet.has(n) || directRequestedSet.has(n)) && !authoredSet.has(n)) {
+      pendingSet.add(n);
+    }
+  }
+  return { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet };
 }
 
 /** The minimal tracked-open row shape the close-out paths carry (no lastSummary blob). */
@@ -302,53 +477,118 @@ class PRMonitorService extends EventEmitter {
     return this.pollWorkspace(workspaceId);
   }
 
-  private async pollWorkspace(workspaceId: string): Promise<{ failedRepos: number }> {
+  /**
+   * Pass 1 of a user Refresh: put the PRs the user does not have yet on the
+   * list, and nothing else. Runs the searches, then fetches and writes only the
+   * PR numbers with no open row, chunk by chunk, leaving mergeability to the
+   * deferred settler. The searches are kept for pass 2 ({@link pollWorkspace}),
+   * which refreshes the rows already there and closes the ones that went.
+   *
+   * A repo whose searches or fetch fail here is left for pass 2, which runs its
+   * own searches and owns the error handling (access, rename, counting).
+   */
+  private async discoverWorkspace(workspaceId: string): Promise<WorkspaceDiscovery | null> {
+    const startedAt = Date.now();
     const login = await this.resolveCurrentUser(workspaceId);
-    if (!login) return { failedRepos: 0 };
+    if (!login) return null;
     const repos = await this.getWatchedRepos(workspaceId);
+    const batched = await this.searchRelationshipsBatched(workspaceId, repos, login);
+    const searches = new Map<string, RelationshipSearch>();
+    const failures: RefreshFailure[] = [];
+    let newPrs = 0;
+    for (const repo of repos) {
+      try {
+        const found = (await this.usableBatchedSearch(workspaceId, repo, batched.get(repo.id)))
+          ?? (await this.searchRelationships(workspaceId, repo.fullName, login));
+        searches.set(repo.id, found);
+        const tracked = new Set(await this.getTrackedOpenNumbers(workspaceId, repo.id));
+        const fresh = [...new Set([...found.authoredNums, ...found.requestedNums, ...found.directRequestedNums])]
+          .filter((n) => !tracked.has(n));
+        if (fresh.length === 0) continue;
+        newPrs += fresh.length;
+        await this.refetchAndUpsert(
+          workspaceId,
+          repo,
+          fresh,
+          { authoredSet: found.authoredSet, pendingSet: found.pendingSet, login },
+          { streaming: true }
+        );
+      } catch (err) {
+        // Pass 2 searches this repo again and reports what is wrong with it.
+        searches.delete(repo.id);
+        failures.push({ repo: repo.fullName, error: err });
+      }
+    }
+    return { login, repos, searches, failures, newPrs, ms: Date.now() - startedAt };
+  }
+
+  private async pollWorkspace(
+    workspaceId: string,
+    opts: { discovery?: WorkspaceDiscovery; streaming?: boolean } = {}
+  ): Promise<WorkspacePollResult> {
+    const startedAt = Date.now();
+    const repoTimings: Array<{ repo: string; ms: number }> = [];
+    const login = opts.discovery?.login ?? (await this.resolveCurrentUser(workspaceId));
+    if (!login) return { failedRepos: 0, repoTimings, searchMs: 0, totalMs: Date.now() - startedAt };
+    const repos = opts.discovery?.repos ?? (await this.getWatchedRepos(workspaceId));
     let failedRepos = 0;
+
+    const searchStartedAt = Date.now();
+    const batched = opts.discovery
+      ? new Map<string, BatchedRelationshipSearch>()
+      : await this.searchRelationshipsBatched(workspaceId, repos, login);
+    const searchMs = Date.now() - searchStartedAt;
 
     for (const repo of repos) {
       const accessKey = `${workspaceId}:${repo.fullName}`;
+      const repoStartedAt = Date.now();
       try {
-        await this.pollRepo(workspaceId, repo, login);
-        // Recovered (e.g. the App was just granted access) — note it once.
-        if (this.inaccessibleRepos.delete(accessKey)) {
-          console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'unknown error';
-        // A watched repo the App can't reach (private repo not in the
-        // installation's selected list): no token can read it until access is
-        // granted on GitHub. Log the actionable notice ONCE, then stay quiet —
-        // don't spam this every 5-min sweep.
-        if (isRepoAccessError(msg)) {
-          // "Cannot see it" and "it moved" are indistinguishable from the
-          // error alone, and they need opposite responses: one waits for a
-          // human to grant access, the other fixes itself. Ask before assuming.
-          const renamedTo = await this.detectRename(workspaceId, repo);
-          if (renamedTo) {
-            await this.applyRename(repo, renamedTo);
-            this.inaccessibleRepos.delete(accessKey);
+        try {
+          await this.pollRepo(workspaceId, repo, login, {
+            batched: batched.get(repo.id),
+            searches: opts.discovery?.searches.get(repo.id),
+            streaming: opts.streaming,
+          });
+          // Recovered (e.g. the App was just granted access) — note it once.
+          if (this.inaccessibleRepos.delete(accessKey)) {
+            console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          // A watched repo the App can't reach (private repo not in the
+          // installation's selected list): no token can read it until access is
+          // granted on GitHub. Log the actionable notice ONCE, then stay quiet —
+          // don't spam this every 5-min sweep.
+          if (isRepoAccessError(msg)) {
+            // "Cannot see it" and "it moved" are indistinguishable from the
+            // error alone, and they need opposite responses: one waits for a
+            // human to grant access, the other fixes itself. Ask before assuming.
+            const renamedTo = await this.detectRename(workspaceId, repo);
+            if (renamedTo) {
+              await this.applyRename(repo, renamedTo);
+              this.inaccessibleRepos.delete(accessKey);
+              continue;
+            }
+            if (!this.inaccessibleRepos.has(accessKey)) {
+              this.inaccessibleRepos.add(accessKey);
+              console.warn(
+                `PR monitor: the GitHub App has no access to ${repo.fullName} — grant it on GitHub (org → Installed GitHub Apps → Repository access). Skipping until then.`
+              );
+            }
             continue;
           }
-          if (!this.inaccessibleRepos.has(accessKey)) {
-            this.inaccessibleRepos.add(accessKey);
-            console.warn(
-              `PR monitor: the GitHub App has no access to ${repo.fullName} — grant it on GitHub (org → Installed GitHub Apps → Repository access). Skipping until then.`
-            );
-          }
-          continue;
+          // Counted only here: a rename is a recovery, and a repo the App can't
+          // read is permanently unreachable by REST too, so neither is worth
+          // waking the caller's fallback for. This branch is the transient one
+          // (rate-limit gate, 5xx) where a cheaper retry can still succeed.
+          failedRepos++;
+          console.error(`PR monitor: ${repo.fullName} poll failed:`, describeError(err));
         }
-        // Counted only here: a rename is a recovery, and a repo the App can't
-        // read is permanently unreachable by REST too, so neither is worth
-        // waking the caller's fallback for. This branch is the transient one
-        // (rate-limit gate, 5xx) where a cheaper retry can still succeed.
-        failedRepos++;
-        console.error(`PR monitor: ${repo.fullName} poll failed:`, msg);
+      } finally {
+        repoTimings.push({ repo: repo.fullName, ms: Date.now() - repoStartedAt });
       }
     }
-    return { failedRepos };
+    return { failedRepos, repoTimings, searchMs, totalMs: Date.now() - startedAt };
   }
 
   /**
@@ -407,7 +647,8 @@ class PRMonitorService extends EventEmitter {
   private async pollRepo(
     workspaceId: string,
     repo: WatchedRepo,
-    currentUserLogin: string
+    currentUserLogin: string,
+    opts: PollRepoOptions = {}
   ): Promise<void> {
     const full = `${repo.owner}/${repo.repo}`;
     // The searches share a 30/min budget per account and are the likeliest
@@ -416,9 +657,11 @@ class PRMonitorService extends EventEmitter {
     // check pill on a TRACKED PR then waited for a sweep that never reached it.
     // A tracked row needs no search to be refreshed, so refresh those and then
     // report the failure.
-    let searches: Awaited<ReturnType<typeof this.searchRelationships>>;
+    let searches: RelationshipSearch;
     try {
-      searches = await this.searchRelationships(workspaceId, full, currentUserLogin);
+      searches = opts.searches
+        ?? (await this.usableBatchedSearch(workspaceId, repo, opts.batched))
+        ?? (await this.searchRelationships(workspaceId, full, currentUserLogin));
     } catch (searchError) {
       const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
       const stale = tracked.length
@@ -464,7 +707,13 @@ class PRMonitorService extends EventEmitter {
     let refetchError: unknown = null;
     if (staleNumbers.length > 0) {
       try {
-        await this.refetchAndUpsert(workspaceId, repo, staleNumbers, { authoredSet, pendingSet });
+        await this.refetchAndUpsert(
+          workspaceId,
+          repo,
+          staleNumbers,
+          { authoredSet, pendingSet, login: currentUserLogin },
+          { streaming: opts.streaming }
+        );
       } catch (err) {
         refetchError = err;
       }
@@ -476,7 +725,7 @@ class PRMonitorService extends EventEmitter {
     // PR whose flag should change but which didn't need a summary refetch
     // (e.g. it fell out of review-requested, or the user just reviewed it)
     // still flips. Without this an approved PR lingers on the Review list.
-    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet);
+    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet, currentUserLogin);
     if (refetchError) throw refetchError;
   }
 
@@ -486,7 +735,11 @@ class PRMonitorService extends EventEmitter {
    * an active direct request still needs attention, including one made after an
    * earlier review.
    */
-  private async searchRelationships(workspaceId: string, full: string, currentUserLogin: string) {
+  private async searchRelationships(
+    workspaceId: string,
+    full: string,
+    currentUserLogin: string
+  ): Promise<RelationshipSearch> {
     const authoredNums = await githubService.searchPullRequestNumbers(
       workspaceId,
       `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -499,33 +752,163 @@ class PRMonitorService extends EventEmitter {
       workspaceId,
       `repo:${full} is:pr is:open reviewed-by:${currentUserLogin}`
     );
-    const authoredSet = new Set(authoredNums);
-    const reviewedSet = new Set(reviewedNums);
-    const directRequestedNums = requestedNums.some(
-      (n) => reviewedSet.has(n) && !authoredSet.has(n),
-    )
+    const directRequestedNums = needsDirectRequestSearch(authoredNums, requestedNums, reviewedNums)
       ? await githubService.searchPullRequestNumbers(
           workspaceId,
           `repo:${full} is:pr is:open user-review-requested:${currentUserLogin}`,
         )
       : [];
-    const directRequestedSet = new Set(directRequestedNums);
-    const pendingSet = new Set<number>();
-    for (const n of [...requestedNums, ...directRequestedNums]) {
-      if ((!reviewedSet.has(n) || directRequestedSet.has(n)) && !authoredSet.has(n)) {
-        pendingSet.add(n);
-      }
-    }
-    return { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet };
+    return relationshipSearch(authoredNums, requestedNums, reviewedNums, directRequestedNums);
   }
 
-  /** Refetch `numbers` and upsert them; `flags` null leaves relationship columns alone. */
+  /**
+   * The same searches for EVERY watched repo of a workspace, run once with many
+   * `repo:` qualifiers instead of once per repo. GitHub allows 30 searches a
+   * minute per account and the per-repo shape costs 3 or 4 per repo, so a
+   * 13-repo workspace spent most of a minute and a half of that budget, and a
+   * user Refresh queued behind it.
+   *
+   * Returns the answer per repository id. A repo it cannot answer for is left
+   * out, and `pollRepo` then runs the per-repo searches as before: a chunk whose
+   * search failed, came back partial, or hit GitHub's 1,000-result cap.
+   */
+  private async searchRelationshipsBatched(
+    workspaceId: string,
+    repos: WatchedRepo[],
+    login: string
+  ): Promise<Map<string, BatchedRelationshipSearch>> {
+    const out = new Map<string, BatchedRelationshipSearch>();
+    // One repo is one search either way, and the per-repo path keeps its errors.
+    if (repos.length < 2) return out;
+
+    const longestBase = `is:pr is:open user-review-requested:${login}`;
+    for (const chunk of chunkReposForSearch(longestBase, repos)) {
+      const scope = (rs: WatchedRepo[]) => rs.map((r) => `repo:${r.fullName}`).join(' ');
+      try {
+        const [authored, requested, reviewed] = [
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open author:${login} ${scope(chunk)}`),
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open review-requested:${login} ${scope(chunk)}`),
+          await githubService.searchPullRequestNumbersByRepo(workspaceId, `is:pr is:open reviewed-by:${login} ${scope(chunk)}`),
+        ];
+        if (!authored.complete || !requested.complete || !reviewed.complete) continue;
+
+        const numsFor = (byRepo: Map<string, number[]>, repo: WatchedRepo) =>
+          byRepo.get(repo.fullName.toLowerCase()) ?? [];
+        const needDirect = chunk.filter((r) =>
+          needsDirectRequestSearch(numsFor(authored.byRepo, r), numsFor(requested.byRepo, r), numsFor(reviewed.byRepo, r))
+        );
+        const direct = needDirect.length > 0
+          ? await githubService.searchPullRequestNumbersByRepo(
+              workspaceId,
+              `is:pr is:open user-review-requested:${login} ${scope(needDirect)}`
+            )
+          : { byRepo: new Map<string, number[]>(), complete: true };
+        if (!direct.complete) continue;
+
+        for (const repo of chunk) {
+          const authoredNums = numsFor(authored.byRepo, repo);
+          const requestedNums = numsFor(requested.byRepo, repo);
+          const reviewedNums = numsFor(reviewed.byRepo, repo);
+          out.set(repo.id, {
+            ...relationshipSearch(authoredNums, requestedNums, reviewedNums, numsFor(direct.byRepo, repo)),
+            sawResults: authoredNums.length + requestedNums.length + reviewedNums.length > 0,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `PR monitor: batched search failed for ${chunk.length} repo(s) in workspace ${workspaceId.slice(0, 8)}, searching each repo instead:`,
+          describeError(err)
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The batched answer for one repo, or null when it cannot be trusted and the
+   * per-repo searches must run.
+   *
+   * A batched search silently leaves out a repo the credential cannot see. With
+   * no results for the repo, "nobody has an open PR here" and "the App lost
+   * access" look the same — and reading it as the first would clear the
+   * Mine / Review flags on every tracked row. The per-repo search fails loudly
+   * on the second, so a repo with no results AND tracked open rows asks it.
+   * With no tracked rows there is nothing for a wrong answer to change. A repo
+   * already known to be unreachable asks too, so its recovery is still noticed.
+   */
+  private async usableBatchedSearch(
+    workspaceId: string,
+    repo: WatchedRepo,
+    batched: BatchedRelationshipSearch | undefined
+  ): Promise<RelationshipSearch | null> {
+    if (!batched) return null;
+    if (batched.sawResults) return batched;
+    if (this.inaccessibleRepos.has(`${workspaceId}:${repo.fullName}`)) return null;
+    const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
+    return tracked.length === 0 ? batched : null;
+  }
+
+  /**
+   * Refetch `numbers` and upsert them; `flags` null leaves relationship columns
+   * alone.
+   *
+   * `streaming` is for a person waiting on Refresh: each chunk is written as it
+   * arrives instead of after the whole repo, and a PR GitHub has not computed
+   * mergeability for is written as UNKNOWN and handed to the deferred settler,
+   * instead of holding every row of the repo through the inline retries.
+   */
   private async refetchAndUpsert(
     workspaceId: string,
     repo: WatchedRepo,
     numbers: number[],
-    flags: { authoredSet: Set<number>; pendingSet: Set<number> } | null
+    flags: { authoredSet: Set<number>; pendingSet: Set<number>; login: string } | null,
+    opts: { streaming?: boolean } = {}
   ): Promise<void> {
+    const upsert = async (summary: PRSummary): Promise<void> => {
+      if (flags) await this.annotateReviewRequest(workspaceId, summary);
+      await upsertFromBatchResult({
+        workspaceId,
+        repositoryId: repo.id,
+        summary,
+        ...(flags
+          ? {
+              reviewRequested: flags.pendingSet.has(summary.number),
+              // See reconcileRelationshipFlags: authorship outlives a degraded search.
+              authored:
+                flags.authoredSet.has(summary.number) ||
+                summary.author.toLowerCase() === flags.login.toLowerCase(),
+            }
+          : {}),
+      });
+    };
+
+    if (opts.streaming) {
+      await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers,
+        dedupeWindowMs: BULK_POLL_DEDUPE_MS,
+        dedupeIdentity: githubService.credentialIdentityFor(workspaceId),
+        onChunk: async (results) => {
+          for (const result of results) {
+            if (!result.pr) continue;
+            await upsert(result.pr);
+            if (result.pr.state === 'open' && result.pr.mergeable === 'UNKNOWN') {
+              scheduleMergeableSettle({
+                workspaceId,
+                repositoryId: repo.id,
+                owner: repo.owner,
+                repo: repo.repo,
+                number: result.pr.number,
+              });
+            }
+          }
+        },
+      });
+      return;
+    }
+
     const results = await this.resolveUnknownMergeable(
       workspaceId,
       repo,
@@ -543,19 +926,7 @@ class PRMonitorService extends EventEmitter {
       })
     );
     for (const result of results) {
-      if (!result.pr) continue;
-      if (flags) await this.annotateReviewRequest(workspaceId, result.pr);
-      await upsertFromBatchResult({
-        workspaceId,
-        repositoryId: repo.id,
-        summary: result.pr,
-        ...(flags
-          ? {
-              reviewRequested: flags.pendingSet.has(result.pr.number),
-              authored: flags.authoredSet.has(result.pr.number),
-            }
-          : {}),
-      });
+      if (result.pr) await upsert(result.pr);
     }
   }
 
@@ -569,7 +940,8 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string,
     repositoryId: string,
     authoredSet: Set<number>,
-    pendingSet: Set<number>
+    pendingSet: Set<number>,
+    currentUserLogin: string
   ): Promise<void> {
     // Note: `lastSummary` is deliberately NOT selected here — most ticks
     // change zero rows, so pulling the ~2KB summary jsonb for every open PR
@@ -589,6 +961,8 @@ class PRMonitorService extends EventEmitter {
         // excludes — see the note above.
         reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
         authored: pullRequestsTable.authored,
+        // Only the login, derived in SQL, so the summary blob does not ship.
+        authorLogin: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'author'`,
       })
       .from(pullRequestsTable)
       .where(
@@ -599,8 +973,13 @@ class PRMonitorService extends EventEmitter {
         )
       );
 
+    const login = currentUserLogin.toLowerCase();
     for (const row of rows) {
-      const authored = authoredSet.has(row.number);
+      // Who opened a PR never changes. A search that leaves out a PR the
+      // viewer opened is a degraded search, not a change of author, and
+      // trusting it hid every authored PR during a GitHub incident.
+      const authored =
+        authoredSet.has(row.number) || (row.authorLogin ?? '').toLowerCase() === login;
       const reviewRequested = pendingSet.has(row.number);
       if (authored === row.authored && reviewRequested === row.reviewRequested) {
         continue;
@@ -1188,17 +1567,34 @@ class PRMonitorService extends EventEmitter {
    * Refresh just the given workspaces' PRs. Drains any in-flight full tick
    * first (and holds the same guard) so it can't race the background poll.
    */
-  async forcePollWorkspaces(workspaceIds: string[]): Promise<void> {
+  async forcePollWorkspaces(
+    workspaceIds: string[],
+    opts: { onListReady?: (outcome: RefreshOutcome) => void } = {}
+  ): Promise<void> {
     if (workspaceIds.length === 0) return;
     if (!(await this.drainInFlightTick())) return;
     if (!this.pollGuard.tryBegin()) return;
     try {
+      // Pass 1 for EVERY workspace before pass 2 for any: new PRs first.
+      const discoveries = new Map<string, WorkspaceDiscovery>();
       for (const workspaceId of workspaceIds) {
         try {
-          await this.pollWorkspace(workspaceId);
+          const discovery = await this.discoverWorkspace(workspaceId);
+          if (discovery) discoveries.set(workspaceId, discovery);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'unknown error';
-          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, msg);
+          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} refresh discovery failed:`, describeError(err));
+        }
+      }
+      opts.onListReady?.(refreshOutcome([...discoveries.values()]));
+      for (const workspaceId of workspaceIds) {
+        try {
+          const discovery = discoveries.get(workspaceId);
+          const result = await this.pollWorkspace(workspaceId, { discovery, streaming: true });
+          // One line per forced poll, because that is a person waiting on a
+          // button: it says whether the time went on the searches or on a repo.
+          console.log(describeForcedPoll(workspaceId, result, discovery));
+        } catch (err) {
+          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, describeError(err));
         }
       }
     } finally {
@@ -1212,13 +1608,55 @@ class PRMonitorService extends EventEmitter {
    * across every tenant's repos (that's what the unscoped {@link forcePoll}
    * does, which is why it's background/test-only).
    */
-  async forcePollForOwner(ownerId: string): Promise<void> {
+  /**
+   * Resolves with what pass 1 found when `untilListReady`, or with null when
+   * the Refresh did not run (another poll held the guard past the drain window,
+   * or there was nothing to poll).
+   */
+  async forcePollForOwner(
+    ownerId: string,
+    opts: { untilListReady?: boolean } = {}
+  ): Promise<RefreshOutcome | null> {
+    // Off the request's owner-scoped transaction, onto the pool, as every other
+    // poll runs. The upserts reach the DB through `getDbClient()`, which inside
+    // a request IS that transaction: one Refresh held a row lock on every PR it
+    // wrote until the response, stalled other writers of those rows on the 30 s
+    // statement timeout, and lost its writes when the client gave up and the
+    // scope closed (or a 30 s GitHub wait tripped the idle-in-transaction
+    // timeout). The owner check is the workspace list below, not RLS.
+    return runWithoutScope(() => this.forcePollForOwnerOnPool(ownerId, opts));
+  }
+
+  private async forcePollForOwnerOnPool(
+    ownerId: string,
+    opts: { untilListReady?: boolean }
+  ): Promise<RefreshOutcome | null> {
     const connected = new Set(githubService.getConnectedWorkspaces());
     const owned = await this.db
       .select({ id: workspacesTable.id })
       .from(workspacesTable)
       .where(eq(workspacesTable.ownerId, ownerId));
-    await this.forcePollWorkspaces(owned.map((r) => r.id).filter((id) => connected.has(id)));
+    const ids = owned.map((r) => r.id).filter((id) => connected.has(id));
+    if (ids.length === 0) return { repos: 0, failedRepos: 0, failure: null };
+    if (!opts.untilListReady) {
+      let outcome: RefreshOutcome | null = null;
+      await this.forcePollWorkspaces(ids, { onListReady: (o) => (outcome = o) });
+      return outcome;
+    }
+    // Answer once the new PRs are on the list. The rest of the refresh updates
+    // rows the client already holds, and reaches it as `pull_request:updated`.
+    return new Promise<RefreshOutcome | null>((resolve, reject) => {
+      let ready = false;
+      this.forcePollWorkspaces(ids, {
+        onListReady: (outcome) => {
+          ready = true;
+          resolve(outcome);
+        },
+      }).then(() => resolve(null), (err: unknown) => {
+        if (!ready) reject(err);
+        else console.error('PR monitor: forced poll failed after the list was ready:', describeError(err));
+      });
+    });
   }
 
   /**

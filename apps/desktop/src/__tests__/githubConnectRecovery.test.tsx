@@ -66,10 +66,12 @@ jest.mock('../renderer/lib/api', () => ({
     repositories: {
       forcePoll: async () => {
         rec().forcePoll += 1;
-        if (rec().release === null) return;
-        await new Promise<void>((resolve) => {
-          rec().release = resolve;
-        });
+        if (rec().release !== null) {
+          await new Promise<void>((resolve) => {
+            rec().release = resolve;
+          });
+        }
+        return { message: 'Poll triggered', skipped: false, repos: 1, failedRepos: 0, failure: null };
       },
     },
     posthog: { getStatus: async () => ({ connected: false }) },

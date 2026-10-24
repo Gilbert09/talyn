@@ -1,4 +1,5 @@
 import {
+  app,
   Menu,
   shell,
   BrowserWindow,
@@ -14,6 +15,22 @@ import {
 
 const SITE_URL = 'https://talyn.dev';
 const SUPPORT_URL = 'https://github.com/Gilbert09/talyn/issues';
+
+const isDevMenu = () =>
+  process.env.NODE_ENV === 'development' || process.env.DEBUG_PROD === 'true';
+
+// The dev menu keeps Cmd+R for a renderer reload: a relaunch there would
+// start a packaged-style process outside the webpack dev tooling.
+function restartItem(label: string): MenuItemConstructorOptions {
+  return {
+    label,
+    accelerator: isDevMenu() ? undefined : 'CmdOrCtrl+R',
+    click: () => {
+      app.relaunch();
+      app.quit();
+    },
+  };
+}
 
 export default class MenuBuilder {
   mainWindow: BrowserWindow;
@@ -100,6 +117,7 @@ export default class MenuBuilder {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
+        restartItem('Restart Talyn'),
         { role: 'quit', label: 'Quit Talyn' },
       ],
     };
@@ -228,6 +246,7 @@ export default class MenuBuilder {
               this.mainWindow.close();
             },
           },
+          restartItem('&Restart Talyn'),
         ],
       },
       {

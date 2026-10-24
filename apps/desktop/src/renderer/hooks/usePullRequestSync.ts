@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { useOnReconnect } from './useOnReconnect';
+import { toast } from '../stores/toast';
 import { useWorkspaceStore } from '../stores/workspace';
 import {
   usePullRequestStore,
@@ -35,9 +36,20 @@ export async function refreshPullRequests(
   // banner. Only an error from the list itself surfaces.
   let pollFailure: string | null = null;
   try {
-    await api.repositories.forcePoll();
+    const result = await api.repositories.forcePoll();
+    // Said out loud: the re-list below shows cached rows either way, so a
+    // refresh that did not happen looks exactly like one that found nothing.
+    if (result.skipped) {
+      toast.info('A refresh is already running', 'The list updates as it finishes.');
+    } else if (result.failedRepos && result.repos) {
+      toast.info(
+        `${result.failedRepos} of ${result.repos} repos couldn't be refreshed`,
+        result.failure ?? undefined
+      );
+    }
   } catch (err) {
     pollFailure = err instanceof Error ? err.message : 'Refresh failed';
+    toast.error("Couldn't refresh from GitHub", pollFailure);
   }
   try {
     const data = await api.pullRequests.list({

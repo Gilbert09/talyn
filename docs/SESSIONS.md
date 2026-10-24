@@ -24,6 +24,117 @@ Open PRs keep their branch checkout rules. Closed PRs leave the session branch a
 The link dialog now has one search field, a filter for closed PRs, and keyboard selection.
 Link errors appear in the dialog so the user can try again.
 
+## A GitHub search incident took the authored PRs off the list (2026-10-22)
+
+During a GitHub incident ("Errors loading Issues, Pull Requests, and search results"), most of the authored PRs left the PR list. They came back when GitHub recovered.
+
+**Cause.** The poll rewrites the `authored` and `reviewRequested` flags from the search results. The per-repo search ignored `incomplete_results`, so a partial answer counted as the full list. `reconcileRelationshipFlags` then set `authored` to false on every PR the search left out. The sweep did not close the rows, because a GraphQL lookup protects it. The rows stayed open but left the "PRs" tab.
+
+**Fix.**
+- `searchPullRequestNumbers` now throws on `incomplete_results`. `pollRepo` then refreshes the tracked rows and keeps their flags, as for any search failure. The batched search already skipped an incomplete chunk.
+- A PR whose summary author is the viewer keeps `authored`, whatever the search says, in the reconcile pass and in the upsert. The author of a PR does not change. The login comes from `last_summary ->> 'author'` in SQL, so the summary blob does not ship.
+
+**Still open.** `reviewRequested` has no equivalent guard. A degraded search that answers 200 with no `incomplete_results` flag can still clear review requests until the next good poll.
+
+## A spent REST budget paused every GitHub call, and Refresh said nothing (2026-10-22)
+
+Tom's PR PostHog/secrets#77 opened at 11:34 and did not reach the list, even
+after a Refresh. His `core` REST budget had run out at about 11:33. A REST
+403 with `x-ratelimit-remaining: 0` set the account's rate gate to `'all'`, so
+GraphQL (4,499 points left) and search (30 left) were refused too. The
+webhook refresh for #77, one GraphQL call, was among them. The Refresh failed on
+all 13 repos in 0.3 s and the button still reported success.
+
+**The gate now pauses only the budget that ran out.** `parseRateLimitResponse`
+returns a `scope`: `x-ratelimit-resource` names a primary budget (`core` →
+`'rest'`, `search` → `'search'`, `graphql` → `'graphql'`). A secondary limit
+(429, `retry-after`, or the "secondary rate limit" body) is still `'all'`, and so
+is a primary limit with a missing or unfamiliar resource name. `search` is a new
+scope because `/search/*` is REST on the wire with its own budget.
+`apiKindForEndpoint` picks the kind in `apiRequest`. Settings → Developer still
+shows only the REST and GraphQL pauses, not search.
+
+**A Refresh now says when it did not work.** Pass 1 records each repo it could
+not search or fetch. `POST /repositories/poll` answers 503 with a sentence when
+it reached GitHub for NO repo (a rate limit says when to try again), 200 with
+`failedRepos` and the first reason when some failed, and `skipped: true` when
+another poll held the guard. Both apps show it as a toast.
+
+**What spends the budget is not known yet.** Measured at 11:50–11:52: about 75
+REST calls a minute, about 4,500 an hour. Reading the code ranked the merge
+queue's group walks first (`rerequest_failed_checks` and `fire_fix_run` repeat
+REST with no cooldown when the result is a no-op or a task-limit deferral), then
+the webhook access index (`canAccessRepository`, cached 60 s, about 750 an hour
+for 13 repos), then the auto-keep watcher's `readFailingChecks` before a
+deferred dispatch. `githubRestUsage.ts` now logs, every 5 minutes, the top REST
+endpoint shapes for any account on pace for half its hourly budget
+(`[github-rest] …`). Fix the real top consumer from that line, not from the
+ranking above.
+
+Two related decisions are Tom's and were left alone. The access cache's 60 s
+lifetime is a security bound (a revoked permission must stop admitting webhook
+data within a minute). And while REST is paused, `canAccessRepository` fails as
+"unavailable", so every webhook for the account is dropped until the pause ends.
+
+## Refresh ran past the client timeout after a restart (2026-10-22)
+
+After a production restart, Tom pressed Refresh. `POST /repositories/poll` ran
+for 300 s and the client gave up (`499 300010ms` in the Railway HTTP log). The
+button then re-read the cached list, so nothing changed. Other requests in that
+window were fast, so the time was inside the poll of his own workspaces.
+
+**The searches were one known cost.** The poll ran 3 or 4 GitHub searches per
+watched repo, one after another, against a budget of 30 a minute per account.
+Tom's 13 repos cost about 40–50 searches, which is about 1.5 minutes at the limit.
+`searchRelationshipsBatched` now runs each search once per workspace, with one
+`repo:` qualifier per watched repo. `searchPullRequestNumbersByRepo` groups the
+results by `repository_url`. Three rules carry it:
+- **A chunk falls back to the per-repo searches** when its search fails, comes back
+  partial (`incomplete_results`), or has more than GitHub's 1,000 results.
+- **A repo with no results and tracked open rows asks per repo.** GitHub silently
+  leaves out a repo the credential cannot see when a query names several. Reading
+  that silence as "no open PRs" would clear Mine / Review on every tracked row.
+- **The limit is the URL, not the qualifier count.** Measured: a 200-repo query
+  (about 7.2 KB encoded) worked, and a 300-repo one returned 414.
+  `BATCH_SEARCH_MAX_QUERY_BYTES` is 6 KB.
+
+What is lost: a repo the App cannot see, with no tracked rows, no longer logs the
+"grant access" notice. It had nothing on the list either way.
+
+**The searches do not explain 5 minutes, and the cause of the rest is not known.**
+One poll write failed at 10:01:01 (`update "pull_requests" set "state" …`), and
+the log line had dropped its cause. The likely suspect is the row-lock wait of
+2026-10-12, with a webhook backlog after the outage. That is not confirmed. The
+poll's error logs now print `describeError(err)`. Each forced poll logs one line
+(`forced poll of workspace … took …, searches …, slowest: …`). The next slow
+Refresh will show where the time went.
+
+**Later that day: the Refresh wrote through the request's transaction.** With
+the batched searches deployed, a Refresh still ran for minutes and never logged
+its timing line. `upsertFromBatchResult` reaches the DB through `getDbClient()`,
+and inside a request that is the owner-scoped TRANSACTION, not the pool. So one
+Refresh held a row lock on every PR it wrote until the response. Other writers
+of those rows waited up to the 30 s statement timeout, which is probably the
+failed `UPDATE` above. When the client gave up at 300 s, the scope closed and the
+poll went on writing through a finished transaction. A GitHub wait over 30 s
+could also trip the idle-in-transaction timeout and roll the writes back. Either
+way the list did not change. `forcePollForOwner` now runs in `runWithoutScope`,
+as every other poll does. The owner check is the workspace list it polls, not RLS.
+
+**A Refresh now answers when the NEW PRs are on the list** (Tom's ask: "prioritise
+getting the PRs into the list, even if they're in an unknown state"). Pass 1
+(`discoverWorkspace`) runs the searches and fetches only the PR numbers with no
+open row. It writes each GraphQL chunk as it lands (`onChunk` on
+`batchPullRequestsByNumber`) and hands UNKNOWN mergeability to the deferred
+settler instead of retrying inline. The HTTP request returns after pass 1 for
+every workspace. Pass 2 is the old full poll (refresh, close-out, flags), reusing
+pass 1's searches. It runs in the background under the same poll guard, writes
+chunks as they land, and reaches the client as `pull_request:updated`. The
+reconcile sweep is unchanged: it still resolves mergeability inline, because no
+person waits on it. Measured for scale: one 5-PR batch against PostHog/posthog
+takes about 5.3 s, and Tom has about 124 open PRs there (34 authored, 90
+review-requested).
+
 ## Images in sandbox sessions (2026-10-21)
 
 The desktop can upload pasted, dropped, and selected images to a ready sandbox.

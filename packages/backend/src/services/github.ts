@@ -22,10 +22,12 @@ import {
   githubRateGate,
   GitHubRateLimitError,
   parseRateLimitResponse,
+  apiKindForEndpoint,
   graphqlPrimaryLimitResetMs,
   PRIMARY_LIMIT_FALLBACK_MS,
 } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
+import { githubRestUsage, endpointShape } from './githubRestUsage.js';
 import {
   isGitHubAppConfigured,
   refreshUserToken,
@@ -239,6 +241,15 @@ export function resolveRepoRelativePath(symlinkPath: string, target: string): st
     }
   }
   return parts.length > 0 ? parts.join('/') : null;
+}
+
+/**
+ * The lower-cased `owner/repo` of a search item's `repository_url`
+ * (`https://api.github.com/repos/{owner}/{repo}`), or null for anything else.
+ */
+export function repoKeyFromApiUrl(url: string | undefined): string | null {
+  const match = url ? /\/repos\/([^/]+)\/([^/]+)\/?$/.exec(url) : null;
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
 }
 
 /** How many chained symlinks the contents helpers will traverse. */
@@ -1339,16 +1350,21 @@ class GitHubService extends EventEmitter {
     }
 
     const accountKey = this.accountKeyFor(workspaceId);
-    // Pause behind any active backoff that covers REST for this account (the
-    // shared secondary limit, or a REST primary-budget block) before adding to
-    // the load. A GraphQL-only exhaustion does NOT gate REST — that's what keeps
-    // the merge queue merging while the poll loops' GraphQL budget is drained.
+    // Pause behind any active backoff that covers this request's budget (the
+    // shared secondary limit, or that budget's own primary block) before adding
+    // to the load. A GraphQL-only exhaustion does NOT gate REST — that's what
+    // keeps the merge queue merging while the poll loops' GraphQL budget is
+    // drained — and search and core gate each other no more than GraphQL does.
     // Throws if the wait would be too long.
-    await githubRateGate.waitIfBlocked(accountKey, 'rest');
+    const kind = apiKindForEndpoint(endpoint);
+    await githubRateGate.waitIfBlocked(accountKey, kind);
 
     const method = (options.method ?? 'GET').toUpperCase();
     const url = `${GITHUB_API_URL}${endpoint}`;
     const startedAt = Date.now();
+    if (kind === 'rest') {
+      for (const line of githubRestUsage.record(accountKey, endpointShape(method, endpoint))) console.warn(line);
+    }
 
     let response: TimedResponse;
     try {
@@ -1382,6 +1398,7 @@ class GitHubService extends EventEmitter {
           accountKey,
           Date.now() + rl.retryAfterMs,
           `${method} ${redactUrl(url)}`,
+          rl.scope,
         );
       }
       // GitHub stamps every response with a per-request trace id; it's the
@@ -2460,12 +2477,67 @@ class GitHubService extends EventEmitter {
         });
         const res = await this.apiRequest<{
           total_count: number;
+          incomplete_results?: boolean;
           items: Array<{ number: number }>;
         }>(workspaceId, `/search/issues?${params}`);
+        // A partial answer is not "these are all of them". The caller rewrites
+        // relationship flags from it, so during a GitHub search incident it
+        // took every authored PR of a repo off the list (2026-10-22).
+        if (res.incomplete_results) {
+          throw new Error(`GitHub search returned incomplete results for: ${query}`);
+        }
         out.push(...res.items.map((i) => i.number));
         if (res.items.length < 100) break;
       }
       return out;
+    });
+  }
+
+  /**
+   * The same search across SEVERAL repos at once (a query with many `repo:`
+   * qualifiers), with the numbers grouped by the repo each came from. The key
+   * is the lower-cased `owner/repo`, because GitHub's casing need not match the
+   * watched row's.
+   *
+   * `complete` is false when GitHub says the answer may be partial: a search
+   * that timed out (`incomplete_results`), or one with more matches than the
+   * 1,000 it will return. A caller must not read a missing number as "not open"
+   * then. Note what this does NOT report: GitHub silently leaves out a repo the
+   * credential cannot see when a query names several, so no results for a repo
+   * is not proof the repo is reachable.
+   */
+  async searchPullRequestNumbersByRepo(
+    workspaceId: string,
+    query: string
+  ): Promise<{ byRepo: Map<string, number[]>; complete: boolean }> {
+    return this.serializeByAccount(this.accountKeyFor(workspaceId), async () => {
+      const byRepo = new Map<string, number[]>();
+      let complete = true;
+      for (let page = 1; page <= 10; page++) {
+        const params = new URLSearchParams({
+          q: query,
+          per_page: '100',
+          page: String(page),
+        });
+        const res = await this.apiRequest<{
+          total_count: number;
+          incomplete_results?: boolean;
+          items: Array<{ number: number; repository_url?: string }>;
+        }>(workspaceId, `/search/issues?${params}`);
+        if (res.incomplete_results || res.total_count > 1000) complete = false;
+        for (const item of res.items) {
+          const key = repoKeyFromApiUrl(item.repository_url);
+          if (!key) {
+            complete = false;
+            continue;
+          }
+          const list = byRepo.get(key);
+          if (list) list.push(item.number);
+          else byRepo.set(key, [item.number]);
+        }
+        if (res.items.length < 100) break;
+      }
+      return { byRepo, complete };
     });
   }
 
@@ -3094,9 +3166,9 @@ class GitHubService extends EventEmitter {
       // gated tick retries once the window clears.
       const rl = parseRateLimitResponse(response, response.bodyText);
       if (rl.isRateLimited) {
-        // A secondary/abuse 403/429 is the SHARED throttle — gate all APIs
-        // ('all' scope, the default), not just GraphQL.
-        githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql secondary rate limit');
+        // A secondary/abuse 403/429 is the SHARED throttle, so `rl.scope` is
+        // 'all' and it gates every API, not just GraphQL.
+        githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql rate limit', rl.scope);
         recordGql(false, 'secondary rate limit');
         throw new GitHubRateLimitError('GitHub GraphQL rate-limited', rl.retryAfterMs);
       }
