@@ -21,6 +21,7 @@ import {
 import { runWithoutScope } from '../../db/client.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
+import { notifyPrSessionChanged } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
@@ -212,6 +213,8 @@ async function afterTurn(chat: ChatRow | null): Promise<void> {
     wb = await refreshDiffStat(wb);
     const linked = await linkPullRequest(wb);
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
+    // The turn may have fixed the PR, so the merge queue and auto-keep look again.
+    if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
   } catch (err) {
     console.warn(`[workbench] after-turn refresh for chat ${chat.id} failed:`, err);
   }

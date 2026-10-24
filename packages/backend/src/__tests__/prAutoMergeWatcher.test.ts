@@ -24,6 +24,7 @@ import {
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
   mergeQueueEntries,
+  workbenches as workbenchesTable,
 } from '../db/schema.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
@@ -1242,5 +1243,93 @@ describe('prAutoMergeWatcher', () => {
     await prAutoMergeWatcher.runOnce();
 
     expect(await countTasks(db)).toBe(0);
+  });
+
+  describe('a live session on the PR', () => {
+    async function insertSession(prId: string, over: Record<string, unknown> = {}) {
+      await db.insert(workbenchesTable).values({
+        id: 'wb1',
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        repoFullName: 'a/b',
+        name: 'paris',
+        branch: 'feat',
+        baseBranch: 'main',
+        runtime: 'sandbox',
+        agent: 'claude',
+        status: 'ready',
+        pullRequestId: prId,
+        ...over,
+      });
+    }
+    type SessionState = {
+      attempts: number;
+      sessionHold?: { workbenchId: string; name: string; at: string };
+    };
+
+    it('waits instead of firing, with a note and no attempt spent', async () => {
+      const prId = await insertPr(db);
+      await insertSession(prId);
+
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(0);
+      const state = (await getPr(db, prId)).autoMergeState as SessionState;
+      expect(state.attempts).toBe(0);
+      expect(state.sessionHold).toMatchObject({ workbenchId: 'wb1', name: 'paris' });
+    });
+
+    it('writes the note once, not on every tick', async () => {
+      const prId = await insertPr(db);
+      await insertSession(prId);
+      await prAutoMergeWatcher.runOnce();
+      const first = ((await getPr(db, prId)).autoMergeState as SessionState).sessionHold!.at;
+
+      await prAutoMergeWatcher.runOnce();
+
+      expect(((await getPr(db, prId)).autoMergeState as SessionState).sessionHold!.at).toBe(first);
+      expect(await countTasks(db)).toBe(0);
+    });
+
+    it('fires on the next tick once the session is archived, and clears the note', async () => {
+      const prId = await insertPr(db);
+      await insertSession(prId);
+      await prAutoMergeWatcher.runOnce();
+
+      await db
+        .update(workbenchesTable)
+        .set({ archivedAt: new Date(), status: 'archived' })
+        .where(eq(workbenchesTable.id, 'wb1'));
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(1);
+      expect(((await getPr(db, prId)).autoMergeState as SessionState).sessionHold).toBeUndefined();
+    });
+
+    it('ignores an archived session from the start', async () => {
+      const prId = await insertPr(db);
+      await insertSession(prId, { archivedAt: new Date(), status: 'archived' });
+
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(1);
+    });
+
+    it('clears the note when the session makes the PR clean', async () => {
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        autoMergeState: {
+          attempts: 0,
+          accounted: true,
+          sessionHold: { workbenchId: 'wb1', name: 'paris', at: new Date().toISOString() },
+        },
+      });
+      await insertSession(prId);
+
+      await prAutoMergeWatcher.runOnce();
+
+      expect(((await getPr(db, prId)).autoMergeState as SessionState).sessionHold).toBeUndefined();
+      expect(await countTasks(db)).toBe(0);
+    });
   });
 });

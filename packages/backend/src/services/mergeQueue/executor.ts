@@ -84,6 +84,7 @@ import { debugBus } from '../debugBus.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { decide } from './decide.js';
 import { codeReviewBlockerFor } from '../codeReview/queueGate.js';
+import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
 import { githubHealthMonitor } from '../githubHealthMonitor.js';
 import { toPublicMergeQueue } from './legacy.js';
 import {
@@ -312,7 +313,7 @@ async function buildBaseContext(
   input: EvaluateEntryInput
 ): Promise<DecisionContext> {
   const accountKey = githubService.accountKeyFor(pr.workspaceId);
-  const [ourFix, otherFix, signingRequired, cloudEnv] = await Promise.all([
+  const [ourFix, otherFix, signingRequired, cloudEnv, liveSession] = await Promise.all([
     entry.fixTaskId ? linkedTaskRun(entry.fixTaskId) : Promise.resolve(null),
     // "Is something OTHER than our own fix run working this PR?" — asked
     // tasks-by-PR rather than through `pull_requests.task_id`, which holds only
@@ -322,6 +323,8 @@ async function buildBaseContext(
     // decide proceeds — the merge's 403 safety net catches a real requirement.
     requiresSignedCommits(pr.workspaceId, pr.owner, pr.repo, entry.baseBranch).catch(() => null),
     (input.walkReads?.cloudEnv ?? resolveCloudEnv)(pr.workspaceId),
+    // A live session works this PR: the queue must not fire a fix run of its own.
+    liveWorkbenchForPr(pr.workspaceId, pr.id),
   ]);
   const graphqlGateBlocked = githubRateGate.isBlocked(accountKey, 'graphql');
   const graphqlBudgetLow = graphqlBudget.shouldDefer(accountKey);
@@ -440,6 +443,7 @@ async function buildBaseContext(
       ((pr.lastSummary ?? {}) as { headSha?: string }).headSha ?? null
     ),
     otherLinkedTaskActive: otherFix !== null,
+    liveSession: liveSession ? { id: liveSession.id, name: liveSession.name } : null,
     signingRequired,
     autoMergeCapability,
     externalGate,

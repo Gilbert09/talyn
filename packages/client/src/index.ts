@@ -1060,6 +1060,12 @@ export interface PRRow {
      * PR's blockers change — so the UI must not say "gave up".
      */
     needsHuman?: { reason: string; since: string } | null;
+    /**
+     * Set while the watcher waits because a live session is working this PR.
+     * No attempt is spent; it fires again once the session is archived.
+     * Absent on an older backend.
+     */
+    waitingOnSession?: { name: string; reason: string; since: string } | null;
   } | null;
   /** True when this PR is in the Talyn merge queue (merges one-by-one per
    *  repo+base, auto-fixing conflicts via a cloud run). */

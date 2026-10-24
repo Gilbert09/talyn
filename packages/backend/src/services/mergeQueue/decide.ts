@@ -42,6 +42,13 @@ import type {
 } from './types.js';
 import type { StackParent } from './stack.js';
 
+export function sessionActiveBlockReason(name: string): string {
+  return (
+    `The session "${name}" is working on this pull request, so the merge queue starts no fix run. ` +
+    'It merges the pull request once it is clean, or fixes it itself after the session is archived.'
+  );
+}
+
 export const DRAFT_BLOCK_REASON =
   'This PR is a draft — mark it ready for review and the merge queue will merge it automatically.';
 
@@ -1419,8 +1426,34 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     d.ensure('queued');
     return d.done('hold');
   }
+  const sessionPark = parkForSession(d, ctx);
+  if (sessionPark) return sessionPark;
   d.act({ kind: 'fire_fix_run', resign: false });
   return d.done('hold');
+}
+
+/**
+ * A live session is working this PR, so the queue starts no fix run of its own:
+ * two agents pushing to one branch is the collision `activePrTaskId` prevents
+ * between tasks. Park, spend no attempt, send no notification, and END THE WALK
+ * (the caller returns this) so nothing later fires the run on the same pass.
+ */
+function parkForSession(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
+  const session = ctx.liveSession;
+  if (!session) return null;
+  if (d.entry.status !== 'blocked' || d.entry.blockedCode !== 'session_active') {
+    const reason = sessionActiveBlockReason(session.name);
+    d.transition('blocked', {
+      blockedCode: 'session_active',
+      blockedReason: reason,
+      event: {
+        code: 'session_active',
+        message: reason,
+        detail: { workbenchId: session.id },
+      },
+    });
+  }
+  return d.done('advance');
 }
 
 // ── Sub-deciders ──
@@ -1844,6 +1877,22 @@ function decideExternalEjection(
     !signatureSeen(d.entry, blockerSignature(pr)) &&
     ctx.cloudEnvAvailable
   ) {
+    if (ctx.liveSession) {
+      // The session gets the failure instead. Drop the submission so the PR
+      // goes through the ordinary rules once the session lets go of it.
+      d.transition('blocked', {
+        blockedCode: 'session_active',
+        blockedReason: sessionActiveBlockReason(ctx.liveSession.name),
+        set: { externalSubmitVia: null, externalSubmittedAt: null, externalState: ext.state },
+        event: {
+          code: 'session_active',
+          message: sessionActiveBlockReason(ctx.liveSession.name),
+          detail: { workbenchId: ctx.liveSession.id, evidence: ext.evidence },
+        },
+      });
+      d.act({ kind: 'disarm_automerge' });
+      return d.done('advance');
+    }
     d.transition('queued', {
       set: {
         externalSubmitVia: null,
@@ -2265,6 +2314,25 @@ function decideBlockedGate(
     return d.done('advance');
   }
 
+  if (code === 'session_active') {
+    // Waiting on a session. Clean now → merge what it fixed. Session gone →
+    // back in line, and the ordinary rules decide whether a run is needed.
+    // After an external queue FAILED this commit the PR reads clean on its own
+    // branch, so only a new push (R2) or the session's end releases it.
+    if (ctx.liveSession && d.entry.externalState === 'failed') return d.done('advance');
+    if (!queueBlockedFor(pr, ctx)) return null;
+    if (ctx.liveSession) return d.done('advance');
+    d.transition('queued', {
+      blockedCode: null,
+      blockedReason: null,
+      event: {
+        code: 'session_released',
+        message: 'No session is working this PR any more — back in line.',
+      },
+    });
+    return null;
+  }
+
   if (code === 'no_progress' || code === 'attempts_exhausted') {
     // Remediation stopped moving the problem ('attempts_exhausted' is the same
     // state on entries blocked before the progress rule shipped) — wait for a
@@ -2380,6 +2448,8 @@ function dispatchResign(d: DecisionBuilder, ctx: DecisionContext, runActive: boo
     return d.done('advance');
   }
   if (d.entry.resignAttempts < ctx.maxAttempts) {
+    const sessionPark = parkForSession(d, ctx);
+    if (sessionPark) return sessionPark;
     d.act({ kind: 'fire_fix_run', resign: true });
     return d.done('advance');
   }

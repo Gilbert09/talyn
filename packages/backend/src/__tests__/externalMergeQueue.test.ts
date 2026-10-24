@@ -992,6 +992,9 @@ describe('queueBlockNeedsHuman', () => {
   const EXPECTED: Record<BlockedCode, boolean> = {
     awaiting_human_check: true,
     agent_needs_human: true,
+    code_review_blocker: true,
+    // The person's own session is working the PR; clears when it lets go.
+    session_active: true,
     // Budgets genuinely spent on this head.
     attempts_exhausted: false,
     no_progress: false,

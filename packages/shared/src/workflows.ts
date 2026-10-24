@@ -452,6 +452,8 @@ export type WorkflowActionFailureCode =
   | 'rate_gated'
   | 'no_cloud_provider'
   | 'task_already_running'
+  /** A live session is working this PR, so no run is started beside it. */
+  | 'session_active'
   | 'skill_unavailable'
   | 'pr_not_tracked'
   | 'not_open'

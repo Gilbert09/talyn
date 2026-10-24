@@ -4,6 +4,7 @@ import { resolveWorkbenchActionPrompt, type WorkbenchNextAction, type WorkbenchP
 import { getPoolDbClient } from '../../db/client.js';
 import { prCheckStates, pullRequests as prTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
+import { activePrTaskId } from '../prCloudFix.js';
 import { emitWorkbenchChat } from './emit.js';
 import { localRuntimeError, WorkbenchError } from './errors.js';
 import { archiveWorkbench } from './lifecycle.js';
@@ -50,6 +51,17 @@ export async function runWorkbenchAction(
   }
   if (!PROMPT_ACTIONS.has(action)) {
     throw new WorkbenchError(`Unknown action "${action}".`, 400, 'bad_action');
+  }
+  // A cloud task already pushing to this PR's branch would collide with the
+  // session's own fix. One agent per PR, either way round.
+  if ((action === 'fix_checks' || action === 'resolve_conflicts') && row.pullRequestId) {
+    if (await activePrTaskId(row.workspaceId, row.pullRequestId)) {
+      throw new WorkbenchError(
+        'A cloud task is already working on this pull request. Stop it, or wait for it to finish.',
+        409,
+        'task_active',
+      );
+    }
   }
   // A local workbench runs its own turns; the desktop resolves the same
   // prompt from `@talyn/shared` and sends it there.

@@ -50,16 +50,30 @@ export interface DomainPrChecksEvent {
   checks: CheckBreakdown;
 }
 
+/**
+ * A session's hold on a pull request may have changed: a turn ended, or the
+ * session was linked, unlinked, archived or deleted. Background fix runs stand
+ * down while a live session works the PR, so this is their cue to look again.
+ */
+export interface DomainPrSessionEvent {
+  workspaceId: string;
+  prId: string;
+  trigger: string;
+}
+
 interface DomainEvents {
   on(event: 'task:status', listener: (evt: DomainTaskStatusEvent) => void): DomainEventEmitter;
   on(event: 'pr:snapshot', listener: (evt: DomainPrSnapshotEvent) => void): DomainEventEmitter;
   on(event: 'pr:checks', listener: (evt: DomainPrChecksEvent) => void): DomainEventEmitter;
+  on(event: 'pr:session', listener: (evt: DomainPrSessionEvent) => void): DomainEventEmitter;
   off(event: 'task:status', listener: (evt: DomainTaskStatusEvent) => void): DomainEventEmitter;
   off(event: 'pr:snapshot', listener: (evt: DomainPrSnapshotEvent) => void): DomainEventEmitter;
   off(event: 'pr:checks', listener: (evt: DomainPrChecksEvent) => void): DomainEventEmitter;
+  off(event: 'pr:session', listener: (evt: DomainPrSessionEvent) => void): DomainEventEmitter;
   emit(event: 'task:status', evt: DomainTaskStatusEvent): boolean;
   emit(event: 'pr:snapshot', evt: DomainPrSnapshotEvent): boolean;
   emit(event: 'pr:checks', evt: DomainPrChecksEvent): boolean;
+  emit(event: 'pr:session', evt: DomainPrSessionEvent): boolean;
 }
 
 class DomainEventEmitter extends EventEmitter implements DomainEvents {}

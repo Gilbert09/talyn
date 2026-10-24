@@ -150,6 +150,14 @@ export type BlockedCode =
    * unlike `agent_needs_human` it needs no blocker-signature bookkeeping.
    */
   | 'code_review_blocker'
+  /**
+   * A live session (a non-archived workbench) is working this PR, and the
+   * queue would otherwise have started a fix run on it. Two agents pushing to
+   * one branch is the collision `activePrTaskId` exists to stop, so the queue
+   * waits. Costs no fix attempt. Self-heals when the session is archived or
+   * unlinked; a PR the session made clean merges straight from here.
+   */
+  | 'session_active'
   /** Re-sign budget spent on a signed-commits-required base. Self-heals on a new head. */
   | 'unsigned_commits'
   /**
@@ -429,6 +437,11 @@ export interface DecisionContext {
    * wedge every entry the first time an older replica built a context.
    */
   codeReviewBlocker?: { reason: string } | null;
+  /**
+   * The live session working this PR, or null. Absent on a context built
+   * before this existed, and absent means "no session", like the field above.
+   */
+  liveSession?: { id: string; name: string } | null;
   /**
    * Another run is linked to the PR (`pull_requests.taskId` differs from our
    * fixTaskId and is active) — a manual task or the keep-mergeable watcher.

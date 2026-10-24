@@ -25,6 +25,7 @@ import {
   tasks as tasksTable,
   mergeQueueEntries,
   mergeQueueEvents,
+  workbenches as workbenchesTable,
 } from '../../db/schema.js';
 import { registerCloudProvider } from '../../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../../services/cloudProviders/posthog/provider.js';
@@ -1286,6 +1287,43 @@ describe('mergeQueue v2 pipeline', () => {
 
       await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
       expect(await entryOf(db, prId)).toBeNull();
+    });
+  });
+
+  describe('a live session on the PR', () => {
+    async function insertSession(prId: string) {
+      await db.insert(workbenchesTable).values({
+        id: 'wb1', workspaceId: 'ws1', repositoryId: 'repo1', repoFullName: 'a/b', name: 'paris',
+        branch: 'feat', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready',
+        pullRequestId: prId,
+      });
+    }
+
+    it('parks on session_active and starts no fix run', async () => {
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).not.toHaveBeenCalled();
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('blocked');
+      expect(entry?.blockedCode).toBe('session_active');
+      expect(entry?.blockedReason).toContain('"paris"');
+      expect(entry?.fixAttempts).toBe(0);
+    });
+
+    it('a pr:session event merges what the session made clean', async () => {
+      initMergeQueueTriggers();
+      const { prId } = await insertQueuedPr(db, {
+        entry: { status: 'blocked', blockedCode: 'session_active', blockedReason: 'x' },
+      });
+      await insertSession(prId);
+
+      domainEvents.emit('pr:session', { workspaceId: 'ws1', prId, trigger: 'session:turn_end' });
+
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
     });
   });
 

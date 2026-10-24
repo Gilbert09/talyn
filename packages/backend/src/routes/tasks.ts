@@ -6,6 +6,7 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { createCloudTask, TaskReferenceError } from '../services/taskCreate.js';
+import { liveWorkbenchForPr, prHasSessionBody } from '../services/workbenches/prSessions.js';
 import {
   ACTIVE_TASK_STATUSES,
   assertCanActivateTask,
@@ -226,6 +227,14 @@ export function taskRoutes(): Router {
         error:
           'repositoryId is required. Add a repository in Settings, then pick it when creating the task.',
       });
+    }
+
+    // The PR panel's Fix is a `pr_response` with no skill. With a live session
+    // on the PR the fix belongs in that session's chat; a new client routes it
+    // there itself, and this catches a stale row or an older client.
+    if (body.type === 'pr_response' && body.pullRequestId && !body.skill) {
+      const session = await liveWorkbenchForPr(body.workspaceId, body.pullRequestId);
+      if (session) return res.status(409).json(prHasSessionBody(session));
     }
 
     try {

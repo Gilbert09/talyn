@@ -20,6 +20,7 @@ import { githubRateGate, GitHubRateLimitError } from '../services/githubRateGate
 import { prMonitorService } from '../services/prMonitor.js';
 import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
+import * as prSessions from '../services/workbenches/prSessions.js';
 import * as taskCreate from '../services/taskCreate.js';
 import { TaskLimitError } from '../services/billing/entitlements.js';
 import * as analytics from '../services/analytics.js';
@@ -388,6 +389,28 @@ describe('workflow engine', () => {
       const [run] = await db.select().from(runsTable);
       expect(run?.status).toBe('failed');
       expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('task_already_running');
+    });
+
+    it.each([
+      ['run_prompt', { type: 'run_prompt', prompt: 'Review this' }],
+      ['run_skill', { type: 'run_skill', skillKey: 'platform:1' }],
+    ] as const)('%s stands down beside a live session, saying why', async (_name, action) => {
+      vi.spyOn(prSessions, 'liveWorkbenchForPr').mockResolvedValue({
+        id: 'wb-1',
+        name: 'paris',
+        status: 'ready',
+      });
+      const create = vi.spyOn(taskCreate, 'createCloudTask');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await addWorkflow({ actions: [action as any] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(create).not.toHaveBeenCalled();
+      const [run] = await db.select().from(runsTable);
+      const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
+      expect(outcome?.code).toBe('session_active');
+      expect(outcome?.error).toContain('"paris"');
     });
 
     it('keeps the outcome when the task it links to has vanished', async () => {

@@ -2948,6 +2948,22 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       expect(lastTransition(d)!.event.code).toBe('external_queue_failed_fixing');
     });
 
+    it('parks on a live session instead of dispatching the queue-failure run', () => {
+      const d = decide(
+        submitted(),
+        trunkPr('trunk-failed'),
+        ctx({ externalGate: 'confirmed', liveSession: { id: 'wb1', name: 'paris' } })
+      );
+      expect(kinds(d)).not.toContain('fire_fix_run');
+      expect(kinds(d)).not.toContain('submit_external');
+      expect(kinds(d)).toContain('disarm_automerge');
+      const t = lastTransition(d)!;
+      expect(t.to).toBe('blocked');
+      expect(t.blockedCode).toBe('session_active');
+      expect(t.set?.externalSubmitVia).toBeNull();
+      expect(d.verdict).toBe('advance');
+    });
+
     // An `ejected` state means the queue never tested the PR: a push landed on
     // it, or it waited too long to become mergeable. Nothing was learned about
     // the code, so those still go round again rather than paying for a run.
@@ -3836,5 +3852,79 @@ describe('decide — merge stack, batch submission', () => {
       expect(lastTransition(d)?.to).toBe('blocked_manual');
       expect(kinds(d)).toContain('notify_blocked');
     });
+  });
+});
+
+describe('decide — a live session holds back fix runs', () => {
+  const session = { id: 'wb1', name: 'paris' };
+  const parked = (o: Partial<EntrySnapshot> = {}) =>
+    entry({ status: 'blocked', blockedCode: 'session_active', blockedReason: 'x', ...o });
+
+  it('parks a blocked PR on session_active instead of firing, spending nothing', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ liveSession: session }));
+    expect(fixRun(d)).toBeUndefined();
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('session_active');
+    expect(t.blockedReason).toContain('"paris"');
+    expect(t.set?.fixAttempts).toBeUndefined();
+    // Nothing failed and nothing was given up on.
+    expect(kinds(d)).not.toContain('notify_blocked');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it.each([
+    ['absent', {}],
+    ['null', { liveSession: null }],
+  ])('fires as before when the session field is %s', (_label, over) => {
+    const d = decide(entry(), conflictingPr(), ctx(over));
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+  });
+
+  it('stays parked, writing nothing, while the session lives and the PR is blocked', () => {
+    const d = decide(parked(), conflictingPr(), ctx({ liveSession: session }));
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('merges a PR the session made clean', () => {
+    const d = decide(parked(), cleanPr(), ctx({ liveSession: session }));
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('goes back in line and fires once the session lets go', () => {
+    const d = decide(parked(), conflictingPr(), ctx({ liveSession: null }));
+    expect(transitions(d)[0].event.code).toBe('session_released');
+    expect(transitions(d)[0].to).toBe('queued');
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+  });
+
+  it('holds a clean-reading PR the external queue failed, until a push or the session ends', () => {
+    const d = decide(parked({ externalState: 'failed' }), cleanPr(), ctx({ liveSession: session }));
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('is released by a new push, which resets the park', () => {
+    const d = decide(parked({ headSha: 'old' }), pr({ headSha: 'new' }), ctx({ liveSession: session }));
+    expect(kinds(d)).toContain('reset_budgets');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+
+  it('does not fire a re-sign run beside a session', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true, unsignedCount: 2, liveSession: session }));
+    expect(fixRun(d)).toBeUndefined();
+    expect(lastTransition(d)!.blockedCode).toBe('session_active');
+  });
+
+  it('still holds an active run as fixing rather than parking on the session', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'active', liveSession: session })
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(lastTransition(d)?.blockedCode).not.toBe('session_active');
   });
 });

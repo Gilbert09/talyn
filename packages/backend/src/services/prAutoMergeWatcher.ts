@@ -33,6 +33,7 @@ import { debugBus } from './debugBus.js';
 import { captureWorkspaceEvent } from './analytics.js';
 import { TickGuard } from './tickGuard.js';
 import { activePrTaskId, resolveCloudEnv } from './prCloudFix.js';
+import { liveWorkbenchForPr, sessionHoldReason } from './workbenches/prSessions.js';
 import {
   workspacePromptTemplate,
   workspaceRespondToHumanComments,
@@ -104,6 +105,16 @@ interface AutoMergeState {
     at: string;
     signature: string;
   };
+  /**
+   * Set while a live session works this PR and the watcher would otherwise
+   * have fired a run. Written once per session, not per tick; cleared when the
+   * session lets go (the next tick fires) or the PR reads clean.
+   */
+  sessionHold?: {
+    workbenchId: string;
+    name: string;
+    at: string;
+  };
 }
 
 // Only the columns this watcher touches — avoids `select()`-ing every PR
@@ -147,7 +158,17 @@ function readState(row: PRRow): AutoMergeState {
     // with no way to ever re-arm (an absent signature can never change), which
     // is a worse failure than ignoring it and retrying.
     needsHuman: readNeedsHuman(s?.needsHuman),
+    sessionHold: readSessionHold(s?.sessionHold),
   };
+}
+
+function readSessionHold(value: unknown): AutoMergeState['sessionHold'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.workbenchId !== 'string' || typeof v.name !== 'string' || typeof v.at !== 'string') {
+    return undefined;
+  }
+  return { workbenchId: v.workbenchId, name: v.name, at: v.at };
 }
 
 /** The stand-down record, or undefined if the stored value is not a whole one. */
@@ -176,6 +197,7 @@ function publicState(s: AutoMergeState): {
   paused: boolean;
   deferredSince: string | null;
   needsHuman: { reason: string; since: string } | null;
+  waitingOnSession: { name: string; reason: string; since: string } | null;
 } {
   return {
     attempts: s.attempts,
@@ -189,6 +211,13 @@ function publicState(s: AutoMergeState): {
     // gave up", the other is "Talyn is waiting on you".
     needsHuman: s.needsHuman
       ? { reason: s.needsHuman.reason, since: s.needsHuman.at }
+      : null,
+    waitingOnSession: s.sessionHold
+      ? {
+          name: s.sessionHold.name,
+          reason: sessionHoldReason(s.sessionHold.name),
+          since: s.sessionHold.at,
+        }
       : null,
   };
 }
@@ -622,7 +651,8 @@ class PRAutoMergeWatcher {
         state.attempts !== 0 ||
         state.pausedAt ||
         state.deferredSince ||
-        state.needsHuman
+        state.needsHuman ||
+        state.sessionHold
       ) {
         state.attempts = 0;
         state.pausedAt = undefined;
@@ -632,6 +662,7 @@ class PRAutoMergeWatcher {
         // Nor is it waiting on a person — whatever they were asked for either
         // happened or stopped mattering.
         state.needsHuman = undefined;
+        state.sessionHold = undefined;
         await this.persist(row, state);
       }
       return;
@@ -655,6 +686,31 @@ class PRAutoMergeWatcher {
 
     // 5. Fire — blocker present, nothing running, not paused.
     if (state.pausedAt || state.attempts >= MAX_ATTEMPTS) return;
+
+    // 5a. A live session works this PR. Two agents on one branch is the
+    //     collision the active-task guard exists to stop, so wait for the
+    //     session, spending no attempt. Re-checked every tick, so a session that
+    //     is archived or unlinked hands the PR back within one interval.
+    const session = await liveWorkbenchForPr(row.workspaceId, row.id);
+    if (session) {
+      if (state.sessionHold?.workbenchId !== session.id) {
+        state.sessionHold = {
+          workbenchId: session.id,
+          name: session.name,
+          at: new Date().toISOString(),
+        };
+        await this.persist(row, state);
+        console.log(
+          `[autoKeep] ${row.owner}/${row.repo}#${row.number}: standing down — ` +
+            `session ${session.id} is working this PR`,
+        );
+      }
+      return;
+    }
+    if (state.sessionHold) {
+      state.sessionHold = undefined;
+      await this.persist(row, state);
+    }
     if (await externalQueueHolds(row, summary)) return;
 
     const resolved = await resolveCloudEnv(row.workspaceId);
