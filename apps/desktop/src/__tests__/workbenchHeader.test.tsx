@@ -7,6 +7,7 @@ import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { WorkbenchHeader } from '../renderer/components/workbench/WorkbenchHeader';
 import { requestWorkbenchAction, type WorkbenchAction } from '../renderer/lib/workbenchActions';
 import { toast } from '../renderer/stores/toast';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
 const merge = jest.fn();
 const archive = jest.fn();
@@ -273,6 +274,28 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.getByText('· 1h ago')).toBeInTheDocument();
     expect(screen.getByText('#42')).toHaveClass('bg-merged/15', 'text-merged');
     expect(screen.getByTestId('workbench-primary-action')).toHaveTextContent('Archive session');
+  });
+
+  it('an open PR shows its status pill, which opens the Pull request tab', () => {
+    useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false });
+    render(
+      <WorkbenchHeader
+        workbench={WB}
+        pr={prRow({ blockingReason: 'checks_failed', ciStatus: 'failing_required', checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 } })}
+        chat={chat}
+        ops={ops()}
+      />
+    );
+    expect(screen.queryByText('#42')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle(/Required CI checks failing/));
+    expect(useWorkbenchStore.getState()).toMatchObject({ sideTab: 'pr', rightPanelOpen: true });
+  });
+
+  it.each(['merged', 'closed'] as const)('a %s PR keeps its number pill, which opens the Pull request tab', (state) => {
+    useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false });
+    render(<WorkbenchHeader workbench={WB} pr={prRow({}, state)} chat={chat} ops={ops()} />);
+    fireEvent.click(screen.getByText('#42'));
+    expect(useWorkbenchStore.getState()).toMatchObject({ sideTab: 'pr', rightPanelOpen: true });
   });
 
   it('shows why a closed PR ended', () => {

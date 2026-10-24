@@ -18,7 +18,7 @@ import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSel
 
 /**
  * One workbench. Centre: the header, the chat tab strip, the transcript and
- * the composer. Right: the GitPanel (files, changes, checks) with the
+ * the composer. Right: the GitPanel (files, changes, pull request) with the
  * terminal dock under it; ⌘⌥B hides it.
  */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {

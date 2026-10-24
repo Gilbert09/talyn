@@ -138,10 +138,6 @@ export function PRDetailSheet({
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Whether PostHog Code is connected for this PR's workspace — gates the
-  // auto-keep-mergeable toggle (the watcher dispatches via PostHog Code).
-  const [posthogConnected, setPosthogConnected] = useState(false);
-  const [togglingAutoKeep, setTogglingAutoKeep] = useState(false);
   const [togglingQueue, setTogglingQueue] = useState(false);
   // The PRs this one is stacked on, root-first. Derived from the open rows in
   // the store (the sheet gets no stackMeta), by the same rule the backend uses.
@@ -320,53 +316,16 @@ export function PRDetailSheet({
     };
   }, [pullRequestId]);
 
-  // PostHog Code connection status for this PR's workspace — gates the
-  // auto-keep-mergeable toggle (no provider → nothing to dispatch to).
   const workspaceId = data?.row.workspaceId ?? seedRow?.workspaceId ?? null;
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    api.posthog
-      .getStatus(workspaceId)
-      .then((s) => {
-        if (!cancelled) setPosthogConnected(s.connected);
-      })
-      .catch(() => {
-        if (!cancelled) setPosthogConnected(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  async function handleToggleAutoKeep(enabled: boolean) {
-    if (!pullRequestId) return;
-    setTogglingAutoKeep(true);
-    // Optimistic — the WS echo will confirm, but the toggle should feel instant.
-    setData((prev) =>
-      prev
-        ? {
-            ...prev,
-            row: {
-              ...prev.row,
-              autoKeepMergeable: enabled,
-              autoMergeState: enabled ? { attempts: 0, paused: false } : null,
-            },
-          }
-        : prev
-    );
-    try {
-      await api.pullRequests.setAutoKeepMergeable(pullRequestId, enabled);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update auto-keep-mergeable');
-      // Roll back the optimistic flip.
-      setData((prev) =>
-        prev ? { ...prev, row: { ...prev.row, autoKeepMergeable: !enabled } } : prev
-      );
-    } finally {
-      setTogglingAutoKeep(false);
-    }
-  }
+  const {
+    posthogConnected,
+    toggling: togglingAutoKeep,
+    toggle: handleToggleAutoKeep,
+  } = usePrAutoKeep(pullRequestId && workspaceId ? { id: pullRequestId, workspaceId } : null, {
+    onPatch: (_id, patch) =>
+      setData((prev) => (prev ? { ...prev, row: { ...prev.row, ...patch } } : prev)),
+    onError: setError,
+  });
 
   /**
    * Queue this PR together with everything it is stacked on. The sheet has no
@@ -880,6 +839,69 @@ export function PRDetailSheet({
   );
 }
 
+type AutoKeepPatch = Partial<Pick<PRRow, 'autoKeepMergeable' | 'autoMergeState'>>;
+
+/**
+ * The per-PR "keep mergeable" toggle, shared by this sheet and a session's Pull
+ * request tab. Offered only when PostHog Code is connected for the PR's
+ * workspace: the watcher dispatches through it, so without a provider there is
+ * nothing to run.
+ *
+ * Optimistic: `onPatch` flips the row at once and the WS echo confirms. By
+ * default the patch goes to the shared PR store and a failure to a toast; the
+ * sheet passes its own, because it renders its own copy of the row.
+ */
+export function usePrAutoKeep(
+  row: Pick<PRRow, 'id' | 'workspaceId'> | null,
+  {
+    onPatch = (id, patch) => usePullRequestStore.getState().patchRow(id, patch),
+    onError = (message) => toast.error('Could not change auto-keep', message),
+  }: {
+    onPatch?: (id: string, patch: AutoKeepPatch) => void;
+    onError?: (message: string) => void;
+  } = {}
+): { posthogConnected: boolean; toggling: boolean; toggle: (enabled: boolean) => Promise<void> } {
+  const [posthogConnected, setPosthogConnected] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const id = row?.id ?? null;
+  const workspaceId = row?.workspaceId ?? null;
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    api.posthog
+      .getStatus(workspaceId)
+      .then((s) => {
+        if (!cancelled) setPosthogConnected(s.connected);
+      })
+      .catch(() => {
+        if (!cancelled) setPosthogConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  async function toggle(enabled: boolean) {
+    if (!id) return;
+    setToggling(true);
+    onPatch(id, {
+      autoKeepMergeable: enabled,
+      autoMergeState: enabled ? { attempts: 0, paused: false } : null,
+    });
+    try {
+      await api.pullRequests.setAutoKeepMergeable(id, enabled);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Could not update auto-keep-mergeable');
+      onPatch(id, { autoKeepMergeable: !enabled });
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return { posthogConnected, toggling, toggle };
+}
+
 // `findings` sits SECOND, right after overview: the reading order is "what is this
 // pull request / what is wrong with it / what does CI think". Adding a member here
 // is what routes the compiler to every switch that has to handle it.
@@ -1152,7 +1174,7 @@ const QUEUE_STATUS_LABEL: Record<NonNullable<PRRow['mergeQueue']>['status'], str
  * blocked entries, and the entry's audit timeline (what the queue actually
  * did, with reasons). Hidden entirely for PRs that were never queued.
  */
-function MergeQueueSection({ row }: { row: PRRow }) {
+export function MergeQueueSection({ row }: { row: PRRow }) {
   const v2 = row.mergeQueue;
   const [events, setEvents] = useState<MergeQueueTimelineEvent[] | null>(null);
   const [showAll, setShowAll] = useState(false);

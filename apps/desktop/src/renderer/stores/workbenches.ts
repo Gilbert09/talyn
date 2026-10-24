@@ -147,7 +147,7 @@ interface WorkbenchState {
   /** Chat tabs the user closed. There is no server-side close, so this is a view decision. */
   hiddenChatIds: Record<string, true>;
   sideTab: WorkbenchSideTab;
-  /** The right panel (files, changes, checks and the terminal dock). ⌘⌥B. */
+  /** The right panel (files, changes, pull request and the terminal dock). ⌘⌥B. */
   rightPanelOpen: boolean;
   rightPanelWidth: number;
   /** The terminal dock under the right panel is open; closed, it is one bar. */

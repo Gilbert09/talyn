@@ -64,8 +64,20 @@ describe('workbench layout', () => {
 
   it('writes a patch over what is stored, and reads it back', () => {
     writeLayout({ gitPanelWidth: 400 });
-    writeLayout({ gitPanelTab: 'checks' });
-    expect(readLayout()).toEqual({ ...DEFAULT_LAYOUT, gitPanelWidth: 400, gitPanelTab: 'checks' });
+    writeLayout({ gitPanelTab: 'pr' });
+    expect(readLayout()).toEqual({ ...DEFAULT_LAYOUT, gitPanelWidth: 400, gitPanelTab: 'pr' });
+  });
+
+  it.each([
+    ['the old Checks tab opens as the Pull request tab', 'checks', 'pr'],
+    ['the Pull request tab', 'pr', 'pr'],
+    ['All files', 'files', 'files'],
+    ['Changes', 'changes', 'changes'],
+    ['an unknown tab', 'diff', 'changes'],
+    ['a non-string tab', 3, 'changes'],
+  ])('reads a stored tab: %s', (_name, stored, expected) => {
+    window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ gitPanelTab: stored }));
+    expect(readLayout().gitPanelTab).toBe(expected);
   });
 
   it.each([
@@ -91,7 +103,7 @@ describe('the store keeps the layout', () => {
     expect(readLayout()).toMatchObject({ gitPanelTab: 'files', gitPanelWidth: GIT_PANEL_MAX_WIDTH });
   });
 
-  it('a new store starts from the stored layout', () => {
+  it('a new store starts from the stored layout, the old Checks tab as Pull request', () => {
     window.localStorage.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({ gitPanelTab: 'checks', gitPanelWidth: 420, dockHeight: 333 })
@@ -100,7 +112,7 @@ describe('the store keeps the layout', () => {
       // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
       const fresh = require('../renderer/stores/workbenches') as typeof import('../renderer/stores/workbenches');
       expect(fresh.useWorkbenchStore.getState()).toMatchObject({
-        sideTab: 'checks',
+        sideTab: 'pr',
         rightPanelWidth: 420,
         terminalHeight: 333,
         terminalOpen: false,

@@ -1,6 +1,7 @@
 import {
   createClaudeStreamParser,
   nextWorkbenchAction,
+  prSummaryToNextActionPr,
   type AgentEvent,
   type AgentEventDraft,
   type Workbench,
@@ -230,29 +231,16 @@ export interface WorkbenchPrLike {
 }
 
 /**
- * Map Talyn's PR summary onto the shared next-action input.
- *
- * `failing_optional` reads as green: a check GitHub does not require does not
- * block the merge. `needs_human` reads as pending: only a person can clear it,
- * and that is not an agent's job or a merge button's.
+ * Talyn's PR summary as the shared next-action input. A row with no CI verdict
+ * (written before the field shipped) keeps it absent, which reads as Merge.
  */
 export function nextActionInput(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextActionInput {
   const hasChanges = (workbench.diffStat?.files ?? 0) > 0;
   if (!pr) return { hasChanges, pr: null };
-  const mergeable =
-    pr.summary.mergeable === 'CONFLICTING' ? 'conflicting' : pr.summary.mergeable === 'MERGEABLE' ? 'mergeable' : 'unknown';
-  const ci = pr.summary.ciStatus;
-  const ciStatus: NonNullable<WorkbenchNextActionInput['pr']>['ciStatus'] =
-    ci === undefined
-      ? undefined
-      : ci === 'passing' || ci === 'failing_optional'
-        ? 'success'
-        : ci === 'failing_required'
-          ? 'failure'
-          : ci === 'none'
-            ? 'none'
-            : 'pending';
-  return { hasChanges, pr: { state: pr.state, mergeable, ciStatus } };
+  return {
+    hasChanges,
+    pr: prSummaryToNextActionPr({ state: pr.state, mergeable: pr.summary.mergeable, ciStatus: pr.summary.ciStatus }),
+  };
 }
 
 export function workbenchNextAction(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextAction {

@@ -1,12 +1,10 @@
 import type { PRCheckContext } from './api';
 
 /**
- * Pure helpers for the workbench Checks tab: the order checks are listed in,
- * and the one line "Add to chat" puts in the composer.
+ * Pure helpers for the checks list in the workbench Pull request tab: the
+ * order checks are listed in, and the one line "Add to chat" puts in the
+ * composer.
  */
-
-/** How often the Checks tab re-reads the PR while it is on screen. */
-export const CHECKS_REFRESH_MS = 30_000;
 
 export type CheckRequirement = 'required' | 'optional' | 'unknown';
 

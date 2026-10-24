@@ -6,9 +6,9 @@
  * instead of drawing a 0px panel.
  */
 
-export type GitPanelTab = 'files' | 'changes' | 'checks';
+export type GitPanelTab = 'files' | 'changes' | 'pr';
 
-export const GIT_PANEL_TABS: readonly GitPanelTab[] = ['files', 'changes', 'checks'];
+export const GIT_PANEL_TABS: readonly GitPanelTab[] = ['files', 'changes', 'pr'];
 
 export const GIT_PANEL_MIN_WIDTH = 280;
 export const GIT_PANEL_MAX_WIDTH = 720;
@@ -32,6 +32,12 @@ export const DEFAULT_LAYOUT: WorkbenchLayout = {
   gitPanelWidth: GIT_PANEL_DEFAULT_WIDTH,
   dockHeight: DOCK_DEFAULT_HEIGHT,
 };
+
+/** The stored tab, with the old Checks tab read as the Pull request tab that replaced it. */
+function storedTab(value: unknown): GitPanelTab {
+  if (value === 'checks') return 'pr';
+  return GIT_PANEL_TABS.includes(value as GitPanelTab) ? (value as GitPanelTab) : DEFAULT_LAYOUT.gitPanelTab;
+}
 
 export function clampPanelWidth(width: number): number {
   if (!Number.isFinite(width)) return GIT_PANEL_DEFAULT_WIDTH;
@@ -59,9 +65,7 @@ export function readLayout(): WorkbenchLayout {
     if (!raw) return { ...DEFAULT_LAYOUT };
     const parsed = JSON.parse(raw) as Partial<Record<keyof WorkbenchLayout, unknown>>;
     return {
-      gitPanelTab: GIT_PANEL_TABS.includes(parsed.gitPanelTab as GitPanelTab)
-        ? (parsed.gitPanelTab as GitPanelTab)
-        : DEFAULT_LAYOUT.gitPanelTab,
+      gitPanelTab: storedTab(parsed.gitPanelTab),
       gitPanelWidth:
         typeof parsed.gitPanelWidth === 'number' ? clampPanelWidth(parsed.gitPanelWidth) : DEFAULT_LAYOUT.gitPanelWidth,
       dockHeight: typeof parsed.dockHeight === 'number' ? clampDockHeight(parsed.dockHeight) : DEFAULT_LAYOUT.dockHeight,

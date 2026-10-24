@@ -27,7 +27,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { cn } from '../../lib/utils';
-import { api, type PRRow } from '../../lib/api';
+import { api, type PRChecks, type PRRow } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
@@ -44,11 +44,14 @@ import {
   type WorkbenchActionRequest,
 } from '../../lib/workbenchActions';
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
+import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { timeAgo } from './new/RecentWorkbenches';
+
+const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -129,6 +132,8 @@ export function WorkbenchHeader({
 }) {
   const toggleTerminal = useWorkbenchStore((s) => s.toggleTerminal);
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel);
+  const setSideTab = useWorkbenchStore((s) => s.setSideTab);
+  const openPrTab = () => setSideTab('pr');
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -242,16 +247,30 @@ export function WorkbenchHeader({
               No internet
             </span>
           )}
-          {pr && (
-            <a
-              href={pr.summary.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={pr.summary.title}
+          {pr?.state === 'open' && (
+            <PRStatusPill
+              compact
+              blockingReason={pr.summary.blockingReason}
+              checks={pr.summary.checks ?? NO_CHECKS}
+              mergeStateStatus={pr.summary.mergeStateStatus}
+              state={pr.state}
+              hideReviewState
+              labels={pr.summary.labels}
+              ciStatus={pr.summary.ciStatus}
+              humanGates={pr.summary.humanGates}
+              onClick={openPrTab}
+              className="app-region-no-drag shrink-0"
+            />
+          )}
+          {pr && pr.state !== 'open' && (
+            <button
+              type="button"
+              onClick={openPrTab}
+              title={`${pr.summary.title}. Show the pull request`}
               className="app-region-no-drag"
             >
               <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />
-            </a>
+            </button>
           )}
         </div>
         {pr?.state === 'merged' && (
