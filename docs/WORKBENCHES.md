@@ -129,6 +129,40 @@ workspace that never stored a file for the agent pays no exec.
 terminal WS bridge gate server-side. Billing gates: deliberately out of scope for the
 exploration (follow-up).
 
+## Previews: run a session's app and open it (2026-10-24)
+
+A session can run its repository's app and open it in a browser. Each repository has a
+**preview target**: `sandbox`, `coder` or `off`. The `workbenches` flag gates previews. They
+have no flag of their own.
+
+- **Target and ports.** `repositories.settings` (migration `0082`) stores the person's choice
+  and the detected answer. The choice wins over `.talyn/settings.toml` `[preview]`, and the file
+  wins over detection. `detectPreview` (`packages/shared/src/previewDetect.ts`) reads a fixed
+  list of files from the default branch. Detection is cached by the branch SHA. Coder signals
+  are `[preview.coder]`, `hogli.yaml` `coder_url`, a `.coder/` directory and Coder Terraform.
+  Port signals are `[preview].ports`, devcontainer `forwardPorts`, compose ports and the dev
+  server defaults in `package.json`.
+- **Sandbox target (desktop).** `main/workbench/previewForward.ts` starts a server on
+  `127.0.0.1` with the same port number when it is free. It forwards HTTP and WebSocket
+  requests to `/workbenches/:id/ports/:port/*` with the person's Bearer token. The backend
+  splices WebSockets to the fleet route (`services/preview/portsWs.ts`), so dev-server HMR
+  works. The forward accepts only loopback Host and Origin headers, and it removes the
+  browser's cookies.
+- **Coder target (desktop only).** A Coder deployment such as PostHog's is on the person's
+  tailnet, so the backend cannot reach it. The desktop uses the person's own `coder` CLI
+  (`main/workbench/coder.ts`). Talyn stores no Coder token. The flow makes a worktree at
+  `~/.talyn/previews/<session>` from the repository checkout in the Coder workspace. It applies
+  `GET /workbenches/:id/patch` (the session's changes against its base, untracked files
+  included) after `git reset --hard <base>` and `git clean -fdq`. It runs the run command in
+  tmux, and opens the template's app URL or a `coder port-forward`. It syncs again after each
+  turn. One preview runs per Coder workspace, because the stack uses fixed ports.
+- **Hosted URLs** on `*.preview.talyn.dev` are not built. They are for the web app and for
+  share links: a one-time ticket sets a host-only cookie on a random host name.
+
+Known gaps: not run end to end on a real repository. A new Coder worktree has no
+`node_modules` or Python environment, so the first run must install them. Two compose stacks
+can start if the project name comes from the directory name.
+
 ## Follow-ups / known gaps
 
 - Web app (`apps/web`) and mobile.
@@ -236,7 +270,8 @@ Talyn's.
 
 - The boot sweep that stops orphaned turns assumes ONE backend replica. A deploy overlap
   would stop a live replica's turns. Fix this before any production use.
-- The preview proxy needs a Bearer token, so an iframe cannot load it directly.
+- The preview proxy needs a Bearer token, so an iframe cannot load it directly. The
+  desktop forward adds the token; the web app waits for hosted preview URLs.
 - `stream_event` deltas are stored without pruning.
 - `openSshStream` and `openPty` do not use `FLEET_HTTP_PROXY`.
 - Sandbox: pasted images are not sent. Local: archive does not remove the worktree.

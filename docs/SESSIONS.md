@@ -2,6 +2,31 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session previews, the web sessions UI, and a PR tab (2026-10-24)
+
+**Previews.** A session can run its repository's app and open it in a browser. A
+per-repository target decides where the app runs: the session's sandbox, or the person's
+own Coder workspace. See "Previews" in [`WORKBENCHES.md`](./WORKBENCHES.md).
+- Coder is for preview only. The agent stays in the sandbox. Talyn applies the session's
+  patch to a worktree in the Coder workspace, because a PostHog-sized stack does not fit in
+  a sandbox.
+- The desktop does all Coder work through the person's `coder` CLI. PostHog's deployment is
+  reachable only on the tailnet, and Talyn must never hold a Coder token.
+- Previews use the `workbenches` flag. A separate `session-previews` flag was added and then
+  removed: previews exist only inside sessions, so a second switch decided nothing.
+- The YAS ports route costs one request token per request, but production sets no tenant
+  API rate. So a separate ports bucket is not needed now.
+
+**Background runs wait for a live session.** The merge queue, auto-keep, workflows and code
+review auto-fix stand down while a session works the same pull request. A manual fix that
+would race a session answers 409 `pr_has_session`.
+
+**Other work.** The web app has the sessions UI (sandbox only, with its own key table). The
+session panel has a "Pull request" tab. The desktop finds local checkouts at startup and
+does not read network mounts. Sidebar state icons have colour, and merged is purple. YAS
+session boxes send loopback traffic directly (`NO_PROXY`), so a repository's local MCP
+server is reachable.
+
 ## Open a pull request when the agent finishes (2026-10-22)
 
 New sessions enable automatic PR creation by default. The person can change the device default in Settings.
