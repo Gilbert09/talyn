@@ -546,13 +546,19 @@ function titleFor(
     checks.total === 0
       ? 'no checks'
       : `${checks.passed} passed · ${checks.failed} failed · ${checks.inProgress} running · ${checks.skipped} skipped`;
-  const reason =
-    blockingReason === 'blocked' && reviewDecision === 'APPROVED'
-      ? 'Approved, but held by branch protection (required signatures / merge restrictions)'
-      : blockingReason === 'needs_human'
-        ? humanGateReason(humanGates)
-        : humanReason(blockingReason);
-  return `${reason} · ${checkSummary}`;
+  return `${blockingReasonText(blockingReason, reviewDecision, humanGates)} · ${checkSummary}`;
+}
+
+export function blockingReasonText(
+  blockingReason: PRBlockingReason,
+  reviewDecision?: string | null,
+  humanGates?: PRHumanGate[]
+): string {
+  return blockingReason === 'blocked' && reviewDecision === 'APPROVED'
+    ? 'Approved, but held by branch protection (required signatures / merge restrictions)'
+    : blockingReason === 'needs_human'
+      ? humanGateReason(humanGates)
+      : humanReason(blockingReason);
 }
 
 function humanGateReason(gates: PRHumanGate[] | undefined): string {

@@ -35,13 +35,15 @@ import {
   Server,
   Sparkles,
   ScanSearch,
+  SquareTerminal,
+  Keyboard,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
-import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
+import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
@@ -76,7 +78,11 @@ import type {
   Workspace,
   McpToken,
   BillingOrder,
+  FleetAccountsResponse,
 } from '@talyn/shared';
+import { FleetAccountsList } from '../settings/FleetAccountsList';
+import { SessionsSettings } from '../settings/sections/SessionsSettings';
+import { ShortcutsSettings } from '../settings/sections/ShortcutsSettings';
 import {
   DEFAULT_FLEET_MODEL_ID,
   FLEET_MODELS,
@@ -120,6 +126,8 @@ export function SettingsPanel() {
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
+    { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
+    { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
@@ -174,6 +182,8 @@ export function SettingsPanel() {
         <ScrollArea className="h-full">
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
+            {activeSection === 'sessions' && <SessionsSettings />}
+            {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && <InstructionsSettings />}
@@ -1116,8 +1126,40 @@ export function ProviderConnectCards() {
  */
 function SelfHostedFleetCard() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
+  const [fleetAccounts, setFleetAccounts] = useState<FleetAccountsResponse | null>(null);
+  const [accountsError, setAccountsError] = useState<'unsupported' | 'failed' | null>(null);
+  const workspaceIdRef = useRef(currentWorkspaceId);
+  workspaceIdRef.current = currentWorkspaceId;
   const entry = (cloudProviders ?? []).find((p) => p.type === 'selfhosted');
-  if (!cloudProviderOffered(cloudProviders, 'selfhosted')) return null;
+  const offered = cloudProviderOffered(cloudProviders, 'selfhosted');
+
+  const refreshAccounts = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    setAccountsError(null);
+    try {
+      const result = await api.cloudProviders.fleetAccounts.list(currentWorkspaceId);
+      if (workspaceIdRef.current === currentWorkspaceId) setFleetAccounts(result);
+    } catch (error) {
+      if (workspaceIdRef.current === currentWorkspaceId) {
+        setAccountsError(error instanceof ApiError && error.status === 404 ? 'unsupported' : 'failed');
+      }
+    }
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    setFleetAccounts(null);
+    setAccountsError(null);
+    if (!offered || !currentWorkspaceId) return;
+    void refreshAccounts();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshAccounts();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [offered, currentWorkspaceId, refreshAccounts]);
+
+  if (!offered) return null;
 
   const agents = entry?.connectedAgents ?? [];
   const reauth = entry?.reauthAgents ?? [];
@@ -1155,16 +1197,24 @@ function SelfHostedFleetCard() {
       </div>
 
       <div className="mt-4 space-y-3 border-t pt-4">
-        <FleetAgentRow
-          agent="claude"
-          connected={agents.includes('claude')}
-          needsReauth={reauth.includes('claude')}
-        />
-        <FleetAgentRow
-          agent="codex"
-          connected={agents.includes('codex')}
-          needsReauth={reauth.includes('codex')}
-        />
+        {accountsError === 'unsupported' && <p className="text-xs text-muted-foreground">Accounts need a newer backend.</p>}
+        {accountsError === 'failed' && <div className="flex items-center gap-2 text-xs text-muted-foreground">Could not load accounts.<Button size="sm" variant="ghost" onClick={() => void refreshAccounts()}>Retry</Button></div>}
+        {(accountsError === 'unsupported' || (!accountsError && fleetAccounts)) && (['claude', 'codex'] as const).map((agent) =>
+          accountsError === 'unsupported' ? <FleetAgentRow key={agent} agent={agent} connected={agents.includes(agent)} needsReauth={reauth.includes(agent)} />
+            : currentWorkspaceId && fleetAccounts && <FleetAccountsList
+              key={agent}
+              agent={agent}
+              workspaceId={currentWorkspaceId}
+              accounts={fleetAccounts.accounts.filter((account) => account.agent === agent)}
+              activeId={fleetAccounts.active[agent]}
+              switchAtPercent={fleetAccounts.switchAtPercent}
+              onChanged={async () => {
+                await refreshAccounts();
+                try { setCloudProviders(await api.cloudProviders.list(currentWorkspaceId)); } catch { /* Keep the account list. */ }
+              }}
+            />
+        )}
+        {!accountsError && !fleetAccounts && (['claude', 'codex'] as const).map((agent) => <div key={agent} role="status" aria-label={`Loading ${agent} accounts`} className="flex items-center gap-2 py-1.5 animate-pulse"><div className="h-4 w-4 rounded bg-muted" /><div className="h-3 w-16 rounded bg-muted" /><div className="h-3 w-24 rounded bg-muted" /></div>)}
       </div>
 
       {connected && (

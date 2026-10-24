@@ -16,6 +16,12 @@ import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initAnalytics } from './lib/analytics';
 
+import { installNavigation, useNavigationStore } from './stores/navigation';
+import { setWorkbenchNavigator } from './lib/workbenchNavigation';
+
+installNavigation();
+setWorkbenchNavigator((id) => useNavigationStore.getState().navigate({ view: 'workbench', id }));
+
 // Before first render, so session replay and autocapture cover the whole
 // session. No-op unless VITE_TALYN_POSTHOG_KEY was set at build time.
 initAnalytics();

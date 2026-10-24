@@ -11,7 +11,7 @@ vi.mock('../components/auth/AuthProvider', () => ({
 }));
 vi.mock('../components/Analytics', () => ({ Analytics: mocks.analytics }));
 vi.mock('../components/auth/LoginScreen', () => ({ LoginScreen: () => <div>Log in</div> }));
-vi.mock('../components/layout/MainLayout', () => ({ MainLayout: () => null }));
+vi.mock('../components/layout/AppShell', () => ({ AppShell: () => null }));
 vi.mock('../components/onboarding/OnboardingWizard', () => ({ OnboardingWizard: () => null }));
 vi.mock('../components/StartingSpinner', () => ({ StartingSpinner: () => <div>Waiting</div> }));
 vi.mock('../components/ui/toaster', () => ({ Toaster: () => null }));

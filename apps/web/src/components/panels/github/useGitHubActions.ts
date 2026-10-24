@@ -18,6 +18,7 @@ import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { openGithubAppFlow } from '../../../lib/githubInstall';
 import { trackEvent } from '../../../lib/analytics';
 import { copyRich } from '../../../lib/prClipboard';
+import { sendPrFixToSession, sessionFromConflict } from '../../../lib/prSessionFix';
 import {
   buildCopyListPayload,
   stackAncestors,
@@ -385,6 +386,10 @@ export function useGitHubActions() {
   const createPostHogTask = useCallback(
     async (row: PRRow, providerType?: string, model?: string): Promise<boolean> => {
       if (!currentWorkspaceId) return false;
+      if (row.session) {
+        await sendPrFixToSession(row, row.session);
+        return true;
+      }
       const envId = resolveTaskEnvId(providerType);
       if (!envId) {
         // No provider connected/resolvable. Prompt the user to connect one and
@@ -397,7 +402,9 @@ export function useGitHubActions() {
       const provider = (environments.find((e) => e.id === envId)?.type ??
         'posthog_code') as CloudProviderType;
       const ref = `${row.owner}/${row.repo}#${row.number}`;
-      const created = await createTask({
+      let created;
+      try {
+        created = await createTask({
         workspaceId: currentWorkspaceId,
         type: 'pr_response',
         title: `Get ${ref} mergeable`,
@@ -417,7 +424,13 @@ export function useGitHubActions() {
         // backend resolve the workspace's own model, then the default for
         // whichever credential it actually holds.
         ...(model ? { model } : {}),
-      });
+        });
+      } catch (error) {
+        const session = sessionFromConflict(error);
+        if (!session) throw error;
+        await sendPrFixToSession(row, session);
+        return true;
+      }
       trackEvent('pr_fix_task_started', {
         repo: `${row.owner}/${row.repo}`,
         pr_number: row.number,

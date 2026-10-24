@@ -230,7 +230,7 @@ describe('useWhatsNew — deciding whether to interrupt', () => {
   });
 
   it('checks once, however many times the layout remounts', async () => {
-    // MainLayout is re-rendered per route in the web fork, so the guard has to
+    // The shell can mount again, so the guard must
     // live in the store rather than in component state.
     seed('0.2.60');
     list.mockResolvedValue([entry('0.2.61')]);

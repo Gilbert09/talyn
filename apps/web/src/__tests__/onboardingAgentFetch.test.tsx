@@ -5,7 +5,7 @@ import { render, waitFor, cleanup } from '@testing-library/react';
  * The Connect-an-agent step fetches what its cards read.
  *
  * It did not, and nothing about the screen said so. `useSystemStatus` — the one
- * loader of `cloudProviders` and `posthogStatus` — mounts in `MainLayout`, which
+ * loader of `cloudProviders` and `posthogStatus` — mounts in `AppShell`, which
  * renders only once onboarding is COMPLETE. So this step ran with both values
  * null for its entire life, and null is read everywhere as "still loading, draw
  * nothing". Two visible consequences, both reported from a real install:

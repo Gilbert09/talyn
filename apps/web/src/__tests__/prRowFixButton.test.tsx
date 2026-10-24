@@ -154,6 +154,31 @@ describe('PR row fix button — dispatching', () => {
     expect(trackEvent).not.toHaveBeenCalledWith('pr_fix_blocked', expect.anything());
     expect(toast.info).not.toHaveBeenCalled();
   });
+
+  it('sends Fix directly for a linked session when provider choice is enabled', async () => {
+    const linked = { ...row(true), session: { id: 'wb1', name: 'paris', status: 'ready' } } as PRRow;
+    const onCreatePostHogTask = vi.fn(async () => true);
+    render(
+      <PRTable
+        rows={[linked]}
+        variant="mine"
+        viewerLogin="octocat"
+        selectedId={null}
+        onSelect={vi.fn()}
+        onOpenTask={vi.fn()}
+        onStopTask={vi.fn()}
+        onMerge={vi.fn()}
+        onSetMergeQueue={vi.fn()}
+        onCreatePostHogTask={onCreatePostHogTask}
+        taskAsk
+        taskProviders={[{ type: 'posthog_code', displayName: 'PostHog Code' }]}
+        taskStatusById={new Map()}
+      />
+    );
+    expect(document.querySelector('[data-attr="pr-session-chip"]')).toBeTruthy();
+    fireEvent.click(fixButton());
+    await waitFor(() => expect(onCreatePostHogTask).toHaveBeenCalledWith(linked, undefined, undefined));
+  });
 });
 
 /**

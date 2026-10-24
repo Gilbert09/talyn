@@ -2,19 +2,16 @@ import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useToastStore, type ToastVariant } from '../../stores/toast';
 
-const VARIANT: Record<
-  ToastVariant,
-  { ring: string; icon: typeof Info; iconColor: string }
-> = {
+const VARIANT: Record<ToastVariant, { ring: string; icon: typeof Info; iconColor: string }> = {
   success: {
-    ring: 'border-emerald-500/30',
+    ring: 'border-success/30',
     icon: CheckCircle2,
-    iconColor: 'text-emerald-600 dark:text-emerald-400',
+    iconColor: 'text-success',
   },
   error: {
-    ring: 'border-red-500/40',
+    ring: 'border-destructive/40',
     icon: AlertCircle,
-    iconColor: 'text-red-600 dark:text-red-400',
+    iconColor: 'text-destructive',
   },
   info: {
     ring: 'border-border',
@@ -23,10 +20,6 @@ const VARIANT: Record<
   },
 };
 
-/**
- * App-wide toast surface. Mount once near the root. Reads from the
- * `useToastStore` zustand store that the `toast` helper writes to.
- */
 export function Toaster() {
   const toasts = useToastStore((s) => s.toasts);
   const dismiss = useToastStore((s) => s.dismiss);
@@ -49,12 +42,20 @@ export function Toaster() {
             <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', iconColor)} />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium leading-snug">{t.title}</p>
-              {t.description && (
-                <p className="mt-0.5 break-words text-xs text-muted-foreground">
-                  {t.description}
-                </p>
-              )}
+              {t.description && <p className="mt-0.5 break-words text-xs text-muted-foreground">{t.description}</p>}
             </div>
+            {t.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  t.action?.onClick();
+                  dismiss(t.id);
+                }}
+                className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => dismiss(t.id)}

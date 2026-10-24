@@ -53,6 +53,8 @@ import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
+import { PrSessionChip } from '../../widgets/session/PrSessionChip';
+import { OpenInWorkbenchButton } from '../../widgets/session/OpenInWorkbenchButton';
 
 /**
  * Shared PR table used by all three GitHub pages. The `variant` picks the
@@ -311,7 +313,7 @@ export function PRTable({
             onSetReviewHidden={onSetReviewHidden}
             onCreatePostHogTask={onCreatePostHogTask}
             onOpenSkillPicker={onRunSkill ? setSkillPickerRowId : undefined}
-            taskAsk={taskAsk}
+            taskAsk={taskAsk && !row.session}
             taskProviders={taskProviders}
             onOpenIntegrations={onOpenIntegrations}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
@@ -943,6 +945,7 @@ const PRTableRow = React.memo(function PRTableRow({
               {variant !== 'queue' && row.codeReview && (
                 <CodeReviewRowChip review={row.codeReview} onOpen={onSelect} />
               )}
+              <PrSessionChip session={row.session} />
               {/* Merge-queue indicator. The membership badge ("Queued #N") stays
                   visible the whole time the PR is in the queue; an activity badge
                   (Merging / Blocked) sits alongside it. We deliberately DON'T show
@@ -1453,6 +1456,7 @@ const PRTableRow = React.memo(function PRTableRow({
               <Wand2 className="h-3.5 w-3.5" />
             </button>
           )}
+          <OpenInWorkbenchButton row={row} variant="row" />
           <button
             type="button"
             data-attr="pr-row-copy-link"
