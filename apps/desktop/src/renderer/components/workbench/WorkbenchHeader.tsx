@@ -48,6 +48,7 @@ import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
+import { SessionPreviewChips } from './SessionPreviewChips';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { timeAgo } from './new/RecentWorkbenches';
 
@@ -247,6 +248,7 @@ export function WorkbenchHeader({
               No internet
             </span>
           )}
+          <SessionPreviewChips workbench={workbench} ops={ops} />
           {pr?.state === 'open' && (
             <PRStatusPill
               compact

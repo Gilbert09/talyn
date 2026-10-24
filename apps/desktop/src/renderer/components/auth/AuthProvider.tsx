@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
+import { getWorkbenchBridge } from '../../lib/workbenchBridge';
+import { toast } from '../../stores/toast';
 import { trackEvent } from '../../lib/analytics';
 
 interface AuthContextValue {
@@ -94,6 +96,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       off?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    void getWorkbenchBridge()?.preview?.setToken(session?.access_token ?? null).catch(() => {
+      toast.error('Could not update preview access');
+    });
+  }, [loading, session?.access_token]);
 
   async function signInWithGitHub(): Promise<{ error: string | null }> {
     // A retry starts from a clean slate: the previous attempt's failure is

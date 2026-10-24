@@ -63,6 +63,12 @@ const workbench: DesktopWorkbenchBridge = {
   detectAgents: () => ipcRenderer.invoke('workbench:detect-agents'),
   pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
   readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
+  preview: {
+    start: (input) => ipcRenderer.invoke('workbench:preview:start', input),
+    stop: (workbenchId, port) => ipcRenderer.invoke('workbench:preview:stop', workbenchId, port),
+    list: () => ipcRenderer.invoke('workbench:preview:list'),
+    setToken: (token) => ipcRenderer.invoke('workbench:preview:set-token', token),
+  },
   repoPaths: {
     // A sandboxed preload cannot load Node's os module, so the main process answers.
     homeDir: () => ipcRenderer.invoke('workbench:repo-paths:home-dir'),

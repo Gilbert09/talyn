@@ -7,6 +7,7 @@ import { clampDockHeight } from '../../../lib/workbenchLayout';
 import type { WorkbenchOps } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useWorkbenchStore, type WorkbenchTerminalTab } from '../../../stores/workbenches';
+import { SessionPreviewChips } from '../SessionPreviewChips';
 import { ShellTerminal } from './ShellTerminal';
 import { useXterm } from './useXterm';
 
@@ -136,6 +137,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           </button>
         ))}
         <div className="flex-1" />
+        {open && tab === 'run' && <SessionPreviewChips workbench={workbench} ops={ops} />}
         {open && config && config.source !== 'none' && (tab === 'setup' || tab === 'run') && (
           <ScriptControls workbench={workbench} ops={ops} name={tab} />
         )}

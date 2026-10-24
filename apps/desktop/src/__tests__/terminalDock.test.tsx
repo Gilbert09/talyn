@@ -4,12 +4,18 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Workbench } from '@talyn/shared';
+import type { Features, Workbench } from '@talyn/shared';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { DOCK_MIN_HEIGHT, readLayout } from '../renderer/lib/workbenchLayout';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { TerminalPanel } from '../renderer/components/workbench/terminal/TerminalPanel';
+import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { toast } from '../renderer/stores/toast';
+
+const previewGet = jest.fn();
+jest.mock('../renderer/lib/api', () => ({
+  api: { repositories: { preview: { get: (...args: unknown[]) => previewGet(...args) } } },
+}));
 
 jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() } }));
 jest.mock('../renderer/components/workbench/terminal/ShellTerminal', () => ({
@@ -19,7 +25,7 @@ jest.mock('../renderer/components/workbench/terminal/useXterm', () => ({
   useXterm: () => ({ ref: { current: null }, term: null }),
 }));
 
-const WB = { id: 'wb1', runtime: 'sandbox', status: 'ready' } as Workbench;
+const WB = { id: 'wb1', repositoryId: 'repo1', runtime: 'sandbox', status: 'ready' } as Workbench;
 const configured = {
   source: 'talyn', setup: { command: 'npm ci' }, run: [{ name: 'run', command: 'npm run dev', default: true }],
   errors: [], filesToCopy: [], runMode: 'concurrent',
@@ -36,6 +42,8 @@ async function renderDock() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  useWorkspaceStore.setState({ features: null });
+  previewGet.mockReset().mockResolvedValue({ target: 'sandbox', ports: [{ port: 5173, label: 'App' }, { port: 8010 }] });
   readConfig.mockReset().mockResolvedValue(configured);
   saveDetectedConfig.mockReset().mockResolvedValue(undefined);
   window.localStorage.clear();
@@ -150,4 +158,23 @@ describe('terminal dock', () => {
     expect(readConfig).toHaveBeenCalledTimes(1);
     expect(ops.runScript).not.toHaveBeenCalled();
   });
+});
+
+
+it('shows each preview port and label in the Run tab', async () => {
+  useWorkspaceStore.setState({ features: { sessionPreviews: true } as Features });
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
+  await renderDock();
+  expect(await screen.findByRole('button', { name: 'Open localhost:5173 (App)' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Open localhost:8010' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: 'Setup' }));
+  expect(screen.queryByRole('button', { name: /Open localhost/ })).not.toBeInTheDocument();
+});
+
+it.each(['flag-off', 'coder', 'off', 'local'])('hides preview chips for %s', async (mode) => {
+  useWorkspaceStore.setState({ features: { sessionPreviews: mode !== 'flag-off' } as Features });
+  previewGet.mockResolvedValue({ target: mode === 'coder' ? 'coder' : mode === 'off' ? 'off' : 'sandbox', ports: [{ port: 8010 }] });
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
+  await act(async () => { render(<TerminalPanel workbench={{ ...WB, runtime: mode === 'local' ? 'local' : 'sandbox' }} ops={ops} />); });
+  expect(screen.queryByRole('button', { name: /Open localhost/ })).not.toBeInTheDocument();
 });

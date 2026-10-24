@@ -1,6 +1,7 @@
 import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
+import type { DesktopWorkbenchBridge } from '../../workbenchBridgeTypes';
 import { AgentProcesses } from './agentProcess';
 import { readConfigWithDetection, saveDetectedConfig } from './config';
 import { detectCheckouts, uniqueMainCheckouts } from './detectCheckouts';
@@ -16,6 +17,7 @@ import {
 } from './git';
 import { discoverInstructionFiles } from './instructionFiles';
 import { WorkbenchPaths } from './paths';
+import { PreviewForwarder } from './previewForward';
 import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
@@ -46,6 +48,8 @@ export async function pickRepoFolder(repoPaths?: RepoPaths): Promise<{
 export function registerWorkbenchIpc(
   getWindow: () => BrowserWindow | null,
 ): void {
+  const previews = new PreviewForwarder();
+  let previewToken: string | null = null;
   const paths = new WorkbenchPaths(app.getPath('userData'));
   const repoPaths = new RepoPaths(app.getPath('userData'));
   const emit = (channel: string, payload: unknown) => {
@@ -175,6 +179,18 @@ export function registerWorkbenchIpc(
     async () => (await pickRepoFolder(repoPaths))?.path ?? null,
   );
   handle('readiness', (force?: boolean) => localReadiness(force === true));
+  handle('preview:start', (input: Parameters<DesktopWorkbenchBridge['preview']['start']>[0]) => {
+    if (typeof input.token !== 'string' || !input.token || /[\r\n]/.test(input.token)) throw new Error('Invalid preview token.');
+    previewToken = input.token;
+    return previews.start({ workbenchId: input.workbenchId, port: input.port, apiBaseUrl: input.apiBaseUrl, getToken: async () => previewToken });
+  });
+  handle('preview:set-token', async (token: string | null) => {
+    if (token !== null && (typeof token !== 'string' || !token || /[\r\n]/.test(token))) throw new Error('Invalid preview token.');
+    previewToken = token;
+    if (!token) await previews.stopAll();
+  });
+  handle('preview:stop', (workbenchId: string, port?: number) => previews.stop(workbenchId, port));
+  handle('preview:list', () => previews.list());
   handle('repo-paths:get', () => repoPaths.get());
   handle('repo-paths:home-dir', () => app.getPath('home'));
   handle('repo-paths:detect', async (input: { repoFullNames: string[]; startup?: boolean }) =>
@@ -214,7 +230,9 @@ export function registerWorkbenchIpc(
     if (shuttingDown) return;
     shuttingDown = true;
     stopGitProcesses();
+    previewToken = null;
     void Promise.allSettled([
+      previews.stopAll(),
       agents.shutdown(),
       scripts.shutdown(),
       terminals.shutdown(),

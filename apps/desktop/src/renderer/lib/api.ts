@@ -3,6 +3,14 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
 import { setLogoutReason } from './logoutReason';
 import { appVersion } from './appVersion';
 
+export const API_BASE_URL = process.env.TALYN_API_URL || 'http://localhost:4747';
+
+export async function getAccessToken(): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  const { data } = await getSupabase().auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
 /**
  * The desktop's binding of the shared backend client.
  *
@@ -18,17 +26,13 @@ import { appVersion } from './appVersion';
  */
 configureApiClient({
   // Falls back to local dev so a fresh checkout Just Works.
-  baseUrl: process.env.TALYN_API_URL || 'http://localhost:4747',
+  baseUrl: API_BASE_URL,
   // Baked at build time; `dev+<sha>` on a local build. Never a bare semver
   // unless CI stamped it, which is what stops a contributor's app from being
   // read as an old release — see lib/appVersion.
   clientVersion: appVersion(),
 
-  getAccessToken: async () => {
-    if (!isSupabaseConfigured()) return null;
-    const { data } = await getSupabase().auth.getSession();
-    return data.session?.access_token ?? null;
-  },
+  getAccessToken,
 
   /**
    * A 401 is NOT proof the session is dead — the 2026-07-07 mass logout was
