@@ -60,10 +60,8 @@ class CodeReviewReconciler {
   }
 
   async tick(): Promise<void> {
-    // No deployment-wide switch to check — code review is gated on PostHog alone,
-    // so there is no subject-free answer to read here. The sweep is cheap when
-    // there is nothing to do: one indexed lookup over non-terminal reviews, and a
-    // deployment whose accounts are all outside the audience has none.
+    // The sweep is cheap when there is nothing to do: one indexed lookup over
+    // non-terminal reviews.
     if (!this.guard.tryBegin()) return;
     const started = Date.now();
     let ok = true;

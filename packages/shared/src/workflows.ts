@@ -461,7 +461,7 @@ export type WorkflowActionFailureCode =
   | 'merge_queue_limit_reached'
   /** The free plan already has a review cycle in flight; it does not queue. */
   | 'review_limit_reached'
-  /** Code review is not switched on for this workspace. */
+  /** Code review cannot run here: no reviewer covers this repository. */
   | 'code_review_unavailable'
   | 'error';
 

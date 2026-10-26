@@ -43,7 +43,7 @@ import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
-import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
+import { highlightsForSurface } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -124,12 +124,7 @@ export function SettingsPanel() {
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
-    // Gated in the NAV, not only in the body: the card renders null when the
-    // feature is not offered, so an unconditional entry would give anyone
-    // outside the flag's audience a nav item that opens onto nothing.
-    ...(codeReviewOffered(features)
-      ? [{ id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' }]
-      : []),
+    { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
 
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },

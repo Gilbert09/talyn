@@ -1549,15 +1549,14 @@ export function codeReviewStartProblem(input: unknown): string | null {
 // ---------- Offered ----------
 
 /**
- * Whether to DRAW code review for this account.
+ * Code review is released to every account, and its flag is gone, so this
+ * always answers true.
  *
- * Three-state, exactly `loopsOffered`: `null` features means still loading and
- * must render nothing, because conflating "loading" with "not offered" is how a
- * tab flashes in on every launch. Never a permission check — every route, the
- * engine and the fix action gate independently.
+ * @deprecated Kept only because both `PRDetailSheet.tsx` forks still call it.
+ * Delete it with those calls.
  */
-export function codeReviewOffered(features: Features | null | undefined): boolean {
-  return features?.codeReview === true;
+export function codeReviewOffered(_features?: Features | null): boolean {
+  return true;
 }
 
 // ---------- Findings, rendered for an agent ----------

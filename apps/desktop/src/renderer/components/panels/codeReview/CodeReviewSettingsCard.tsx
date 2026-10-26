@@ -9,7 +9,6 @@ import {
   codeReviewPresetFacts,
   type CodeReviewLensStat,
   CODE_REVIEW_PRESET_LABELS,
-  codeReviewOffered,
   resolveCodeReviewSettings,
   type CodeReviewSettings,
   type Workspace,
@@ -49,7 +48,6 @@ export function CodeReviewSettingsCard() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
-  const features = useWorkspaceStore((s) => s.features);
   const [saving, setSaving] = useState(false);
   // Fetched once when the page opens, not polled: it answers "is this reviewer
   // worth its cost", which is a question you ask occasionally.
@@ -70,11 +68,6 @@ export function CodeReviewSettingsCard() {
       cancelled = true;
     };
   }, [currentWorkspaceId]);
-
-  // Three-state, like every other gated surface: `null` features means still
-  // loading and must draw nothing, because conflating that with "not offered" is
-  // how a card flashes in and out on every launch.
-  if (!codeReviewOffered(features)) return null;
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = resolveCodeReviewSettings(workspace?.settings?.codeReview);

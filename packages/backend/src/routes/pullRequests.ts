@@ -64,10 +64,6 @@ import {
 } from '../services/codeReview/findings.js';
 import { getPrForReview, getReviewForPr, listReviewEvents } from '../services/codeReview/store.js';
 import {
-  codeReviewRefusalReason,
-  userMayUseCodeReview,
-} from '../services/codeReviewAccess.js';
-import {
   CODE_REVIEW_PHASE_AT_REST,
   isCodeReviewDismissReason,
   validateCodeReviewStart,
@@ -1301,12 +1297,10 @@ export function pullRequestRoutes(): Router {
   // id, which is the trap routes/loops.ts warns about.
   //
   // Every handler starts with `reviewGate`, so none of them can forget the
-  // feature check. It answers 403 with a code rather than 404: "you may not" and
-  // "there is nothing here" are different answers and the client pitches
-  // differently for each.
+  // workspace access check.
 
   /**
-   * Resolve the pull request, check access, and check the feature — in that order.
+   * Resolve the pull request and check access to its workspace.
    *
    * Returns the workspace id on success and has already answered on failure, so a
    * handler reads `const ws = await reviewGate(...); if (!ws) return;`.
@@ -1327,15 +1321,6 @@ export function pullRequestRoutes(): Router {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {
       handleAccessError(err, res);
-      return null;
-    }
-    const user = assertUser(req);
-    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
-      res.status(403).json({
-        success: false,
-        error: `Code review is not available: ${codeReviewRefusalReason()}.`,
-        code: 'code_review_unavailable',
-      });
       return null;
     }
     return workspaceId;
@@ -1401,7 +1386,7 @@ export function pullRequestRoutes(): Router {
       userId: user.id,
     });
     if (!outcome.ok) {
-      return res.status(outcome.code === 'not_available' ? 403 : 409).json({
+      return res.status(409).json({
         success: false,
         error: outcome.message,
         code: outcome.code,
@@ -1440,7 +1425,7 @@ export function pullRequestRoutes(): Router {
     const user = assertUser(req);
     const outcome = await startFixRun(review, findingIds, user.id);
     if (!outcome.ok) {
-      const status = outcome.code === 'not_available' ? 403 : outcome.code === 'deferred' ? 202 : 409;
+      const status = outcome.code === 'deferred' ? 202 : 409;
       return res.status(status).json({
         success: false,
         error: outcome.message,

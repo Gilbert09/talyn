@@ -268,7 +268,6 @@ const features: Features = {
   workflows: true,
   loops: true,
   mcpServers: true,
-  codeReview: true,
   reviewPriority: true,
   reviewRankingCandidate: false,
   reviewRankingExport: false,
@@ -624,7 +623,7 @@ describe('MCP product coverage', () => {
     }
   );
 
-  it.each(['workflows', 'loops', 'mcpServers', 'codeReview'] as const)(
+  it.each(['workflows', 'loops', 'mcpServers'] as const)(
     'hides tools when %s is off',
     (feature) => {
       const visible = listToolsFor({ ...features, [feature]: false });

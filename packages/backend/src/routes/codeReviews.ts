@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { inArray } from 'drizzle-orm';
 import type { ApiResponse } from '@talyn/shared';
-import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { LIST_COLUMNS, rowToPublicShape } from './pullRequests.js';
@@ -11,7 +11,6 @@ import {
   rowToEntrySnapshot,
 } from '../services/mergeQueue/store.js';
 import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
-import { codeReviewRefusalReason, userMayUseCodeReview } from '../services/codeReviewAccess.js';
 import { recentReviewsForWorkspace } from '../services/codeReview/store.js';
 import { codeReviewsForPrs } from '../services/codeReview/public.js';
 import { lensEffectiveness } from '../services/codeReview/findings.js';
@@ -26,9 +25,6 @@ import { lensEffectiveness } from '../services/codeReview/findings.js';
  *
  * Mounted BELOW `ownerScope`, like workflows and loops, so the RLS policies are
  * the second line of defence behind `requireWorkspaceAccess`.
- *
- * Gated here as well as in the nav. Hiding a nav item is not a gate — the CLI,
- * the MCP server and plain `curl` all walk past one.
  */
 
 /**
@@ -47,15 +43,6 @@ export function codeReviewRoutes(): Router {
   const router = Router();
 
   router.get('/', async (req: Request, res: Response<ApiResponse<unknown>>) => {
-    const user = assertUser(req);
-    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
-      return res.status(403).json({
-        success: false,
-        error: `Code review is not available: ${codeReviewRefusalReason()}`,
-        code: 'code_review_unavailable',
-      });
-    }
-
     const workspaceId = String(req.query.workspaceId ?? '');
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
@@ -132,16 +119,7 @@ export function codeReviewRoutes(): Router {
    * this is "is this reviewer worth its cost", and it is read on the settings
    * page rather than on every poll of a pull-request list.
    */
-  router.get('/lenses', async (req: Request, res: Response<ApiResponse<unknown>>) => {
-    const user = assertUser(req);
-    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
-      return res.status(403).json({
-        success: false,
-        error: `Code review is not available: ${codeReviewRefusalReason()}`,
-        code: 'code_review_unavailable',
-      });
-    }
-    const workspaceId = String(req.query.workspaceId ?? '');
+  router.get('/lenses', async (req: Request, res: Response<ApiResponse<unknown>>) => {    const workspaceId = String(req.query.workspaceId ?? '');
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
     }

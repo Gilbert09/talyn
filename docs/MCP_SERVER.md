@@ -198,7 +198,7 @@ API-key servers must be added in the Talyn app, so the key never passes through 
 ### Feature-gated tools
 
 Tool listing checks `/features` once per request.
-The flags `workflows`, `loops`, `mcpServers`, and `codeReview` control their tool groups.
+The flags `workflows`, `loops`, and `mcpServers` control their tool groups. The code review tools are always listed.
 A false flag hides the group. If the feature request fails, all tools remain listed.
 Each REST route checks access independently. Tool calls use the route's error message and code.
 HTTP 402 errors also explain the free-plan limit and point to Settings → Billing.

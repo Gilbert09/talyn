@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { codeReviewOffered } from '@talyn/shared';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkspaceStore } from '../stores/workspace';
 import type { PRRow } from '../lib/api';
@@ -65,15 +64,11 @@ let announcedThisLaunch = false;
 
 /** Exported for tests: should the introduction open, given the guards? */
 export function shouldShowCodeReviewIntro(input: {
-  offered: boolean;
   onboardingComplete: boolean;
   justOnboarded: boolean;
   openPrCount: number;
   seen: string | null;
 }): boolean {
-  // Never on the three-state `null` — showing this and then discovering the
-  // account is not in the audience is the worst version of it.
-  if (!input.offered) return false;
   if (!input.onboardingComplete) return false;
   // Somebody who finished the wizard ninety seconds ago has already seen the
   // step; `useWhatsNew` reads `justOnboarded` for exactly this reason.
@@ -91,7 +86,6 @@ export interface CodeReviewIntro {
 }
 
 export function useCodeReviewIntro(): CodeReviewIntro {
-  const features = useWorkspaceStore((s) => s.features);
   const onboardingComplete = useWorkspaceStore((s) => s.onboardingComplete);
   const justOnboarded = useWorkspaceStore((s) => s.justOnboarded);
   const [open, setOpen] = useState(false);
@@ -109,7 +103,6 @@ export function useCodeReviewIntro(): CodeReviewIntro {
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
       if (
         !shouldShowCodeReviewIntro({
-          offered: codeReviewOffered(features),
           onboardingComplete,
           justOnboarded,
           openPrCount: mine.length,
@@ -131,7 +124,7 @@ export function useCodeReviewIntro(): CodeReviewIntro {
     return usePullRequestStore.subscribe((state, prev) => {
       if (state.rows !== prev.rows) check(state.rows);
     });
-  }, [features, onboardingComplete, justOnboarded, open]);
+  }, [onboardingComplete, justOnboarded, open]);
 
   const dismiss = useCallback(() => setOpen(false), []);
   return { open, examplePrId, dismiss };

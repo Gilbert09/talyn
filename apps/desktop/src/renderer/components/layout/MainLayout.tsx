@@ -1,5 +1,5 @@
 import React from 'react';
-import { codeReviewOffered, loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { QueuePanel } from '../panels/QueuePanel';
@@ -69,9 +69,7 @@ export function MainLayout() {
                 backend will refuse every request for. */}
             {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
             {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
-      {activePanel === 'code_reviews' && codeReviewOffered(features) && (
-        <CodeReviewsPanel />
-      )}
+            {activePanel === 'code_reviews' && <CodeReviewsPanel />}
           {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
             {activePanel === 'settings' && <SettingsPanel />}
           </div>

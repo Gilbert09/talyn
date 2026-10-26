@@ -41,12 +41,13 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Connect GitHub')).toBeTruthy();
     expect(body).not.toContain('Name your workspace');
     expect(body).not.toContain('Workspace name');
-    // Three steps: GitHub, then the agent, then repos. The agent step is new —
+    // Four steps: GitHub, the agent, repos, then code review. The agent step is new —
     // it did not used to be part of setup, and is now because the fleet runs on
     // the user's OWN Claude or Codex subscription, so asking up front is what
     // makes the first task run on their key.
     expect(screen.getByTitle('Connect an agent')).toBeTruthy();
-    expect(screen.queryByText('4')).toBeNull();
+    expect(screen.getByTitle('Turn on code review')).toBeTruthy();
+    expect(screen.queryByText('5')).toBeNull();
   });
 
   // Optional on purpose: a workspace that is not on the fleet allow-list is

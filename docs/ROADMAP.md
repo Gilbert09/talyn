@@ -34,11 +34,11 @@ Consolidated billing only. No workspace is shared, and none is planned (Tom's ca
 - [x] Analytics: `team_created`, `team_checkout_started`, `team_seats_assigned`, `team_seat_removed`, `team_seat_count_changed`, `team_left`, `team_offer_opened`.
 - [ ] Launch: flip `teams` to `availability: 'general'`, then publish prices on the pricing page (Teams band CTA to checkout, a Team column in `PlanTable`, `OfferSchema`).
 
-### Code review — shipped behind a flag (2026-09-27)
+### Code review — shipped (2026-09-27), released to everyone (2026-10-26)
 
 AI review of a pull request with the findings in the app, and a fix you choose.
-Behind `code-review` (fallback OFF, `availability: 'gated'`). See the session
-note in [`SESSIONS.md`](./SESSIONS.md) for the design and the reasoning.
+It was behind the `code-review` flag. The flag was removed on 2026-10-26, so
+every account has code review. See the session note in [`SESSIONS.md`](./SESSIONS.md) for the design and the reasoning.
 
 - [x] The sandbox seam (`dispatchSandboxRun`), so booting a microVM is not a
       task-only capability. Adds `repo.targetRef` and `timeoutSec`, neither of
@@ -82,9 +82,9 @@ Follow-ups, in the order they are worth doing:
       arrive incrementally. Needs a streamable-HTTP MCP endpoint and a per-run
       scoped credential; the text parser stays regardless, because the fall-back
       provider has no MCP.
-- [ ] **Announce it.** `availability: 'gated'` withholds every `code-review`
-      highlight from everybody until it flips to `'general'`, which is also what
-      replays the withheld backlog.
+- [x] **Announce it.** The flag went to `availability: 'general'`, which
+      replayed the withheld `code-review` highlights. The flag itself was
+      removed on 2026-10-26.
 
 ### Shipped
 

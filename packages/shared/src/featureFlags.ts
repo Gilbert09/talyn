@@ -168,9 +168,9 @@ export const FEATURE_FLAGS = {
    * Fallback OFF, on the `loops` side of the line: a workbench keeps a fleet
    * microVM alive across turns and spends the workspace's own agent
    * subscription, so "PostHog is unreachable" must not open long-lived
-   * hardware to every account. Unlike `codeReview` it keeps an env override,
-   * because the feature is still an exploration and has to run locally with no
-   * PostHog project (`WORKBENCHES_ENABLED=true`).
+   * hardware to every account. It keeps an env override, because the feature
+   * is still an exploration and has to run locally with no PostHog project
+   * (`WORKBENCHES_ENABLED=true`).
    *
    * `availability: 'gated'` until it ships, which withholds every
    * `workbenches` highlight from everybody.
@@ -182,50 +182,6 @@ export const FEATURE_FLAGS = {
     description: 'Workbenches — a branch with an agent chat, diff and terminal, in a sandbox or a local worktree',
     availability: 'gated',
     releaseScopes: ['workbenches'],
-  },
-
-  /**
-   * Code review — AI findings on a pull request, shown in the app.
-   *
-   * Fallback OFF, on the `loops` side of the line rather than the `workflows`
-   * side, and for two reasons that compound. A review spends the workspace's own
-   * agent subscription across several sandboxes per pull request, and the fix
-   * run it leads to PUSHES COMMITS to a branch somebody else may own. "PostHog
-   * is unreachable, so let every account review and fix" is not a graceful
-   * degradation; it is the expensive kind of outage.
-   *
-   * NO env override, matching `mcpServers` rather than its other three siblings.
-   * Tom's call, and the reasoning is sharper here than there: an override is read
-   * generously — anything but `false`/`0`/`off`/`no` reads as ON — and it
-   * SHORT-CIRCUITS PostHog. So one env var set in production would hand a feature
-   * that pushes commits to other people's branches to every account at once.
-   * PostHog's audience is the only way in.
-   *
-   * Two costs, stated rather than discovered. This cannot be run against a
-   * deployment with no PostHog project — the thing `LOOPS_ENABLED=true` exists
-   * for — so developing it locally needs a project. And there is no switch to
-   * reach for if PostHog is the broken thing; `fallback: false` is what answers
-   * then, which turns the feature off rather than on. That is the direction you
-   * would have wanted the switch to go anyway.
-   *
-   * `availability: 'gated'` while it rolls out, which withholds every
-   * `code-review` highlight from EVERYBODY — including the accounts PostHog has
-   * already switched it on for. That is correct during a rollout and it is why
-   * the feature carries its own introduction rather than relying on the
-   * changelog. Flipping this to 'general' on launch day is what replays the
-   * withheld backlog.
-   *
-   * The release scope is `code-review` and not `reviews`: `reviewPriority`
-   * already claims the latter, and `gateForScopeIn` returns the FIRST gated flag
-   * matching a scope, so sharing one would tag the Reviews tab's commits as this
-   * feature's and withhold them too.
-   */
-  codeReview: {
-    posthogKey: 'code-review',
-    fallback: false,
-    description: 'Code review — AI findings on a pull request, shown in the app',
-    availability: 'general',
-    releaseScopes: ['code-review'],
   },
 
   /**
@@ -499,7 +455,6 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'workflows',
   'loops',
   'mcpServers',
-  'codeReview',
   'reviewPriority',
   'reviewRankingCandidate',
   'reviewRankingExport',

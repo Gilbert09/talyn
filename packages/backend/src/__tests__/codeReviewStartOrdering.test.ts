@@ -62,9 +62,6 @@ vi.mock('../services/codeReview/store.js', () => ({
 }));
 
 vi.mock('../services/codeReview/findings.js', () => ({ discardFindings: vi.fn(async () => 0) }));
-vi.mock('../services/codeReviewAccess.js', () => ({
-  workspaceMayUseCodeReview: vi.fn(async () => true),
-}));
 // The preset and owner lookups read the workspaces table directly; a stub db is
 // enough because what is under test is ORDER, not what they return.
 vi.mock('../db/client.js', () => ({

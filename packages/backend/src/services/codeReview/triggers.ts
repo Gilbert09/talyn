@@ -2,7 +2,6 @@ import { TASK_STATUS_TERMINAL, type TaskStatus } from '@talyn/shared';
 import { domainEvents } from '../events.js';
 import { runWithoutScope } from '../../db/client.js';
 import { resolveEntitlement } from '../billing/entitlements.js';
-import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import { settleFixRun } from './fix.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { startReviewCycle, workspaceOwner, workspaceReviewSettings } from './cycle.js';
@@ -17,14 +16,9 @@ import { CODE_REVIEW_PHASE_AT_REST, type CodeReviewPhase } from '@talyn/shared';
  * AsyncLocalStorage would otherwise hand these detached handlers a transaction
  * that is dead by the time they run — a hang, then `25P02` over everything after.
  *
- * # Why the snapshot handler is careful about cost
- *
- * `pr:snapshot` fires on every poll upsert of every tracked pull request, which is
- * the busiest domain event in the app. There is no cheap deployment-wide switch to
- * check first — this feature is gated on PostHog alone — so the first thing it does
- * is the per-workspace feature check, which the flag service caches for thirty
- * seconds. Until the feature is switched on for an account, a snapshot costs one
- * cached boolean and nothing else.
+ * The snapshot handler runs on `pr:snapshot`, which fires on every poll upsert of
+ * every tracked pull request. It is the busiest domain event in the app, so the
+ * handler reads one review row and returns early when there is nothing to do.
  */
 
 export function initCodeReviewTriggers(): void {
@@ -72,10 +66,6 @@ async function onSnapshot(
   workspaceId: string,
   state: 'open' | 'closed' | 'merged'
 ): Promise<void> {
-  // Cached for thirty seconds by the flag service, so this is the cheap gate that
-  // keeps an unswitched-on deployment paying nothing for the busiest event we have.
-  if (!(await workspaceMayUseCodeReview(workspaceId))) return;
-
   const review = await getReviewForPr(prId);
 
   // A review mid-cycle wants to know: its pull request closing is how `decide`

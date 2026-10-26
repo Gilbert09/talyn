@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Code review flag removed (2026-10-26)
+
+The `code-review` PostHog flag was released to every account, so the code no longer reads it. Code review is always available.
+
+**What changed.**
+- **Register.** `codeReview` is gone from `packages/shared/src/featureFlags.ts` and from `ACCOUNT_FEATURE_FLAGS`. `GET /features` no longer carries a `codeReview` key, and the `Features` type no longer has one.
+- **Backend.** `services/codeReviewAccess.ts` and its test are deleted. The routes no longer answer 403 `code_review_unavailable`. The cycle start, the fix run, the unit dispatch and the snapshot trigger no longer check the flag. The `not_available` refusal is gone from the start and fix outcomes. The MCP code review tools are always listed.
+- **Clients.** Both forks draw the nav item, the panel, the settings section, the settings card, the onboarding step and the once-ever intro without a flag check. `onboarding_completed` no longer sends `code_review_offered`. `codeReviewOffered` stays in `@talyn/shared` as a deprecated stub that answers `true`, only because both `PRDetailSheet.tsx` forks still call it. Delete it with those calls.
+- **Kept.** The plan gates are unchanged: the free-plan cycle limit and the Unlimited gate on automatic review. The workflow code `code_review_unavailable` stays, because a start with no reviewer still uses it and stored run history holds it.
+
+**Release notes.** The flag went to `availability: 'general'` on 2026-09-28, which already replayed the withheld `code-review` highlights. Deleting the flag changes nothing more: `isGatedFeature` answers false for a key the register does not know, so stored highlights tagged `codeReview` stay visible to everyone. New `feat(code-review)` commits are not tagged.
+
+**Older desktop builds.** A build from before this deploy reads `features.codeReview === true`. The key is now absent, so that build hides code review until it updates.
+
+**Next step, AFTER this deploy.** Delete the PostHog flag `code-review` (id 913388 in project 459813). Do not delete it first. The backend fallback for this flag was OFF, so a backend that still reads it would turn code review off for everyone.
+
 ## Trunk merge-queue ETAs on PR rows (2026-10-26)
 
 A PR in Trunk's merge queue now shows when it will merge: "Will merge in ~12 min · Starts testing in ~3 min · 2 PRs ahead", with a muted "running long" when Trunk says a time is behind. Talyn read Trunk's queue state only from GitHub before (its PR comment and `trunk-*` labels). This is the first call to Trunk's own API.

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { codeReviewOffered, loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 
 /**
@@ -105,9 +105,7 @@ export function MainLayout() {
                   403s. */}
               {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
               {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
-      {activePanel === 'code_reviews' && codeReviewOffered(features) && (
-        <CodeReviewsPanel />
-      )}
+              {activePanel === 'code_reviews' && <CodeReviewsPanel />}
             {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
               {activePanel === 'settings' && <SettingsPanel />}
             </Suspense>

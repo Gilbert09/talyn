@@ -6,7 +6,6 @@ import {
   type CodeReviewPreset,
 } from '@talyn/shared';
 import { withReviewCycleGate } from '../billing/entitlements.js';
-import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import { getSelfHostedClient } from '../selfHosted/credentials.js';
 import { getPostHogCodeClient } from '../posthogCode/credentials.js';
 import { discardFindings } from './findings.js';
@@ -39,7 +38,7 @@ export type StartOutcome =
   | { ok: true; review: ReviewRow; started: boolean }
   | {
       ok: false;
-      code: 'not_available' | 'pr_closed' | 'pr_missing' | 'busy' | 'no_reviewers';
+      code: 'pr_closed' | 'pr_missing' | 'busy' | 'no_reviewers';
       message: string;
     };
 
@@ -58,11 +57,11 @@ export interface StartReviewInput {
 /**
  * Start a cycle, or report why not.
  *
- * The order matters. Availability and the pull request's state are checked before
- * the plan gate, because a refusal the user cannot act on ("not in the audience")
- * should not be reported as a billing problem. The plan gate comes last and wraps
- * only the transition, so the advisory lock it takes is held for a row write rather
- * than for two API reads.
+ * The order matters. The pull request's state is checked before the plan gate,
+ * because a refusal the user cannot act on ("closed") should not be reported as
+ * a billing problem. The plan gate comes last and wraps only the transition, so
+ * the advisory lock it takes is held for a row write rather than for two API
+ * reads.
  */
 export async function startReviewCycle(input: StartReviewInput): Promise<StartOutcome> {
   const pr = await getPrForReview(input.pullRequestId);
@@ -76,14 +75,6 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
       message: 'That pull request is closed, so there is nothing to review.',
     };
   }
-  if (!(await workspaceMayUseCodeReview(pr.workspaceId))) {
-    return {
-      ok: false,
-      code: 'not_available',
-      message: 'Code review is not available for this workspace.',
-    };
-  }
-
   const existing = await getReviewForPr(input.pullRequestId);
   // A cycle already in flight is not an error and not a second cycle: the user
   // pressed a button twice, or a webhook raced a click. Hand back what is running.

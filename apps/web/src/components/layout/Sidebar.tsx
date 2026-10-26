@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   cloudProviderStatus,
-  codeReviewOffered,
   loopsOffered,
   mcpServersOffered,
   workflowsOffered,
@@ -95,22 +94,16 @@ export function Sidebar({ className }: SidebarProps) {
     },
     // Code review sits with the two PR cohorts above rather than with the
     // definition lists below, because that is what it is: pull requests waiting
-    // on you, counted the same way. Gated the same three-state way as Loops and
-    // failing CLOSED — a review spends the workspace's own agent subscription,
-    // so an outage must not draw it for accounts nobody switched it on for.
-    ...(codeReviewOffered(features)
-      ? [
-          {
-            id: 'code_reviews' as const,
-            icon: ScanSearch,
-            label: 'Code review',
-            // Reviews with findings still open — work, not inventory. Derived
-            // from the PR store rather than set when the panel loads, so the
-            // badge is right before you have ever opened it.
-            badge: codeReviewCount > 0 ? codeReviewCount : undefined,
-          },
-        ]
-      : []),
+    // on you, counted the same way.
+    {
+      id: 'code_reviews' as const,
+      icon: ScanSearch,
+      label: 'Code review',
+      // Reviews with findings still open — work, not inventory. Derived from the
+      // PR store rather than set when the panel loads, so the badge is right
+      // before you have ever opened it.
+      badge: codeReviewCount > 0 ? codeReviewCount : undefined,
+    },
     {
       id: 'merge_queue' as const,
       icon: GitMerge,
