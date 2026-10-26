@@ -100,9 +100,16 @@ const configuration: webpack.Configuration = {
         test: /\.(png|jpg|jpeg|gif)$/i,
         type: 'asset/resource',
       },
+      // File-type icons are plain image assets (loaded as <img>), not components
+      {
+        test: /\.svg$/,
+        include: /node_modules[\\/]material-icon-theme/,
+        type: 'asset/resource',
+      },
       // SVG
       {
         test: /\.svg$/,
+        exclude: /node_modules[\\/]material-icon-theme/,
         use: [
           {
             loader: '@svgr/webpack',

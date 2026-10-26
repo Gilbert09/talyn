@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, Folder, Loader2, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { FileIcon } from './FileIcon';
 
 /** Every file on the branch as a tree, and a read-only viewer for the one picked. */
 export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; ops: WorkbenchOps; visible: boolean }) {
@@ -120,11 +121,7 @@ function TreeLevel({
               ) : (
                 <span className="w-3 shrink-0" />
               )}
-              {isDir ? (
-                <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
-              ) : (
-                <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-              )}
+              <FileIcon name={node.name} folder={isDir} open={open} />
               <span className="truncate font-mono">{node.name}</span>
             </button>
             {open && node.children && (

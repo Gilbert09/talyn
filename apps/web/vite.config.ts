@@ -1,6 +1,35 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { createRequire } from 'node:module';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import type { Plugin } from 'vite';
 import { assertUsableBuildEnv } from './buildEnv';
+
+/** Serves the Material Icon Theme SVGs at /file-icons: from disk in dev, as plain assets in the build. */
+function fileIcons(): Plugin {
+  const dir = join(dirname(createRequire(import.meta.url).resolve('material-icon-theme/package.json')), 'icons');
+  return {
+    name: 'file-icons',
+    configureServer(server) {
+      server.middlewares.use('/file-icons', (req, res, next) => {
+        const name = (req.url ?? '').split('?')[0].replace(/^\//, '');
+        if (!/^[\w.-]+\.svg$/.test(name)) return next();
+        try {
+          res.setHeader('Content-Type', 'image/svg+xml');
+          res.end(readFileSync(join(dir, name)));
+        } catch {
+          next();
+        }
+      });
+    },
+    generateBundle() {
+      for (const file of readdirSync(dir).filter((f) => f.endsWith('.svg'))) {
+        this.emitFile({ type: 'asset', fileName: `file-icons/${file}`, source: readFileSync(join(dir, file)) });
+      }
+    },
+  };
+}
 
 /**
  * The browser app's build.
@@ -43,7 +72,7 @@ export default defineConfig(({ mode, command }) => {
       ?.slice(0, 7) ?? 'dev';
 
   return {
-    plugins: [react()],
+    plugins: [react(), fileIcons()],
     define: {
       // Feeds CLIENT_VERSION → X-Talyn-Client-Version → the backend's
       // paywall gate. `web/<sha>` can never parse as an old desktop semver,
