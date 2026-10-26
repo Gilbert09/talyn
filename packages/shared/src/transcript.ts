@@ -258,6 +258,11 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     // the truncation marker. Drop init / status / etc — they're noise
     // in a conversation view.
     if (event.type === 'system') {
+      // The closing line of an imported conversation. No subtype, so no label prefix.
+      if (event.subtype === 'talyn_imported') {
+        blocks.push({ kind: 'system', key: seqKey, text: String((event as { text?: unknown }).text ?? '') });
+        continue;
+      }
       const show = ['stderr', 'spawn_error', 'truncated'].includes(String(event.subtype ?? ''));
       if (show) {
         blocks.push({

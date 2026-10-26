@@ -350,6 +350,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       internetAccess: wb.settings?.internetAccess,
       autoCreatePr: wb.settings?.autoCreatePr,
       hasPullRequest: Boolean(wb.pullRequestId),
+      imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
     });
     const argv =
       agent === 'codex'

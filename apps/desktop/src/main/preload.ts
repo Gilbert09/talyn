@@ -67,6 +67,10 @@ const workbench: DesktopWorkbenchBridge = {
     status: (url) => ipcRenderer.invoke('workbench:coder:status', url),
     workspaces: () => ipcRenderer.invoke('workbench:coder:workspaces'),
   },
+  claudeImport: {
+    list: (repoFullNames) => ipcRenderer.invoke('workbench:claude-import:list', repoFullNames),
+    prepare: (input) => ipcRenderer.invoke('workbench:claude-import:prepare', input),
+  },
   coderPreview: {
     prepare: (input) => ipcRenderer.invoke('workbench:coder-preview:prepare', input),
     sync: (input) => ipcRenderer.invoke('workbench:coder-preview:sync', input),

@@ -7,6 +7,7 @@ import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewWorkbench } from './workbench/new/openNewWorkbench';
+import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import {
   CommandDialog,
   CommandEmpty,
@@ -148,6 +149,20 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             >
               <Home className="h-3.5 w-3.5 text-muted-foreground" />
               New session
+            </CommandItem>
+          )}
+          {workbenchesOffered(features) && claudeImportAvailable() && (
+            <CommandItem
+              value="continue a claude code conversation import session"
+              onSelect={() =>
+                pick(() => {
+                  openNewWorkbench();
+                  useClaudeImportDialog.getState().setOpen(true);
+                })
+              }
+            >
+              <History className="h-3.5 w-3.5 text-muted-foreground" />
+              Continue a Claude Code conversation
             </CommandItem>
           )}
           {navItems.map((item) => (

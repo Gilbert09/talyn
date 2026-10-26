@@ -12,6 +12,7 @@ import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
+import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
 
 // ============================================================================
 // Vocabulary
@@ -216,6 +217,8 @@ export interface WorkbenchChat {
   agentSessionId: string | null;
   status: WorkbenchChatStatus;
   queuedMessages: WorkbenchQueuedMessage[];
+  /** Set when the chat continues a local Claude Code conversation. */
+  importedFrom?: WorkbenchImportedFrom | null;
   createdAt: string;
   updatedAt: string;
 }

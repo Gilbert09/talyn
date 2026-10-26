@@ -56,7 +56,7 @@ interface Match {
   origin: boolean;
 }
 
-async function readConfig(checkout: string, main: boolean): Promise<string | null> {
+export async function readCheckoutConfig(checkout: string, main: boolean): Promise<string | null> {
   const dotGit = path.join(checkout, '.git');
   try {
     if (main) return await fs.readFile(path.join(dotGit, 'config'), 'utf8');
@@ -77,7 +77,7 @@ async function readConfig(checkout: string, main: boolean): Promise<string | nul
   }
 }
 
-function matchingRemote(config: string, wanted: Set<string>): Map<string, boolean> {
+export function matchingRemote(config: string, wanted: Set<string>): Map<string, boolean> {
   let remote = '';
   const matches = new Map<string, boolean>();
   for (const line of config.split(/\r?\n/)) {
@@ -132,7 +132,7 @@ export async function detectCheckouts(
     const gitEntry = entries.find((entry) => entry.name === '.git');
     if (gitEntry?.isDirectory() || gitEntry?.isFile()) {
       const main = gitEntry.isDirectory();
-      const config = await readConfig(dir, main);
+      const config = await readCheckoutConfig(dir, main);
       if (config) {
         const remotes = matchingRemote(config, new Set(wanted.keys()));
         for (const [name, origin] of remotes) {

@@ -2,6 +2,7 @@ import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
 import type { DesktopWorkbenchBridge } from '../../workbenchBridgeTypes';
+import { listClaudeConversations, prepareClaudeImport } from './claudeImport';
 import { CoderCli } from './coder';
 import { CoderPreviews } from './coderPreview';
 import { AgentProcesses } from './agentProcess';
@@ -205,6 +206,15 @@ export function registerWorkbenchIpc(
   });
   handle('preview:stop', (workbenchId: string, port?: number) => previews.stop(workbenchId, port));
   handle('preview:list', () => previews.list());
+  handle('claude-import:list', (repoFullNames: unknown) =>
+    listClaudeConversations(Array.isArray(repoFullNames) ? repoFullNames.filter((n): n is string => typeof n === 'string') : []),
+  );
+  handle('claude-import:prepare', (input: { sessionId?: unknown; cwd?: unknown }) => {
+    if (typeof input?.sessionId !== 'string' || typeof input.cwd !== 'string' || !input.cwd) {
+      throw new Error('A conversation id and its folder are required.');
+    }
+    return prepareClaudeImport({ sessionId: input.sessionId, cwd: input.cwd });
+  });
   handle('repo-paths:get', () => repoPaths.get());
   handle('repo-paths:home-dir', () => app.getPath('home'));
   handle('repo-paths:detect', async (input: { repoFullNames: string[]; startup?: boolean }) =>

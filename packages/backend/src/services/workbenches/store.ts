@@ -8,6 +8,7 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEffort,
   WorkbenchEvent,
+  WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchRuntimeKind,
   WorkbenchSandboxState,
@@ -89,6 +90,7 @@ export const CHAT_COLUMNS = {
   statusMessage: chatsTable.statusMessage,
   queuedMessages: chatsTable.queuedMessages,
   turnCount: chatsTable.turnCount,
+  importedFrom: chatsTable.importedFrom,
   closedAt: chatsTable.closedAt,
   createdAt: chatsTable.createdAt,
   updatedAt: chatsTable.updatedAt,
@@ -135,6 +137,7 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     agentSessionId: row.agentSessionId,
     status: row.status as WorkbenchChatStatus,
     queuedMessages: row.queuedMessages ?? [],
+    importedFrom: row.importedFrom ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -313,6 +316,27 @@ export async function listChats(workbenchId: string): Promise<ChatRow[]> {
     .orderBy(asc(chatsTable.createdAt));
 }
 
+/**
+ * Mark a chat that has never run a turn as busy with an import, in one
+ * statement. A message sent meanwhile queues behind it, and a second import
+ * finds the chat taken. Null when the chat has turns, is running or is closed.
+ */
+export async function claimChatForImport(chatId: string, message: string): Promise<ChatRow | null> {
+  const [row] = await db()
+    .update(chatsTable)
+    .set({ status: 'running', statusMessage: message, updatedAt: new Date() })
+    .where(
+      and(
+        eq(chatsTable.id, chatId),
+        eq(chatsTable.turnCount, 0),
+        ne(chatsTable.status, 'running'),
+        isNull(chatsTable.closedAt),
+      ),
+    )
+    .returning(CHAT_COLUMNS);
+  return row ?? null;
+}
+
 /** The open chats of several workbenches, oldest first — embedded in the list response in one query. */
 export function openChatsQuery(workbenchIds: string[]) {
   return db()
@@ -403,6 +427,7 @@ interface RawChatRow {
   status_message: string | null;
   queued_messages: WorkbenchQueuedMessage[] | string;
   turn_count: number;
+  imported_from: WorkbenchImportedFrom | string | null;
   closed_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -425,6 +450,7 @@ function rawToChatRow(r: RawChatRow): ChatRow {
     statusMessage: r.status_message,
     queuedMessages: queue ?? [],
     turnCount: Number(r.turn_count),
+    importedFrom: (typeof r.imported_from === 'string' ? JSON.parse(r.imported_from) : r.imported_from) ?? null,
     closedAt: r.closed_at ? date(r.closed_at) : null,
     createdAt: date(r.created_at),
     updatedAt: date(r.updated_at),
@@ -440,7 +466,7 @@ function rowsOf<T>(result: unknown): T[] {
 const RETURNING_CHAT = sql.raw(
   `c.id, c.workbench_id, c.workspace_id, c.title, c.agent, c.model, c.effort, c.plan_mode,
    c.agent_session_id, c.status, c.status_message, c.queued_messages, c.turn_count,
-   c.closed_at, c.created_at, c.updated_at`,
+   c.imported_from, c.closed_at, c.created_at, c.updated_at`,
 );
 
 export interface ClaimResult {

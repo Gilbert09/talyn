@@ -109,6 +109,24 @@ describe('workbenchTurnPrompt', () => {
     expect(turn.prompt.endsWith('Plan the change')).toBe(true);
   });
 
+  it.each([
+    ['claude', null],
+    ['codex', null],
+    ['claude', { root: '/Users/x/dev/app', repoDir: '/work/app' }],
+    ['codex', { root: '/Users/x/dev/app', repoDir: '/work/app' }],
+  ] as const)('%s with imported=%j says where the paths moved only for an imported chat', (agent, imported) => {
+    const turn = workbenchTurnPrompt({ agent, text: 'carry on', planMode: false, createPr, autoCreatePr: false, imported });
+    const hidden = turn.appendSystemPrompt ?? turn.prompt;
+    if (!imported) {
+      expect(turn).toEqual({ prompt: 'carry on' });
+      return;
+    }
+    expect(hidden).toContain('started on the user\'s machine in /Users/x/dev/app');
+    expect(hidden).toContain('Paths under /Users/x/dev/app are now under /work/app.');
+    expect(turn.prompt.endsWith('carry on')).toBe(true);
+    if (agent === 'claude') expect(turn.prompt).toBe('carry on');
+  });
+
   it('a Create PR turn gets the PR instructions, not the plan ones', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'Create a pull request', planMode: true, intent: 'create_pr', createPr });
     expect(turn.appendSystemPrompt).toContain('talyn-pr');

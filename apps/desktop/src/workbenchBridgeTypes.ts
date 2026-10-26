@@ -44,12 +44,43 @@ export interface CoderPreviewBridge {
   state(sessionId: string): Promise<CoderPreviewState | null>;
 }
 
+/** A local Claude Code conversation, as the import picker lists it. */
+export interface ClaudeConversation {
+  sessionId: string;
+  cwd: string | null;
+  gitBranch: string | null;
+  /** Claude Code's own title for the conversation, when it wrote one. */
+  title: string | null;
+  firstPrompt: string | null;
+  /** ISO time of the newest line, or of the file's last change. */
+  lastActivity: string;
+  bytes: number;
+  /** The watched repository the folder is a checkout of, or null with `unavailableReason`. */
+  repoFullName: string | null;
+  unavailableReason: string | null;
+}
+
+/** The upload body for one conversation, built in main. */
+export interface ClaudeImportPrepared {
+  /** The upload body: header line, gzipped conversation, gzipped patch. */
+  body: Uint8Array;
+  sessionBytes: number;
+  patchBytes: number;
+  base: string;
+  root: string;
+  untrackedFiles: number;
+}
+
 export type DesktopWorkbenchBridge = Omit<WorkbenchLocalBridge, 'repoPaths'> & {
   coder: {
     status(expectedUrl?: string): Promise<CoderStatus>;
     workspaces(): Promise<CoderWorkspace[]>;
   };
   coderPreview: CoderPreviewBridge;
+  claudeImport: {
+    list(repoFullNames: string[]): Promise<ClaudeConversation[]>;
+    prepare(input: { sessionId: string; cwd: string }): Promise<ClaudeImportPrepared>;
+  };
   preview: {
     start(input: { workbenchId: string; port: number; token: string; apiBaseUrl: string }): Promise<PreviewForward>;
     stop(workbenchId: string, port?: number): Promise<void>;

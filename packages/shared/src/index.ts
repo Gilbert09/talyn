@@ -116,6 +116,7 @@ export * from './previewDetect.js';
 export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
+export * from './claudeSessionImport.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';

@@ -104,6 +104,7 @@ import type {
   CreateWorkbenchPullRequestResult,
   SendWorkbenchMessageInput,
   WorkbenchAttachment,
+  WorkbenchImportResult,
   UpdateLocalWorkbenchChatInput,
   UpdateWorkbenchChatInput,
   UpdateWorkbenchInput,
@@ -260,7 +261,7 @@ async function request<T>(
   path: string,
   body?: unknown,
   isRetry = false,
-  raw?: { file: Blob; name: string }
+  raw?: { file: Blob; name?: string }
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': raw ? raw.file.type : 'application/json',
@@ -270,7 +271,7 @@ async function request<T>(
     // enforced alike, whatever it claims here.
     'X-Talyn-Client-Version': getConfig().clientVersion,
   };
-  if (raw) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
+  if (raw?.name) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -2679,6 +2680,14 @@ export const workbenches = {
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
   uploadAttachment: (workbenchId: string, file: Blob, name: string): Promise<WorkbenchAttachment> =>
     request<WorkbenchAttachment>('POST', `/workbenches/${enc(workbenchId)}/attachments`, undefined, false, { file, name }),
+  /**
+   * Continue a local Claude Code conversation in a fresh sandbox session. The
+   * body is the framed upload `claudeSessionImport.ts` describes.
+   */
+  import: (workbenchId: string, body: Uint8Array | Blob): Promise<WorkbenchImportResult> =>
+    request<WorkbenchImportResult>('POST', `/workbenches/${enc(workbenchId)}/import`, undefined, false, {
+      file: new Blob([body as BlobPart], { type: 'application/octet-stream' }),
+    }),
 
   // ---- The user's own instruction files, copied into sandbox sessions ----
   instructions: {

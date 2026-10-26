@@ -1,5 +1,5 @@
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { Readable } from 'stream';
 import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
@@ -10,6 +10,7 @@ import {
   sanitizeWorkbenchTitle,
   workbenchNameFromTask,
   WORKBENCH_EFFORTS,
+  WORKBENCH_IMPORT_MAX_BYTES,
   WORKBENCH_MANUAL_TITLE_MAX,
   type ApiResponse,
   type CreateWorkbenchChatInput,
@@ -31,6 +32,7 @@ import { reconcileDefaultBranch } from '../services/repoDefaultBranch.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
+import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import {
@@ -55,6 +57,7 @@ import {
   getWorkbench,
   insertChat,
   insertWorkbench,
+  listChats,
   listCheckpoints,
   listEvents,
   listOlderEvents,
@@ -692,6 +695,31 @@ export function workbenchRoutes(): Router {
     ok(res, rowToChat(chat));
   });
 
+  /**
+   * Continue a local Claude Code conversation in this fresh sandbox session.
+   * The body framing is in `claudeSessionImport.ts` (shared). The checks that
+   * need no body run before the body is read.
+   */
+  router.post('/:id/import', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      requireReadySandbox(row);
+      if (row.agent !== 'claude') {
+        throw new WorkbenchError('Only a Claude session can continue a Claude Code conversation.', 409, 'wrong_agent');
+      }
+      const target = importTargetChat(await listChats(row.id));
+      const body = await readImportBody(req);
+      if (body === 'too_large') {
+        return bad(res, 413, `The conversation and your changes are larger than ${IMPORT_LIMIT_MB} MB, the most one import can take.`, 'import_too_large');
+      }
+      if (!body) return bad(res, 415, 'Send the import as application/octet-stream.', 'bad_import');
+      ok(res, await importClaudeSession(row, target, parseImportBody(body)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
   // ---- Files and diff (sandbox only: a local workbench's desktop reads its own disk) ----
 
   router.get('/:id/changes', async (req, res) => {
@@ -896,6 +924,20 @@ function forwardRequestHeaders(req: Request): Record<string, string> {
     if (typeof value === 'string') out[name] = value;
   }
   return out;
+}
+
+const IMPORT_LIMIT_MB = WORKBENCH_IMPORT_MAX_BYTES / (1024 * 1024);
+const importBodyParser = express.raw({ type: 'application/octet-stream', limit: WORKBENCH_IMPORT_MAX_BYTES });
+
+/** An import body, read only after the gate. Null when it is not octet-stream. */
+function readImportBody(req: Request): Promise<Buffer | null | 'too_large'> {
+  return new Promise((resolve, reject) => {
+    importBodyParser(req, {} as Response, (err?: unknown) => {
+      if ((err as { type?: string } | undefined)?.type === 'entity.too.large') return resolve('too_large');
+      if (err) return reject(err);
+      resolve(Buffer.isBuffer(req.body) && req.body.length > 0 ? req.body : null);
+    });
+  });
 }
 
 /** The body to forward: what `express.json` already parsed, or the raw stream it left alone. */

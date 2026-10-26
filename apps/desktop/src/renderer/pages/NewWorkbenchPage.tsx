@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, FolderOpen, Globe2, Loader2 } from 'lucide-react';
+import { ArrowUp, FolderOpen, Globe2, History, Loader2 } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
   storedFleetModelForAgent,
+  workbenchesOffered,
   type WorkbenchAgent,
   type WorkbenchEffort,
 } from '@talyn/shared';
@@ -28,6 +29,11 @@ import {
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
+import {
+  claudeImportAvailable,
+  ContinueClaudeConversationDialog,
+  useClaudeImportDialog,
+} from '../components/workbench/new/ContinueClaudeConversation';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
 import { useRepoPaths } from '../components/workbench/new/useRepoPaths';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
@@ -54,6 +60,7 @@ export function NewWorkbenchPage() {
   const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId) ?? null);
   const repositories = useWorkspaceStore((s) => s.repositories);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
+  const sessionsOffered = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const prRows = usePullRequestStore((s) => s.rows);
   const request = useWorkbenchStore((s) => s.newWorkbench);
   const workbenches = useWorkspaceWorkbenches();
@@ -258,6 +265,14 @@ export function NewWorkbenchPage() {
     }
   };
 
+  const claudeSandbox = agentChoice({ sandbox: readiness.sandbox, local: readiness.local }, 'sandbox', 'claude');
+  const importBlockedReason = !runtimes.sandbox.available
+    ? runtimes.sandbox.reason ?? 'Sandbox sessions are not available.'
+    : !claudeSandbox.available
+      ? claudeSandbox.reason ?? 'Claude is not available in a sandbox.'
+      : null;
+  const showImport = sessionsOffered && claudeImportAvailable();
+
   const error = createError ?? pathError;
   const unavailable = readinessKnown
     ? (['sandbox', 'local'] as const).filter((r) => !runtimes[r].available)
@@ -372,6 +387,16 @@ export function NewWorkbenchPage() {
               <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
               <ModelPicker agent={agent} value={model} onChange={setModel} />
               <EffortPicker value={effort} onChange={setEffort} />
+              {showImport && (
+                <ControlChip
+                  onClick={() => useClaudeImportDialog.getState().setOpen(true)}
+                  data-attr="new-workbench-claude-import"
+                  className="ml-auto"
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>Continue a Claude Code conversation</span>
+                </ControlChip>
+              )}
             </div>
 
             {(error || unavailable.length > 0 || agentOk.warning) && (
@@ -417,6 +442,13 @@ export function NewWorkbenchPage() {
           </div>
 
           <RecentWorkbenches workbenches={workbenches} />
+          {showImport && (
+            <ContinueClaudeConversationDialog
+              workspaceId={workspaceId}
+              repositories={repositories}
+              blockedReason={readinessKnown ? importBlockedReason : null}
+            />
+          )}
         </div>
       </div>
     </TooltipProvider>
