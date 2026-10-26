@@ -7,8 +7,10 @@ import { gunzipSync } from 'zlib';
 import { claudeProjectSlug, type WorkbenchImportHeader } from '@talyn/shared';
 import * as environment from '../environment';
 import {
+  isScriptRun,
   listClaudeConversations,
   peekFile,
+  rawFields,
   prepareClaudeImport,
   remoteBaseRef,
   summarise,
@@ -61,10 +63,10 @@ describe('summarise', () => {
       { cwd: '/a', firstPrompt: 'Real prompt', gitBranch: 'feature', title: null },
     ],
     [
-      'the title and newest folder from the tail',
+      'the title from the tail without changing the launch folder',
       [prompt('/a', 'First')],
       [line({ type: 'ai-title', aiTitle: 'Fix login' }), line({ type: 'user', cwd: '/b', gitBranch: 'other', timestamp: '2026-10-21T00:00:00.000Z', message: { content: [{ type: 'tool_result' }] } })],
-      { cwd: '/b', firstPrompt: 'First', gitBranch: 'other', title: 'Fix login', lastTimestamp: '2026-10-21T00:00:00.000Z' },
+      { cwd: '/a', firstPrompt: 'First', gitBranch: 'feature', title: 'Fix login', lastTimestamp: '2026-10-21T00:00:00.000Z' },
     ],
     [
       'the last prompt when the head holds none',
@@ -75,6 +77,42 @@ describe('summarise', () => {
   ])('reads %s', (_label, head, tail, expected) => {
     const parse = (ls: string[]) => ls.map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(summarise(parse(head), parse(tail))).toMatchObject(expected);
+  });
+
+  it('prefers a head folder that matches the project folder', () => {
+    const scratch = '/private/tmp/claude-501/scratchpad';
+    const head = [
+      { cwd: scratch, gitBranch: 'tom/scratch' },
+      { cwd: repo, gitBranch: 'main' },
+    ];
+    const tail = [
+      { cwd: repo, gitBranch: 'tom/launch' },
+      { cwd: scratch, gitBranch: 'tom/scratch-later' },
+    ];
+    expect(summarise(head, tail, claudeProjectSlug(repo))).toMatchObject({ cwd: repo, gitBranch: 'tom/launch' });
+  });
+});
+
+describe('isScriptRun', () => {
+  it.each([
+    ['an sdk entrypoint', [{ type: 'user', entrypoint: 'sdk-ts' }], {}, true],
+    ['an sdk prompt source from an editor', [{ type: 'user', entrypoint: 'claude-vscode', promptSource: 'sdk' }], {}, true],
+    ['a queued prompt before the first user line', [{ type: 'ai-title' }, { type: 'queue-operation' }], { fileStart: true }, true],
+    ['a prompt queued during a turn', [{ type: 'mode' }, { type: 'user', entrypoint: 'cli' }, { type: 'queue-operation' }], { fileStart: true }, false],
+    ['a queued line away from the file start', [{ type: 'queue-operation' }], {}, false],
+    ['a typed CLI prompt', [{ type: 'user', entrypoint: 'cli', promptSource: 'typed' }], {}, false],
+    ['raw text cut before the metadata parses', [], { raw: '{"type":"user","message":"…","promptSource":"sdk"' }, true],
+    ['escaped keys inside content', [], { raw: '{"message":"see \\"promptSource\\":\\"sdk\\""' }, false],
+  ])('%s', (_name, lines, opts, expected) => {
+    expect(isScriptRun(lines as Array<Record<string, unknown>>, opts)).toBe(expected);
+  });
+});
+
+describe('rawFields', () => {
+  it('reads the first metadata values from a cut line and ignores escaped content', () => {
+    const raw = '{"message":{"content":"say \\"cwd\\":\\"/nope\\""},"cwd":"/work/a b","gitBranch":"tom/x","entrypoint":"cli","messa';
+    expect(rawFields(raw)).toEqual({ cwd: '/work/a b', gitBranch: 'tom/x', entrypoint: 'cli' });
+    expect(rawFields('{"type":"user","message":"hi')).toBeNull();
   });
 });
 
@@ -133,6 +171,53 @@ describe('listClaudeConversations', () => {
     }
     const list = await listClaudeConversations(['acme/app'], { projectsDir: projects, limit: 2 });
     expect(list.map((c) => c.firstPrompt)).toEqual(['p3', 'p2']);
+  });
+
+  it.each([
+    ['scratch folder', '/private/tmp/claude-501/scratchpad/fixes'],
+    ['worktree', 'posthog-worktree'],
+  ])('keeps the launch folder and its last branch after moving into a %s', async (_label, drift) => {
+    const movedTo = drift === 'posthog-worktree' ? path.join(directory, drift) : drift;
+    await writeConversation(repo, ID(30), [
+      prompt(repo, 'Fix the checkout', { entrypoint: 'cli', gitBranch: 'main' }),
+      line({ type: 'assistant', cwd: repo, gitBranch: 'tom/launch-branch' }),
+      line({ type: 'assistant', cwd: movedTo, gitBranch: 'tom/drifted-branch' }),
+    ]);
+    const list = await listClaudeConversations(['acme/app'], { projectsDir: projects });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ cwd: repo, gitBranch: 'tom/launch-branch', repoFullName: 'acme/app', unavailableReason: null });
+  });
+
+  it('skips SDK runs and counts kept conversations toward the limit', async () => {
+    await writeConversation(repo, ID(40), [prompt(repo, 'Old without entrypoint')], new Date('2026-10-01T00:00:00Z'));
+    await writeConversation(repo, ID(41), [prompt(repo, 'IDE', { entrypoint: 'claude-vscode' })], new Date('2026-10-02T00:00:00Z'));
+    await writeConversation(repo, ID(42), [prompt(repo, 'CLI', { entrypoint: 'cli' })], new Date('2026-10-03T00:00:00Z'));
+    await writeConversation(repo, ID(43), [prompt(repo, 'SDK TypeScript', { entrypoint: 'sdk-ts' })], new Date('2026-10-04T00:00:00Z'));
+    await writeConversation(repo, ID(44), [line({ type: 'file-history-snapshot' }), prompt(repo, 'SDK Python', { entrypoint: 'sdk-py' })], new Date('2026-10-05T00:00:00Z'));
+    await writeConversation(repo, ID(45), [prompt(repo, 'SDK CLI', { entrypoint: 'sdk-cli' })], new Date('2026-10-06T00:00:00Z'));
+    const list = await listClaudeConversations(['acme/app'], { projectsDir: projects, limit: 3 });
+    expect(list.map((c) => c.firstPrompt)).toEqual(['CLI', 'IDE', 'Old without entrypoint']);
+  });
+
+  it('skips editor-started SDK runs whose metadata sits past a long first prompt', async () => {
+    const long = 'x'.repeat(100 * 1024);
+    const queued = line({ type: 'queue-operation', operation: 'enqueue' });
+    // Key order as Claude Code writes it: the message first, the metadata after.
+    const sdkPrompt = `{"type":"user","message":{"role":"user","content":"${long}"},"cwd":"${repo}","promptSource":"sdk","entrypoint":"claude-vscode"}`;
+    await writeConversation(repo, ID(50), [prompt(repo, 'Typed by a person', { entrypoint: 'cli', promptSource: 'typed' })], new Date('2026-10-01T00:00:00Z'));
+    await writeConversation(repo, ID(51), [line({ type: 'ai-title', aiTitle: 'Generated' }), queued, sdkPrompt], new Date('2026-10-02T00:00:00Z'));
+    await writeConversation(repo, ID(52), [sdkPrompt, line({ type: 'assistant', cwd: repo, entrypoint: 'claude-vscode' })], new Date('2026-10-03T00:00:00Z'));
+    const list = await listClaudeConversations(['acme/app'], { projectsDir: projects });
+    expect(list.map((c) => c.firstPrompt)).toEqual(['Typed by a person']);
+  });
+
+  it('finds the folder of a conversation whose first prompt is longer than the read window', async () => {
+    const long = 'y'.repeat(100 * 1024);
+    const first = `{"type":"user","message":{"role":"user","content":"${long}"},"cwd":"${repo}","gitBranch":"main","entrypoint":"cli"}`;
+    // Only the later lines, which every Claude Code line has, say where it ran.
+    await writeConversation(repo, ID(53), [first, line({ type: 'assistant', cwd: repo, entrypoint: 'cli' }), line({ type: 'ai-title', aiTitle: 'Long start' })]);
+    const [conversation] = await listClaudeConversations(['acme/app'], { projectsDir: projects });
+    expect(conversation).toMatchObject({ cwd: repo, title: 'Long start', repoFullName: 'acme/app' });
   });
 
   it('returns nothing when there is no projects folder', async () => {
@@ -219,6 +304,20 @@ describe('prepareClaudeImport', () => {
     const { patch, header } = split((await prepareClaudeImport({ sessionId: id, cwd: repo }, { projectsDir: projects })).body);
     expect(patch).toBe('');
     expect(header.patchBytes).toBeGreaterThan(0);
+  });
+
+  it('imports the listed launch folder after the conversation moves to a scratch folder', async () => {
+    await remoteAtHead();
+    const id = ID(46);
+    await writeConversation(repo, id, [
+      prompt(repo, 'Continue from launch', { entrypoint: 'cli' }),
+      line({ type: 'assistant', cwd: '/private/tmp/claude-501/scratchpad/fixes', gitBranch: 'tom/scratch' }),
+    ]);
+    const [conversation] = await listClaudeConversations(['acme/app'], { projectsDir: projects });
+    expect(conversation).toMatchObject({ sessionId: id, cwd: repo, repoFullName: 'acme/app' });
+    const { header, session } = split((await prepareClaudeImport({ sessionId: conversation.sessionId, cwd: conversation.cwd! }, { projectsDir: projects })).body);
+    expect(header).toMatchObject({ sessionId: id, cwd: repo, root: repo });
+    expect(session).toContain('Continue from launch');
   });
 
   it('falls back to the upstream when origin/HEAD is not set', async () => {

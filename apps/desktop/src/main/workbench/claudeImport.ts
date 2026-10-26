@@ -28,12 +28,12 @@ const gzipAsync = promisify(gzip);
 
 /** Bytes read from each end of a file by the list. A first prompt and a title fit in this. */
 const PEEK_BYTES = 64 * 1024;
-/**
- * The newest conversations the list reads. A heavy machine holds tens of
- * thousands of files; reading head and tail of each would take seconds, and
- * the picker shows the newest first.
- */
+/** The newest conversations the list keeps. */
 export const LIST_LIMIT = 100;
+/** Bytes read from each end of a file to spot a script run: the first lines of a CLI conversation fit. */
+const SCRIPT_CHECK_BYTES = 8 * 1024;
+/** Files checked at once for their entrypoint: two small reads each, well under the open-file limit. */
+const SCRIPT_CHECK_BATCH = 64;
 
 export function claudeProjectsDir(): string {
   const config = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -56,20 +56,44 @@ function parseLines(text: string): Json[] {
   return out;
 }
 
+const RAW_FIELDS = ['entrypoint', 'cwd', 'gitBranch'] as const;
+
+/**
+ * The metadata fields as they first appear in raw text. A first prompt can be
+ * longer than the read window, and then no complete line carries them.
+ * Content that quotes these keys is escaped (`\"cwd\":`), so it does not match.
+ */
+export function rawFields(text: string): Json | null {
+  const out: Json = {};
+  for (const key of RAW_FIELDS) {
+    const m = new RegExp(`(?<!\\\\)"${key}":"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+    if (!m) continue;
+    try {
+      out[key] = JSON.parse(`"${m[1]}"`);
+    } catch {
+      // Not a JSON string.
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** The complete lines in the first and the last `PEEK_BYTES` of a file. */
 export async function peekFile(file: string, size: number): Promise<{ head: Json[]; tail: Json[] }> {
   const handle = await fs.open(file, 'r');
   try {
     const headBuf = Buffer.alloc(Math.min(PEEK_BYTES, size));
     await handle.read(headBuf, 0, headBuf.length, 0);
-    let headText = headBuf.toString('utf8');
+    const rawHead = headBuf.toString('utf8');
+    const fields = rawFields(rawHead);
+    let headText = rawHead;
     if (size > PEEK_BYTES) headText = headText.slice(0, headText.lastIndexOf('\n') + 1);
-    if (size <= PEEK_BYTES) return { head: parseLines(headText), tail: parseLines(headText) };
+    const head = [...parseLines(headText), ...(fields ? [fields] : [])];
+    if (size <= PEEK_BYTES) return { head, tail: parseLines(headText) };
     const tailLength = Math.min(PEEK_BYTES, size);
     const tailBuf = Buffer.alloc(tailLength);
     await handle.read(tailBuf, 0, tailLength, size - tailLength);
     const tailText = tailBuf.toString('utf8');
-    return { head: parseLines(headText), tail: parseLines(tailText.slice(tailText.indexOf('\n') + 1)) };
+    return { head, tail: parseLines(tailText.slice(tailText.indexOf('\n') + 1)) };
   } finally {
     await handle.close();
   }
@@ -77,22 +101,64 @@ export async function peekFile(file: string, size: number): Promise<{ head: Json
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/**
+ * A conversation a program started through the Claude Agent SDK, not a person.
+ * Its lines say `entrypoint: "sdk-…"`, or its prompts say `promptSource: "sdk"`
+ * (an SDK run started from an editor reports the editor's entrypoint), and its
+ * file queues its prompt before the first user line, which a person cannot do.
+ */
+export function isScriptRun(lines: Json[], opts: { raw?: string; fileStart?: boolean } = {}): boolean {
+  if (opts.fileStart) {
+    // A person cannot queue a prompt before the first one has started; the SDK queues its input.
+    for (const line of lines) {
+      if (line.type === 'user') break;
+      if (line.type === 'queue-operation') return true;
+    }
+  }
+  for (const line of lines) {
+    if (str(line.entrypoint)?.startsWith('sdk-') || line.promptSource === 'sdk') return true;
+  }
+  return Boolean(opts.raw && /(?<!\\)"(?:promptSource":"sdk"|entrypoint":"sdk-)/.test(opts.raw));
+}
+
+/** `isScriptRun` from a small read at each end of the file, before the full peek. */
+async function scriptRunAtEnds(file: string, size: number): Promise<boolean> {
+  const handle = await fs.open(file, 'r');
+  try {
+    const buffer = Buffer.alloc(Math.min(SCRIPT_CHECK_BYTES, size));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const raw = buffer.toString('utf8', 0, bytesRead);
+    const text = bytesRead < size ? raw.slice(0, raw.lastIndexOf('\n') + 1) : raw;
+    if (isScriptRun(parseLines(text), { raw, fileStart: true })) return true;
+    if (size <= buffer.length) return false;
+    // A long first prompt puts the metadata past the window. Every line carries `entrypoint`, so read the end too.
+    const { bytesRead: tailRead } = await handle.read(buffer, 0, buffer.length, size - buffer.length);
+    const tailText = buffer.toString('utf8', 0, tailRead);
+    return isScriptRun(parseLines(tailText.slice(tailText.indexOf('\n') + 1)));
+  } finally {
+    await handle.close();
+  }
+}
+
 /** What the head and tail say about one conversation. */
-export function summarise(head: Json[], tail: Json[]): Pick<ClaudeConversation, 'cwd' | 'gitBranch' | 'title' | 'firstPrompt'> & { lastTimestamp: string | null } {
-  let cwd: string | null = null;
+export function summarise(head: Json[], tail: Json[], projectFolder?: string): Pick<ClaudeConversation, 'cwd' | 'gitBranch' | 'title' | 'firstPrompt'> & { lastTimestamp: string | null } {
+  const headCwds = head.map((line) => str(line.cwd));
+  const tailCwds = tail.map((line) => str(line.cwd));
+  const launch = (value: string | null) => Boolean(value && projectFolder && claudeProjectSlug(value) === projectFolder);
+  const cwd = headCwds.find(launch) || headCwds.find(Boolean) || tailCwds.find(launch) || tailCwds.find(Boolean) || null;
   let gitBranch: string | null = null;
   let firstPrompt: string | null = null;
   for (const line of head) {
-    cwd ??= str(line.cwd);
     gitBranch ??= str(line.gitBranch);
     firstPrompt ??= claudePromptText(line);
+  }
+  for (const line of [...head, ...tail]) {
+    if (str(line.cwd) === cwd && str(line.gitBranch)) gitBranch = str(line.gitBranch);
   }
   let title: string | null = null;
   let lastTimestamp: string | null = null;
   let lastPrompt: string | null = null;
   for (const line of tail) {
-    if (str(line.cwd)) cwd = str(line.cwd);
-    if (str(line.gitBranch)) gitBranch = str(line.gitBranch);
     if (str(line.timestamp)) lastTimestamp = str(line.timestamp);
     if (line.type === 'ai-title' && str(line.aiTitle)) title = str(line.aiTitle);
     if (line.type === 'summary' && str(line.summary)) title = str(line.summary);
@@ -149,7 +215,7 @@ export async function listClaudeConversations(
   } catch {
     return [];
   }
-  const files: Array<{ file: string; sessionId: string; size: number; mtimeMs: number }> = [];
+  const files: Array<{ file: string; folder: string; sessionId: string; size: number; mtimeMs: number }> = [];
   for (const folder of folders) {
     let names: string[];
     try {
@@ -163,7 +229,7 @@ export async function listClaudeConversations(
       const file = path.join(root, folder, name);
       try {
         const stat = await fs.stat(file);
-        if (stat.isFile() && stat.size > 0) files.push({ file, sessionId, size: stat.size, mtimeMs: stat.mtimeMs });
+        if (stat.isFile() && stat.size > 0) files.push({ file, folder, sessionId, size: stat.size, mtimeMs: stat.mtimeMs });
       } catch {
         // Removed while listing.
       }
@@ -173,28 +239,40 @@ export async function listClaudeConversations(
 
   const repoByFolder = new Map<string, Promise<{ repoFullName: string | null; unavailableReason: string | null }>>();
   const out: ClaudeConversation[] = [];
-  for (const entry of files.slice(0, opts.limit ?? LIST_LIMIT)) {
-    let summary: ReturnType<typeof summarise>;
+  const limit = opts.limit ?? LIST_LIMIT;
+  const inspect = async (entry: (typeof files)[number]) => {
     try {
+      if (await scriptRunAtEnds(entry.file, entry.size)) return null;
       const { head, tail } = await peekFile(entry.file, entry.size);
-      summary = summarise(head, tail);
+      if (isScriptRun(head, { fileStart: true }) || isScriptRun(tail)) return null;
+      return summarise(head, tail, entry.folder);
     } catch {
-      continue;
+      return null;
     }
-    if (!summary.firstPrompt && !summary.title) continue;
-    const key = summary.cwd ?? '';
-    if (!repoByFolder.has(key)) repoByFolder.set(key, repoForFolder(summary.cwd, wanted));
-    const repo = await repoByFolder.get(key)!;
-    out.push({
-      sessionId: entry.sessionId,
-      cwd: summary.cwd,
-      gitBranch: summary.gitBranch,
-      title: summary.title,
-      firstPrompt: summary.firstPrompt,
-      lastActivity: summary.lastTimestamp ?? new Date(entry.mtimeMs).toISOString(),
-      bytes: entry.size,
-      ...repo,
-    });
+  };
+  // Script runs can be the newest thousands of files, so inspect a batch at a time, in parallel, newest first.
+  for (let i = 0; i < files.length && out.length < limit; i += SCRIPT_CHECK_BATCH) {
+    const batch = files.slice(i, i + SCRIPT_CHECK_BATCH);
+    const summaries = await Promise.all(batch.map(inspect));
+    for (let j = 0; j < batch.length && out.length < limit; j += 1) {
+      const entry = batch[j];
+      const summary = summaries[j];
+      if (!summary) continue;
+        if (!summary.firstPrompt && !summary.title) continue;
+        const key = summary.cwd ?? '';
+        if (!repoByFolder.has(key)) repoByFolder.set(key, repoForFolder(summary.cwd, wanted));
+        const repo = await repoByFolder.get(key)!;
+        out.push({
+          sessionId: entry.sessionId,
+          cwd: summary.cwd,
+          gitBranch: summary.gitBranch,
+          title: summary.title,
+          firstPrompt: summary.firstPrompt,
+          lastActivity: summary.lastTimestamp ?? new Date(entry.mtimeMs).toISOString(),
+          bytes: entry.size,
+          ...repo,
+        });
+    }
   }
   return out;
 }
