@@ -22,6 +22,7 @@ import { workbenchAttachmentRoutes } from './workbenchAttachments.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
+import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
@@ -244,7 +245,10 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/cloud-providers`, mount(cloudProviderRoutes()));
   app.use(`${api}/posthog`, mount(posthogRoutes()));
   app.use(`${api}/repositories`, mount(repositoryRoutes()));
+  // Trunk merge ETAs. The PR route shares the prefix and is mounted first.
+  app.use(`${api}/pull-requests`, mount(trunkPullRequestRoutes()));
   app.use(`${api}/pull-requests`, mount(pullRequestRoutes()));
+  app.use(`${api}/trunk`, mount(trunkRoutes()));
   app.use(`${api}/skills`, mount(skillRoutes()));
   // Workflows — user-defined PR automation. Below ownerScope like every other
   // workspace-scoped router; each handler also gates on the allow-list.

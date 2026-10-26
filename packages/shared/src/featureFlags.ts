@@ -362,6 +362,25 @@ export const FEATURE_FLAGS = {
     availability: 'gated',
     releaseScopes: ['teams'],
   },
+
+  /**
+   * Trunk merge ETAs — when a PR in Trunk's merge queue will merge, read from
+   * Trunk's API with the workspace's own Trunk token.
+   *
+   * Fallback OFF while it rolls out. It stores a third-party credential, and
+   * Trunk's ETA fields are new and not in its published API spec yet, so an
+   * outage should not open it to accounts nobody chose. It keeps an env
+   * override (`TRUNK_MERGE_ETA_ENABLED=true`) so it can run locally with no
+   * PostHog project.
+   */
+  trunkMergeEta: {
+    posthogKey: 'trunk-merge-eta',
+    envOverride: 'TRUNK_MERGE_ETA_ENABLED',
+    fallback: false,
+    description: 'Trunk merge ETAs — when a PR in the Trunk merge queue will merge',
+    availability: 'gated',
+    releaseScopes: ['trunk-eta'],
+  },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -486,6 +505,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingExport',
   'teams',
   'workbenches',
+  'trunkMergeEta',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

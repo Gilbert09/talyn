@@ -150,6 +150,19 @@ export async function readExternalQueueState(
 }
 
 /**
+ * The cached observation only, with no GitHub call. `undefined` when nothing
+ * has been observed on this replica; `null` when the comments said nothing.
+ */
+export function peekExternalQueueState(
+  owner: string,
+  repo: string,
+  number: number
+): ExternalQueueStatus | null | undefined {
+  const cached = observations.get(keyOf(owner, repo, number));
+  return cached ? cached.status : undefined;
+}
+
+/**
  * The last-moment answer to "would a push right now throw this PR out?", taken
  * because the caller is ABOUT TO PUSH.
  *

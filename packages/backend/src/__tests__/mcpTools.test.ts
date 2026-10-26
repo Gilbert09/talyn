@@ -274,6 +274,7 @@ const features: Features = {
   reviewRankingExport: false,
   teams: false,
   workbenches: false,
+  trunkMergeEta: false,
   reviewPriorityMode: true,
 };
 const workflow = {

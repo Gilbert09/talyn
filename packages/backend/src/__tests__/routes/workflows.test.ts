@@ -230,6 +230,7 @@ describe('workflow routes', () => {
         reviewRankingExport: false,
         teams: false,
         workbenches: false,
+        trunkMergeEta: false,
       });
     });
 
@@ -254,6 +255,7 @@ describe('workflow routes', () => {
         reviewRankingExport: false,
         teams: false,
         workbenches: false,
+        trunkMergeEta: false,
       });
     });
   });

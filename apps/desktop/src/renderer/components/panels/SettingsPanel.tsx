@@ -41,6 +41,7 @@ import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
+import { TrunkSettingsCard } from './TrunkSettingsCard';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
@@ -930,6 +931,8 @@ function IntegrationsSettings() {
           )}
         </Card>
 
+        {/* Trunk merge ETAs. Draws nothing unless the feature is on. */}
+        <TrunkSettingsCard />
       </div>
 
       {/* Cloud providers — the vendors that run the agent loop and open PRs. */}

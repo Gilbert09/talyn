@@ -83,6 +83,8 @@ const SERVICE_INFO: Record<string, string> = {
   github_webhooks:
     'Inbound GitHub App webhooks — verified, filtered, and pushed onto the Redis ingest stream, then drained by the worker into PR refreshes.',
   redis: 'Redis — the cross-replica backbone: WebSocket fan-out (Pub/Sub) and the webhook ingest queue (Stream).',
+  trunk:
+    'Trunk.io merge-queue API \u2014 the merge ETA for a PR in Trunk\u2019s queue, asked only while a client shows that PR and cached for a minute.',
   polar:
     'Polar billing API — hosted checkout + customer-portal sessions for the Unlimited plan.',
   billing:
