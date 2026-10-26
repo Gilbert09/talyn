@@ -1,4 +1,3 @@
-import type { Features } from './featureFlags.js';
 import { parseSkillKey } from './skills.js';
 
 /**
@@ -1546,18 +1545,6 @@ export function codeReviewStartProblem(input: unknown): string | null {
   }
 }
 
-// ---------- Offered ----------
-
-/**
- * Code review is released to every account, and its flag is gone, so this
- * always answers true.
- *
- * @deprecated Kept only because both `PRDetailSheet.tsx` forks still call it.
- * Delete it with those calls.
- */
-export function codeReviewOffered(_features?: Features | null): boolean {
-  return true;
-}
 
 // ---------- Findings, rendered for an agent ----------
 
