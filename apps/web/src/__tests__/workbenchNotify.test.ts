@@ -118,7 +118,7 @@ describe('notification text', () => {
         ...initial,
         workbenches: { wb1: { id: 'wb1', name: 'internal-branch', title: 'Fix settings' } as Workbench },
         chats: { wb1: [{ id: 'chat1', workbenchId: 'wb1', status: 'running' } as WorkbenchChat] },
-        chatEvents: { chat1: { events: [event(1, assistant('Updated the settings page.'))], loaded: true, loading: false, error: null } },
+        chatEvents: { chat1: { events: [event(1, assistant('Updated the settings page.'))], loaded: true, loading: false, error: null, hasOlder: false, oldestSeq: 1, loadingOlder: false, olderError: null } },
       }, true);
       const uninstall = installWorkbenchNotifications();
       try {

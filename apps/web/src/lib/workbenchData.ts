@@ -1,5 +1,5 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
-import { api } from './api';
+import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { api, type WorkbenchEventsPage } from './api';
 import { useWorkbenchStore } from '../stores/workbenches';
 
 /**
@@ -46,13 +46,15 @@ export async function loadWorkbench(id: string): Promise<Workbench | null> {
 }
 
 const inflightHistory = new Map<string, Promise<void>>();
+const inflightOlder = new Map<string, Promise<void>>();
 
 /**
- * Page a chat's stored events into the store, oldest first, until a short
- * page says there is no more. Concurrent callers share one load.
+ * Load a chat's newest page of history into the store. Older pages load on
+ * demand with `loadOlderEvents`, as the transcript scrolls up. Concurrent
+ * callers share one load.
  *
- * `force` re-reads from the last seq held — the reconnect catch-up, which
- * fetches only what was broadcast while the socket was down.
+ * `force` re-reads forward from the last seq held — the reconnect catch-up,
+ * which fetches only what was broadcast while the socket was down.
  */
 export function ensureChatHistory(chatId: string, opts: { force?: boolean } = {}): Promise<void> {
   const state = useWorkbenchStore.getState().chatEvents[chatId];
@@ -63,15 +65,18 @@ export function ensureChatHistory(chatId: string, opts: { force?: boolean } = {}
     const store = useWorkbenchStore.getState();
     store.setChatEventsState(chatId, { loading: true, error: null });
     try {
-      let after = opts.force ? lastHeldSeq(chatId) : 0;
-      for (;;) {
-        const page: { events: WorkbenchEvent[]; cursor: number } = await api.workbenches.events(chatId, {
-          after,
-          limit: EVENTS_PAGE_SIZE,
-        });
-        useWorkbenchStore.getState().appendEvents(chatId, page.events);
-        if (page.events.length < EVENTS_PAGE_SIZE || page.cursor <= after) break;
-        after = page.cursor;
+      if (opts.force) {
+        await loadForward(chatId, lastHeldSeq(chatId));
+      } else {
+        const page = await api.workbenches.events(chatId, { before: 'latest', limit: EVENTS_PAGE_SIZE });
+        if (page.hasOlder === undefined) {
+          await loadAllFromForwardPage(chatId, page);
+        } else {
+          useWorkbenchStore.getState().setLatestPage(chatId, page.events, {
+            hasOlder: page.hasOlder,
+            oldestSeq: page.oldestSeq ?? null,
+          });
+        }
       }
       useWorkbenchStore.getState().setChatEventsState(chatId, { loaded: true, loading: false });
     } catch (err) {
@@ -84,6 +89,63 @@ export function ensureChatHistory(chatId: string, opts: { force?: boolean } = {}
   })();
   inflightHistory.set(chatId, load);
   return load;
+}
+
+/** Load the page of history just older than what is held, when there is one. */
+export function loadOlderEvents(chatId: string): Promise<void> {
+  const state = useWorkbenchStore.getState().chatEvents[chatId];
+  if (!state?.loaded || !state.hasOlder || state.oldestSeq === null) return Promise.resolve();
+  const running = inflightOlder.get(chatId);
+  if (running) return running;
+  const before = state.oldestSeq;
+  const load = (async () => {
+    useWorkbenchStore.getState().setChatEventsState(chatId, { loadingOlder: true, olderError: null });
+    try {
+      const page = await api.workbenches.events(chatId, { before, limit: EVENTS_PAGE_SIZE });
+      if (page.hasOlder === undefined) {
+        await loadAllFromForwardPage(chatId, page);
+      } else {
+        useWorkbenchStore.getState().prependOlderPage(chatId, page.events, {
+          hasOlder: page.hasOlder,
+          oldestSeq: page.oldestSeq ?? null,
+        });
+      }
+      useWorkbenchStore.getState().setChatEventsState(chatId, { loadingOlder: false });
+    } catch (err) {
+      useWorkbenchStore.getState().setChatEventsState(chatId, {
+        loadingOlder: false,
+        olderError: err instanceof Error ? err.message : 'Could not load earlier messages.',
+      });
+    } finally {
+      inflightOlder.delete(chatId);
+    }
+  })();
+  inflightOlder.set(chatId, load);
+  return load;
+}
+
+/**
+ * A backend older than `before` ignores it and answers the first forward page
+ * from seq 0. Keep that page and page forward to the end: the whole history,
+ * as before paging backwards existed.
+ */
+async function loadAllFromForwardPage(chatId: string, page: WorkbenchEventsPage): Promise<void> {
+  useWorkbenchStore.getState().appendEvents(chatId, page.events);
+  if (page.events.length >= EVENTS_PAGE_SIZE && page.cursor > 0) await loadForward(chatId, page.cursor);
+  const events = useWorkbenchStore.getState().chatEvents[chatId]?.events ?? [];
+  useWorkbenchStore
+    .getState()
+    .setChatEventsState(chatId, { hasOlder: false, oldestSeq: events.length ? events[0].seq : null });
+}
+
+/** Page forward from `after` until a short page says there is no more. */
+async function loadForward(chatId: string, after: number): Promise<void> {
+  for (;;) {
+    const page = await api.workbenches.events(chatId, { after, limit: EVENTS_PAGE_SIZE });
+    useWorkbenchStore.getState().appendEvents(chatId, page.events);
+    if (page.events.length < EVENTS_PAGE_SIZE || page.cursor <= after) break;
+    after = page.cursor;
+  }
 }
 
 function lastHeldSeq(chatId: string): number {

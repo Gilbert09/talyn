@@ -22,6 +22,7 @@ export function WorkbenchTranscript({
   error,
   ops,
   emptyHint,
+  older = NO_OLDER,
 }: {
   chat: WorkbenchChat;
   events: WorkbenchEvent[];
@@ -29,19 +30,52 @@ export function WorkbenchTranscript({
   error: string | null;
   ops: WorkbenchOps;
   emptyHint?: React.ReactNode;
+  /** Paging backwards: the transcript holds the newest events and loads older ones as it scrolls up. */
+  older?: OlderHistory;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const turns = useStableTurns(events);
+  const firstSeq = events.length ? events[0].seq : null;
+  const prevFirstSeqRef = useRef(firstSeq);
+  const prevChatIdRef = useRef(chat.id);
+  // The content height at the last layout or scroll, to keep the view still when a page lands above it.
+  const prevHeightRef = useRef(0);
+  const olderRef = useRef(older);
+  olderRef.current = older;
+
+  const maybeLoadOlder = useCallback(() => {
+    const el = scrollRef.current;
+    const o = olderRef.current;
+    if (!el || !o.hasOlder || o.loading || o.error) return;
+    if (el.scrollTop < LOAD_OLDER_THRESHOLD_PX) void o.load();
+  }, []);
+
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
-    if (el) wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-  }, []);
+    if (!el) return;
+    wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+    prevHeightRef.current = el.scrollHeight;
+    maybeLoadOlder();
+  }, [maybeLoadOlder]);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [events.length, chat.id]);
+    if (!el) return;
+    // Another chat opens at its bottom, like the first one did.
+    if (prevChatIdRef.current !== chat.id) {
+      prevChatIdRef.current = chat.id;
+      prevFirstSeqRef.current = null;
+      wasAtBottomRef.current = true;
+    }
+    const prepended = firstSeq !== null && prevFirstSeqRef.current !== null && firstSeq < prevFirstSeqRef.current;
+    if (wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
+    else if (prepended) el.scrollTop += el.scrollHeight - prevHeightRef.current;
+    prevFirstSeqRef.current = firstSeq;
+    prevHeightRef.current = el.scrollHeight;
+    // A page that does not fill the view gives no scroll to react to.
+    maybeLoadOlder();
+  }, [events.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
 
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
@@ -65,6 +99,7 @@ export function WorkbenchTranscript({
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the chat…
           </div>
         )}
+        {older.hasOlder && turns.length > 0 && <OlderRow older={older} />}
         <div className="space-y-3">
           {turns.map((turn, i) => {
             const plan = plans[i];
@@ -96,7 +131,40 @@ export function WorkbenchTranscript({
           )}
         </div>
       </div>
-      {totals.turns > 0 && <ChatTotalsFooter totals={totals} />}
+      {totals.turns > 0 && <ChatTotalsFooter totals={totals} partial={older.hasOlder} />}
+    </div>
+  );
+}
+
+/** Paging state for the transcript's older history. */
+export interface OlderHistory {
+  hasOlder: boolean;
+  loading: boolean;
+  error: string | null;
+  load: () => Promise<void> | void;
+}
+
+const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
+
+/** How close to the top a scroll must come before the next older page loads. */
+const LOAD_OLDER_THRESHOLD_PX = 400;
+
+/** The row above the oldest loaded turn. A fixed height, so it never moves the content when it changes. */
+function OlderRow({ older }: { older: OlderHistory }) {
+  return (
+    <div className="mb-3 flex h-6 items-center justify-center gap-2 text-xs text-muted-foreground">
+      {older.error ? (
+        <>
+          <span>Could not load earlier messages.</span>
+          <button type="button" onClick={() => void older.load()} className="rounded px-1.5 text-foreground hover:bg-accent">
+            Retry
+          </button>
+        </>
+      ) : older.loading ? (
+        <>
+          <Loader2 className="h-3 w-3 animate-spin" /> Loading earlier messages…
+        </>
+      ) : null}
     </div>
   );
 }
@@ -131,10 +199,14 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
 }
 
 /** The chat's spend so far, pinned under the transcript so it never scrolls away. */
-function ChatTotalsFooter({ totals }: { totals: ReturnType<typeof chatTotals> }) {
+function ChatTotalsFooter({ totals, partial }: { totals: ReturnType<typeof chatTotals>; partial: boolean }) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 border-t border-border px-4 py-1.5 text-xs text-muted-foreground">
+    <div
+      className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 border-t border-border px-4 py-1.5 text-xs text-muted-foreground"
+      title={partial ? 'These totals cover the loaded messages. Scroll up to load earlier ones.' : undefined}
+    >
       <span>
+        {partial && 'Last '}
         {totals.turns} {totals.turns === 1 ? 'turn' : 'turns'}
       </span>
       {totals.costUsd !== null && (

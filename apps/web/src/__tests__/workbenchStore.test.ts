@@ -113,6 +113,45 @@ describe('workbench store', () => {
     expect(state.c2.events).toHaveLength(1);
   });
 
+  it.each([
+    ['no held events', [], [5, 6, 7], [5, 6, 7]],
+    ['live events newer than the page', [8, 9], [5, 6, 7], [5, 6, 7, 8, 9]],
+    ['live events across a gap below the page', [1, 2, 6], [5, 6, 7], [5, 6, 7]],
+  ])('setLatestPage keeps %s at or above the page', (_name, held, page, seqs) => {
+    const s = useWorkbenchStore.getState();
+    s.appendEvents('c1', held.map((seq) => ev(seq)));
+    s.setLatestPage('c1', page.map((seq) => ev(seq)), { hasOlder: true, oldestSeq: page[0] });
+    const state = useWorkbenchStore.getState().chatEvents.c1;
+    expect(state.events.map((e) => e.seq)).toEqual(seqs);
+    expect(state).toMatchObject({ hasOlder: true, oldestSeq: 5, olderError: null });
+  });
+
+  it('setLatestPage with an empty page keeps what the socket brought', () => {
+    const s = useWorkbenchStore.getState();
+    s.appendEvents('c1', [ev(1)]);
+    s.setLatestPage('c1', [], { hasOlder: false, oldestSeq: null });
+    expect(useWorkbenchStore.getState().chatEvents.c1).toMatchObject({ hasOlder: false, oldestSeq: 1 });
+  });
+
+  it('prependOlderPage merges in front and moves the marker down', () => {
+    const s = useWorkbenchStore.getState();
+    s.setLatestPage('c1', [ev(5), ev(6)], { hasOlder: true, oldestSeq: 5 });
+    s.setChatEventsState('c1', { olderError: 'boom' });
+    s.prependOlderPage('c1', [ev(3), ev(4)], { hasOlder: true, oldestSeq: 3 });
+    expect(useWorkbenchStore.getState().chatEvents.c1).toMatchObject({ hasOlder: true, oldestSeq: 3, olderError: null });
+    s.prependOlderPage('c1', [ev(1), ev(2), ev(3)], { hasOlder: false, oldestSeq: 1 });
+    const state = useWorkbenchStore.getState().chatEvents.c1;
+    expect(state.events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(state).toMatchObject({ hasOlder: false, oldestSeq: 1 });
+  });
+
+  it('prependOlderPage leaves the other chats alone', () => {
+    const s = useWorkbenchStore.getState();
+    s.setLatestPage('c2', [{ ...ev(9), chatId: 'c2' }], { hasOlder: true, oldestSeq: 9 });
+    s.prependOlderPage('c1', [ev(1)], { hasOlder: false, oldestSeq: 1 });
+    expect(useWorkbenchStore.getState().chatEvents.c2).toMatchObject({ hasOlder: true, oldestSeq: 9 });
+  });
+
   it('ignores a workbench from another workspace', () => {
     const s = useWorkbenchStore.getState();
     s.setWorkspace('ws1');

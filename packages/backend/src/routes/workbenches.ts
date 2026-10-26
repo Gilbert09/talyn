@@ -57,6 +57,7 @@ import {
   insertWorkbench,
   listCheckpoints,
   listEvents,
+  listOlderEvents,
   listWorkbenches,
   liveWorkbenchNames,
   removeQueuedMessage,
@@ -248,6 +249,17 @@ export function workbenchRoutes(): Router {
     const after = Number(req.query.after ?? 0);
     const rawLimit = Number(req.query.limit);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), MAX_EVENT_PAGE) : DEFAULT_EVENT_PAGE;
+    // Backward mode: `before=latest` is the newest page, `before=<seq>` the page older than that seq.
+    const rawBefore = req.query.before;
+    if (rawBefore !== undefined) {
+      if (req.query.after !== undefined) return bad(res, 400, 'Pass after or before, not both.');
+      const before = rawBefore === 'latest' ? null : Number(rawBefore);
+      if (before !== null && !(Number.isInteger(before) && before > 0)) {
+        return bad(res, 400, 'before must be "latest" or a positive integer');
+      }
+      // The ceiling that bounds a turn-aligned page is the forward page's own cap.
+      return ok(res, await listOlderEvents(found.chat.id, before, limit, MAX_EVENT_PAGE));
+    }
     ok(res, await listEvents(found.chat.id, Number.isFinite(after) && after > 0 ? Math.floor(after) : 0, limit));
   });
 

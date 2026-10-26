@@ -374,6 +374,16 @@ async function rawRequest(
   return response;
 }
 
+/** `GET /workbenches/chats/:id/events`. The last two fields come only with `before`. */
+export interface WorkbenchEventsPage {
+  events: WorkbenchEvent[];
+  /** The newest seq returned. */
+  cursor: number;
+  /** More events exist below `oldestSeq`. Absent from the forward mode and from a backend older than `before`. */
+  hasOlder?: boolean;
+  oldestSeq?: number | null;
+}
+
 /**
  * The per-viewer ranking model + aggregates, as `GET
  * /workspaces/:id/review-rank-model` answers it.
@@ -2699,13 +2709,22 @@ export const workbenches = {
   sendMessage: (chatId: string, input: SendWorkbenchMessageInput) =>
     request<{ queued: boolean }>('POST', `/workbenches/chats/${enc(chatId)}/messages`, input),
   cancel: (chatId: string) => request<void>('POST', `/workbenches/chats/${enc(chatId)}/cancel`),
-  /** A page of stored transcript events with `seq > after`. Pass the returned `cursor` back as `after`. */
-  events: (chatId: string, opts: { after?: number; limit?: number } = {}) => {
+  /**
+   * A page of stored transcript events, oldest first.
+   *
+   * `after`: events with `seq > after`; pass the returned `cursor` back as `after`.
+   * `before`: the newest page older than that seq (`'latest'` = from the newest),
+   * aligned to whole turns; pass the returned `oldestSeq` back as `before`.
+   * A backend older than `before` ignores it and answers the forward page from
+   * the start, without `hasOlder`.
+   */
+  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number } = {}) => {
     const qs = new URLSearchParams();
     if (opts.after !== undefined) qs.set('after', String(opts.after));
+    if (opts.before !== undefined) qs.set('before', String(opts.before));
     if (opts.limit) qs.set('limit', String(opts.limit));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return request<{ events: WorkbenchEvent[]; cursor: number }>(
+    return request<WorkbenchEventsPage>(
       'GET',
       `/workbenches/chats/${enc(chatId)}/events${suffix}`
     );

@@ -4,7 +4,7 @@ import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { chatInsights } from '../../lib/workbenchFormat';
-import { ensureChatHistory, loadWorkbench } from '../../lib/workbenchData';
+import { ensureChatHistory, loadOlderEvents, loadWorkbench } from '../../lib/workbenchData';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
@@ -77,6 +77,12 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
             error={state.error}
             ops={ops}
             emptyHint={startingHint}
+            older={{
+              hasOlder: state.hasOlder,
+              loading: state.loadingOlder,
+              error: state.olderError,
+              load: () => loadOlderEvents(chat.id),
+            }}
           />
         ) : (
           <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">

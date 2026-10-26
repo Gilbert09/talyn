@@ -13,6 +13,8 @@ import {
   insertWorkbench,
   listEvents,
   listEventsQuery,
+  listEventRangeQuery,
+  listOlderEvents,
   listWorkbenchesQuery,
   openChatsQuery,
   failQueued,
@@ -144,6 +146,76 @@ describe('workbench store', () => {
       const page = await listEvents('chat-1', after, limit);
       expect(page.events.map((e) => e.seq)).toEqual(seqs);
       expect(page.cursor).toBe(cursor);
+    });
+
+    describe('paging backwards', () => {
+      /** Store events with the given turn per seq, seq 1 first. */
+      const seed = (turns: number[]) =>
+        storeNumberedEvents(
+          'chat-1',
+          turns.map((turn, i) => ({ chatId: 'chat-1', seq: i + 1, turn, event: { seq: i + 1, type: 'assistant' } })),
+        );
+      const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+      it('answers an empty page for a chat with no events', async () => {
+        expect(await listOlderEvents('chat-1', null, 10, 100)).toEqual({ events: [], cursor: 0, oldestSeq: null, hasOlder: false });
+      });
+
+      // Turn 1 is seq 1-3, turn 2 is seq 4-8, turn 3 is seq 9-10.
+      it.each([
+        ['the whole chat when the limit covers it', null, 50, range(1, 10), false],
+        ['the newest turn, when the window starts on it', null, 2, [9, 10], true],
+        ['down to the start of the oldest turn in the window', null, 3, range(4, 10), true],
+        ['a window inside one turn, widened to all of it', 9, 1, range(4, 8), true],
+        ['the first turn, with nothing older', 4, 2, [1, 2, 3], false],
+        ['nothing below the first event', 1, 10, [], false],
+      ])('returns %s', async (_name, before, limit, seqs, hasOlder) => {
+        await seed([1, 1, 1, 2, 2, 2, 2, 2, 3, 3]);
+        const page = await listOlderEvents('chat-1', before, limit, 100);
+        expect(page.events.map((e) => e.seq)).toEqual(seqs);
+        expect(page.events.every((e) => e.event.seq === e.seq)).toBe(true);
+        expect(page).toMatchObject({
+          hasOlder,
+          oldestSeq: seqs[0] ?? null,
+          cursor: seqs[seqs.length - 1] ?? 0,
+        });
+      });
+
+      it('cuts a turn longer than the ceiling, and pages the rest of it next', async () => {
+        await seed([...Array(10).fill(1), 2, 2]);
+        const pages: number[][] = [];
+        let before: number | null = null;
+        for (;;) {
+          const page = await listOlderEvents('chat-1', before, 3, 5);
+          pages.push(page.events.map((e) => e.seq));
+          expect(page.events.length).toBeLessThanOrEqual(5);
+          if (!page.hasOlder) break;
+          before = page.oldestSeq;
+        }
+        expect(pages).toEqual([range(8, 12), range(3, 7), [1, 2]]);
+      });
+
+      it('does not widen a page when the limit already is the ceiling', async () => {
+        await seed([1, 1, 1, 1]);
+        const page = await listOlderEvents('chat-1', null, 2, 2);
+        expect(page.events.map((e) => e.seq)).toEqual([3, 4]);
+        expect(page.hasOlder).toBe(true);
+      });
+
+      it('leaves gaps in the seqs alone', async () => {
+        await storeNumberedEvents(
+          'chat-1',
+          [2, 5, 9, 12].map((seq, i) => ({ chatId: 'chat-1', seq, turn: i < 2 ? 1 : 2, event: { seq, type: 'x' } })),
+        );
+        expect((await listOlderEvents('chat-1', null, 1, 100)).events.map((e) => e.seq)).toEqual([9, 12]);
+        expect((await listOlderEvents('chat-1', 9, 1, 100)).events.map((e) => e.seq)).toEqual([2, 5]);
+      });
+
+      it('leaves the forward mode as it was', async () => {
+        await seed([1, 1, 2, 2]);
+        expect(await listEvents('chat-1', 1, 2)).toMatchObject({ cursor: 3 });
+        expect(Object.keys(await listEvents('chat-1', 0, 10)).sort()).toEqual(['cursor', 'events']);
+      });
     });
 
     it('stores a local runtime\'s numbered events once, and moves the allocator past them', async () => {
@@ -287,8 +359,9 @@ describe('workbench store', () => {
       expect(sqlText).not.toMatch(/select \*/i);
     });
 
-    it('only the transcript page selects the event column', () => {
+    it('only the transcript pages select the event column', () => {
       expect(listEventsQuery('chat-1', 0, 10).toSQL().sql).toMatch(/"event"/);
+      expect(listEventRangeQuery('chat-1', 1, 10, 10).toSQL().sql).toMatch(/order by "workbench_events"."seq" asc limit/i);
     });
 
     it('finds a branch\'s PR without shipping its summary blob', () => {

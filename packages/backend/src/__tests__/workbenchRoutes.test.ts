@@ -1261,6 +1261,32 @@ describe('workbench routes', () => {
       expect(state.body.data).toMatchObject({ status: 'running', agentSessionId: 'local-sess' });
     });
 
+    it('pages a local chat backwards from the newest event, by whole turns', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const events = [1, 2, 3, 4, 5].map((seq) => ({ chatId, seq, turn: seq <= 2 ? 1 : 2, event: { seq, type: 'assistant' } }));
+      await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+
+      const latest = (await call('GET', `/workbenches/chats/${chatId}/events?before=latest&limit=2`)).body.data;
+      expect(latest.events.map((e: Loose) => e.seq)).toEqual([3, 4, 5]);
+      expect(latest).toMatchObject({ cursor: 5, oldestSeq: 3, hasOlder: true });
+
+      const older = (await call('GET', `/workbenches/chats/${chatId}/events?before=3&limit=2`)).body.data;
+      expect(older.events.map((e: Loose) => e.seq)).toEqual([1, 2]);
+      expect(older).toMatchObject({ cursor: 2, oldestSeq: 1, hasOlder: false });
+
+      // The forward mode carries no paging fields, which is how an older client keeps working.
+      expect((await call('GET', `/workbenches/chats/${chatId}/events?after=0`)).body.data).not.toHaveProperty('hasOlder');
+    });
+
+    it.each(['before=0', 'before=-1', 'before=1.5', 'before=newest', 'before=latest&after=2'])(
+      'refuses the events query %s',
+      async (query) => {
+        const wb = await createLocalWorkbench();
+        expect((await call('GET', `/workbenches/chats/${await chatIdOf(wb.id)}/events?${query}`)).status).toBe(400);
+      },
+    );
+
     it.each([
       [{ events: 'no' }],
       [{ events: [{ seq: 0, turn: 1, event: { type: 'x' } }] }],

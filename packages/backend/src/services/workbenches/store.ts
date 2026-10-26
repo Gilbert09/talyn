@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
 import type {
   AgentEvent,
   Workbench,
@@ -651,7 +651,7 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
   return inserted.length;
 }
 
-/** The transcript page query — the ONLY query that selects `event`. */
+/** The forward transcript page. With `listEventRangeQuery`, the only queries that select `event`. */
 export function listEventsQuery(chatId: string, after: number, limit: number) {
   return db()
     .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
@@ -674,6 +674,99 @@ export async function listEvents(
     event: { ...r.event, seq: r.seq } as AgentEvent,
   }));
   return { events, cursor: events.length > 0 ? events[events.length - 1].seq : after };
+}
+
+/** The backward mode's page body: `seq` in `[from, to]`, oldest first. With `listEventsQuery`, the only reads of `event`. */
+export function listEventRangeQuery(chatId: string, from: number, to: number, limit: number) {
+  return db()
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), gte(eventsTable.seq, from), lte(eventsTable.seq, to)))
+    .orderBy(asc(eventsTable.seq))
+    .limit(limit);
+}
+
+export interface OlderEventsPage {
+  events: WorkbenchEvent[];
+  /** The newest seq returned, as in the forward mode; 0 for an empty page. */
+  cursor: number;
+  /** The oldest seq returned. Pass it back as `before` for the next older page. */
+  oldestSeq: number | null;
+  hasOlder: boolean;
+}
+
+/**
+ * The newest page of events with `seq < before` (`null` = from the newest),
+ * returned oldest first and aligned to whole turns: the window of the newest
+ * `limit` events is extended down to the first event of its oldest turn, so a
+ * tool_result never arrives without its tool_use.
+ *
+ * `ceiling` bounds that extension. A single turn with more events than that
+ * is cut at the ceiling instead, and its first events arrive with the next
+ * older page. One response never holds more than `ceiling` events.
+ *
+ * Every step but the page body reads `seq` and `turn` only, walking the
+ * `(chat_id, seq)` primary key backwards.
+ */
+export async function listOlderEvents(
+  chatId: string,
+  before: number | null,
+  limit: number,
+  ceiling: number,
+): Promise<OlderEventsPage> {
+  const below =
+    before === null ? eq(eventsTable.chatId, chatId) : and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, before));
+  const [newest] = await db()
+    .select({ seq: eventsTable.seq })
+    .from(eventsTable)
+    .where(below)
+    .orderBy(desc(eventsTable.seq))
+    .limit(1);
+  if (!newest) return { events: [], cursor: 0, oldestSeq: null, hasOlder: false };
+
+  // The oldest event of the plain window. None means the window reaches the start of the chat.
+  const [edge] = await db()
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn })
+    .from(eventsTable)
+    .where(below)
+    .orderBy(desc(eventsTable.seq))
+    .offset(limit - 1)
+    .limit(1);
+
+  let from = 0;
+  if (edge) {
+    // Seqs are unique, so [edge - budget, edge) holds at most `budget` events.
+    const floor = edge.seq - Math.max(0, ceiling - limit);
+    const [prevTurn] = await db()
+      .select({ seq: eventsTable.seq })
+      .from(eventsTable)
+      .where(
+        and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, edge.seq), gte(eventsTable.seq, floor), ne(eventsTable.turn, edge.turn)),
+      )
+      .orderBy(desc(eventsTable.seq))
+      .limit(1);
+    // No other turn inside the budget: either the chat starts there, or the turn is cut at the floor.
+    from = prevTurn ? prevTurn.seq + 1 : floor;
+  }
+
+  const rows = await listEventRangeQuery(chatId, from, newest.seq, ceiling);
+  const events = rows.map((r) => ({
+    chatId,
+    seq: r.seq,
+    turn: r.turn,
+    event: { ...r.event, seq: r.seq } as AgentEvent,
+  }));
+  const oldestSeq = events.length ? events[0].seq : null;
+  let hasOlder = false;
+  if (oldestSeq !== null) {
+    const [older] = await db()
+      .select({ seq: eventsTable.seq })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, oldestSeq)))
+      .limit(1);
+    hasOlder = Boolean(older);
+  }
+  return { events, cursor: events.length ? events[events.length - 1].seq : 0, oldestSeq, hasOlder };
 }
 
 // ============================================================================

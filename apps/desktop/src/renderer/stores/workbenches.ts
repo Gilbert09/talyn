@@ -32,10 +32,22 @@ export type WorkbenchTerminalTab = 'setup' | 'run' | 'terminal';
 
 export interface ChatEventsState {
   events: WorkbenchEvent[];
-  /** The whole stored history has been fetched. */
+  /** The newest page is in. Older events load on demand, see `hasOlder`. */
   loaded: boolean;
   loading: boolean;
   error: string | null;
+  /** Stored events exist below `oldestSeq` that this client has not fetched. */
+  hasOlder: boolean;
+  /** The oldest seq of the fetched history; the next older page is the one below it. */
+  oldestSeq: number | null;
+  loadingOlder: boolean;
+  olderError: string | null;
+}
+
+/** What a history page says about the events below it. */
+export interface OlderEventsMarker {
+  hasOlder: boolean;
+  oldestSeq: number | null;
 }
 
 /** What the new-workbench page starts from when something opens it with a target (a PR row, a branch). */
@@ -72,7 +84,16 @@ export const SCRIPT_OUTPUT_MAX_CHUNKS = 5000;
 export const TERMINAL_MIN_HEIGHT = DOCK_MIN_HEIGHT;
 export const TERMINAL_DEFAULT_HEIGHT = DOCK_DEFAULT_HEIGHT;
 
-const EMPTY_EVENTS: ChatEventsState = { events: [], loaded: false, loading: false, error: null };
+const EMPTY_EVENTS: ChatEventsState = {
+  events: [],
+  loaded: false,
+  loading: false,
+  error: null,
+  hasOlder: false,
+  oldestSeq: null,
+  loadingOlder: false,
+  olderError: null,
+};
 
 /**
  * Merge `incoming` into `existing`, de-duplicated on `seq` and in `seq` order.
@@ -173,6 +194,14 @@ interface WorkbenchState {
   upsertChat: (chat: WorkbenchChat) => void;
   setChatEventsState: (chatId: string, patch: Partial<ChatEventsState>) => void;
   appendEvents: (chatId: string, events: WorkbenchEvent[]) => void;
+  /**
+   * The newest page of a chat's history. Held events older than the page are
+   * dropped: they came over the socket before the chat was opened and may sit
+   * across a gap. They come back with the older pages.
+   */
+  setLatestPage: (chatId: string, events: WorkbenchEvent[], marker: OlderEventsMarker) => void;
+  /** An older page, merged in front of what is held. */
+  prependOlderPage: (chatId: string, events: WorkbenchEvent[], marker: OlderEventsMarker) => void;
   selectWorkbench: (id: string | null) => void;
   selectChat: (workbenchId: string, chatId: string) => void;
   hideChat: (workbenchId: string, chatId: string) => void;
@@ -288,6 +317,37 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       const merged = mergeWorkbenchEvents(cur.events, events);
       if (merged === cur.events) return s;
       return { chatEvents: { ...s.chatEvents, [chatId]: { ...cur, events: merged } } };
+    }),
+
+  setLatestPage: (chatId, events, marker) =>
+    set((s) => {
+      const cur = s.chatEvents[chatId] ?? EMPTY_EVENTS;
+      const floor = marker.oldestSeq ?? (events.length ? events[0].seq : null);
+      const kept = floor === null ? cur.events : cur.events.filter((e) => e.seq >= floor);
+      const merged = mergeWorkbenchEvents(kept, events);
+      const next: ChatEventsState = {
+        ...cur,
+        events: merged,
+        hasOlder: marker.hasOlder,
+        oldestSeq: merged.length ? merged[0].seq : null,
+        olderError: null,
+      };
+      return { chatEvents: { ...s.chatEvents, [chatId]: next } };
+    }),
+
+  prependOlderPage: (chatId, events, marker) =>
+    set((s) => {
+      const cur = s.chatEvents[chatId] ?? EMPTY_EVENTS;
+      const oldestSeq =
+        marker.oldestSeq === null ? cur.oldestSeq : Math.min(marker.oldestSeq, cur.oldestSeq ?? marker.oldestSeq);
+      const next: ChatEventsState = {
+        ...cur,
+        events: mergeWorkbenchEvents(cur.events, events),
+        hasOlder: marker.hasOlder,
+        oldestSeq,
+        olderError: null,
+      };
+      return { chatEvents: { ...s.chatEvents, [chatId]: next } };
     }),
 
   selectWorkbench: (id) => set({ selectedWorkbenchId: id }),
