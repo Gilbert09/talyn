@@ -21,6 +21,7 @@ import type {
   ReleaseHighlight,
   RepositorySettings,
   WorkbenchDiffStat,
+  WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
 } from '@talyn/shared';
@@ -1982,6 +1983,8 @@ export const workbenchChats = pgTable(
     statusMessage: text('status_message'),
     queuedMessages: jsonb('queued_messages').$type<WorkbenchQueuedMessage[]>().notNull().default([]),
     turnCount: integer('turn_count').notNull().default(0),
+    /** Set when the chat continues a local Claude Code conversation (`WorkbenchImportedFrom`). */
+    importedFrom: jsonb('imported_from').$type<WorkbenchImportedFrom>(),
     /** The last event seq handed out. Bumped in the same statement as the insert. */
     nextSeq: bigint('next_seq', { mode: 'number' }).notNull().default(0),
     /** A closed tab. Its transcript stays; it drops out of the embedded chat list. */

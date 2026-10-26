@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
 import type {
   AgentEvent,
   Workbench,
@@ -8,6 +8,7 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEffort,
   WorkbenchEvent,
+  WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchRuntimeKind,
   WorkbenchSandboxState,
@@ -89,6 +90,7 @@ export const CHAT_COLUMNS = {
   statusMessage: chatsTable.statusMessage,
   queuedMessages: chatsTable.queuedMessages,
   turnCount: chatsTable.turnCount,
+  importedFrom: chatsTable.importedFrom,
   closedAt: chatsTable.closedAt,
   createdAt: chatsTable.createdAt,
   updatedAt: chatsTable.updatedAt,
@@ -135,6 +137,7 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     agentSessionId: row.agentSessionId,
     status: row.status as WorkbenchChatStatus,
     queuedMessages: row.queuedMessages ?? [],
+    importedFrom: row.importedFrom ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -313,6 +316,27 @@ export async function listChats(workbenchId: string): Promise<ChatRow[]> {
     .orderBy(asc(chatsTable.createdAt));
 }
 
+/**
+ * Mark a chat that has never run a turn as busy with an import, in one
+ * statement. A message sent meanwhile queues behind it, and a second import
+ * finds the chat taken. Null when the chat has turns, is running or is closed.
+ */
+export async function claimChatForImport(chatId: string, message: string): Promise<ChatRow | null> {
+  const [row] = await db()
+    .update(chatsTable)
+    .set({ status: 'running', statusMessage: message, updatedAt: new Date() })
+    .where(
+      and(
+        eq(chatsTable.id, chatId),
+        eq(chatsTable.turnCount, 0),
+        ne(chatsTable.status, 'running'),
+        isNull(chatsTable.closedAt),
+      ),
+    )
+    .returning(CHAT_COLUMNS);
+  return row ?? null;
+}
+
 /** The open chats of several workbenches, oldest first — embedded in the list response in one query. */
 export function openChatsQuery(workbenchIds: string[]) {
   return db()
@@ -403,6 +427,7 @@ interface RawChatRow {
   status_message: string | null;
   queued_messages: WorkbenchQueuedMessage[] | string;
   turn_count: number;
+  imported_from: WorkbenchImportedFrom | string | null;
   closed_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -425,6 +450,7 @@ function rawToChatRow(r: RawChatRow): ChatRow {
     statusMessage: r.status_message,
     queuedMessages: queue ?? [],
     turnCount: Number(r.turn_count),
+    importedFrom: (typeof r.imported_from === 'string' ? JSON.parse(r.imported_from) : r.imported_from) ?? null,
     closedAt: r.closed_at ? date(r.closed_at) : null,
     createdAt: date(r.created_at),
     updatedAt: date(r.updated_at),
@@ -440,7 +466,7 @@ function rowsOf<T>(result: unknown): T[] {
 const RETURNING_CHAT = sql.raw(
   `c.id, c.workbench_id, c.workspace_id, c.title, c.agent, c.model, c.effort, c.plan_mode,
    c.agent_session_id, c.status, c.status_message, c.queued_messages, c.turn_count,
-   c.closed_at, c.created_at, c.updated_at`,
+   c.imported_from, c.closed_at, c.created_at, c.updated_at`,
 );
 
 export interface ClaimResult {
@@ -651,7 +677,7 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
   return inserted.length;
 }
 
-/** The transcript page query — the ONLY query that selects `event`. */
+/** The forward transcript page. With `listEventRangeQuery`, the only queries that select `event`. */
 export function listEventsQuery(chatId: string, after: number, limit: number) {
   return db()
     .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
@@ -674,6 +700,99 @@ export async function listEvents(
     event: { ...r.event, seq: r.seq } as AgentEvent,
   }));
   return { events, cursor: events.length > 0 ? events[events.length - 1].seq : after };
+}
+
+/** The backward mode's page body: `seq` in `[from, to]`, oldest first. With `listEventsQuery`, the only reads of `event`. */
+export function listEventRangeQuery(chatId: string, from: number, to: number, limit: number) {
+  return db()
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), gte(eventsTable.seq, from), lte(eventsTable.seq, to)))
+    .orderBy(asc(eventsTable.seq))
+    .limit(limit);
+}
+
+export interface OlderEventsPage {
+  events: WorkbenchEvent[];
+  /** The newest seq returned, as in the forward mode; 0 for an empty page. */
+  cursor: number;
+  /** The oldest seq returned. Pass it back as `before` for the next older page. */
+  oldestSeq: number | null;
+  hasOlder: boolean;
+}
+
+/**
+ * The newest page of events with `seq < before` (`null` = from the newest),
+ * returned oldest first and aligned to whole turns: the window of the newest
+ * `limit` events is extended down to the first event of its oldest turn, so a
+ * tool_result never arrives without its tool_use.
+ *
+ * `ceiling` bounds that extension. A single turn with more events than that
+ * is cut at the ceiling instead, and its first events arrive with the next
+ * older page. One response never holds more than `ceiling` events.
+ *
+ * Every step but the page body reads `seq` and `turn` only, walking the
+ * `(chat_id, seq)` primary key backwards.
+ */
+export async function listOlderEvents(
+  chatId: string,
+  before: number | null,
+  limit: number,
+  ceiling: number,
+): Promise<OlderEventsPage> {
+  const below =
+    before === null ? eq(eventsTable.chatId, chatId) : and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, before));
+  const [newest] = await db()
+    .select({ seq: eventsTable.seq })
+    .from(eventsTable)
+    .where(below)
+    .orderBy(desc(eventsTable.seq))
+    .limit(1);
+  if (!newest) return { events: [], cursor: 0, oldestSeq: null, hasOlder: false };
+
+  // The oldest event of the plain window. None means the window reaches the start of the chat.
+  const [edge] = await db()
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn })
+    .from(eventsTable)
+    .where(below)
+    .orderBy(desc(eventsTable.seq))
+    .offset(limit - 1)
+    .limit(1);
+
+  let from = 0;
+  if (edge) {
+    // Seqs are unique, so [edge - budget, edge) holds at most `budget` events.
+    const floor = edge.seq - Math.max(0, ceiling - limit);
+    const [prevTurn] = await db()
+      .select({ seq: eventsTable.seq })
+      .from(eventsTable)
+      .where(
+        and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, edge.seq), gte(eventsTable.seq, floor), ne(eventsTable.turn, edge.turn)),
+      )
+      .orderBy(desc(eventsTable.seq))
+      .limit(1);
+    // No other turn inside the budget: either the chat starts there, or the turn is cut at the floor.
+    from = prevTurn ? prevTurn.seq + 1 : floor;
+  }
+
+  const rows = await listEventRangeQuery(chatId, from, newest.seq, ceiling);
+  const events = rows.map((r) => ({
+    chatId,
+    seq: r.seq,
+    turn: r.turn,
+    event: { ...r.event, seq: r.seq } as AgentEvent,
+  }));
+  const oldestSeq = events.length ? events[0].seq : null;
+  let hasOlder = false;
+  if (oldestSeq !== null) {
+    const [older] = await db()
+      .select({ seq: eventsTable.seq })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, oldestSeq)))
+      .limit(1);
+    hasOlder = Boolean(older);
+  }
+  return { events, cursor: events.length ? events[events.length - 1].seq : 0, oldestSeq, hasOlder };
 }
 
 // ============================================================================

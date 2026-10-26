@@ -582,6 +582,13 @@
       "when": 1790900000001,
       "tag": "0082_repository_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1790900000002,
+      "tag": "0083_workbench_chat_imported_from",
+      "breakpoints": true
     }
   ]
 }

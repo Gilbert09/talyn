@@ -106,6 +106,7 @@ import type {
   CreateWorkbenchPullRequestResult,
   SendWorkbenchMessageInput,
   WorkbenchAttachment,
+  WorkbenchImportResult,
   UpdateLocalWorkbenchChatInput,
   UpdateWorkbenchChatInput,
   UpdateWorkbenchInput,
@@ -262,7 +263,7 @@ async function request<T>(
   path: string,
   body?: unknown,
   isRetry = false,
-  raw?: { file: Blob; name: string }
+  raw?: { file: Blob; name?: string }
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': raw ? raw.file.type : 'application/json',
@@ -272,7 +273,7 @@ async function request<T>(
     // enforced alike, whatever it claims here.
     'X-Talyn-Client-Version': getConfig().clientVersion,
   };
-  if (raw) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
+  if (raw?.name) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -374,6 +375,16 @@ async function rawRequest(
   }
 
   return response;
+}
+
+/** `GET /workbenches/chats/:id/events`. The last two fields come only with `before`. */
+export interface WorkbenchEventsPage {
+  events: WorkbenchEvent[];
+  /** The newest seq returned. */
+  cursor: number;
+  /** More events exist below `oldestSeq`. Absent from the forward mode and from a backend older than `before`. */
+  hasOlder?: boolean;
+  oldestSeq?: number | null;
 }
 
 /**
@@ -2699,6 +2710,14 @@ export const workbenches = {
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
   uploadAttachment: (workbenchId: string, file: Blob, name: string): Promise<WorkbenchAttachment> =>
     request<WorkbenchAttachment>('POST', `/workbenches/${enc(workbenchId)}/attachments`, undefined, false, { file, name }),
+  /**
+   * Continue a local Claude Code conversation in a fresh sandbox session. The
+   * body is the framed upload `claudeSessionImport.ts` describes.
+   */
+  import: (workbenchId: string, body: Uint8Array | Blob): Promise<WorkbenchImportResult> =>
+    request<WorkbenchImportResult>('POST', `/workbenches/${enc(workbenchId)}/import`, undefined, false, {
+      file: new Blob([body as BlobPart], { type: 'application/octet-stream' }),
+    }),
 
   // ---- The user's own instruction files, copied into sandbox sessions ----
   instructions: {
@@ -2729,13 +2748,22 @@ export const workbenches = {
   sendMessage: (chatId: string, input: SendWorkbenchMessageInput) =>
     request<{ queued: boolean }>('POST', `/workbenches/chats/${enc(chatId)}/messages`, input),
   cancel: (chatId: string) => request<void>('POST', `/workbenches/chats/${enc(chatId)}/cancel`),
-  /** A page of stored transcript events with `seq > after`. Pass the returned `cursor` back as `after`. */
-  events: (chatId: string, opts: { after?: number; limit?: number } = {}) => {
+  /**
+   * A page of stored transcript events, oldest first.
+   *
+   * `after`: events with `seq > after`; pass the returned `cursor` back as `after`.
+   * `before`: the newest page older than that seq (`'latest'` = from the newest),
+   * aligned to whole turns; pass the returned `oldestSeq` back as `before`.
+   * A backend older than `before` ignores it and answers the forward page from
+   * the start, without `hasOlder`.
+   */
+  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number } = {}) => {
     const qs = new URLSearchParams();
     if (opts.after !== undefined) qs.set('after', String(opts.after));
+    if (opts.before !== undefined) qs.set('before', String(opts.before));
     if (opts.limit) qs.set('limit', String(opts.limit));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return request<{ events: WorkbenchEvent[]; cursor: number }>(
+    return request<WorkbenchEventsPage>(
       'GET',
       `/workbenches/chats/${enc(chatId)}/events${suffix}`
     );

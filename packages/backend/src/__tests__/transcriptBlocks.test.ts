@@ -392,3 +392,15 @@ describe('groupToolRuns', () => {
     expect(before).not.toBe(after);
   });
 });
+
+describe('system lines', () => {
+  it.each([
+    ['talyn_imported', 'Imported from a Claude Code conversation in /a.', { kind: 'system', text: 'Imported from a Claude Code conversation in /a.' }],
+    ['stderr', 'boom', { kind: 'system', text: 'boom', subtype: 'stderr' }],
+    ['init', 'hidden', null],
+  ])('%s', (subtype, text, expected) => {
+    const blocks = buildBlocks([{ seq: ++seq, type: 'system', subtype, text } as AgentEvent]);
+    if (expected === null) expect(blocks).toEqual([]);
+    else expect(blocks).toEqual([{ key: String(seq), ...expected }]);
+  });
+});
