@@ -16,6 +16,10 @@ export * from './checkVerdict.js';
 // the backend pipeline and the desktop badges.
 export * from './externalMergeQueue.js';
 
+// Trunk merge-queue ETAs — the merge-eta answer and the one countdown
+// formatter both front ends render it with.
+export * from './trunkMergeEta.js';
+
 // Stacked-PR linking — the one definition of "B is stacked on A", shared by the
 // merge queue's stack drain and both front ends' indented PR lists.
 export * from './stacks.js';

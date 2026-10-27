@@ -34,6 +34,7 @@ import {
   externalQueueProviderLabel,
   externalQueueStateLabel,
   externalQueueStatusFromLabels,
+  externalQueueStateIsInQueue,
   fixBlockedReason,
   fixBlockedMessage,
   coarseQueueStatus,
@@ -50,6 +51,7 @@ import { PrSessionChip } from '../../workbench/PrSessionChip';
 import { CodeReviewRowChip } from '../../widgets/codeReview/CodeReviewRowChip';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
+import { TrunkMergeEtaChip } from '../../widgets/TrunkMergeEta';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
@@ -1037,6 +1039,13 @@ const PRTableRow = React.memo(function PRTableRow({
                     </span>
                   );
                 })()}
+              {/* Trunk's merge ETA, on every page, for a PR Trunk still holds.
+                  The queue entry's reading of Trunk's comment outranks the
+                  labels, as in isReadyToMerge. */}
+              {externalQueueStateIsInQueue(
+                row.mergeQueue?.external?.state ??
+                  externalQueueStatusFromLabels(row.summary.labels)?.state
+              ) && <TrunkMergeEtaChip prId={row.id} />}
             </span>
             <span className="truncate">
               {row.owner}/{row.repo}

@@ -18,6 +18,8 @@ import type {
   CodeReviewPublic,
   Features,
   GithubHealth,
+  MergeEtaAnswer,
+  TrunkIntegrationStatus,
   LoopInput,
   LoopRun,
   LoopWithStats,
@@ -1521,6 +1523,14 @@ export const pullRequests = {
    */
   description: (id: string) =>
     request<{ body: string | null }>('GET', `/pull-requests/${id}/description`),
+  /**
+   * Trunk's merge ETA for a PR in Trunk's queue. Behind the `trunkMergeEta`
+   * feature. The backend caches each answer for a minute, so ask at most once a
+   * minute per PR and count down locally between asks. `eta: null` carries a
+   * `reason`, and the row draws nothing for it.
+   */
+  mergeEta: (id: string) =>
+    request<MergeEtaAnswer>('GET', `/pull-requests/${id}/merge-eta`),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
   reviews: (id: string) =>
@@ -2389,6 +2399,26 @@ export const system = {
 };
 
 // ============================================================================
+// Trunk (merge-queue ETAs) — the per-workspace Trunk org API token
+// ============================================================================
+
+export const trunk = {
+  /** Whether a token is set, and whether Trunk refused it. Never the token. */
+  getStatus: (workspaceId: string) =>
+    request<TrunkIntegrationStatus>(
+      'GET',
+      `/trunk/status?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+  saveToken: (workspaceId: string, token: string) =>
+    request<TrunkIntegrationStatus>('PUT', '/trunk/token', { workspaceId, token }),
+  removeToken: (workspaceId: string) =>
+    request<TrunkIntegrationStatus>(
+      'DELETE',
+      `/trunk/token?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+};
+
+// ============================================================================
 // Features (allow-listed capabilities)
 // ============================================================================
 
@@ -2850,6 +2880,7 @@ export const api = {
   cloudProviders,
   repositories,
   pullRequests,
+  trunk,
   skills,
   mcpTokens,
   debug,

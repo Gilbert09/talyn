@@ -57,6 +57,19 @@ It tracks each PR with its real state and merge time.
 Open PRs keep their branch checkout rules. Closed PRs leave the session branch and worktree unchanged.
 The link dialog now has one search field, a filter for closed PRs, and keyboard selection.
 Link errors appear in the dialog so the user can try again.
+## Trunk merge-queue ETAs on PR rows (2026-10-26)
+
+A PR in Trunk's merge queue now shows when it will merge: "Will merge in ~12 min · Starts testing in ~3 min · 2 PRs ahead", with a muted "running long" when Trunk says a time is behind. Talyn read Trunk's queue state only from GitHub before (its PR comment and `trunk-*` labels). This is the first call to Trunk's own API.
+
+**What was built.**
+- **Flag.** `trunkMergeEta` (`trunk-merge-eta` in PostHog), fallback OFF, `availability: 'gated'`, env override `TRUNK_MERGE_ETA_ENABLED`. It is in `ACCOUNT_FEATURE_FLAGS`. Every route gates on the caller, the same subject `GET /features` answers for.
+- **Token.** A per-workspace Trunk org API token on an `integrations` row of type `trunk`, encrypted with `tokenCrypto`. No migration. `GET /trunk/status` says only `connected` and `needsReauth`. `PUT` and `DELETE /trunk/token` set and remove it. A 401 or 403 from Trunk writes `reauthRequiredAt` on the row, and only for the token that failed (matched on the envelope's ciphertext). A new token or a later successful call clears it.
+- **Call.** `services/trunk/client.ts` sends `POST https://api.trunk.io/v1/getSubmittedPullRequest` with `x-api-token`, the spec's by-number body (`repo { host, owner, name }`, `pr { number }`, `targetBranch`) and `includeEstimatedTimeToMerge: true`. The timeout is 8 s. Each call goes through `debugBus.recordHttp` as service `trunk`. `targetBranch` is the PR's landing branch (a stack's base), read from `last_summary` in SQL.
+- **Parser.** `services/trunk/parse.ts`. The ETA block is not in Trunk's published OpenAPI spec yet, so every field is optional. Any `status` but `available` means no ETA. An unknown enum value reads as `unknown`. The parser never throws. "Running long" comes only from pace values that clearly mean late (`behind`, `late`, `overdue` and similar), because Trunk documents only `on_track` and `holding`.
+- **Endpoint.** `GET /pull-requests/:id/merge-eta` answers `{ eta, reason?, queueState?, stateChangedAt?, fetchedAt }`. It does not call Trunk when there is no token, the PR is not open, or Talyn already knows Trunk does not hold the PR (the cached comment observation, then the labels). Answers are cached in memory for 60 s per PR and token, and concurrent asks share one call. There is no poll loop.
+- **Clients.** `api.pullRequests.mergeEta` and `api.trunk` in `@talyn/client`. `formatEtaDuration` and `describeMergeEta` in `@talyn/shared` do the wording for both apps: round up to whole minutes, nearest 5 minutes from an hour up, "any moment" for a time that has passed. `TrunkMergeEtaChip` sits in the PR row's badge group on every page, for a PR whose external queue state says Trunk still holds it. It asks only while the row is on screen and the window is visible, refreshes every 60 s and counts down every 30 s. `TrunkSettingsCard` sits under the GitHub card in Settings → Integrations. Both are forked into `apps/web`.
+
+**Not verified.** The ETA fields and `includeEstimatedTimeToMerge` come from Trunk's example, not from its spec. The token is not checked against Trunk when it is saved, because the API has no endpoint for that without a PR. A bad token shows as "Reconnect needed" after the first ETA request.
 
 ## A GitHub search incident took the authored PRs off the list (2026-10-22)
 

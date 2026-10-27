@@ -9,6 +9,7 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { SettingsPage } from '../../ui/settings';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
+import { TrunkSettingsCard } from '../../panels/TrunkSettingsCard';
 
 export function IntegrationsSettings() {
   // GitHub status + user are preloaded into the store at startup
@@ -180,6 +181,9 @@ export function IntegrationsSettings() {
           </div>
         )}
       </Card>
+
+      {/* Trunk merge ETAs. Draws nothing unless the feature is on. */}
+      <TrunkSettingsCard />
     </SettingsPage>
   );
 }

@@ -483,6 +483,7 @@ describe('featuresForUser', () => {
       'reviewRankingCandidate',
       'reviewRankingExport',
       'teams',
+      'trunkMergeEta',
       'workbenches',
       'workflows',
     ]);
@@ -501,6 +502,7 @@ describe('featuresForUser', () => {
       reviewRankingExport: false,
       teams: false,
       workbenches: false,
+      trunkMergeEta: false,
     });
   });
 
@@ -523,6 +525,7 @@ describe('featuresForUser', () => {
       reviewRankingExport: false,
       teams: false,
       workbenches: false,
+      trunkMergeEta: false,
     });
   });
 
