@@ -100,6 +100,7 @@ export const MOVE_SETTINGS_KEYS = [
   'moveSandboxId',
   'moveHeartbeatAt',
   'moveTargetHost',
+  'moveFleetSandboxId',
   'moveFailedAt',
   'moveFailures',
   'movedForDiskTo',
@@ -785,7 +786,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const made = await createWorkbenchSandbox(claimed, targetId);
     if (!made.ok) throw new Error(made.error);
     created = made;
-    await setMoveTargetHost(row.id, from, targetId, made.fleetHost);
+    await setMoveTargetHost(row.id, from, targetId, made.fleetHost, made.fleetSandboxId);
     const fresh: WorkbenchRow = { ...claimed, sandboxGeneration: made.sandboxId, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');

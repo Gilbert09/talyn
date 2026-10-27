@@ -373,8 +373,8 @@ describe('workbench store', () => {
 
   describe('the PR link', () => {
     const pr = (id: string, number: number, state: string, headBranch: string, extra: object = {}) => ({
-      id, workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'o', repo: 'r', number, state,
-      lastSummary: { headBranch, mergeable: 'MERGEABLE', ciStatus: 'passing', ...extra },
+      id, workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'o', repo: 'r', number, state, mergedAt: state === 'merged' ? new Date(Date.now() + 60_000) : null,
+      lastSummary: { createdAt: new Date().toISOString(), closedAt: new Date(Date.now() + 60_000).toISOString(), headBranch, mergeable: 'MERGEABLE', ciStatus: 'passing', ...extra },
     });
 
     it.each([

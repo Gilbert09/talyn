@@ -168,6 +168,7 @@ describe('workbench Create PR', () => {
     vi.stubEnv('FLEET_ALLOWED', 'true');
     resetFeatureFlagsForTests();
     testDb = await createTestDb();
+    vi.spyOn(githubService, 'branchExists').mockResolvedValue(false);
     await seedUser(testDb.db, { id: 'owner-a' });
     await testDb.db.insert(workspaces).values([{ id: 'ws-a', ownerId: 'owner-a', name: 'A' }]);
     await testDb.db.insert(repositories).values([
@@ -179,7 +180,7 @@ describe('workbench Create PR', () => {
     watch.mockReset().mockImplementation(async ({ number }: { number: number }) => {
       await testDb.db.insert(pullRequests).values({
         id: `pr-${number}`, workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number, state: 'open',
-        lastSummary: { headBranch: 'x', mergeable: 'MERGEABLE', ciStatus: 'passing' },
+        lastSummary: { createdAt: new Date().toISOString(), headBranch: 'x', mergeable: 'MERGEABLE', ciStatus: 'passing' },
       });
       return { ok: true, rowId: `pr-${number}`, alreadyTracked: false, summary: {} };
     });
@@ -379,7 +380,7 @@ describe('workbench Create PR', () => {
       const wb = await localWorkbench();
       mockPr(7, wb.branch);
       await call('POST', `/workbenches/${wb.id}/pull-request/link`, { number: 7 });
-      await testDb.db.update(pullRequests).set({ lastSummary: { headBranch: wb.branch } }).where(eq(pullRequests.id, 'pr-7'));
+      await testDb.db.update(pullRequests).set({ lastSummary: { headBranch: wb.branch, createdAt: new Date().toISOString() } }).where(eq(pullRequests.id, 'pr-7'));
       const res = await call('POST', `/workbenches/${wb.id}/pull-request/unlink`);
       expect(res.body.data).toMatchObject({ pullRequestId: null, branch: wb.branch, settings: { prUnlinked: 7 } });
       const read = await call('GET', `/workbenches/${wb.id}`);

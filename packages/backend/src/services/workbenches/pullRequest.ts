@@ -1,3 +1,7 @@
+import { eligiblePr } from './prEligibility.js';
+import { eq, sql } from 'drizzle-orm';
+import { getPoolDbClient } from '../../db/client.js';
+import { workbenches, pullRequests } from '../../db/schema.js';
 import {
   afterSignedPublishSteps,
   commitAllSteps,
@@ -235,6 +239,10 @@ export async function createWorkbenchPullRequest(
     if (input.pushed) throw new WorkbenchError('Only a local session pushes for itself.', 400, 'sandbox_runtime');
     requireReadySandbox(row);
     await commitAndPush(row, input);
+    const { sha: head } = parseHeadCommit((await runGitSteps(row, headCommitSteps(), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
+    if (head) await getPoolDbClient().update(workbenches).set({
+      pushedHeadShas: sql`array_append(${workbenches.pushedHeadShas}, ${head})`,
+    }).where(eq(workbenches.id, row.id));
   }
 
   const opened = await openOnGitHub(row, input);
@@ -267,6 +275,12 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
       allowClosed: strict,
     });
     if (watched.ok) {
+      if (!strict) {
+        const [eligible] = await getPoolDbClient().select({ id: pullRequests.id }).from(pullRequests)
+          .innerJoin(workbenches, eq(workbenches.id, row.id))
+          .where(sql`${pullRequests.id} = ${watched.rowId} AND ${eligiblePr()}`);
+        if (!eligible) return row;
+      }
       return (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
     }
     if (strict) throw new WorkbenchError('Pull request not found in this repository.', 404, 'pr_not_found');

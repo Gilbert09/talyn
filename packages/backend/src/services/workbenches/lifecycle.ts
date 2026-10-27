@@ -1,3 +1,4 @@
+import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
@@ -43,6 +44,7 @@ import {
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import {
   claimArchive,
+  backfillCredentialArchives,
   requestArchiveRestore, cancelPendingArchive, releaseArchive, ensureSandboxGeneration,
   finishArchive,
   markArchive,
@@ -648,6 +650,8 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   bootTimer = setTimeout(() => {
     void runWithoutScope(async () => {
       try {
+        await backfillCredentialArchives();
+        initWorkbenchMaintenance();
         const settled = await sweepOrphanedTurns();
         const stuck = await provisioningWorkbenchIds();
         for (const id of stuck) scheduleProvision(id);
@@ -679,6 +683,7 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
 
 export function stopWorkbenches(): void {
   beginWorkbenchDrain();
+  stopWorkbenchMaintenance();
   if (turnSweepTimer) clearInterval(turnSweepTimer);
   turnSweepTimer = null;
   if (archiveSweepTimer) clearInterval(archiveSweepTimer);

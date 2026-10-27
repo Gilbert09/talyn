@@ -617,7 +617,7 @@ async function upsertRow(
   }
 ): Promise<string> {
   if (opts.summary.state === 'merged' || opts.summary.mergedAt) {
-    await autoArchiveForMergedPr({ repoFullName: `${opts.summary.owner}/${opts.summary.repo}`, number: opts.summary.number, workspaceIds: [opts.workspaceId] });
+    await autoArchiveForMergedPr({ repoFullName: `${opts.summary.owner}/${opts.summary.repo}`, number: opts.summary.number, workspaceIds: [opts.workspaceId], mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null });
   }
   const now = new Date();
   const id = opts.existingId ?? uuid();
@@ -1038,6 +1038,7 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     baseBranch: s.baseBranch,
     headSha: s.headSha,
     createdAt: s.createdAt,
+    closedAt: s.closedAt,
     updatedAt: s.updatedAt,
     url: s.url,
     mergeable: s.mergeable,

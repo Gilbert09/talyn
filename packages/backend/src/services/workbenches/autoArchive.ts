@@ -1,10 +1,11 @@
+import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests, workbenches } from '../../db/schema.js';
 import { archiveWorkbench } from './lifecycle.js';
 
 type MergeArchiveInput =
-  | { repoFullName: string; number: number; workspaceIds?: string[] }
+  | { repoFullName: string; number: number; workspaceIds?: string[]; mergedAt?: Date | null }
   | { workbenchId: string };
 
 /** One entry point for the merge rule and its deferred completion. */
@@ -15,6 +16,8 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
     const rows = await db.select({ id: workbenches.id }).from(workbenches).where(and(
       eq(workbenches.id, input.workbenchId), isNull(workbenches.archivedAt),
       sql`${workbenches.settings} ->> 'archiveOnIdle' IS NOT NULL`,
+      sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
+        AND ${eligiblePr()} AND ${linkedBeforeMerge()})`,
     ));
     ids = rows.map((row) => row.id);
   } else {
@@ -22,12 +25,14 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
     const [owner, repo] = input.repoFullName.toLowerCase().split('/');
     if (!owner || !repo) return;
     const key = `${owner}/${repo}#${input.number}`;
+    const mergeTime = input.mergedAt ? sql`${input.mergedAt.toISOString()}::timestamptz` : sql`${pullRequests.mergedAt}`;
     const matches = await db.select({ id: workbenches.id, pullRequestId: pullRequests.id }).from(pullRequests)
       .innerJoin(workbenches, eq(workbenches.pullRequestId, pullRequests.id))
       .where(and(
         sql`lower(${pullRequests.owner}) = ${owner}`,
         sql`lower(${pullRequests.repo}) = ${repo}`,
         eq(pullRequests.number, input.number), isNull(workbenches.archivedAt),
+        eligiblePr(), linkedBeforeMerge(mergeTime),
         input.workspaceIds ? inArray(workbenches.workspaceId, input.workspaceIds) : undefined,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
       ));
@@ -39,6 +44,8 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
       }).where(and(
         eq(workbenches.id, match.id), eq(workbenches.pullRequestId, match.pullRequestId), isNull(workbenches.archivedAt),
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
+        sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
+          AND ${eligiblePr()} AND ${linkedBeforeMerge(mergeTime)})`,
       )).returning({ id: workbenches.id });
       ids.push(...marked.map((row) => row.id));
     }

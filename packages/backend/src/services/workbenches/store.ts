@@ -76,6 +76,9 @@ export const WORKBENCH_COLUMNS = {
   status: workbenchesTable.status,
   statusMessage: workbenchesTable.statusMessage,
   pullRequestId: workbenchesTable.pullRequestId,
+  pullRequestLinkedAt: workbenchesTable.pullRequestLinkedAt,
+  pushedHeadShas: workbenchesTable.pushedHeadShas,
+  allocatedBranch: workbenchesTable.allocatedBranch,
   settings: workbenchesTable.settings,
   diffStat: workbenchesTable.diffStat,
   archivedAt: workbenchesTable.archivedAt,
@@ -244,7 +247,7 @@ export async function claimMove(
     .set({
       status: 'moving',
       statusMessage: message,
-      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'moveTargetHost')
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'moveTargetHost' - 'moveFleetSandboxId')
         || jsonb_build_object('moveSandboxId', ${targetSandboxId}::text, 'moveHeartbeatAt', now())`,
       updatedAt: new Date(),
     })
@@ -285,11 +288,13 @@ export async function setMoveTargetHost(
   fromSandboxId: string,
   targetSandboxId: string,
   host: string | null,
+  fleetSandboxId: string | null = null,
 ): Promise<void> {
   if (!host) return;
   await db()
     .update(workbenchesTable)
-    .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveTargetHost', ${host}::text)` })
+    .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb)
+      || jsonb_build_object('moveTargetHost', ${host}::text, 'moveFleetSandboxId', ${fleetSandboxId}::text)` })
     .where(isMove(id, fromSandboxId, targetSandboxId));
 }
 
@@ -306,7 +311,7 @@ export async function otherRunningChats(workbenchId: string, exceptChatId?: stri
   return rows.length;
 }
 
-const LEASE_KEYS = sql.raw(`'moveHeartbeatAt' - 'moveTargetHost'`);
+const LEASE_KEYS = sql.raw(`'moveHeartbeatAt' - 'moveTargetHost' - 'moveFleetSandboxId'`);
 
 /**
  * Undo a claim: back to `ready` on the old box. Only for THIS move (the target
@@ -483,6 +488,25 @@ export async function workbenchBySandboxId(sandboxId: string): Promise<Workbench
     .where(eq(workbenchesTable.sandboxId, sandboxId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Match only recorded IDs. A move target belongs to the session only during that move. */
+export async function workbenchForCredentials(sandboxId: string): Promise<WorkbenchRow | null> {
+  const [row] = await db().select(WORKBENCH_COLUMNS).from(workbenchesTable).where(and(
+    eq(workbenchesTable.runtime, 'sandbox'),
+    or(
+      eq(workbenchesTable.sandboxId, sandboxId),
+      and(isNotNull(workbenchesTable.sandboxId),
+        eq(workbenchesTable.sandboxId, sandboxId.replace(/--[0-9a-f]{6}$/, '')),
+        sql`${workbenchesTable.settings} ->> 'fleetSandboxId' = ${sandboxId}`),
+      and(eq(workbenchesTable.status, 'moving'), or(
+        sql`${workbenchesTable.settings} ->> 'moveSandboxId' = ${sandboxId}`,
+        and(sql`${workbenchesTable.settings} ->> 'moveSandboxId' = ${sandboxId.replace(/--[0-9a-f]{6}$/, '')}`,
+          sql`${workbenchesTable.settings} ->> 'moveFleetSandboxId' = ${sandboxId}`),
+      )),
+    ),
+  )).limit(1);
+  return row ?? null;
 }
 
 // ============================================================================
@@ -1204,11 +1228,12 @@ export async function renewArchive(row: WorkbenchRow): Promise<boolean> {
 
 export async function finishArchive(row: WorkbenchRow, error?: string): Promise<WorkbenchRow | null> {
   const failures = row.archiveFailures + 1;
+  const exhausted = failures >= 8 && !isArchiveCredentialFailure(error);
   const [updated] = await db().update(workbenchesTable).set(error ? {
     archiveLeaseUntil: null,
-    archiveRetryAt: failures >= 8 ? null : new Date(Date.now() + Math.min(15 * 60_000 * 2 ** (failures - 1), 6 * 3_600_000)),
-    archivePendingAt: failures >= 8 ? null : row.archivePendingAt,
-    status: failures >= 8 ? 'archiveError' : 'archived',
+    archiveRetryAt: exhausted ? null : new Date(Date.now() + Math.min(15 * 60_000 * 2 ** (failures - 1), 6 * 3_600_000)),
+    archivePendingAt: exhausted ? null : row.archivePendingAt,
+    status: exhausted ? 'archiveError' : 'archived',
     archiveFailures: failures, statusMessage: error,
   } : {
     archivePendingAt: null, archiveLeaseUntil: null, archiveRetryAt: null, archiveFailures: 0,
@@ -1216,6 +1241,29 @@ export async function finishArchive(row: WorkbenchRow, error?: string): Promise<
   }).where(and(eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!)))
     .returning(WORKBENCH_COLUMNS);
   return updated ?? null;
+}
+
+const ARCHIVE_CREDENTIAL_ERROR = 'could not read Username';
+
+function isArchiveCredentialFailure(error?: string): boolean {
+  return error?.toLowerCase().includes(ARCHIVE_CREDENTIAL_ERROR.toLowerCase()) ?? false;
+}
+
+/** Repair each affected archive once. The update also excludes concurrent restores and active archives. */
+export async function backfillCredentialArchives(): Promise<number> {
+  const rows = await db().update(workbenchesTable).set({
+    archivePendingAt: new Date(), archiveLeaseUntil: null, archiveRetryAt: null, archiveFailures: 0,
+    status: 'archived', updatedAt: new Date(),
+    settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || '{"archiveCredentialsRearmed":true}'::jsonb`,
+  }).where(and(
+    eq(workbenchesTable.runtime, 'sandbox'), isNotNull(workbenchesTable.archivedAt),
+    isNotNull(workbenchesTable.sandboxId), inArray(workbenchesTable.sandboxState, ['running', 'suspended']),
+    inArray(workbenchesTable.status, ['archived', 'archiveError']),
+    isNull(workbenchesTable.archivePendingAt), archiveAvailable(), isNull(workbenchesTable.restoreRequestedAt),
+    sql`${workbenchesTable.statusMessage} ILIKE ${`%${ARCHIVE_CREDENTIAL_ERROR}%`}`,
+    sql`NOT (COALESCE(${workbenchesTable.settings}, '{}'::jsonb) ? 'archiveCredentialsRearmed')`,
+  )).returning({ id: workbenchesTable.id });
+  return rows.length;
 }
 
 export const TURN_COLUMNS = {

@@ -131,6 +131,7 @@ describe('workbench import', () => {
     await testDb.db.insert(repositories).values([
       { id: 'repo-a', workspaceId: 'ws-a', name: 'acme/app', url: 'https://github.com/acme/app', defaultBranch: 'main' },
     ]);
+    vi.spyOn(githubService, 'branchExists').mockResolvedValue(false);
     vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
     importReply = { exitCode: 0 };
     fleet = new FakeFleet();

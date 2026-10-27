@@ -452,7 +452,7 @@ async function applyTerminalStateFromPayload(
   for (const number of numbers) {
     if (outcome.merged) {
       await autoArchiveForMergedPr({ repoFullName: delivery.repoFullName, number,
-        workspaceIds: targets.map((target) => target.workspaceId) });
+        workspaceIds: targets.map((target) => target.workspaceId), mergedAt: outcome.mergedAt });
     }
     const closed = await prMonitorService.markPrTerminal(targets, number, outcome);
     whTrace(
