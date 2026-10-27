@@ -306,11 +306,16 @@ export function workingTreeStatus(): GitStep {
  * Stage everything and commit it. The message is one argv element: the local
  * runtime runs it with `execFile` (no shell), and the sandbox's script quotes
  * it with `shellQuote`, so no message can run as a command.
+ *
+ * `skipHooks` is for the sandbox: its commit shell lacks the agent's tool PATH,
+ * so a hook such as husky's `pnpm lint-staged` fails with "not found", and the
+ * agent has already run the checks that CI runs again. A user's own machine
+ * keeps its hooks.
  */
-export function commitAllSteps(message: string): GitStep[] {
+export function commitAllSteps(message: string, opts: { skipHooks?: boolean } = {}): GitStep[] {
   return [
     { argv: ['git', 'add', '-A'] },
-    { argv: ['git', 'commit', '-m', message] },
+    { argv: ['git', 'commit', ...(opts.skipHooks ? ['--no-verify'] : []), '-m', message] },
   ];
 }
 

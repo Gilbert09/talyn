@@ -369,6 +369,23 @@ describe('sandbox naming and scripts', () => {
     });
   });
 
+  it.each(['rev-list', 'rev-parse', 'status'])('fails the archive when git %s cannot read the work', (command) => {
+    const script = archiveSaveScript({ id: 'w1', branch: 'paris', baseBranch: 'main' });
+    const stub = `git() {
+      if [ "$1" = "$TALYN_FAIL_GIT" ]; then return 1; fi
+      case "$1" in
+        rev-list) echo 0 ;;
+        rev-parse) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+        status) return 0 ;;
+        *) return 97 ;;
+      esac
+    }`;
+    const result = spawnSync('bash', ['-c', `${stub}\n${script}`], {
+      encoding: 'utf8', env: { ...process.env, TALYN_FAIL_GIT: command },
+    });
+    expect(result.status).toBe(1);
+  });
+
   it('saves work on archive without ever forcing the branch', () => {
     const script = archiveSaveScript({ id: 'w1', branch: 'paris', baseBranch: 'main' });
     expect(script).toContain('git push origin HEAD:refs/heads/paris');

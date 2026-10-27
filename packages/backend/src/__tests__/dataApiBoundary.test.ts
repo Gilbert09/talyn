@@ -156,6 +156,10 @@ describe('Data API database boundary', () => {
       workbench_chats: crud,
       workbench_checkpoints: crud,
       workbench_events: ['DELETE', 'INSERT', 'SELECT'],
+      // Agent conversation backups (migration 0084), behind the chat's workspace policy.
+      workbench_agent_backups: crud,
+      // Script output followers (migration 0086), resumed by another instance after a deploy.
+      workbench_script_runs: crud,
       // Instruction files (migration 0077): the user's own CLAUDE.md and friends.
       workbench_instruction_files: crud,
       // Fleet accounts (migration 0079): encrypted Claude and Codex credentials,

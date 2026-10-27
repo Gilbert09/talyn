@@ -372,6 +372,8 @@ export interface CreateSandboxInput {
   mcpServers?: FleetMcpServerInline[];
   /** The guest's memory ceiling. Absent takes the tenant's default. */
   memMib?: number;
+  /** The guest's CPU-time allowance in thousandths of a vCPU. Absent takes the tenant's default. */
+  milliVcpu?: number;
 }
 
 /** One MCP server, as the fleet takes it on a create. */

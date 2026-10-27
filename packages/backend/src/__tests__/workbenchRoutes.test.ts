@@ -46,13 +46,15 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
   reconcileDefaultBranch: async (input: { stored: string }) => input.stored || 'main',
 }));
 
+const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { githubService } = await import('../services/github.js');
+const { refreshDiffStat } = await import('../services/workbenches/changes.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
-const { getChat, getWorkbench, listChats, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
+const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -160,6 +162,7 @@ describe('workbench routes', () => {
   });
 
   afterEach(async () => {
+    await settleArchivesForTests();
     setWorkbenchFleetClientForTests(null);
     await new Promise((resolve) => server.close(resolve));
     await testDb.cleanup();
@@ -501,7 +504,7 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: "- fix 'it'", planMode: true, model: 'claude-opus-5', effort: 'high' });
       await idle(chatId);
       const turn = fleet.execs.find((e) => isAgentTurn(e.script))!;
-      expect(turn.follow).toBe(true);
+      expect(turn.follow).toBe(false);
       expect(turn.script).toContain('--permission-mode plan');
       expect(turn.script).toContain('--model claude-opus-5');
       expect(turn.script).toContain('--effort high');
@@ -509,7 +512,7 @@ describe('workbench routes', () => {
       expect(turn.script.endsWith(`-- '- fix '\\''it'\\'''`)).toBe(true);
       expect(turn.req.cwd).toBe('/work/app');
       expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
-      expect(turn.req.cmd[3]).toBe(turnMarker(chatId));
+      expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
       // The checkpoint ran before the agent, and the credentials are the box's vendor only.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
       expect(order.indexOf('checkpoint')).toBeLessThan(order.indexOf('agent'));
@@ -666,10 +669,12 @@ describe('workbench routes', () => {
     it('settles a turn a dead process left running, and says why', async () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
-      await updateChat(chatId, { status: 'running', turnCount: 1 });
+      await updateChat(chatId, { status: 'running', turnCount: 1,
+        turnOwner: 'previous-instance', turnHeartbeatAt: new Date(Date.now() - 91_000) });
+      const before = fleet.scripts.length;
       expect(await sweepOrphanedTurns()).toBe(1);
-      expect(await getChat(chatId)).toMatchObject({ status: 'error', statusMessage: ORPHAN_MESSAGE });
-      expect(fleet.execs.at(-1)?.req.env?.TALYN_MARKER).toBe(turnMarker(chatId));
+      await vi.waitFor(async () => expect(await getChat(chatId)).toMatchObject({ status: 'error', statusMessage: ORPHAN_MESSAGE }));
+      expect(fleet.scripts.slice(before).some((script) => script.includes('pkill'))).toBe(false);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
       expect(page.body.data.events.at(-1).event.result).toBe(ORPHAN_MESSAGE);
       expect(await sweepOrphanedTurns()).toBe(0);
@@ -703,14 +708,14 @@ describe('workbench routes', () => {
   });
 
   describe('archive and restore', () => {
-    it('runs the save script, then deletes the box, and reports what it pushed', async () => {
+    it('answers immediately, then saves and deletes the box', async () => {
       const wb = await createSandboxWorkbench();
       scriptedFleet((script) => (script.includes('PUSHED_BRANCH') ? { stdout: 'PUSHED_BRANCH 3\nSAVED_WORK\n' } : null));
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
-      expect(res.body.data).toMatchObject({ status: 'archived', sandboxState: 'deleted' });
+      expect(res.body.data).toMatchObject({ status: 'archived' });
+      await settleArchivesForTests();
+      expect((await getWorkbench(wb.id))?.sandboxState).toBe('deleted');
       expect(res.body.data.archivedAt).toBeTruthy();
-      expect(res.body.data.statusMessage).toContain(`Pushed 3 commits to ${wb.branch}.`);
-      expect(res.body.data.statusMessage).toContain('uncommitted changes');
       expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
       const save = fleet.scripts.findIndex((s) => s.includes(`git push origin HEAD:refs/heads/${wb.branch}`));
       expect(save).toBeGreaterThan(-1);
@@ -722,11 +727,11 @@ describe('workbench routes', () => {
       const wb = await createSandboxWorkbench();
       scriptedFleet((script) => (script.includes('PUSHED_BRANCH') ? { exitCode: 1, stderr: 'remote: Permission denied' } : null));
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe('archive_save_failed');
-      expect(res.body.error).toContain('Permission denied');
+      expect(res.status).toBe(200);
+      await settleArchivesForTests();
+      expect((await getWorkbench(wb.id))?.statusMessage).toContain('Permission denied');
       expect(fleet.deleted).toEqual([]);
-      expect((await getWorkbench(wb.id))?.archivedAt).toBeNull();
+      expect((await getWorkbench(wb.id))?.archivedAt).not.toBeNull();
     });
 
     it('restores onto a new box, forgets the old sessions, and puts the saved work back', async () => {
@@ -989,14 +994,16 @@ describe('workbench routes', () => {
       expect((await call('POST', `/workbenches/${wb.id}/retry`, undefined, 'owner-b')).status).toBe(404);
     });
 
-    it('archives a failed workbench without its box when the fleet is not deployed', async () => {
+    it('keeps a pending archive when the fleet is not deployed', async () => {
       const wb = await createFailedWorkbench();
       fleet.deleteSandbox = async () => {
         throw new FleetNotDeployedError();
       };
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
       expect(res.status).toBe(200);
-      expect(res.body.data).toMatchObject({ status: 'archived', sandboxState: 'deleted', error: null });
+      expect(res.body.data).toMatchObject({ status: 'archived' });
+      await settleArchivesForTests();
+      expect((await getWorkbench(wb.id))?.archivePendingAt).not.toBeNull();
     });
 
     it('archives a failed workbench that never had a sandbox id, without calling the fleet', async () => {
@@ -1008,29 +1015,48 @@ describe('workbench routes', () => {
       expect(fleet.scripts).toEqual([]);
     });
 
-    it('keeps a ready workbench, and answers 503, when its box cannot be deleted', async () => {
+    it('keeps the archive pending when its box cannot be deleted', async () => {
       const wb = await createSandboxWorkbench();
       fleet.deleteSandbox = async () => {
         throw new FleetNotDeployedError();
       };
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
-      expect([res.status, res.body.code, res.body.error]).toEqual([503, 'fleet_not_deployed', NOT_DEPLOYED]);
-      expect((await getWorkbench(wb.id))?.archivedAt).toBeNull();
+      expect(res.status).toBe(200);
+      await settleArchivesForTests();
+      expect((await getWorkbench(wb.id))?.archivePendingAt).not.toBeNull();
+      expect((await getWorkbench(wb.id))?.archivedAt).not.toBeNull();
     });
 
-    it('answers a fleet that is down with 503 and words, not a 500', async () => {
+    it('records a fleet failure after answering the archive request', async () => {
       const wb = await createSandboxWorkbench();
       scriptedFleet((script) => {
         if (script.includes('PUSHED_BRANCH')) throw new FleetCapacityError('http://10.0.0.7:8080 down', undefined, 'unreachable');
         return null;
       });
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
-      expect([res.status, res.body.code]).toEqual([503, 'fleet_unavailable']);
-      expect(res.body.error).toBe('The sandbox runners are not reachable right now. Try again shortly.');
+      expect(res.status).toBe(200);
+      await settleArchivesForTests();
+      expect((await getWorkbench(wb.id))?.statusMessage).toBe('The sandbox runners are not reachable right now. Try again shortly.');
     });
   });
 
   describe('files, diff and scripts', () => {
+    it.each(['config', 'files', 'changes', 'diff'])('waits for the sandbox before reading %s', async (route) => {
+      const wb = await createSandboxWorkbench();
+      await updateWorkbench(wb.id, { status: 'moving' });
+      const scripts = fleet.scripts.length;
+      let answered = false;
+      const request = call('GET', `/workbenches/${wb.id}/${route}`).then((response) => {
+        answered = true;
+        return response;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(answered).toBe(false);
+      expect(fleet.scripts).toHaveLength(scripts);
+      await updateWorkbench(wb.id, { status: 'ready' });
+      expect((await request).status).toBe(200);
+    });
+
     const detectionOutput = [
       `FILES ${Buffer.from('package.json\npackage-lock.json\nuv.lock\n').toString('base64')}`,
       `PACKAGE ${Buffer.from('{"scripts":{"dev":"vite"}}').toString('base64')}`,
@@ -1113,7 +1139,7 @@ describe('workbench routes', () => {
       expect(fleet.scripts.length).toBe(before);
     });
 
-    it('reads changes through git when the fleet has no diff route, and stores the stat', async () => {
+    it('reads changes in both scopes and keeps the combined fields', async () => {
       const wb = await createSandboxWorkbench();
       const b64 = (s: string) => Buffer.from(s).toString('base64');
       scriptedFleet((script) =>
@@ -1124,6 +1150,10 @@ describe('workbench routes', () => {
                 `HEAD ${b64('b'.repeat(40) + '\n')}`,
                 `NUMSTAT ${b64('3\t1\tsrc/a.ts\0')}`,
                 `NAMES ${b64('M\0src/a.ts\0')}`,
+                `UNCOMMITTED_NUMSTAT ${b64('1\t0\tsrc/a.ts\0')}`,
+                `UNCOMMITTED_NAMES ${b64('M\0src/a.ts\0')}`,
+                `COMMITTED_NUMSTAT ${b64('2\t1\tsrc/a.ts\0')}`,
+                `COMMITTED_NAMES ${b64('M\0src/a.ts\0')}`,
                 `UNTRACKED ${b64('new.txt\0')}`,
                 `COUNTS ${b64('new.txt\t4\n')}`,
               ].join('\n'),
@@ -1134,11 +1164,44 @@ describe('workbench routes', () => {
       expect(res.body.data).toEqual({
         base: 'a'.repeat(40),
         headSha: 'b'.repeat(40),
+        uncommitted: [
+          { path: 'new.txt', status: 'added', added: 4, removed: 0, binary: false },
+          { path: 'src/a.ts', status: 'modified', added: 1, removed: 0, binary: false },
+        ],
+        committed: [{ path: 'src/a.ts', status: 'modified', added: 2, removed: 1, binary: false }],
+        uncommittedStats: { added: 5, removed: 0, files: 2 },
+        committedStats: { added: 2, removed: 1, files: 1 },
         files: [
           { path: 'new.txt', status: 'added', added: 4, removed: 0, binary: false },
           { path: 'src/a.ts', status: 'modified', added: 3, removed: 1, binary: false },
         ],
       });
+      const updated = await refreshDiffStat((await getWorkbench(wb.id))!);
+      expect(rowToWorkbench(updated)).toMatchObject({
+        diffStat: res.body.data.uncommittedStats,
+        uncommittedStats: res.body.data.uncommittedStats,
+        committedStats: res.body.data.committedStats,
+      });
+      expect(emitted.findLast((event) => event.type === 'workbench:updated')?.payload).toMatchObject({
+        workbench: expect.objectContaining({ uncommittedStats: res.body.data.uncommittedStats, committedStats: res.body.data.committedStats }),
+      });
+    });
+
+    it.each(['uncommitted', 'committed', 'combined'])('passes the %s diff scope', async (scope) => {
+      const wb = await createSandboxWorkbench();
+      scriptedFleet((script) => script.includes('git diff --no-color') ? { stdout: 'scoped patch' } : null);
+      const res = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts&scope=${scope}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.patch).toBe('scoped patch');
+      const script = fleet.scripts.findLast((s) => s.includes('git diff --no-color'))!;
+      const comparison = scope === 'uncommitted' ? 'HEAD' : scope === 'committed' ? '"$mb" HEAD' : '"$mb"';
+      expect(script).toContain(`--find-renames ${comparison} -- src/a.ts`);
+    });
+
+    it('refuses an invalid diff scope', async () => {
+      const wb = await createSandboxWorkbench();
+      const res = await call('GET', `/workbenches/${wb.id}/diff?scope=wrong`);
+      expect([res.status, res.body.code]).toEqual([400, 'bad_scope']);
     });
 
     it.each([

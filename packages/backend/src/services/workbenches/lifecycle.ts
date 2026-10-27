@@ -1,3 +1,7 @@
+import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
+import { sweepAgentBackups } from './agentBackups.js';
+import { sweepScripts, detachScriptFollowers } from './scripts.js';
+import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
 import {
   checkpointCreateSteps,
   checkpointRestoreSteps,
@@ -18,7 +22,7 @@ import {
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, movingError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
@@ -28,14 +32,21 @@ import {
   fleetCreateTarget,
   gitAuthorFor,
   loadWorkbenchConfig,
+  killMarker,
   nextSandboxId,
   providerForAgent,
   recordWorkbenchEvent,
   runCapture,
   sandboxIdFor,
 } from './sandboxRuntime.js';
-import { startScript, stopAllScripts } from './scripts.js';
+import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import {
+  claimArchive,
+  requestArchiveRestore, cancelPendingArchive, releaseArchive, ensureSandboxGeneration,
+  finishArchive,
+  markArchive,
+  pendingArchives,
+  renewArchive,
   deleteWorkbenchRow,
   failQueued,
   getWorkbench,
@@ -46,7 +57,7 @@ import {
   updateWorkbench,
   type WorkbenchRow,
 } from './store.js';
-import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns } from './turns.js';
+import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollowers } from './turns.js';
 
 /**
  * A sandbox workbench's life: provision (create the box, clone, set up),
@@ -91,7 +102,7 @@ function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['setting
  */
 async function failProvision(workbenchId: string, message: string): Promise<void> {
   const row = await getWorkbench(workbenchId);
-  if (!row || row.archivedAt) return;
+  if (!row || row.archivedAt || isWorkbenchDraining()) return;
   recordWorkbenchEvent(row, 'provision_failed', message, false);
   await setRow(row, {
     status: 'error',
@@ -113,6 +124,13 @@ export function scheduleProvision(workbenchId: string, opts: { restore?: boolean
  * asks for it explicitly rather than inherit whatever the plan says.
  */
 export const SESSION_SANDBOX_MEM_MIB = 4096;
+
+/**
+ * The CPU allowance of a session's box: 4 vCPUs. The tenant default is 1, or
+ * 0.5 on a plan, which made a PostHog test run or build take many minutes. It
+ * is a ceiling, not a reservation: the host shares its 12 threads by load.
+ */
+export const SESSION_SANDBOX_MILLI_VCPU = 4000;
 
 export type CreatedWorkbenchSandbox =
   | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
@@ -152,7 +170,7 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   });
   if (!built.ok) return { ok: false, error: built.error };
   const target = await fleetCreateTarget(row.workspaceId);
-  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB });
+  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB, milliVcpu: SESSION_SANDBOX_MILLI_VCPU });
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
@@ -165,7 +183,9 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
   provisioning.add(workbenchId);
   let row = await getWorkbench(workbenchId);
   try {
-    if (!row || row.runtime !== 'sandbox' || row.archivedAt) return;
+    if (!row || row.runtime !== 'sandbox' || row.archivedAt || isWorkbenchDraining()) return;
+    row = (await ensureSandboxGeneration(row.id))!;
+    await resetSetupForGeneration(row);
     const replacingLostSandbox = row.sandboxState === 'lost';
     const fail = (message: string) => failProvision(workbenchId, message);
 
@@ -184,6 +204,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     });
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
 
+    if (isWorkbenchDraining()) return;
     // 2. The repository and the branch.
     const cloned = await runCapture(row, cloneScript(row), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
     if (cloned.exitCode !== 0) {
@@ -192,6 +213,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
           (cloned.stderr.trim().split('\n').slice(-3).join(' ') || `git exited ${cloned.exitCode}`),
       );
     }
+    if (isWorkbenchDraining()) return;
     if (opts.restore || row.memoryRestorePending === 'archive') {
       const restored = await runCapture(row, restoreSavedWorkScript(row), { timeoutMs: CLONE_TIMEOUT_MS });
       if (restored.exitCode !== 0) {
@@ -203,15 +225,18 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     // can often fix what the script could not — and says so.
     let setupNote: string | null = null;
     const config = await loadWorkbenchConfig(row).catch(() => null);
+    if (isWorkbenchDraining()) return;
     if (config?.setup) {
       row = await setRow(row, { statusMessage: 'Running the setup script' });
-      const { done } = await startScript(row, 'setup', { config });
+      const { done } = await startScript(row, 'setup', { config, resume: true });
       const code = await done;
+      if (isWorkbenchDraining()) return;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
       }
     }
 
+    if (isWorkbenchDraining()) return;
     row = await linkPullRequest(row);
     if (row.memoryRestorePending || replacingLostSandbox) {
       await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
@@ -225,6 +250,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       if (chat.queuedMessages.length > 0 && !chat.closedAt) await startQueuedIfIdle(chat.id);
     }
   } catch (err) {
+    if (isWorkbenchDraining() || (err instanceof WorkbenchError && err.code === 'draining')) return;
     console.warn(`[workbench] provisioning ${workbenchId} failed:`, err);
     await failProvision(workbenchId, userFacingError(err)).catch((failErr) =>
       console.error(`[workbench] recording the failed provision of ${workbenchId} failed:`, failErr),
@@ -237,8 +263,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
 /**
  * Save everything the box holds that origin does not, before the box goes.
  *
- * Prints one line per thing it did, which `archiveWorkbench` turns into the
- * note the user reads:
+ * Prints one line per saved item:
  *   PUSHED_BRANCH <n>   n commits pushed to the branch itself
  *   PUSHED_HEAD         the branch had moved on origin; HEAD saved to the archive ref instead
  *   SAVED_WORK          uncommitted changes saved as a hidden commit on the archive ref
@@ -257,8 +282,8 @@ export function archiveSaveScript(row: Pick<WorkbenchRow, 'id' | 'branch' | 'bas
   );
   return [
     'set -u',
-    `ahead=$(git rev-list --count ${base}..HEAD 2>/dev/null || echo 0)`,
-    'head=$(git rev-parse HEAD)',
+    `ahead=$(git rev-list --count ${base}..HEAD) || exit 1`,
+    'head=$(git rev-parse HEAD) || exit 1',
     `if [ "$ahead" -gt 0 ]; then`,
     `  remote=$(git ls-remote origin ${branchRef} | cut -f1)`,
     `  if [ "$remote" != "$head" ]; then`,
@@ -267,7 +292,8 @@ export function archiveSaveScript(row: Pick<WorkbenchRow, 'id' | 'branch' | 'bas
     '    else echo "could not push the commits on this branch" >&2; exit 1; fi',
     '  fi',
     'fi',
-    `if [ -n "$(git status --porcelain)" ]; then`,
+    'work=$(git status --porcelain) || exit 1',
+    'if [ -n "$work" ]; then',
     `  sha=$(bash -c ${shellQuote(checkpoint)} | tail -n 1)`,
     `  if [ -n "$sha" ] && git push --force origin "$sha":${shellQuote(ref)} >&2; then echo SAVED_WORK`,
     '  else echo "could not save the uncommitted changes" >&2; exit 1; fi',
@@ -296,83 +322,90 @@ export function restoreSavedWorkScript(row: Pick<WorkbenchRow, 'id' | 'branch'>)
   ].join('\n');
 }
 
-/**
- * Archive: stop what is running, run the archive script, save the work to
- * origin, delete the box. A local workbench is only marked — the desktop
- * removes its worktree.
- */
+/** Archive answers after the durable marker is written. */
 export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow> {
-  const row = await getWorkbench(workbenchId);
+  const row = await markArchive(workbenchId);
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
-  if (row.archivedAt) return row;
-  // Its work is on two boxes until the move ends. Archiving now would save
-  // and delete only one of them.
-  if (row.status === 'moving') throw movingError();
-  const release = holdMoves(row.id);
+  await emitWorkbenchUpdated(await publicWorkbench(row));
+  scheduleArchive(row.id);
+  return row;
+}
+
+const archiveJobs = new Set<Promise<void>>();
+
+const archiveSaveMarker = (row: WorkbenchRow) => `archive-save-${row.id}-${row.archivePendingAt?.getTime() ?? 0}`;
+
+export async function settleArchivesForTests(): Promise<void> {
+  while (archiveJobs.size) await Promise.all([...archiveJobs]);
+}
+
+export function scheduleArchive(workbenchId: string): void {
+  const job = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(() => runWithoutScope(() => processArchive(workbenchId)))
+    .catch((err) => {
+      debugBus.pollerTick(ARCHIVE_POLLER, { durationMs: 0, ok: false, error: err });
+    }).finally(() => { archiveJobs.delete(job); });
+  archiveJobs.add(job);
+}
+
+/** Save first. A failed save keeps the sandbox and its durable retry marker. */
+export async function processArchive(workbenchId: string): Promise<void> {
+  if (isWorkbenchDraining()) return;
+  const seen = await getWorkbench(workbenchId);
+  if (!seen?.archivePendingAt || seen.status === 'moving' || provisioning.has(workbenchId)) return;
+  const row = await claimArchive(seen);
+  if (!row) return;
+  let lost = false;
+  const timer = setInterval(() => {
+    void renewArchive(row).then((ok) => { if (!ok) lost = true; }).catch(() => { lost = true; });
+  }, 20_000);
+  timer.unref();
+  const checkLease = async () => {
+    if (lost || !(await renewArchive(row))) { lost = true; throw new Error('The archive claim expired.'); }
+  };
   try {
-    return await archiveHeld(row);
+    await checkLease();
+    if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
+      const chats = await listChats(row.id);
+      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await stopAllScripts(row);
+      const config = await loadWorkbenchConfig(row);
+      await checkLease();
+      if (config?.archive) {
+        const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS, resume: true });
+        await done;
+      }
+      await checkLease();
+      const saved = await runCapture(row, archiveSaveScript(row), { marker: archiveSaveMarker(row), timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS, diskRecovery: false });
+      if (saved.exitCode !== 0) {
+        throw new Error(`Could not save the session: ${saved.stderr.trim().slice(-300) || `git exited ${saved.exitCode}`}`);
+      }
+      await checkLease();
+      await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await stopSandboxScripts(row.id, row.sandboxId);
+    }
+    const done = await finishArchive(row);
+    if (done) await emitWorkbenchUpdated(await publicWorkbench(done));
+    recordWorkbenchEvent(row, 'archived', 'Saved the session and deleted its sandbox.');
+  } catch (err) {
+    if (isWorkbenchDraining()) return;
+    if (!lost) {
+      const gone = err instanceof FleetRunNotFoundError;
+      const updated = await finishArchive(row, gone ? undefined : userFacingError(err));
+      if (updated) await emitWorkbenchUpdated(await publicWorkbench(updated));
+      if (!gone) {
+        recordWorkbenchEvent(row, 'archive_failed', 'The sandbox was kept for another save attempt.', false, err);
+        debugBus.pollerTick(ARCHIVE_POLLER, { durationMs: 0, ok: false, error: err });
+      }
+    }
   } finally {
-    release();
+    clearInterval(timer);
+    await releaseArchive(row);
   }
 }
 
-async function archiveHeld(row: WorkbenchRow): Promise<WorkbenchRow> {
-  const notes: string[] = [];
-
-  if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
-    const chats = await listChats(row.id);
-    await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
-    await stopAllScripts(row).catch(() => undefined);
-
-    if (row.status === 'ready') {
-      const config = await loadWorkbenchConfig(row).catch(() => null);
-      if (config?.archive) {
-        try {
-          const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS });
-          const code = await done;
-          notes.push(code === 0 ? 'Ran the archive script.' : `The archive script exited with ${code ?? 'no exit code'}.`);
-        } catch (err) {
-          notes.push(`The archive script could not run: ${userFacingError(err)}`);
-        }
-      }
-      const saved = await runCapture(row, archiveSaveScript(row), { timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS, diskRecovery: false });
-      if (saved.exitCode !== 0) {
-        // The box stays: deleting it now would lose work nothing else holds.
-        throw new WorkbenchError(
-          `This session was not archived, because its work could not be saved to GitHub first: ` +
-            (saved.stderr.trim().split('\n').slice(-2).join(' ') || `git exited ${saved.exitCode}`),
-          409,
-          'archive_save_failed',
-        );
-      }
-      const pushed = /^PUSHED_BRANCH (\d+)/m.exec(saved.stdout);
-      if (pushed) notes.push(`Pushed ${pushed[1]} commit${pushed[1] === '1' ? '' : 's'} to ${row.branch}.`);
-      if (/^PUSHED_HEAD/m.test(saved.stdout)) {
-        notes.push(`${row.branch} had moved on GitHub, so this session's commits were saved separately.`);
-      }
-      if (/^SAVED_WORK/m.test(saved.stdout)) notes.push('Saved the uncommitted changes; restoring brings them back.');
-    }
-
-    try {
-      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-      await client.deleteSandbox(row.sandboxId);
-      recordWorkbenchEvent(row, 'archived', notes.join(' ') || 'sandbox deleted');
-    } catch (err) {
-      // A workbench that never became ready holds no work, and a fleet that is
-      // not set up cannot hold a box either. Archive it without the box rather
-      // than strand it. A ready one keeps the refusal: its box may hold work.
-      if (row.status === 'ready' || !fleetHoldsNoBox(err)) throw err;
-      recordWorkbenchEvent(row, 'archived', `archived without the sandbox: ${userFacingError(err)}`);
-    }
-  }
-
-  row = await setRow(row, {
-    status: 'archived',
-    archivedAt: new Date(),
-    sandboxState: row.runtime === 'sandbox' ? 'deleted' : 'none',
-    statusMessage: notes.length > 0 ? notes.join(' ') : null,
-  });
-  return row;
+export async function sweepPendingArchives(): Promise<void> {
+  for (const row of await pendingArchives()) await processArchive(row.id);
 }
 
 /**
@@ -401,6 +434,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
     statusMessage: 'Creating the sandbox',
     sandboxId: row.sandboxId ? nextSandboxId(row) : sandboxIdFor(row.id),
     sandboxState: 'creating',
+    sandboxGeneration: null,
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
   });
@@ -424,26 +458,50 @@ function fleetHoldsNoBox(err: unknown): boolean {
  * checked out again and the saved work put back. Agent backups are restored
  * before queued turns start.
  */
-export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRow> {
+export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitMs?: number } = {}): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (!row.archivedAt) return row;
+
+  row = (await requestArchiveRestore(workbenchId))!;
+  const deadline = Date.now() + Math.max(0, Math.min(opts.archiveWaitMs ?? 60_000, 60_000));
+  while (row.archivePendingAt && row.archiveLeaseUntil && row.archiveLeaseUntil.getTime() > Date.now()) {
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    row = (await getWorkbench(workbenchId))!;
+    if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
+  }
+  const interruptedArchive = row.archivePendingAt && row.archiveLeaseUntil ? row : null;
+  row = (await cancelPendingArchive(workbenchId)) ?? row;
 
   // The name is unique among LIVE workbenches, and another may have taken it.
   const taken = await liveWorkbenchNames(row.workspaceId);
   const name = taken.includes(row.name) ? pickWorkbenchName(taken) : row.name;
 
   if (row.runtime !== 'sandbox') {
-    return setRow(row, { archivedAt: null, status: 'ready', statusMessage: null, name });
+    return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+  }
+  if (row.sandboxId && row.sandboxState !== 'deleted') {
+    try {
+      const box = await (await fleetClientFor(row.workspaceId, row.fleetHost)).getSandbox(row.sandboxId);
+      if (box.retired) throw new FleetRunNotFoundError('The sandbox was deleted.');
+      if (interruptedArchive) {
+        await stopScript(row, 'archive');
+        await killMarker(row, archiveSaveMarker(interruptedArchive));
+      }
+      return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+    } catch (error) { if (!fleetHoldsNoBox(error)) throw error; }
   }
   row = await setRow(row, {
     archivedAt: null,
+    restoreRequestedAt: null,
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
     memoryRestorePending: 'archive',
     sandboxId: nextSandboxId(row),
     sandboxState: 'creating',
+    sandboxGeneration: null,
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
   });
@@ -481,16 +539,55 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.pullRequestId) await emitPrSession(row.workspaceId, row.pullRequestId);
 }
 
-/**
- * How long after boot the sweep waits. A deploy overlaps the old and the new
- * instance; the old one is still following its turns until it is told to
- * stop, and settling them from here before then would stop work in progress.
- * Railway's drain plus the forced exit is well under this.
- */
-const BOOT_SWEEP_DELAY_MS = 90_000;
+/** Resume provisions promptly. Turn ownership protects overlapping backend instances. */
+const BOOT_SWEEP_DELAY_MS = 5_000;
 
+let turnSweepTimer: NodeJS.Timeout | null = null;
+let turnSweepRunning = false;
+let backupSweepRunning = false;
+async function backupSweepTick(): Promise<void> {
+  if (backupSweepRunning) return;
+  backupSweepRunning = true;
+  const started = Date.now();
+  let error: unknown;
+  try { await runWithoutScope(() => sweepAgentBackups()); } catch (err) { error = err; }
+  finally {
+    backupSweepRunning = false;
+    debugBus.pollerTick('workbench-backup-sweep', { durationMs: Date.now() - started, ok: !error, error });
+  }
+}
+async function turnSweepTick(): Promise<void> {
+  if (turnSweepRunning) return;
+  turnSweepRunning = true;
+  const started = Date.now();
+  let error: unknown;
+  try { await runWithoutScope(async () => { await sweepOrphanedTurns(); await sweepScripts(); }); }
+  catch (err) { error = err; }
+  finally {
+    turnSweepRunning = false;
+    debugBus.pollerTick('workbench-turn-sweep', { durationMs: Date.now() - started, ok: !error, error });
+  }
+}
 let bootTimer: NodeJS.Timeout | null = null;
 let moveSweepTimer: NodeJS.Timeout | null = null;
+let archiveSweepTimer: NodeJS.Timeout | null = null;
+let archiveSweepRunning = false;
+const ARCHIVE_POLLER = 'workbench-archive-sweep';
+
+async function archiveSweepTick(): Promise<void> {
+  if (archiveSweepRunning) return;
+  archiveSweepRunning = true;
+  const started = Date.now();
+  let error: unknown;
+  try {
+    await runWithoutScope(() => sweepPendingArchives());
+  } catch (err) {
+    error = err;
+  } finally {
+    archiveSweepRunning = false;
+    debugBus.pollerTick(ARCHIVE_POLLER, { durationMs: Date.now() - started, ok: !error, error });
+  }
+}
 let moveSweepRunning = false;
 
 const MOVE_SWEEP_POLLER = 'workbench-move-sweep';
@@ -520,6 +617,27 @@ async function moveSweepTick(): Promise<void> {
  */
 export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   if (bootTimer) return;
+  debugBus.registerPoller('workbench-turn-sweep', 5_000, 'Resumes stale turns and starts queued messages.');
+  debugBus.registerPoller('workbench-backup-sweep', 30_000, 'Retries agent backups after a backend restart.');
+  void turnSweepTick();
+  void backupSweepTick();
+  const bootAt = Date.now();
+  let lastBackupAt = bootAt;
+  let lastInterval = 5_000;
+  const scheduleSweep = () => {
+    const interval = Date.now() - bootAt < 120_000 ? 5_000 : 15_000;
+    if (interval !== lastInterval) {
+      debugBus.registerPoller('workbench-turn-sweep', interval, 'Resumes stale turns and deferred queues.');
+      lastInterval = interval;
+    }
+    turnSweepTimer = setTimeout(() => {
+      void turnSweepTick();
+      if (Date.now() - lastBackupAt >= 30_000) { lastBackupAt = Date.now(); void backupSweepTick(); }
+      scheduleSweep();
+    }, interval);
+    turnSweepTimer.unref();
+  };
+  scheduleSweep();
   bootTimer = setTimeout(() => {
     void runWithoutScope(async () => {
       try {
@@ -536,6 +654,11 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
     void moveSweepTick();
   }, delayMs);
   bootTimer.unref();
+  if (!archiveSweepTimer) {
+    debugBus.registerPoller(ARCHIVE_POLLER, 60_000, 'Saves pending session archives and deletes their sandboxes after a successful save.');
+    archiveSweepTimer = setInterval(() => void archiveSweepTick(), 60_000);
+    archiveSweepTimer.unref();
+  }
   if (!moveSweepTimer) {
     debugBus.registerPoller(
       MOVE_SWEEP_POLLER,
@@ -548,8 +671,25 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
 }
 
 export function stopWorkbenches(): void {
+  beginWorkbenchDrain();
+  if (turnSweepTimer) clearInterval(turnSweepTimer);
+  turnSweepTimer = null;
+  if (archiveSweepTimer) clearInterval(archiveSweepTimer);
+  archiveSweepTimer = null;
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
   if (moveSweepTimer) clearInterval(moveSweepTimer);
   moveSweepTimer = null;
+}
+
+export function workbenchDrainTimeoutMs(): number {
+  const seconds = Number(process.env.RAILWAY_DEPLOYMENT_DRAINING_SECONDS ?? 10);
+  return (Number.isFinite(seconds) ? Math.max(2, Math.min(seconds, 52)) : 10) * 1000;
+}
+
+/** Leave time for output writes before the platform terminates the backend. */
+export async function drainWorkbenchFollowers(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, workbenchDrainTimeoutMs() - 2000));
+  detachWorkbenchFollowers();
+  await Promise.all([detachTurnFollowers(), detachScriptFollowers()]);
 }

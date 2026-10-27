@@ -5,6 +5,7 @@ import {
   shellQuote,
   type WorkbenchChanges,
   type WorkbenchDiffStat,
+  type WorkbenchDiffScope,
 } from '@talyn/shared';
 import { emitWorkbenchUpdated } from './emit.js';
 import { FleetHttpError } from '../selfHosted/client.js';
@@ -15,14 +16,7 @@ import { fleetClientFor, MERGE_BASE_DEEPEN_BY, repoDirFor, runCapture } from './
 import { withLostRecovery } from './recovery.js';
 import { updateWorkbench, type WorkbenchRow } from './store.js';
 
-/**
- * The diff panel, the file tree and the file viewer for a sandbox workbench.
- *
- * Each read tries the fleet's own route first (`/diff`, `/files`, `/file` on
- * the YAS workbench branch) and falls back to git through a quiet exec. The
- * client learns once per process whether a route exists, so a fleet without
- * them costs one 404 per feature, not one per request.
- */
+/** Changes use one quiet exec. Other reads prefer the fleet routes when available. */
 
 /**
  * The largest file the viewer opens through the exec fallback. The content
@@ -70,36 +64,25 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
   ].join(' ');
 }
 
-export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
-  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await withLostRecovery(row, () => client.getDiff(row.sandboxId!, { base: baseRef(row), cwd: repoDirFor(row) }));
-  if (fleet.supported && fleet.data) {
-    return {
-      files: fleet.data.files.map((f) => ({
-        path: f.path,
-        ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-        status: f.status,
-        added: f.added,
-        removed: f.removed,
-        binary: f.binary,
-      })),
-      base: fleet.data.mergeBase,
-      headSha: fleet.data.headSha,
-    };
-  }
-
+export async function getChanges(row: WorkbenchRow): Promise<Required<WorkbenchChanges>> {
   const script = [
+    'set -e -o pipefail',
     mergeBaseLine(row),
+    'head=$(git rev-parse HEAD)',
     sectionsScript([
       { label: 'MB', command: 'printf %s "$mb"' },
-      { label: 'HEAD', command: 'git rev-parse HEAD' },
+      { label: 'HEAD', command: 'printf %s "$head"' },
       { label: 'NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" --' },
       { label: 'NAMES', command: 'git diff --name-status -z --find-renames "$mb" --' },
+      { label: 'UNCOMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$head" --' },
+      { label: 'UNCOMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$head" --' },
+      { label: 'COMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" "$head" --' },
+      { label: 'COMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$mb" "$head" --' },
       { label: 'UNTRACKED', command: 'git ls-files --others --exclude-standard -z' },
       {
         label: 'COUNTS',
         command:
-          `git ls-files --others --exclude-standard -z | head -z -n ${MAX_COUNTED_UNTRACKED} | ` +
+          `git ls-files --others --exclude-standard -z | { head -z -n ${MAX_COUNTED_UNTRACKED}; cat >/dev/null; } | ` +
           `while IFS= read -r -d '' f; do printf '%s\\t%s\\n' "$f" "$(awk 'END{print NR}' "$f" 2>/dev/null)"; done`,
       },
     ]),
@@ -114,7 +97,22 @@ export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
     const tab = line.lastIndexOf('\t');
     if (tab > 0) counts[line.slice(0, tab)] = Number(line.slice(tab + 1)) || 0;
   }
+  const uncommitted = mergeChangedFiles({
+    numstat: s.UNCOMMITTED_NUMSTAT ?? '',
+    nameStatus: s.UNCOMMITTED_NAMES ?? '',
+    untracked: s.UNTRACKED ?? '',
+    untrackedLineCounts: counts,
+  });
+  const committed = mergeChangedFiles({
+    numstat: s.COMMITTED_NUMSTAT ?? '',
+    nameStatus: s.COMMITTED_NAMES ?? '',
+    untracked: '',
+  });
   return {
+    uncommitted,
+    committed,
+    uncommittedStats: diffStatOf(uncommitted),
+    committedStats: diffStatOf(committed),
     files: mergeChangedFiles({
       numstat: s.NUMSTAT ?? '',
       nameStatus: s.NAMES ?? '',
@@ -126,27 +124,32 @@ export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
   };
 }
 
-/** The unified patch vs the merge-base, untracked files included as additions. */
-export async function getPatch(row: WorkbenchRow, path?: string): Promise<{ patch: string }> {
+/** The patch for one scope. An absent scope keeps the combined diff. */
+export async function getPatch(row: WorkbenchRow, path?: string, scope: WorkbenchDiffScope = 'combined'): Promise<{ patch: string }> {
   const safePath = path ? assertRepoPath(path) : undefined;
-  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await withLostRecovery(row, () => client.getDiff(row.sandboxId!, {
-    base: baseRef(row),
-    patch: true,
-    cwd: repoDirFor(row),
-    ...(safePath ? { path: safePath } : {}),
-  }));
-  if (fleet.supported && fleet.data) return { patch: fleet.data.patch ?? '' };
+  if (scope === 'combined') {
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const fleet = await withLostRecovery(row, () => client.getDiff(row.sandboxId!, {
+      base: baseRef(row),
+      patch: true,
+      cwd: repoDirFor(row),
+      ...(safePath ? { path: safePath } : {}),
+    }));
+    if (fleet.supported && fleet.data) return { patch: fleet.data.patch ?? '' };
+  }
 
   const quotedPath = safePath ? shellQuote(safePath) : '';
   const untracked = safePath
     ? `git ls-files --others --exclude-standard -z -- ${quotedPath}`
     : 'git ls-files --others --exclude-standard -z';
+  const comparison = scope === 'uncommitted' ? 'HEAD' : scope === 'committed' ? '"$mb" HEAD' : '"$mb"';
   const script = [
-    mergeBaseLine(row),
-    `git diff --no-color --find-renames "$mb" --${safePath ? ` ${quotedPath}` : ''}`,
-    // `--no-index` exits 1 when the files differ, which here is always.
-    `${untracked} | while IFS= read -r -d '' f; do git diff --no-color --no-index -- /dev/null "$f" || true; done`,
+    'set -e -o pipefail',
+    ...(scope === 'uncommitted' ? [] : [mergeBaseLine(row)]),
+    `git diff --no-color --find-renames ${comparison} --${safePath ? ` ${quotedPath}` : ''}`,
+    ...(scope === 'committed' ? [] : [
+      `${untracked} | while IFS= read -r -d '' f; do git diff --no-color --no-index -- /dev/null "$f" || true; done`,
+    ]),
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
@@ -222,9 +225,14 @@ export async function refreshDiffStat(row: WorkbenchRow): Promise<WorkbenchRow> 
   if (row.runtime !== 'sandbox' || !row.sandboxId) return row;
   try {
     const changes = await getChanges(row);
-    const stat = diffStatOf(changes.files);
-    if (sameStat(row.diffStat ?? null, stat)) return row;
-    const updated = (await updateWorkbench(row.id, { diffStat: stat })) ?? row;
+    const uncommittedStats = changes.uncommittedStats;
+    const committedStats = changes.committedStats;
+    if (sameStat(row.diffStat ?? null, uncommittedStats)
+      && sameStat(row.diffStat?.uncommittedStats ?? null, uncommittedStats)
+      && sameStat(row.diffStat?.committedStats ?? null, committedStats)) return row;
+    const updated = (await updateWorkbench(row.id, {
+      diffStat: { ...uncommittedStats, uncommittedStats, committedStats },
+    })) ?? row;
     await emitWorkbenchUpdated(await publicWorkbench(updated));
     return updated;
   } catch (err) {

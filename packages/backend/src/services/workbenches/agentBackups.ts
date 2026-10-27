@@ -9,12 +9,14 @@ import { debugBus } from '../debugBus.js';
 import { boxSessionPath, MAX_IMPORTED_SESSION_BYTES } from './claudeImport.js';
 import { shellPath, writeSandboxFiles } from './sandboxFiles.js';
 import { repoDirFor, runCapture } from './sandboxRuntime.js';
+import { isWorkbenchDraining } from './ownership.js';
 import { getChat, getWorkbench, type ChatRow, type WorkbenchRow } from './store.js';
 
 const gunzipAsync = promisify(gunzip);
 export const BACKUP_CHUNK_BYTES = 2 * 1024 * 1024;
-const active = new Map<string, Promise<void>>();
+const active = new Map<string, Promise<boolean>>();
 const rerun = new Set<string>();
+const scheduled = new Set<Promise<void>>();
 const execOptions = { cwd: '/', env: { TMPDIR: '/dev/shm' }, quiet: true, timeoutMs: 30_000, diskRecovery: false } as const;
 
 export const BACKUP_METADATA_COLUMNS = {
@@ -42,27 +44,30 @@ function report(chat: ChatRow, action: string, summary: string, error?: unknown)
 
 /** No turn waits for this work or inherits its errors. */
 export function scheduleAgentBackup(chatId: string): void {
-  void runWithoutScope(() => backupAgentSession(chatId)).catch((error) => {
+  const job = runWithoutScope(async () => { await runPendingBackup(chatId); }).catch((error) => {
     debugBus.recordEvent({ service: 'workbench', action: 'agent_backup_failed',
       summary: 'The agent memory backup failed.', ok: false, error, meta: { chatId } });
-  });
+  }).finally(() => scheduled.delete(job));
+  scheduled.add(job);
 }
 
 export async function settleAgentBackupsForTests(): Promise<void> {
-  await Promise.allSettled([...active.values()]);
+  await Promise.allSettled([...scheduled, ...active.values()]);
 }
 
-export function backupAgentSession(chatId: string): Promise<void> {
+export function backupAgentSession(chatId: string): Promise<boolean> {
   const pending = active.get(chatId);
   if (pending) {
     rerun.add(chatId);
     return pending;
   }
   const work = (async () => {
+    let complete = false;
     do {
       rerun.delete(chatId);
-      await backupSession(chatId);
+      complete = await backupSession(chatId);
     } while (rerun.has(chatId));
+    return complete;
   })().finally(() => {
     active.delete(chatId);
     rerun.delete(chatId);
@@ -102,10 +107,10 @@ export async function verifyBackupChunk(data: Buffer, length: number, sha256: st
   return raw;
 }
 
-async function backupSession(chatId: string): Promise<void> {
+async function backupSession(chatId: string): Promise<boolean> {
   const chat = await getChat(chatId);
   const wb = chat ? await getWorkbench(chat.workbenchId) : null;
-  if (!chat?.agentSessionId || !wb?.sandboxId || wb.runtime !== 'sandbox' || wb.status !== 'ready') return;
+  if (!chat?.agentSessionId || !wb?.sandboxId || wb.runtime !== 'sandbox' || wb.status !== 'ready') return false;
   const db = getPoolDbClient();
   const sessionId = chat.agentSessionId;
   const where = and(eq(backups.chatId, chatId), eq(backups.sessionId, sessionId));
@@ -137,10 +142,10 @@ async function backupSession(chatId: string): Promise<void> {
     await tx.update(chats).set({ agentBackup: metadata }).where(eq(chats.id, chatId));
     return true;
   });
-  if (!prepared) return;
+  if (!prepared) return metadata.capped;
   if (metadata.capped) {
     report(chat, 'agent_backup_limit', 'The conversation exceeds the 256 MiB backup limit. Backup stopped.');
-    return;
+    return true;
   }
   // Each write checks its generation. No database lock stays open during box I/O.
   const deadline = Date.now() + 4 * 60_000;
@@ -161,10 +166,11 @@ async function backupSession(chatId: string): Promise<void> {
         data, byteLen: length, sha256 });
       return true;
     });
-    if (!inserted) return;
+    if (!inserted) return false;
     offset += length;
     seq++;
   }
+  return true;
 }
 
 /** Restore one chat at a time. Only this path fetches compressed bytes. */
@@ -206,5 +212,57 @@ export async function restoreAgentSession(wb: WorkbenchRow, chat: ChatRow): Prom
     return false;
   } finally {
     await runCapture(wb, `rm -rf -- ${shellQuote(staging)}`, execOptions).catch(() => undefined);
+  }
+}
+
+
+interface BackupClaim { id: string; session_id: string; turn_count: number; backup_failures: number; backup_token: string }
+
+export async function claimPendingBackup(chatId?: string): Promise<BackupClaim | null> {
+  const result = await getPoolDbClient().execute(sql`
+    WITH candidate AS (
+      SELECT c.id FROM workbench_chats c JOIN workbenches w ON w.id = c.workbench_id
+      WHERE c.agent_backup_pending AND c.status <> 'running' AND c.agent_session_id IS NOT NULL
+        AND w.status = 'ready' AND w.sandbox_id IS NOT NULL
+        AND (c.backup_lease_until IS NULL OR c.backup_lease_until < now())
+        AND (c.backup_retry_at IS NULL OR c.backup_retry_at <= now())
+        AND (${chatId ?? null}::text IS NULL OR c.id = ${chatId ?? null})
+      ORDER BY c.updated_at, c.id FOR UPDATE OF c SKIP LOCKED LIMIT 1
+    )
+    UPDATE workbench_chats c SET backup_token = ${randomUUID()}, backup_lease_until = now() + interval '5 minutes'
+    FROM candidate WHERE c.id = candidate.id
+    RETURNING c.id, c.agent_session_id AS session_id, c.turn_count, c.backup_failures, c.backup_token
+  `);
+  return (Array.isArray(result) ? result : (result as { rows: BackupClaim[] }).rows)[0] as BackupClaim ?? null;
+}
+
+async function runPendingBackup(chatId?: string): Promise<boolean> {
+  const claim = await claimPendingBackup(chatId);
+  if (!claim) return false;
+  const db = getPoolDbClient();
+  const owned = and(eq(chats.id, claim.id), eq(chats.backupToken, claim.backup_token));
+  try {
+    if (!(await backupAgentSession(claim.id))) throw new Error('The agent backup is not complete.');
+    await db.update(chats).set({
+      agentBackupPending: sql`CASE WHEN ${chats.turnCount} = ${claim.turn_count}
+        AND ${chats.agentSessionId} = ${claim.session_id} AND ${chats.status} <> 'running'
+        THEN false ELSE ${chats.agentBackupPending} END`,
+      backupToken: null, backupLeaseUntil: null, backupRetryAt: null, backupFailures: 0,
+    }).where(owned);
+  } catch (error) {
+    await db.update(chats).set({ backupToken: null, backupLeaseUntil: null,
+      backupFailures: claim.backup_failures + 1,
+      backupRetryAt: new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(claim.backup_failures, 6), 3_600_000)),
+    }).where(owned);
+    debugBus.recordEvent({ service: 'workbench', action: 'agent_backup_retry',
+      summary: 'The agent backup will retry.', ok: false, error });
+  }
+  return true;
+}
+
+/** Each claim covers one backup. Failed rows wait while other rows continue. */
+export async function sweepAgentBackups(): Promise<void> {
+  for (let i = 0; i < 20 && !isWorkbenchDraining(); i++) {
+    if (!(await runPendingBackup())) break;
   }
 }

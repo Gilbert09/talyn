@@ -28,7 +28,7 @@ export type WorkbenchAgent = 'claude' | 'codex';
  * `moving`: Talyn is moving the session to a fresh sandbox (a newer image, or
  * more disk). Messages sent meanwhile queue, as they do while provisioning.
  */
-export type WorkbenchStatus = 'provisioning' | 'ready' | 'moving' | 'error' | 'archived';
+export type WorkbenchStatus = 'provisioning' | 'ready' | 'moving' | 'error' | 'archived' | 'archiveError';
 
 /** What both apps show while a session moves to a fresh sandbox. */
 export const WORKBENCH_MOVING_MESSAGE = 'Moving to a fresh sandbox…';
@@ -85,6 +85,14 @@ export interface WorkbenchDiffStat {
   removed: number;
   files: number;
 }
+
+/** Stored in the existing JSON column. The top-level totals are uncommitted. */
+export interface WorkbenchStoredDiffStat extends WorkbenchDiffStat {
+  uncommittedStats?: WorkbenchDiffStat;
+  committedStats?: WorkbenchDiffStat;
+}
+
+export type WorkbenchDiffScope = 'combined' | 'uncommitted' | 'committed';
 
 /**
  * Per-workbench overrides. Everything is optional: an absent key means "use
@@ -158,6 +166,8 @@ export interface Workbench {
   settings: WorkbenchSettings;
   /** Null until a diff has been computed once. */
   diffStat: WorkbenchDiffStat | null;
+  uncommittedStats?: WorkbenchDiffStat | null;
+  committedStats?: WorkbenchDiffStat | null;
   /**
    * Why `status` is what it is, in words a person can act on — set on `error`
    * (what failed while provisioning) and cleared when there is nothing to say.
@@ -271,6 +281,11 @@ export interface WorkbenchChangedFile {
 
 export interface WorkbenchChanges {
   files: WorkbenchChangedFile[];
+  /** Absent on older servers. `files` keeps the combined diff. */
+  uncommitted?: WorkbenchChangedFile[];
+  committed?: WorkbenchChangedFile[];
+  uncommittedStats?: WorkbenchDiffStat;
+  committedStats?: WorkbenchDiffStat;
   /** The merge-base sha the diff was taken against. */
   base: string;
   headSha: string;
@@ -367,6 +382,10 @@ export interface UpdateLocalWorkbenchChatInput {
 // ============================================================================
 
 export interface WorkbenchScriptFrame {
+  generation?: string;
+  offset?: number;
+  snapshot?: boolean;
+  running?: boolean;
   workbenchId: string;
   name: string;
   stream: 'stdout' | 'stderr' | 'exit';

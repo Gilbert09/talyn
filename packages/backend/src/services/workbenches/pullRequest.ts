@@ -100,7 +100,7 @@ async function commitAndPush(row: WorkbenchRow, input: { title: string; commitMe
     throw new WorkbenchError(`Could not read the git status.\n${gitStderrTail(status.stderr)}`.trim(), 409, 'git_failed');
   }
   if (status.stdout.trim()) {
-    const commit = await runGitSteps(row, commitAllSteps(prCommitMessage(input)), { timeoutMs: GIT_TIMEOUT_MS });
+    const commit = await runGitSteps(row, commitAllSteps(prCommitMessage(input), { skipHooks: true }), { timeoutMs: GIT_TIMEOUT_MS });
     if (commit.exitCode !== 0) {
       throw new WorkbenchError(
         `Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim(),

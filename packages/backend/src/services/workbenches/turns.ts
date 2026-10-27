@@ -15,12 +15,16 @@ import {
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
   type AgentEventDraft,
+  type AgentStreamParser,
   type SendWorkbenchMessageInput,
   type WorkbenchAttachment,
   type WorkbenchChatStatus,
   type WorkbenchQueuedMessage,
   type WorkbenchStatus,
 } from '@talyn/shared';
+import { debugBus } from '../debugBus.js';
+import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExec, durableMarker } from './durableExec.js';
+import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { runWithoutScope } from '../../db/client.js';
 import { scheduleAgentBackup } from './agentBackups.js';
 import { clearRecoveryRecap, recoveryRecap } from './agentRecap.js';
@@ -48,12 +52,12 @@ import { selectFleetAccount } from '../selfHosted/accountSelection.js';
 import { exhaustedAgentFrom, noteExhaustedAgent, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
 import {
   killMarker,
+  isMarkerAlive,
   recordWorkbenchEvent,
   refreshSandboxCredentials,
   repoDirFor,
   runCapture,
   runGitSteps,
-  runStream,
   sandboxScriptEnv,
   startAccountWatch,
   workbenchFleetAccountId,
@@ -69,8 +73,17 @@ import {
   getWorkbench,
   requeueTurn,
   rowToChat,
-  runningChats,
-  updateChat,
+  getTurnLease,
+  hasTurnEvent,
+  turnLeases,
+  claimTurnLease,
+  renewTurnLease,
+  releaseTurnLease,
+  releaseOwnedTurnLeases,
+  markDrainPending,
+  setTurnAttempt,
+  queuedIdleChats,
+  type TurnLease,
   upsertCheckpoint,
   type ChatRow,
   type EventDraftInput,
@@ -92,16 +105,13 @@ import {
  *
  * # Where a turn lives
  *
- * The follower is this process. The process in the sandbox is not — it runs
- * detached from the request — so a backend restart loses the view of a turn
- * and not the turn. The boot sweep (`sweepOrphanedTurns`) settles what a dead
- * process left `running`, stopping the orphan so two agents never share one
- * session, and says so in the transcript instead of leaving a silent hang.
+ * The agent and its output log live in the sandbox. A database lease selects
+ * one backend follower. A stale lease permits replay from its saved offset.
  */
 
 /** Events are written in batches: whichever comes first of this many, or this long. */
 const FLUSH_EVENTS = 50;
-const FLUSH_MS = 500;
+const FLUSH_MS = 250;
 
 interface LiveTurn {
   turn: number;
@@ -112,8 +122,8 @@ interface LiveTurn {
 /** chatId → the turn this process is following. */
 const liveTurns = new Map<string, LiveTurn>();
 
-export function turnMarker(chatId: string): string {
-  return safeMarker(`talyn-turn-${chatId}`);
+export function turnMarker(chatId: string, turn?: number, attempt = 0): string {
+  return safeMarker(`talyn-turn-${chatId}${turn === undefined ? '' : `-${turn}-${attempt}`}`);
 }
 
 export function isTurnLiveHere(chatId: string): boolean {
@@ -184,6 +194,7 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
 
 /** Start the head of the queue when nothing is running — after a provision, or a cancel. */
 export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
+  if (isWorkbenchDraining()) { await markDrainPending(chatId); return false; }
   const claim = await claimOrEnqueue(chatId, null, true);
   if (!claim?.started) return false;
   emitWorkbenchChat(claim.chat.workspaceId, rowToChat(claim.chat));
@@ -207,12 +218,43 @@ function launchTurnLoop(chatId: string, first: { message: WorkbenchQueuedMessage
 async function runTurnLoop(
   chatId: string,
   first: { message: WorkbenchQueuedMessage; turn: number },
+  resume?: TurnLease,
+  legacyTurn = false,
 ): Promise<void> {
   let next: { message: WorkbenchQueuedMessage; turn: number } | null = first;
   while (next) {
-    const outcome = await runOneTurn(chatId, next.message, next.turn);
+    let lost = false;
+    const heldTurn = next.turn;
+    const heartbeat = setInterval(() => {
+      if (isWorkbenchDetached()) {
+        lost = true;
+        liveTurns.get(chatId)?.controller.abort();
+        return;
+      }
+      void renewTurnLease(chatId, heldTurn).then((ok) => {
+        if (!ok) { lost = true; liveTurns.get(chatId)?.controller.abort(); }
+      }).catch((err: unknown) => {
+        lost = true;
+        liveTurns.get(chatId)?.controller.abort();
+        debugBus.recordEvent({ service: 'workbenches', action: 'lease_failed', summary: 'The turn follower lost its lease.', ok: false, error: err });
+      });
+    }, 20_000);
+    heartbeat.unref();
+    let outcome: TurnOutcome;
+    try {
+      outcome = resume ? await resumeTurn(chatId, resume, legacyTurn) : await runOneTurn(chatId, next.message, next.turn);
+      resume = undefined;
+    } catch (error) {
+      await releaseTurnLease(chatId, heldTurn);
+      debugBus.recordEvent({ service: 'workbenches', action: 'turn_handoff', summary: 'The turn follower will reconnect.', ok: false, error });
+      return;
+    } finally { clearInterval(heartbeat); }
+    if (lost || isWorkbenchDetached() || outcome.handedOff) {
+      await releaseTurnLease(chatId, heldTurn);
+      return;
+    }
     // Back in the queue: the move that is running starts it when it ends.
-    if (outcome.requeued) return;
+    if (outcome.requeued) { await startQueuedIfIdle(chatId); return; }
     // T3: a turn that failed on a full disk is not run again (its side effects
     // could repeat); the box is made usable and the user sends it again.
     if (outcome.diskFull && !outcome.cancelled) await recoverTurnFromDiskFull(chatId);
@@ -220,9 +262,18 @@ async function runTurnLoop(
       finalStatus: outcome.status,
       statusMessage: outcome.statusMessage,
       drain: !outcome.cancelled,
+      owner: TURN_OWNER,
+      turn: heldTurn,
     });
     if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
-    scheduleAgentBackup(chatId);
+    if (fin) {
+      scheduleAgentBackup(chatId);
+      const wb = await getWorkbench(fin.chat.workbenchId);
+      if (wb) for (const attempt of [0, 1]) {
+        await removeDurableExec(wb, turnLogKey(chatId, heldTurn, attempt), turnMarker(chatId, heldTurn, attempt))
+          .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));
+      }
+    }
     void afterTurn(fin?.chat ?? null);
     if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
       const wb = await getWorkbench(fin.chat.workbenchId);
@@ -260,6 +311,7 @@ interface TurnOutcome {
   diskFull?: boolean;
   /** The workbench was moving: the message went back to the queue and nothing ran. */
   requeued?: boolean;
+  handedOff?: boolean;
 }
 
 export const DISK_FULL_MOVED_NOTE =
@@ -300,6 +352,7 @@ class EventBatcher {
   private pending: EventDraftInput[] = [];
   private timer: NodeJS.Timeout | null = null;
   private chain: Promise<void> = Promise.resolve();
+  private failure: unknown;
 
   constructor(
     private readonly workspaceId: string,
@@ -310,8 +363,8 @@ class EventBatcher {
   add(draft: AgentEventDraft | Record<string, unknown>): void {
     const { seq: _seq, ...event } = draft as Record<string, unknown>;
     this.pending.push({ turn: this.turn, event });
-    if (this.pending.length >= FLUSH_EVENTS) void this.flush();
-    else if (!this.timer) this.timer = setTimeout(() => void this.flush(), FLUSH_MS);
+    if (this.pending.length >= FLUSH_EVENTS) void this.flush().catch(() => undefined);
+    else if (!this.timer) this.timer = setTimeout(() => void this.flush().catch(() => undefined), FLUSH_MS);
   }
 
   flush(): Promise<void> {
@@ -323,12 +376,13 @@ class EventBatcher {
     if (batch.length > 0) {
       this.chain = this.chain
         .then(async () => {
-          const stored = await appendEvents(this.chatId, batch);
+          if (this.failure) throw this.failure;
+          const stored = await retryBatchWrite(() => appendEvents(this.chatId, batch, { owner: TURN_OWNER, turn: this.turn }));
           emitWorkbenchEvents(this.workspaceId, this.chatId, stored);
         })
-        .catch((err) => console.error(`[workbench] storing events for chat ${this.chatId} failed:`, err));
+        .catch((err: unknown) => { this.failure = err; });
     }
-    return this.chain;
+    return this.chain.then(() => { if (this.failure) throw this.failure; });
   }
 }
 
@@ -356,6 +410,11 @@ function errorResultEvent(subtype: string, text: string): Record<string, unknown
 }
 
 async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number): Promise<TurnOutcome> {
+  if (isWorkbenchDraining()) {
+    const chat = await requeueTurn(chatId, message);
+    if (chat) emitWorkbenchChat(chat.workspaceId, rowToChat(chat));
+    return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
+  }
   const chat = await getChat(chatId);
   if (!chat) return { status: 'error', statusMessage: 'Chat not found', cancelled: false };
   // A move claimed the workbench between this turn's claim and now: queue the
@@ -373,14 +432,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
-  events.add(userMessageEvent(message));
+  if (!(await hasTurnEvent(chatId, turn, 'user_message'))) events.add(userMessageEvent(message));
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
-  let sessionWrites = Promise.resolve();
+  let agentMayBeRunning = false;
   let recapWrite = Promise.resolve();
   try {
     let wb = early;
-    if (!wb || wb.status !== 'ready' || !wb.sandboxId) {
+    if (!wb || wb.archivedAt || wb.status !== 'ready' || !wb.sandboxId) {
       throw new WorkbenchError('The session is not ready.', 409, 'not_ready');
     }
     recordWorkbenchEvent(wb, 'turn_start', `chat ${chatId.slice(0, 8)} turn ${turn}`);
@@ -450,9 +509,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
     const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) };
 
-    let sessionId = chat.agentSessionId;
     let accountId = refreshed.accountId;
-    let outcome!: Awaited<ReturnType<typeof runStream>>;
+    let outcome!: Awaited<ReturnType<typeof followDurableExec>>;
     let attemptSawResult = false;
     let recapStarted = false;
     const noteRecapStarted = () => {
@@ -465,31 +523,25 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     for (let attempt = 0; attempt < 2; attempt++) {
       const parser = createAgentStreamParser(agent);
       attemptSawResult = false;
-      // The guest sends one frame per line and the demux hands back whole lines.
-      const onLine = (line: string) => {
-        noteRecapStarted();
-        for (const draft of parser.push(line)) {
-          if (draft.type === 'result') {
-            sawResult = true;
-            attemptSawResult = true;
-          }
-          events.add(draft);
-        }
-        if (parser.sessionId && parser.sessionId !== sessionId) {
-          sessionId = parser.sessionId;
-          const nextSessionId = sessionId;
-          sessionWrites = sessionWrites.then(() => saveSessionId(chatId, nextSessionId));
-        }
-      };
+      await events.flush();
+      if (!(await setTurnAttempt(chatId, turn, attempt))) return handoffOutcome();
+      const key = turnLogKey(chatId, turn, attempt);
+      if (live.controller.signal.aborted || isWorkbenchDetached() || !(await renewTurnLease(chatId, turn))) return handoffOutcome();
+      agentMayBeRunning = true;
+      try {
+        await startDurableExec(wb, key, turnMarker(chatId, turn, attempt), argv.map(shellQuote).join(' '), env);
+      } catch (err) {
+        if (isDiskFullError(err)) agentMayBeRunning = false;
+        throw err;
+      }
       const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
-      const stream = runStream(wb, argv.map(shellQuote).join(' '), {
-        marker: turnMarker(chatId),
-        cwd: repoDirFor(wb),
-        env,
-        signal: live.controller.signal,
-        onStdoutLine: onLine,
+      const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
+        noteRecapStarted();
+        if (parser.result) { sawResult = true; attemptSawResult = true; }
       }).finally(stopAccountWatch);
       outcome = await stream;
+      if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+      agentMayBeRunning = false;
       if (outcome.exitCode === 0) noteRecapStarted();
       parserResult = parser.result;
 
@@ -522,27 +574,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (outcome.exitCode === 0 && !parserResult?.isError) {
       await events.flush();
-      // Once per turn, and only from a turn that ended well. The chat stays
-      // `running` meanwhile, so a queued message cannot edit what is committed.
-      if (message.intent === 'create_pr' && !live.cancelRequested) {
-        const fresh = (await getWorkbench(wb.id)) ?? wb;
-        events.add(await openPullRequestFromTurn(fresh, parserResult?.text ?? ''));
-        await events.flush();
-      } else if (message.intent !== 'create_pr' && !live.cancelRequested && wb.settings?.autoCreatePr !== false &&
-          (await getChat(chatId))?.status !== 'awaiting_input') {
-        const fresh = (await getWorkbench(wb.id)) ?? wb;
-        if (!fresh.pullRequestId && parseAutoPrDetails(parserResult?.text ?? '').ok) {
-          events.add(await openPullRequestFromTurn(fresh, parserResult?.text ?? ''));
-          await events.flush();
-        }
-      }
+      await finishSuccessfulAgent(wb, chatId, message, parserResult?.text ?? '', events, live);
       return { status: 'idle', statusMessage: null, cancelled: false };
     }
     const why =
       parserResult?.text?.trim() ||
       outcome.stderrTail.trim() ||
-      (outcome.exitCode === null
-        ? 'The agent process ended without reporting an exit code.'
+      (outcome.exitCode === null || outcome.exitCode === 125
+        ? 'The agent stopped unexpectedly.'
         : `The agent exited with code ${outcome.exitCode}.`);
     if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
     await events.flush();
@@ -550,11 +589,16 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // own exec or the fleet reports says the disk is full (see the catch).
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
   } catch (err) {
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (err instanceof FleetRunNotFoundError) {
       events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
       await events.flush();
       return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
+    }
+    if (agentMayBeRunning) {
+      recordWorkbenchEvent(early!, 'turn_handoff', 'The turn follower will reconnect.', false, err);
+      return handoffOutcome();
     }
     const why = err instanceof Error ? err.message : String(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
@@ -563,7 +607,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const diskFull = isDiskFullError(err);
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
   } finally {
-    await Promise.all([sessionWrites, recapWrite]);
+    await recapWrite;
     liveTurns.delete(chatId);
   }
 }
@@ -572,15 +616,6 @@ async function cancelledOutcome(events: EventBatcher, sawResult = false): Promis
   if (!sawResult) events.add(errorResultEvent('cancelled', 'Stopped.'));
   await events.flush();
   return { status: 'idle', statusMessage: 'Cancelled', cancelled: true };
-}
-
-async function saveSessionId(chatId: string, sessionId: string): Promise<void> {
-  try {
-    const row = await updateChat(chatId, { agentSessionId: sessionId });
-    if (row) emitWorkbenchChat(row.workspaceId, rowToChat(row));
-  } catch (err) {
-    console.warn(`[workbench] saving the session id for chat ${chatId} failed:`, err);
-  }
 }
 
 /** The prompt, with the attached files named so the agent knows where to look. */
@@ -743,14 +778,22 @@ export async function cancelTurn(chatId: string): Promise<void> {
   const live = liveTurns.get(chatId);
   if (live) live.cancelRequested = true;
   if (chat.status !== 'running' && !live) return;
+  const lease = await getTurnLease(chatId);
+  if (lease && lease.turn !== chat.turnCount) return;
   if (wb.sandboxId) {
-    await killMarker(wb, turnMarker(chatId)).catch((err) =>
-      console.warn(`[workbench] stopping chat ${chatId} failed:`, err),
-    );
+    const marker = lease?.heartbeat ? await durableMarker(wb, turnLogKey(chatId, lease.turn, lease.attempt),
+      turnMarker(chatId, lease.turn, lease.attempt), turnMarker(chatId)) : turnMarker(chatId);
+    await killMarker(wb, marker);
   }
   if (!live) {
-    const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false });
-    if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+    const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
+    if (fin) {
+      emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+      if (wb.sandboxId) for (const attempt of [0, 1]) {
+        await removeDurableExec(wb, turnLogKey(chatId, chat.turnCount, attempt), turnMarker(chatId, chat.turnCount, attempt))
+          .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));
+      }
+    }
   }
 }
 
@@ -759,36 +802,144 @@ export async function cancelAllTurns(chatIds: string[]): Promise<void> {
   await Promise.all(chatIds.map((id) => cancelTurn(id).catch(() => undefined)));
 }
 
-export const ORPHAN_MESSAGE =
-  'The backend restarted while this turn was running, so Talyn lost its view of it and stopped the agent. ' +
-  'Any changes it made are still in the session. Send a message to carry on.';
+export const ORPHAN_MESSAGE = 'The agent stopped unexpectedly.';
+export const LEGACY_INTERRUPTED_MESSAGE = 'This turn was interrupted by an update; send your message again.';
 
-/**
- * Settle chats a dead process left `running`: stop the orphaned agent (two
- * processes on one session would interleave), mark the chat `error` with a
- * reason, and put that reason in the transcript. Chats this process is
- * following are left alone.
- */
+export function turnLogKey(chatId: string, turn: number, attempt: number): string {
+  return `${chatId}-${turn}-${attempt}`;
+}
+function handoffOutcome(): TurnOutcome {
+  return { status: 'running', statusMessage: null, cancelled: false, handedOff: true };
+}
+
+async function finishSuccessfulAgent(
+  wb: WorkbenchRow, chatId: string, message: WorkbenchQueuedMessage,
+  text: string, events: EventBatcher, live: LiveTurn,
+): Promise<void> {
+  if (live.cancelRequested || isWorkbenchDetached()) return;
+  if (!(await renewTurnLease(chatId, live.turn)) || await hasTurnEvent(chatId, live.turn, 'talyn_pr')) return;
+  const fresh = (await getWorkbench(wb.id)) ?? wb;
+  if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
+      (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
+    events.add(await openPullRequestFromTurn(fresh, text));
+    await events.flush();
+  }
+}
+
+async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean): Promise<TurnOutcome> {
+  const chat = await getChat(chatId);
+  const wb = chat ? await getWorkbench(chat.workbenchId) : null;
+  if (!chat || !wb) return handoffOutcome();
+  const live: LiveTurn = { turn: lease.turn, controller: new AbortController(), cancelRequested: false };
+  liveTurns.set(chatId, live);
+  const events = new EventBatcher(chat.workspaceId, chatId, lease.turn);
+  const parser = createAgentStreamParser(chat.agent === 'codex' ? 'codex' : 'claude', lease.parser);
+  try {
+    // Replay the saved prefix into the parser only. Codex keeps tool state between lines.
+    const key = turnLogKey(chatId, lease.turn, lease.attempt);
+    const exists = await durableExecExists(wb, key);
+    if (!exists && lease.message) {
+      const requeued = await requeueTurn(chatId, lease.message, lease.turn);
+      if (requeued) emitWorkbenchChat(chat.workspaceId, rowToChat(requeued));
+      return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
+    }
+    if (!exists && !lease.message) {
+      if (!legacyTurn) {
+        events.add(errorResultEvent('error_during_execution', ORPHAN_MESSAGE));
+        await events.flush();
+        return { status: 'error', statusMessage: ORPHAN_MESSAGE, cancelled: false };
+      }
+      events.add({ type: 'system', subtype: 'turn_interrupted', text: LEGACY_INTERRUPTED_MESSAGE });
+      await events.flush();
+      return { status: 'idle', statusMessage: LEGACY_INTERRUPTED_MESSAGE, cancelled: true };
+    }
+    if (!lease.parser && lease.offset > 0) {
+      await followDurableExec(wb, key, turnMarker(chatId, lease.turn, lease.attempt), 0, async (record) => {
+        if (record.stream === 'stdout') parser.push(record.line);
+      }, live.controller.signal, lease.offset, turnMarker(chatId));
+    }
+    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, live.controller.signal);
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+    if (live.cancelRequested) return cancelledOutcome(events, Boolean(parser.result));
+    if (outcome.exitCode === 0 && !parser.result?.isError) {
+      if (lease.message) await finishSuccessfulAgent(wb, chatId, lease.message, parser.result?.text ?? '', events, live);
+      return { status: 'idle', statusMessage: null, cancelled: false };
+    }
+    const why = outcome.exitCode === 125 ? ORPHAN_MESSAGE :
+      parser.result?.text?.trim() || outcome.stderrTail.trim() || `The agent exited with code ${outcome.exitCode}.`;
+    if (!parser.result?.isError && !(await hasTurnEvent(chatId, lease.turn, 'result', true))) {
+      events.add(errorResultEvent('error_during_execution', why));
+    }
+    await events.flush();
+    return { status: 'error', statusMessage: why, cancelled: false };
+  } catch (err) {
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+    if (!(err instanceof FleetRunNotFoundError)) {
+      recordWorkbenchEvent(wb, 'turn_handoff', 'The turn follower will reconnect.', false, err);
+      return handoffOutcome();
+    }
+    events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
+    await events.flush();
+    return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
+  } finally { liveTurns.delete(chatId); }
+}
+
+/** Claim stale leases. A legacy process remains authoritative while its agent is alive. */
 export async function sweepOrphanedTurns(): Promise<number> {
-  const rows = await runningChats();
-  let settled = 0;
-  for (const row of rows) {
-    if (liveTurns.has(row.id)) continue;
+  if (isWorkbenchDraining()) return 0;
+  let adopted = 0;
+  for (const lease of await turnLeases()) {
+    if (liveTurns.has(lease.id)) continue;
+    if (lease.heartbeat && Date.now() - lease.heartbeat.getTime() <= 90_000) continue;
     try {
-      const wb = await getWorkbench(row.workbenchId);
-      if (wb?.runtime === 'local') continue;
-      if (wb?.sandboxId) await killMarker(wb, turnMarker(row.id)).catch(() => undefined);
-      const chat = await getChat(row.id);
-      const stored = await appendEvents(row.id, [
-        { turn: chat?.turnCount ?? 0, event: errorResultEvent('error_during_execution', ORPHAN_MESSAGE) },
-      ]);
-      emitWorkbenchEvents(row.workspaceId, row.id, stored);
-      const fin = await finishTurn(row.id, { finalStatus: 'error', statusMessage: ORPHAN_MESSAGE, drain: false });
-      if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
-      settled++;
+      const wb = await getWorkbench(lease.workbenchId);
+      if (!wb || wb.runtime === 'local' || !wb.sandboxId) continue;
+      if (!lease.heartbeat) {
+        if (Date.now() - lease.updatedAt.getTime() < 3 * 60_000) continue;
+        if (await isMarkerAlive(wb, turnMarker(lease.id))) continue;
+      }
+      if (!(await claimTurnLease(lease))) continue;
+      const claimed = await getTurnLease(lease.id);
+      if (!claimed) continue;
+      adopted++;
+      const first = { message: claimed.message ?? { id: 'legacy', text: '', queuedAt: new Date().toISOString() }, turn: claimed.turn };
+      void runWithoutScope(() => runTurnLoop(claimed.id, first, claimed, lease.heartbeat === null)).catch((err) => {
+        console.error(`[workbench] resuming chat ${claimed.id} failed:`, err);
+      });
     } catch (err) {
-      console.warn(`[workbench] settling orphaned chat ${row.id} failed:`, err);
+      console.warn(`[workbench] claiming chat ${lease.id} failed:`, err);
     }
   }
-  return settled;
+  for (const chat of await queuedIdleChats()) await startQueuedIfIdle(chat.id);
+  return adopted;
+}
+
+async function followTurnOutput(
+  wb: WorkbenchRow, chat: ChatRow, turn: number, attempt: number, parser: AgentStreamParser,
+  startOffset: number, signal: AbortSignal, onParsed?: () => void,
+) {
+  let offset = startOffset;
+  let sessionId = chat.agentSessionId;
+  return followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
+    async (records) => {
+      const drafts = records.flatMap(({ record }) => record.stream === 'stdout' ? parser.push(record.line) : []);
+      onParsed?.();
+      const nextOffset = records[records.length - 1].offset;
+      const snapshot = parser.snapshot();
+      const stored = await retryBatchWrite(() => appendEvents(chat.id, drafts.map((event) => ({ turn, event })), {
+        owner: TURN_OWNER, turn, offset: nextOffset, previousOffset: offset, parser: snapshot,
+      }));
+      offset = nextOffset;
+      emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+      if (parser.sessionId && parser.sessionId !== sessionId) {
+        const updated = await getChat(chat.id);
+        if (updated) emitWorkbenchChat(chat.workspaceId, rowToChat(updated));
+        sessionId = parser.sessionId;
+      }
+    }, { records: FLUSH_EVENTS, ms: FLUSH_MS, signal, legacyMarker: turnMarker(chat.id) });
+}
+
+export async function detachTurnFollowers(): Promise<void> {
+  for (const live of liveTurns.values()) live.controller.abort();
+  await releaseOwnedTurnLeases();
 }

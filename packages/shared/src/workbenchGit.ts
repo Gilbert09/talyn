@@ -123,13 +123,13 @@ export function headSha(): GitStep {
  * the merge-base sha, not the base branch: diffing against the branch tip
  * would show the base's own new commits as reverted on this branch.
  */
-export function diffNumstat(sha: string): GitStep {
-  return git('diff', '--numstat', '-z', '--find-renames', sha, '--');
+export function diffNumstat(sha: string, head?: string): GitStep {
+  return git('diff', '--numstat', '-z', '--find-renames', sha, ...(head ? [head] : []), '--');
 }
 
 /** The same diff as `--name-status`, which is where added/deleted/renamed comes from. */
-export function diffNameStatus(sha: string): GitStep {
-  return git('diff', '--name-status', '-z', '--find-renames', sha, '--');
+export function diffNameStatus(sha: string, head?: string): GitStep {
+  return git('diff', '--name-status', '-z', '--find-renames', sha, ...(head ? [head] : []), '--');
 }
 
 /** Untracked, not ignored — the files a diff against a commit cannot see. */
@@ -143,8 +143,8 @@ export function listFiles(): GitStep {
 }
 
 /** Unified patch text vs `sha`, for one path or all of them. */
-export function diffPatch(sha: string, path?: string): GitStep {
-  const argv = ['diff', '--no-color', '--find-renames', sha, '--'];
+export function diffPatch(sha: string, path?: string, head?: string): GitStep {
+  const argv = ['diff', '--no-color', '--find-renames', sha, ...(head ? [head] : []), '--'];
   if (path) argv.push(path);
   return git(...argv);
 }

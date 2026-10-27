@@ -1,6 +1,8 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, isNotNull, or, lt, lte, ne, sql } from 'drizzle-orm';
 import type {
   AgentEvent,
+  AgentStreamSnapshot,
   Workbench,
   WorkbenchAgent,
   WorkbenchChat,
@@ -21,6 +23,7 @@ import {
   workbenchEvents as eventsTable,
   workbenches as workbenchesTable,
 } from '../../db/schema.js';
+import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 
 /**
@@ -61,8 +64,14 @@ export const WORKBENCH_COLUMNS = {
   deviceId: workbenchesTable.deviceId,
   localPath: workbenchesTable.localPath,
   sandboxId: workbenchesTable.sandboxId,
+  sandboxGeneration: workbenchesTable.sandboxGeneration,
   sandboxState: workbenchesTable.sandboxState,
   memoryRestorePending: workbenchesTable.memoryRestorePending,
+  archivePendingAt: workbenchesTable.archivePendingAt,
+  archiveRetryAt: workbenchesTable.archiveRetryAt,
+  restoreRequestedAt: workbenchesTable.restoreRequestedAt,
+  archiveLeaseUntil: workbenchesTable.archiveLeaseUntil,
+  archiveFailures: workbenchesTable.archiveFailures,
   fleetHost: workbenchesTable.fleetHost,
   status: workbenchesTable.status,
   statusMessage: workbenchesTable.statusMessage,
@@ -115,11 +124,13 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     localPath: row.localPath,
     sandboxId: row.sandboxId,
     sandboxState: row.sandboxState as WorkbenchSandboxState,
-    status: row.status as WorkbenchStatus,
+    status: row.status === 'archiveError' ? 'archiveError' : row.archivedAt ? 'archived' : row.status as WorkbenchStatus,
     statusMessage: row.statusMessage,
     pullRequestId: row.pullRequestId,
     settings: row.settings ?? {},
-    diffStat: row.diffStat ?? null,
+    diffStat: row.diffStat ? { added: row.diffStat.added, removed: row.diffStat.removed, files: row.diffStat.files } : null,
+    uncommittedStats: row.diffStat?.uncommittedStats ?? null,
+    committedStats: row.diffStat?.committedStats ?? null,
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -201,6 +212,7 @@ export async function claimLostWorkbench(id: string, sandboxId: string, replacem
       sandboxState: 'lost',
       memoryRestorePending: 'lost',
       sandboxId: replacementId,
+      sandboxGeneration: null,
       fleetHost: null,
       updatedAt: new Date(),
     })
@@ -263,8 +275,8 @@ export async function heartbeatMove(id: string, fromSandboxId: string, targetSan
     .update(workbenchesTable)
     .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveHeartbeatAt', now())` })
     .where(isMove(id, fromSandboxId, targetSandboxId))
-    .returning({ id: workbenchesTable.id });
-  return rows.length > 0;
+    .returning({ archivedAt: workbenchesTable.archivedAt });
+  return rows.length > 0 && rows[0].archivedAt === null;
 }
 
 /** Record where the new box was made, so a sweep can delete it on the right host. */
@@ -316,7 +328,7 @@ export async function releaseMove(
   const [row] = await db()
     .update(workbenchesTable)
     .set({
-      status: 'ready',
+      status: sql`CASE WHEN ${workbenchesTable.archivedAt} IS NULL THEN 'ready' ELSE 'archived' END`,
       statusMessage,
       settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - ${LEASE_KEYS}`,
       updatedAt: new Date(),
@@ -350,6 +362,7 @@ export async function commitMove(
       status: 'ready',
       statusMessage: to.statusMessage,
       sandboxId: to.sandboxId,
+      sandboxGeneration: to.sandboxId,
       sandboxState: 'running',
       fleetHost: to.fleetHost,
       settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'fleetSandboxId' - ${LEASE_KEYS}
@@ -661,13 +674,13 @@ const RETURNING_CHAT = sql.raw(
  */
 function workbenchState(chatId: string) {
   return sql`wb_state AS (
-      SELECT w.status FROM workbenches w
+      SELECT w.status, w.archived_at FROM workbenches w
       WHERE w.id = (SELECT workbench_id FROM workbench_chats WHERE id = ${chatId})
       FOR SHARE
     )`;
 }
 
-const WORKBENCH_MOVING = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status = 'moving')`);
+const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL)`);
 
 export interface ClaimResult {
   chat: ChatRow;
@@ -693,13 +706,15 @@ export async function claimOrEnqueue(
   message: WorkbenchQueuedMessage | null,
   canStart: boolean,
 ): Promise<ClaimResult | null> {
+  const deferred = canStart && isWorkbenchDraining();
+  canStart = canStart && !isWorkbenchDraining();
   const add = JSON.stringify(message ? [message] : []);
   const result = await db().execute(sql`
     WITH ${workbenchState(chatId)}, old AS (
       SELECT status, queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
       SELECT status AS prev_status, queued_messages || ${add}::jsonb AS mq,
-        (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_MOVING}
+        (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_UNAVAILABLE}
           AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0) AS go
       FROM old
     )
@@ -708,13 +723,25 @@ export async function claimOrEnqueue(
       status = CASE WHEN merged.go THEN 'running' ELSE c.status END,
       status_message = CASE WHEN merged.go THEN NULL ELSE c.status_message END,
       turn_count = CASE WHEN merged.go THEN c.turn_count + 1 ELSE c.turn_count END,
+      turn_owner = CASE WHEN merged.go THEN ${TURN_OWNER} ELSE c.turn_owner END,
+      turn_heartbeat_at = CASE WHEN merged.go THEN date_trunc('milliseconds', now()) ELSE c.turn_heartbeat_at END,
+      turn_started_at = CASE WHEN merged.go THEN now() ELSE c.turn_started_at END,
+      turn_parser = CASE WHEN merged.go THEN NULL ELSE c.turn_parser END,
+      turn_offset = CASE WHEN merged.go THEN 0 ELSE c.turn_offset END,
+      turn_attempt = CASE WHEN merged.go THEN 0 ELSE c.turn_attempt END,
+      turn_message = CASE WHEN merged.go THEN merged.mq -> 0 ELSE c.turn_message END,
+      drain_pending = CASE WHEN merged.go THEN false ELSE c.drain_pending OR
+        (${deferred} AND c.status <> 'running' AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(merged.mq) > 0) END,
       updated_at = now()
     FROM merged
-    WHERE c.id = ${chatId}
+    WHERE c.id = ${chatId} AND (merged.go OR ${message !== null} OR ${deferred})
     RETURNING ${RETURNING_CHAT}, merged.go AS started, CASE WHEN merged.go THEN merged.mq -> 0 END AS started_message
   `);
   const row = rowsOf<RawChatRow & { started: boolean; started_message: unknown }>(result)[0];
-  if (!row) return null;
+  if (!row) {
+    const current = await getChat(chatId);
+    return current ? { chat: current, started: null } : null;
+  }
   const chat = rawToChatRow(row);
   if (!row.started) return { chat, started: null };
   const startedMessage =
@@ -729,24 +756,38 @@ export async function claimOrEnqueue(
  */
 export async function finishTurn(
   chatId: string,
-  opts: { finalStatus: WorkbenchChatStatus; statusMessage: string | null; drain: boolean },
+  opts: { finalStatus: WorkbenchChatStatus; statusMessage: string | null; drain: boolean; owner?: string; turn?: number },
 ): Promise<ClaimResult | null> {
   const result = await db().execute(sql`
     WITH ${workbenchState(chatId)}, old AS (
       SELECT queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
       SELECT queued_messages AS mq,
-        (${opts.drain} AND NOT ${WORKBENCH_MOVING} AND jsonb_array_length(queued_messages) > 0) AS go
+        (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
+      agent_backup_pending = true,
       queued_messages = CASE WHEN merged.go THEN merged.mq - 0 ELSE merged.mq END,
       status = CASE WHEN merged.go THEN 'running' ELSE ${opts.finalStatus} END,
       status_message = CASE WHEN merged.go THEN NULL ELSE ${opts.statusMessage} END,
       turn_count = CASE WHEN merged.go THEN c.turn_count + 1 ELSE c.turn_count END,
+      turn_owner = CASE WHEN merged.go THEN ${TURN_OWNER} ELSE c.turn_owner END,
+      turn_heartbeat_at = CASE WHEN merged.go THEN date_trunc('milliseconds', now()) ELSE c.turn_heartbeat_at END,
+      turn_started_at = CASE WHEN merged.go THEN now() ELSE c.turn_started_at END,
+      turn_parser = CASE WHEN merged.go THEN NULL ELSE c.turn_parser END,
+      turn_offset = CASE WHEN merged.go THEN 0 ELSE c.turn_offset END,
+      turn_attempt = CASE WHEN merged.go THEN 0 ELSE c.turn_attempt END,
+      turn_message = CASE WHEN merged.go THEN merged.mq -> 0 ELSE NULL END,
+      drain_pending = (${opts.drain && isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE}
+        AND jsonb_array_length(merged.mq) > 0),
       updated_at = now()
     FROM merged
     WHERE c.id = ${chatId}
+      AND (${opts.owner ?? null}::text IS NULL OR c.turn_owner = ${opts.owner ?? null})
+      AND (${opts.turn ?? null}::int IS NULL OR c.turn_count = ${opts.turn ?? null})
+      -- A turn can end while the chat waits for the user; the owner and turn checks stop a stale instance.
+      AND c.status IN ('running', 'awaiting_input')
     RETURNING ${RETURNING_CHAT}, merged.go AS started, CASE WHEN merged.go THEN merged.mq -> 0 END AS started_message
   `);
   const row = rowsOf<RawChatRow & { started: boolean; started_message: unknown }>(result)[0];
@@ -763,15 +804,18 @@ export async function finishTurn(
  * the head of the queue, the turn number is returned, and the chat is idle.
  * For a turn that found its workbench moving. Null when the chat was not running.
  */
-export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage): Promise<ChatRow | null> {
+export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
   const result = await db().execute(sql`
     UPDATE workbench_chats c SET
       queued_messages = ${JSON.stringify([message])}::jsonb || c.queued_messages,
       status = 'idle',
+      turn_message = NULL,
+      drain_pending = true,
       status_message = NULL,
       turn_count = GREATEST(c.turn_count - 1, 0),
       updated_at = now()
-    WHERE c.id = ${chatId} AND c.status = 'running'
+    WHERE c.id = ${chatId} AND c.status = 'running' AND c.turn_owner = ${TURN_OWNER}
+      AND (${turn ?? null}::int IS NULL OR c.turn_count = ${turn ?? null})
     RETURNING ${RETURNING_CHAT}
   `);
   const row = rowsOf<RawChatRow>(result)[0];
@@ -856,13 +900,22 @@ export interface EventDraftInput {
  * reader paging by `seq` never sees a later one before an earlier one. No
  * advisory lock and no read-then-write.
  */
-export async function appendEvents(chatId: string, items: EventDraftInput[]): Promise<WorkbenchEvent[]> {
-  if (items.length === 0) return [];
+export async function appendEvents(
+  chatId: string, items: EventDraftInput[],
+  progress?: { owner: string; turn: number; offset?: number; previousOffset?: number; parser?: AgentStreamSnapshot },
+): Promise<WorkbenchEvent[]> {
+  if (items.length === 0 && !progress) return [];
   const payload = JSON.stringify(items.map((i) => ({ turn: i.turn, event: i.event })));
   const result = await db().execute(sql`
     WITH alloc AS (
-      UPDATE workbench_chats SET next_seq = next_seq + ${items.length}, updated_at = now()
+      UPDATE workbench_chats SET next_seq = next_seq + ${items.length}, updated_at = now(),
+        turn_offset = COALESCE(${progress?.offset ?? null}::bigint, turn_offset),
+        turn_parser = COALESCE(${progress?.parser ? JSON.stringify(progress.parser) : null}::jsonb, turn_parser),
+        agent_session_id = COALESCE(${progress?.parser?.sessionId ?? null}::text, agent_session_id)
       WHERE id = ${chatId}
+        AND (${progress?.owner ?? null}::text IS NULL OR
+          (turn_owner = ${progress?.owner ?? null} AND turn_count = ${progress?.turn ?? null}
+           AND (${progress?.previousOffset ?? null}::bigint IS NULL OR turn_offset = ${progress?.previousOffset ?? null}) AND status = 'running'))
       RETURNING next_seq - ${items.length} AS base
     )
     INSERT INTO workbench_events (chat_id, seq, turn, event)
@@ -1071,4 +1124,167 @@ export async function chatIdsOf(workbenchIds: string[]): Promise<string[]> {
     .from(chatsTable)
     .where(inArray(chatsTable.workbenchId, workbenchIds));
   return rows.map((r) => r.id);
+}
+
+/** Mark the archive before any sandbox work starts. Preserve an active move's lease. */
+export async function markArchive(id: string): Promise<WorkbenchRow | null> {
+  const [row] = await db().update(workbenchesTable).set({
+    archivedAt: new Date(),
+    archivePendingAt: new Date(),
+    archiveFailures: 0, archiveRetryAt: null, restoreRequestedAt: null,
+    status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
+    statusMessage: null,
+    updatedAt: new Date(),
+  }).where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt), or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')))).returning(WORKBENCH_COLUMNS);
+  return row ?? getWorkbench(id);
+}
+
+const archiveAvailable = () => or(isNull(workbenchesTable.archiveLeaseUntil), lt(workbenchesTable.archiveLeaseUntil, new Date()));
+
+export async function pendingArchives(): Promise<Array<{ id: string }>> {
+  return db().select({ id: workbenchesTable.id }).from(workbenchesTable).where(and(
+    lt(workbenchesTable.archivePendingAt, new Date(Date.now() - 120_000)),
+    ne(workbenchesTable.status, 'moving'), archiveAvailable(), isNull(workbenchesTable.restoreRequestedAt),
+    or(isNull(workbenchesTable.archiveRetryAt), lte(workbenchesTable.archiveRetryAt, new Date())),
+  )).limit(100);
+}
+
+/** The timestamp comparison elects one worker across backend instances. */
+export async function claimArchive(row: WorkbenchRow): Promise<WorkbenchRow | null> {
+  if (!row.archivePendingAt) return null;
+  const [claimed] = await db().update(workbenchesTable).set({
+    archivePendingAt: new Date(Math.max(Date.now(), row.archivePendingAt.getTime() + 1)),
+    archiveLeaseUntil: new Date(Date.now() + 120_000),
+  }).where(and(
+    eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt),
+    isNotNull(workbenchesTable.archivedAt), ne(workbenchesTable.status, 'moving'), archiveAvailable(), isNull(workbenchesTable.restoreRequestedAt),
+    or(isNull(workbenchesTable.archiveRetryAt), lte(workbenchesTable.archiveRetryAt, new Date())),
+  )).returning(WORKBENCH_COLUMNS);
+  return claimed ?? null;
+}
+
+export async function renewArchive(row: WorkbenchRow): Promise<boolean> {
+  const rows = await db().update(workbenchesTable).set({ archiveLeaseUntil: new Date(Date.now() + 120_000) })
+    .where(and(eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!),
+      isNull(workbenchesTable.restoreRequestedAt), gt(workbenchesTable.archiveLeaseUntil, new Date())))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+export async function finishArchive(row: WorkbenchRow, error?: string): Promise<WorkbenchRow | null> {
+  const failures = row.archiveFailures + 1;
+  const [updated] = await db().update(workbenchesTable).set(error ? {
+    archiveLeaseUntil: null,
+    archiveRetryAt: failures >= 8 ? null : new Date(Date.now() + Math.min(15 * 60_000 * 2 ** (failures - 1), 6 * 3_600_000)),
+    archivePendingAt: failures >= 8 ? null : row.archivePendingAt,
+    status: failures >= 8 ? 'archiveError' : 'archived',
+    archiveFailures: failures, statusMessage: error,
+  } : {
+    archivePendingAt: null, archiveLeaseUntil: null, archiveRetryAt: null, archiveFailures: 0,
+    status: 'archived', sandboxState: row.runtime === 'sandbox' ? 'deleted' : 'none', statusMessage: null,
+  }).where(and(eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!)))
+    .returning(WORKBENCH_COLUMNS);
+  return updated ?? null;
+}
+
+export const TURN_COLUMNS = {
+  id: chatsTable.id, workbenchId: chatsTable.workbenchId, workspaceId: chatsTable.workspaceId,
+  owner: chatsTable.turnOwner, heartbeat: chatsTable.turnHeartbeatAt, startedAt: chatsTable.turnStartedAt,
+  offset: chatsTable.turnOffset, attempt: chatsTable.turnAttempt, message: chatsTable.turnMessage,
+  turn: chatsTable.turnCount, updatedAt: chatsTable.updatedAt, parser: chatsTable.turnParser,
+} as const;
+export type TurnLease = {
+  id: string; workbenchId: string; workspaceId: string; owner: string | null;
+  heartbeat: Date | null; startedAt: Date | null; offset: number; attempt: number;
+  message: WorkbenchQueuedMessage | null; turn: number; updatedAt: Date; parser: AgentStreamSnapshot | null;
+};
+export async function getTurnLease(id: string): Promise<TurnLease | null> {
+  const [row] = await db().select(TURN_COLUMNS).from(chatsTable).where(eq(chatsTable.id, id));
+  return row ?? null;
+}
+export async function turnLeases(): Promise<Array<Omit<TurnLease, 'message' | 'parser'>>> {
+  const { message: _message, parser: _parser, ...columns } = TURN_COLUMNS;
+  return db().select(columns).from(chatsTable).where(eq(chatsTable.status, 'running'));
+}
+export async function renewTurnLease(id: string, turn: number, owner = TURN_OWNER): Promise<boolean> {
+  const rows = await db().update(chatsTable).set({ turnHeartbeatAt: new Date() })
+    .where(and(eq(chatsTable.id, id), eq(chatsTable.turnOwner, owner), eq(chatsTable.turnCount, turn), eq(chatsTable.status, 'running')))
+    .returning({ id: chatsTable.id });
+  return rows.length === 1;
+}
+export async function claimTurnLease(seen: Pick<TurnLease, 'id' | 'owner' | 'heartbeat' | 'turn'>, owner = TURN_OWNER): Promise<boolean> {
+  const rows = await db().update(chatsTable).set({ turnOwner: owner, turnHeartbeatAt: new Date() })
+    .where(and(eq(chatsTable.id, seen.id), eq(chatsTable.status, 'running'), eq(chatsTable.turnCount, seen.turn),
+      seen.owner === null ? isNull(chatsTable.turnOwner) : eq(chatsTable.turnOwner, seen.owner),
+      seen.heartbeat === null ? isNull(chatsTable.turnHeartbeatAt) : eq(chatsTable.turnHeartbeatAt, seen.heartbeat)))
+    .returning({ id: chatsTable.id });
+  return rows.length === 1;
+}
+export async function setTurnAttempt(id: string, turn: number, attempt: number): Promise<boolean> {
+  const rows = await db().update(chatsTable).set({ turnAttempt: attempt, turnOffset: 0, turnParser: null })
+    .where(and(eq(chatsTable.id, id), eq(chatsTable.turnOwner, TURN_OWNER), eq(chatsTable.turnCount, turn)))
+    .returning({ id: chatsTable.id });
+  return rows.length === 1;
+}
+export async function queuedIdleChats(): Promise<Array<{ id: string }>> {
+  return db().select({ id: chatsTable.id }).from(chatsTable).where(and(
+    eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
+    sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
+  ));
+}
+
+export async function hasTurnEvent(chatId: string, turn: number, type: string, onlyErrors = false): Promise<boolean> {
+  const rows = await db().select({ seq: eventsTable.seq }).from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), eq(eventsTable.turn, turn), type === 'user_message' ? sql`${eventsTable.event}->'talyn'->>'kind' = ${type}` : sql`${eventsTable.event}->>'type' = ${type}`,
+      onlyErrors ? sql`${eventsTable.event}->>'is_error' = 'true'` : undefined)).limit(1);
+  return rows.length > 0;
+}
+
+export async function saveOwnedSessionId(chatId: string, turn: number, sessionId: string): Promise<ChatRow | null> {
+  const [row] = await db().update(chatsTable).set({ agentSessionId: sessionId, updatedAt: new Date() })
+    .where(and(eq(chatsTable.id, chatId), eq(chatsTable.turnOwner, TURN_OWNER),
+      eq(chatsTable.turnCount, turn), eq(chatsTable.status, 'running'),
+      sql`${chatsTable.agentSessionId} IS DISTINCT FROM ${sessionId}`)).returning(CHAT_COLUMNS);
+  return row ?? null;
+}
+
+export async function releaseTurnLease(id: string, turn: number): Promise<void> {
+  await db().update(chatsTable).set({ turnHeartbeatAt: new Date(0) }).where(and(
+    eq(chatsTable.id, id), eq(chatsTable.turnOwner, TURN_OWNER), eq(chatsTable.turnCount, turn), eq(chatsTable.status, 'running'),
+  ));
+}
+
+export async function releaseOwnedTurnLeases(): Promise<void> {
+  await db().update(chatsTable).set({ turnHeartbeatAt: new Date(0) })
+    .where(and(eq(chatsTable.turnOwner, TURN_OWNER), eq(chatsTable.status, 'running')));
+}
+
+export async function markDrainPending(id: string): Promise<void> {
+  await db().update(chatsTable).set({ drainPending: true }).where(and(eq(chatsTable.id, id),
+    ne(chatsTable.status, 'running'), eq(chatsTable.drainPending, false), sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`));
+}
+
+export async function ensureSandboxGeneration(id: string): Promise<WorkbenchRow | null> {
+  const [row] = await db().update(workbenchesTable).set({ sandboxGeneration: randomUUID() })
+    .where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.sandboxGeneration))).returning(WORKBENCH_COLUMNS);
+  return row ?? getWorkbench(id);
+}
+
+export async function requestArchiveRestore(id: string): Promise<WorkbenchRow | null> {
+  const [row] = await db().update(workbenchesTable).set({ restoreRequestedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), isNotNull(workbenchesTable.archivedAt))).returning(WORKBENCH_COLUMNS);
+  return row ?? getWorkbench(id);
+}
+
+export async function cancelPendingArchive(id: string): Promise<WorkbenchRow | null> {
+  const [row] = await db().update(workbenchesTable).set({
+    archivePendingAt: null, archiveLeaseUntil: null, archiveRetryAt: null, archiveFailures: 0,
+  }).where(and(eq(workbenchesTable.id, id), isNotNull(workbenchesTable.restoreRequestedAt))).returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+export async function releaseArchive(row: WorkbenchRow): Promise<void> {
+  await db().update(workbenchesTable).set({ archiveLeaseUntil: null }).where(and(
+    eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!),
+  ));
 }

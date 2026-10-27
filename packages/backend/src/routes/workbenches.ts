@@ -1,3 +1,4 @@
+import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
 import { Readable } from 'stream';
@@ -34,7 +35,7 @@ import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
-import { fleetErrorAsRefusal, localRuntimeError, movingError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
 import {
   archiveWorkbench,
@@ -165,17 +166,19 @@ export function workbenchRoutes(): Router {
     return (await gate(req, res, workbench.workspaceId)) ? { chat, workbench } : null;
   }
 
-  /**
-   * T1: opening a session whose box sleeps on a stale golden starts a move
-   * before anything wakes the box, and the read answers that it is moving.
-   */
-  async function moveIfStaleGolden(row: WorkbenchRow): Promise<void> {
-    if (await startStaleGoldenMove(row)) throw movingError();
-  }
-
-  /** A sandbox workbench that can run a command right now, or the refusal that says why not. */
-  function requireReadySandbox(row: WorkbenchRow): void {
+  /** Reads wait for the current sandbox before they use its id. */
+  async function requireReadySandbox(row: WorkbenchRow, checkGolden = false): Promise<void> {
     if (row.runtime === 'local') throw localRuntimeError();
+    if (row.archivedAt) throw notReadyError('archived');
+    if (checkGolden) await startStaleGoldenMove(row);
+    const deadline = Date.now() + 180_000;
+    let current = await getWorkbench(row.id);
+    while (current?.status === 'moving' && !current.archivedAt && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      current = await getWorkbench(row.id);
+    }
+    if (!current) throw new WorkbenchError('Session not found', 404, 'not_found');
+    Object.assign(row, current);
     if (row.archivedAt) throw notReadyError('archived');
     if (row.status !== 'ready' || !row.sandboxId) throw notReadyError(row.status);
   }
@@ -720,7 +723,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       if (row.agent !== 'claude') {
         throw new WorkbenchError('Only a Claude session can continue a Claude Code conversation.', 409, 'wrong_agent');
       }
@@ -742,8 +745,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
-      await moveIfStaleGolden(row);
+      await requireReadySandbox(row, true);
       ok(res, await getChanges(row));
     } catch (err) {
       fail(res, err);
@@ -754,8 +756,12 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
-      ok(res, await getPatch(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined));
+      await requireReadySandbox(row);
+      const scope = req.query.scope;
+      if (scope !== undefined && scope !== 'combined' && scope !== 'uncommitted' && scope !== 'committed') {
+        return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
+      }
+      ok(res, await getPatch(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
     } catch (err) {
       fail(res, err);
     }
@@ -765,7 +771,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       if (typeof req.query.path !== 'string' || !req.query.path) return bad(res, 400, 'path is required');
       ok(res, await readRepoFile(row, req.query.path));
     } catch (err) {
@@ -777,8 +783,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
-      await moveIfStaleGolden(row);
+      await requireReadySandbox(row, true);
       ok(res, await listRepoFiles(row));
     } catch (err) {
       fail(res, err);
@@ -791,8 +796,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
-      await moveIfStaleGolden(row);
+      await requireReadySandbox(row, true);
       ok(res, await loadWorkbenchConfigWithDetection(row));
     } catch (err) {
       fail(res, err);
@@ -803,7 +807,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       await saveDetectedConfig(row);
       ok(res, null);
     } catch (err) {
@@ -811,11 +815,17 @@ export function workbenchRoutes(): Router {
     }
   });
 
+  router.get('/:id/scripts/output', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try { ok(res, await scriptSnapshots(row.id)); } catch (err) { fail(res, err); }
+  });
+
   router.post('/:id/scripts/:name', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       // Detached from the request: the script outlives it, and its follower
       // must not inherit anything request-scoped.
       await runWithoutScope(() => startScript(row, req.params.name));
@@ -829,7 +839,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       await stopScript(row, req.params.name);
       ok(res, null);
     } catch (err) {
@@ -864,7 +874,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       ok(res, await getPreviewPatch(row));
     } catch (err) { fail(res, err); }
   });
@@ -877,7 +887,7 @@ export function workbenchRoutes(): Router {
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
     try {
-      requireReadySandbox(row);
+      await requireReadySandbox(row);
       const body = await proxyBody(req);
       if (body === 'too_large') return bad(res, 413, 'That request body is too large to forward.');
       const rest = (req.params as Record<string, string>)[0] ?? '';

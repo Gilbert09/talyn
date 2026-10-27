@@ -13,19 +13,22 @@ import { sendMessage } from '../services/workbenches/turns.js';
 import * as turns from '../services/workbenches/turns.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
-import { restoreWorkbench } from '../services/workbenches/lifecycle.js';
+import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
+import * as scriptRunner from '../services/workbenches/scripts.js';
+import { provisionWorkbench, restoreWorkbench } from '../services/workbenches/lifecycle.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { repositories, workbenchAgentBackups as backups, workbenchChats as chats, workbenches, workspaces } from '../db/schema.js';
 import { debugBus } from '../services/debugBus.js';
 import {
   BACKUP_CHUNK_BYTES, BACKUP_METADATA_COLUMNS, backupAgentSession, backupLocateScript,
-  backupTotalsQuery, restoreAgentSession, scheduleAgentBackup, settleAgentBackupsForTests,
+  backupTotalsQuery, restoreAgentSession, scheduleAgentBackup, settleAgentBackupsForTests, claimPendingBackup, sweepAgentBackups,
 } from '../services/workbenches/agentBackups.js';
 import { clearRecoveryRecap, MAX_RECAP_BYTES, recoveryRecap } from '../services/workbenches/agentRecap.js';
 import { MAX_IMPORTED_SESSION_BYTES, boxSessionPath } from '../services/workbenches/claudeImport.js';
 import { AGENT_MEMORY_RECAP_NOTE, AGENT_MEMORY_RESTORED_NOTE, recordRecoveredTranscript, recoverLostSandbox } from '../services/workbenches/recovery.js';
+import * as durable from '../services/workbenches/durableExec.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
-import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
+import { appendEvents, CHAT_COLUMNS, getChat, getTurnLease, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
 
 const SESSION = '11111111-1111-4111-8111-111111111111';
 const digest = (raw: Buffer) => createHash('sha256').update(raw).digest('hex');
@@ -88,6 +91,7 @@ describe('agent memory backups', () => {
 
   afterEach(async () => {
     await settleAgentBackupsForTests();
+    resetWorkbenchDrainForTests();
     vi.restoreAllMocks();
   });
 
@@ -137,9 +141,10 @@ describe('agent memory backups', () => {
     vi.spyOn(instructions, 'syncInstructionFiles').mockResolvedValue(undefined);
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
-    vi.spyOn(runtime, 'runStream').mockRejectedValue(new Error('The agent did not start.'));
+    vi.spyOn(durable, 'startDurableExec').mockRejectedValue(new Error('The agent did not start.'));
     await sendMessage('chat', { text: 'continue' });
-    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('error'));
+    await vi.waitFor(async () => expect((await getTurnLease('chat'))?.heartbeat).toEqual(new Date(0)));
+    expect((await getChat('chat'))?.status).toBe('running');
     expect((await state()).pending).toBe(true);
   });
 
@@ -154,9 +159,14 @@ describe('agent memory backups', () => {
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
     const prompts: string[] = [];
-    vi.spyOn(runtime, 'runStream').mockImplementation(async (_row, script, opts) => {
-      prompts.push(script);
-      for (const line of claudeTurnLines(SESSION, 'done')) opts?.onStdoutLine?.(line);
+    vi.spyOn(durable, 'startDurableExec').mockImplementation(async (_row, _key, _marker, script) => { prompts.push(script); });
+    vi.spyOn(durable, 'followDurableBatches').mockImplementation(async (_row, _key, _marker, _offset, onRecord) => {
+      let offset = 0;
+      for (const line of claudeTurnLines(SESSION, 'done')) {
+        const record = { stream: 'stdout' as const, line };
+        offset += Buffer.byteLength(JSON.stringify(record) + '\n');
+        await onRecord([{ record, offset }]);
+      }
       return { exitCode: 0, stderrTail: '' };
     });
     const capture = vi.mocked(runtime.runCapture).getMockImplementation()!;
@@ -246,6 +256,7 @@ describe('agent memory backups', () => {
   it('detaches failures and gives the debug bus the error object', async () => {
     const error = new Error('box offline', { cause: new Error('connection reset') });
     vi.mocked(runtime.runCapture).mockRejectedValue(error);
+    await testDb.db.update(chats).set({ agentBackupPending: true });
     expect(scheduleAgentBackup('chat')).toBeUndefined();
     await settleAgentBackupsForTests();
     await vi.waitFor(() => expect(debugBus.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ error })));
@@ -399,4 +410,51 @@ describe('agent memory backups', () => {
     expect(await testDb.db.select({ seq: backups.seq }).from(backups)
       .where(and(eq(backups.chatId, 'other'), eq(backups.sessionId, SESSION)))).toEqual([]);
   });
+  it('claims backups once and skips a leased row', async () => {
+    await testDb.db.update(chats).set({ agentBackupPending: true });
+    const claims = await Promise.all([claimPendingBackup(), claimPendingBackup()]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(await claimPendingBackup()).toBeNull();
+  });
+  it('backs off failed rows and clears the flag after a successful post-turn backup', async () => {
+    await testDb.db.update(chats).set({ agentBackupPending: true });
+    scheduleAgentBackup('chat');
+    await settleAgentBackupsForTests();
+    const pending = async () => (await testDb.db.select({ pending: chats.agentBackupPending, retry: chats.backupRetryAt,
+      failures: chats.backupFailures, lease: chats.backupLeaseUntil }).from(chats))[0];
+    expect((await pending()).pending).toBe(false);
+    const count = scripts.length;
+    await sweepAgentBackups();
+    expect(scripts).toHaveLength(count);
+    await testDb.db.update(chats).set({ agentBackupPending: true });
+    vi.mocked(runtime.runCapture).mockRejectedValue(new Error('offline'));
+    await sweepAgentBackups();
+    expect(await pending()).toMatchObject({ pending: true, retry: expect.any(Date), failures: 1, lease: null });
+    expect(await claimPendingBackup()).toBeNull();
+  });
+
+  it('leaves a draining provision for the next instance to resume', async () => {
+    await updateWorkbench('wb', { status: 'provisioning' });
+    const fleet = new FakeFleet();
+    vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
+    vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
+    vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
+    vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
+    vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
+    const config = { setup: { command: 'setup' }, run: [], runMode: 'nonconcurrent' as const, source: 'none' as const, filesToCopy: [], errors: [] };
+    const load = vi.spyOn(runtime, 'loadWorkbenchConfig').mockImplementation(async () => { beginWorkbenchDrain(); return config; });
+    const setup = vi.spyOn(scriptRunner, 'startScript').mockResolvedValue({ done: Promise.resolve(0) });
+    await provisionWorkbench('wb');
+    expect((await getWorkbench('wb'))?.status).toBe('provisioning');
+    expect(setup).not.toHaveBeenCalled();
+    const generation = (await getWorkbench('wb'))?.sandboxGeneration;
+    resetWorkbenchDrainForTests();
+    load.mockResolvedValue(config);
+    await provisionWorkbench('wb');
+    expect((await getWorkbench('wb'))?.status).toBe('ready');
+    expect((await getWorkbench('wb'))?.sandboxGeneration).toBe(generation);
+    expect(setup).toHaveBeenCalledTimes(1);
+  });
+
 });

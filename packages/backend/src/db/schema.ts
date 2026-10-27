@@ -15,12 +15,13 @@
 
 import { sql } from 'drizzle-orm';
 import type {
+  AgentStreamSnapshot,
   McpInjection,
   McpOAuthGrant,
   McpProbeResult,
   ReleaseHighlight,
   RepositorySettings,
-  WorkbenchDiffStat,
+  WorkbenchStoredDiffStat,
   WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
@@ -1935,8 +1936,14 @@ export const workbenches = pgTable(
     deviceId: text('device_id'),
     localPath: text('local_path'),
     sandboxId: text('sandbox_id'),
+    sandboxGeneration: text('sandbox_generation'),
     /** `WorkbenchSandboxState`. */
     sandboxState: text('sandbox_state').notNull().default('none'),
+    archivePendingAt: timestamp('archive_pending_at', { withTimezone: true }),
+    archiveLeaseUntil: timestamp('archive_lease_until', { withTimezone: true }),
+    archiveRetryAt: timestamp('archive_retry_at', { withTimezone: true }),
+    restoreRequestedAt: timestamp('restore_requested_at', { withTimezone: true }),
+    archiveFailures: integer('archive_failures').default(0).notNull(),
     memoryRestorePending: text('memory_restore_pending').$type<'lost' | 'archive'>(),
     /** The fleet host that took the sandbox — an authorization input for a credential pull. */
     fleetHost: text('fleet_host'),
@@ -1947,7 +1954,7 @@ export const workbenches = pgTable(
       onDelete: 'set null',
     }),
     settings: jsonb('settings').$type<WorkbenchSettings>().notNull().default({}),
-    diffStat: jsonb('diff_stat').$type<WorkbenchDiffStat | null>(),
+    diffStat: jsonb('diff_stat').$type<WorkbenchStoredDiffStat | null>(),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1980,6 +1987,11 @@ export const workbenchChats = pgTable(
     effort: text('effort'),
     planMode: boolean('plan_mode').notNull().default(false),
     agentSessionId: text('agent_session_id'),
+    backupLeaseUntil: timestamp('backup_lease_until', { withTimezone: true }),
+    backupRetryAt: timestamp('backup_retry_at', { withTimezone: true }),
+    backupFailures: integer('backup_failures').notNull().default(0),
+    backupToken: text('backup_token'),
+    agentBackupPending: boolean('agent_backup_pending').notNull().default(false),
     recapPending: boolean('recap_pending').notNull().default(false),
     agentBackup: jsonb('agent_backup').$type<{ sessionId: string; path: string; byteLen: number; generation: string; capped?: boolean }>(),
     /** `WorkbenchChatStatus`. */
@@ -1987,6 +1999,14 @@ export const workbenchChats = pgTable(
     statusMessage: text('status_message'),
     queuedMessages: jsonb('queued_messages').$type<WorkbenchQueuedMessage[]>().notNull().default([]),
     turnCount: integer('turn_count').notNull().default(0),
+    turnOwner: text('turn_owner'),
+    turnHeartbeatAt: timestamp('turn_heartbeat_at', { withTimezone: true }),
+    turnStartedAt: timestamp('turn_started_at', { withTimezone: true }),
+    turnParser: jsonb('turn_parser').$type<AgentStreamSnapshot>(),
+    drainPending: boolean('drain_pending').notNull().default(false),
+    turnOffset: bigint('turn_offset', { mode: 'number' }).notNull().default(0),
+    turnAttempt: integer('turn_attempt').notNull().default(0),
+    turnMessage: jsonb('turn_message').$type<WorkbenchQueuedMessage>(),
     /** Set when the chat continues a local Claude Code conversation (`WorkbenchImportedFrom`). */
     importedFrom: jsonb('imported_from').$type<WorkbenchImportedFrom>(),
     /** The last event seq handed out. Bumped in the same statement as the insert. */
@@ -2082,3 +2102,19 @@ export const workbenchInstructionFiles = pgTable(
     workspaceKeyUq: uniqueIndex('uq_workbench_instruction_files_workspace_key').on(t.workspaceId, t.key),
   })
 );
+
+export const workbenchScriptRuns = pgTable('workbench_script_runs', {
+  id: text('id').primaryKey(),
+  workbenchId: text('workbench_id').notNull().references(() => workbenches.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull(),
+  sandboxId: text('sandbox_id').notNull(),
+  sandboxGeneration: text('sandbox_generation'),
+  name: text('name').notNull(),
+  generation: text('generation').notNull(),
+  owner: text('owner').notNull(),
+  heartbeat: timestamp('heartbeat', { withTimezone: true }).notNull().defaultNow(),
+  offset: bigint('offset', { mode: 'number' }).notNull().default(0),
+  output: text('output').notNull().default(''),
+  running: boolean('running').notNull().default(true),
+  exitCode: integer('exit_code'),
+});

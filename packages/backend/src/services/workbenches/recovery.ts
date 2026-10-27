@@ -1,3 +1,4 @@
+import { stopSandboxScripts } from './scriptStore.js';
 import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { restoreAgentSession } from './agentBackups.js';
@@ -17,6 +18,7 @@ const recovering = new Map<string, Promise<void>>();
 /** Start one replacement for the sandbox that answered as lost. */
 export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promise<void> {
   if (!(err instanceof FleetRunNotFoundError) || !row.sandboxId) return;
+  await stopSandboxScripts(row.id, row.sandboxId);
   const pending = recovering.get(row.id);
   if (pending) return pending;
   const now = Date.now();
