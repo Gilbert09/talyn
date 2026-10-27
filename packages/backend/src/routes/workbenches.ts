@@ -34,7 +34,8 @@ import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
-import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, localRuntimeError, movingError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
+import { startStaleGoldenMove } from '../services/workbenches/move.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
@@ -162,6 +163,14 @@ export function workbenchRoutes(): Router {
       return null;
     }
     return (await gate(req, res, workbench.workspaceId)) ? { chat, workbench } : null;
+  }
+
+  /**
+   * T1: opening a session whose box sleeps on a stale golden starts a move
+   * before anything wakes the box, and the read answers that it is moving.
+   */
+  async function moveIfStaleGolden(row: WorkbenchRow): Promise<void> {
+    if (await startStaleGoldenMove(row)) throw movingError();
   }
 
   /** A sandbox workbench that can run a command right now, or the refusal that says why not. */
@@ -607,6 +616,10 @@ export function workbenchRoutes(): Router {
           : {}),
         // Also server-only: the id the fleet gave the box, which its credential pull carries.
         ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
+        // The last generation a move used: a later box must not reuse it.
+        ...(typeof (row.settings as Record<string, unknown> | null)?.moveSandboxId === 'string'
+          ? { moveSandboxId: (row.settings as Record<string, unknown>).moveSandboxId }
+          : {}),
         ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
           ? { internetAccess: row.settings.internetAccess }
           : {}),
@@ -727,6 +740,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       requireReadySandbox(row);
+      await moveIfStaleGolden(row);
       ok(res, await getChanges(row));
     } catch (err) {
       fail(res, err);
@@ -761,6 +775,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       requireReadySandbox(row);
+      await moveIfStaleGolden(row);
       ok(res, await listRepoFiles(row));
     } catch (err) {
       fail(res, err);
@@ -774,6 +789,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       requireReadySandbox(row);
+      await moveIfStaleGolden(row);
       ok(res, await loadWorkbenchConfigWithDetection(row));
     } catch (err) {
       fail(res, err);

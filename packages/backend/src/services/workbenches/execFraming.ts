@@ -38,6 +38,8 @@ const CAPTURE_LINE_WIDTH = 65_536;
 
 const PID_DIR = '/tmp/talyn-run';
 
+const MKTEMP = 'mktemp 2>/dev/null || mktemp -p /dev/shm';
+
 export function newNonce(): string {
   return randomBytes(9).toString('hex');
 }
@@ -107,7 +109,9 @@ export function frameCommand(
     FLEET_PROXY_PRELUDE,
     `mkdir -p ${PID_DIR} 2>/dev/null || true`,
     opts.marker ? `echo $$ > ${pidFileFor(marker)} 2>/dev/null || true` : ':',
-    `rc_file=$(mktemp)`,
+    // /dev/shm when /tmp is full, so a full disk still runs the script and
+    // its own "No space left on device" comes back framed.
+    `rc_file=$(${MKTEMP})`,
   ];
   if (opts.mode === 'stream') {
     // fd 4 and fd 5 are the exec's real stdout and stderr. The inner pipeline
@@ -124,7 +128,7 @@ export function frameCommand(
     );
   } else {
     lines.push(
-      `out=$(mktemp); err=$(mktemp)`,
+      `out=$(${MKTEMP}); err=$(${MKTEMP})`,
       `bash -c "$s" ${marker} < /dev/null > "$out" 2> "$err"; echo $? > "$rc_file"`,
       `base64 -w ${CAPTURE_LINE_WIDTH} < "$out" | sed 's/^/${o}/'`,
       `base64 -w ${CAPTURE_LINE_WIDTH} < "$err" | sed 's/^/${e}/'`,

@@ -310,7 +310,10 @@ class DebugBus {
     ok?: boolean;
     meta?: Record<string, unknown>;
     workspaceId?: string;
+    /** The error itself, not its message: `describeError` walks the cause chain. */
+    error?: unknown;
   }): void {
+    const error = input.error === undefined ? '' : describeError(input.error);
     this.record({
       category: 'event',
       service: input.service,
@@ -318,7 +321,7 @@ class DebugBus {
       ok: input.ok ?? true,
       summary: input.summary,
       ...this.resolveOwner(input.workspaceId),
-      meta: input.meta,
+      meta: error ? { ...(input.meta ?? {}), error: truncate(error) } : input.meta,
     });
   }
 

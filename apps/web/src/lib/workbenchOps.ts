@@ -1,3 +1,4 @@
+import { WORKBENCH_MOVING_MESSAGE } from '@talyn/shared';
 import type {
   SendWorkbenchMessageInput,
   Workbench,
@@ -63,6 +64,7 @@ export function sandboxUnavailableReason(workbench: Workbench): string | null {
   }
   if (workbench.sandboxState === 'lost') return 'The sandbox was lost. Talyn is starting a new one.';
   if (workbench.status === 'provisioning') return 'The sandbox is starting.';
+  if (workbench.status === 'moving') return WORKBENCH_MOVING_MESSAGE;
   return null;
 }
 

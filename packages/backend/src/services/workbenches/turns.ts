@@ -9,6 +9,8 @@ import {
   parseAutoPrDetails,
   workbenchTurnPrompt,
   shellQuote,
+  toShellScript,
+  workbenchQueuesMessages,
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
@@ -17,14 +19,25 @@ import {
   type WorkbenchAttachment,
   type WorkbenchChatStatus,
   type WorkbenchQueuedMessage,
+  type WorkbenchStatus,
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
+import {
+  DISK_PROBE_SCRIPT,
+  isDiskFullError,
+  isDiskFullText,
+  LOW_DISK_BYTES,
+  parseDiskProbe,
+  withoutDiskProbe,
+  type DiskProbe,
+} from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
+import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
@@ -36,6 +49,7 @@ import {
   recordWorkbenchEvent,
   refreshSandboxCredentials,
   repoDirFor,
+  runCapture,
   runGitSteps,
   runStream,
   sandboxScriptEnv,
@@ -156,7 +170,7 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
   // Only a workbench still starting may queue: a failed or archived one has no
   // box coming, so a queued message would wait forever.
   if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
-  if (wb.status !== 'ready' && wb.status !== 'provisioning') throw notReadyError(wb.status);
+  if (wb.status !== 'ready' && !workbenchQueuesMessages(wb.status as WorkbenchStatus)) throw notReadyError(wb.status);
   const message = normaliseMessage(input);
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
@@ -188,7 +202,12 @@ async function runTurnLoop(
 ): Promise<void> {
   let next: { message: WorkbenchQueuedMessage; turn: number } | null = first;
   while (next) {
-    const outcome = await runOneTurn(chatId, next.message, next.turn);
+    let outcome = await runOneTurn(chatId, next.message, next.turn);
+    // T3: a turn that failed on a full disk runs once more after a grow or a move.
+    if (outcome.diskFull && !outcome.cancelled) {
+      const recovered = await recoverTurnFromDiskFull(chatId);
+      if (recovered) outcome = await runOneTurn(chatId, next.message, next.turn, { retry: true });
+    }
     const fin = await finishTurn(chatId, {
       finalStatus: outcome.status,
       statusMessage: outcome.statusMessage,
@@ -228,6 +247,21 @@ interface TurnOutcome {
   status: WorkbenchChatStatus;
   statusMessage: string | null;
   cancelled: boolean;
+  /** The turn failed because the box's disk is full. */
+  diskFull?: boolean;
+}
+
+/** Grow the disk or move the session after a turn failed on a full disk. True when the turn can run again. */
+async function recoverTurnFromDiskFull(chatId: string): Promise<boolean> {
+  try {
+    const chat = await getChat(chatId);
+    const wb = chat ? await getWorkbench(chat.workbenchId) : null;
+    if (!wb || wb.status !== 'ready') return false;
+    return (await growOrMove(wb, 'disk_full', { ownerChatId: chatId })).ok;
+  } catch (err) {
+    console.warn(`[workbench] recovering chat ${chatId} from a full disk failed:`, err);
+    return false;
+  }
 }
 
 /**
@@ -294,28 +328,39 @@ function errorResultEvent(subtype: string, text: string): Record<string, unknown
   return { type: 'result', subtype, is_error: true, result: text };
 }
 
-async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number): Promise<TurnOutcome> {
+async function runOneTurn(
+  chatId: string,
+  message: WorkbenchQueuedMessage,
+  turn: number,
+  opts: { retry?: boolean } = {},
+): Promise<TurnOutcome> {
   const chat = await getChat(chatId);
   if (!chat) return { status: 'error', statusMessage: 'Chat not found', cancelled: false };
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
-  events.add(userMessageEvent(message));
+  // A retry runs the same message again; the transcript already shows it.
+  if (!opts.retry) events.add(userMessageEvent(message));
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
   try {
-    const wb = await getWorkbench(chat.workbenchId);
+    let wb = await getWorkbench(chat.workbenchId);
     if (!wb || wb.status !== 'ready' || !wb.sandboxId) {
       throw new WorkbenchError('The session is not ready.', 409, 'not_ready');
     }
     recordWorkbenchEvent(wb, 'turn_start', `chat ${chatId.slice(0, 8)} turn ${turn}`);
 
+    // T1: a box asleep on a stale golden moves before anything wakes it.
+    if (await needsFreshGolden(wb)) {
+      const moved = await moveWorkbenchToFreshSandbox(wb, 'stale_golden', { ownerChatId: chatId });
+      if (moved.moved) wb = moved.row;
+    }
+    if (live.cancelRequested) return cancelledOutcome(events);
+
     // The checkpoint first: it is also the exec that wakes a suspended box,
-    // which the credential push below needs.
-    await createCheckpoint(wb, chatId, turn).catch((err) => {
-      if (err instanceof FleetRunNotFoundError) throw err;
-      console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
-    });
+    // which the credential push below needs. It reports the free disk too (T2).
+    wb = await checkpointAndCheckDisk(wb, chatId, turn);
+    if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.
     const refreshed = await refreshSandboxCredentials(wb, { model: turnModel });
@@ -452,7 +497,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         : `The agent exited with code ${outcome.exitCode}.`);
     if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
     await events.flush();
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
+    const diskFull = !opts.retry && isDiskFullText(`${parserResult?.text ?? ''}\n${outcome.stderrTail}`);
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
   } catch (err) {
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (err instanceof FleetRunNotFoundError) {
@@ -464,7 +510,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
     events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
     await events.flush();
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
+    const diskFull = !opts.retry && isDiskFullError(err);
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
   } finally {
     liveTurns.delete(chatId);
   }
@@ -532,17 +579,60 @@ function tmpIndexPath(chatId: string, turn: number, tag = 'cp'): string {
   return `/tmp/talyn-${tag}-${safeMarker(chatId)}-${turn}.index`;
 }
 
-/** Snapshot the working tree before a turn, as a hidden commit under `refs/talyn/checkpoints`. */
-export async function createCheckpoint(wb: WorkbenchRow, chatId: string, turn: number): Promise<string | null> {
+/**
+ * Snapshot the working tree before a turn, as a hidden commit under
+ * `refs/talyn/checkpoints`, and report the root filesystem's free space from
+ * the same exec. The probe runs first and the framing's temp files go to
+ * /dev/shm, so a full disk still answers with its numbers.
+ */
+export async function createCheckpoint(
+  wb: WorkbenchRow,
+  chatId: string,
+  turn: number,
+): Promise<{ sha: string | null; disk: DiskProbe | null; error: string | null }> {
   const steps = checkpointCreateSteps({ chatId, turn, tmpIndexPath: tmpIndexPath(chatId, turn) });
-  const r = await runGitSteps(wb, steps, { quiet: true, timeoutMs: 120_000 });
+  const r = await runCapture(wb, `${DISK_PROBE_SCRIPT}\n${toShellScript(steps)}`, {
+    quiet: true,
+    timeoutMs: 120_000,
+    env: { TMPDIR: '/dev/shm' },
+    // The caller deals with a full disk itself, knowing which chat is running.
+    diskRecovery: false,
+  });
+  const disk = parseDiskProbe(r.stderr);
   const sha = r.stdout.trim().split('\n').pop()?.trim() ?? '';
   if (r.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) {
-    throw new Error(`checkpoint exited ${r.exitCode}: ${r.stderr.slice(-300)}`);
+    return { sha: null, disk, error: `checkpoint exited ${r.exitCode}: ${withoutDiskProbe(r.stderr).slice(-300)}` };
   }
   const ref = steps.find((s) => s.argv[1] === 'update-ref')?.argv[2] ?? '';
   await upsertCheckpoint({ chatId, turn, ref, sha });
-  return sha;
+  return { sha, disk, error: null };
+}
+
+/**
+ * T2: the turn-start checkpoint, and when the disk is low or full, a grow or a
+ * move before the turn runs. Returns the row to run the turn on.
+ */
+async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number): Promise<WorkbenchRow> {
+  const first = await createCheckpoint(wb, chatId, turn).catch((err) => {
+    if (err instanceof FleetRunNotFoundError) throw err;
+    console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
+    return { sha: null, disk: null, error: err instanceof Error ? err.message : String(err) };
+  });
+  if (first.error) console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed: ${first.error}`);
+  const low = first.disk !== null && first.disk.availBytes < LOW_DISK_BYTES;
+  const full = isDiskFullText(first.error);
+  if (!low && !full) return wb;
+  const recovered = await growOrMove(wb, full ? 'disk_full' : 'low_disk', { ownerChatId: chatId, probe: first.disk }).catch(
+    (err) => {
+      console.warn(`[workbench] making room for chat ${chatId} failed:`, err);
+      return { ok: false as const };
+    },
+  );
+  if (!recovered.ok) return wb;
+  if (recovered.action === 'moved' || first.sha === null) {
+    await createCheckpoint(recovered.row, chatId, turn).catch(() => undefined);
+  }
+  return recovered.row;
 }
 
 /**

@@ -95,6 +95,12 @@ export interface FleetSandbox {
   golden?: string;
   /** 'base' | 'repo' — which layer selection landed on. */
   goldenLayer?: string;
+  /** The rootfs this box was given. Absent or 0 means the golden's own size. */
+  diskMib?: number;
+  /** True when a newer golden exists for this box's repository. Absent reads as "not stale". */
+  goldenStale?: boolean;
+  /** `memory` or `rootfs`, while suspended. */
+  suspendKind?: string;
   /** Last vsock heartbeat. */
   lastHeartbeat?: string;
   /**
@@ -1333,6 +1339,35 @@ export class FleetClient {
       if (err instanceof FleetRunNotFoundError) return;
       throw err;
     }
+  }
+
+  /**
+   * Grow a live sandbox's rootfs to `diskMib` (`POST /v1/sandboxes/{id}/disk`).
+   * The fleet grows the image and the guest's filesystem. A fleet without the
+   * route answers 404 or 405, which is learned once per endpoint and answered
+   * as `unsupported` from then on. The caller already knows the box exists, so
+   * a 404 here means no route rather than no box.
+   */
+  async growSandboxDisk(id: string, diskMib: number): Promise<'grown' | 'unsupported'> {
+    const key = `${this.endpoint}|grow-disk`;
+    if (optionalSupport.get(key) === false) return 'unsupported';
+    try {
+      await this.request(
+        sandboxPath(id, '/disk'),
+        { method: 'POST', body: JSON.stringify({ diskMib }) },
+        { timeoutMs: 5 * 60_000 },
+      );
+    } catch (err) {
+      const status =
+        err instanceof FleetHttpError ? err.status : err instanceof FleetRunNotFoundError ? 404 : 0;
+      if (status === 404 || status === 405 || status === 501) {
+        optionalSupport.set(key, false);
+        return 'unsupported';
+      }
+      throw err;
+    }
+    optionalSupport.set(key, true);
+    return 'grown';
   }
 
   async getDiff(

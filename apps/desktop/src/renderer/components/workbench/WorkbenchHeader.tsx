@@ -15,7 +15,7 @@ import {
   PanelRight,
   Wrench,
 } from 'lucide-react';
-import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat, workbenchQueuesMessages } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -107,7 +107,7 @@ export async function sendCreatePullRequest(
     if (res.queued) {
       toast.info(
         'Queued',
-        workbench.status === 'provisioning' ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
+        workbenchQueuesMessages(workbench.status) ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
       );
     }
   } catch (err) {

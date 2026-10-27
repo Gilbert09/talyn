@@ -212,6 +212,102 @@ export async function claimLostWorkbench(id: string, sandboxId: string, replacem
   return row ?? null;
 }
 
+/**
+ * Claim a move to a new box: `ready` → `moving`, in one statement, only while
+ * the row still names `sandboxId`. The target id goes on the row so no later
+ * box reuses its generation. Null when the workbench is not ready or another
+ * move or recovery got there first.
+ */
+export async function claimMove(
+  id: string,
+  sandboxId: string,
+  targetSandboxId: string,
+  message: string,
+): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      status: 'moving',
+      statusMessage: message,
+      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveSandboxId', ${targetSandboxId}::text)`,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.sandboxId, sandboxId),
+      eq(workbenchesTable.status, 'ready'),
+      eq(workbenchesTable.runtime, 'sandbox'),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Running chats of a workbench other than `exceptChatId`. Read after `claimMove` commits. */
+export async function otherRunningChats(workbenchId: string, exceptChatId?: string): Promise<number> {
+  const rows = await db()
+    .select({ id: chatsTable.id })
+    .from(chatsTable)
+    .where(and(
+      eq(chatsTable.workbenchId, workbenchId),
+      eq(chatsTable.status, 'running'),
+      ...(exceptChatId ? [ne(chatsTable.id, exceptChatId)] : []),
+    ));
+  return rows.length;
+}
+
+/** Undo a claim: back to `ready` on the old box. Null when the row is no longer moving off it. */
+export async function releaseMove(id: string, sandboxId: string, statusMessage: string | null): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ status: 'ready', statusMessage, updatedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId), eq(workbenchesTable.status, 'moving')))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Finish a move: the row names the new box and is `ready` again. Only while
+ * it is still moving off `fromSandboxId` and not archived, so a workbench
+ * deleted or archived meanwhile is left alone and the caller cleans up.
+ */
+export async function commitMove(
+  id: string,
+  fromSandboxId: string,
+  to: { sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null; statusMessage: string | null },
+): Promise<WorkbenchRow | null> {
+  const fleetId = to.fleetSandboxId
+    ? sql`jsonb_build_object('fleetSandboxId', ${to.fleetSandboxId}::text)`
+    : sql`'{}'::jsonb`;
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      status: 'ready',
+      statusMessage: to.statusMessage,
+      sandboxId: to.sandboxId,
+      sandboxState: 'running',
+      fleetHost: to.fleetHost,
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'fleetSandboxId') || ${fleetId}`,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.sandboxId, fromSandboxId),
+      eq(workbenchesTable.status, 'moving'),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Live sandbox workbenches a dead process left mid-move. */
+export async function movingWorkbenches(): Promise<WorkbenchRow[]> {
+  return db()
+    .select(WORKBENCH_COLUMNS)
+    .from(workbenchesTable)
+    .where(and(eq(workbenchesTable.status, 'moving'), eq(workbenchesTable.runtime, 'sandbox')));
+}
+
 /** Stop an automatic loop when a second box is lost inside the retry window. */
 export async function failLostWorkbench(id: string, sandboxId: string, message: string): Promise<WorkbenchRow | null> {
   const [row] = await db()
@@ -469,6 +565,22 @@ const RETURNING_CHAT = sql.raw(
    c.imported_from, c.closed_at, c.created_at, c.updated_at`,
 );
 
+/**
+ * A CTE named `wb_state`: the chat's workbench status, read under a share lock.
+ * The lock orders a turn start against a move's claim, which updates that row:
+ * whichever commits first, the other sees it. The move then reads the running
+ * chats only after its claim has committed (see move.ts).
+ */
+function workbenchState(chatId: string) {
+  return sql`wb_state AS (
+      SELECT w.status FROM workbenches w
+      WHERE w.id = (SELECT workbench_id FROM workbench_chats WHERE id = ${chatId})
+      FOR SHARE
+    )`;
+}
+
+const WORKBENCH_MOVING = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status = 'moving')`);
+
 export interface ClaimResult {
   chat: ChatRow;
   /** The message that starts a turn now, with that turn's number; null when it queued. */
@@ -495,11 +607,12 @@ export async function claimOrEnqueue(
 ): Promise<ClaimResult | null> {
   const add = JSON.stringify(message ? [message] : []);
   const result = await db().execute(sql`
-    WITH old AS (
+    WITH ${workbenchState(chatId)}, old AS (
       SELECT status, queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
       SELECT status AS prev_status, queued_messages || ${add}::jsonb AS mq,
-        (status <> 'running' AND ${canStart} AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0) AS go
+        (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_MOVING}
+          AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
@@ -531,10 +644,12 @@ export async function finishTurn(
   opts: { finalStatus: WorkbenchChatStatus; statusMessage: string | null; drain: boolean },
 ): Promise<ClaimResult | null> {
   const result = await db().execute(sql`
-    WITH old AS (
+    WITH ${workbenchState(chatId)}, old AS (
       SELECT queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
-      SELECT queued_messages AS mq, (${opts.drain} AND jsonb_array_length(queued_messages) > 0) AS go FROM old
+      SELECT queued_messages AS mq,
+        (${opts.drain} AND NOT ${WORKBENCH_MOVING} AND jsonb_array_length(queued_messages) > 0) AS go
+      FROM old
     )
     UPDATE workbench_chats c SET
       queued_messages = CASE WHEN merged.go THEN merged.mq - 0 ELSE merged.mq END,
