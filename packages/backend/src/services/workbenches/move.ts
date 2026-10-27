@@ -786,7 +786,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     if (!made.ok) throw new Error(made.error);
     created = made;
     await setMoveTargetHost(row.id, from, targetId, made.fleetHost);
-    const fresh: WorkbenchRow = { ...claimed, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
+    const fresh: WorkbenchRow = { ...claimed, sandboxGeneration: made.sandboxId, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'clone';

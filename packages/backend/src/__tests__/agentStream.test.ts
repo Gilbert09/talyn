@@ -620,3 +620,27 @@ describe('createAgentStreamParser / parseAgentLine', () => {
     expect(withSeq({ type: 'system', subtype: 'init' }, 7)).toEqual({ type: 'system', subtype: 'init', seq: 7 });
   });
 });
+
+
+describe('parser snapshots', () => {
+  it.each(['claude', 'codex'] as const)('continues %s without replaying the saved prefix', (agent) => {
+    const prefix = agent === 'codex' ? [
+      { type: 'thread.started', thread_id: 'session' },
+      { type: 'item.started', item: { id: 'tool', type: 'command_execution', command: 'ls' } },
+      { type: 'item.updated', item: { id: 'text', type: 'agent_message', text: 'hello' } },
+    ] : [{ type: 'system', subtype: 'init', session_id: 'session', model: 'claude' }];
+    const suffix = agent === 'codex' ? [
+      { type: 'item.completed', item: { id: 'tool', type: 'command_execution', command: 'ls', aggregated_output: 'file' } },
+      { type: 'item.updated', item: { id: 'text', type: 'agent_message', text: 'hello world' } },
+      { type: 'item.completed', item: { id: 'text', type: 'agent_message', text: 'hello world' } },
+      { type: 'turn.completed', usage: { input_tokens: 42 } },
+    ] : [{ type: 'result', subtype: 'success', result: 'done' }];
+    const original = createAgentStreamParser(agent);
+    prefix.forEach((line) => original.push(JSON.stringify(line)));
+    const resumed = createAgentStreamParser(agent, JSON.parse(JSON.stringify(original.snapshot())));
+    const actual = suffix.flatMap((line) => resumed.push(JSON.stringify(line)));
+    const expected = suffix.flatMap((line) => original.push(JSON.stringify(line)));
+    expect(actual).toEqual(expected);
+    expect(resumed.snapshot()).toEqual(original.snapshot());
+  });
+});

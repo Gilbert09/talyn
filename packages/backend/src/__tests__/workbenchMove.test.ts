@@ -662,10 +662,12 @@ describe('moving a session to a fresh sandbox', () => {
       expect(calls.n).toBe(1);
     });
 
-    it('does not run a failed turn again; moves and asks the user to send it again', async () => {
-      replies.agent = () => {
-        throw new Error('Talyn Fleet refused the request: harness_error: ENOSPC: no space left on device');
-      };
+    it.each([
+      { failure: 'fleet error', reply: () => { throw new Error('Talyn Fleet refused the request: harness_error: ENOSPC: no space left on device'); } },
+      { failure: 'ENOSPC code', reply: () => { throw Object.assign(new Error('write failed'), { code: 'ENOSPC' }); } },
+      { failure: 'fleet disk refusal', reply: () => { throw new Error('Talyn Fleet refused the request: Out of diskspace'); } },
+    ])('does not run a failed turn again for $failure; moves and asks the user to send it again', async ({ reply }) => {
+      replies.agent = reply;
       await turns.sendMessage('chat-a', { text: 'go' });
       await vi.waitFor(async () => expect((await row()).sandboxId).toBe(NEW_BOX), { timeout: 5000 });
       await vi.waitFor(async () => expect((await store.getChat('chat-a'))?.status).toBe('error'));

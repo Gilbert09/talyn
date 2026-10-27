@@ -1,6 +1,6 @@
 import { shellQuote } from '@talyn/shared';
-import { startDurableExec, followDurableExec } from './durableExec.js';
-import { claimScript, renewScript, appendScriptOutput, finishScript, staleScripts, adoptScript, storedScriptNames, stopStoredScript, existingScript, type ScriptLease } from './scriptStore.js';
+import { startDurableExec, followDurableBatches, retryBatchWrite, pruneDurableSegments } from './durableExec.js';
+import { claimScript, renewScript, appendScriptOutput, finishScript, staleScripts, adoptScript, storedScriptNames, stopStoredScript, existingScript, releaseScript, releaseOwnedScripts, stopSandboxScripts, type ScriptLease } from './scriptStore.js';
 import { isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { getWorkbench } from './store.js';
 import type { WorkbenchConfig } from '@talyn/shared';
@@ -23,6 +23,7 @@ import type { WorkbenchRow } from './store.js';
  */
 
 interface RunningScript {
+  sandboxId: string;
   controller: AbortController;
   marker: string;
   done: Promise<number | null>;
@@ -59,10 +60,11 @@ export async function startScript(
   opts: { config?: WorkbenchConfig; timeoutMs?: number; resume?: boolean } = {},
 ): Promise<{ done: Promise<number | null> }> {
   if (isWorkbenchDraining()) throw new WorkbenchError('The session is reconnecting. Try again shortly.', 503, 'draining');
-  if (opts.resume && await existingScript(row.id, name, row.sandboxId!)) {
+  if (opts.resume && await existingScript(row.id, name, row.sandboxId!, row.sandboxGeneration ?? row.sandboxId!)) {
     const done = (async () => {
       for (;;) {
-        const state = await existingScript(row.id, name, row.sandboxId!);
+        if (isWorkbenchDraining()) return null;
+        const state = await existingScript(row.id, name, row.sandboxId!, row.sandboxGeneration ?? row.sandboxId!);
         if (!state?.running) return state?.exitCode ?? null;
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -80,7 +82,7 @@ export async function startScript(
     throw new WorkbenchError(`The "${name}" script is already running.`, 409, 'script_running');
   }
   if (resolved.isRun && config.runMode === 'nonconcurrent') {
-    const others = (await storedScriptNames(row.id)).filter((n) => n !== name && commandFor(config, n)?.isRun);
+    const others = (await storedScriptNames(row.id, row.sandboxId ?? undefined)).filter((n) => n !== name && commandFor(config, n)?.isRun);
     await Promise.all(others.map((n) => stopScript(row, n)));
   }
 
@@ -89,9 +91,9 @@ export async function startScript(
   const marker = scriptMarker(row.id, name);
   const command = opts.timeoutMs ? `timeout ${Math.ceil(opts.timeoutMs / 1000)} bash -c ${shellQuote(resolved.command)}` : resolved.command;
   try {
-    await startDurableExec(row, lease.generation, marker, command, sandboxScriptEnv(row));
+    await startDurableExec(row, lease.generation, marker, command, sandboxScriptEnv(row), true);
   } catch (err) {
-    await finishScript(lease, null);
+    await releaseScript(lease);
     throw err;
   }
   recordWorkbenchEvent(row, 'script_start', `script ${name} started`);
@@ -106,12 +108,20 @@ function followScript(row: WorkbenchRow, lease: ScriptLease): { done: Promise<nu
     void renewScript(lease).then((ok) => { if (!ok) controller.abort(); }).catch(() => controller.abort());
   }, 20_000);
   timer.unref();
-  const done = followDurableExec(row, lease.generation, marker, lease.offset, async (record, offset) => {
-    const data = `${record.line}\n`;
-    if (!(await appendScriptOutput(lease, data, offset))) { controller.abort(); return; }
+  // A build can print thousands of lines per second. Batch them to limit database writes and WebSocket frames.
+  let prunedAt = Math.floor(lease.offset / (8 * 1024 * 1024)) - 1;
+  const done = followDurableBatches(row, lease.generation, marker, lease.offset, async (records) => {
+    const data = records.map(({ record }) => `${record.line}\n`).join('');
+    const offset = records[records.length - 1].offset;
+    if (!(await retryBatchWrite(() => appendScriptOutput(lease, data, offset)))) { controller.abort(); return; }
     emitWorkbenchScript(row.workspaceId, { workbenchId: row.id, name: lease.name,
-      stream: record.stream, data, generation: lease.generation, offset });
-  }, controller.signal).then(async (outcome) => {
+      stream: 'stdout', data, generation: lease.generation, offset });
+    const segment = Math.floor(offset / (8 * 1024 * 1024));
+    if (segment > prunedAt) {
+      await pruneDurableSegments(row, lease.generation, offset);
+      prunedAt = segment;
+    }
+  }, { bytes: 65536, ms: 150, signal: controller.signal }).then(async (outcome) => {
     if (controller.signal.aborted || isWorkbenchDetached()) return null;
     if (await finishScript(lease, outcome.exitCode)) {
       emitWorkbenchScript(row.workspaceId, { workbenchId: row.id, name: lease.name, stream: 'exit',
@@ -121,12 +131,13 @@ function followScript(row: WorkbenchRow, lease: ScriptLease): { done: Promise<nu
   }).catch((err: unknown) => {
     recordWorkbenchEvent(row, 'script_follow_failed', 'The script output will reconnect.', false, err);
     return null;
-  }).finally(() => {
+  }).finally(async () => {
     clearInterval(timer);
+    await releaseScript(lease);
     if (running.get(row.id)?.get(lease.name)?.controller === controller) running.get(row.id)?.delete(lease.name);
   });
   const scripts = running.get(row.id) ?? new Map<string, RunningScript>();
-  scripts.set(lease.name, { controller, marker, done });
+  scripts.set(lease.name, { sandboxId: lease.sandboxId, controller, marker, done });
   running.set(row.id, scripts);
   return { done };
 }
@@ -135,7 +146,11 @@ export async function sweepScripts(): Promise<void> {
   if (isWorkbenchDraining()) return;
   for (const lease of await staleScripts()) {
     const row = await getWorkbench(lease.workbenchId);
-    if (!row?.sandboxId || row.sandboxId !== lease.sandboxId || (row.archivedAt && lease.name !== 'archive') || !(await adoptScript(lease))) continue;
+    if (!row?.sandboxId || row.sandboxId !== lease.sandboxId || ['deleted', 'lost'].includes(row.sandboxState)) {
+      await stopSandboxScripts(lease.workbenchId, lease.sandboxId);
+      continue;
+    }
+    if ((row.archivedAt && lease.name !== 'archive') || !(await adoptScript(lease))) continue;
     followScript(row, lease);
   }
 }
@@ -146,7 +161,8 @@ export async function sweepScripts(): Promise<void> {
  * can still be stopped after it.
  */
 export async function stopScript(row: WorkbenchRow, name: string): Promise<void> {
-  const entry = running.get(row.id)?.get(name);
+  const found = running.get(row.id)?.get(name);
+  const entry = found?.sandboxId === row.sandboxId ? found : undefined;
   await killMarker(row, scriptMarker(row.id, name));
   if (entry) {
     // The kill ends the exec, which ends the stream and emits `exit`. Waited
@@ -156,16 +172,21 @@ export async function stopScript(row: WorkbenchRow, name: string): Promise<void>
     entry.controller.abort();
     running.get(row.id)?.delete(name);
   }
-  await stopStoredScript(row.id, name);
+  await stopStoredScript(row.id, name, row.sandboxId ?? undefined);
 }
 
 /** Stop every script this process follows for a workbench (archive, delete). */
 export async function stopAllScripts(row: WorkbenchRow): Promise<void> {
-  const names = [...new Set([...(running.get(row.id)?.keys() ?? []), ...await storedScriptNames(row.id)])];
+  const names = [...new Set([...[...(running.get(row.id)?.entries() ?? [])].filter(([, entry]) => entry.sandboxId === row.sandboxId).map(([name]) => name), ...await storedScriptNames(row.id, row.sandboxId ?? undefined)])];
   await Promise.all(names.map((n) => stopScript(row, n).catch(() => undefined)));
-  running.delete(row.id);
+  if (!running.get(row.id)?.size) running.delete(row.id);
 }
 
 export function runningScriptNames(workbenchId: string): string[] {
   return [...(running.get(workbenchId)?.keys() ?? [])];
+}
+
+export async function detachScriptFollowers(): Promise<void> {
+  for (const scripts of running.values()) for (const entry of scripts.values()) entry.controller.abort();
+  await releaseOwnedScripts();
 }

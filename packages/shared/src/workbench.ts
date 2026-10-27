@@ -28,7 +28,7 @@ export type WorkbenchAgent = 'claude' | 'codex';
  * `moving`: Talyn is moving the session to a fresh sandbox (a newer image, or
  * more disk). Messages sent meanwhile queue, as they do while provisioning.
  */
-export type WorkbenchStatus = 'provisioning' | 'ready' | 'moving' | 'error' | 'archived';
+export type WorkbenchStatus = 'provisioning' | 'ready' | 'moving' | 'error' | 'archived' | 'archiveError';
 
 /** What both apps show while a session moves to a fresh sandbox. */
 export const WORKBENCH_MOVING_MESSAGE = 'Moving to a fresh sandbox…';

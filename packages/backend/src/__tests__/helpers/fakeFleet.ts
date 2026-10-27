@@ -83,6 +83,7 @@ export class FakeFleet {
   }
 
   private async run(req: FleetExecRequest, follow: boolean): Promise<ExecReply> {
+    if (req.env?.TALYN_LOG_PROBE) return { exitCode: this.durableLogs.has(req.env.TALYN_LOG_PROBE) ? 0 : 1 };
     if (req.env?.TALYN_DURABLE_SCRIPT) {
       const script = req.env.TALYN_DURABLE_SCRIPT;
       this.scripts.push(script);
@@ -169,6 +170,10 @@ export class FakeFleet {
 
   async deleteSandbox(id: string) {
     this.deleted.push(id);
+  }
+
+  async getSandbox(id: string) {
+    return { sandbox: { id, status: 'idle' }, terminal: false };
   }
 
   async getDiff() {

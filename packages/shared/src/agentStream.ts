@@ -197,7 +197,26 @@ export interface AgentStreamResult {
   numTurns?: number;
 }
 
+export interface AgentStreamSnapshot {
+  version: 1;
+  agent: WorkbenchAgent;
+  sessionId: string | null;
+  result: AgentStreamResult | null;
+  todos: WorkbenchTodo[] | null;
+  usedTokens: number | null;
+  nonJsonLines: number;
+  model?: string | null;
+  contextWindow?: number | null;
+  lastAgentMessage?: string;
+  todoRevision?: number;
+  lastTodoSignature?: string;
+  toolUseEmitted?: string[];
+  toolResultEmitted?: string[];
+  streamedText?: Array<[string, string]>;
+}
+
 export interface AgentStreamParser {
+  snapshot(): AgentStreamSnapshot;
   readonly agent: WorkbenchAgent;
   /** One line of stdout in, zero or more events out. Blank lines yield nothing. */
   push(line: string): AgentEventDraft[];
@@ -266,17 +285,18 @@ function claudeWindowForModel(model: string | null): number {
  * - Context window: `result.modelUsage[model].contextWindow` once the result
  *   arrives, else 1M for a `[1m]` model, else 200k.
  */
-export function createClaudeStreamParser(): AgentStreamParser {
-  let sessionId: string | null = null;
-  let result: AgentStreamResult | null = null;
-  let todos: WorkbenchTodo[] | null = null;
-  let usedTokens: number | null = null;
-  let model: string | null = null;
-  let contextWindow: number | null = null;
-  let nonJsonLines = 0;
+export function createClaudeStreamParser(state?: AgentStreamSnapshot): AgentStreamParser {
+  let sessionId: string | null = state?.sessionId ?? null;
+  let result: AgentStreamResult | null = state?.result ?? null;
+  let todos: WorkbenchTodo[] | null = state?.todos ?? null;
+  let usedTokens: number | null = state?.usedTokens ?? null;
+  let model: string | null = state?.model ?? null;
+  let contextWindow: number | null = state?.contextWindow ?? null;
+  let nonJsonLines = state?.nonJsonLines ?? 0;
 
   return {
     agent: 'claude',
+    snapshot: () => ({ version: 1, agent: 'claude', sessionId, result, todos, usedTokens, model, contextWindow, nonJsonLines }),
     push(line: string): AgentEventDraft[] {
       if (!line.trim()) return [];
       const obj = parseJsonObject(line);
@@ -397,18 +417,18 @@ interface CodexItem {
  * Context usage is approximate: Codex reports the turn's summed input tokens,
  * not the last prompt's size, so it reads as an upper bound.
  */
-export function createCodexStreamParser(opts: { contextWindow?: number } = {}): AgentStreamParser {
-  let sessionId: string | null = null;
-  let result: AgentStreamResult | null = null;
-  let todos: WorkbenchTodo[] | null = null;
-  let usedTokens: number | null = null;
-  let nonJsonLines = 0;
-  let lastAgentMessage = '';
-  let todoRevision = 0;
-  let lastTodoSignature = '';
-  const toolUseEmitted = new Set<string>();
-  const toolResultEmitted = new Set<string>();
-  const streamedText = new Map<string, string>();
+export function createCodexStreamParser(opts: { contextWindow?: number } = {}, state?: AgentStreamSnapshot): AgentStreamParser {
+  let sessionId: string | null = state?.sessionId ?? null;
+  let result: AgentStreamResult | null = state?.result ?? null;
+  let todos: WorkbenchTodo[] | null = state?.todos ?? null;
+  let usedTokens: number | null = state?.usedTokens ?? null;
+  let nonJsonLines = state?.nonJsonLines ?? 0;
+  let lastAgentMessage = state?.lastAgentMessage ?? '';
+  let todoRevision = state?.todoRevision ?? 0;
+  let lastTodoSignature = state?.lastTodoSignature ?? '';
+  const toolUseEmitted = new Set<string>(state?.toolUseEmitted);
+  const toolResultEmitted = new Set<string>(state?.toolResultEmitted);
+  const streamedText = new Map<string, string>(state?.streamedText);
 
   const base = (): { session_id?: string } => (sessionId ? { session_id: sessionId } : {});
   const assistant = (id: string | undefined, content: unknown[]): AgentEventDraft => ({
@@ -540,6 +560,9 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}): 
 
   return {
     agent: 'codex',
+    snapshot: () => ({ version: 1, agent: 'codex', sessionId, result, todos, usedTokens, nonJsonLines,
+      lastAgentMessage, todoRevision, lastTodoSignature, toolUseEmitted: [...toolUseEmitted],
+      toolResultEmitted: [...toolResultEmitted], streamedText: [...streamedText] }),
     push(line: string): AgentEventDraft[] {
       if (!line.trim()) return [];
       const obj = parseJsonObject(line);
@@ -619,8 +642,9 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}): 
   };
 }
 
-export function createAgentStreamParser(agent: WorkbenchAgent): AgentStreamParser {
-  return agent === 'codex' ? createCodexStreamParser() : createClaudeStreamParser();
+export function createAgentStreamParser(agent: WorkbenchAgent, state?: AgentStreamSnapshot | null): AgentStreamParser {
+  const saved = state?.version === 1 && state.agent === agent ? state : undefined;
+  return agent === 'codex' ? createCodexStreamParser({}, saved) : createClaudeStreamParser(saved);
 }
 
 /**

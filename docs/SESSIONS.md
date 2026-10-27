@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Repair session continuity during deploys (2026-10-27)
+
+Migration 0087 adds parser snapshots, deferred queue flags, archive retry dates, sandbox generations, and backup leases.
+Turn records commit in batches of 50 records or 250 ms, with their offset and parser state.
+Script output commits every 150 ms or 64 KiB. Each batch produces one socket frame.
+Detached followers release their leases. Adoption runs every five seconds during startup, then every fifteen seconds.
+A failed database batch retries three times. Continued failure releases the turn without ending its agent.
+Turn attempts have separate process files. Finished turns remove those files after their events commit.
+Script logs use 8 MiB segments. The follower removes committed segments and retains the last segment.
+
+Restore cancels pending archives and uses an existing sandbox when possible.
+Eight archive failures retain the sandbox and show the reason and Retry action in both History views.
+Provisioning stops safely during a drain. Setup results belong to the sandbox generation that ran them.
+Cancelled queues stay stopped. Only a deferred drain starts messages from the sweep.
+Backup workers claim one row at a time, clear successful work, and delay failed work.
+
 ## Split session changes (2026-10-27)
 
 The changes route returns uncommitted and committed files in one quiet exec.

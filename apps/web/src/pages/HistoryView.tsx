@@ -137,6 +137,15 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       setBusy(false);
     }
   };
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const wb = await api.workbenches.archive(workbench.id);
+      useWorkbenchStore.getState().upsertWorkbench(wb);
+    } catch (err) {
+      toast.error('Could not save the session', err instanceof Error ? err.message : undefined);
+    } finally { setBusy(false); }
+  };
   return (
     <li className="flex items-center gap-3 px-3 py-2 text-[13px]">
       <div className="min-w-0 flex-1">
@@ -150,6 +159,12 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
           <span className="truncate">{workbench.baseBranch}</span>
         </div>
       </div>
+      {workbench.status === 'archiveError' && (
+        <div className="max-w-sm text-xs text-destructive">
+          <p>{workbench.statusMessage}</p>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => void retry()}>Retry</Button>
+        </div>
+      )}
       <span className="shrink-0 text-[11px] text-muted-foreground" title={new Date(at).toLocaleString()}>
         {relativeTime(at)}
       </span>

@@ -77,7 +77,7 @@ describe('durable session archives', () => {
     expect(fleet.scripts).toHaveLength(count);
     expect(fleet.deleted).toEqual([]);
     fleet.handler = () => ({ exitCode: 0 });
-    await updateWorkbench(WB, { archiveLeaseUntil: new Date(0), archivePendingAt: new Date(0) });
+    await updateWorkbench(WB, { archiveLeaseUntil: new Date(0), archiveRetryAt: new Date(0), archivePendingAt: new Date(0) });
     await sweepPendingArchives();
     expect(fleet.deleted).toEqual(['box']);
     expect((await row()).archivePendingAt).toBeNull();
@@ -132,4 +132,29 @@ describe('durable session archives', () => {
     await testDb.db.execute(sql`UPDATE workbenches SET status = 'ready' WHERE id = ${WB}`);
     expect((await row()).status).toBe('archived');
   });
+  it('restores from the live box during archive backoff', async () => {
+    await markArchive(WB);
+    await finishArchive((await claimArchive(await row()))!, 'Access revoked');
+    const restored = await restoreWorkbench(WB);
+    expect(restored).toMatchObject({ status: 'ready', archivedAt: null, archivePendingAt: null, sandboxId: 'box' });
+    expect(fleet.deleted).toEqual([]);
+  });
+  it('caps archive failures and permits an explicit retry', async () => {
+    await markArchive(WB);
+    await updateWorkbench(WB, { archiveFailures: 7 });
+    await finishArchive((await claimArchive(await row()))!, 'Protected branch');
+    expect(await row()).toMatchObject({ status: 'archiveError', archivePendingAt: null, statusMessage: 'Protected branch', sandboxId: 'box' });
+    expect(await markArchive(WB)).toMatchObject({ status: 'archived', archiveFailures: 0, archivePendingAt: expect.any(Date) });
+    expect(fleet.deleted).toEqual([]);
+  });
+
+  it('cancels an unresponsive archive after sixty seconds and fences its worker', async () => {
+    const claimed = (await claimArchive((await markArchive(WB))!))!;
+    expect(await restoreWorkbench(WB, { archiveWaitMs: 0 })).toMatchObject({ status: 'ready', archivePendingAt: null, sandboxId: 'box' });
+    expect(fleet.execs.some((exec) => exec.req.env?.TALYN_MARKER?.startsWith('archive-save-'))).toBe(true);
+    expect(await renewArchive(claimed)).toBe(false);
+    expect(await finishArchive(claimed)).toBeNull();
+    expect(fleet.deleted).toEqual([]);
+  });
+
 });

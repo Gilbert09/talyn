@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
 import { drainWorkbenchFollowers, workbenchDrainTimeoutMs } from './services/workbenches/lifecycle.js';
-import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';

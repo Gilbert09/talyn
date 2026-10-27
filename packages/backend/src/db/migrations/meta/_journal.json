@@ -610,6 +610,13 @@
       "when": 1790900000005,
       "tag": "0086_workbench_turn_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790900000006,
+      "tag": "0087_workbench_continuity",
+      "breakpoints": true
     }
   ]
 }

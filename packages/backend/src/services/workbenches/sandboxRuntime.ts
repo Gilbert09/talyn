@@ -546,6 +546,7 @@ export async function runStream(
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   opts.signal?.addEventListener('abort', onAbort);
+  if (opts.signal?.aborted) controller.abort();
   let cursor = 0;
   let terminal = false;
   try {
