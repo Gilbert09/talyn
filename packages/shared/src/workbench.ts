@@ -24,7 +24,19 @@ export type WorkbenchRuntimeKind = 'sandbox' | 'local';
 /** Which coding-agent CLI drives a chat. */
 export type WorkbenchAgent = 'claude' | 'codex';
 
-export type WorkbenchStatus = 'provisioning' | 'ready' | 'error' | 'archived';
+/**
+ * `moving`: Talyn is moving the session to a fresh sandbox (a newer image, or
+ * more disk). Messages sent meanwhile queue, as they do while provisioning.
+ */
+export type WorkbenchStatus = 'provisioning' | 'ready' | 'moving' | 'error' | 'archived';
+
+/** What both apps show while a session moves to a fresh sandbox. */
+export const WORKBENCH_MOVING_MESSAGE = 'Moving to a fresh sandbox…';
+
+/** The statuses in which a sent message waits in the queue for the sandbox. */
+export function workbenchQueuesMessages(status: WorkbenchStatus): boolean {
+  return status === 'provisioning' || status === 'moving';
+}
 
 /** The fleet's view of a sandbox workbench's microVM. Always `none` for a local workbench. */
 export type WorkbenchSandboxState =

@@ -53,6 +53,12 @@ import {
   parseSections,
   sectionsScript,
 } from './execFraming.js';
+import {
+  GUEST_RETRY_DELAYS_MS,
+  isDiskFullError,
+  isDiskFullText,
+  isGuestUnreachableBeforeStart,
+} from './execFailures.js';
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import type { WorkbenchRow } from './store.js';
@@ -103,6 +109,17 @@ export function sandboxGeneration(sandboxId: string | null): number {
   if (!sandboxId) return -1;
   const match = /-r(\d+)$/.exec(sandboxId);
   return match ? Number(match[1]) : 0;
+}
+
+/**
+ * The id of the workbench's next box. Above both the current box and the last
+ * box a move tried (`settings.moveSandboxId`): a deleted id answers from its
+ * tombstone, so a generation a failed move used is never reused.
+ */
+export function nextSandboxId(row: Pick<WorkbenchRow, 'id' | 'sandboxId' | 'settings'>): string {
+  const moved = (row.settings as Record<string, unknown> | null | undefined)?.moveSandboxId;
+  const highest = Math.max(sandboxGeneration(row.sandboxId), typeof moved === 'string' ? sandboxGeneration(moved) : -1);
+  return sandboxIdFor(row.id, highest + 1);
 }
 
 /** `owner/name` → the clone directory, `/work/name`. */
@@ -198,7 +215,7 @@ function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
 }
 
 /** Calls that manage the box itself, and must never resume it as a side effect. */
-const NO_WAKE = new Set<PropertyKey>(['createSandbox', 'resumeSandbox', 'suspendSandbox', 'deleteSandbox']);
+const NO_WAKE = new Set<PropertyKey>(['createSandbox', 'getSandbox', 'resumeSandbox', 'suspendSandbox', 'deleteSandbox']);
 
 /**
  * The client, but a call refused with `remote_resume_required` resumes the box
@@ -217,34 +234,83 @@ function withWake(client: FleetClient): FleetClient {
         return (...args: Parameters<FleetClient['execFollow']>) => followWithWake(target, args);
       }
       return (...args: unknown[]) => {
-        const result = method.apply(target, args);
         const sandboxId = args[0];
-        if (!(result instanceof Promise) || typeof sandboxId !== 'string') return result;
-        return result.catch(async (err: unknown) => {
-          if (!isRemoteResumeRequired(err)) throw err;
-          await resumeOnce(target, sandboxId);
-          return method.apply(target, args);
-        });
+        const once = (): unknown => {
+          const result = method.apply(target, args);
+          if (!(result instanceof Promise) || typeof sandboxId !== 'string') return result;
+          return result.catch(async (err: unknown) => {
+            if (!isRemoteResumeRequired(err)) throw err;
+            await resumeOnce(target, sandboxId);
+            return method.apply(target, args);
+          });
+        };
+        return RETRY_UNSTARTED.has(prop) ? retryUnstarted(once as () => Promise<unknown>) : once();
       };
     },
   });
 }
 
-/** The fleet refuses a follow before its first frame, so a retry repeats nothing. */
+/** Exec calls retried when the fleet could not reach the guest before the command started. */
+const RETRY_UNSTARTED = new Set<PropertyKey>(['exec', 'quietExec']);
+
+let guestRetryDelays: readonly number[] = GUEST_RETRY_DELAYS_MS;
+
+/** Tests shorten the waits. */
+export function setGuestRetryDelaysForTests(delays: readonly number[] | null): void {
+  guestRetryDelays = delays ?? GUEST_RETRY_DELAYS_MS;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Send an exec again when the error proves the guest never started it: safe
+ * for any command, idempotent or not. Up to three more tries, then the error.
+ */
+async function retryUnstarted<T>(call: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();
+    } catch (err) {
+      const delay = guestRetryDelays[attempt];
+      if (delay === undefined || !isGuestUnreachableBeforeStart(err)) throw err;
+      console.warn(`[workbench] the guest was not reached; exec retry ${attempt + 1} in ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
+/**
+ * The fleet refuses a follow before its first frame, so a retry repeats
+ * nothing: a hibernated box is resumed once, and a guest that was not reached
+ * is tried again as `retryUnstarted` does. Never after a frame has arrived.
+ */
 async function* followWithWake(
   client: FleetClient,
   args: Parameters<FleetClient['execFollow']>,
 ): AsyncGenerator<FleetExecFrame> {
-  let started = false;
-  try {
-    for await (const frame of client.execFollow(...args)) {
-      started = true;
-      yield frame;
+  let resumed = false;
+  let unreached = 0;
+  for (;;) {
+    let started = false;
+    try {
+      for await (const frame of client.execFollow(...args)) {
+        started = true;
+        yield frame;
+      }
+      return;
+    } catch (err) {
+      if (started) throw err;
+      if (isRemoteResumeRequired(err) && !resumed) {
+        resumed = true;
+        await resumeOnce(client, args[0]);
+        continue;
+      }
+      const delay = guestRetryDelays[unreached];
+      if (delay === undefined || args[2].aborted || !isGuestUnreachableBeforeStart(err)) throw err;
+      unreached++;
+      console.warn(`[workbench] the guest was not reached; follow retry ${unreached} in ${delay}ms`);
+      await sleep(delay);
     }
-  } catch (err) {
-    if (started || !isRemoteResumeRequired(err)) throw err;
-    await resumeOnce(client, args[0]);
-    yield* client.execFollow(...args);
   }
 }
 
@@ -299,6 +365,13 @@ export interface SandboxExecOptions {
   quiet?: boolean;
   /** Follow large captures so the event ring cannot discard their first frames. */
   follow?: boolean;
+  /**
+   * Opt in for an IDEMPOTENT script only: on a full-disk failure, grow the
+   * disk and run once more on the same box. When the fleet cannot grow it, a
+   * move starts in the background and this call is not run again: a retry on
+   * a different box would repeat it against other state.
+   */
+  diskRecovery?: boolean;
 }
 
 export interface SandboxExecResult {
@@ -307,6 +380,8 @@ export interface SandboxExecResult {
   stderr: string;
   /** The raw stdout bytes — for file contents that may not be UTF-8. */
   stdoutBytes: Buffer;
+  /** The fleet cut a quiet answer at its cap, so stdout is incomplete. */
+  truncated?: boolean;
 }
 
 /** How many events one page of a wait-mode exec returns (the fleet's own cap). */
@@ -315,11 +390,42 @@ const EVENTS_PAGE = 1000;
 /**
  * Run `script` to its end and return its output, framed so another command
  * running at the same time cannot leak into it.
+ *
+ * With `diskRecovery`, a failure that says the disk is full grows the disk
+ * and runs once more on the same box (see move.ts).
  */
 export async function runCapture(
   row: WorkbenchRow,
   script: string,
   opts: SandboxExecOptions = {},
+): Promise<SandboxExecResult> {
+  let result: SandboxExecResult;
+  try {
+    result = await runCaptureOnce(row, script, opts);
+  } catch (err) {
+    if (opts.diskRecovery !== true || !isDiskFullError(err)) throw err;
+    if (!(await grownAfterDiskFull(row))) throw err;
+    return runCaptureOnce(row, script, opts);
+  }
+  if (result.exitCode !== 0 && opts.diskRecovery === true && isDiskFullText(result.stderr)) {
+    if (await grownAfterDiskFull(row)) return runCaptureOnce(row, script, opts);
+  }
+  return result;
+}
+
+/** True when the same box now has room. Otherwise a move may have started; it does not concern this call. */
+async function grownAfterDiskFull(row: WorkbenchRow): Promise<boolean> {
+  const { growForDiskFull } = await import('./move.js');
+  return growForDiskFull(row).catch((err) => {
+    console.warn(`[workbench] making room on ${row.id} failed:`, err);
+    return false;
+  });
+}
+
+async function runCaptureOnce(
+  row: WorkbenchRow,
+  script: string,
+  opts: SandboxExecOptions,
 ): Promise<SandboxExecResult> {
   return withLostRecovery(row, async () => {
     const sandboxId = requireSandbox(row);
@@ -346,7 +452,10 @@ export async function runCapture(
       if (outcome.kind === 'quiet') {
         demux.pushText(outcome.result.stdout);
         demux.pushText(outcome.result.stderr);
-        return resultOf(demux, outcome.result.exitCode);
+        const result = resultOf(demux, outcome.result.exitCode);
+        // The wrapper's own failure is not framed. A full disk is worth reading from it.
+        if (!demux.done && isDiskFullText(outcome.result.stderr)) result.stderr = outcome.result.stderr.slice(-2000);
+        return outcome.result.truncated ? { ...result, truncated: true } : result;
       }
       frame = outcome.frame;
     } else {
@@ -643,7 +752,8 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
       { label: 'CJSON', command: 'cat conductor.json' },
       { label: 'CTOML', command: 'cat .conductor/settings.toml' },
     ]),
-    { quiet: true, timeoutMs: 30_000 },
+    // Reads only, so it may run again after a grow.
+    { quiet: true, timeoutMs: 30_000, diskRecovery: true },
   );
   const files = parseSections(r.stdout);
   const config = resolveWorkbenchConfig({
@@ -905,6 +1015,7 @@ export function recordWorkbenchEvent(
   action: string,
   summary: string,
   ok = true,
+  error?: unknown,
 ): void {
   if (!debugBus.isRecording()) return;
   debugBus.recordEvent({
@@ -913,5 +1024,6 @@ export function recordWorkbenchEvent(
     summary: `${row.id.slice(0, 8)}: ${summary}`,
     ok,
     workspaceId: row.workspaceId,
+    ...(error !== undefined ? { error } : {}),
   });
 }

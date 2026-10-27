@@ -104,7 +104,7 @@ export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
       },
     ]),
   ].join('\n');
-  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000 });
+  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
     throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
   }
@@ -148,7 +148,7 @@ export async function getPatch(row: WorkbenchRow, path?: string): Promise<{ patc
     // `--no-index` exits 1 when the files differ, which here is always.
     `${untracked} | while IFS= read -r -d '' f; do git diff --no-color --no-index -- /dev/null "$f" || true; done`,
   ].join('\n');
-  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000 });
+  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
     throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
   }
@@ -188,7 +188,7 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
     `[ "$(wc -c < ${q})" -le ${MAX_FILE_BYTES} ] || exit 4`,
     `cat ${q}`,
   ].join('\n');
-  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000 });
+  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode === 3) throw new WorkbenchError(`${safePath} does not exist.`, 404, 'file_not_found');
   if (r.exitCode === 4) throw new WorkbenchError(`${safePath} is too large to open here.`, 413, 'file_too_large');
   if (r.exitCode !== 0) throw new Error(`reading ${safePath} failed (exit ${r.exitCode}): ${r.stderr.slice(-300)}`);

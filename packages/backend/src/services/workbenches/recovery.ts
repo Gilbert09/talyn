@@ -2,7 +2,7 @@ import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
-import { recordWorkbenchEvent, sandboxGeneration, sandboxIdFor } from './sandboxRuntime.js';
+import { nextSandboxId, recordWorkbenchEvent } from './sandboxRuntime.js';
 import { appendEvents, claimLostWorkbench, clearAgentSessions, failLostWorkbench, listChats, rowToChat, type WorkbenchRow } from './store.js';
 
 export const SANDBOX_LOST_MESSAGE = 'The sandbox was lost. Talyn is starting a new one.';
@@ -28,7 +28,7 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
     return;
   }
   const work = runWithoutScope(async () => {
-    const replacementId = sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1);
+    const replacementId = nextSandboxId(row);
     const claimed = await claimLostWorkbench(row.id, row.sandboxId!, replacementId, SANDBOX_LOST_MESSAGE);
     if (!claimed) return;
     attempts.set(row.id, now);

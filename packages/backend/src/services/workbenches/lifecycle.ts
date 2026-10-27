@@ -6,6 +6,7 @@ import {
   toShellScript,
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
+import { debugBus } from '../debugBus.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
@@ -17,7 +18,8 @@ import {
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchDeleted, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { localRuntimeError, movingError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
 import {
@@ -26,10 +28,10 @@ import {
   fleetCreateTarget,
   gitAuthorFor,
   loadWorkbenchConfig,
+  nextSandboxId,
   providerForAgent,
   recordWorkbenchEvent,
   runCapture,
-  sandboxGeneration,
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { startScript, stopAllScripts } from './scripts.js';
@@ -108,6 +110,59 @@ export function scheduleProvision(workbenchId: string, opts: { restore?: boolean
   );
 }
 
+/**
+ * The memory ceiling of a session's box. The YAS tenant default is 4096 today,
+ * but `yasctl -reseed-quotas` resets tenant defaults from the plan, so Talyn
+ * asks for it explicitly rather than inherit whatever the plan says.
+ */
+export const SESSION_SANDBOX_MEM_MIB = 4096;
+
+export type CreatedWorkbenchSandbox =
+  | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Create a box for a workbench, writing nothing to its row. The create body
+ * comes from the ONE builder task dispatch uses, so the credential rules
+ * cannot differ between the two. The repository and its DEFAULT branch go on
+ * the body, which is what picks the newest golden: goldens are keyed on them.
+ */
+export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: string): Promise<CreatedWorkbenchSandbox> {
+  const resolved = await resolveSandboxCredentials(row.workspaceId);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const provider = providerForAgent(row.agent);
+  // Best effort: without it the box boots the base image and the clone script
+  // clones as it always did.
+  const repository = await resolveRepository(row.repositoryId, row.workspaceId).catch((err) => {
+    console.warn(`[workbench] resolving the default branch for ${row.id} failed:`, err);
+    return null;
+  });
+  const built = await buildSandboxCreateBody({
+    id: sandboxId,
+    workspaceId: row.workspaceId,
+    provider,
+    model: row.model ?? (provider === 'openai' ? 'Codex' : 'Claude'),
+    creds: resolved.creds,
+    githubToken: resolved.githubToken,
+    mcpServerIds: null,
+    internetAccess: row.settings?.internetAccess !== false,
+    gitAuthor: await gitAuthorFor(row.workspaceId),
+    // No `task` and no `ephemeral`: a bare box that outlives every turn.
+    // So the scope goes at the top level: the fleet proxy's commit, checks
+    // and review-thread endpoints refuse a box that names no repository.
+    repo: row.repoFullName,
+    ...(repository ? { baseBranch: repository.defaultBranch } : {}),
+  });
+  if (!built.ok) return { ok: false, error: built.error };
+  const target = await fleetCreateTarget(row.workspaceId);
+  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB });
+  const fleetSandboxId =
+    typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
+      ? created.sandbox.id
+      : null;
+  return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId };
+}
+
 export async function provisionWorkbench(workbenchId: string, opts: { restore?: boolean } = {}): Promise<void> {
   if (provisioning.has(workbenchId)) return;
   provisioning.add(workbenchId);
@@ -117,46 +172,16 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     const replacingLostSandbox = row.sandboxState === 'lost';
     const fail = (message: string) => failProvision(workbenchId, message);
 
-    // 1. The box. The create body comes from the ONE builder task dispatch
-    // uses, so the credential rules cannot differ between the two.
-    const resolved = await resolveSandboxCredentials(row.workspaceId);
-    if (!resolved.ok) return await fail(resolved.error);
-    const provider = providerForAgent(row.agent);
-    const sandboxId = row.sandboxId ?? sandboxIdFor(row.id);
-    // The repository's DEFAULT branch, not the session's base: goldens are
-    // keyed on it. Best effort — without it the box boots the base image and
-    // the clone script clones as it always did.
-    const repository = await resolveRepository(row.repositoryId, row.workspaceId).catch((err) => {
-      console.warn(`[workbench] resolving the default branch for ${workbenchId} failed:`, err);
-      return null;
-    });
-    const built = await buildSandboxCreateBody({
-      id: sandboxId,
-      workspaceId: row.workspaceId,
-      provider,
-      model: row.model ?? (provider === 'openai' ? 'Codex' : 'Claude'),
-      creds: resolved.creds,
-      githubToken: resolved.githubToken,
-      mcpServerIds: null,
-      internetAccess: row.settings?.internetAccess !== false,
-      gitAuthor: await gitAuthorFor(row.workspaceId),
-      // No `task` and no `ephemeral`: a bare box that outlives every turn.
-      // So the scope goes at the top level: the fleet proxy's commit, checks
-      // and review-thread endpoints refuse a box that names no repository.
-      repo: row.repoFullName,
-      ...(repository ? { baseBranch: repository.defaultBranch } : {}),
-    });
-    if (!built.ok) return await fail(built.error);
-    const target = await fleetCreateTarget(row.workspaceId);
-    const created = await createSandboxRetryingUncertain(target.client, built.body);
+    // 1. The box.
+    const created = await createWorkbenchSandbox(row, row.sandboxId ?? sandboxIdFor(row.id));
+    if (!created.ok) return await fail(created.error);
     const settings = settingsWithoutFleetSandboxId(row);
-    if (typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId) {
-      settings.fleetSandboxId = created.sandbox.id;
-    }
+    if (created.fleetSandboxId) settings.fleetSandboxId = created.fleetSandboxId;
+    const sandboxId = created.sandboxId;
     row = await setRow(row, {
       sandboxId,
       sandboxState: replacingLostSandbox ? 'lost' : 'running',
-      fleetHost: target.host ?? created.host ?? row.fleetHost ?? null,
+      fleetHost: created.fleetHost ?? row.fleetHost ?? null,
       settings,
       statusMessage: 'Cloning the repository',
     });
@@ -279,9 +304,21 @@ export function restoreSavedWorkScript(row: Pick<WorkbenchRow, 'id' | 'branch'>)
  * removes its worktree.
  */
 export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow> {
-  let row = await getWorkbench(workbenchId);
+  const row = await getWorkbench(workbenchId);
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (row.archivedAt) return row;
+  // Its work is on two boxes until the move ends. Archiving now would save
+  // and delete only one of them.
+  if (row.status === 'moving') throw movingError();
+  const release = holdMoves(row.id);
+  try {
+    return await archiveHeld(row);
+  } finally {
+    release();
+  }
+}
+
+async function archiveHeld(row: WorkbenchRow): Promise<WorkbenchRow> {
   const notes: string[] = [];
 
   if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
@@ -300,7 +337,7 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
           notes.push(`The archive script could not run: ${userFacingError(err)}`);
         }
       }
-      const saved = await runCapture(row, archiveSaveScript(row), { timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS });
+      const saved = await runCapture(row, archiveSaveScript(row), { timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS, diskRecovery: false });
       if (saved.exitCode !== 0) {
         // The box stays: deleting it now would lose work nothing else holds.
         throw new WorkbenchError(
@@ -364,7 +401,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
   row = await setRow(row, {
     status: 'provisioning',
     statusMessage: 'Creating the sandbox',
-    sandboxId: row.sandboxId ? sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1) : sandboxIdFor(row.id),
+    sandboxId: row.sandboxId ? nextSandboxId(row) : sandboxIdFor(row.id),
     sandboxState: 'creating',
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
@@ -407,7 +444,7 @@ export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRo
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
-    sandboxId: sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1),
+    sandboxId: nextSandboxId(row),
     sandboxState: 'creating',
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
@@ -434,6 +471,16 @@ export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRo
 export async function deleteWorkbench(workbenchId: string): Promise<void> {
   const row = await getWorkbench(workbenchId);
   if (!row) return;
+  // A move in flight finds the row gone at its commit and deletes its new box.
+  const release = holdMoves(row.id);
+  try {
+    await deleteHeld(row);
+  } finally {
+    release();
+  }
+}
+
+async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
     const chats = await listChats(row.id);
     await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id)).catch(() => undefined);
@@ -459,11 +506,33 @@ export async function deleteWorkbench(workbenchId: string): Promise<void> {
 const BOOT_SWEEP_DELAY_MS = 90_000;
 
 let bootTimer: NodeJS.Timeout | null = null;
+let moveSweepTimer: NodeJS.Timeout | null = null;
+let moveSweepRunning = false;
+
+const MOVE_SWEEP_POLLER = 'workbench-move-sweep';
+
+/** One pass of the abandoned-move sweep, timed on the debug bus. */
+async function moveSweepTick(): Promise<void> {
+  if (moveSweepRunning) return;
+  moveSweepRunning = true;
+  const started = Date.now();
+  try {
+    const undone = await runWithoutScope(() => sweepAbandonedMoves());
+    if (undone > 0) console.log(`[workbench] undid ${undone} abandoned move(s)`);
+    debugBus.pollerTick(MOVE_SWEEP_POLLER, { durationMs: Date.now() - started, ok: true });
+  } catch (err) {
+    console.error('[workbench] the move sweep failed:', err);
+    debugBus.pollerTick(MOVE_SWEEP_POLLER, { durationMs: Date.now() - started, ok: false, error: err });
+  } finally {
+    moveSweepRunning = false;
+  }
+}
 
 /**
  * Arm the one-shot boot sweep: settle turns a dead process left running, and
- * carry on provisions it left half done. Not a poll loop — nothing here runs
- * twice.
+ * carry on provisions it left half done. Then the move sweep, which runs on
+ * an interval: an instance can die mid-move at any time, not only at a deploy,
+ * and the row would stay `moving` until the next one.
  */
 export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   if (bootTimer) return;
@@ -480,11 +549,23 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
         console.error('[workbench] boot sweep failed:', err);
       }
     });
+    void moveSweepTick();
   }, delayMs);
   bootTimer.unref();
+  if (!moveSweepTimer) {
+    debugBus.registerPoller(
+      MOVE_SWEEP_POLLER,
+      MOVE_SWEEP_INTERVAL_MS,
+      'Undoes session moves whose lease lapsed: puts the old sandbox back and deletes the half-made one.',
+    );
+    moveSweepTimer = setInterval(() => void moveSweepTick(), MOVE_SWEEP_INTERVAL_MS);
+    moveSweepTimer.unref();
+  }
 }
 
 export function stopWorkbenches(): void {
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
+  if (moveSweepTimer) clearInterval(moveSweepTimer);
+  moveSweepTimer = null;
 }
