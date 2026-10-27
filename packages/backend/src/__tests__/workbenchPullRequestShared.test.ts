@@ -204,6 +204,11 @@ describe('pullRequestOutcomeEvent in the transcript', () => {
     ]);
   });
 
+
+  it('skips hooks on the sandbox commit, where the hook tools are not on PATH', () => {
+    expect(commitAllSteps('fix: x', { skipHooks: true })[1].argv).toEqual(['git', 'commit', '--no-verify', '-m', 'fix: x']);
+    expect(commitAllSteps('fix: x')[1].argv).toEqual(['git', 'commit', '-m', 'fix: x']);
+  });
   it('a failure has no link', () => {
     expect(render(pullRequestOutcomeEvent({ ok: false, message: 'x' }))[0]).not.toHaveProperty('url');
   });

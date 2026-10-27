@@ -195,7 +195,7 @@ describe('workbench Create PR', () => {
     fleet.handler = async (script) => {
       if (isAgentTurn(script) || isAgentTurn(script, 'codex')) return turnReply;
       if (script.includes('git status --porcelain')) return { stdout: world.status ?? '' };
-      if (script.includes('git commit -m')) return world.commit ?? { exitCode: 0 };
+      if (script.includes('git commit --no-verify -m')) return world.commit ?? { exitCode: 0 };
       if (script.includes('rev-list --count')) return { stdout: world.ahead ?? '' };
       if (script.includes('git push -u origin HEAD')) return world.push ?? { exitCode: 0 };
       if (script.includes('git ls-remote --heads origin refs/heads/')) return { stdout: world.remote ?? '' };
@@ -483,7 +483,7 @@ describe('workbench Create PR', () => {
       expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
         title: 'feat: add the thing', head: wb.branch, base: 'main', body: '## Summary\nAdds it.', draft: false,
       });
-      expect(scriptsSinceMark().find((s) => s.includes('git commit -m'))).toContain("git commit -m 'feat: wip'");
+      expect(scriptsSinceMark().find((s) => s.includes('git commit --no-verify -m'))).toContain("git commit --no-verify -m 'feat: wip'");
       expect(prEvents(events)).toEqual([
         expect.objectContaining({ type: 'talyn_pr', ok: true, number: 7, url: 'https://github.com/acme/app/pull/7', existing: false }),
       ]);
@@ -700,12 +700,12 @@ describe('workbench Create PR', () => {
       const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
       expect(res.status).toBe(200);
       const scripts = scriptsSinceMark();
-      const order = ['git status --porcelain', 'git commit -m', 'rev-list --count', 'git push -u origin HEAD'].map((needle) =>
+      const order = ['git status --porcelain', 'git commit --no-verify -m', 'rev-list --count', 'git push -u origin HEAD'].map((needle) =>
         scripts.findIndex((s) => s.includes(needle)),
       );
       expect(order.every((i) => i >= 0)).toBe(true);
       expect([...order].sort((a, b) => a - b)).toEqual(order);
-      expect(scripts.find((s) => s.includes('git commit -m'))).toContain("git add -A\ngit commit -m 'feat: wip'");
+      expect(scripts.find((s) => s.includes('git commit --no-verify -m'))).toContain("git add -A\ngit commit --no-verify -m 'feat: wip'");
       expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
         title: 'feat: add the thing', head: wb.branch, base: 'main', body: 'Body', draft: true,
       });
@@ -720,14 +720,14 @@ describe('workbench Create PR', () => {
       mark = fleet.scripts.length;
       world.status = '?? new.txt\n';
       await call('POST', `/workbenches/${wb.id}/pull-request`, { ...input, title: "fix: it's $(done)", commitMessage: '' });
-      expect(scriptsSinceMark().find((s) => s.includes('git commit -m'))).toContain(`git commit -m 'fix: it'\\''s $(done)'`);
+      expect(scriptsSinceMark().find((s) => s.includes('git commit --no-verify -m'))).toContain(`git commit --no-verify -m 'fix: it'\\''s $(done)'`);
     });
 
     it('does not commit a clean tree', async () => {
       const wb = await sandboxWorkbench();
       mark = fleet.scripts.length;
       expect((await call('POST', `/workbenches/${wb.id}/pull-request`, input)).status).toBe(200);
-      expect(scriptsSinceMark().some((s) => s.includes('git commit -m'))).toBe(false);
+      expect(scriptsSinceMark().some((s) => s.includes('git commit --no-verify -m'))).toBe(false);
       expect(scriptsSinceMark().some((s) => s.includes('git push -u origin HEAD'))).toBe(true);
     });
 
@@ -768,7 +768,7 @@ describe('workbench Create PR', () => {
         expect(res.status).toBe(200);
 
         const scripts = scriptsSinceMark();
-        const order = ['git commit -m', 'git push -u origin HEAD', 'git ls-remote', 'merge-base HEAD FETCH_HEAD', 'fleet-publish --branch', 'git reset --soft FETCH_HEAD'].map(
+        const order = ['git commit --no-verify -m', 'git push -u origin HEAD', 'git ls-remote', 'merge-base HEAD FETCH_HEAD', 'fleet-publish --branch', 'git reset --soft FETCH_HEAD'].map(
           (needle) => scripts.findIndex((s) => s.includes(needle)),
         );
         expect(order.every((i) => i >= 0)).toBe(true);
