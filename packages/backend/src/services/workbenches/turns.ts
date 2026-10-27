@@ -23,8 +23,8 @@ import {
   type WorkbenchQueuedMessage,
   type WorkbenchStatus,
 } from '@talyn/shared';
-import { debugBus } from '../debugBus.js';
-import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExec, durableMarker } from './durableExec.js';
+import { debugBus, describeError } from '../debugBus.js';
+import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExecs, durableMarker, fenceDurableExec } from './durableExec.js';
 import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { runWithoutScope } from '../../db/client.js';
 import { scheduleAgentBackup } from './agentBackups.js';
@@ -122,6 +122,76 @@ interface LiveTurn {
 
 /** chatId → the turn this process is following. */
 const liveTurns = new Map<string, LiveTurn>();
+
+/**
+ * chatId → turn loops alive in this process. Wider than `liveTurns`, which is
+ * empty between a claim and the first await of a turn: the sweep must never
+ * adopt a lease that this process still works on.
+ */
+const turnLoops = new Map<string, number>();
+
+/**
+ * A turn's attempts, across launch failures, an account failover and
+ * adoptions. Each attempt has its own log key, and a launch that fails is
+ * fenced before the next one, so no attempt can run twice.
+ */
+export const MAX_TURN_ATTEMPTS = 4;
+export const LAUNCH_FAILED_MESSAGE = 'The agent could not start in the sandbox.';
+export const LOST_CONTACT_MESSAGE = 'Talyn lost contact with the agent in the sandbox.';
+const DEFAULT_LAUNCH_BACKOFF_MS: readonly number[] = [2_000, 5_000, 15_000];
+let launchBackoffMs = DEFAULT_LAUNCH_BACKOFF_MS;
+
+/**
+ * Adoptions of one turn by this process that ended in an error before any
+ * progress. They back off, and after `MAX_ADOPT_FAILURES` the turn settles,
+ * so a box that cannot be reached is not retried silently forever.
+ */
+const MAX_ADOPT_FAILURES = 5;
+const ADOPT_BACKOFF_BASE_MS = 5_000;
+const adoptFailures = new Map<string, { turn: number; failures: number; notBefore: number }>();
+
+/** Tests shorten the waits. */
+export function setTurnRetryDelaysForTests(delays: readonly number[] | null): void {
+  launchBackoffMs = delays ?? DEFAULT_LAUNCH_BACKOFF_MS;
+  adoptFailures.clear();
+}
+
+/** One log line and one debug event for every lease handoff, release and launch failure. */
+function noteTurn(action: string, chatId: string, turn: number, reason: string, error?: unknown): void {
+  const line = `[workbench] chat ${chatId.slice(0, 8)} turn ${turn}: ${action.replace(/_/g, ' ')}: ${reason}`;
+  if (error === undefined) console.log(line);
+  else console.warn(`${line}: ${describeError(error)}`);
+  debugBus.recordEvent({
+    service: 'workbenches', action, summary: `chat ${chatId.slice(0, 8)} turn ${turn}: ${reason}`,
+    ok: error === undefined, ...(error !== undefined ? { error } : {}),
+  });
+}
+
+async function releaseLease(chatId: string, turn: number, reason: string, error?: unknown): Promise<void> {
+  noteTurn('lease_released', chatId, turn, reason, error);
+  await releaseTurnLease(chatId, turn);
+}
+
+/** Wait between launches; a cancel or an abort ends the wait early. */
+async function backoff(ms: number, live: LiveTurn): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until && !live.cancelRequested && !live.controller.signal.aborted && !isWorkbenchDetached()) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(200, until - Date.now())));
+  }
+}
+
+function launchBackoff(attempt: number): number {
+  return launchBackoffMs[Math.min(attempt - 1, launchBackoffMs.length - 1)] ?? 0;
+}
+
+/** Every attempt's log and pid file for a turn, in one exec. */
+async function removeTurnLogs(wb: WorkbenchRow, chatId: string, turn: number): Promise<void> {
+  const entries = Array.from({ length: MAX_TURN_ATTEMPTS }, (_, attempt) => ({
+    key: turnLogKey(chatId, turn, attempt), marker: turnMarker(chatId, turn, attempt),
+  }));
+  await removeDurableExecs(wb, entries)
+    .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));
+}
 
 export function turnMarker(chatId: string, turn?: number, attempt = 0): string {
   return safeMarker(`talyn-turn-${chatId}${turn === undefined ? '' : `-${turn}-${attempt}`}`);
@@ -225,37 +295,61 @@ async function runTurnLoop(
   resume?: TurnLease,
   legacyTurn = false,
 ): Promise<void> {
+  turnLoops.set(chatId, (turnLoops.get(chatId) ?? 0) + 1);
+  try {
+    await runTurnLoopBody(chatId, first, resume, legacyTurn);
+  } finally {
+    const left = (turnLoops.get(chatId) ?? 1) - 1;
+    if (left > 0) turnLoops.set(chatId, left);
+    else turnLoops.delete(chatId);
+  }
+}
+
+async function runTurnLoopBody(
+  chatId: string,
+  first: { message: WorkbenchQueuedMessage; turn: number },
+  resume: TurnLease | undefined,
+  legacyTurn: boolean,
+): Promise<void> {
   let next: { message: WorkbenchQueuedMessage; turn: number } | null = first;
+  let startAttempt = 0;
   while (next) {
-    let lost = false;
-    const heldTurn = next.turn;
+    let lost: string | null = null;
+    let lostError: unknown;
+    const heldTurn: number = next.turn;
     const heartbeat = setInterval(() => {
       if (isWorkbenchDetached()) {
-        lost = true;
+        lost = 'this instance detached';
         liveTurns.get(chatId)?.controller.abort();
         return;
       }
       void renewTurnLease(chatId, heldTurn).then((ok) => {
-        if (!ok) { lost = true; liveTurns.get(chatId)?.controller.abort(); }
+        if (!ok) { lost = 'another owner holds the lease'; liveTurns.get(chatId)?.controller.abort(); }
       }).catch((err: unknown) => {
-        lost = true;
+        lost = 'the heartbeat could not be written';
+        lostError = err;
         liveTurns.get(chatId)?.controller.abort();
-        debugBus.recordEvent({ service: 'workbenches', action: 'lease_failed', summary: 'The turn follower lost its lease.', ok: false, error: err });
       });
     }, 20_000);
     heartbeat.unref();
     let outcome: TurnOutcome;
     try {
-      outcome = resume ? await resumeTurn(chatId, resume, legacyTurn) : await runOneTurn(chatId, next.message, next.turn);
+      outcome = resume ? await resumeTurn(chatId, resume, legacyTurn) : await runOneTurn(chatId, next.message, next.turn, startAttempt);
       resume = undefined;
+      startAttempt = 0;
     } catch (error) {
-      await releaseTurnLease(chatId, heldTurn);
-      debugBus.recordEvent({ service: 'workbenches', action: 'turn_handoff', summary: 'The turn follower will reconnect.', ok: false, error });
+      await releaseLease(chatId, heldTurn, 'the turn follower failed', error);
       return;
     } finally { clearInterval(heartbeat); }
     if (lost || isWorkbenchDetached() || outcome.handedOff) {
-      await releaseTurnLease(chatId, heldTurn);
+      await releaseLease(chatId, heldTurn, lost ?? outcome.handoffReason ?? 'this instance detached', lostError ?? outcome.handoffError);
       return;
+    }
+    // The adopted attempt never started: run the turn again here, as its next attempt.
+    if (outcome.relaunch) {
+      startAttempt = outcome.relaunch.attempt;
+      next = { message: outcome.relaunch.message, turn: heldTurn };
+      continue;
     }
     // Back in the queue: the move that is running starts it when it ends.
     if (outcome.requeued) { await startQueuedIfIdle(chatId); return; }
@@ -269,6 +363,7 @@ async function runTurnLoop(
       owner: TURN_OWNER,
       turn: heldTurn,
     });
+    adoptFailures.delete(chatId);
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
@@ -276,10 +371,7 @@ async function runTurnLoop(
     if (fin) {
       scheduleAgentBackup(chatId);
       const wb = await getWorkbench(fin.chat.workbenchId);
-      if (wb) for (const attempt of [0, 1]) {
-        await removeDurableExec(wb, turnLogKey(chatId, heldTurn, attempt), turnMarker(chatId, heldTurn, attempt))
-          .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));
-      }
+      if (wb?.sandboxId) await removeTurnLogs(wb, chatId, heldTurn);
     }
     void afterTurn(fin?.chat ?? null);
     if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
@@ -319,6 +411,11 @@ interface TurnOutcome {
   /** The workbench was moving: the message went back to the queue and nothing ran. */
   requeued?: boolean;
   handedOff?: boolean;
+  /** Why the lease is being given up, for the log line. */
+  handoffReason?: string;
+  handoffError?: unknown;
+  /** The adopted attempt never started: run the turn again, from this attempt. */
+  relaunch?: { message: WorkbenchQueuedMessage; attempt: number };
 }
 
 export const DISK_FULL_MOVED_NOTE =
@@ -416,12 +513,10 @@ function errorResultEvent(subtype: string, text: string): Record<string, unknown
   return { type: 'result', subtype, is_error: true, result: text };
 }
 
-async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number): Promise<TurnOutcome> {
-  if (isWorkbenchDraining()) {
-    const chat = await requeueTurn(chatId, message);
-    if (chat) emitWorkbenchChat(chat.workspaceId, rowToChat(chat));
-    return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
-  }
+async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number, firstAttempt = 0): Promise<TurnOutcome> {
+  // Nothing has started: the next instance adopts the lease and launches the
+  // agent. The chat stays `running` throughout, so no client sees it stop.
+  if (isWorkbenchDraining()) return handoffOutcome('draining before the agent started');
   const chat = await getChat(chatId);
   if (!chat) return { status: 'error', statusMessage: 'Chat not found', cancelled: false };
   // A move claimed the workbench between this turn's claim and now: queue the
@@ -460,7 +555,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
 
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs. It reports the free disk too (T2).
-    wb = await checkpointAndCheckDisk(wb, chatId, turn);
+    // A relaunch keeps the turn's first checkpoint: an earlier attempt may have run.
+    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) wb = await checkpointAndCheckDisk(wb, chatId, turn);
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.
@@ -468,7 +564,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
     // The box is awake and has its credentials: name the session beside the turn.
-    if (turn === 1) startTitleGeneration(wb, message.text);
+    if (turn === 1 && firstAttempt === 0) startTitleGeneration(wb, message.text);
 
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     // A reboot rewrites the agent's home files, so this runs every turn. A
@@ -527,19 +623,34 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         console.warn(`[workbench] clearing the recap for chat ${chatId} failed:`, err);
       });
     };
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let attempt = firstAttempt;
+    let failedOver = false;
+    for (;;) {
       const parser = createAgentStreamParser(agent);
       attemptSawResult = false;
       await events.flush();
-      if (!(await setTurnAttempt(chatId, turn, attempt))) return handoffOutcome();
-      const key = turnLogKey(chatId, turn, attempt);
-      if (live.controller.signal.aborted || isWorkbenchDetached() || !(await renewTurnLease(chatId, turn))) return handoffOutcome();
+      if (!(await setTurnAttempt(chatId, turn, attempt))) return handoffOutcome('another owner holds the lease');
+      if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('this instance detached');
+      if (!(await renewTurnLease(chatId, turn))) return handoffOutcome('another owner holds the lease');
+      // From here until the fence answers, an agent may be running in the box.
       agentMayBeRunning = true;
-      try {
-        await startDurableExec(wb, key, turnMarker(chatId, turn, attempt), argv.map(shellQuote).join(' '), env);
-      } catch (err) {
+      const launch = await launchAgent(wb, chatId, turn, attempt, argv.map(shellQuote).join(' '), env).catch((err: unknown) => {
         if (isDiskFullError(err)) agentMayBeRunning = false;
         throw err;
+      });
+      if (!launch.started) {
+        agentMayBeRunning = false;
+        attempt++;
+        if (attempt >= MAX_TURN_ATTEMPTS) {
+          const why = `${LAUNCH_FAILED_MESSAGE} ${describeError(launch.error)}`.slice(0, 500);
+          noteTurn('turn_launch_gave_up', chatId, turn, `${MAX_TURN_ATTEMPTS} attempts did not start`, launch.error);
+          events.add(errorResultEvent('error_during_execution', why));
+          await events.flush();
+          return { status: 'error', statusMessage: why, cancelled: false };
+        }
+        await backoff(launchBackoff(attempt), live);
+        if (live.cancelRequested) return cancelledOutcome(events);
+        continue;
       }
       const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
       const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
@@ -547,12 +658,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         if (parser.result) { sawResult = true; attemptSawResult = true; }
       }).finally(stopAccountWatch);
       outcome = await stream;
-      if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+      if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped');
       agentMayBeRunning = false;
       if (outcome.exitCode === 0) noteRecapStarted();
       parserResult = parser.result;
 
-      if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || attempt > 0) break;
+      if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || failedOver) break;
+      if (attempt + 1 >= MAX_TURN_ATTEMPTS) break;
       // The account this attempt ran on. The row can still name the one from before the turn-start switch.
       const failedAccountId = accountId ?? workbenchFleetAccountId(wb);
       if (!failedAccountId) break;
@@ -576,6 +688,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
       events.add(accountSwitchEvent(`${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`));
       accountId = next.accountId;
+      failedOver = true;
+      attempt++;
     }
 
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
@@ -596,17 +710,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // own exec or the fleet reports says the disk is full (see the catch).
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
   } catch (err) {
-    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped', err);
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (err instanceof FleetRunNotFoundError) {
       events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
       await events.flush();
       return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
     }
-    if (agentMayBeRunning) {
-      recordWorkbenchEvent(early!, 'turn_handoff', 'The turn follower will reconnect.', false, err);
-      return handoffOutcome();
-    }
+    if (agentMayBeRunning) return handoffOutcome('the agent may be running and its log could not be followed', err);
     const why = err instanceof Error ? err.message : String(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
     events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
@@ -797,10 +908,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
-      if (wb.sandboxId) for (const attempt of [0, 1]) {
-        await removeDurableExec(wb, turnLogKey(chatId, chat.turnCount, attempt), turnMarker(chatId, chat.turnCount, attempt))
-          .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));
-      }
+      if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
     }
   }
 }
@@ -816,8 +924,34 @@ export const LEGACY_INTERRUPTED_MESSAGE = 'This turn was interrupted by an updat
 export function turnLogKey(chatId: string, turn: number, attempt: number): string {
   return `${chatId}-${turn}-${attempt}`;
 }
-function handoffOutcome(): TurnOutcome {
-  return { status: 'running', statusMessage: null, cancelled: false, handedOff: true };
+function handoffOutcome(reason: string, error?: unknown): TurnOutcome {
+  return { status: 'running', statusMessage: null, cancelled: false, handedOff: true, handoffReason: reason,
+    ...(error !== undefined ? { handoffError: error } : {}) };
+}
+
+/**
+ * Launch one attempt. A launcher that gave up does not prove the agent did not
+ * start, so the attempt's start marker is fenced: either the agent started
+ * (follow it) or it never can (the caller tries the next attempt). A fence
+ * that cannot be checked throws, and the turn is handed off undecided.
+ */
+async function launchAgent(
+  wb: WorkbenchRow, chatId: string, turn: number, attempt: number, script: string, env: Record<string, string>,
+): Promise<{ started: true } | { started: false; error: unknown }> {
+  const key = turnLogKey(chatId, turn, attempt);
+  try {
+    await startDurableExec(wb, key, turnMarker(chatId, turn, attempt), script, env);
+    return { started: true };
+  } catch (error) {
+    if (error instanceof FleetRunNotFoundError || isDiskFullError(error)) throw error;
+    const fence = await fenceDurableExec(wb, key);
+    if (fence === 'started') {
+      noteTurn('turn_launch_late', chatId, turn, `attempt ${attempt} started after its launcher gave up`);
+      return { started: true };
+    }
+    noteTurn('turn_launch_failed', chatId, turn, `attempt ${attempt} did not start (${fence})`, error);
+    return { started: false, error };
+  }
 }
 
 async function finishSuccessfulAgent(
@@ -837,7 +971,7 @@ async function finishSuccessfulAgent(
 async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean): Promise<TurnOutcome> {
   const chat = await getChat(chatId);
   const wb = chat ? await getWorkbench(chat.workbenchId) : null;
-  if (!chat || !wb) return handoffOutcome();
+  if (!chat || !wb) return handoffOutcome('the chat or its session is gone');
   const live: LiveTurn = { turn: lease.turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, lease.turn);
@@ -846,11 +980,6 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     // Replay the saved prefix into the parser only. Codex keeps tool state between lines.
     const key = turnLogKey(chatId, lease.turn, lease.attempt);
     const exists = await durableExecExists(wb, key);
-    if (!exists && lease.message) {
-      const requeued = await requeueTurn(chatId, lease.message, lease.turn);
-      if (requeued) emitWorkbenchChat(chat.workspaceId, rowToChat(requeued));
-      return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
-    }
     if (!exists && !lease.message) {
       if (!legacyTurn) {
         events.add(errorResultEvent('error_during_execution', ORPHAN_MESSAGE));
@@ -861,13 +990,34 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
       await events.flush();
       return { status: 'idle', statusMessage: LEGACY_INTERRUPTED_MESSAGE, cancelled: true };
     }
+    if (!exists && lease.message) {
+      if (isWorkbenchDraining() || isWorkbenchDetached()) return handoffOutcome('draining before the agent started');
+      // Fence the attempt first, so its launcher cannot still start an agent beside the next one.
+      const fence = await fenceDurableExec(wb, key);
+      if (fence !== 'started') {
+        const attempt = lease.attempt + 1;
+        if (attempt >= MAX_TURN_ATTEMPTS) {
+          noteTurn('turn_launch_gave_up', chatId, lease.turn, `${MAX_TURN_ATTEMPTS} attempts did not start`);
+          events.add(errorResultEvent('error_during_execution', LAUNCH_FAILED_MESSAGE));
+          await events.flush();
+          return { status: 'error', statusMessage: LAUNCH_FAILED_MESSAGE, cancelled: false };
+        }
+        noteTurn('turn_relaunch', chatId, lease.turn, `attempt ${lease.attempt} never started (${fence}); launching attempt ${attempt}`);
+        await backoff(launchBackoff(attempt), live);
+        if (live.cancelRequested) return cancelledOutcome(events);
+        if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('this instance detached');
+        return { status: 'running', statusMessage: null, cancelled: false, relaunch: { message: lease.message, attempt } };
+      }
+      noteTurn('turn_launch_late', chatId, lease.turn, `attempt ${lease.attempt} started after its launcher gave up`);
+    }
     if (!lease.parser && lease.offset > 0) {
       await followDurableExec(wb, key, turnMarker(chatId, lease.turn, lease.attempt), 0, async (record) => {
         if (record.stream === 'stdout') parser.push(record.line);
       }, live.controller.signal, lease.offset, turnMarker(chatId));
     }
-    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, live.controller.signal);
-    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, live.controller.signal,
+      () => adoptFailures.delete(chatId));
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped');
     if (live.cancelRequested) return cancelledOutcome(events, Boolean(parser.result));
     if (outcome.exitCode === 0 && !parser.result?.isError) {
       if (lease.message) await finishSuccessfulAgent(wb, chatId, lease.message, parser.result?.text ?? '', events, live);
@@ -881,10 +1031,16 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     await events.flush();
     return { status: 'error', statusMessage: why, cancelled: false };
   } catch (err) {
-    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome();
+    if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped', err);
     if (!(err instanceof FleetRunNotFoundError)) {
-      recordWorkbenchEvent(wb, 'turn_handoff', 'The turn follower will reconnect.', false, err);
-      return handoffOutcome();
+      const failures = noteAdoptFailure(chatId, lease.turn);
+      if (failures < MAX_ADOPT_FAILURES) return handoffOutcome(`the adopted turn could not be followed (failure ${failures})`, err);
+      noteTurn('turn_lost_contact', chatId, lease.turn, `${failures} adoptions failed`, err);
+      adoptFailures.delete(chatId);
+      await killMarker(wb, turnMarker(chatId, lease.turn, lease.attempt)).catch(() => undefined);
+      if (!(await hasTurnEvent(chatId, lease.turn, 'result', true))) events.add(errorResultEvent('error_during_execution', LOST_CONTACT_MESSAGE));
+      await events.flush();
+      return { status: 'error', statusMessage: LOST_CONTACT_MESSAGE, cancelled: false };
     }
     events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
     await events.flush();
@@ -892,13 +1048,32 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
   } finally { liveTurns.delete(chatId); }
 }
 
+/** Count a failed adoption of `turn` and set when this process may try again. */
+function noteAdoptFailure(chatId: string, turn: number): number {
+  const prior = adoptFailures.get(chatId);
+  const failures = prior && prior.turn === turn ? prior.failures + 1 : 1;
+  const delay = Math.min(ADOPT_BACKOFF_BASE_MS * 2 ** (failures - 1), 2 * 60_000);
+  adoptFailures.set(chatId, { turn, failures, notBefore: Date.now() + delay });
+  return failures;
+}
+
+function adoptReason(lease: Omit<TurnLease, 'message' | 'parser'>): string {
+  const from = lease.owner === TURN_OWNER ? 'this instance' : lease.owner ? `instance ${lease.owner.slice(0, 8)}` : 'a legacy owner';
+  if (!lease.heartbeat) return `${from} left a legacy turn without a heartbeat`;
+  if (lease.heartbeat.getTime() === 0) return `${from} released it`;
+  return `${from} stopped its heartbeat ${Math.round((Date.now() - lease.heartbeat.getTime()) / 1000)} s ago`;
+}
+
 /** Claim stale leases. A legacy process remains authoritative while its agent is alive. */
 export async function sweepOrphanedTurns(): Promise<number> {
   if (isWorkbenchDraining()) return 0;
   let adopted = 0;
   for (const lease of await turnLeases()) {
-    if (liveTurns.has(lease.id)) continue;
+    // Never adopt a turn this process is still working on, whatever its heartbeat says.
+    if (liveTurns.has(lease.id) || turnLoops.has(lease.id)) continue;
     if (lease.heartbeat && Date.now() - lease.heartbeat.getTime() <= 90_000) continue;
+    const failed = adoptFailures.get(lease.id);
+    if (failed && failed.turn === lease.turn && Date.now() < failed.notBefore) continue;
     try {
       const wb = await getWorkbench(lease.workbenchId);
       if (!wb || wb.runtime === 'local' || !wb.sandboxId) continue;
@@ -910,6 +1085,7 @@ export async function sweepOrphanedTurns(): Promise<number> {
       const claimed = await getTurnLease(lease.id);
       if (!claimed) continue;
       adopted++;
+      noteTurn('lease_adopted', claimed.id, claimed.turn, `${adoptReason(lease)}; following attempt ${claimed.attempt} from byte ${claimed.offset}`);
       const first = { message: claimed.message ?? { id: 'legacy', text: '', queuedAt: new Date().toISOString() }, turn: claimed.turn };
       void runWithoutScope(() => runTurnLoop(claimed.id, first, claimed, lease.heartbeat === null)).catch((err) => {
         console.error(`[workbench] resuming chat ${claimed.id} failed:`, err);
@@ -948,6 +1124,9 @@ async function followTurnOutput(
 }
 
 export async function detachTurnFollowers(): Promise<void> {
-  for (const live of liveTurns.values()) live.controller.abort();
+  for (const [chatId, live] of liveTurns) {
+    noteTurn('lease_released', chatId, live.turn, 'this instance is detaching');
+    live.controller.abort();
+  }
   await releaseOwnedTurnLeases();
 }

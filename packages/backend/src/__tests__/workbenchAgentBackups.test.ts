@@ -9,7 +9,7 @@ import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as instructions from '../services/workbenches/instructions.js';
 import * as title from '../services/workbenches/title.js';
-import { sendMessage } from '../services/workbenches/turns.js';
+import { LAUNCH_FAILED_MESSAGE, sendMessage, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import * as turns from '../services/workbenches/turns.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
@@ -28,7 +28,7 @@ import { MAX_IMPORTED_SESSION_BYTES, boxSessionPath } from '../services/workbenc
 import { AGENT_MEMORY_RECAP_NOTE, AGENT_MEMORY_RESTORED_NOTE, recordRecoveredTranscript, recoverLostSandbox } from '../services/workbenches/recovery.js';
 import * as durable from '../services/workbenches/durableExec.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
-import { appendEvents, CHAT_COLUMNS, getChat, getTurnLease, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
+import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
 
 const SESSION = '11111111-1111-4111-8111-111111111111';
 const digest = (raw: Buffer) => createHash('sha256').update(raw).digest('hex');
@@ -142,10 +142,13 @@ describe('agent memory backups', () => {
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
     vi.spyOn(durable, 'startDurableExec').mockRejectedValue(new Error('The agent did not start.'));
-    await sendMessage('chat', { text: 'continue' });
-    await vi.waitFor(async () => expect((await getTurnLease('chat'))?.heartbeat).toEqual(new Date(0)));
-    expect((await getChat('chat'))?.status).toBe('running');
-    expect((await state()).pending).toBe(true);
+    setTurnRetryDelaysForTests([0]);
+    try {
+      await sendMessage('chat', { text: 'continue' });
+      await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('error'), { timeout: 5000 });
+      expect((await getChat('chat'))?.statusMessage).toContain(LAUNCH_FAILED_MESSAGE);
+      expect((await state()).pending).toBe(true);
+    } finally { setTurnRetryDelaysForTests(null); }
   });
 
   it('starts backups after real turns without waiting, and sends the recap only once', async () => {
