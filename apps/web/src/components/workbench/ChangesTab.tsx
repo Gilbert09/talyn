@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
-import type { Workbench, WorkbenchChangedFile, WorkbenchChanges, WorkbenchChat } from '@talyn/shared';
+import type { Workbench, WorkbenchChangedFile, WorkbenchChanges, WorkbenchChat, WorkbenchDiffScope } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -62,7 +62,8 @@ export function ChangesTab({
   const [changes, setChanges] = useState<WorkbenchChanges | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ path: string; scope: WorkbenchDiffScope } | null>(null);
+  const [collapsed, setCollapsed] = useState<Partial<Record<WorkbenchDiffScope, boolean>>>({});
   const [showMergedDiff, setShowMergedDiff] = useState(false);
   const loadingRef = useRef(false);
   const merged = workbench.pr?.state === 'merged';
@@ -86,7 +87,8 @@ export function ChangesTab({
 
   useEffect(() => {
     setChanges(null);
-    setSelectedPath(null);
+    setSelection(null);
+    setCollapsed({});
     setShowMergedDiff(false);
   }, [workbench.id]);
 
@@ -103,7 +105,11 @@ export function ChangesTab({
   }, [visible, showChanges, refresh, ops.unavailable]);
 
   const files = changes?.files ?? [];
-  const selected = files.find((f) => f.path === selectedPath) ?? null;
+  const groups = changes?.uncommitted && changes.committed ? [
+    { scope: 'uncommitted' as const, label: 'Uncommitted', files: changes.uncommitted, empty: 'No uncommitted changes.' },
+    { scope: 'committed' as const, label: 'Committed on this branch', files: changes.committed, empty: 'No committed changes.' },
+  ] : [{ scope: 'combined' as const, label: 'Changes against base', files, empty: 'No changes against the base branch.' }];
+  const selected = groups.find((g) => g.scope === selection?.scope)?.files.find((f) => f.path === selection?.path) ?? null;
 
   if (merged && !showMergedDiff) {
     return (
@@ -123,15 +129,7 @@ export function ChangesTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1.5 text-xs text-muted-foreground">
-        <span>
-          {files.length} {files.length === 1 ? 'file' : 'files'} changed
-          {changes && (
-            <span className="ml-2 tabular-nums">
-              <span className="text-success">+{files.reduce((n, f) => n + f.added, 0)}</span>{' '}
-              <span className="text-destructive">−{files.reduce((n, f) => n + f.removed, 0)}</span>
-            </span>
-          )}
-        </span>
+        <span>Changes</span>
         <button
           type="button"
           onClick={() => void refresh()}
@@ -148,26 +146,49 @@ export function ChangesTab({
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading changes…
         </div>
       )}
-      {changes && files.length === 0 && (
-        <p className="px-3 py-4 text-xs text-muted-foreground">No changes against {workbench.baseBranch} yet.</p>
-      )}
-      {files.length > 0 && (
-        <ul className="max-h-[40%] shrink-0 overflow-y-auto border-b">
-          {files.map((f) => (
-            <FileRow
-              key={f.path}
-              file={f}
-              active={f.path === selectedPath}
-              onClick={() => setSelectedPath((current) => (current === f.path ? null : f.path))}
-            />
+      {changes && (
+        <div className="max-h-[40%] shrink-0 overflow-y-auto border-b">
+          {groups.map((group) => (
+            <section key={group.scope} aria-label={group.label}>
+              <button
+                type="button"
+                aria-expanded={!collapsed[group.scope]}
+                onClick={() => setCollapsed((current) => ({ ...current, [group.scope]: !current[group.scope] }))}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent/60"
+              >
+                {collapsed[group.scope] ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                <span className="font-medium">{group.label}</span>
+                <span className="text-muted-foreground">{group.files.length} {group.files.length === 1 ? 'file' : 'files'}</span>
+                <span className="ml-auto tabular-nums">
+                  <span className="text-success">+{group.files.reduce((n, f) => n + f.added, 0)}</span>{' '}
+                  <span className="text-destructive">−{group.files.reduce((n, f) => n + f.removed, 0)}</span>
+                </span>
+              </button>
+              {!collapsed[group.scope] && (group.files.length === 0 ? (
+                <p className="px-3 pb-3 text-xs text-muted-foreground">{group.empty}</p>
+              ) : (
+                <ul>
+                  {group.files.map((f) => (
+                    <FileRow
+                      key={f.path}
+                      file={f}
+                      active={f.path === selection?.path && group.scope === selection.scope}
+                      onClick={() => setSelection((current) => current?.path === f.path && current.scope === group.scope
+                        ? null : { path: f.path, scope: group.scope })}
+                    />
+                  ))}
+                </ul>
+              ))}
+            </section>
           ))}
-        </ul>
+        </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
-        {selected && (
+        {selected && selection && (
           <FileDiffView
-            key={`${selected.path}:${changes?.headSha ?? ''}`}
+            key={`${selection?.scope}:${selected.path}:${changes?.headSha ?? ''}`}
             file={selected}
+            scope={selection.scope}
             ops={ops}
             refreshKey={turnsEnded}
             onComment={(c) => setComments([...comments, c])}
@@ -217,11 +238,13 @@ function FileRow({ file, active, onClick }: { file: WorkbenchChangedFile; active
 
 function FileDiffView({
   file,
+  scope,
   ops,
   refreshKey,
   onComment,
 }: {
   file: WorkbenchChangedFile;
+  scope: WorkbenchDiffScope;
   ops: WorkbenchOps;
   refreshKey: number;
   onComment: (comment: DiffComment) => void;
@@ -234,7 +257,7 @@ function FileDiffView({
   useEffect(() => {
     let cancelled = false;
     ops
-      .diff(file.path)
+      .diff(file.path, scope)
       .then((p) => {
         if (cancelled) return;
         setPatch(p);
@@ -245,7 +268,7 @@ function FileDiffView({
     return () => {
       cancelled = true;
     };
-  }, [file.path, ops, refreshKey]);
+  }, [file.path, scope, ops, refreshKey]);
 
   const options = useMemo(
     () => ({

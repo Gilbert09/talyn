@@ -48,7 +48,7 @@ export function isArchivedWorkbench(workbench: Pick<Workbench, 'status' | 'archi
 
 /** The primary button's action, or null when the right move is to wait. */
 export function primaryWorkbenchAction(
-  workbench: Pick<Workbench, 'diffStat' | 'status' | 'archivedAt'>,
+  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'>,
   pr: WorkbenchPrLike | null
 ): WorkbenchAction | null {
   if (isArchivedWorkbench(workbench)) return null;
@@ -62,7 +62,7 @@ export function primaryWorkbenchAction(
  * always.
  */
 export function availableWorkbenchActions(
-  workbench: Pick<Workbench, 'diffStat' | 'status' | 'archivedAt'>,
+  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'>,
   pr: WorkbenchPrLike | null
 ): WorkbenchAction[] {
   if (isArchivedWorkbench(workbench)) return [];

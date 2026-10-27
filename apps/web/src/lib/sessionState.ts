@@ -50,7 +50,7 @@ export interface SessionState {
 }
 
 export function sessionState(
-  workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'archivedAt'>,
+  workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>,
   chats: Pick<WorkbenchChat, 'id' | 'status'>[],
   unread: Record<string, true>,
   pr: SessionPr | null
@@ -78,7 +78,7 @@ export function sessionState(
     if (next === 'merge') return { kind: 'ready_to_merge', label: `#${pr.number} is ready to merge` };
     return { kind: 'pr_waiting', label: `#${pr.number} open, waiting on checks or review` };
   }
-  if (workbench.diffStat && workbench.diffStat.files > 0) {
+  if ((workbench.diffStat?.files ?? 0) > 0 || (workbench.committedStats?.files ?? 0) > 0) {
     return { kind: 'unshipped', label: 'Changes with no pull request yet' };
   }
   return { kind: 'idle', label: 'Idle' };

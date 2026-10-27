@@ -40,6 +40,7 @@ describe('next action', () => {
     ['no PR, no changes', clean, null, null],
     ['no PR, zero-file diff', { diffStat: { added: 0, removed: 0, files: 0 } }, null, null],
     ['no PR, changes', changed, null, 'create_pr'],
+    ['no PR, committed changes', { diffStat: null, committedStats: { files: 1, added: 5, removed: 1 } }, null, 'create_pr'],
     ['merged PR', changed, pr({ state: 'merged' }), 'archive'],
     ['closed PR', clean, pr({ state: 'closed' }), 'archive'],
     ['conflicting', changed, pr({ mergeable: 'CONFLICTING', ciStatus: 'failing_required' }), 'resolve_conflicts'],

@@ -112,7 +112,8 @@ import type {
   UpdateWorkbenchInput,
   Workbench,
   WorkbenchConfig,
-  WorkbenchChangedFile,
+  WorkbenchChanges,
+  WorkbenchDiffScope,
   WorkbenchChat,
   WorkbenchCheckpoint,
   WorkbenchEvent,
@@ -2771,15 +2772,16 @@ export const workbenches = {
 
   // ---- Files and diff ----
   changes: (id: string) =>
-    request<{ files: WorkbenchChangedFile[]; base: string; headSha: string }>(
+    request<WorkbenchChanges>(
       'GET',
       `/workbenches/${enc(id)}/changes`
     ),
-  diff: (id: string, path?: string) =>
-    request<{ patch: string }>(
-      'GET',
-      `/workbenches/${enc(id)}/diff${path ? `?path=${enc(path)}` : ''}`
-    ),
+  diff: (id: string, path?: string, scope?: WorkbenchDiffScope) => {
+    const qs = new URLSearchParams();
+    if (path) qs.set('path', path);
+    if (scope) qs.set('scope', scope);
+    return request<{ patch: string }>('GET', `/workbenches/${enc(id)}/diff${qs.size ? `?${qs}` : ''}`);
+  },
   file: (id: string, path: string) =>
     request<{ content: string; binary: boolean }>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}`),
   attachmentBlob: async (id: string, path: string): Promise<Blob> =>

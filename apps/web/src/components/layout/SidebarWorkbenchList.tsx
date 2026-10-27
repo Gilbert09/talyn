@@ -75,7 +75,8 @@ function WorkbenchRow({
   const isUnread = state.kind === 'needs_reply';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
-  const diff = workbench.diffStat && workbench.diffStat.files > 0 ? workbench.diffStat : null;
+  const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
+  const diff = stats && stats.files > 0 ? stats : null;
 
   const prUrl = pr?.summary.url ?? workbench.pr?.url;
   const [confirming, setConfirming] = useState(false);

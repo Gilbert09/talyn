@@ -1,6 +1,8 @@
 import {
   applyWorkbenchScriptOverrides,
   checkpointRestoreSteps,
+  countLines,
+  diffStatOf,
   diffNameStatus,
   diffNumstat,
   diffPatch,
@@ -21,6 +23,7 @@ import {
   type Workbench,
   type WorkbenchAttachment,
   type WorkbenchChanges,
+  type WorkbenchDiffScope,
   type WorkbenchChat,
   type WorkbenchConfig,
   type WorkbenchLocalBridge,
@@ -58,7 +61,7 @@ export interface WorkbenchOps {
   removeQueued(chatId: string, messageId: string): void;
   changes(): Promise<WorkbenchChanges>;
   /** Unified diff text for one file, or the whole branch. */
-  diff(path?: string): Promise<string>;
+  diff(path?: string, scope?: WorkbenchDiffScope): Promise<string>;
   listFiles(): Promise<string[]>;
   readFile(path: string): Promise<{ content: string; binary: boolean }>;
   config(): Promise<WorkbenchConfig>;
@@ -103,7 +106,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
         .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
     },
     changes: () => api.workbenches.changes(id),
-    diff: async (path) => (await api.workbenches.diff(id, path)).patch,
+    diff: async (path, scope) => (await api.workbenches.diff(id, path, scope)).patch,
     listFiles: async () => (await api.workbenches.files(id)).paths,
     readFile: (path) => api.workbenches.file(id, path),
     config: () => api.workbenches.config(id),
@@ -212,20 +215,44 @@ export function localOps(
     removeQueued: (chatId, messageId) => useWorkbenchStore.getState().removeLocalQueued(chatId, messageId),
     changes: async () => {
       const sha = await base();
-      const [numstat, nameStatus, untracked, head] = await Promise.all([
+      const head = (await run([headSha()])).trim();
+      const [numstat, nameStatus, untracked, uncommittedNumstat, uncommittedNames, committedNumstat, committedNames] = await Promise.all([
         run([diffNumstat(sha)]),
         run([diffNameStatus(sha)]),
         run([untrackedFiles()]),
-        run([headSha()]),
+        run([diffNumstat(head)]),
+        run([diffNameStatus(head)]),
+        run([diffNumstat(sha, head)]),
+        run([diffNameStatus(sha, head)]),
       ]);
-      return { files: mergeChangedFiles({ numstat, nameStatus, untracked }), base: sha, headSha: head.trim() };
+      const untrackedLineCounts: Record<string, number> = {};
+      for (const file of parseNulList(untracked).slice(0, 1000)) {
+        try {
+          const content = await need().readFile(path, file);
+          untrackedLineCounts[file] = content.binary ? 0 : countLines(content.content);
+        } catch {
+          untrackedLineCounts[file] = 0;
+        }
+      }
+      const uncommitted = mergeChangedFiles({ numstat: uncommittedNumstat, nameStatus: uncommittedNames, untracked, untrackedLineCounts });
+      const committed = mergeChangedFiles({ numstat: committedNumstat, nameStatus: committedNames });
+      const uncommittedStats = diffStatOf(uncommitted);
+      const committedStats = diffStatOf(committed);
+      const current = useWorkbenchStore.getState().workbenches[workbench.id];
+      if (current && (JSON.stringify(current.uncommittedStats) !== JSON.stringify(uncommittedStats)
+        || JSON.stringify(current.committedStats) !== JSON.stringify(committedStats))) useWorkbenchStore.getState().upsertWorkbench({ ...current, diffStat: uncommittedStats, uncommittedStats, committedStats });
+      return {
+        files: mergeChangedFiles({ numstat, nameStatus, untracked, untrackedLineCounts }),
+        base: sha, headSha: head, uncommitted, committed, uncommittedStats, committedStats,
+      };
     },
-    diff: async (file) => {
-      const sha = await base();
-      const patch = await run([diffPatch(sha, file)]);
-      if (patch.trim() || !file) return patch;
-      // An untracked file has no diff against a commit; show it as an addition.
-      return run([untrackedFilePatch(file)]);
+    diff: async (file, scope = 'combined') => {
+      const sha = scope === 'uncommitted' ? 'HEAD' : await base();
+      const patch = await run([diffPatch(sha, file, scope === 'committed' ? 'HEAD' : undefined)]);
+      if (scope === 'committed' || patch.trim()) return patch;
+      if (file) return run([untrackedFilePatch(file)]);
+      const paths = parseNulList(await run([untrackedFiles()]));
+      return patch + (await Promise.all(paths.map((rel) => run([untrackedFilePatch(rel)])))).join('');
     },
     listFiles: async () => parseNulList(await run([listFiles()])),
     readFile: (rel) => need().readFile(path, rel),

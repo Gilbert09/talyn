@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Split session changes (2026-10-27)
+
+The changes route returns uncommitted and committed files in one quiet exec.
+Uncommitted changes compare the working tree with HEAD and include untracked files.
+Committed changes compare HEAD with the merge base.
+The old combined fields remain available. Diff requests accept a scope and default to the combined comparison.
+The existing statistics column stores both totals. Its legacy totals now contain only uncommitted changes.
+Both clients show separate collapsible groups. Their sidebar counts use only uncommitted changes.
+
+
 ## Keep sandbox work through backend deploys (2026-10-27)
 
 Migration 0086 adds turn ownership, heartbeats, byte offsets, script runs, and pending backup markers.

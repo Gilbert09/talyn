@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
     attachmentBlob: vi.fn(),
     uploadAttachment: vi.fn(),
     runScript: vi.fn(),
+    diff: vi.fn(),
   },
 }));
 vi.mock('../lib/api', () => ({ api }));
@@ -47,6 +48,12 @@ beforeEach(() => {
 });
 
 describe('sandboxOps', () => {
+  it.each(['uncommitted', 'committed', undefined] as const)('passes the diff scope: %s', async (scope) => {
+    api.workbenches.diff.mockResolvedValue({ patch: 'patch' });
+    expect(await sandboxOps(wb()).diff('a.ts', scope)).toBe('patch');
+    expect(api.workbenches.diff).toHaveBeenCalledWith('wb1', 'a.ts', scope);
+  });
+
   it.each([
     ['ready', { status: 'ready' }, null],
     ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],

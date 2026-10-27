@@ -234,8 +234,8 @@ export interface WorkbenchPrLike {
  * Talyn's PR summary as the shared next-action input. A row with no CI verdict
  * (written before the field shipped) keeps it absent, which reads as Merge.
  */
-export function nextActionInput(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextActionInput {
-  const hasChanges = (workbench.diffStat?.files ?? 0) > 0;
+export function nextActionInput(workbench: Pick<Workbench, 'diffStat' | 'committedStats'>, pr: WorkbenchPrLike | null): WorkbenchNextActionInput {
+  const hasChanges = (workbench.diffStat?.files ?? 0) > 0 || (workbench.committedStats?.files ?? 0) > 0;
   if (!pr) return { hasChanges, pr: null };
   return {
     hasChanges,
@@ -243,7 +243,7 @@ export function nextActionInput(workbench: Pick<Workbench, 'diffStat'>, pr: Work
   };
 }
 
-export function workbenchNextAction(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextAction {
+export function workbenchNextAction(workbench: Pick<Workbench, 'diffStat' | 'committedStats'>, pr: WorkbenchPrLike | null): WorkbenchNextAction {
   return nextWorkbenchAction(nextActionInput(workbench, pr));
 }
 

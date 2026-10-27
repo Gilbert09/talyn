@@ -51,9 +51,10 @@ const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { githubService } = await import('../services/github.js');
+const { refreshDiffStat } = await import('../services/workbenches/changes.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
-const { getChat, getWorkbench, listChats, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
+const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -1138,7 +1139,7 @@ describe('workbench routes', () => {
       expect(fleet.scripts.length).toBe(before);
     });
 
-    it('reads changes through git when the fleet has no diff route, and stores the stat', async () => {
+    it('reads changes in both scopes and keeps the combined fields', async () => {
       const wb = await createSandboxWorkbench();
       const b64 = (s: string) => Buffer.from(s).toString('base64');
       scriptedFleet((script) =>
@@ -1149,6 +1150,10 @@ describe('workbench routes', () => {
                 `HEAD ${b64('b'.repeat(40) + '\n')}`,
                 `NUMSTAT ${b64('3\t1\tsrc/a.ts\0')}`,
                 `NAMES ${b64('M\0src/a.ts\0')}`,
+                `UNCOMMITTED_NUMSTAT ${b64('1\t0\tsrc/a.ts\0')}`,
+                `UNCOMMITTED_NAMES ${b64('M\0src/a.ts\0')}`,
+                `COMMITTED_NUMSTAT ${b64('2\t1\tsrc/a.ts\0')}`,
+                `COMMITTED_NAMES ${b64('M\0src/a.ts\0')}`,
                 `UNTRACKED ${b64('new.txt\0')}`,
                 `COUNTS ${b64('new.txt\t4\n')}`,
               ].join('\n'),
@@ -1159,11 +1164,44 @@ describe('workbench routes', () => {
       expect(res.body.data).toEqual({
         base: 'a'.repeat(40),
         headSha: 'b'.repeat(40),
+        uncommitted: [
+          { path: 'new.txt', status: 'added', added: 4, removed: 0, binary: false },
+          { path: 'src/a.ts', status: 'modified', added: 1, removed: 0, binary: false },
+        ],
+        committed: [{ path: 'src/a.ts', status: 'modified', added: 2, removed: 1, binary: false }],
+        uncommittedStats: { added: 5, removed: 0, files: 2 },
+        committedStats: { added: 2, removed: 1, files: 1 },
         files: [
           { path: 'new.txt', status: 'added', added: 4, removed: 0, binary: false },
           { path: 'src/a.ts', status: 'modified', added: 3, removed: 1, binary: false },
         ],
       });
+      const updated = await refreshDiffStat((await getWorkbench(wb.id))!);
+      expect(rowToWorkbench(updated)).toMatchObject({
+        diffStat: res.body.data.uncommittedStats,
+        uncommittedStats: res.body.data.uncommittedStats,
+        committedStats: res.body.data.committedStats,
+      });
+      expect(emitted.findLast((event) => event.type === 'workbench:updated')?.payload).toMatchObject({
+        workbench: expect.objectContaining({ uncommittedStats: res.body.data.uncommittedStats, committedStats: res.body.data.committedStats }),
+      });
+    });
+
+    it.each(['uncommitted', 'committed', 'combined'])('passes the %s diff scope', async (scope) => {
+      const wb = await createSandboxWorkbench();
+      scriptedFleet((script) => script.includes('git diff --no-color') ? { stdout: 'scoped patch' } : null);
+      const res = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts&scope=${scope}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.patch).toBe('scoped patch');
+      const script = fleet.scripts.findLast((s) => s.includes('git diff --no-color'))!;
+      const comparison = scope === 'uncommitted' ? 'HEAD' : scope === 'committed' ? '"$mb" HEAD' : '"$mb"';
+      expect(script).toContain(`--find-renames ${comparison} -- src/a.ts`);
+    });
+
+    it('refuses an invalid diff scope', async () => {
+      const wb = await createSandboxWorkbench();
+      const res = await call('GET', `/workbenches/${wb.id}/diff?scope=wrong`);
+      expect([res.status, res.body.code]).toEqual([400, 'bad_scope']);
     });
 
     it.each([

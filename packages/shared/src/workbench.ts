@@ -86,6 +86,14 @@ export interface WorkbenchDiffStat {
   files: number;
 }
 
+/** Stored in the existing JSON column. The top-level totals are uncommitted. */
+export interface WorkbenchStoredDiffStat extends WorkbenchDiffStat {
+  uncommittedStats?: WorkbenchDiffStat;
+  committedStats?: WorkbenchDiffStat;
+}
+
+export type WorkbenchDiffScope = 'combined' | 'uncommitted' | 'committed';
+
 /**
  * Per-workbench overrides. Everything is optional: an absent key means "use
  * the repository's config file" (scripts) or "use Talyn's default" (prompts).
@@ -158,6 +166,8 @@ export interface Workbench {
   settings: WorkbenchSettings;
   /** Null until a diff has been computed once. */
   diffStat: WorkbenchDiffStat | null;
+  uncommittedStats?: WorkbenchDiffStat | null;
+  committedStats?: WorkbenchDiffStat | null;
   /**
    * Why `status` is what it is, in words a person can act on — set on `error`
    * (what failed while provisioning) and cleared when there is nothing to say.
@@ -271,6 +281,11 @@ export interface WorkbenchChangedFile {
 
 export interface WorkbenchChanges {
   files: WorkbenchChangedFile[];
+  /** Absent on older servers. `files` keeps the combined diff. */
+  uncommitted?: WorkbenchChangedFile[];
+  committed?: WorkbenchChangedFile[];
+  uncommittedStats?: WorkbenchDiffStat;
+  committedStats?: WorkbenchDiffStat;
   /** The merge-base sha the diff was taken against. */
   base: string;
   headSha: string;

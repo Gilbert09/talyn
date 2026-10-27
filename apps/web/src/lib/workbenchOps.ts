@@ -3,6 +3,7 @@ import type {
   Workbench,
   WorkbenchAttachment,
   WorkbenchChanges,
+  WorkbenchDiffScope,
   WorkbenchChat,
   WorkbenchConfig,
   WorkbenchNextAction,
@@ -37,7 +38,7 @@ export interface WorkbenchOps {
   removeQueued(chatId: string, messageId: string): void;
   changes(): Promise<WorkbenchChanges>;
   /** Unified diff text for one file, or the whole branch. */
-  diff(path?: string): Promise<string>;
+  diff(path?: string, scope?: WorkbenchDiffScope): Promise<string>;
   listFiles(): Promise<string[]>;
   readFile(path: string): Promise<{ content: string; binary: boolean }>;
   config(): Promise<WorkbenchConfig>;
@@ -82,7 +83,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
         .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
     },
     changes: () => api.workbenches.changes(id),
-    diff: async (path) => (await api.workbenches.diff(id, path)).patch,
+    diff: async (path, scope) => (await api.workbenches.diff(id, path, scope)).patch,
     listFiles: async () => (await api.workbenches.files(id)).paths,
     readFile: (path) => api.workbenches.file(id, path),
     config: () => api.workbenches.config(id),

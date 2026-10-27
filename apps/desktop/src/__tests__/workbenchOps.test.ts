@@ -2,6 +2,8 @@
  * @jest-environment jsdom
  */
 import type { Workbench, WorkbenchLocalBridge } from '@talyn/shared';
+import { api as backendApi } from '../renderer/lib/api';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { localOps, sandboxOps } from '../renderer/lib/workbenchOps';
 import { openLocalPullRequest } from '../renderer/lib/localPullRequest';
 import { getDeviceId, resetDeviceIdCache } from '../renderer/lib/workbenchBridge';
@@ -53,6 +55,35 @@ beforeEach(() => {
 });
 
 describe('localOps', () => {
+  it('splits local files and stores only uncommitted totals for the sidebar', async () => {
+    const { bridge } = bridgeWith((steps) => {
+      if (has(steps, 'merge-base')) return { exitCode: 0, stdout: 'base' };
+      if (has(steps, 'rev-parse')) return { exitCode: 0, stdout: 'head' };
+      if (has(steps, '--numstat')) return { exitCode: 0, stdout: has(steps, 'base', 'head') ? '8\t2\tboth.ts\0' : '2\t1\tboth.ts\0' };
+      if (has(steps, '--name-status')) return { exitCode: 0, stdout: 'M\0both.ts\0' };
+      if (has(steps, '--others')) return { exitCode: 0, stdout: 'new.txt\0' };
+      return undefined;
+    });
+    jest.mocked(bridge.readFile).mockResolvedValue({ content: 'one\ntwo', binary: false });
+    useWorkbenchStore.getState().upsertWorkbench(wb());
+    const changes = await localOps(wb(), bridge, null).changes();
+    expect(changes.uncommittedStats).toEqual({ files: 2, added: 4, removed: 1 });
+    expect(changes.committedStats).toEqual({ files: 1, added: 8, removed: 2 });
+    expect(changes.committed?.map((file) => file.path)).toEqual(['both.ts']);
+    expect(useWorkbenchStore.getState().workbenches.wb1.diffStat).toEqual(changes.uncommittedStats);
+  });
+
+  it.each(['uncommitted', 'committed'] as const)('uses the local %s patch comparison', async (scope) => {
+    const { bridge, exec } = bridgeWith((steps) => {
+      if (has(steps, 'merge-base')) return { exitCode: 0, stdout: 'base' };
+      return { exitCode: 0, stdout: 'patch' };
+    });
+    expect(await localOps(wb(), bridge, null).diff('both.ts', scope)).toBe('patch');
+    expect(exec).toHaveBeenLastCalledWith('/work/lisbon', [{
+      argv: ['git', 'diff', '--no-color', '--find-renames', ...(scope === 'committed' ? ['base', 'HEAD'] : ['HEAD']), '--', 'both.ts'],
+    }]);
+  });
+
   it.each([
     ['no bridge', null, {}, /desktop app/],
     ['another device', 'bridge', { deviceId: 'someone-else' }, /another computer/],
@@ -211,6 +242,16 @@ describe('openLocalPullRequest', () => {
 });
 
 describe('sandboxOps', () => {
+  it.each(['uncommitted', 'committed', undefined] as const)('passes the diff scope: %s', async (scope) => {
+    const diff = jest.spyOn(backendApi.workbenches, 'diff').mockResolvedValue({ patch: 'patch' });
+    try {
+      expect(await sandboxOps(wb()).diff('a.ts', scope)).toBe('patch');
+      expect(diff).toHaveBeenCalledWith('wb1', 'a.ts', scope);
+    } finally {
+      diff.mockRestore();
+    }
+  });
+
   it.each([
     ['ready', { status: 'ready' }, null],
     ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],

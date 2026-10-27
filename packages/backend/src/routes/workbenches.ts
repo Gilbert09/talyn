@@ -757,7 +757,11 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       await requireReadySandbox(row);
-      ok(res, await getPatch(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined));
+      const scope = req.query.scope;
+      if (scope !== undefined && scope !== 'combined' && scope !== 'uncommitted' && scope !== 'committed') {
+        return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
+      }
+      ok(res, await getPatch(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
     } catch (err) {
       fail(res, err);
     }

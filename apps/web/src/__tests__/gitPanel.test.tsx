@@ -4,7 +4,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Workbench, WorkbenchChanges, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
 import type { WorkbenchOps } from '../lib/workbenchOps';
@@ -487,6 +487,45 @@ describe('Pull request tab', () => {
 });
 
 describe('Changes tab', () => {
+  it('shows separate counts and passes the scope for a file in both groups', async () => {
+    const data = changes([['both.ts', 5]]);
+    data.uncommitted = [{ ...data.files[0], added: 2, removed: 1 }];
+    data.committed = [{ ...data.files[0], added: 7, removed: 3 }];
+    const ops = makeOps({ changes: vi.fn(async () => data) });
+    render(<ChangesTab workbench={WB} chat={chat} ops={ops} visible turnsEnded={0} comments={[]} setComments={() => {}} />);
+    const uncommitted = await screen.findByRole('region', { name: 'Uncommitted' });
+    const committed = screen.getByRole('region', { name: 'Committed on this branch' });
+    const header = within(uncommitted).getByRole('button', { name: /Uncommitted/ });
+    expect(header).toHaveTextContent('1 file');
+    expect(header).toHaveTextContent('+2');
+    expect(header).toHaveTextContent('−1');
+    const committedHeader = within(committed).getByRole('button', { name: /Committed on this branch/ });
+    expect(committedHeader).toHaveTextContent('1 file');
+    expect(committedHeader).toHaveTextContent('+7');
+    expect(committedHeader).toHaveTextContent('−3');
+    fireEvent.click(within(uncommitted).getByRole('button', { name: /both.ts/ }));
+    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'uncommitted'));
+    fireEvent.click(within(committed).getByRole('button', { name: /both.ts/ }));
+    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'committed'));
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+    expect(within(uncommitted).queryByText('both.ts')).not.toBeInTheDocument();
+    expect(within(committed).getByText('both.ts')).toBeInTheDocument();
+    fireEvent.click(header);
+    expect(within(uncommitted).getByText('both.ts')).toBeInTheDocument();
+  });
+
+  it.each(['uncommitted', 'committed', 'both'] as const)('shows empty states for %s', async (empty) => {
+    const data = changes([['a.ts', 1]]);
+    data.uncommitted = empty === 'committed' ? data.files : [];
+    data.committed = empty === 'uncommitted' ? data.files : [];
+    const ops = makeOps({ changes: vi.fn(async () => data) });
+    render(<ChangesTab workbench={WB} chat={chat} ops={ops} visible turnsEnded={0} comments={[]} setComments={() => {}} />);
+    await screen.findByRole('region', { name: 'Uncommitted' });
+    if (empty !== 'committed') expect(screen.getByText('No uncommitted changes.')).toBeInTheDocument();
+    if (empty !== 'uncommitted') expect(screen.getByText('No committed changes.')).toBeInTheDocument();
+  });
+
   it('does not refresh a merged branch while the notice is shown', () => {
     vi.useFakeTimers();
     try {

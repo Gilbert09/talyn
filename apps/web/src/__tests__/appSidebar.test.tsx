@@ -307,3 +307,26 @@ describe('AppSidebar', () => {
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(false);
   });
 });
+
+ it.each([
+   [{ files: 1, added: 2, removed: 1 }, true],
+   [{ files: 0, added: 0, removed: 0 }, false],
+   [null, false],
+ ] as const)('shows only uncommitted sidebar totals: %j', (uncommittedStats, shown) => {
+   useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
+     diffStat: { files: 2, added: 99, removed: 88 },
+     uncommittedStats,
+     committedStats: { files: 2, added: 97, removed: 87 },
+   }));
+   render(<AppSidebar />);
+   const row = screen.getByRole('button', { name: /lisbon/ });
+   expect(row).not.toHaveTextContent('+99');
+   expect(row).not.toHaveTextContent('−88');
+   expect(row).not.toHaveTextContent('+97');
+   if (shown) {
+     expect(row).toHaveTextContent('+2');
+     expect(row).toHaveTextContent('−1');
+   } else {
+     expect(row).not.toHaveTextContent(/\+\d|−\d/);
+   }
+ });

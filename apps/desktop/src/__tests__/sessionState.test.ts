@@ -2,7 +2,7 @@ import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../renderer/lib/api';
 import { sessionPr, sessionState, type SessionStateKind } from '../renderer/lib/sessionState';
 
-type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'archivedAt'>;
+type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
 const chat = (status: WorkbenchChat['status'], id = 'c1') => ({ id, status }) as Pick<WorkbenchChat, 'id' | 'status'>;
 
@@ -32,6 +32,7 @@ describe('sessionState', () => {
     ['green is ready to merge', {}, [], {}, pr('open'), 'ready_to_merge'],
     ['running checks wait', {}, [], {}, pr('open', { ciStatus: 'running' }), 'pr_waiting'],
     ['changes with no PR', { diffStat: { files: 2, added: 5, removed: 1 } } as Partial<Wb>, [], {}, null, 'unshipped'],
+    ['committed changes with no PR', { committedStats: { files: 1, added: 5, removed: 1 } }, [], {}, null, 'unshipped'],
     ['nothing at all', {}, [], {}, null, 'idle'],
   ])('%s', (_name, over, chats, unread, row, kind) => {
     expect(sessionState({ ...WB, ...over }, chats, unread, row).kind).toBe(kind);
