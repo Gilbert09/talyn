@@ -87,7 +87,7 @@ export function AgentConversation({
     return (
       <div className="h-full flex items-center justify-center text-xs text-zinc-500 bg-[#1a1a1a]">
         {hasAnyEvents
-          ? 'Claude is thinking…'
+          ? 'The agent is thinking…'
           : (waitingHint ?? 'Waiting for the agent to start…')}
       </div>
     );
