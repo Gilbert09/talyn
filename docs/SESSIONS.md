@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Keep agent memory after sandbox loss (2026-10-27)
+
+Migration 0084 adds compressed backups for agent conversations. Each completed turn starts a backup without waiting for it.
+Backups read only new bytes, in chunks of 2 MiB. Each chunk has a checksum.
+A smaller file resets the backup. Files above 256 MiB stop the backup and produce one debug event.
+Recovery and archive restoration restore each usable conversation before queued turns start.
+Other chats receive a hidden recap on their first turn. It contains recent user and assistant text, up to 24 KiB.
+A database trigger removes old backups when a session ID changes. Chat deletion removes backups through the foreign key.
+
 ## Session previews, the web sessions UI, and a PR tab (2026-10-24)
 
 **Previews.** A session can run its repository's app and open it in a browser. A

@@ -1,9 +1,10 @@
 import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { restoreAgentSession } from './agentBackups.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
 import { nextSandboxId, recordWorkbenchEvent } from './sandboxRuntime.js';
-import { appendEvents, claimLostWorkbench, clearAgentSessions, failLostWorkbench, listChats, rowToChat, type WorkbenchRow } from './store.js';
+import { appendEvents, claimLostWorkbench, failLostWorkbench, listChats, rowToChat, updateChat, type WorkbenchRow } from './store.js';
 
 export const SANDBOX_LOST_MESSAGE = 'The sandbox was lost. Talyn is starting a new one.';
 export const SANDBOX_RESTORED_NOTE =
@@ -35,7 +36,6 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
     try {
       recordWorkbenchEvent(claimed, 'sandbox_lost', `sandbox ${row.sandboxId} was lost`, false);
       await emitWorkbenchUpdated(await publicWorkbench(claimed));
-      for (const chat of await clearAgentSessions(row.id)) emitWorkbenchChat(chat.workspaceId, rowToChat(chat));
     } finally {
       const { scheduleProvision } = await import('./lifecycle.js');
       scheduleProvision(row.id);
@@ -54,12 +54,23 @@ export async function withLostRecovery<T>(row: WorkbenchRow, operation: () => Pr
   }
 }
 
-/** Record the data loss after the new branch checkout is ready. */
-export async function recordRecoveredTranscript(row: WorkbenchRow): Promise<void> {
+export const AGENT_MEMORY_RESTORED_NOTE = "The agent's memory of this conversation was restored.";
+export const AGENT_MEMORY_RECAP_NOTE =
+  'The agent does not remember this conversation; the first message below gives it a short summary.';
+
+/** Restore each conversation before the new sandbox accepts turns. */
+export async function recordRecoveredTranscript(row: WorkbenchRow, archived = false): Promise<void> {
   for (const chat of await listChats(row.id)) {
+    const restored = await restoreAgentSession(row, chat);
+    const updated = await updateChat(chat.id, restored
+      ? { recapPending: false }
+      : { agentSessionId: null, recapPending: true });
+    if (updated) emitWorkbenchChat(chat.workspaceId, rowToChat(updated));
+    const base = archived ? 'This session was restored onto a new sandbox.' : SANDBOX_RESTORED_NOTE;
+    const text = `${base} ${restored ? AGENT_MEMORY_RESTORED_NOTE : AGENT_MEMORY_RECAP_NOTE}`;
     const stored = await appendEvents(chat.id, [{
       turn: chat.turnCount,
-      event: { type: 'system', subtype: 'sandbox_recovered', text: SANDBOX_RESTORED_NOTE },
+      event: { type: 'system', subtype: archived ? 'sandbox_restored' : 'sandbox_recovered', text },
     }]);
     emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
   }

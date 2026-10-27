@@ -36,6 +36,7 @@ import type {
 import type { ExhaustedQuotaRecord } from '../services/selfHosted/credentials.js';
 import {
   pgTable,
+  customType,
   text,
   timestamp,
   jsonb,
@@ -1936,6 +1937,7 @@ export const workbenches = pgTable(
     sandboxId: text('sandbox_id'),
     /** `WorkbenchSandboxState`. */
     sandboxState: text('sandbox_state').notNull().default('none'),
+    memoryRestorePending: text('memory_restore_pending').$type<'lost' | 'archive'>(),
     /** The fleet host that took the sandbox — an authorization input for a credential pull. */
     fleetHost: text('fleet_host'),
     /** `WorkbenchStatus`. */
@@ -1978,6 +1980,8 @@ export const workbenchChats = pgTable(
     effort: text('effort'),
     planMode: boolean('plan_mode').notNull().default(false),
     agentSessionId: text('agent_session_id'),
+    recapPending: boolean('recap_pending').notNull().default(false),
+    agentBackup: jsonb('agent_backup').$type<{ sessionId: string; path: string; byteLen: number; generation: string; capped?: boolean }>(),
     /** `WorkbenchChatStatus`. */
     status: text('status').notNull().default('idle'),
     statusMessage: text('status_message'),
@@ -1998,6 +2002,27 @@ export const workbenchChats = pgTable(
       .on(t.status)
       .where(sql`${t.status} = 'running'`),
   })
+);
+
+const backupBytes = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+  fromDriver: (value) => Buffer.from(value),
+});
+
+export const workbenchAgentBackups = pgTable(
+  'workbench_agent_backups',
+  {
+    chatId: text('chat_id').notNull().references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    agent: text('agent').notNull(),
+    sessionId: text('session_id').notNull(),
+    seq: integer('seq').notNull(),
+    startOffset: bigint('start_offset', { mode: 'number' }).notNull(),
+    data: backupBytes('data').notNull(),
+    byteLen: integer('byte_len').notNull(),
+    sha256: text('sha256').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.chatId, t.sessionId, t.seq] }) }),
 );
 
 /** The transcript, append-only. The primary key is the paging index. */

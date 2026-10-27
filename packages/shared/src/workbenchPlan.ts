@@ -48,6 +48,7 @@ export function workbenchTurnPrompt(input: {
   hasPullRequest?: boolean;
   /** A chat that continues a local conversation: where it came from and the box's repo folder. */
   imported?: { root: string; repoDir: string } | null;
+  recap?: string;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -62,7 +63,7 @@ export function workbenchTurnPrompt(input: {
     ? buildAutoCreatePrInstructions()
     : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
-  const instructions = [actionInstructions, networkNote, autoPrNote, importNote].filter(Boolean).join('\n\n');
+  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, input.recap].filter(Boolean).join('\n\n');
   if (!instructions) return { prompt: input.text };
   if (input.agent === 'codex') return { prompt: `${instructions}\n\n---\n\n${input.text}` };
   // A Create PR turn also puts its instructions in Claude's prompt. In a system

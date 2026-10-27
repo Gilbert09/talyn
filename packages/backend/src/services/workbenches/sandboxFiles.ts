@@ -46,7 +46,7 @@ function dirOf(path: string): string {
 export async function writeSandboxFiles(
   wb: WorkbenchRow,
   files: SandboxFile[],
-  opts: { before?: string; after?: string; timeoutMs?: number; diskRecovery?: boolean } = {},
+  opts: { before?: string; after?: string; timeoutMs?: number; diskRecovery?: boolean; env?: Record<string, string> } = {},
 ): Promise<void> {
   const steps: Array<{ line: (v: string) => string; data: string } | { line: () => string; data: null }> = [];
   for (const file of files) {
@@ -91,7 +91,7 @@ export async function writeSandboxFiles(
     if (lines.length === 1) continue;
     const r = await runCapture(wb, lines.join('\n'), {
       cwd: '/',
-      env: exec.env,
+      env: { ...opts.env, ...exec.env },
       timeoutMs: opts.timeoutMs ?? 30_000,
       quiet: true,
       ...(opts.diskRecovery === false ? { diskRecovery: false } : {}),
