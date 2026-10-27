@@ -103,6 +103,7 @@ export function withoutDiskProbe(stderr: string): string {
 export function grownDiskMib(probe: DiskProbe, currentDiskMib?: number | null): number | null {
   const need = GROW_TARGET_FREE_BYTES - probe.availBytes;
   if (need <= 0) return null;
-  const current = currentDiskMib && currentDiskMib > 0 ? currentDiskMib : Math.ceil(probe.sizeBytes / (1024 * 1024));
+  // A repo golden can be larger than the record's diskMib, so the measured size wins when bigger.
+  const current = Math.max(currentDiskMib && currentDiskMib > 0 ? currentDiskMib : 0, Math.ceil(probe.sizeBytes / (1024 * 1024)));
   return current + Math.ceil(need / (1024 * 1024));
 }

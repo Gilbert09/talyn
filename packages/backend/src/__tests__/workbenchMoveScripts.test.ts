@@ -361,6 +361,8 @@ describe('disk probe and grow size', () => {
     [GIB, 16384, 16384 + 7 * 1024],
     [0, undefined, 16384 + 8 * 1024],
     [GROW_TARGET_FREE_BYTES, 16384, null],
+    // A repo golden larger than the record: the measured 16 GiB wins over the record's 4096.
+    [GIB, 4096, 16384 + 7 * 1024],
   ])('with %d free on %s MiB grows to %s MiB', (avail, current, expected) => {
     expect(grownDiskMib({ availBytes: avail, sizeBytes: 16 * GIB }, current)).toBe(expected);
   });
