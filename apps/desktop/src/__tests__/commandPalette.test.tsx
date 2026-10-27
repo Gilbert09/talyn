@@ -4,7 +4,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Features, Workbench } from '@talyn/shared';
+import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import { CommandPalette } from '../renderer/components/CommandPalette';
 import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
 import { clearShortcuts, formatKeys, registerShortcuts } from '../renderer/lib/shortcuts';
@@ -60,6 +60,7 @@ beforeEach(() => {
     wb('oslo', { repoFullName: 'acme/api' }),
     wb('gone', { status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }),
   ]);
+  useWorkbenchStore.setState({ chats: {}, unread: {} });
   useNavigationStore.getState().navigate({ view: 'home' });
   useNavigationStore.setState({ paletteOpen: true });
   unregister = registerShortcuts(buildAppShortcuts());
@@ -85,6 +86,39 @@ describe('CommandPalette', () => {
     expect(screen.getByText('oslo')).toBeInTheDocument();
     expect(screen.getByText('acme/web')).toBeInTheDocument();
     expect(screen.queryByText('gone')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['running', 'Working', 'text-warning'],
+    ['error', 'Failed to start', 'text-destructive'],
+    ['pr open', '#12 open, waiting on checks or review', 'text-success'],
+  ])('shows the sidebar state icon for a %s session', (kind, label, color) => {
+    if (kind === 'running') {
+      useWorkbenchStore.getState().setChats('lisbon', [{ id: 'chat-1', status: 'running' } as WorkbenchChat]);
+    } else if (kind === 'error') {
+      useWorkbenchStore.getState().setWorkbenches('ws1', [wb('lisbon', { status: 'error' })]);
+    } else {
+      useWorkbenchStore.getState().setWorkbenches('ws1', [wb('lisbon', {
+        pr: { number: 12, url: 'https://example.com/pr/12', state: 'open', mergeable: 'unknown', ciStatus: 'pending' },
+      })]);
+    }
+
+    render(<CommandPalette />);
+    expect(screen.getByLabelText(label)).toHaveClass(color);
+  });
+
+  it('orders sessions by latest update before search filtering and keeps ties in order', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [
+      wb('older', { repoFullName: 'acme/z', updatedAt: '2026-10-13T01:00:00Z' }),
+      wb('same-a', { repoFullName: 'acme/a', createdAt: '2026-10-13T01:00:00Z', updatedAt: '2026-10-13T03:00:00Z' }),
+      wb('latest', { repoFullName: 'acme/z', updatedAt: '2026-10-13T04:00:00Z' }),
+      wb('same-b', { repoFullName: 'acme/a', createdAt: '2026-10-13T02:00:00Z', updatedAt: '2026-10-13T03:00:00Z' }),
+    ]);
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'feat/' } });
+    expect(screen.getAllByText(/^(latest|same-a|same-b|older)$/).map((item) => item.textContent)).toEqual([
+      'latest', 'same-a', 'same-b', 'older',
+    ]);
   });
 
   it('picking a workbench opens it and closes the palette', () => {

@@ -1,12 +1,16 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { GitPullRequest, History, Home, Settings, Workflow } from 'lucide-react';
-import { codeReviewOffered, mcpServersOffered, workbenchDisplayName, workbenchesOffered } from '@talyn/shared';
+import { codeReviewOffered, mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
+import { sessionPr, sessionState } from '../lib/sessionState';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
+import { usePullRequestStore } from '../stores/pullRequests';
+import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewWorkbench } from './workbench/new/openNewWorkbench';
+import { SessionStateIcon } from './workbench/WorkbenchBadges';
 import {
   CommandDialog,
   CommandEmpty,
@@ -64,7 +68,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   useSyncExternalStore(subscribeVersion, readVersion);
 
   const workbenches = useMemo(
-    () => groupByRepository(all.filter((w) => !isArchived(w))).flatMap((g) => g.items),
+    () => groupByRepository(all.filter((w) => !isArchived(w)))
+      .flatMap((g) => g.items)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [all]
   );
 
@@ -119,18 +125,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         <CommandEmpty>Nothing matches.</CommandEmpty>
         {workbenchesOffered(features) && workbenches.length > 0 && (
           <CommandGroup heading="Sessions">
-            {workbenches.map((wb) => {
-              return (
-                <CommandItem
-                  key={wb.id}
-                  value={`session ${workbenchDisplayName(wb)} ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
-                  onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))}
-                >
-                  <span className="truncate">{workbenchDisplayName(wb)}</span>
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">{wb.repoFullName}</span>
-                </CommandItem>
-              );
-            })}
+            {workbenches.map((wb) => (
+              <PaletteSessionItem key={wb.id} workbench={wb} onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))} />
+            ))}
           </CommandGroup>
         )}
         <CommandGroup heading="Navigate">
@@ -159,5 +156,27 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         )}
       </CommandList>
     </CommandDialog>
+  );
+}
+
+function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onSelect: () => void }) {
+  const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
+  const unread = useWorkbenchStore((s) => s.unread);
+  const pr = usePullRequestStore((s) =>
+    workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
+  );
+  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr));
+
+  return (
+    <CommandItem
+      value={`session ${workbenchDisplayName(workbench)} ${workbench.name} ${workbench.branch} ${workbench.repoFullName} ${workbench.id}`}
+      onSelect={onSelect}
+    >
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        <SessionStateIcon state={state} />
+      </span>
+      <span className="truncate">{workbenchDisplayName(workbench)}</span>
+      <span className="truncate font-mono text-[11px] text-muted-foreground">{workbench.repoFullName}</span>
+    </CommandItem>
   );
 }
