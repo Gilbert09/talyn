@@ -35,7 +35,7 @@ import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/w
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, localRuntimeError, movingError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
-import { startStaleGoldenMove } from '../services/workbenches/move.js';
+import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
@@ -616,10 +616,13 @@ export function workbenchRoutes(): Router {
           : {}),
         // Also server-only: the id the fleet gave the box, which its credential pull carries.
         ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
-        // The last generation a move used: a later box must not reuse it.
-        ...(typeof (row.settings as Record<string, unknown> | null)?.moveSandboxId === 'string'
-          ? { moveSandboxId: (row.settings as Record<string, unknown>).moveSandboxId }
-          : {}),
+        // A move's target, lease and backoff: server-only, and a later box must not reuse the target's generation.
+        ...Object.fromEntries(
+          MOVE_SETTINGS_KEYS.flatMap((key) => {
+            const value = (row.settings as Record<string, unknown> | null)?.[key];
+            return value === undefined ? [] : [[key, value]];
+          }),
+        ),
         ...(settings.internetAccess === undefined && row.settings?.internetAccess !== undefined
           ? { internetAccess: row.settings.internetAccess }
           : {}),

@@ -65,6 +65,7 @@ import {
   getChat,
   getCheckpoint,
   getWorkbench,
+  requeueTurn,
   rowToChat,
   runningChats,
   updateChat,
@@ -188,6 +189,11 @@ export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
   return true;
 }
 
+/** Tests only: follow a turn another call already claimed, as `sendMessage` would. */
+export function launchTurnLoopForTests(chatId: string, first: { message: WorkbenchQueuedMessage; turn: number }): void {
+  launchTurnLoop(chatId, first);
+}
+
 function launchTurnLoop(chatId: string, first: { message: WorkbenchQueuedMessage; turn: number }): void {
   // Off the request's owner scope: by the time this runs, that transaction has
   // committed and every query on it would fail.
@@ -202,12 +208,12 @@ async function runTurnLoop(
 ): Promise<void> {
   let next: { message: WorkbenchQueuedMessage; turn: number } | null = first;
   while (next) {
-    let outcome = await runOneTurn(chatId, next.message, next.turn);
-    // T3: a turn that failed on a full disk runs once more after a grow or a move.
-    if (outcome.diskFull && !outcome.cancelled) {
-      const recovered = await recoverTurnFromDiskFull(chatId);
-      if (recovered) outcome = await runOneTurn(chatId, next.message, next.turn, { retry: true });
-    }
+    const outcome = await runOneTurn(chatId, next.message, next.turn);
+    // Back in the queue: the move that is running starts it when it ends.
+    if (outcome.requeued) return;
+    // T3: a turn that failed on a full disk is not run again (its side effects
+    // could repeat); the box is made usable and the user sends it again.
+    if (outcome.diskFull && !outcome.cancelled) await recoverTurnFromDiskFull(chatId);
     const fin = await finishTurn(chatId, {
       finalStatus: outcome.status,
       statusMessage: outcome.statusMessage,
@@ -249,18 +255,36 @@ interface TurnOutcome {
   cancelled: boolean;
   /** The turn failed because the box's disk is full. */
   diskFull?: boolean;
+  /** The workbench was moving: the message went back to the queue and nothing ran. */
+  requeued?: boolean;
 }
 
-/** Grow the disk or move the session after a turn failed on a full disk. True when the turn can run again. */
-async function recoverTurnFromDiskFull(chatId: string): Promise<boolean> {
+export const DISK_FULL_MOVED_NOTE =
+  'The sandbox ran out of disk space, so Talyn moved this session to a fresh sandbox. Send your message again to continue.';
+export const DISK_FULL_GROWN_NOTE =
+  'The sandbox ran out of disk space, so Talyn gave it more. Send your message again to continue.';
+
+/** After a turn failed on a full disk: grow the disk or move the session, and say so. */
+async function recoverTurnFromDiskFull(chatId: string): Promise<void> {
   try {
     const chat = await getChat(chatId);
     const wb = chat ? await getWorkbench(chat.workbenchId) : null;
-    if (!wb || wb.status !== 'ready') return false;
-    return (await growOrMove(wb, 'disk_full', { ownerChatId: chatId })).ok;
+    if (!chat || !wb || wb.status !== 'ready') return;
+    const recovered = await growOrMove(wb, 'disk_full', { ownerChatId: chatId });
+    if (!recovered.ok) return;
+    const stored = await appendEvents(chatId, [
+      {
+        turn: chat.turnCount,
+        event: {
+          type: 'system',
+          subtype: 'sandbox_disk_full',
+          text: recovered.action === 'moved' ? DISK_FULL_MOVED_NOTE : DISK_FULL_GROWN_NOTE,
+        },
+      },
+    ]);
+    emitWorkbenchEvents(chat.workspaceId, chatId, stored);
   } catch (err) {
     console.warn(`[workbench] recovering chat ${chatId} from a full disk failed:`, err);
-    return false;
   }
 }
 
@@ -328,23 +352,29 @@ function errorResultEvent(subtype: string, text: string): Record<string, unknown
   return { type: 'result', subtype, is_error: true, result: text };
 }
 
-async function runOneTurn(
-  chatId: string,
-  message: WorkbenchQueuedMessage,
-  turn: number,
-  opts: { retry?: boolean } = {},
-): Promise<TurnOutcome> {
+async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number): Promise<TurnOutcome> {
   const chat = await getChat(chatId);
   if (!chat) return { status: 'error', statusMessage: 'Chat not found', cancelled: false };
+  // A move claimed the workbench between this turn's claim and now: queue the
+  // message again rather than fail it. Nothing has been written for the turn yet.
+  const early = await getWorkbench(chat.workbenchId);
+  if (early?.status === 'moving') {
+    const requeued = await requeueTurn(chatId, message);
+    if (requeued) {
+      emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+      // The move may have released already, and looked at this chat while it was still running.
+      if ((await getWorkbench(chat.workbenchId))?.status === 'ready') void startQueuedIfIdle(chatId).catch(() => false);
+      return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
+    }
+  }
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
-  // A retry runs the same message again; the transcript already shows it.
-  if (!opts.retry) events.add(userMessageEvent(message));
+  events.add(userMessageEvent(message));
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
   try {
-    let wb = await getWorkbench(chat.workbenchId);
+    let wb = early;
     if (!wb || wb.status !== 'ready' || !wb.sandboxId) {
       throw new WorkbenchError('The session is not ready.', 409, 'not_ready');
     }
@@ -497,8 +527,9 @@ async function runOneTurn(
         : `The agent exited with code ${outcome.exitCode}.`);
     if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
     await events.flush();
-    const diskFull = !opts.retry && isDiskFullText(`${parserResult?.text ?? ''}\n${outcome.stderrTail}`);
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
+    // Not matched against the agent's text or stderr: only a failure Talyn's
+    // own exec or the fleet reports says the disk is full (see the catch).
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
   } catch (err) {
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (err instanceof FleetRunNotFoundError) {
@@ -510,7 +541,7 @@ async function runOneTurn(
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
     events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
     await events.flush();
-    const diskFull = !opts.retry && isDiskFullError(err);
+    const diskFull = isDiskFullError(err);
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
   } finally {
     liveTurns.delete(chatId);

@@ -122,6 +122,20 @@ export function setTerminalOpenerForTests(fn: Opener | null): void {
   openerOverride = fn;
 }
 
+/** Terminals this process holds open, per workbench, as their close functions. */
+const openTerminals = new Map<string, Set<(code: number, reason: string) => void>>();
+
+/**
+ * Close every terminal this process holds for a workbench, before its box is
+ * replaced. 1012 tells the client to reconnect, and a reconnect is refused
+ * with 1013 until the session is ready again. Returns how many were open.
+ */
+export function closeWorkbenchTerminals(workbenchId: string): number {
+  const closers = [...(openTerminals.get(workbenchId) ?? [])];
+  for (const close of closers) close(1012, 'the session is moving to a fresh sandbox');
+  return closers.length;
+}
+
 function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): void {
   let phase: 'auth' | 'opening' | 'open' | 'closed' = 'auth';
   let session: TerminalSession | null = null;
@@ -132,6 +146,7 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
   const close = (code: number, reason: string) => {
     if (phase === 'closed') return;
     phase = 'closed';
+    openTerminals.get(workbenchId)?.delete(close);
     clearTimeout(handshakeTimer);
     clearTimeout(expiryTimer);
     session?.close();
@@ -223,6 +238,9 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
       }
       session = opened;
       phase = 'open';
+      const held = openTerminals.get(workbenchId) ?? new Set();
+      held.add(close);
+      openTerminals.set(workbenchId, held);
       recordWorkbenchEvent(row, 'terminal_open', `terminal session ${opts.session}`);
       for (const chunk of backlog.splice(0)) opened.write(chunk);
     } catch (err) {

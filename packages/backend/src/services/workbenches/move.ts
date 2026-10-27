@@ -2,13 +2,7 @@ import { shellQuote, WORKBENCH_IMPORT_MAX_BYTES } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError, type FleetSandbox } from '../selfHosted/client.js';
 import { refreshDiffStat } from './changes.js';
-import {
-  DISK_PROBE_SCRIPT,
-  grownDiskMib,
-  LOW_DISK_BYTES,
-  parseDiskProbe,
-  type DiskProbe,
-} from './execFailures.js';
+import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { userFacingError } from './errors.js';
 import { publicWorkbench } from './prLink.js';
@@ -24,28 +18,34 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
-import { startScript, stopAllScripts } from './scripts.js';
+import { runningScriptNames, startScript, stopAllScripts } from './scripts.js';
 import {
   appendEvents,
   claimMove,
   commitMove,
   getWorkbench,
+  heartbeatMove,
   listChats,
-  movingWorkbenches,
+  mergeWorkbenchSettings,
   otherRunningChats,
+  recordMoveFailure,
   releaseMove,
   rowToChat,
+  setMoveTargetHost,
+  staleMovingWorkbenches,
   updateChat,
   updateWorkbench,
   type ChatRow,
   type WorkbenchRow,
 } from './store.js';
+import { closeWorkbenchTerminals } from './terminalBridge.js';
 
 /**
  * Moving a session to a fresh box: the newest golden for its repository, with
- * the branch, the uncommitted changes, small ignored files (`.env` and the
- * like) and every chat's agent conversation carried over. Running processes
- * do not survive, and the system note says so.
+ * every local branch, the stash, the turn checkpoints, the uncommitted
+ * changes, small ignored files (`.env` and the like) and every chat's agent
+ * conversation carried over. Running processes do not survive, and the chat
+ * note says so.
  *
  * # Why
  *
@@ -53,27 +53,34 @@ import {
  * create, and a resume always reuses the box's own disk. So a session keeps
  * its golden for life, and an old golden can be full.
  *
- * # The old box's disk is never written
+ * # The old box's disk is never written, and nothing is published
  *
- * It may be full, and a write that fails half way is the thing to avoid. The
- * export runs with `TMPDIR`, the git index and the staging folder on
- * `/dev/shm` (tmpfs), `GIT_OPTIONAL_LOCKS=0`, and pushes the commits rather
- * than writing a bundle: a push writes no objects. The staged files then
- * cross to the new box in chunks the backend holds one at a time.
+ * The export runs with `TMPDIR`, the git index and the staging folder on
+ * `/dev/shm` (tmpfs) and `GIT_OPTIONAL_LOCKS=0`. Commits travel as a git
+ * bundle streamed through Talyn, never as a push: a push of unpushed commits
+ * to a hidden ref on a public repository would publish them.
  *
  * # Never lose work
  *
- * The old box is deleted only after the new one has everything and the row
- * names it. Any failure before that keeps the old box, puts the status back
- * and deletes the half-made new one.
+ * The old box is deleted only after the row names the new one. Before that,
+ * any failure keeps the old box, puts the status back and deletes the
+ * half-made new one, after reading the row again in case a commit landed
+ * whose answer was lost. After it, nothing deletes the box the row names.
  *
  * # Concurrency
  *
- * One move per workbench, by a DB claim (`ready` → `moving`) rather than a
- * lock: a deploy overlaps two backend instances. A turn start reads the
- * workbench under a share lock and does not start while it is `moving`, and
- * the move reads the running chats only after its claim has committed, so
- * either the turn or the move sees the other.
+ * One move per workbench, by a DB claim (`ready` → `moving`) and a lease: the
+ * running move renews `settings.moveHeartbeatAt`, and the sweep undoes only a
+ * move whose lease has lapsed, so a live move on the other instance during a
+ * deploy overlap is never touched. A turn start reads the workbench under a
+ * share lock and does not start while it is `moving`, and the move reads the
+ * running chats only after its claim has committed.
+ *
+ * # Known gap
+ *
+ * A Create PR or checkout that started before the claim keeps running on the
+ * old box. No in-flight marker exists for them; their pushes still reach
+ * GitHub, but a commit made after the export is not in the new box.
  */
 
 export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full';
@@ -86,7 +93,7 @@ const REASON_TEXT: Record<MoveReason, string> = {
 
 export type MoveResult =
   | { moved: true; row: WorkbenchRow }
-  | { moved: false; reason: 'not_applicable' | 'busy' | 'failed'; message?: string };
+  | { moved: false; reason: 'not_applicable' | 'busy' | 'blocked' | 'failed'; message?: string };
 
 export interface MoveOptions {
   /** The chat whose turn asked for the move. It is running, and is not a reason to refuse. */
@@ -94,6 +101,17 @@ export interface MoveOptions {
   /** Called with true once the claim is held, or false when the move will not happen. */
   onClaim?: (claimed: boolean) => void;
 }
+
+/** Settings keys only the server writes. A settings PATCH keeps them. */
+export const MOVE_SETTINGS_KEYS = [
+  'moveSandboxId',
+  'moveHeartbeatAt',
+  'moveTargetHost',
+  'moveFailedAt',
+  'moveFailures',
+  'movedForDiskTo',
+  'lowDiskNotedFor',
+] as const;
 
 // ============================================================================
 // Limits
@@ -126,8 +144,11 @@ export const MOVE_IGNORED_FILE_MAX_BYTES = 1 * MIB;
  */
 export const MOVE_IGNORED_TOTAL_MAX_BYTES = 16 * MIB;
 
-/** Ignored files skipped by name in the note; the rest are counted. */
+/** Large ignored files named in the manifest; the rest are counted. */
 const SKIPPED_NAMES_SHOWN = 50;
+
+/** Files counted per skipped folder, at most: the count is for the note, not worth a long walk. */
+const SKIPDIR_COUNT_MAX = 100_000;
 
 /** Dependency, build and cache folders. The setup script makes them again. */
 export const MOVE_SKIP_DIRS = [
@@ -156,8 +177,19 @@ const CHUNK_TIMEOUT_MS = 2 * 60_000;
 const CLONE_TIMEOUT_MS = 20 * 60_000;
 const IMPORT_TIMEOUT_MS = 10 * 60_000;
 
-/** After a failed move, automatic moves for that session wait this long. */
-const FAILED_MOVE_BACKOFF_MS = 30 * 60_000;
+/**
+ * The lease. A move renews it every 30 s; a sweep treats a move as abandoned
+ * after six missed renewals, which is longer than any single step blocks the
+ * event loop and shorter than a user would wait for a stuck status to clear.
+ */
+const LEASE_RENEW_MS = 30_000;
+export const LEASE_STALE_SECONDS = 180;
+/** How often the sweep looks for abandoned moves. */
+export const MOVE_SWEEP_INTERVAL_MS = 60_000;
+
+/** After the nth failed or refused move, automatic moves wait 30 min × 2^(n-1), at most a day. */
+const BACKOFF_BASE_MS = 30 * 60_000;
+const BACKOFF_MAX_MS = 24 * 60 * 60_000;
 
 /** How often a session's golden is asked about at most. One GET each time. */
 const STALE_CHECK_INTERVAL_MS = 3 * 60_000;
@@ -165,11 +197,6 @@ const STALE_CHECK_INTERVAL_MS = 3 * 60_000;
 // ============================================================================
 // Names
 // ============================================================================
-
-/** The hidden remote ref that carries the session's commits across. */
-export function moveRef(workbenchId: string): string {
-  return `refs/talyn/move/${workbenchId}`;
-}
 
 /** Where the old box stages the export. tmpfs, never the rootfs. */
 export function moveStagingDir(workbenchId: string): string {
@@ -190,9 +217,21 @@ export function moveExportEnv(workbenchId: string): Record<string, string> {
   };
 }
 
-/** The staged files, in the order the import applies them. */
-export const MOVE_ARTIFACTS = ['staged.patch.gz', 'unstaged.patch.gz', 'ignored.tgz', 'agent.tgz'] as const;
+/** The staged files, in the order the import uses them. */
+export const MOVE_ARTIFACTS = [
+  'repo.bundle',
+  'staged.patch.gz',
+  'unstaged.patch.gz',
+  'filtered.tgz',
+  'ignored.tgz',
+  'agent.tgz',
+] as const;
 export type MoveArtifact = (typeof MOVE_ARTIFACTS)[number];
+/** Always made by the export, even when empty. A manifest without them is incomplete. */
+const REQUIRED_ARTIFACTS: readonly MoveArtifact[] = ['staged.patch.gz', 'unstaged.patch.gz'];
+
+/** The refs a move carries: every branch, the stash, the turn checkpoints. */
+const CARRIED_REF = /^refs\/(?:heads\/[^\s~^:?*[\\]+|stash|talyn\/checkpoints\/[^\s~^:?*[\\]+)$/;
 
 export interface MoveSession {
   agent: 'claude' | 'codex';
@@ -205,28 +244,33 @@ const SESSION_ID = /^[A-Za-z0-9-]{8,80}$/;
 // Scripts
 // ============================================================================
 
-/** Exit codes of the export script. */
+/** Exit codes of the export script. 41 and 42 refuse the move rather than fail it. */
 export const MOVE_EXPORT_EXIT: Record<number, string> = {
   30: 'could not stage the work in memory',
   31: 'could not read the repository',
-  32: 'could not push the commits to GitHub',
   33: 'could not read the uncommitted changes',
   34: 'could not pack the ignored files',
   35: 'could not pack the agent conversations',
+  36: 'could not bundle the commits',
   40: 'the work is too large to move',
+  41: 'a rebase, merge, cherry-pick or bisect is in progress',
+  42: 'there are commits with Git LFS files that are not pushed',
 };
+const BLOCKING_EXITS = new Set([41, 42]);
 
 /**
  * The old box's side. Writes only under /dev/shm (staging, index, temp files)
- * and pushes HEAD to `moveRef`. Prints a manifest:
+ * and prints a manifest, one fact per line, ending in END:
  *   HEAD <sha> · BRANCH <b64> · UPSTREAM <b64>
- *   FILE <name> <bytes> <sha256>   one per staged file
- *   SKIPPED <b64 path> · SKIPPED_COUNT <n>   ignored files left behind
- *   MISSING_SESSION <id>   a chat's conversation file was not found
+ *   REF <sha> <ref> [<upstream>]          every branch, the stash, each checkpoint
+ *   FILE <name> <bytes> <sha256>          one per staged file
+ *   FILTERED_DELETED <b64 path>           a filtered file deleted in the work tree
+ *   SKIPPED <b64 path> · SKIPPED_COUNT <n>   ignored files too large to copy
+ *   SKIPDIR <b64 path> <files>            a dependency or build folder left behind
+ *   MISSING_SESSION <id>                  a chat's conversation file was not found
  */
 export function moveExportScript(input: { workbenchId: string; sessions: MoveSession[] }): string {
   const dir = shellQuote(moveStagingDir(input.workbenchId));
-  const ref = shellQuote(moveRef(input.workbenchId));
   const skipCase = MOVE_SKIP_DIRS.map((d) => `*/${d}/*`).join('|');
   const prune = MOVE_SKIP_DIRS.map((d) => `-name ${shellQuote(d)}`).join(' -o ');
   const sessions = input.sessions.filter((s) => SESSION_ID.test(s.sessionId));
@@ -234,7 +278,7 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     s.agent === 'codex'
       ? [
           `found=; while IFS= read -r -d '' f; do printf '%s\\0' "\${f#/}" >> "$d/agent.list"; found=1; done < <(find "\${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name ${shellQuote(`*${s.sessionId}*.jsonl`)} -print0 2>/dev/null)`,
-          `[ -n "$found" ] || echo ${shellQuote(`MISSING_SESSION ${s.sessionId}`)}`,
+          `[ -n "$found" ] || echo ${shellQuote(`MISSING_SESSION ${s.sessionId}`)} >> "$d/manifest.extra"`,
         ]
       : [
           `f=$(find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name ${shellQuote(`${s.sessionId}.jsonl`)} -print -quit 2>/dev/null)`,
@@ -243,54 +287,91 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
           // Claude Code keeps a session's subagent and tool output beside it.
           '  side=${f%.jsonl}',
           `  if [ -d "$side" ]; then printf '%s\\0' "\${side#/}" >> "$d/agent.list"; fi`,
-          `else echo ${shellQuote(`MISSING_SESSION ${s.sessionId}`)}; fi`,
+          `else echo ${shellQuote(`MISSING_SESSION ${s.sessionId}`)} >> "$d/manifest.extra"; fi`,
         ],
   );
   return [
     'set -u',
     `d=${dir}`,
     `cap=${MOVE_TRANSFER_MAX_BYTES}`,
-    'rm -rf -- "$d" && mkdir -p -- "$d" || exit 30',
+    'rm -rf -- "$d" && mkdir -p -- "$d" && : > "$d/manifest.extra" || exit 30',
+    'b64() { printf %s "$1" | base64 -w 0; }',
     'allzero() { for c in "$@"; do [ "$c" = 0 ] || return 1; done; }',
-    // A file one byte over the cap means it was cut, so it is refused, not sent.
+    // A file one byte over the cap was cut, so it is refused, not sent.
     'fits() { [ "$(stat -c %s -- "$d/$1")" -le "$cap" ] || { echo "TOO_LARGE $1" >&2; exit 40; }; }',
     'capped() { head -c $((cap + 1)) > "$d/$1"; }',
+    'gitpath() { env -u GIT_INDEX_FILE git rev-parse --git-path "$1"; }',
     // The REAL index, read only: the env points GIT_INDEX_FILE at /dev/shm.
-    'real_index=$(env -u GIT_INDEX_FILE git rev-parse --git-path index) || exit 31',
+    'real_index=$(gitpath index) || exit 31',
+    // Any object git writes (the empty blob `add -N` records) goes to /dev/shm;
+    // the real store is read as an alternate.
+    'objects=$(cd "$(gitpath objects)" && pwd) || exit 31',
+    'mkdir -p -- "$d/objects" || exit 30',
+    'export GIT_OBJECT_DIRECTORY="$d/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects"',
     'head=$(git rev-parse --verify HEAD) || exit 31',
     'branch=$(git symbolic-ref --short -q HEAD || true)',
     `upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)`,
-    // Commits: a push sends a pack over the wire and writes no objects here.
-    `git push --no-verify --force --quiet origin "$head":${ref} >&2 || exit 32`,
+    // The state of these lives in .git and does not travel.
+    'for s in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do',
+    '  if [ -e "$(gitpath "$s")" ]; then echo "IN_PROGRESS $s" >&2; exit 41; fi',
+    'done',
+    // Commits: a bundle of every carried ref, less what the remote already has.
+    `git for-each-ref --format='%(objectname) %(refname) %(upstream:short)' refs/heads refs/stash refs/talyn/checkpoints > "$d/refs.txt" || exit 31`,
+    'refs=(); while IFS= read -r r; do refs+=("$r"); done < <(cut -d " " -f 2 "$d/refs.txt")',
+    'if [ "${#refs[@]}" -gt 0 ] && [ "$(git rev-list --count "${refs[@]}" --not --remotes)" -gt 0 ]; then',
+    // Unpushed commits that add LFS pointers: their objects are only in .git/lfs.
+    '  if [ -d "$(gitpath lfs)" ] && git log --format= -p --no-textconv --no-ext-diff "${refs[@]}" --not --remotes 2>/dev/null | grep -q "^+version https://git-lfs.github.com/spec/v1"; then',
+    '    echo LFS_UNPUSHED >&2; exit 42',
+    '  fi',
+    '  git bundle create - "${refs[@]}" --not --remotes | capped repo.bundle',
+    '  rc="${PIPESTATUS[*]}"; fits repo.bundle; allzero $rc || exit 36',
+    'fi',
+    // Paths with a clean/smudge filter (LFS, git-crypt, uv.lock) travel as raw
+    // bytes: a diff would carry the cleaned text, which does not apply.
+    '{ GIT_INDEX_FILE="$real_index" git diff --name-only -z HEAD -- && GIT_INDEX_FILE="$real_index" git ls-files -z -o --exclude-standard; } > "$d/changed.list" || exit 33',
+    'excl=(); : > "$d/filtered.list"',
+    "while IFS= read -r -d '' p && IFS= read -r -d '' a && IFS= read -r -d '' v; do",
+    "  case \"$v\" in unspecified|unset|'') continue ;; esac",
+    '  excl+=(":(exclude,literal)$p")',
+    `  if [ -e "$p" ] || [ -L "$p" ]; then printf '%s\\0' "$p" >> "$d/filtered.list"; else printf 'FILTERED_DELETED %s\\n' "$(b64 "$p")" >> "$d/manifest.extra"; fi`,
+    'done < <(GIT_INDEX_FILE="$real_index" git check-attr -z --stdin filter < "$d/changed.list")',
+    'if [ -s "$d/filtered.list" ]; then',
+    '  tar -czf - --null --no-recursion -T "$d/filtered.list" | capped filtered.tgz',
+    '  rc="${PIPESTATUS[*]}"; fits filtered.tgz; allzero $rc || exit 33',
+    'fi',
     // Staged changes, against HEAD, from the real index.
-    'GIT_INDEX_FILE="$real_index" git diff --cached --binary --no-ext-diff --no-textconv --no-color HEAD -- | gzip -c | capped staged.patch.gz',
+    'GIT_INDEX_FILE="$real_index" git diff --cached --binary --no-ext-diff --no-textconv --no-color HEAD -- . ${excl[@]+"${excl[@]}"} | gzip -c | capped staged.patch.gz',
     'rc="${PIPESTATUS[*]}"; fits staged.patch.gz; allzero $rc || exit 33',
     // Unstaged and untracked: a copy of the index in /dev/shm, untracked files
     // added as intent-to-add (no blobs written), then the work tree against it.
     'rm -f -- "$GIT_INDEX_FILE"',
     'if [ -f "$real_index" ]; then cp -- "$real_index" "$GIT_INDEX_FILE" || exit 33; fi',
     'git ls-files -z -o --exclude-standard | xargs -0 -r git add -N -- || exit 33',
-    'git diff --binary --no-ext-diff --no-textconv --no-color -- | gzip -c | capped unstaged.patch.gz',
+    'git diff --binary --no-ext-diff --no-textconv --no-color -- . ${excl[@]+"${excl[@]}"} | gzip -c | capped unstaged.patch.gz',
     'rc="${PIPESTATUS[*]}"; fits unstaged.patch.gz; allzero $rc || exit 33',
     'rm -f -- "$GIT_INDEX_FILE"',
     // Small ignored files. Each costs its size in 512-byte blocks plus a
-    // 512-byte header, as in the tar.
+    // 512-byte header, as in the tar. Dependency folders are counted, not sent.
     `skipdir() { case "/$1/" in ${skipCase}) return 0 ;; esac; return 1; }`,
+    `skipped_dir() { printf 'SKIPDIR %s %s\\n' "$(b64 "$1")" "$(find "$1" \\( -type f -o -type l \\) 2>/dev/null | head -n ${SKIPDIR_COUNT_MAX} | wc -l)" >> "$d/manifest.extra"; }`,
     'total=0; nskip=0',
     ': > "$d/ignored.list"; : > "$d/skipped.list"',
     `note_skip() { nskip=$((nskip + 1)); if [ "$nskip" -le ${SKIPPED_NAMES_SHOWN} ]; then printf '%s\\0' "$1" >> "$d/skipped.list"; fi; }`,
     'add_file() {',
-    '  skipdir "$1" && return 0',
+    '  if skipdir "$1"; then skipped_dir "$1"; return 0; fi',
     '  if [ -L "$1" ]; then size=0; elif [ -f "$1" ]; then size=$(stat -c %s -- "$1" 2>/dev/null || echo 0); else return 0; fi',
     '  cost=$(( (size + 511) / 512 * 512 + 512 ))',
     `  if [ "$size" -gt ${MOVE_IGNORED_FILE_MAX_BYTES} ] || [ $((total + cost)) -gt ${MOVE_IGNORED_TOTAL_MAX_BYTES} ]; then note_skip "$1"; return 0; fi`,
     `  total=$((total + cost)); printf '%s\\0' "$1" >> "$d/ignored.list"`,
     '}',
-    'while IFS= read -r -d \'\' e; do',
+    "while IFS= read -r -d '' e; do",
     '  case "$e" in',
     '    */)',
-    '      e=${e%/}; skipdir "$e" && continue',
-    `      while IFS= read -r -d '' f; do add_file "$f"; done < <(find "$e" -type d \\( ${prune} \\) -prune -o \\( -type f -o -type l \\) -print0 2>/dev/null) ;;`,
+    '      e=${e%/}',
+    '      if skipdir "$e"; then skipped_dir "$e"; continue; fi',
+    `      while IFS= read -r -d '' f; do`,
+    '        if [ -d "$f" ] && [ ! -L "$f" ]; then skipped_dir "$f"; else add_file "$f"; fi',
+    `      done < <(find "$e" -type d \\( ${prune} \\) -prune -print0 -o \\( -type f -o -type l \\) -print0 2>/dev/null) ;;`,
     '    *) add_file "$e" ;;',
     '  esac',
     // The real index, so tracked files never read as ignored ones.
@@ -307,16 +388,18 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     '  rc="${PIPESTATUS[*]}"; fits agent.tgz; allzero $rc || exit 35',
     'fi',
     // The manifest.
-    'b64() { printf %s "$1" | base64 -w 0; }',
     'printf "HEAD %s\\n" "$head"',
     'printf "BRANCH %s\\n" "$(b64 "$branch")"',
     'printf "UPSTREAM %s\\n" "$(b64 "$upstream")"',
+    'while IFS= read -r line; do [ -n "$line" ] && printf "REF %s\\n" "$line"; done < "$d/refs.txt"',
     `for name in ${MOVE_ARTIFACTS.join(' ')}; do`,
     '  [ -f "$d/$name" ] || continue',
     '  printf "FILE %s %s %s\\n" "$name" "$(stat -c %s -- "$d/$name")" "$(sha256sum -- "$d/$name" | cut -d " " -f 1)"',
     'done',
+    'cat "$d/manifest.extra"',
     'printf "SKIPPED_COUNT %s\\n" "$nskip"',
     `while IFS= read -r -d '' f; do printf "SKIPPED %s\\n" "$(b64 "$f")"; done < "$d/skipped.list"`,
+    'echo END',
   ].join('\n');
 }
 
@@ -328,105 +411,222 @@ export function moveReadChunkScript(path: string, offset: number, length: number
 /** Exit codes of the import script. */
 export const MOVE_IMPORT_EXIT: Record<number, string> = {
   20: 'the copied files did not match',
-  21: 'could not fetch the commits from GitHub',
-  22: 'could not check out the branch',
+  21: 'could not bring the commits into the new sandbox',
+  22: 'could not put the branches back',
   23: 'could not apply the staged changes',
   24: 'could not apply the unstaged changes',
-  25: 'could not unpack the ignored files',
+  25: 'could not unpack the ignored or filtered files',
   26: 'could not unpack the agent conversations',
 };
+
+export interface MoveRef {
+  name: string;
+  sha: string;
+  /** `origin/x`, or empty. */
+  upstream: string;
+}
 
 export interface MoveManifest {
   head: string;
   branch: string;
   upstream: string;
+  refs: MoveRef[];
   files: Array<{ name: MoveArtifact; size: number; sha256: string }>;
+  filteredDeleted: string[];
   skipped: string[];
   skippedCount: number;
+  skippedDirs: Array<{ path: string; files: number }>;
   missingSessions: string[];
 }
 
-/**
- * The new box's side, run in the repository after the clone: check every
- * copied file, put the branch at the moved commit with its upstream, apply
- * the staged then the unstaged changes, and unpack the ignored files and the
- * conversations.
- */
-export function moveImportScript(input: { workbenchId: string; manifest: MoveManifest }): string {
-  const { manifest } = input;
-  const has = (name: MoveArtifact) => manifest.files.some((f) => f.name === name);
-  const head = shellQuote(manifest.head);
-  const lines = [
-    'set -u',
-    `d=${shellQuote(moveImportDir(input.workbenchId))}`,
-    'trap \'rm -rf -- "$d"\' EXIT',
-    ...manifest.files.map(
-      (f) =>
-        `printf '%s  %s\\n' ${shellQuote(f.sha256)} "$d/${f.name}" | sha256sum -c --status || { echo ${shellQuote(`checksum mismatch: ${f.name}`)} >&2; exit 20; }`,
-    ),
-    `git fetch --no-tags --quiet origin ${shellQuote(moveRef(input.workbenchId))} || exit 21`,
-    `git cat-file -e ${shellQuote(`${manifest.head}^{commit}`)} || exit 21`,
-  ];
-  if (manifest.branch) {
-    const branch = shellQuote(manifest.branch);
-    lines.push(`git checkout --quiet -f -B ${branch} ${head} || exit 22`);
-    if (manifest.upstream.startsWith('origin/')) {
-      const remoteBranch = manifest.upstream.slice('origin/'.length);
-      const spec = shellQuote(`+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`);
-      lines.push(
-        `git config --get-all remote.origin.fetch | grep -qxF -e ${shellQuote('+refs/heads/*:refs/remotes/origin/*')} -e ${spec} || git config --add remote.origin.fetch ${spec}`,
-        `if git fetch --quiet origin ${spec} 2>/dev/null; then git branch --quiet --set-upstream-to=${shellQuote(manifest.upstream)} ${branch} || true; fi`,
-      );
-    } else {
-      lines.push(`git branch --unset-upstream ${branch} 2>/dev/null || true`);
-    }
-  } else {
-    lines.push(`git checkout --quiet -f --detach ${head} || exit 22`);
-  }
-  if (has('staged.patch.gz')) {
-    lines.push(
-      'gunzip -c "$d/staged.patch.gz" > "$d/staged.patch" || exit 23',
-      'if [ -s "$d/staged.patch" ]; then git apply --index --binary --whitespace=nowarn "$d/staged.patch" || exit 23; fi',
-    );
-  }
-  if (has('unstaged.patch.gz')) {
-    lines.push(
-      'gunzip -c "$d/unstaged.patch.gz" > "$d/unstaged.patch" || exit 24',
-      'if [ -s "$d/unstaged.patch" ]; then git apply --binary --whitespace=nowarn "$d/unstaged.patch" || exit 24; fi',
-    );
-  }
-  if (has('ignored.tgz')) lines.push('tar -xzf "$d/ignored.tgz" -C . || exit 25');
-  if (has('agent.tgz')) lines.push('tar -xzf "$d/agent.tgz" -C / || exit 26');
-  return lines.join('\n');
-}
+const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
+const SHA = /^[0-9a-f]{40,64}$/;
 
+/**
+ * The manifest, strictly: an unknown or malformed line, a missing required
+ * line or file, a duplicate, or no END means the export did not finish, and
+ * the move fails rather than carry part of the work.
+ */
 export function parseMoveManifest(stdout: string): MoveManifest | null {
   const out: MoveManifest = {
     head: '',
     branch: '',
     upstream: '',
+    refs: [],
     files: [],
+    filteredDeleted: [],
     skipped: [],
-    skippedCount: 0,
+    skippedCount: -1,
+    skippedDirs: [],
     missingSessions: [],
   };
-  const decode = (v: string | undefined) => (v ? Buffer.from(v, 'base64').toString('utf8') : '');
-  for (const line of stdout.split('\n')) {
-    const [kind, ...rest] = line.trim().split(' ');
-    if (kind === 'HEAD' && /^[0-9a-f]{40,64}$/.test(rest[0] ?? '')) out.head = rest[0];
-    else if (kind === 'BRANCH') out.branch = decode(rest[0]);
-    else if (kind === 'UPSTREAM') out.upstream = decode(rest[0]);
-    else if (kind === 'FILE') {
-      const name = rest[0] as MoveArtifact;
-      const size = Number(rest[1]);
-      if (MOVE_ARTIFACTS.includes(name) && Number.isSafeInteger(size) && size >= 0 && /^[0-9a-f]{64}$/.test(rest[2] ?? '')) {
-        out.files.push({ name, size, sha256: rest[2] });
+  const seen = new Set<string>();
+  const decode = (v: string): string | null => {
+    if (!B64.test(v)) return null;
+    const text = Buffer.from(v, 'base64').toString('utf8');
+    return /[\0\n]/.test(text) ? null : text;
+  };
+  const lines = stdout.split('\n').filter((l) => l !== '');
+  if (lines.at(-1) !== 'END') return null;
+  for (const line of lines.slice(0, -1)) {
+    const parts = line.split(' ');
+    const [kind, ...rest] = parts;
+    const once = (k: string) => {
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    };
+    switch (kind) {
+      case 'HEAD':
+        if (rest.length !== 1 || !SHA.test(rest[0]) || !once(kind)) return null;
+        out.head = rest[0];
+        break;
+      case 'BRANCH':
+      case 'UPSTREAM': {
+        const value = decode(rest[0] ?? '');
+        if (rest.length > 1 || value === null || !once(kind)) return null;
+        if (kind === 'BRANCH') out.branch = value;
+        else out.upstream = value;
+        break;
       }
-    } else if (kind === 'SKIPPED') out.skipped.push(decode(rest[0]));
-    else if (kind === 'SKIPPED_COUNT') out.skippedCount = Number(rest[0]) || 0;
-    else if (kind === 'MISSING_SESSION' && rest[0]) out.missingSessions.push(rest[0]);
+      case 'REF': {
+        const [sha, name, upstream = ''] = rest;
+        if (rest.length < 2 || rest.length > 3 || !SHA.test(sha) || !CARRIED_REF.test(name) || /\s/.test(upstream)) {
+          return null;
+        }
+        if (!once(`REF ${name}`)) return null;
+        out.refs.push({ name, sha, upstream });
+        break;
+      }
+      case 'FILE': {
+        const [name, sizeText, sha256] = rest;
+        const size = Number(sizeText);
+        if (
+          rest.length !== 3 ||
+          !MOVE_ARTIFACTS.includes(name as MoveArtifact) ||
+          !/^\d+$/.test(sizeText) ||
+          !Number.isSafeInteger(size) ||
+          !/^[0-9a-f]{64}$/.test(sha256) ||
+          !once(`FILE ${name}`)
+        ) {
+          return null;
+        }
+        out.files.push({ name: name as MoveArtifact, size, sha256 });
+        break;
+      }
+      case 'FILTERED_DELETED':
+      case 'SKIPPED': {
+        const path = rest.length === 1 ? decode(rest[0]) : null;
+        if (!path) return null;
+        (kind === 'SKIPPED' ? out.skipped : out.filteredDeleted).push(path);
+        break;
+      }
+      case 'SKIPPED_COUNT':
+        if (rest.length !== 1 || !/^\d+$/.test(rest[0]) || !once(kind)) return null;
+        out.skippedCount = Number(rest[0]);
+        break;
+      case 'SKIPDIR': {
+        const path = rest.length === 2 ? decode(rest[0]) : null;
+        if (!path || !/^\d+$/.test(rest[1])) return null;
+        out.skippedDirs.push({ path, files: Number(rest[1]) });
+        break;
+      }
+      case 'MISSING_SESSION':
+        if (rest.length !== 1 || !SESSION_ID.test(rest[0])) return null;
+        out.missingSessions.push(rest[0]);
+        break;
+      default:
+        return null;
+    }
   }
-  return out.head ? out : null;
+  if (!seen.has('HEAD') || !seen.has('BRANCH') || !seen.has('UPSTREAM') || out.skippedCount < 0) return null;
+  if (REQUIRED_ARTIFACTS.some((name) => !out.files.some((f) => f.name === name))) return null;
+  // The current branch must be one of the carried refs, at HEAD.
+  if (out.branch && !out.refs.some((r) => r.name === `refs/heads/${out.branch}` && r.sha === out.head)) return null;
+  return out;
+}
+
+/**
+ * The new box's side, run in the repository after the clone: check every
+ * copied file's size and sha256, bring the commits in from the bundle (and
+ * any tip it did not need from origin), put every carried ref back, check out
+ * the same branch with its upstream, apply the staged then the unstaged
+ * changes, then write the filtered files' raw bytes, the ignored files and
+ * the conversations.
+ */
+export function moveImportScript(input: { workbenchId: string; manifest: MoveManifest }): string {
+  const { manifest } = input;
+  const has = (name: MoveArtifact) => manifest.files.some((f) => f.name === name);
+  const q = shellQuote;
+  const lines = [
+    'set -u',
+    `d=${q(moveImportDir(input.workbenchId))}`,
+    'trap \'rm -rf -- "$d"\' EXIT',
+    ...manifest.files.flatMap((f) => [
+      `[ "$(stat -c %s -- "$d/${f.name}" 2>/dev/null)" = ${f.size} ] || { echo ${q(`size mismatch: ${f.name}`)} >&2; exit 20; }`,
+      `printf '%s  %s\\n' ${f.sha256} "$d/${f.name}" | sha256sum -c --status || { echo ${q(`checksum mismatch: ${f.name}`)} >&2; exit 20; }`,
+    ]),
+    // A shallow golden fetches a missing commit at depth 1; a full clone fetches it as it is.
+    'depth=; if [ "$(git rev-parse --is-shallow-repository)" = true ]; then depth=--depth=1; fi',
+    'have() { git cat-file -e "$1^{commit}" 2>/dev/null || git fetch --quiet --no-tags $depth origin "$1"; }',
+  ];
+  if (has('repo.bundle')) {
+    lines.push(
+      // The bundle's prerequisites: commits the old box had from the remote.
+      `sed -n '/^$/q; s/^-\\([0-9a-f]\\{40,64\\}\\).*/\\1/p' "$d/repo.bundle" > "$d/prereqs" || exit 21`,
+      'while read -r p; do have "$p" || exit 21; done < "$d/prereqs"',
+      `git fetch --quiet --no-tags "$d/repo.bundle" '+refs/*:refs/talyn-import/*' || exit 21`,
+    );
+  }
+  const shas = [...new Set([manifest.head, ...manifest.refs.map((r) => r.sha)])];
+  lines.push(...shas.map((sha) => `have ${sha} || exit 21`));
+  // Detached first, so the branch the clone checked out can move.
+  lines.push('git checkout --quiet --detach || exit 22');
+  for (const ref of manifest.refs) {
+    if (ref.name === 'refs/stash') continue;
+    lines.push(`git update-ref ${q(ref.name)} ${ref.sha} || exit 22`);
+  }
+  const stash = manifest.refs.find((r) => r.name === 'refs/stash');
+  if (stash) {
+    // Through `stash store`, so `git stash list` shows it: a bare ref has no reflog.
+    lines.push(`git update-ref -d refs/stash 2>/dev/null; git stash store -q -m 'Moved from the old sandbox' ${stash.sha} || exit 22`);
+  }
+  lines.push(`git for-each-ref --format='%(refname)' refs/talyn-import | while read -r r; do git update-ref -d "$r"; done`);
+  for (const ref of manifest.refs) {
+    if (!ref.name.startsWith('refs/heads/')) continue;
+    const name = ref.name.slice('refs/heads/'.length);
+    if (ref.upstream.startsWith('origin/')) {
+      lines.push(
+        `git config branch.${q(name)}.remote origin && git config branch.${q(name)}.merge ${q(`refs/heads/${ref.upstream.slice('origin/'.length)}`)} || exit 22`,
+      );
+    } else {
+      lines.push(`git config --unset branch.${q(name)}.remote 2>/dev/null; git config --unset branch.${q(name)}.merge 2>/dev/null; true`);
+    }
+  }
+  if (manifest.branch) {
+    lines.push(`git checkout --quiet -f ${q(manifest.branch)} || exit 22`);
+    if (manifest.upstream.startsWith('origin/')) {
+      const remoteBranch = manifest.upstream.slice('origin/'.length);
+      const spec = q(`+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`);
+      lines.push(
+        `git config --get-all remote.origin.fetch | grep -qxF -e ${q('+refs/heads/*:refs/remotes/origin/*')} -e ${spec} || git config --add remote.origin.fetch ${spec}`,
+        `git fetch --quiet --no-tags origin ${spec} 2>/dev/null || true`,
+      );
+    }
+  } else {
+    lines.push(`git checkout --quiet -f --detach ${manifest.head} || exit 22`);
+  }
+  lines.push(
+    'gunzip -c "$d/staged.patch.gz" > "$d/staged.patch" || exit 23',
+    'if [ -s "$d/staged.patch" ]; then git apply --index --binary --whitespace=nowarn "$d/staged.patch" || exit 23; fi',
+    'gunzip -c "$d/unstaged.patch.gz" > "$d/unstaged.patch" || exit 24',
+    'if [ -s "$d/unstaged.patch" ]; then git apply --binary --whitespace=nowarn "$d/unstaged.patch" || exit 24; fi',
+  );
+  if (has('filtered.tgz')) lines.push('tar -xzf "$d/filtered.tgz" -C . || exit 25');
+  for (const path of manifest.filteredDeleted) lines.push(`rm -f -- ${q(path)} || exit 25`);
+  if (has('ignored.tgz')) lines.push('tar -xzf "$d/ignored.tgz" -C . || exit 25');
+  if (has('agent.tgz')) lines.push('tar -xzf "$d/agent.tgz" -C / || exit 26');
+  return lines.join('\n');
 }
 
 // ============================================================================
@@ -435,7 +635,6 @@ export function parseMoveManifest(stdout: string): MoveManifest | null {
 
 const inFlight = new Map<string, Promise<MoveResult>>();
 const held = new Map<string, number>();
-const failedAt = new Map<string, number>();
 
 /**
  * Keep automatic moves off a workbench while an archive or a delete owns it.
@@ -453,16 +652,24 @@ export function holdMoves(workbenchId: string): () => void {
   };
 }
 
-/** Tests only: forget backoffs, holds and stale-golden checks. */
+/** Tests only: wait for every move this process is running. */
+export async function settleMovesForTests(): Promise<void> {
+  await Promise.allSettled([...inFlight.values()]);
+}
+
+/** Tests only: forget holds and stale-golden checks. The backoff is on the row. */
 export function resetMovesForTests(): void {
   held.clear();
-  failedAt.clear();
   staleChecks.clear();
 }
 
-function backingOff(workbenchId: string): boolean {
-  const at = failedAt.get(workbenchId);
-  return at !== undefined && Date.now() - at < FAILED_MOVE_BACKOFF_MS;
+/** Whether automatic moves wait, from the failures recorded on the row. */
+export function backingOff(row: Pick<WorkbenchRow, 'settings'>, now = Date.now()): boolean {
+  const settings = (row.settings ?? {}) as Record<string, unknown>;
+  const failures = Number(settings.moveFailures ?? 0);
+  const at = typeof settings.moveFailedAt === 'string' ? Date.parse(settings.moveFailedAt) : NaN;
+  if (!failures || Number.isNaN(at)) return false;
+  return now - at < Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
 }
 
 /**
@@ -515,33 +722,68 @@ async function setMessage(row: WorkbenchRow, message: string): Promise<void> {
   if (updated) await emitWorkbenchUpdated(await publicWorkbench(updated)).catch(() => undefined);
 }
 
+/** Renews the claim while a move runs. `lost` once a renewal finds the row in another state. */
+interface Lease {
+  lost: boolean;
+  stop: () => void;
+}
+
+function startLease(id: string, from: string, target: string): Lease {
+  const lease: Lease = { lost: false, stop: () => undefined };
+  const timer = setInterval(() => {
+    void heartbeatMove(id, from, target)
+      .then((ok) => {
+        if (!ok) lease.lost = true;
+      })
+      .catch((err) => console.warn(`[workbench] renewing the move lease of ${id} failed:`, err));
+  }, LEASE_RENEW_MS);
+  timer.unref?.();
+  lease.stop = () => clearInterval(timer);
+  return lease;
+}
+
+class MoveBusy extends Error {}
+class MoveBlocked extends Error {}
+
+interface Created {
+  sandboxId: string;
+  fleetHost: string | null;
+  fleetSandboxId: string | null;
+}
+
 async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions): Promise<MoveResult> {
   if (row.runtime !== 'sandbox' || !row.sandboxId || held.has(row.id)) {
     return { moved: false, reason: 'not_applicable' };
   }
-  const fromSandboxId = row.sandboxId;
+  const from = row.sandboxId;
   const previousMessage = row.statusMessage;
   const targetId = await freeSandboxId(row);
-  const claimed = await claimMove(row.id, fromSandboxId, targetId, 'Saving the session’s work');
+  const claimed = await claimMove(row.id, from, targetId, 'Saving the session’s work');
   if (!claimed) return { moved: false, reason: 'busy' };
-  // Read only now that the claim has committed: a turn that started before it is seen here.
-  if ((await otherRunningChats(row.id, opts.ownerChatId)) > 0) {
-    const released = await releaseMove(row.id, fromSandboxId, previousMessage);
-    if (released) await emitWorkbenchUpdated(await publicWorkbench(released));
-    return { moved: false, reason: 'busy' };
-  }
-  opts.onClaim?.(true);
-  await emitWorkbenchUpdated(await publicWorkbench(claimed));
-  recordWorkbenchEvent(claimed, 'move_start', `${reason}: ${fromSandboxId} → ${targetId}`);
+  const lease = startLease(row.id, from, targetId);
 
-  const chats = await listChats(row.id);
-  const sessions: MoveSession[] = chats
-    .filter((c) => c.agentSessionId)
-    .map((c) => ({ agent: c.agent === 'codex' ? 'codex' : 'claude', sessionId: c.agentSessionId! }));
-  let created: { sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null } | null = null;
-  let step = 'export';
+  let created: Created | null = null;
+  let step = 'claim';
+  let chats: ChatRow[] = [];
+  let stopped = false;
+  let manifest: MoveManifest | null = null;
+  let committed: WorkbenchRow | null = null;
   try {
-    const manifest = await exportFromOldBox(claimed, sessions);
+    // Read only now that the claim has committed: a turn that started before it is seen here.
+    if ((await otherRunningChats(row.id, opts.ownerChatId)) > 0) throw new MoveBusy();
+    opts.onClaim?.(true);
+    await emitWorkbenchUpdated(await publicWorkbench(claimed));
+    recordWorkbenchEvent(claimed, 'move_start', `${reason}: ${from} → ${targetId}`);
+    chats = await listChats(row.id);
+    const sessions: MoveSession[] = chats
+      .filter((c) => c.agentSessionId)
+      .map((c) => ({ agent: c.agent === 'codex' ? 'codex' : 'claude', sessionId: c.agentSessionId! }));
+
+    step = 'stop';
+    stopped = await stopOldBoxWork(claimed);
+
+    step = 'export';
+    manifest = await exportFromOldBox(claimed, sessions);
 
     step = 'create';
     await setMessage(claimed, 'Starting a fresh sandbox');
@@ -549,14 +791,11 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const made = await createWorkbenchSandbox(claimed, targetId);
     if (!made.ok) throw new Error(made.error);
     created = made;
+    await setMoveTargetHost(row.id, from, targetId, made.fleetHost);
     const fresh: WorkbenchRow = { ...claimed, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
     step = 'clone';
-    const cloned = await runCapture(fresh, cloneScript(claimed), {
-      cwd: '/',
-      timeoutMs: CLONE_TIMEOUT_MS,
-      diskRecovery: false,
-    });
+    const cloned = await runCapture(fresh, cloneScript(claimed), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
     if (cloned.exitCode !== 0) throw new Error(`the clone failed: ${tail(cloned.stderr) || `exit ${cloned.exitCode}`}`);
 
     step = 'transfer';
@@ -567,7 +806,6 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const imported = await runCapture(fresh, moveImportScript({ workbenchId: row.id, manifest }), {
       quiet: true,
       timeoutMs: IMPORT_TIMEOUT_MS,
-      diskRecovery: false,
     });
     if (imported.exitCode !== 0) {
       const what = MOVE_IMPORT_EXIT[imported.exitCode] ?? `the import exited ${imported.exitCode}`;
@@ -578,29 +816,52 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const setupNote = await runSetup(claimed, fresh);
 
     step = 'commit';
-    const committed = await commitMove(row.id, fromSandboxId, {
+    if (lease.lost) throw new Error('the move lost its claim');
+    committed = await commitMove(row.id, from, {
       sandboxId: made.sandboxId,
       fleetHost: made.fleetHost ?? null,
       fleetSandboxId: made.fleetSandboxId,
       statusMessage: setupNote,
+      ...(reason === 'stale_golden' ? {} : { settings: { movedForDiskTo: made.sandboxId } }),
     });
-    if (!committed) throw new Error('the session was archived or deleted during the move');
-
-    await afterSuccess(claimed, committed, reason, manifest, chats, opts);
-    return { moved: true, row: committed };
+    if (!committed) throw new Error('the session was archived, deleted or swept during the move');
   } catch (err) {
-    const message = userFacingError(err);
-    failedAt.set(row.id, Date.now());
-    console.warn(`[workbench] moving ${row.id} failed at ${step}:`, err);
-    recordWorkbenchEvent(claimed, 'move_failed', `${step}: ${message}`, false, err);
-    const oldBoxLost = step === 'export' && err instanceof FleetRunNotFoundError;
-    await afterFailure(claimed, fromSandboxId, previousMessage, created, message, oldBoxLost ? err : null, opts);
-    return { moved: false, reason: 'failed', message };
+    lease.stop();
+    return handleFailure({ row, claimed, from, targetId, previousMessage, created, step, err, reason, manifest, chats, stopped, opts });
   }
+  lease.stop();
+  await afterCommit(claimed, committed, reason, manifest, chats, stopped, opts);
+  return { moved: true, row: committed };
 }
 
 function tail(text: string): string {
   return text.trim().split('\n').slice(-3).join(' ').slice(-300);
+}
+
+/**
+ * Stop what writes the old box after the export would read it: the scripts
+ * (followed here or by another instance) and every terminal. True when
+ * anything was running.
+ */
+async function stopOldBoxWork(row: WorkbenchRow): Promise<boolean> {
+  const terminals = closeWorkbenchTerminals(row.id);
+  const followed = runningScriptNames(row.id).length;
+  await stopAllScripts(row).catch(() => undefined);
+  // The pattern comes from the env and is bracketed, so it never matches this script's own command line.
+  const r = await runCapture(
+    row,
+    [
+      'pat="[$(printf %.1s "$TALYN_PREFIX")]$(printf %s "$TALYN_PREFIX" | cut -c2-)"',
+      'n=$(pgrep -fc "$pat" 2>/dev/null || true)',
+      'pkill -TERM -f "$pat" 2>/dev/null || true',
+      't=$(tmux list-sessions 2>/dev/null | wc -l)',
+      'tmux kill-server 2>/dev/null || true',
+      'echo "$(( ${n:-0} + ${t:-0} ))"',
+    ].join('\n'),
+    { cwd: '/', env: { TMPDIR: '/dev/shm', TALYN_PREFIX: `talyn-script-${row.id}` }, quiet: true, timeoutMs: 60_000 },
+  ).catch(() => null);
+  const remote = Number(r?.stdout.trim() || 0) || 0;
+  return terminals + followed + remote > 0;
 }
 
 async function exportFromOldBox(row: WorkbenchRow, sessions: MoveSession[]): Promise<MoveManifest> {
@@ -608,19 +869,19 @@ async function exportFromOldBox(row: WorkbenchRow, sessions: MoveSession[]): Pro
     env: moveExportEnv(row.id),
     quiet: true,
     timeoutMs: EXPORT_TIMEOUT_MS,
-    diskRecovery: false,
   });
+  if (BLOCKING_EXITS.has(r.exitCode)) throw new MoveBlocked(MOVE_EXPORT_EXIT[r.exitCode]);
   if (r.exitCode !== 0) {
     const what = MOVE_EXPORT_EXIT[r.exitCode] ?? `the export exited ${r.exitCode}`;
     throw new Error(`${what}${tail(r.stderr) ? `: ${tail(r.stderr)}` : ''}`);
   }
   if (r.truncated) throw new Error('the export answer was cut short');
   const manifest = parseMoveManifest(r.stdout);
-  if (!manifest) throw new Error('the export printed no manifest');
+  if (!manifest) throw new Error('the export did not finish: its manifest is incomplete');
   const total = manifest.files.reduce((sum, f) => sum + f.size, 0);
   if (total > MOVE_TRANSFER_MAX_BYTES) {
     throw new Error(
-      `the changes and conversations come to ${Math.ceil(total / MIB)} MB compressed, ` +
+      `the work comes to ${Math.ceil(total / MIB)} MB compressed, ` +
         `more than the ${MOVE_TRANSFER_MAX_BYTES / MIB} MB a move can carry`,
     );
   }
@@ -628,15 +889,15 @@ async function exportFromOldBox(row: WorkbenchRow, sessions: MoveSession[]): Pro
 }
 
 /** One staged file, old box to new, a chunk at a time. Every chunk's length is checked. */
-async function transferFile(
-  oldRow: WorkbenchRow,
-  newRow: WorkbenchRow,
-  file: MoveManifest['files'][number],
-): Promise<void> {
+async function transferFile(oldRow: WorkbenchRow, newRow: WorkbenchRow, file: MoveManifest['files'][number]): Promise<void> {
   const source = `${moveStagingDir(oldRow.id)}/${file.name}`;
   const dir = moveImportDir(oldRow.id);
   const target = shellQuote(`${dir}/${file.name}`);
   const part = `${dir}/${file.name}.part`;
+  if (file.size === 0) {
+    await writeSandboxFiles(newRow, [], { before: `mkdir -p ${shellQuote(dir)} && : > ${target}` });
+    return;
+  }
   for (let offset = 0; offset < file.size; offset += MOVE_CHUNK_BYTES) {
     const length = Math.min(MOVE_CHUNK_BYTES, file.size - offset);
     const r = await runCapture(oldRow, moveReadChunkScript(source, offset, length), {
@@ -644,7 +905,6 @@ async function transferFile(
       env: moveExportEnv(oldRow.id),
       quiet: true,
       timeoutMs: CHUNK_TIMEOUT_MS,
-      diskRecovery: false,
     });
     if (r.exitCode !== 0) throw new Error(`could not read ${file.name} on the old sandbox: ${tail(r.stderr)}`);
     if (r.truncated || r.stdoutBytes.length !== length) {
@@ -654,7 +914,6 @@ async function transferFile(
       ...(offset === 0 ? { before: `mkdir -p ${shellQuote(dir)} && : > ${target}` } : {}),
       after: `cat ${shellQuote(part)} >> ${target} && rm -f ${shellQuote(part)}`,
       timeoutMs: CHUNK_TIMEOUT_MS,
-      diskRecovery: false,
     });
   }
 }
@@ -673,23 +932,64 @@ async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow): Promise<str
   }
 }
 
-export function movedNote(reason: MoveReason): string {
-  return (
-    `Moved to a fresh sandbox (${REASON_TEXT[reason]}). Your branch, changes and this conversation came along. ` +
-    'Running processes stopped, so restart any dev servers.'
+/** The chat note after a move. Every sentence is true of THIS chat. */
+export function movedNote(input: {
+  reason: MoveReason;
+  conversation: 'carried' | 'missing' | 'none';
+  stopped: boolean;
+  manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>;
+}): string {
+  const parts = [
+    `Moved to a fresh sandbox (${REASON_TEXT[input.reason]}). Your branches, commits, stash and uncommitted changes came along.`,
+  ];
+  if (input.conversation === 'carried') parts.push('This conversation came along, so the agent remembers it.');
+  if (input.conversation === 'missing') {
+    parts.push('The agent’s copy of this conversation could not be found, so the agent starts fresh. This transcript is still here.');
+  }
+  parts.push(
+    input.stopped
+      ? 'Talyn stopped the running scripts and terminals first, so restart any you need.'
+      : 'Running processes stopped, so restart any dev servers.',
   );
+  const skipped = skippedNote(input.manifest);
+  if (skipped) parts.push(skipped);
+  return parts.join(' ');
 }
 
-function skippedNote(manifest: MoveManifest): string | null {
-  if (manifest.skippedCount === 0) return null;
-  const names = manifest.skipped.slice(0, 10).join(', ');
-  const more = manifest.skippedCount - Math.min(10, manifest.skipped.length);
-  return `Ignored files too large to copy: ${names}${more > 0 ? ` and ${more} more` : ''}.`;
+/** What was left behind: large ignored files by name, dependency folders as counts. */
+export function skippedNote(manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>): string | null {
+  const parts: string[] = [];
+  if (manifest.skippedDirs.length > 0) {
+    const byName = new Map<string, { folders: number; files: number }>();
+    for (const dir of manifest.skippedDirs) {
+      const name = dir.path.split('/').find((c) => (MOVE_SKIP_DIRS as readonly string[]).includes(c)) ?? dir.path;
+      const entry = byName.get(name) ?? { folders: 0, files: 0 };
+      entry.folders++;
+      entry.files += dir.files;
+      byName.set(name, entry);
+    }
+    const list = [...byName.entries()]
+      .map(([name, c]) => `${name} (${c.folders} ${c.folders === 1 ? 'folder' : 'folders'}, ${c.files} files)`)
+      .join(', ');
+    parts.push(`Not copied, because setup makes them again: ${list}.`);
+  }
+  if (manifest.skippedCount > 0) {
+    const names = manifest.skipped.slice(0, 10).join(', ');
+    const more = manifest.skippedCount - Math.min(10, manifest.skipped.length);
+    parts.push(`Ignored files too large to copy (${manifest.skippedCount}): ${names}${more > 0 ? ` and ${more} more` : ''}.`);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 async function note(chat: ChatRow, subtype: string, text: string, extra: Record<string, unknown> = {}): Promise<void> {
   const stored = await appendEvents(chat.id, [{ turn: chat.turnCount, event: { type: 'system', subtype, text, ...extra } }]);
   emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+}
+
+async function noteAll(workbenchId: string, subtype: string, text: string): Promise<void> {
+  for (const chat of await listChats(workbenchId)) {
+    if (!chat.closedAt) await note(chat, subtype, text).catch(() => undefined);
+  }
 }
 
 async function startQueued(workbenchId: string, ownerChatId?: string): Promise<void> {
@@ -700,66 +1000,109 @@ async function startQueued(workbenchId: string, ownerChatId?: string): Promise<v
   }
 }
 
-async function afterSuccess(
+/** Run one post-commit step. Nothing after the commit may undo it, so a failure is logged and the rest go on. */
+async function bestEffort(row: WorkbenchRow, what: string, work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (err) {
+    console.warn(`[workbench] after moving ${row.id}, ${what} failed:`, err);
+    recordWorkbenchEvent(row, 'move_cleanup', `${what} failed`, false, err);
+  }
+}
+
+async function afterCommit(
   old: WorkbenchRow,
   committed: WorkbenchRow,
   reason: MoveReason,
-  manifest: MoveManifest,
+  manifest: MoveManifest | null,
   chats: ChatRow[],
+  stopped: boolean,
   opts: MoveOptions,
 ): Promise<void> {
-  failedAt.delete(old.id);
   staleChecks.delete(old.id);
-  await emitWorkbenchUpdated(await publicWorkbench(committed));
   recordWorkbenchEvent(committed, 'moved', `${old.sandboxId} → ${committed.sandboxId} (${reason})`);
-
-  // The old box goes last: its followers first, then the box itself.
-  await stopAllScripts(old).catch(() => undefined);
-  try {
-    const client = await fleetClientFor(old.workspaceId, old.fleetHost);
-    await client.deleteSandbox(old.sandboxId!);
-  } catch (err) {
-    console.warn(`[workbench] deleting the old sandbox ${old.sandboxId} after a move failed:`, err);
-    recordWorkbenchEvent(committed, 'move_cleanup', `old sandbox ${old.sandboxId} not deleted`, false, err);
-  }
-  await runCapture(committed, `git push --no-verify --quiet origin ${shellQuote(`:${moveRef(old.id)}`)}`, {
-    quiet: true,
-    timeoutMs: 60_000,
-    diskRecovery: false,
-  }).catch((err) => console.warn(`[workbench] deleting ${moveRef(old.id)} failed:`, err));
-
-  const missing = new Set(manifest.missingSessions);
-  const skipped = skippedNote(manifest);
+  await bestEffort(committed, 'announcing the new sandbox', async () =>
+    emitWorkbenchUpdated(await publicWorkbench(committed)),
+  );
+  await bestEffort(committed, 'stopping the old followers', () => stopAllScripts(old));
+  await bestEffort(committed, `deleting the old sandbox ${old.sandboxId}`, async () =>
+    (await fleetClientFor(old.workspaceId, old.fleetHost)).deleteSandbox(old.sandboxId!),
+  );
+  const missing = new Set(manifest?.missingSessions ?? []);
   for (const chat of chats) {
     if (chat.closedAt) continue;
-    let current = chat;
-    if (chat.agentSessionId && missing.has(chat.agentSessionId)) {
-      // Its file was not on the old box, so a resume would fail the next turn.
-      const cleared = await updateChat(chat.id, { agentSessionId: null }).catch(() => null);
-      if (cleared) {
-        current = cleared;
-        emitWorkbenchChat(cleared.workspaceId, rowToChat(cleared));
+    await bestEffort(committed, `the note in chat ${chat.id}`, async () => {
+      let current = chat;
+      let conversation: 'carried' | 'missing' | 'none' = chat.agentSessionId ? 'carried' : 'none';
+      if (chat.agentSessionId && missing.has(chat.agentSessionId)) {
+        conversation = 'missing';
+        // Its file was not on the old box, so a resume would fail the next turn.
+        const cleared = await updateChat(chat.id, { agentSessionId: null });
+        if (cleared) {
+          current = cleared;
+          emitWorkbenchChat(cleared.workspaceId, rowToChat(cleared));
+        }
       }
-    }
-    const text = [movedNote(reason), skipped].filter(Boolean).join(' ');
-    await note(current, 'sandbox_moved', text, skipped ? { skippedFiles: manifest.skipped } : {}).catch((err) =>
-      console.warn(`[workbench] noting the move in chat ${chat.id} failed:`, err),
-    );
+      const text = movedNote({
+        reason,
+        conversation,
+        stopped,
+        manifest: manifest ?? { skipped: [], skippedCount: 0, skippedDirs: [] },
+      });
+      await note(current, 'sandbox_moved', text, manifest?.skipped.length ? { skippedFiles: manifest.skipped } : {});
+    });
   }
-  void refreshDiffStat(committed).catch(() => undefined);
-  await startQueued(committed.id, opts.ownerChatId);
+  await bestEffort(committed, 'refreshing the diff', () => refreshDiffStat(committed));
+  await bestEffort(committed, 'starting queued messages', () => startQueued(committed.id, opts.ownerChatId));
 }
 
-async function afterFailure(
-  claimed: WorkbenchRow,
-  fromSandboxId: string,
-  previousMessage: string | null,
-  created: { sandboxId: string; fleetHost: string | null } | null,
-  message: string,
-  /** Set when the export found the old box gone: recovery then replaces it. */
-  oldBoxLost: FleetRunNotFoundError | null,
-  opts: MoveOptions,
-): Promise<void> {
+async function handleFailure(f: {
+  row: WorkbenchRow;
+  claimed: WorkbenchRow;
+  from: string;
+  targetId: string;
+  previousMessage: string | null;
+  created: Created | null;
+  step: string;
+  err: unknown;
+  reason: MoveReason;
+  manifest: MoveManifest | null;
+  chats: ChatRow[];
+  stopped: boolean;
+  opts: MoveOptions;
+}): Promise<MoveResult> {
+  const { row, claimed, from, targetId, created, err } = f;
+
+  // A commit whose answer was lost: if the row names the new box, it is the session's box now.
+  let current: WorkbenchRow | null;
+  try {
+    current = await getWorkbench(row.id);
+  } catch (readErr) {
+    console.error(`[workbench] moving ${row.id}: could not re-read the row after a failure, so nothing is cleaned up:`, readErr);
+    return { moved: false, reason: 'failed', message: userFacingError(err) };
+  }
+  if (current && current.sandboxId === targetId && current.status !== 'moving') {
+    recordWorkbenchEvent(current, 'move_commit_recovered', 'the commit landed although its answer was lost');
+    await afterCommit(claimed, current, f.reason, f.manifest, f.chats, f.stopped, f.opts);
+    return { moved: true, row: current };
+  }
+
+  if (err instanceof MoveBusy) {
+    const released = await releaseMove(row.id, from, targetId, f.previousMessage).catch(() => null);
+    if (released) await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);
+    await startQueued(row.id, f.opts.ownerChatId).catch(() => undefined);
+    return { moved: false, reason: 'busy' };
+  }
+
+  const blocked = err instanceof MoveBlocked;
+  const message = userFacingError(err);
+  console.warn(`[workbench] moving ${row.id} ${blocked ? 'refused' : 'failed'} at ${f.step}:`, err);
+  recordWorkbenchEvent(claimed, blocked ? 'move_blocked' : 'move_failed', `${f.step}: ${message}`, false, err);
+
+  const released = await releaseMove(row.id, from, targetId, f.previousMessage).catch((releaseErr) => {
+    console.warn(`[workbench] releasing the move of ${row.id} failed:`, releaseErr);
+    return null;
+  });
   if (created) {
     try {
       const client = await fleetClientFor(claimed.workspaceId, created.fleetHost);
@@ -769,29 +1112,33 @@ async function afterFailure(
       recordWorkbenchEvent(claimed, 'move_cleanup', `new sandbox ${created.sandboxId} not deleted`, false, deleteErr);
     }
   }
-  if (!oldBoxLost) {
-    // The staging lives in memory, but a long-lived box should not keep it.
-    // Deleting the ref writes nothing to the disk either.
-    const dir = shellQuote(moveStagingDir(claimed.id));
-    await runCapture(
-      claimed,
-      `rm -rf -- ${dir} ${shellQuote(moveExportEnv(claimed.id).GIT_INDEX_FILE)}; git push --no-verify --quiet origin ${shellQuote(`:${moveRef(claimed.id)}`)} || true`,
-      { env: moveExportEnv(claimed.id), quiet: true, timeoutMs: 60_000, diskRecovery: false },
-    ).catch(() => undefined);
-  }
-  const released = await releaseMove(claimed.id, fromSandboxId, previousMessage);
-  if (!released) return;
-  await emitWorkbenchUpdated(await publicWorkbench(released));
-  for (const chat of await listChats(claimed.id)) {
-    if (chat.closedAt) continue;
-    await note(
-      chat,
-      'sandbox_move_failed',
-      `Talyn could not move this session to a fresh sandbox: ${message} It stays on its current sandbox.`,
-    ).catch(() => undefined);
-  }
-  if (oldBoxLost) await recoverLostSandbox(released, oldBoxLost).catch(() => undefined);
-  await startQueued(claimed.id, opts.ownerChatId);
+  const oldBoxLost = f.step === 'export' && err instanceof FleetRunNotFoundError;
+  if (!oldBoxLost) await dropStaging(claimed);
+  await recordMoveFailure(row.id).catch(() => null);
+  if (!released) return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
+
+  await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);
+  await noteAll(
+    row.id,
+    blocked ? 'sandbox_move_blocked' : 'sandbox_move_failed',
+    blocked
+      ? `Talyn did not move this session to a fresh sandbox, because ${message}. It stays on its current sandbox. Finish or push that work, and Talyn tries again later.`
+      : `Talyn could not move this session to a fresh sandbox: ${message} It stays on its current sandbox.`,
+  ).catch(() => undefined);
+  if (oldBoxLost) await recoverLostSandbox(released, err).catch(() => undefined);
+  await startQueued(row.id, f.opts.ownerChatId).catch(() => undefined);
+  return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
+}
+
+/** The staging lives in memory, but a long-lived box should not keep it. */
+async function dropStaging(row: WorkbenchRow): Promise<void> {
+  const env = moveExportEnv(row.id);
+  await runCapture(row, `rm -rf -- ${shellQuote(moveStagingDir(row.id))} ${shellQuote(env.GIT_INDEX_FILE)}`, {
+    cwd: '/',
+    env,
+    quiet: true,
+    timeoutMs: 60_000,
+  }).catch(() => undefined);
 }
 
 // ============================================================================
@@ -811,7 +1158,7 @@ const staleChecks = new Map<string, { sandboxId: string; at: number }>();
  */
 export async function needsFreshGolden(row: WorkbenchRow): Promise<boolean> {
   if (row.runtime !== 'sandbox' || row.status !== 'ready' || !row.sandboxId) return false;
-  if (held.has(row.id) || backingOff(row.id)) return false;
+  if (held.has(row.id) || backingOff(row)) return false;
   const last = staleChecks.get(row.id);
   if (last && last.sandboxId === row.sandboxId && Date.now() - last.at < STALE_CHECK_INTERVAL_MS) return false;
   staleChecks.set(row.id, { sandboxId: row.sandboxId, at: Date.now() });
@@ -837,13 +1184,7 @@ export async function startStaleGoldenMove(row: WorkbenchRow): Promise<boolean> 
 
 /** One `df` of the root filesystem. Runs on a full disk too: its temp files go to /dev/shm. */
 export async function probeDisk(row: WorkbenchRow): Promise<DiskProbe | null> {
-  const r = await runCapture(row, DISK_PROBE_SCRIPT, {
-    cwd: '/',
-    env: { TMPDIR: '/dev/shm' },
-    quiet: true,
-    timeoutMs: 60_000,
-    diskRecovery: false,
-  });
+  const r = await runCapture(row, DISK_PROBE_SCRIPT, { cwd: '/', env: { TMPDIR: '/dev/shm' }, quiet: true, timeoutMs: 60_000 });
   return parseDiskProbe(r.stderr);
 }
 
@@ -871,6 +1212,30 @@ export async function tryGrowDisk(row: WorkbenchRow, probe?: DiskProbe | null): 
   return ok;
 }
 
+/**
+ * A box a disk move already made, still on the newest golden: a second move
+ * would land on the same image with the same work, so it is not made. The
+ * chats are told once per box.
+ */
+async function alreadyFreshForDisk(row: WorkbenchRow): Promise<boolean> {
+  const settings = (row.settings ?? {}) as Record<string, unknown>;
+  if (!row.sandboxId || settings.movedForDiskTo !== row.sandboxId) return false;
+  const stale = await fleetClientFor(row.workspaceId, row.fleetHost)
+    .then((client) => client.getSandbox(row.sandboxId!))
+    .then((r) => r.sandbox.goldenStale === true)
+    .catch(() => false);
+  if (stale) return false;
+  if (settings.lowDiskNotedFor !== row.sandboxId) {
+    await mergeWorkbenchSettings(row.id, { lowDiskNotedFor: row.sandboxId }).catch(() => undefined);
+    await noteAll(
+      row.id,
+      'sandbox_low_disk',
+      'This sandbox is on the newest image and still has less than 2 GB free. Remove large files or build outputs to make room.',
+    ).catch(() => undefined);
+  }
+  return true;
+}
+
 export type DiskRecovery = { ok: true; row: WorkbenchRow; action: 'grown' | 'moved' } | { ok: false };
 
 /** T2 and T3: grow the disk when the fleet can, else move. */
@@ -879,53 +1244,59 @@ export async function growOrMove(
   reason: 'low_disk' | 'disk_full',
   opts: { ownerChatId?: string; probe?: DiskProbe | null } = {},
 ): Promise<DiskRecovery> {
-  if (held.has(row.id) || backingOff(row.id)) return { ok: false };
+  if (held.has(row.id)) return { ok: false };
   const grown = await tryGrowDisk(row, opts.probe).catch((err) => {
     console.warn(`[workbench] growing the disk of ${row.id} failed:`, err);
     return false;
   });
   if (grown) return { ok: true, row, action: 'grown' };
+  if (backingOff(row) || (await alreadyFreshForDisk(row))) return { ok: false };
   const moved = await moveWorkbenchToFreshSandbox(row, reason, { ownerChatId: opts.ownerChatId });
   return moved.moved ? { ok: true, row: moved.row, action: 'moved' } : { ok: false };
 }
 
 /**
- * T3 from the exec layer: an exec failed on a full disk. Only between turns:
- * a running chat makes the move's claim refuse. Returns the row to retry on.
+ * T3 from the exec layer: an idempotent exec failed on a full disk. A grow
+ * keeps the same box, so the caller may run once more: true. Otherwise a move
+ * starts in the background and the caller does not retry.
  */
-export async function recoverFromDiskFull(row: WorkbenchRow): Promise<WorkbenchRow | null> {
-  const pending = inFlight.get(row.id);
-  if (pending) {
-    const result = await pending;
-    return result.moved ? result.row : null;
-  }
+export async function growForDiskFull(row: WorkbenchRow): Promise<boolean> {
   const fresh = await getWorkbench(row.id);
-  if (!fresh || fresh.status !== 'ready' || fresh.sandboxId !== row.sandboxId) return null;
-  const outcome = await growOrMove(fresh, 'disk_full');
-  return outcome.ok ? outcome.row : null;
+  if (!fresh || fresh.status !== 'ready' || fresh.sandboxId !== row.sandboxId || held.has(row.id)) return false;
+  const grown = await tryGrowDisk(fresh).catch(() => false);
+  if (grown) return true;
+  if (!backingOff(fresh) && !(await alreadyFreshForDisk(fresh))) {
+    void moveWorkbenchToFreshSandbox(fresh, 'disk_full').catch(() => undefined);
+  }
+  return false;
 }
 
 /**
- * Boot sweep: a move a dead process left half done. The row still names the
- * old box, which holds the work, so the move is undone and the half-made box
- * deleted. Moves this process runs are left alone.
+ * The sweep: a move whose lease lapsed, because its process died. The row
+ * still names the old box, which holds the work, so the move is undone, the
+ * half-made box deleted on the host it was made on, and the staging dropped.
+ * A move with a live lease (this instance's or another's) is never touched.
  */
 export async function sweepAbandonedMoves(): Promise<number> {
   let undone = 0;
-  for (const row of await movingWorkbenches()) {
+  for (const row of await staleMovingWorkbenches(LEASE_STALE_SECONDS)) {
     if (inFlight.has(row.id) || !row.sandboxId) continue;
-    const released = await releaseMove(row.id, row.sandboxId, null);
+    const settings = (row.settings ?? {}) as Record<string, unknown>;
+    const target = typeof settings.moveSandboxId === 'string' ? settings.moveSandboxId : null;
+    if (!target) continue;
+    const released = await releaseMove(row.id, row.sandboxId, target, null, { staleAfterSeconds: LEASE_STALE_SECONDS });
     if (!released) continue;
     undone++;
-    recordWorkbenchEvent(released, 'move_abandoned', 'a move left by a restart was undone', false);
+    recordWorkbenchEvent(released, 'move_abandoned', 'a move whose process stopped was undone', false);
     await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);
-    const target = (row.settings as Record<string, unknown> | null)?.moveSandboxId;
-    if (typeof target === 'string' && target !== row.sandboxId) {
-      await fleetClientFor(row.workspaceId)
+    if (target !== row.sandboxId) {
+      const host = typeof settings.moveTargetHost === 'string' ? settings.moveTargetHost : row.fleetHost;
+      await fleetClientFor(row.workspaceId, host)
         .then((client) => client.deleteSandbox(target))
         .catch((err) => console.warn(`[workbench] deleting the abandoned sandbox ${target} failed:`, err));
     }
-    await startQueued(row.id);
+    await dropStaging(released);
+    await startQueued(row.id).catch(() => undefined);
   }
   return undone;
 }

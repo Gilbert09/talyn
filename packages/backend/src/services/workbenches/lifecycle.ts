@@ -6,6 +6,7 @@ import {
   toShellScript,
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
+import { debugBus } from '../debugBus.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
@@ -18,7 +19,7 @@ import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchDeleted, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, movingError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
-import { holdMoves, sweepAbandonedMoves } from './move.js';
+import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
 import {
@@ -109,6 +110,13 @@ export function scheduleProvision(workbenchId: string, opts: { restore?: boolean
   );
 }
 
+/**
+ * The memory ceiling of a session's box. The YAS tenant default is 4096 today,
+ * but `yasctl -reseed-quotas` resets tenant defaults from the plan, so Talyn
+ * asks for it explicitly rather than inherit whatever the plan says.
+ */
+export const SESSION_SANDBOX_MEM_MIB = 4096;
+
 export type CreatedWorkbenchSandbox =
   | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
   | { ok: false; error: string };
@@ -147,7 +155,7 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   });
   if (!built.ok) return { ok: false, error: built.error };
   const target = await fleetCreateTarget(row.workspaceId);
-  const created = await createSandboxRetryingUncertain(target.client, built.body);
+  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB });
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
@@ -498,11 +506,33 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
 const BOOT_SWEEP_DELAY_MS = 90_000;
 
 let bootTimer: NodeJS.Timeout | null = null;
+let moveSweepTimer: NodeJS.Timeout | null = null;
+let moveSweepRunning = false;
+
+const MOVE_SWEEP_POLLER = 'workbench-move-sweep';
+
+/** One pass of the abandoned-move sweep, timed on the debug bus. */
+async function moveSweepTick(): Promise<void> {
+  if (moveSweepRunning) return;
+  moveSweepRunning = true;
+  const started = Date.now();
+  try {
+    const undone = await runWithoutScope(() => sweepAbandonedMoves());
+    if (undone > 0) console.log(`[workbench] undid ${undone} abandoned move(s)`);
+    debugBus.pollerTick(MOVE_SWEEP_POLLER, { durationMs: Date.now() - started, ok: true });
+  } catch (err) {
+    console.error('[workbench] the move sweep failed:', err);
+    debugBus.pollerTick(MOVE_SWEEP_POLLER, { durationMs: Date.now() - started, ok: false, error: err });
+  } finally {
+    moveSweepRunning = false;
+  }
+}
 
 /**
  * Arm the one-shot boot sweep: settle turns a dead process left running, and
- * carry on provisions it left half done. Not a poll loop — nothing here runs
- * twice.
+ * carry on provisions it left half done. Then the move sweep, which runs on
+ * an interval: an instance can die mid-move at any time, not only at a deploy,
+ * and the row would stay `moving` until the next one.
  */
 export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   if (bootTimer) return;
@@ -512,22 +542,30 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
         const settled = await sweepOrphanedTurns();
         const stuck = await provisioningWorkbenchIds();
         for (const id of stuck) scheduleProvision(id);
-        const moves = await sweepAbandonedMoves();
-        if (settled > 0 || stuck.length > 0 || moves > 0) {
-          console.log(
-            `[workbench] boot sweep: settled ${settled} orphaned turn(s), resumed ${stuck.length} provision(s), ` +
-              `undid ${moves} move(s)`,
-          );
+        if (settled > 0 || stuck.length > 0) {
+          console.log(`[workbench] boot sweep: settled ${settled} orphaned turn(s), resumed ${stuck.length} provision(s)`);
         }
       } catch (err) {
         console.error('[workbench] boot sweep failed:', err);
       }
     });
+    void moveSweepTick();
   }, delayMs);
   bootTimer.unref();
+  if (!moveSweepTimer) {
+    debugBus.registerPoller(
+      MOVE_SWEEP_POLLER,
+      MOVE_SWEEP_INTERVAL_MS,
+      'Undoes session moves whose lease lapsed: puts the old sandbox back and deletes the half-made one.',
+    );
+    moveSweepTimer = setInterval(() => void moveSweepTick(), MOVE_SWEEP_INTERVAL_MS);
+    moveSweepTimer.unref();
+  }
 }
 
 export function stopWorkbenches(): void {
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
+  if (moveSweepTimer) clearInterval(moveSweepTimer);
+  moveSweepTimer = null;
 }

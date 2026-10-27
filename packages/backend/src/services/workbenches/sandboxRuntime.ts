@@ -366,9 +366,10 @@ export interface SandboxExecOptions {
   /** Follow large captures so the event ring cannot discard their first frames. */
   follow?: boolean;
   /**
-   * On a full-disk failure, grow the disk or move the session to a fresh box,
-   * then run once more there. On by default; lifecycle code that owns the box
-   * (a move, an archive, a kill) turns it off.
+   * Opt in for an IDEMPOTENT script only: on a full-disk failure, grow the
+   * disk and run once more on the same box. When the fleet cannot grow it, a
+   * move starts in the background and this call is not run again: a retry on
+   * a different box would repeat it against other state.
    */
   diskRecovery?: boolean;
 }
@@ -390,8 +391,8 @@ const EVENTS_PAGE = 1000;
  * Run `script` to its end and return its output, framed so another command
  * running at the same time cannot leak into it.
  *
- * A failure that says the disk is full grows the disk or moves the session to
- * a fresh box (see move.ts), then runs once more on the box that results.
+ * With `diskRecovery`, a failure that says the disk is full grows the disk
+ * and runs once more on the same box (see move.ts).
  */
 export async function runCapture(
   row: WorkbenchRow,
@@ -402,24 +403,22 @@ export async function runCapture(
   try {
     result = await runCaptureOnce(row, script, opts);
   } catch (err) {
-    if (opts.diskRecovery === false || !isDiskFullError(err)) throw err;
-    const next = await recoverDiskFull(row);
-    if (!next) throw err;
-    return runCaptureOnce(next, script, opts);
+    if (opts.diskRecovery !== true || !isDiskFullError(err)) throw err;
+    if (!(await grownAfterDiskFull(row))) throw err;
+    return runCaptureOnce(row, script, opts);
   }
-  if (result.exitCode !== 0 && opts.diskRecovery !== false && isDiskFullText(result.stderr)) {
-    const next = await recoverDiskFull(row);
-    if (next) return runCaptureOnce(next, script, opts);
+  if (result.exitCode !== 0 && opts.diskRecovery === true && isDiskFullText(result.stderr)) {
+    if (await grownAfterDiskFull(row)) return runCaptureOnce(row, script, opts);
   }
   return result;
 }
 
-/** The box to run on after a full disk was dealt with, or null when nothing changed. */
-async function recoverDiskFull(row: WorkbenchRow): Promise<WorkbenchRow | null> {
-  const { recoverFromDiskFull } = await import('./move.js');
-  return recoverFromDiskFull(row).catch((err) => {
-    console.warn(`[workbench] recovering ${row.id} from a full disk failed:`, err);
-    return null;
+/** True when the same box now has room. Otherwise a move may have started; it does not concern this call. */
+async function grownAfterDiskFull(row: WorkbenchRow): Promise<boolean> {
+  const { growForDiskFull } = await import('./move.js');
+  return growForDiskFull(row).catch((err) => {
+    console.warn(`[workbench] making room on ${row.id} failed:`, err);
+    return false;
   });
 }
 
@@ -630,12 +629,12 @@ async function recoverStream(
 /** Stop everything a marker names: INT, then TERM, then KILL to its process group. */
 export async function killMarker(row: WorkbenchRow, marker: string): Promise<void> {
   const { script, env } = killMarkerScript(marker);
-  await runCapture(row, script, { cwd: '/', env, timeoutMs: 20_000, quiet: true, diskRecovery: false });
+  await runCapture(row, script, { cwd: '/', env, timeoutMs: 20_000, quiet: true });
 }
 
 export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<boolean> {
   const { script, env } = aliveMarkerScript(marker);
-  const r = await runCapture(row, script, { cwd: '/', env, timeoutMs: 10_000, quiet: true, diskRecovery: false });
+  const r = await runCapture(row, script, { cwd: '/', env, timeoutMs: 10_000, quiet: true });
   return r.exitCode === 0;
 }
 
@@ -753,7 +752,8 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
       { label: 'CJSON', command: 'cat conductor.json' },
       { label: 'CTOML', command: 'cat .conductor/settings.toml' },
     ]),
-    { quiet: true, timeoutMs: 30_000 },
+    // Reads only, so it may run again after a grow.
+    { quiet: true, timeoutMs: 30_000, diskRecovery: true },
   );
   const files = parseSections(r.stdout);
   const config = resolveWorkbenchConfig({

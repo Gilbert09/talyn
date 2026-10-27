@@ -214,9 +214,10 @@ export async function claimLostWorkbench(id: string, sandboxId: string, replacem
 
 /**
  * Claim a move to a new box: `ready` → `moving`, in one statement, only while
- * the row still names `sandboxId`. The target id goes on the row so no later
- * box reuses its generation. Null when the workbench is not ready or another
- * move or recovery got there first.
+ * the row still names `sandboxId`. The target id goes on the row, so no later
+ * box reuses its generation, and so do the lease's first heartbeat and nothing
+ * else. Null when the workbench is not ready or another move or recovery got
+ * there first.
  */
 export async function claimMove(
   id: string,
@@ -229,7 +230,8 @@ export async function claimMove(
     .set({
       status: 'moving',
       statusMessage: message,
-      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveSandboxId', ${targetSandboxId}::text)`,
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'moveTargetHost')
+        || jsonb_build_object('moveSandboxId', ${targetSandboxId}::text, 'moveHeartbeatAt', now())`,
       updatedAt: new Date(),
     })
     .where(and(
@@ -241,6 +243,40 @@ export async function claimMove(
     ))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
+}
+
+/** The move this row is in: `moving`, off `fromSandboxId`, to `targetSandboxId`. */
+function isMove(id: string, fromSandboxId: string, targetSandboxId: string) {
+  return and(
+    eq(workbenchesTable.id, id),
+    eq(workbenchesTable.sandboxId, fromSandboxId),
+    eq(workbenchesTable.status, 'moving'),
+    sql`${workbenchesTable.settings} ->> 'moveSandboxId' = ${targetSandboxId}`,
+  );
+}
+
+/** Renew a move's lease. False when the row is no longer in this move. */
+export async function heartbeatMove(id: string, fromSandboxId: string, targetSandboxId: string): Promise<boolean> {
+  const rows = await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveHeartbeatAt', now())` })
+    .where(isMove(id, fromSandboxId, targetSandboxId))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+/** Record where the new box was made, so a sweep can delete it on the right host. */
+export async function setMoveTargetHost(
+  id: string,
+  fromSandboxId: string,
+  targetSandboxId: string,
+  host: string | null,
+): Promise<void> {
+  if (!host) return;
+  await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('moveTargetHost', ${host}::text)` })
+    .where(isMove(id, fromSandboxId, targetSandboxId));
 }
 
 /** Running chats of a workbench other than `exceptChatId`. Read after `claimMove` commits. */
@@ -256,29 +292,56 @@ export async function otherRunningChats(workbenchId: string, exceptChatId?: stri
   return rows.length;
 }
 
-/** Undo a claim: back to `ready` on the old box. Null when the row is no longer moving off it. */
-export async function releaseMove(id: string, sandboxId: string, statusMessage: string | null): Promise<WorkbenchRow | null> {
+const LEASE_KEYS = sql.raw(`'moveHeartbeatAt' - 'moveTargetHost'`);
+
+/**
+ * Undo a claim: back to `ready` on the old box. Only for THIS move (the target
+ * must match), and with `staleAfterSeconds` only when its lease has lapsed, so
+ * a sweep never undoes a move that is still running elsewhere.
+ */
+export async function releaseMove(
+  id: string,
+  fromSandboxId: string,
+  targetSandboxId: string,
+  statusMessage: string | null,
+  opts: { staleAfterSeconds?: number } = {},
+): Promise<WorkbenchRow | null> {
+  const stale =
+    opts.staleAfterSeconds === undefined
+      ? sql`TRUE`
+      : sql`(${workbenchesTable.settings} ->> 'moveHeartbeatAt' IS NULL
+          OR (${workbenchesTable.settings} ->> 'moveHeartbeatAt')::timestamptz < now() - make_interval(secs => ${opts.staleAfterSeconds}::int))`;
   const [row] = await db()
     .update(workbenchesTable)
-    .set({ status: 'ready', statusMessage, updatedAt: new Date() })
-    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId), eq(workbenchesTable.status, 'moving')))
+    .set({
+      status: 'ready',
+      statusMessage,
+      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - ${LEASE_KEYS}`,
+      updatedAt: new Date(),
+    })
+    .where(and(isMove(id, fromSandboxId, targetSandboxId), stale))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }
 
 /**
  * Finish a move: the row names the new box and is `ready` again. Only while
- * it is still moving off `fromSandboxId` and not archived, so a workbench
- * deleted or archived meanwhile is left alone and the caller cleans up.
+ * it is still in THIS move and not archived, so a workbench deleted, archived
+ * or swept meanwhile is left alone and the caller cleans up. Clears the
+ * lease and the failure backoff; `settings` adds keys.
  */
 export async function commitMove(
   id: string,
   fromSandboxId: string,
-  to: { sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null; statusMessage: string | null },
+  to: {
+    sandboxId: string;
+    fleetHost: string | null;
+    fleetSandboxId: string | null;
+    statusMessage: string | null;
+    settings?: Record<string, string>;
+  },
 ): Promise<WorkbenchRow | null> {
-  const fleetId = to.fleetSandboxId
-    ? sql`jsonb_build_object('fleetSandboxId', ${to.fleetSandboxId}::text)`
-    : sql`'{}'::jsonb`;
+  const added = { ...(to.fleetSandboxId ? { fleetSandboxId: to.fleetSandboxId } : {}), ...(to.settings ?? {}) };
   const [row] = await db()
     .update(workbenchesTable)
     .set({
@@ -287,25 +350,48 @@ export async function commitMove(
       sandboxId: to.sandboxId,
       sandboxState: 'running',
       fleetHost: to.fleetHost,
-      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'fleetSandboxId') || ${fleetId}`,
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'fleetSandboxId' - ${LEASE_KEYS}
+        - 'moveFailedAt' - 'moveFailures') || ${JSON.stringify(added)}::jsonb`,
       updatedAt: new Date(),
     })
-    .where(and(
-      eq(workbenchesTable.id, id),
-      eq(workbenchesTable.sandboxId, fromSandboxId),
-      eq(workbenchesTable.status, 'moving'),
-      isNull(workbenchesTable.archivedAt),
-    ))
+    .where(and(isMove(id, fromSandboxId, to.sandboxId), isNull(workbenchesTable.archivedAt)))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }
 
-/** Live sandbox workbenches a dead process left mid-move. */
-export async function movingWorkbenches(): Promise<WorkbenchRow[]> {
+/** Moving rows whose lease has lapsed: their move's process is gone. */
+export async function staleMovingWorkbenches(staleAfterSeconds: number): Promise<WorkbenchRow[]> {
   return db()
     .select(WORKBENCH_COLUMNS)
     .from(workbenchesTable)
-    .where(and(eq(workbenchesTable.status, 'moving'), eq(workbenchesTable.runtime, 'sandbox')));
+    .where(and(
+      eq(workbenchesTable.status, 'moving'),
+      eq(workbenchesTable.runtime, 'sandbox'),
+      sql`(${workbenchesTable.settings} ->> 'moveHeartbeatAt' IS NULL
+        OR (${workbenchesTable.settings} ->> 'moveHeartbeatAt')::timestamptz < now() - make_interval(secs => ${staleAfterSeconds}::int))`,
+    ));
+}
+
+/** Count a failed or refused move on the row, so the backoff survives a deploy. */
+export async function recordMoveFailure(id: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object(
+        'moveFailedAt', now(),
+        'moveFailures', COALESCE((${workbenchesTable.settings} ->> 'moveFailures')::int, 0) + 1)`,
+    })
+    .where(eq(workbenchesTable.id, id))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Merge server-owned keys into a workbench's settings, leaving the rest alone. */
+export async function mergeWorkbenchSettings(id: string, values: Record<string, string>): Promise<void> {
+  await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || ${JSON.stringify(values)}::jsonb` })
+    .where(eq(workbenchesTable.id, id));
 }
 
 /** Stop an automatic loop when a second box is lost inside the retry window. */
@@ -668,6 +754,26 @@ export async function finishTurn(
   const startedMessage =
     typeof row.started_message === 'string' ? JSON.parse(row.started_message) : row.started_message;
   return { chat, started: { message: startedMessage as WorkbenchQueuedMessage, turn: chat.turnCount } };
+}
+
+/**
+ * Give a turn back to the queue before it ran anything: its message goes to
+ * the head of the queue, the turn number is returned, and the chat is idle.
+ * For a turn that found its workbench moving. Null when the chat was not running.
+ */
+export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage): Promise<ChatRow | null> {
+  const result = await db().execute(sql`
+    UPDATE workbench_chats c SET
+      queued_messages = ${JSON.stringify([message])}::jsonb || c.queued_messages,
+      status = 'idle',
+      status_message = NULL,
+      turn_count = GREATEST(c.turn_count - 1, 0),
+      updated_at = now()
+    WHERE c.id = ${chatId} AND c.status = 'running'
+    RETURNING ${RETURNING_CHAT}
+  `);
+  const row = rowsOf<RawChatRow>(result)[0];
+  return row ? rawToChatRow(row) : null;
 }
 
 /**

@@ -16,10 +16,11 @@ import {
   moveExportEnv,
   moveExportScript,
   moveImportScript,
+  movedNote,
   moveReadChunkScript,
-  moveRef,
   moveStagingDir,
   parseMoveManifest,
+  skippedNote,
   type MoveManifest,
 } from '../services/workbenches/move.js';
 import {
@@ -67,13 +68,38 @@ describe('the export script', () => {
     const targets = redirectTargets(script);
     expect(targets.length).toBeGreaterThan(5);
     for (const target of targets) expect(target).toMatch(/^"\$d\//);
-    // The only other files: the index copy, at the env's /dev/shm path.
+    // The only other file: the index copy, at the env's /dev/shm path.
     expect(script).toContain('cp -- "$real_index" "$GIT_INDEX_FILE"');
   });
 
-  it('pushes HEAD to the hidden move ref, skipping hooks', () => {
-    expect(moveRef(WB)).toBe(`refs/talyn/move/${WB}`);
-    expect(script).toContain(`git push --no-verify --force --quiet origin "$head":refs/talyn/move/${WB} `);
+  it('never pushes: commits travel as a bundle of every branch, the stash and the checkpoints', () => {
+    expect(script).not.toMatch(/git push/);
+    expect(script).toContain(
+      "git for-each-ref --format='%(objectname) %(refname) %(upstream:short)' refs/heads refs/stash refs/talyn/checkpoints",
+    );
+    expect(script).toContain('git bundle create - "${refs[@]}" --not --remotes | capped repo.bundle');
+    // An empty bundle is an error in git, so the bundle is made only when there are new commits.
+    expect(script).toContain('git rev-list --count "${refs[@]}" --not --remotes');
+  });
+
+  it.each(['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'])(
+    'refuses with 41 while %s exists',
+    (state) => {
+      expect(script).toMatch(new RegExp(`for s in [^;]*\\b${state}\\b`));
+      expect(script).toContain('exit 41');
+    },
+  );
+
+  it('refuses with 42 for unpushed commits that add LFS pointers, before bundling', () => {
+    expect(script.indexOf('exit 42')).toBeLessThan(script.indexOf('git bundle create'));
+    expect(script).toContain('grep -q "^+version https://git-lfs.github.com/spec/v1"');
+  });
+
+  it('sends filtered paths as raw bytes and keeps them out of both patches', () => {
+    expect(script).toContain('git check-attr -z --stdin filter');
+    expect(script).toContain('excl+=(":(exclude,literal)$p")');
+    expect(script).toContain('tar -czf - --null --no-recursion -T "$d/filtered.list" | capped filtered.tgz');
+    expect(script.match(/-- \. \$\{excl\[@\]\+"\$\{excl\[@\]\}"\}/g)).toHaveLength(2);
   });
 
   it('reads the staged changes from the real index and the rest from a /dev/shm copy with intent-to-add', () => {
@@ -82,12 +108,13 @@ describe('the export script', () => {
     expect(script.indexOf('git add -N')).toBeLessThan(script.indexOf('git diff --binary --no-ext-diff --no-textconv --no-color --'));
   });
 
-  it.each(MOVE_SKIP_DIRS.map((d) => [d]))('skips the %s folder', (dir) => {
+  it.each(MOVE_SKIP_DIRS.map((d) => [d]))('skips and counts the %s folder', (dir) => {
     expect(script).toContain(`*/${dir}/*`);
     expect(script).toContain(`-name ${dir} `);
   });
 
-  it('caps ignored files per file and in total, and every staged file at the transfer cap', () => {
+  it('counts the files of each skipped folder, and caps ignored files per file and in total', () => {
+    expect(script).toContain(`printf 'SKIPDIR %s %s\\n'`);
     expect(script).toContain(`[ "$size" -gt ${MOVE_IGNORED_FILE_MAX_BYTES} ]`);
     expect(script).toContain(`-gt ${MOVE_IGNORED_TOTAL_MAX_BYTES} ]`);
     expect(script).toContain(`cap=${MOVE_TRANSFER_MAX_BYTES}`);
@@ -101,97 +128,181 @@ describe('the export script', () => {
     expect(script).toContain(`"\${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name '*0199aabb-ccdd-7eef-8000-112233445566*.jsonl'`);
     expect(script).not.toContain('rm -rf /');
   });
+
+  it('ends the manifest with END, after everything else', () => {
+    expect(script.trimEnd().endsWith('echo END')).toBe(true);
+  });
 });
 
+const SHA64 = 'f'.repeat(64);
+const HEAD = 'a'.repeat(40);
+const good = [
+  `HEAD ${HEAD}`,
+  `BRANCH ${b64('feature/x')}`,
+  'UPSTREAM ',
+  `REF ${HEAD} refs/heads/feature/x origin/feature/x`,
+  `REF ${'b'.repeat(40)} refs/heads/other`,
+  `REF ${'c'.repeat(40)} refs/stash`,
+  `REF ${'d'.repeat(40)} refs/talyn/checkpoints/chat-1/3`,
+  `FILE repo.bundle 7 ${SHA64}`,
+  `FILE staged.patch.gz 20 ${SHA64}`,
+  `FILE unstaged.patch.gz 20 ${SHA64}`,
+  `FILTERED_DELETED ${b64('uv.lock')}`,
+  `SKIPDIR ${b64('web/node_modules')} 4000`,
+  `MISSING_SESSION 4f1c2b9e-1111-4222-8333-944455556666`,
+  'SKIPPED_COUNT 3',
+  `SKIPPED ${b64('a b/.env.big')}`,
+  'END',
+];
+
+function b64(s: string): string {
+  return Buffer.from(s).toString('base64');
+}
+
 describe('the manifest', () => {
-  const sha = 'f'.repeat(64);
   it('parses what the export prints', () => {
-    const parsed = parseMoveManifest(
-      [
-        `HEAD ${'a'.repeat(40)}`,
-        `BRANCH ${Buffer.from('feature/x').toString('base64')}`,
-        'UPSTREAM ',
-        `FILE staged.patch.gz 20 ${sha}`,
-        `FILE agent.tgz 99 ${sha}`,
-        `FILE evil.sh 1 ${sha}`,
-        'FILE unstaged.patch.gz -1 abc',
-        'SKIPPED_COUNT 3',
-        `SKIPPED ${Buffer.from('a b/.env.big').toString('base64')}`,
-        'MISSING_SESSION 4f1c',
-      ].join('\n'),
-    );
-    expect(parsed).toEqual({
-      head: 'a'.repeat(40),
+    expect(parseMoveManifest(good.join('\n'))).toEqual({
+      head: HEAD,
       branch: 'feature/x',
       upstream: '',
-      files: [
-        { name: 'staged.patch.gz', size: 20, sha256: sha },
-        { name: 'agent.tgz', size: 99, sha256: sha },
+      refs: [
+        { name: 'refs/heads/feature/x', sha: HEAD, upstream: 'origin/feature/x' },
+        { name: 'refs/heads/other', sha: 'b'.repeat(40), upstream: '' },
+        { name: 'refs/stash', sha: 'c'.repeat(40), upstream: '' },
+        { name: 'refs/talyn/checkpoints/chat-1/3', sha: 'd'.repeat(40), upstream: '' },
       ],
+      files: [
+        { name: 'repo.bundle', size: 7, sha256: SHA64 },
+        { name: 'staged.patch.gz', size: 20, sha256: SHA64 },
+        { name: 'unstaged.patch.gz', size: 20, sha256: SHA64 },
+      ],
+      filteredDeleted: ['uv.lock'],
       skipped: ['a b/.env.big'],
       skippedCount: 3,
-      missingSessions: ['4f1c'],
+      skippedDirs: [{ path: 'web/node_modules', files: 4000 }],
+      missingSessions: ['4f1c2b9e-1111-4222-8333-944455556666'],
     });
   });
 
-  it('is null without a HEAD', () => {
-    expect(parseMoveManifest('FILE agent.tgz 1 x')).toBeNull();
+  const without = (prefix: string) => good.filter((l) => !l.startsWith(prefix));
+  const replace = (prefix: string, line: string) => good.map((l) => (l.startsWith(prefix) ? line : l));
+  it.each<[string, string[]]>([
+    ['no END', good.slice(0, -1)],
+    ['a line after END', [...good, 'HEAD x']],
+    ['an unknown line', ['WHAT 1', ...good]],
+    ['no HEAD', without('HEAD')],
+    ['two HEADs', [good[0], ...good]],
+    ['no BRANCH', without('BRANCH')],
+    ['no SKIPPED_COUNT', without('SKIPPED_COUNT')],
+    ['no staged patch', without('FILE staged.patch.gz')],
+    ['no unstaged patch', without('FILE unstaged.patch.gz')],
+    ['an unknown file', [...good.slice(0, -1), `FILE evil.sh 1 ${SHA64}`, 'END']],
+    ['a negative size', replace('FILE repo.bundle', `FILE repo.bundle -1 ${SHA64}`)],
+    ['a short checksum', replace('FILE repo.bundle', 'FILE repo.bundle 7 abc')],
+    ['a file twice', [...good.slice(0, -1), `FILE repo.bundle 7 ${SHA64}`, 'END']],
+    ['a ref outside the carried ones', [...good.slice(0, -1), `REF ${HEAD} refs/remotes/origin/main`, 'END']],
+    ['a ref with a bad sha', [...good.slice(0, -1), `REF xyz refs/heads/y`, 'END']],
+    ['a branch with no ref at HEAD', replace('REF ' + HEAD, `REF ${'e'.repeat(40)} refs/heads/feature/x`)],
+    ['bad base64', replace('SKIPPED ', 'SKIPPED !!!')],
+    ['a skipped folder with no count', replace('SKIPDIR', `SKIPDIR ${b64('x')}`)],
+  ])('is null with %s', (_name, lines) => {
+    expect(parseMoveManifest(lines.join('\n'))).toBeNull();
   });
 });
 
 describe('the import script', () => {
-  const base: MoveManifest = {
-    head: 'a'.repeat(40),
-    branch: 'paris',
-    upstream: 'origin/paris',
-    files: [
-      { name: 'staged.patch.gz', size: 1, sha256: '1'.repeat(64) },
-      { name: 'unstaged.patch.gz', size: 1, sha256: '2'.repeat(64) },
-      { name: 'ignored.tgz', size: 1, sha256: '3'.repeat(64) },
-      { name: 'agent.tgz', size: 1, sha256: '4'.repeat(64) },
-    ],
-    skipped: [],
-    skippedCount: 0,
-    missingSessions: [],
-  };
+  const base = parseMoveManifest(good.join('\n'))!;
+  const withFiles = (names: string[]) => ({
+    ...base,
+    files: names.map((name) => ({ name, size: 9, sha256: SHA64 })) as MoveManifest['files'],
+  });
 
-  it('checks every file, fetches the ref, then applies in order', () => {
-    const script = moveImportScript({ workbenchId: WB, manifest: base });
+  it('checks every file, brings the commits in, puts every ref back, then applies in order', () => {
+    const script = moveImportScript({
+      workbenchId: WB,
+      manifest: withFiles(['repo.bundle', 'staged.patch.gz', 'unstaged.patch.gz', 'filtered.tgz', 'ignored.tgz', 'agent.tgz']),
+    });
     const order = [
-      "sha256sum -c --status",
-      `git fetch --no-tags --quiet origin refs/talyn/move/${WB} `,
-      `git checkout --quiet -f -B paris ${'a'.repeat(40)} `,
-      'git branch --quiet --set-upstream-to=origin/paris paris',
+      `[ "$(stat -c %s -- "$d/repo.bundle" 2>/dev/null)" = 9 ]`,
+      'sha256sum -c --status',
+      `sed -n '/^$/q; s/^-`,
+      `git fetch --quiet --no-tags "$d/repo.bundle" '+refs/*:refs/talyn-import/*'`,
+      `have ${HEAD} || exit 21`,
+      'git checkout --quiet --detach',
+      `git update-ref refs/heads/feature/x ${HEAD}`,
+      `git update-ref refs/heads/other ${'b'.repeat(40)}`,
+      `git update-ref refs/talyn/checkpoints/chat-1/3 ${'d'.repeat(40)}`,
+      `git stash store -q -m 'Moved from the old sandbox' ${'c'.repeat(40)}`,
+      'refs/talyn-import | while read -r r; do git update-ref -d "$r"; done',
+      'git config branch.feature/x.remote origin && git config branch.feature/x.merge refs/heads/feature/x',
+      'git config --unset branch.other.remote',
+      'git checkout --quiet -f feature/x',
       'git apply --index --binary',
       'git apply --binary --whitespace=nowarn "$d/unstaged.patch"',
+      'tar -xzf "$d/filtered.tgz" -C .',
+      'rm -f -- uv.lock',
       'tar -xzf "$d/ignored.tgz" -C .',
       'tar -xzf "$d/agent.tgz" -C /',
     ];
     const positions = order.map((s) => script.indexOf(s));
-    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect(positions.filter((p) => p < 0)).toEqual([]);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
-    expect(script.match(/sha256sum -c/g)).toHaveLength(4);
+    expect(script.match(/sha256sum -c/g)).toHaveLength(6);
+    expect(script).not.toContain('git update-ref refs/stash');
   });
 
-  it.each<[Partial<MoveManifest>, string, string]>([
-    [{ upstream: '' }, 'git branch --unset-upstream paris', '--set-upstream-to'],
-    [{ branch: '' }, '--detach', '-B'],
-  ])('handles %o', (patch, present, absent) => {
-    const script = moveImportScript({ workbenchId: WB, manifest: { ...base, ...patch } });
-    expect(script).toContain(present);
-    expect(script).not.toContain(absent);
+  it('fetches a missing commit at depth 1 only in a shallow repository', () => {
+    const script = moveImportScript({ workbenchId: WB, manifest: base });
+    expect(script).toContain('depth=; if [ "$(git rev-parse --is-shallow-repository)" = true ]; then depth=--depth=1; fi');
+    expect(script).toContain('git fetch --quiet --no-tags $depth origin "$1"');
   });
 
-  it('skips a file the export did not make', () => {
-    const script = moveImportScript({ workbenchId: WB, manifest: { ...base, files: [] } });
-    expect(script).not.toContain('git apply');
+  it('checks out HEAD detached when there was no branch', () => {
+    const script = moveImportScript({ workbenchId: WB, manifest: { ...base, branch: '' } });
+    expect(script).toContain(`git checkout --quiet -f --detach ${HEAD}`);
+  });
+
+  it('fetches the current branch upstream so status works', () => {
+    const script = moveImportScript({ workbenchId: WB, manifest: { ...base, upstream: 'origin/feature/x' } });
+    expect(script).toContain('git fetch --quiet --no-tags origin +refs/heads/feature/x:refs/remotes/origin/feature/x');
+  });
+
+  it('uses no bundle and no tar it was not given', () => {
+    const script = moveImportScript({ workbenchId: WB, manifest: withFiles(['staged.patch.gz', 'unstaged.patch.gz']) });
+    expect(script).not.toContain('repo.bundle');
     expect(script).not.toContain('tar ');
   });
 
   it('reads a chunk by byte offset', () => {
     expect(moveReadChunkScript('/dev/shm/x/agent.tgz', 2 * MIB, 5)).toBe(
-      "dd if=/dev/shm/x/agent.tgz bs=1M iflag=skip_bytes,count_bytes skip=2097152 count=5 status=none",
+      'dd if=/dev/shm/x/agent.tgz bs=1M iflag=skip_bytes,count_bytes skip=2097152 count=5 status=none',
     );
+  });
+});
+
+describe('the chat note', () => {
+  const manifest = { skipped: ['data/big.bin'], skippedCount: 12, skippedDirs: [
+    { path: 'node_modules', files: 100 },
+    { path: 'web/node_modules', files: 50 },
+    { path: 'api/.venv', files: 7 },
+  ] };
+
+  it.each<['carried' | 'missing' | 'none', string | null, string[]]>([
+    ['carried', 'This conversation came along', ['starts fresh']],
+    ['missing', 'could not be found, so the agent starts fresh', ['came along, so the agent']],
+    ['none', null, ['conversation']],
+  ])('with the conversation %s', (conversation, present, absent) => {
+    const text = movedNote({ reason: 'stale_golden', conversation, stopped: false, manifest });
+    if (present) expect(text).toContain(present);
+    for (const a of absent) expect(text).not.toContain(a);
+  });
+
+  it('names what it left behind', () => {
+    expect(skippedNote(manifest)).toBe(
+      'Not copied, because setup makes them again: node_modules (2 folders, 150 files), .venv (1 folder, 7 files). ' +
+        'Ignored files too large to copy (12): data/big.bin and 11 more.',
+    );
+    expect(skippedNote({ skipped: [], skippedCount: 0, skippedDirs: [] })).toBeNull();
   });
 });
 
