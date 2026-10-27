@@ -674,13 +674,13 @@ const RETURNING_CHAT = sql.raw(
  */
 function workbenchState(chatId: string) {
   return sql`wb_state AS (
-      SELECT w.status, w.archived_at FROM workbenches w
+      SELECT w.status, w.archived_at, w.settings ->> 'archiveOnIdle' AS archive_on_idle FROM workbenches w
       WHERE w.id = (SELECT workbench_id FROM workbench_chats WHERE id = ${chatId})
       FOR SHARE
     )`;
 }
 
-const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL)`);
+const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL OR archive_on_idle IS NOT NULL)`);
 
 export interface ClaimResult {
   chat: ChatRow;
@@ -1127,16 +1127,47 @@ export async function chatIdsOf(workbenchIds: string[]): Promise<string[]> {
 }
 
 /** Mark the archive before any sandbox work starts. Preserve an active move's lease. */
-export async function markArchive(id: string): Promise<WorkbenchRow | null> {
-  const [row] = await db().update(workbenchesTable).set({
-    archivedAt: new Date(),
-    archivePendingAt: new Date(),
-    archiveFailures: 0, archiveRetryAt: null, restoreRequestedAt: null,
-    status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
-    statusMessage: null,
-    updatedAt: new Date(),
-  }).where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt), or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')))).returning(WORKBENCH_COLUMNS);
-  return row ?? getWorkbench(id);
+export async function markArchive(id: string, autoForMergedPr = false): Promise<WorkbenchRow | null> {
+  const row = await db().transaction(async (tx) => {
+    const [archived] = await tx.update(workbenchesTable).set({
+      archivedAt: new Date(),
+      archivePendingAt: new Date(),
+      archiveFailures: 0, archiveRetryAt: null, restoreRequestedAt: null,
+      status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
+      statusMessage: null,
+      settings: sql`CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
+        THEN ${workbenchesTable.settings}
+        ELSE (${workbenchesTable.settings} - 'archiveOnIdle') || jsonb_build_object('autoArchivedForPr',
+          COALESCE(${workbenchesTable.settings} -> 'autoArchivedForPr', '[]'::jsonb)
+          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END`,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
+      autoForMergedPr ? and(
+        isNull(workbenchesTable.archivedAt),
+        sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
+        sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
+          WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`,
+      ) : or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')),
+    )).returning(WORKBENCH_COLUMNS);
+    if (archived && autoForMergedPr) {
+      await tx.execute(sql`
+        WITH first_chat AS (
+          SELECT id FROM workbench_chats WHERE workbench_id = ${id} ORDER BY created_at, id LIMIT 1
+        ), alloc AS (
+          UPDATE workbench_chats SET next_seq = next_seq + 1
+          WHERE id = (SELECT id FROM first_chat) RETURNING id, next_seq, turn_count
+        )
+        INSERT INTO workbench_events (chat_id, seq, turn, event)
+        SELECT id, next_seq, turn_count, ${JSON.stringify({
+          type: 'system', subtype: 'pr_merged_archive',
+          text: 'The pull request was merged, so Talyn archived this session.',
+        })}::jsonb FROM alloc
+      `);
+    }
+    return archived;
+  });
+  return row ?? (autoForMergedPr ? null : getWorkbench(id));
 }
 
 const archiveAvailable = () => or(isNull(workbenchesTable.archiveLeaseUntil), lt(workbenchesTable.archiveLeaseUntil, new Date()));

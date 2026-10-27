@@ -1,3 +1,4 @@
+import { autoArchiveForMergedPr } from './autoArchive.js';
 import { v4 as uuid } from 'uuid';
 import {
   buildClaudeArgv,
@@ -196,7 +197,10 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
 export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
   if (isWorkbenchDraining()) { await markDrainPending(chatId); return false; }
   const claim = await claimOrEnqueue(chatId, null, true);
-  if (!claim?.started) return false;
+  if (!claim?.started) {
+    if (claim) await autoArchiveForMergedPr({ workbenchId: claim.chat.workbenchId });
+    return false;
+  }
   emitWorkbenchChat(claim.chat.workspaceId, rowToChat(claim.chat));
   launchTurnLoop(chatId, claim.started);
   return true;
@@ -265,7 +269,10 @@ async function runTurnLoop(
       owner: TURN_OWNER,
       turn: heldTurn,
     });
-    if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+    if (fin) {
+      emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+      await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
+    }
     if (fin) {
       scheduleAgentBackup(chatId);
       const wb = await getWorkbench(fin.chat.workbenchId);
@@ -789,6 +796,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+      await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
       if (wb.sandboxId) for (const attempt of [0, 1]) {
         await removeDurableExec(wb, turnLogKey(chatId, chat.turnCount, attempt), turnMarker(chatId, chat.turnCount, attempt))
           .catch((error) => recordWorkbenchEvent(wb, 'turn_cleanup_failed', 'The finished turn log could not be removed.', false, error));

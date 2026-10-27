@@ -18,6 +18,7 @@
  * separator and the body has exactly one valid reading.
  */
 import type { WorkbenchChat } from './workbench.js';
+import { isClaudeInterruptionText } from './transcript.js';
 
 /**
  * The largest upload. Every Claude Code conversation on a heavy user's machine
@@ -118,7 +119,7 @@ export function claudePromptText(line: Json): string | null {
   if (line.type !== 'user' || line.isMeta || line.isSidechain || line.isCompactSummary) return null;
   const content = (line.message as { content?: unknown } | undefined)?.content;
   if (typeof content === 'string') {
-    return content.trim() && !isInjectedClaudePrompt(content) ? content : null;
+    return content.trim() && !isInjectedClaudePrompt(content) && !isClaudeInterruptionText(content) ? content : null;
   }
   if (!Array.isArray(content)) return null;
   const texts: string[] = [];
@@ -129,6 +130,7 @@ export function claudePromptText(line: Json): string | null {
     if (block?.type === 'image') images++;
   }
   const text = texts.join('\n');
+  if (images === 0 && texts.length === content.length && isClaudeInterruptionText(text)) return null;
   if (text && isInjectedClaudePrompt(text)) return null;
   if (!text.trim() && images === 0) return null;
   const note = images > 0 ? `(${images === 1 ? 'An image' : `${images} images`} not shown.)` : '';
@@ -250,6 +252,18 @@ export function claudeSessionToEvents(
         continue;
       }
       const content = (line.message as { content?: unknown } | undefined)?.content;
+      const interruptionText = typeof content === 'string'
+        ? content
+        : Array.isArray(content) && content.every((b) => b?.type === 'text' && typeof b.text === 'string')
+          ? content.map((b) => b.text).join('\n')
+          : null;
+      if (interruptionText !== null && isClaudeInterruptionText(interruptionText)) {
+        events.push({
+          turn: Math.max(turn, 1),
+          event: { type: 'user', ...sessionId, message: { role: 'user', content: [{ type: 'text', text: interruptionText }] } },
+        });
+        continue;
+      }
       if (!Array.isArray(content)) continue;
       const results = (content as Json[])
         .filter((b) => b?.type === 'tool_result')

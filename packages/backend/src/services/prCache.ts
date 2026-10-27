@@ -1,3 +1,4 @@
+import { autoArchiveForMergedPr } from './workbenches/autoArchive.js';
 import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
@@ -615,6 +616,9 @@ async function upsertRow(
     existingId?: string;
   }
 ): Promise<string> {
+  if (opts.summary.state === 'merged' || opts.summary.mergedAt) {
+    await autoArchiveForMergedPr({ repoFullName: `${opts.summary.owner}/${opts.summary.repo}`, number: opts.summary.number, workspaceIds: [opts.workspaceId] });
+  }
   const now = new Date();
   const id = opts.existingId ?? uuid();
   // GitHub resets `mergeable` to UNKNOWN on any base-branch advance and
