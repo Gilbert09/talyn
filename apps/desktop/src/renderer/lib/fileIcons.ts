@@ -61,3 +61,10 @@ export function loadFileIconResolver(): Promise<FileIconResolver> {
   pending ??= import('./fileIconData.json').then((m) => createFileIconResolver(m.default as FileIconData));
   return pending;
 }
+
+export type IconModule = string | { default?: string };
+
+/** An asset/resource module's exports ARE its URL; a context load has no `default`. */
+export function iconModuleUrl(m: IconModule): string | null {
+  return (typeof m === 'string' ? m : m?.default) || null;
+}
