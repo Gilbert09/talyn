@@ -794,6 +794,7 @@ export const pullRequests = pgTable(
   (t) => ({
     // One row per (workspace, repo, number). Upsert key for the
     // poller — same PR seen twice in one tick must not double-insert.
+    repoNumberIdx: index('idx_pull_requests_repo_number').on(sql`lower(${t.owner})`, sql`lower(${t.repo})`, t.number),
     workspaceRepoNumberUq: uniqueIndex('uq_pull_requests_workspace_repo_number').on(
       t.workspaceId,
       t.repositoryId,
@@ -1967,6 +1968,8 @@ export const workbenches = pgTable(
     sandboxIdx: index('idx_workbenches_sandbox')
       .on(t.sandboxId)
       .where(sql`${t.sandboxId} IS NOT NULL`),
+    archiveOnIdleIdx: index('idx_workbenches_archive_on_idle').on(t.id)
+      .where(sql`${t.archivedAt} IS NULL AND ${t.settings} ->> 'archiveOnIdle' IS NOT NULL`),
     pullRequestIdx: index('idx_workbenches_pull_request')
       .on(t.pullRequestId)
       .where(sql`${t.archivedAt} IS NULL`),

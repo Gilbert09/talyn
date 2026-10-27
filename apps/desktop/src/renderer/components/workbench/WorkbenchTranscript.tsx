@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
-import { findTurnPlan, PLAN_APPROVED_MESSAGE, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { renderMarkdownish } from '../../lib/markdown';
 import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
@@ -178,7 +178,21 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   const cache = useRef(new Map<string, { size: number; last: number; turn: TranscriptTurn }>());
   return useMemo(() => {
     const next = new Map<string, { size: number; last: number; turn: TranscriptTurn }>();
-    const out = splitTurns(events).map((turn, i) => {
+    let lastTurn: number | null = null;
+    const displayEvents = events.map((entry) => {
+      if (!isClaudeInterruptionEvent(entry.event)) {
+        lastTurn = entry.turn;
+        return entry;
+      }
+      const turn = lastTurn ?? entry.turn;
+      lastTurn = turn;
+      return {
+        ...entry,
+        turn,
+        event: { seq: entry.seq, type: 'system', subtype: 'talyn_interruption' } as AgentEvent,
+      };
+    });
+    const out = splitTurns(displayEvents).map((turn, i) => {
       const key = `${turn.turn}:${turn.userSeq ?? i}`;
       const last = turn.events.length ? turn.events[turn.events.length - 1].seq : -1;
       const prev = cache.current.get(key);

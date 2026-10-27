@@ -1,3 +1,4 @@
+import { autoArchiveForMergedPr } from './workbenches/autoArchive.js';
 import { recordRankingOutcome } from './reviewPriority/collection.js';
 import type { Redis } from 'ioredis';
 import { createRedisConnection, isRedisEnabled } from './redis.js';
@@ -449,6 +450,10 @@ async function applyTerminalStateFromPayload(
   const outcome = terminalOutcomeFromPayload(delivery.action, delivery.payload);
   if (!outcome) return;
   for (const number of numbers) {
+    if (outcome.merged) {
+      await autoArchiveForMergedPr({ repoFullName: delivery.repoFullName, number,
+        workspaceIds: targets.map((target) => target.workspaceId) });
+    }
     const closed = await prMonitorService.markPrTerminal(targets, number, outcome);
     whTrace(
       `  pull_request/closed ${delivery.repoFullName}#${number}: ` +

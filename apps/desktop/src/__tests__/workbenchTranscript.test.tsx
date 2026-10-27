@@ -140,3 +140,35 @@ it.each(['The agent stopped unexpectedly.', 'The tool connection failed.'])('sho
   render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
   expect(screen.getByText(message)).toBeInTheDocument();
 });
+
+it.each(['[Request interrupted by user]', '[Request interrupted by user for tool use]'])(
+  'shows a quiet interruption instead of a user bubble for %s', (marker) => {
+    const events: WorkbenchEvent[] = [userEvent(1, 1), {
+      chatId: 'c1', seq: 2, turn: 2,
+      event: { seq: 2, type: 'user', message: { role: 'user', content: [{ type: 'text', text: marker }] } } as AgentEvent,
+    }, {
+      chatId: 'c1', seq: 3, turn: 3,
+      event: { seq: 3, type: 'user', message: { role: 'user', content: [{ type: 'text', text: marker }] } } as AgentEvent,
+    }];
+    render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+    expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Interrupted')).toHaveLength(1);
+    expect(screen.getByText('Interrupted')).toHaveClass('text-muted-foreground');
+  },
+);
+
+it('shows a stopped tool without its canned rejection text', () => {
+  const rejection = "The user doesn't want to proceed with this tool use. STOP what you are doing.";
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'Edit', input: { file_path: 'a.ts' } }] } } as AgentEvent,
+  }, {
+    chatId: 'c1', seq: 3, turn: 1,
+    event: { seq: 3, type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: rejection, is_error: true }] } } as AgentEvent,
+  }];
+  render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText('edit')).toBeInTheDocument();
+  expect(screen.getByText('stopped')).toHaveClass('text-muted-foreground');
+  expect(screen.getByText('Interrupted')).toHaveClass('text-muted-foreground');
+  expect(screen.queryByText(rejection)).not.toBeInTheDocument();
+});

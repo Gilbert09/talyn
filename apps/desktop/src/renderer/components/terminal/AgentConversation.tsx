@@ -202,6 +202,7 @@ function BlockViewImpl({
           input={block.input}
           output={block.output}
           isError={block.isError}
+          stopped={block.stopped}
           settled={block.settled}
           skillInstructions={skills.get(block.toolId)}
         />
@@ -333,6 +334,7 @@ function ToolBlockView({
   input,
   output,
   isError,
+  stopped,
   settled,
   skillInstructions,
 }: {
@@ -340,6 +342,7 @@ function ToolBlockView({
   input: unknown;
   output?: unknown;
   isError: boolean;
+  stopped: boolean;
   settled: boolean;
   /** The SKILL.md text a Skill call added to the conversation. */
   skillInstructions?: string;
@@ -401,6 +404,7 @@ function ToolBlockView({
           </span>
         )}
         {!settled && <span className="flex-none text-[11px] text-muted-foreground">running…</span>}
+        {stopped && <span className="flex-none text-[11px] text-muted-foreground">stopped</span>}
         {canToggle && (
           <span className="flex-none flex items-center gap-1 text-[11px] text-muted-foreground">
             <span>{out.summary}</span>
@@ -531,6 +535,7 @@ function ToolGroupView({
               input={t.input}
               output={t.output}
               isError={t.isError}
+              stopped={t.stopped}
               settled={t.settled}
               skillInstructions={skills.get(t.toolId)}
             />

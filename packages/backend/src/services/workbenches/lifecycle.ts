@@ -1,3 +1,4 @@
+import { sweepMergeArchives } from './autoArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
@@ -323,8 +324,11 @@ export function restoreSavedWorkScript(row: Pick<WorkbenchRow, 'id' | 'branch'>)
 }
 
 /** Archive answers after the durable marker is written. */
-export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow> {
-  const row = await markArchive(workbenchId);
+export function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow>;
+export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true }): Promise<WorkbenchRow | null>;
+export async function archiveWorkbench(workbenchId: string, opts?: { autoForMergedPr: true }): Promise<WorkbenchRow | null> {
+  const row = await markArchive(workbenchId, opts?.autoForMergedPr);
+  if (!row && opts?.autoForMergedPr) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
   scheduleArchive(row.id);
@@ -580,7 +584,10 @@ async function archiveSweepTick(): Promise<void> {
   const started = Date.now();
   let error: unknown;
   try {
-    await runWithoutScope(() => sweepPendingArchives());
+    await runWithoutScope(async () => {
+      await sweepMergeArchives();
+      await sweepPendingArchives();
+    });
   } catch (err) {
     error = err;
   } finally {

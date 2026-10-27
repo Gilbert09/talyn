@@ -19,6 +19,35 @@
 import type { AgentEvent } from './index.js';
 import { adoptedPullRequestMessage } from './workbenchPullRequest.js';
 
+const INTERRUPTED_MESSAGES = new Set([
+  '[Request interrupted by user]',
+  '[Request interrupted by user for tool use]',
+]);
+const REJECTED_TOOL_PREFIX = "The user doesn't want to proceed with this tool use.";
+
+export function isClaudeInterruptionText(text: string): boolean {
+  return INTERRUPTED_MESSAGES.has(text.trim());
+}
+
+export function isClaudeInterruptionEvent(event: AgentEvent): boolean {
+  if (event.type !== 'user') return false;
+  const content = (event.message as { content?: unknown })?.content;
+  if (typeof content === 'string') return isClaudeInterruptionText(content);
+  return Array.isArray(content) && content.length > 0 &&
+    content.every((block) => block?.type === 'text' && typeof block.text === 'string') &&
+    isClaudeInterruptionText(content.map((block) => block.text).join('\n'));
+}
+
+export function isClaudeRejectedToolResult(content: unknown, isError: boolean): boolean {
+  if (!isError) return false;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content) && content[0]?.type === 'text'
+      ? content[0].text
+      : null;
+  return typeof text === 'string' && text.trimStart().startsWith(REJECTED_TOOL_PREFIX);
+}
+
 // ---------------------------------------------------------------------------
 // Block model — the transcript is event-stream shaped; the renderer wants a
 // block-stream shape (one "card" per assistant turn, tool call, permission
@@ -35,6 +64,7 @@ export type Block =
       toolId: string;
       content: unknown;
       isError: boolean;
+      stopped?: boolean;
       /** Filled in at buildBlocks time by pairing with the preceding tool_use. */
       toolName?: string;
       toolInput?: unknown;
@@ -62,6 +92,11 @@ export type Block =
 
 export function buildBlocks(events: AgentEvent[]): Block[] {
   const blocks: Block[] = [];
+  let interruptionOpen = false;
+  const interrupt = (key: string) => {
+    if (!interruptionOpen) blocks.push({ kind: 'system', key, text: 'Interrupted', subtype: 'talyn_interruption' });
+    interruptionOpen = true;
+  };
   const permissionByRequestId = new Map<string, number>(); // requestId → blocks index
   // Pair tool_result → tool_use by tool_use_id so the collapsed result
   // row can say "Read 40 lines from <file>" instead of dumping bytes.
@@ -80,6 +115,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
   for (const event of events) {
     const seqKey = String(event.seq);
+    if (event.type !== 'user' && !(event.type === 'system' && event.subtype === 'talyn_interruption')) interruptionOpen = false;
 
     if (event.type === 'talyn_permission_request') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
@@ -178,7 +214,14 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
     if (event.type === 'user') {
       const content = (event.message as { content?: unknown })?.content;
-      if (!Array.isArray(content)) continue;
+      if (isClaudeInterruptionEvent(event)) {
+        interrupt(`${seqKey}.interrupted`);
+        continue;
+      }
+      if (!Array.isArray(content)) {
+        interruptionOpen = false;
+        continue;
+      }
       for (let i = 0; i < content.length; i++) {
         const b = content[i] as {
           type?: string;
@@ -189,15 +232,21 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         if (b.type === 'tool_result') {
           const toolId = String(b.tool_use_id ?? '');
           const paired = toolId ? toolUseById.get(toolId) : undefined;
+          const stopped = isClaudeRejectedToolResult(b.content, b.is_error === true);
           blocks.push({
             kind: 'tool_result',
             key: `${seqKey}.${i}`,
             toolId,
-            content: b.content ?? '',
-            isError: Boolean(b.is_error),
+            content: stopped ? '' : b.content ?? '',
+            isError: Boolean(b.is_error) && !stopped,
+            stopped,
             toolName: paired?.name,
             toolInput: paired?.input,
           });
+          if (stopped) interrupt(`${seqKey}.${i}.interrupted`);
+          else interruptionOpen = false;
+        } else {
+          interruptionOpen = false;
         }
       }
       continue;
@@ -258,8 +307,12 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     // the truncation marker. Drop init / status / etc — they're noise
     // in a conversation view.
     if (event.type === 'system') {
-      // The closing line of an imported conversation. No subtype, so no label prefix.
-      if (event.subtype === 'talyn_imported') {
+      if (event.subtype === 'talyn_interruption') {
+        interrupt(seqKey);
+        continue;
+      }
+      // Session notes have no label prefix.
+      if (event.subtype === 'talyn_imported' || event.subtype === 'pr_merged_archive') {
         blocks.push({ kind: 'system', key: seqKey, text: String((event as { text?: unknown }).text ?? '') });
         continue;
       }
@@ -502,6 +555,7 @@ export interface ToolBlock {
   output?: unknown;
   /** Only meaningful once `output` has landed. */
   isError: boolean;
+  stopped: boolean;
   /** False until the result arrives — lets a renderer show a spinner. */
   settled: boolean;
 }
@@ -529,6 +583,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
         name: block.name,
         input: block.input,
         isError: false,
+        stopped: false,
         settled: false,
       });
       continue;
@@ -540,6 +595,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
       if (target && target.kind === 'tool') {
         target.output = block.content;
         target.isError = block.isError;
+        target.stopped = block.stopped === true;
         target.settled = true;
         continue;
       }
@@ -552,6 +608,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
         input: block.toolInput,
         output: block.content,
         isError: block.isError,
+        stopped: block.stopped === true,
         settled: true,
       });
       continue;
@@ -575,7 +632,7 @@ export function mergedBlockSignature(block: MergedBlock): string {
   if (block.kind === 'tool') {
     const len =
       typeof block.output === 'string' ? block.output.length : block.output ? 1 : 0;
-    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${len}`;
+    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}`;
   }
   return blockSignature(block);
 }

@@ -1,3 +1,4 @@
+import { autoArchiveForMergedPr } from './workbenches/autoArchive.js';
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -1467,6 +1468,9 @@ class PRMonitorService extends EventEmitter {
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, row.id))
       .limit(1);
+    if (nextState === 'merged') {
+      await autoArchiveForMergedPr({ repoFullName: `${row.owner}/${row.repo}`, number: row.number, workspaceIds: [workspaceId] });
+    }
     await this.db
       .update(pullRequestsTable)
       .set({ state: nextState, mergedAt, updatedAt: new Date(), ...QUEUE_RESET_COLUMNS })

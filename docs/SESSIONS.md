@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Archive sessions when their PR merges (2026-10-27)
+
+Merged webhook payloads, monitor close-outs, and PR refreshes now request the same session archive.
+The lookup matches the linked PR by repository and number across owner workspaces.
+Migration 0088 adds lookup indexes and guards for overlapping backend versions.
+The rule waits until every running chat finishes. Queued messages stay queued.
+The normal archive service saves the branch and uncommitted work before it deletes the sandbox.
+The archive and one system note commit together. Stored PR identities prevent another archive after a restore.
+The existing archive sweep recovers a crash after the last turn commits. No GitHub polling was added.
+
+
 ## Repair session continuity during deploys (2026-10-27)
 
 Migration 0087 adds parser snapshots, deferred queue flags, archive retry dates, sandbox generations, and backup leases.
