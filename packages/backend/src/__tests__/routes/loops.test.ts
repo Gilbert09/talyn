@@ -222,7 +222,7 @@ describe('loop routes', () => {
       const res = await fetch(`${url}/api/v1/loops`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body({ model: 'gpt-5.6-sol' })),
+        body: JSON.stringify(body({ model: 'gpt-6.1-sol' })),
       });
       expect(res.status).toBe(400);
       const json = (await res.json()) as { error: string };
@@ -264,7 +264,7 @@ describe('loop routes', () => {
       const res = await fetch(`${url}/api/v1/loops`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body({ provider: 'selfhosted', model: 'gpt-5.6-terra' })),
+        body: JSON.stringify(body({ provider: 'selfhosted', model: 'gpt-6.1-terra' })),
       });
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toMatch(/no Codex subscription/);
@@ -315,7 +315,7 @@ describe('loop routes', () => {
       const res = await fetch(`${url}/api/v1/loops/${made.id}`, {
         method: 'PATCH',
         headers,
-        body: JSON.stringify({ model: 'gpt-5.6-sol' }),
+        body: JSON.stringify({ model: 'gpt-6.1-sol' }),
       });
       expect(res.status).toBe(400);
     });

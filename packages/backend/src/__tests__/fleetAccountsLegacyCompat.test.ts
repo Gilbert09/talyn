@@ -123,11 +123,11 @@ const LEGACY: Record<Kind, { configKey: string; agent: 'claude' | 'codex'; model
     value: () => encryptString('sk-ant-api03-legacy'),
   },
   codex_oauth: {
-    configKey: 'codexOAuth', agent: 'codex', model: 'gpt-5.6-sol', token: codexJwt('legacy'), bodyKey: 'openaiKey',
+    configKey: 'codexOAuth', agent: 'codex', model: 'gpt-6.1-sol', token: codexJwt('legacy'), bodyKey: 'openaiKey',
     value: () => ({ ...oauthCredential(codexJwt('legacy')), accountId: 'chatgpt-1' }),
   },
   openai_key: {
-    configKey: 'openaiKeyEnc', agent: 'codex', model: 'gpt-5.6-sol', token: 'sk-proj-legacy', bodyKey: 'openaiKey',
+    configKey: 'openaiKeyEnc', agent: 'codex', model: 'gpt-6.1-sol', token: 'sk-proj-legacy', bodyKey: 'openaiKey',
     value: () => encryptString('sk-proj-legacy'),
   },
 };

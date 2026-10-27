@@ -308,11 +308,10 @@ export const FLEET_MODELS = [
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'The previous Sonnet.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', blurb: 'Cheapest of the Claude set.' },
-  { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', blurb: 'Newest and most capable.' },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', provider: 'openai', blurb: 'Most capable 5.6 — complex coding.' },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai', blurb: 'Balanced — the Codex default.' },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', provider: 'openai', blurb: 'Fastest and cheapest of the set.' },
-  { id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai', blurb: 'The previous flagship.' },
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', blurb: 'Most capable: the hardest reasoning and coding.' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', blurb: 'Near-Astra on complex work, for less.' },
+  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'openai', blurb: 'Fast and efficient: the Codex default.' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'openai', blurb: 'Cheapest, for focused high-volume work.' },
 ] as const satisfies readonly { id: string; label: string; provider: FleetProvider; blurb: string }[];
 
 export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
@@ -337,7 +336,7 @@ export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5-5';
  * asked for. The dispatch ladder picks between the two by which credential the
  * workspace actually holds.
  */
-export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-5.6-terra';
+export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-6.1-terra';
 
 /**
  * Codex ids that OpenAI has withdrawn from the ChatGPT sign-in path, and what
@@ -350,15 +349,15 @@ export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-5.6-terra';
  * Preserving that choice preserves a broken product, so a retired pin is
  * migrated forward instead. This is also what OpenAI's own retirement notice
  * tells you to do ("replace gpt-5.4 with gpt-5.6-terra").
- *
- * They map to the DEFAULT rather than to a like-for-like tier: the retired set
- * spans flagship and mid, the replacements do not line up one to one, and the
- * everyday model is the safe landing for work that is mostly mechanical.
  */
 export const RETIRED_FLEET_MODELS = {
-  'gpt-5.1-codex': 'gpt-5.6-terra',
-  'gpt-5-codex': 'gpt-5.6-terra',
-  'gpt-5.1': 'gpt-5.6-terra',
+  'gpt-5.1-codex': 'gpt-6.1-terra',
+  'gpt-5-codex': 'gpt-6.1-terra',
+  'gpt-5.1': 'gpt-6.1-terra',
+  'gpt-5.5': 'gpt-6.1-sol',
+  'gpt-5.6-sol': 'gpt-6.1-sol',
+  'gpt-5.6-terra': 'gpt-6.1-terra',
+  'gpt-5.6-luna': 'gpt-6-luna',
 } as const satisfies Record<string, FleetModelId>;
 
 export type RetiredFleetModelId = keyof typeof RETIRED_FLEET_MODELS;
@@ -411,8 +410,8 @@ export function fleetProviderForModel(modelId: string | undefined): FleetProvide
  * The strongest model available for the vendor a given model belongs to.
  *
  * `FLEET_MODELS` is ordered most-capable-first within each provider — the first
- * Anthropic entry is labelled "Most capable", the first OpenAI one "Newest and
- * most capable" — so the top tier is the first entry matching the provider.
+ * Anthropic entry is labelled "Most capable", and so is the first OpenAI one
+ * — so the top tier is the first entry matching the provider.
  * Stated here rather than assumed at a call site, because the ordering is the
  * whole contract: reordering that list for display would silently change which
  * model a review escalates to.
