@@ -16,7 +16,7 @@ import {
   resolveSandboxCredentials,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
-import { emitWorkbenchChat, emitWorkbenchDeleted, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
+import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, movingError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
@@ -36,8 +36,6 @@ import {
 } from './sandboxRuntime.js';
 import { startScript, stopAllScripts } from './scripts.js';
 import {
-  appendEvents,
-  clearAgentSessions,
   deleteWorkbenchRow,
   failQueued,
   getWorkbench,
@@ -45,7 +43,6 @@ import {
   liveWorkbenchNames,
   provisioningWorkbenchIds,
   resetFailedChats,
-  rowToChat,
   updateWorkbench,
   type WorkbenchRow,
 } from './store.js';
@@ -195,7 +192,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
           (cloned.stderr.trim().split('\n').slice(-3).join(' ') || `git exited ${cloned.exitCode}`),
       );
     }
-    if (opts.restore) {
+    if (opts.restore || row.memoryRestorePending === 'archive') {
       const restored = await runCapture(row, restoreSavedWorkScript(row), { timeoutMs: CLONE_TIMEOUT_MS });
       if (restored.exitCode !== 0) {
         console.warn(`[workbench] restoring saved work for ${row.id} failed:`, restored.stderr.slice(-300));
@@ -216,11 +213,12 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
 
     row = await linkPullRequest(row);
-    row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote });
+    if (row.memoryRestorePending || replacingLostSandbox) {
+      await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
+    }
+    row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
     void refreshDiffStat(row);
-
-    if (replacingLostSandbox) await recordRecoveredTranscript(row);
 
     // 4. Messages sent while the box was coming up.
     for (const chat of await listChats(row.id)) {
@@ -423,9 +421,8 @@ function fleetHoldsNoBox(err: unknown): boolean {
 
 /**
  * Restore: a NEW box (the old id answers from its tombstone), the branch
- * checked out again and the saved work put back. Every chat's CLI session is
- * forgotten, because the session files lived on the box that is gone — a
- * `--resume` of one would fail the first turn.
+ * checked out again and the saved work put back. Agent backups are restored
+ * before queued turns start.
  */
 export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
@@ -444,25 +441,12 @@ export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRo
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
+    memoryRestorePending: 'archive',
     sandboxId: nextSandboxId(row),
     sandboxState: 'creating',
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
   });
-  for (const chat of await clearAgentSessions(row.id)) {
-    const stored = await appendEvents(chat.id, [
-      {
-        turn: chat.turnCount,
-        event: {
-          type: 'system',
-          subtype: 'sandbox_restored',
-          text: 'This session was restored onto a new sandbox. The agent starts fresh and does not remember earlier turns.',
-        },
-      },
-    ]);
-    emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
-    emitWorkbenchChat(chat.workspaceId, rowToChat(chat));
-  }
   scheduleProvision(row.id, { restore: true });
   return row;
 }

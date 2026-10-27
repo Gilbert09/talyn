@@ -589,6 +589,13 @@
       "when": 1790900000002,
       "tag": "0083_workbench_chat_imported_from",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1790900000003,
+      "tag": "0084_workbench_agent_backups",
+      "breakpoints": true
     }
   ]
 }

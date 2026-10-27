@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { repositories, workspaces } from '../db/schema.js';
 import { FleetRunNotFoundError, type FleetClient } from '../services/selfHosted/client.js';
-import { SANDBOX_LOST_MESSAGE, SANDBOX_RESTORED_NOTE, recordRecoveredTranscript } from '../services/workbenches/recovery.js';
+import { AGENT_MEMORY_RECAP_NOTE, SANDBOX_LOST_MESSAGE, SANDBOX_RESTORED_NOTE, recordRecoveredTranscript } from '../services/workbenches/recovery.js';
 import { runCapture, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import { getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateWorkbench } from '../services/workbenches/store.js';
 import { sendMessage } from '../services/workbenches/turns.js';
@@ -62,7 +62,7 @@ describe('lost workbench recovery', () => {
     await recordRecoveredTranscript((await getWorkbench(row.id))!);
     const events = await listEvents('chat-recovery', 0, 20);
     expect(events.events.map((event) => event.event)).toEqual([
-      expect.objectContaining({ type: 'system', subtype: 'sandbox_recovered', text: SANDBOX_RESTORED_NOTE }),
+      expect.objectContaining({ type: 'system', subtype: 'sandbox_recovered', text: `${SANDBOX_RESTORED_NOTE} ${AGENT_MEMORY_RECAP_NOTE}` }),
     ]);
   });
 

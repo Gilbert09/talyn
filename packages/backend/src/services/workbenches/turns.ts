@@ -22,6 +22,8 @@ import {
   type WorkbenchStatus,
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
+import { scheduleAgentBackup } from './agentBackups.js';
+import { clearRecoveryRecap, recoveryRecap } from './agentRecap.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import {
   DISK_PROBE_SCRIPT,
@@ -220,6 +222,7 @@ async function runTurnLoop(
       drain: !outcome.cancelled,
     });
     if (fin) emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+    scheduleAgentBackup(chatId);
     void afterTurn(fin?.chat ?? null);
     if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
       const wb = await getWorkbench(fin.chat.workbenchId);
@@ -373,6 +376,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   events.add(userMessageEvent(message));
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
+  let sessionWrites = Promise.resolve();
+  let recapWrite = Promise.resolve();
   try {
     let wb = early;
     if (!wb || wb.status !== 'ready' || !wb.sandboxId) {
@@ -416,7 +421,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const resumeSessionId = chat.agentSessionId ?? undefined;
     const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
+    const recap = await recoveryRecap(chatId, turn);
     const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
+      recap,
       agent,
       text,
       planMode,
@@ -447,11 +454,20 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     let accountId = refreshed.accountId;
     let outcome!: Awaited<ReturnType<typeof runStream>>;
     let attemptSawResult = false;
+    let recapStarted = false;
+    const noteRecapStarted = () => {
+      if (recap === undefined || recapStarted) return;
+      recapStarted = true;
+      recapWrite = clearRecoveryRecap(chatId).catch((err) => {
+        console.warn(`[workbench] clearing the recap for chat ${chatId} failed:`, err);
+      });
+    };
     for (let attempt = 0; attempt < 2; attempt++) {
       const parser = createAgentStreamParser(agent);
       attemptSawResult = false;
       // The guest sends one frame per line and the demux hands back whole lines.
       const onLine = (line: string) => {
+        noteRecapStarted();
         for (const draft of parser.push(line)) {
           if (draft.type === 'result') {
             sawResult = true;
@@ -461,17 +477,20 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         }
         if (parser.sessionId && parser.sessionId !== sessionId) {
           sessionId = parser.sessionId;
-          void saveSessionId(chatId, sessionId);
+          const nextSessionId = sessionId;
+          sessionWrites = sessionWrites.then(() => saveSessionId(chatId, nextSessionId));
         }
       };
       const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
-      outcome = await runStream(wb, argv.map(shellQuote).join(' '), {
+      const stream = runStream(wb, argv.map(shellQuote).join(' '), {
         marker: turnMarker(chatId),
         cwd: repoDirFor(wb),
         env,
         signal: live.controller.signal,
         onStdoutLine: onLine,
       }).finally(stopAccountWatch);
+      outcome = await stream;
+      if (outcome.exitCode === 0) noteRecapStarted();
       parserResult = parser.result;
 
       if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || attempt > 0) break;
@@ -544,6 +563,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const diskFull = isDiskFullError(err);
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
   } finally {
+    await Promise.all([sessionWrites, recapWrite]);
     liveTurns.delete(chatId);
   }
 }
