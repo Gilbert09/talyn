@@ -9,8 +9,30 @@ import 'monaco-editor/features/links/register';
 import 'monaco-editor/features/clipboard/register';
 import 'monaco-editor/features/contextmenu/register';
 import 'monaco-editor/features/bracketMatching/register';
-// Monarch grammars only. Each one is its own small chunk, loaded when a file needs it.
-import 'monaco-editor/languages/definitions/register.all';
+// Monarch grammars only. Monaco loads each grammar when a file needs it.
+import 'monaco-editor/languages/definitions/typescript/register';
+import 'monaco-editor/languages/definitions/javascript/register';
+import 'monaco-editor/languages/definitions/python/register';
+import 'monaco-editor/languages/definitions/go/register';
+import 'monaco-editor/languages/definitions/rust/register';
+import 'monaco-editor/languages/definitions/markdown/register';
+import 'monaco-editor/languages/definitions/yaml/register';
+import 'monaco-editor/languages/definitions/shell/register';
+import 'monaco-editor/languages/definitions/css/register';
+import 'monaco-editor/languages/definitions/scss/register';
+import 'monaco-editor/languages/definitions/less/register';
+import 'monaco-editor/languages/definitions/html/register';
+import 'monaco-editor/languages/definitions/sql/register';
+import 'monaco-editor/languages/definitions/dockerfile/register';
+import 'monaco-editor/languages/definitions/ini/register';
+import 'monaco-editor/languages/definitions/java/register';
+import 'monaco-editor/languages/definitions/cpp/register';
+import 'monaco-editor/languages/definitions/csharp/register';
+import 'monaco-editor/languages/definitions/ruby/register';
+import 'monaco-editor/languages/definitions/php/register';
+import 'monaco-editor/languages/definitions/kotlin/register';
+import 'monaco-editor/languages/definitions/swift/register';
+import 'monaco-editor/languages/definitions/xml/register';
 import { hslTokenToHex, JSON_LANGUAGE, languageForPath } from './codeViewer';
 
 // The base editor worker only (links, word ranges). Webpack emits it as a
