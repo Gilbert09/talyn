@@ -8,6 +8,7 @@ import {
   type WorkbenchContextUsage,
   type WorkbenchEffort,
   type WorkbenchTodo,
+  workbenchQueuesMessages,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
@@ -143,9 +144,16 @@ export function Composer({
     }
   };
 
+  // A session whose sandbox is starting, moving or being replaced still takes
+  // messages: the backend queues them and runs them when the sandbox is ready.
+  const sendBlocked =
+    Boolean(ops.unavailable) &&
+    !workbenchQueuesMessages(workbench.status) &&
+    !(workbench.status === 'ready' && workbench.sandboxState === 'lost');
+
   const send = async () => {
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || ops.unavailable) return;
+    if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || sendBlocked) return;
     setSending(true);
     try {
       const target = chat ?? (await createChatTab(workbench));
@@ -164,7 +172,7 @@ export function Composer({
       if (res.queued) {
         toast.info(
           'Queued',
-          workbench.status === 'provisioning'
+          workbenchQueuesMessages(workbench.status)
             ? 'It runs when the sandbox is ready.'
             : 'It runs when the current turn ends.',
         );
@@ -193,7 +201,7 @@ export function Composer({
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
     if (ops.unavailable || !ops.canAttach) {
-      if (ops.runtime === 'sandbox' && workbench.status === 'provisioning') setImageNotReady(true);
+      if (ops.runtime === 'sandbox' && workbenchQueuesMessages(workbench.status)) setImageNotReady(true);
       else toast.error('Could not attach the image', ops.unavailable ?? 'Attachments are unavailable.');
       return;
     }
@@ -346,7 +354,7 @@ export function Composer({
           ref={textareaRef}
           value={draft}
           rows={1}
-          disabled={Boolean(ops.unavailable && workbench.status !== 'provisioning')}
+          disabled={sendBlocked}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
             updateTrigger(e.target.value, e.target.selectionStart);
@@ -425,7 +433,7 @@ export function Composer({
             type="button"
             onClick={() => void send()}
             disabled={
-              sending || pendingUploads > 0 || Boolean(ops.unavailable) || (!draft.trim() && attachments.length === 0)
+              sending || pendingUploads > 0 || sendBlocked || (!draft.trim() && attachments.length === 0)
             }
             className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
             title={running ? 'Queue (Enter)' : 'Send (Enter)'}

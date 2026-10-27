@@ -64,3 +64,24 @@ it('encodes a large PNG as JPEG before upload', async () => {
   expect(upload.mock.calls[0][1].type).toBe('image/jpeg');
   expect(upload.mock.calls[0][2]).toBe('shot.jpg');
 });
+
+it.each([
+  ['starting', { status: 'provisioning' as const }],
+  ['being replaced after a loss', { status: 'provisioning' as const, sandboxState: 'lost' as const }],
+  ['lost but not yet claimed for recovery', { sandboxState: 'lost' as const }],
+])('queues a message while the sandbox is %s', async (_label, patch) => {
+  const send = jest.spyOn(api.workbenches, 'sendMessage').mockResolvedValue({ queued: true });
+  const wb = { ...workbench, ...patch };
+  render(<Composer workbench={wb} chat={chat} ops={sandboxOps(wb)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Try again' } });
+  const button = screen.getByRole('button', { name: 'Send the message' });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  await waitFor(() => expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Try again' })));
+});
+
+it('does not send to an archived session', () => {
+  const wb = { ...workbench, status: 'archived' as const };
+  render(<Composer workbench={wb} chat={chat} ops={sandboxOps(wb)} todos={null} contextUsage={null} slashCommands={null} />);
+  expect(screen.getByRole('button', { name: 'Send the message' })).toBeDisabled();
+});
