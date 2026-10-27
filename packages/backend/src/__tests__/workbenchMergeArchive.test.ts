@@ -3,7 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { buildBlocks } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet, claudeTurnLines } from './helpers/fakeFleet.js';
-import { pullRequests, repositories, workbenchChats, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
 import * as graphql from '../services/githubGraphql.js';
 import type { PRSummary } from '../services/githubGraphql.js';
@@ -30,6 +30,9 @@ vi.mock('../services/workbenches/agentBackups.js', async (original) => ({
   ...await original<typeof import('../services/workbenches/agentBackups.js')>(), scheduleAgentBackup: vi.fn(),
 }));
 
+const createdAt = new Date(Date.now() - 3 * 3600_000);
+const linkedAt = new Date(Date.now() - 90 * 60_000);
+const mergedAt = new Date(Date.now() - 60 * 60_000);
 const note = 'The pull request was merged, so Talyn archived this session.';
 const message = (id: string) => ({ id, text: id, queuedAt: new Date().toISOString() });
 
@@ -37,8 +40,8 @@ function mergedSummary(): PRSummary {
   return {
     owner: 'acme', repo: 'widget', number: 7, title: 'Change', body: '', changedFiles: 1,
     url: 'https://github.com/acme/widget/pull/7', author: 'me', draft: false, state: 'merged',
-    mergedAt: '2026-10-27T12:00:00Z', closedAt: '2026-10-27T12:00:00Z', headBranch: 'branch',
-    baseBranch: 'main', headSha: 'sha', createdAt: '2026-10-26T12:00:00Z', updatedAt: '2026-10-27T12:00:00Z',
+    mergedAt: mergedAt.toISOString(), closedAt: mergedAt.toISOString(), headBranch: 'branch',
+    baseBranch: 'main', headSha: 'sha', createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(), updatedAt: mergedAt.toISOString(),
     mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', reviewDecision: null, blockingReason: null,
     checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 }, unresolvedReviewThreads: 0,
     checkDigest: 'sha:', recentReviews: [], recentReviewComments: [], recentComments: [],
@@ -53,17 +56,18 @@ describe('archive sessions after a PR merge', () => {
   async function seedSession(id: string, workspaceId = 'ws', repositoryId = 'repo', number = 7, repo = 'widget') {
     const prId = `pr-${id}`;
     await testDb.db.insert(pullRequests).values({ id: prId, workspaceId, repositoryId,
-      owner: 'acme', repo, number, state: 'open', lastSummary: { headBranch: 'branch' } });
+      owner: 'acme', repo, number, state: 'open', lastSummary: { headBranch: 'branch', createdAt: createdAt.toISOString() } });
     await insertWorkbench({ id, workspaceId, repositoryId, repoFullName: `acme/${repo}`, name: id,
       branch: 'branch', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready',
-      sandboxId: `box-${id}`, sandboxState: 'running', pullRequestId: prId, settings: { autoCreatePr: false } });
+      createdAt, sandboxId: `box-${id}`, sandboxState: 'running', pullRequestId: prId, settings: { autoCreatePr: false } });
+    await testDb.db.update(workbenches).set({ pullRequestLinkedAt: linkedAt }).where(eq(workbenches.id, id));
     await insertChat({ id: `chat-${id}`, workbenchId: id, workspaceId, title: 'Chat', agent: 'claude' });
   }
 
   const deliver = (merged = true) => processWebhookDelivery({
     deliveryId: 'same-delivery', eventType: 'pull_request', action: 'closed', repoFullName: 'acme/widget',
     enqueuedAtMs: 0, payload: { pull_request: { number: 7, merged,
-      merged_at: merged ? '2026-10-27T12:00:00Z' : null } },
+      merged_at: merged ? mergedAt.toISOString() : null } },
   });
   const row = async () => (await getWorkbench('wb'))!;
   const notes = async () => (await listEvents('chat-wb', 0, 100)).events.filter(
@@ -257,7 +261,8 @@ describe('archive sessions after a PR merge', () => {
     await settleArchivesForTests();
     await restoreWorkbench('wb');
     await testDb.db.insert(pullRequests).values({ id: 'new-pr', workspaceId: 'ws', repositoryId: 'repo',
-      owner: 'acme', repo: 'widget', number: 8, state: 'merged' });
+      owner: 'acme', repo: 'widget', number: 8, state: 'merged', mergedAt: new Date(Date.now() + 60_000),
+      lastSummary: { createdAt: new Date().toISOString() } });
     await updateWorkbench('wb', { pullRequestId: 'new-pr' });
     await autoArchiveForMergedPr({ repoFullName: 'acme/widget', number: 8 });
     expect((await row()).settings).toMatchObject({ autoArchivedForPr: ['acme/widget#7', 'acme/widget#8'] });
@@ -271,7 +276,7 @@ describe('archive sessions after a PR merge', () => {
 
   it('keeps the move active until its existing archive handling takes over', async () => {
     await updateWorkbench('wb', { status: 'moving', settings: { moveSandboxId: 'new-box' } });
-    await autoArchiveForMergedPr({ repoFullName: 'ACME/Widget', number: 7 });
+    await autoArchiveForMergedPr({ repoFullName: 'ACME/Widget', number: 7, mergedAt });
     expect(await row()).toMatchObject({ status: 'moving', archivePendingAt: expect.any(Date),
       settings: { moveSandboxId: 'new-box', autoArchivedForPr: ['acme/widget#7'] } });
     await settleArchivesForTests();

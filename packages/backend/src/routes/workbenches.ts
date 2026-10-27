@@ -1,3 +1,4 @@
+import { allocateWorkbenchBranch } from '../services/workbenches/branchAllocation.js';
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
@@ -532,7 +533,8 @@ export function workbenchRoutes(): Router {
           repositoryId: repo.id,
           repoFullName,
           name,
-          branch: branch || `${branchPrefix}${name}`,
+          branch: branch || await allocateWorkbenchBranch(workspaceId, repoFullName, `${branchPrefix}${name}`),
+          allocatedBranch: !branch,
           baseBranch,
           runtime: body.runtime,
           agent: body.agent,
@@ -551,9 +553,15 @@ export function workbenchRoutes(): Router {
           },
         });
       } catch (err) {
-        if (!/uq_workbenches_workspace_name_live|duplicate key/i.test(String((err as Error)?.message ?? err)) || requestedName) {
-          throw err;
+        let cause: unknown = err;
+        let constraint: string | undefined;
+        while (cause && typeof cause === 'object') {
+          const detail = cause as { code?: string; constraint?: string; constraint_name?: string; cause?: unknown };
+          if (detail.code === '23505') constraint = detail.constraint ?? detail.constraint_name;
+          cause = detail.cause;
         }
+        if (constraint !== 'uq_workbenches_allocated_branch'
+          && (constraint !== 'uq_workbenches_workspace_name_live' || requestedName)) throw err;
       }
     }
     if (!row) return bad(res, 409, 'Could not find a free name for the session; try again.', 'name_taken');
@@ -619,6 +627,7 @@ export function workbenchRoutes(): Router {
           : {}),
         // Also server-only: the id the fleet gave the box, which its credential pull carries.
         ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
+        ...((row.settings as Record<string, unknown> | null)?.archiveCredentialsRearmed ? { archiveCredentialsRearmed: true } : {}),
         // A move's target, lease and backoff: server-only, and a later box must not reuse the target's generation.
         ...Object.fromEntries(
           MOVE_SETTINGS_KEYS.flatMap((key) => {

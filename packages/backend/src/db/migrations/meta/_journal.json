@@ -624,6 +624,13 @@
       "when": 1790900000007,
       "tag": "0088_workbench_merge_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1790900000008,
+      "tag": "0089_workbench_safety",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,9 @@
+import { eligiblePr } from './prEligibility.js';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { prSummaryToNextActionPr, type Workbench, type WorkbenchPullRequestSummary } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { pullRequests as prTable } from '../../db/schema.js';
-import { openChatsByWorkbench, rowToChat, rowToWorkbench, updateWorkbench, type WorkbenchRow } from './store.js';
+import { pullRequests as prTable, workbenches } from '../../db/schema.js';
+import { openChatsByWorkbench, rowToChat, rowToWorkbench, getWorkbench, type WorkbenchRow } from './store.js';
 
 /**
  * The pull request opened from a workbench's branch, and the summary the
@@ -51,7 +52,7 @@ export function toPrSummary(row: PrSummaryRow): WorkbenchPullRequestSummary {
 }
 
 /** The query that finds a branch's PR, exposed for the egress test. */
-export function findBranchPrQuery(workspaceId: string, repositoryId: string, branch: string, excludedNumber?: number) {
+export function findBranchPrQuery(workspaceId: string, repositoryId: string, branch: string, excludedNumber?: number, createdAt = new Date(), pushedHeadShas: string[] = []) {
   return getPoolDbClient()
     .select({ id: prTable.id })
     .from(prTable)
@@ -59,6 +60,7 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
       and(
         eq(prTable.workspaceId, workspaceId),
         eq(prTable.repositoryId, repositoryId),
+        eligiblePr(sql`${createdAt.toISOString()}::timestamptz`, sql`ARRAY[${sql.join(pushedHeadShas.map((sha) => sql`${sha}`), sql`, `)}]::text[]`),
         excludedNumber === undefined ? undefined : ne(prTable.number, excludedNumber),
         sql`${prTable.lastSummary} ->> 'headBranch' = ${branch}`,
       ),
@@ -75,9 +77,13 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
  */
 export async function linkPullRequest(row: WorkbenchRow): Promise<WorkbenchRow> {
   if (row.pullRequestId) return row;
-  const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch, row.settings?.prUnlinked))[0];
+  const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch, row.settings?.prUnlinked, row.createdAt, row.pushedHeadShas))[0];
   if (!found) return row;
-  return (await updateWorkbench(row.id, { pullRequestId: found.id })) ?? row;
+  const [linked] = await getPoolDbClient().update(workbenches).set({ pullRequestId: found.id, updatedAt: new Date() })
+    .where(and(eq(workbenches.id, row.id), eq(workbenches.branch, row.branch), sql`${workbenches.pullRequestId} IS NULL`,
+      sql`EXISTS (SELECT 1 FROM ${prTable} WHERE ${prTable.id} = ${found.id} AND ${eligiblePr()})`,
+    )).returning({ id: workbenches.id });
+  return linked ? (await getWorkbench(row.id)) ?? row : row;
 }
 
 export async function prSummaries(ids: string[]): Promise<Map<string, WorkbenchPullRequestSummary>> {

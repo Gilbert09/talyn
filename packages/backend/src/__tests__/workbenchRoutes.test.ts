@@ -142,6 +142,7 @@ describe('workbench routes', () => {
       { id: 'repo-a', workspaceId: 'ws-a', name: 'acme/app', url: 'https://github.com/acme/app', defaultBranch: 'main' },
       { id: 'repo-b', workspaceId: 'ws-b', name: 'other/app', url: 'https://github.com/other/app', defaultBranch: 'main' },
     ]);
+    vi.spyOn(githubService, 'branchExists').mockResolvedValue(false);
     vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
     fleet = new FakeFleet();
     scriptedFleet();
@@ -1391,12 +1392,13 @@ describe('workbench routes', () => {
       }
     });
 
-    it('refuses once the workbench is archived, and when the subscription has gone', async () => {
+    it('refuses after the archive completes, and when the subscription has gone', async () => {
       const wb = await createSandboxWorkbench();
       creds = { openaiKey: 'oa-codex' };
       expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'credentials_unavailable' });
       creds = { claudeToken: 'sk-ant-oat-claude' };
       await call('POST', `/workbenches/${wb.id}/archive`);
+      await settleArchivesForTests();
       expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'run_not_live' });
     });
   });

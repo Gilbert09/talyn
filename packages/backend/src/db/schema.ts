@@ -1954,6 +1954,9 @@ export const workbenches = pgTable(
     pullRequestId: text('pull_request_id').references(() => pullRequests.id, {
       onDelete: 'set null',
     }),
+    pullRequestLinkedAt: timestamp('pull_request_linked_at', { withTimezone: true }),
+    pushedHeadShas: text('pushed_head_shas').array().notNull().default([]),
+    allocatedBranch: boolean('allocated_branch').notNull().default(false),
     settings: jsonb('settings').$type<WorkbenchSettings>().notNull().default({}),
     diffStat: jsonb('diff_stat').$type<WorkbenchStoredDiffStat | null>(),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
@@ -1962,6 +1965,8 @@ export const workbenches = pgTable(
   },
   (t) => ({
     workspaceIdx: index('idx_workbenches_workspace').on(t.workspaceId, t.createdAt),
+    allocatedBranchUq: uniqueIndex('uq_workbenches_allocated_branch').on(t.workspaceId, t.branch)
+      .where(sql`${t.allocatedBranch}`),
     liveNameUq: uniqueIndex('uq_workbenches_workspace_name_live')
       .on(t.workspaceId, t.name)
       .where(sql`${t.archivedAt} IS NULL`),

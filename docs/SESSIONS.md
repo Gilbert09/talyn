@@ -2,6 +2,30 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Keep session credentials available during saves (2026-10-27)
+
+Pending archives and live restores can obtain credentials for their current sandbox.
+Moves can obtain credentials for the recorded source and target, each on its recorded host.
+Completed archives and unrelated or obsolete sandbox IDs remain forbidden.
+Git saves that fail with `could not read Username` keep their retry schedule, including after eight failures.
+A successful retry clears the stored error.
+The boot repair re-arms affected archives once when their recorded sandbox state is running or suspended.
+This repair runs before sandbox maintenance starts, so the reaper preserves those pending saves.
+
+## Protect session identity and remove unused sandboxes (2026-10-27)
+
+Generated branches now skip all session branches, including archives, and existing GitHub refs.
+PR links require a recent PR or a recorded push. Earlier closed or merged PRs cannot match.
+Migration 0089 records link times and pushed commits. It also adds branch reservations and maintenance claims.
+Legacy link times use the last session write only when that write precedes the merge.
+Unknown legacy link times stay unset. The backfill does not guess them.
+The merge backfill runs at boot and every ten minutes. It removes stale links and uses the existing archive function.
+The sandbox reaper runs at boot and every five minutes. Both jobs use atomic claims with expiry checks.
+The reaper keeps current boxes, active move targets, and pending archives. Known orphans have a thirty-minute grace period.
+Boxes without a session row have a twenty-four-hour grace period. Only names with `talyn-wb-` qualify.
+Set `WORKBENCH_REAPER_DRY_RUN=1` to log proposed deletions. The default permits deletion.
+
+
 ## Archive sessions when their PR merges (2026-10-27)
 
 Merged webhook payloads, monitor close-outs, and PR refreshes now request the same session archive.

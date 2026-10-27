@@ -1871,6 +1871,17 @@ class GitHubService extends EventEmitter {
     return out;
   }
 
+  async branchExists(workspaceId: string, owner: string, repo: string, branch: string): Promise<boolean> {
+    try {
+      await this.apiRequest<{ ref: string }>(workspaceId,
+        `/repos/${owner}/${repo}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
+      return true;
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return false;
+      throw err;
+    }
+  }
+
   async getRepository(workspaceId: string, owner: string, repo: string): Promise<GitHubRepo> {
     return this.apiRequest<GitHubRepo>(workspaceId, `/repos/${owner}/${repo}`);
   }

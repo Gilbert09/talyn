@@ -1469,7 +1469,7 @@ class PRMonitorService extends EventEmitter {
       .where(eq(pullRequestsTable.id, row.id))
       .limit(1);
     if (nextState === 'merged') {
-      await autoArchiveForMergedPr({ repoFullName: `${row.owner}/${row.repo}`, number: row.number, workspaceIds: [workspaceId] });
+      await autoArchiveForMergedPr({ repoFullName: `${row.owner}/${row.repo}`, number: row.number, workspaceIds: [workspaceId], mergedAt });
     }
     await this.db
       .update(pullRequestsTable)
