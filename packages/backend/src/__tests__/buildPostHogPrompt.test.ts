@@ -198,6 +198,34 @@ describe('buildMergeablePrompt — Talyn comment tagline', () => {
   );
 });
 
+describe('buildMergeablePrompt — no top-level PR comments', () => {
+  it.each<CloudProviderType>(['posthog_code', 'selfhosted', 'codex_cloud'])(
+    'forbids status and summary comments (%s)',
+    (provider) => {
+      const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+      expect(prompt).toContain('Do NOT post top-level comments on the PR');
+    }
+  );
+
+  it.each<CloudProviderType>(['posthog_code', 'selfhosted', 'codex_cloud'])(
+    'does not ask for a comment when stopping for a human (%s)',
+    (provider) => {
+      const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+      expect(prompt).toContain('Do NOT post a PR comment asking for it');
+      expect(prompt).not.toContain('Leave ONE clear PR comment');
+    }
+  );
+
+  it.each<CloudProviderType>(['posthog_code', 'selfhosted', 'codex_cloud'])(
+    'reports flaky tests in the final message (%s)',
+    (provider) => {
+      const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+      expect(prompt).toContain('note it in your final message');
+      expect(prompt).not.toContain('document it briefly in a PR comment');
+    }
+  );
+});
+
 describe('buildMergeablePrompt — re-sign section (signed-commits repos)', () => {
   it('is absent by default (no behaviour change for the common case)', () => {
     for (const provider of ['posthog_code', 'selfhosted'] as CloudProviderType[]) {
