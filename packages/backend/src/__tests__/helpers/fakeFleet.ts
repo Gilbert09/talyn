@@ -1,9 +1,10 @@
-import type {
-  CreateSandboxInput,
-  FleetClient,
-  FleetEvent,
-  FleetExecFrame,
-  FleetExecRequest,
+import {
+  FleetHttpError,
+  type CreateSandboxInput,
+  type FleetClient,
+  type FleetEvent,
+  type FleetExecFrame,
+  type FleetExecRequest,
 } from '../../services/selfHosted/client.js';
 
 /**
@@ -48,6 +49,20 @@ export class FakeFleet {
   private seq = 0;
   durableLogs = new Map<string, ExecReply>();
   durableFollowOffsets: number[] = [];
+  /**
+   * Decides a durable launch, by log path. `exitCode` other than 0 is a
+   * launcher that gave up; `lateStart` means the supervisor started anyway.
+   */
+  launchHandler?: (logPath: string) => { exitCode: number; stderr?: string; lateStart?: boolean } | undefined;
+  /** Log paths whose start marker a fence created. */
+  fenced = new Set<string>();
+  /** Forces the fence's exit code (4 = the directory is not writable). */
+  fenceExitCode?: number;
+  launches: string[] = [];
+  /** While set, every sandbox call is refused with `remote_resume_required` until `resumeSandbox` ends. */
+  hibernated = false;
+  resumeGate: Promise<void> = Promise.resolve();
+  resumes = 0;
 
   asClient(): FleetClient {
     return this as unknown as FleetClient;
@@ -83,12 +98,35 @@ export class FakeFleet {
   }
 
   private async run(req: FleetExecRequest, follow: boolean): Promise<ExecReply> {
-    if (req.env?.TALYN_LOG_PROBE) return { exitCode: this.durableLogs.has(req.env.TALYN_LOG_PROBE) ? 0 : 1 };
+    if (this.hibernated) throw new FleetHttpError('this sandbox is hibernated', 409, 'remote_resume_required');
+    if (req.env?.TALYN_LOG_FENCE) {
+      const log = req.env.TALYN_LOG_FENCE.replace(/\.started$/, '.log');
+      if (this.fenceExitCode !== undefined) return { exitCode: this.fenceExitCode };
+      if (this.durableLogs.has(log) || this.fenced.has(log)) return { exitCode: 3 };
+      this.fenced.add(log);
+      return { exitCode: 0 };
+    }
+    if (req.env?.TALYN_LOG_PROBE) {
+      const log = req.env.TALYN_LOG_PROBE;
+      return { exitCode: this.durableLogs.has(log) || this.fenced.has(log) ? 0 : 1 };
+    }
     if (req.env?.TALYN_DURABLE_SCRIPT) {
       const script = req.env.TALYN_DURABLE_SCRIPT;
+      const key = JSON.parse(req.env.TALYN_LOG_PATHS).log as string;
+      this.launches.push(key);
+      // A fenced attempt's supervisor finds the marker and exits: its launcher gives up.
+      if (this.fenced.has(key)) return { exitCode: 1, stderr: 'start marker exists' };
+      const decided = this.launchHandler?.(key);
+      if (decided && decided.exitCode !== 0) {
+        if (decided.lateStart && !this.durableLogs.has(key)) {
+          this.scripts.push(script);
+          this.execs.push({ script, req, follow });
+          this.durableLogs.set(key, await this.handler(script, req));
+        }
+        return { exitCode: decided.exitCode, stderr: decided.stderr };
+      }
       this.scripts.push(script);
       this.execs.push({ script, req, follow });
-      const key = JSON.parse(req.env.TALYN_LOG_PATHS).log as string;
       if (!this.durableLogs.has(key)) this.durableLogs.set(key, await this.handler(script, req));
       return { exitCode: 0 };
     }
@@ -166,6 +204,12 @@ export class FakeFleet {
 
   async setSandboxCredentials(id: string, creds: Record<string, unknown>) {
     this.credentialPushes.push({ id, creds });
+  }
+
+  async resumeSandbox(_id: string) {
+    this.resumes++;
+    await this.resumeGate;
+    this.hibernated = false;
   }
 
   async deleteSandbox(id: string) {

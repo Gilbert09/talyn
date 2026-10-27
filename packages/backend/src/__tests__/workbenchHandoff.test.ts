@@ -13,7 +13,7 @@ import { appendEvents, claimOrEnqueue, claimTurnLease, finishTurn, getChat, getT
   insertChat, insertWorkbench, listEvents, renewTurnLease, saveOwnedSessionId } from '../services/workbenches/store.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests, TURN_OWNER } from '../services/workbenches/ownership.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
-import { ORPHAN_MESSAGE, LEGACY_INTERRUPTED_MESSAGE, sweepOrphanedTurns, turnLogKey, launchTurnLoopForTests } from '../services/workbenches/turns.js';
+import { ORPHAN_MESSAGE, LEGACY_INTERRUPTED_MESSAGE, sweepOrphanedTurns, turnLogKey, launchTurnLoopForTests, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import { durablePaths, followDurableExec } from '../services/workbenches/durableExec.js';
 import { claimScript, appendScriptOutput, scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { settleAgentBackupsForTests } from '../services/workbenches/agentBackups.js';
@@ -28,6 +28,7 @@ describe('workbench deploy handoff', () => {
   let fleet: FakeFleet;
   beforeEach(async () => {
     resetWorkbenchDrainForTests();
+    setTurnRetryDelaysForTests([0]);
     db = await createTestDb();
     await seedUser(db.db, { id: 'owner' });
     await db.db.insert(workspaces).values({ id: 'ws', ownerId: 'owner', name: 'Workspace' });
@@ -119,15 +120,17 @@ describe('workbench deploy handoff', () => {
     expect(next?.started?.message.id).toBe('msg');
     expect((await getTurnLease('chat'))?.owner).toBe(TURN_OWNER);
   });
-  it('returns a claimed turn to the queue when drain starts before its loop', async () => {
+  it('hands a claimed turn to the next instance when drain starts before its loop', async () => {
     const claim = await claimOrEnqueue('chat', { id: 'pending', text: 'work', queuedAt: new Date().toISOString() }, true);
+    const chats = vi.spyOn(emit, 'emitWorkbenchChat');
     beginWorkbenchDrain();
     launchTurnLoopForTests('chat', claim!.started!);
-    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('idle'));
-    expect((await getChat('chat'))?.queuedMessages[0].id).toBe('pending');
+    await vi.waitFor(async () => expect((await getTurnLease('chat'))?.heartbeat).toEqual(new Date(0)));
+    // Still running, with its message on the lease: no client sees the turn stop.
+    expect((await getChat('chat'))?.status).toBe('running');
+    expect((await getTurnLease('chat'))?.message?.id).toBe('pending');
+    expect(chats).not.toHaveBeenCalled();
     expect(fleet.scripts).toEqual([]);
-    resetWorkbenchDrainForTests();
-    expect((await claimOrEnqueue('chat', null, true))?.started?.message.id).toBe('pending');
   });
   it('resumes script output at its stored byte offset', async () => {
     const row = (await getWorkbench('wb'))!;
@@ -177,16 +180,17 @@ describe('workbench deploy handoff', () => {
     expect((await getChat('chat'))?.status).toBe('running');
     expect((await getTurnLease('chat'))?.offset).toBe(0);
   });
-  it('requeues a pre-start handoff once through the owner claim', async () => {
+  it('hands a pre-start turn on when drain starts during its adoption', async () => {
     await running();
     await db.db.update(workbenchChats).set({ turnHeartbeatAt: new Date(0) });
+    const chats = vi.spyOn(emit, 'emitWorkbenchChat');
     vi.spyOn(durable, 'durableExecExists').mockImplementation(async () => { beginWorkbenchDrain(); return false; });
     expect(await sweepOrphanedTurns()).toBe(1);
-    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('idle'));
-    expect((await getChat('chat'))?.queuedMessages.map((m) => m.id)).toEqual(['msg']);
-    resetWorkbenchDrainForTests();
-    const claims = await Promise.all([claimOrEnqueue('chat', null, true), claimOrEnqueue('chat', null, true)]);
-    expect(claims.filter((c) => c?.started)).toHaveLength(1);
+    await vi.waitFor(async () => expect((await getTurnLease('chat'))?.heartbeat).toEqual(new Date(0)));
+    expect((await getChat('chat'))).toMatchObject({ status: 'running', queuedMessages: [] });
+    expect((await getTurnLease('chat'))?.message?.id).toBe('msg');
+    expect(chats).not.toHaveBeenCalled();
+    expect(fleet.launches).toEqual([]);
   });
   it('settles an owned turn when its message and start marker are missing', async () => {
     await running();

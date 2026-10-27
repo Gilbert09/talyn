@@ -6,9 +6,18 @@ import { runCapture, runStream, killMarker, recordWorkbenchEvent, type StreamOut
 import type { WorkbenchRow } from './store.js';
 
 export interface LogRecord { stream: 'stdout' | 'stderr'; line: string }
-export function durablePaths(key: string): { log: string; exit: string; started: string } {
-  const base = `/root/.talyn/turns/${safeMarker(key)}`;
-  return { log: `${base}.log`, exit: `${base}.exit`, started: `${base}.started` };
+
+/**
+ * Where durable logs live. The guest runs every exec as the unprivileged
+ * `fleet` user (uid 1000), so the directory must be writable by it: `/root` is
+ * 0700 root in the guest image, and a supervisor told to write there dies
+ * before its start marker, every time.
+ */
+export const DURABLE_DIR = '/tmp/talyn-turns';
+
+export function durablePaths(key: string): { log: string; exit: string; started: string; launchError: string } {
+  const base = `${DURABLE_DIR}/${safeMarker(key)}`;
+  return { log: `${base}.log`, exit: `${base}.exit`, started: `${base}.started`, launchError: `${base}.launch-err` };
 }
 
 // The supervisor has no pipe back to the backend. Its process group stays in the box.
@@ -98,14 +107,57 @@ tick();
 export async function startDurableExec(
   row: WorkbenchRow, key: string, marker: string, script: string, env: Record<string, string>, segmented = false,
 ): Promise<void> {
-  const result = await runCapture(row, `nohup setsid node -e ${shellQuote(DURABLE_SUPERVISOR)} >/dev/null 2>&1 < /dev/null &\n` +
-    'pid=$!; for i in $(seq 1 100); do [ -e "$TALYN_LOG_FILE" ] && [ -f "$TALYN_PID_FILE" ] && exit 0; kill -0 "$pid" 2>/dev/null || exit 1; sleep 0.05; done; exit 1', {
+  const paths = durablePaths(key);
+  const result = await runCapture(row, LAUNCHER(DURABLE_SUPERVISOR), {
     quiet: true,
-    env: { ...env, TALYN_SEGMENT_BYTES: segmented ? String(8 * 1024 * 1024) : '0', TALYN_DURABLE_SCRIPT: script, TALYN_LOG_FILE: durablePaths(key).log, TALYN_LOG_PATHS: JSON.stringify(durablePaths(key)), TALYN_PID_FILE: pidFileFor(marker) },
+    env: { ...env, TALYN_SEGMENT_BYTES: segmented ? String(8 * 1024 * 1024) : '0', TALYN_DURABLE_SCRIPT: script, TALYN_LOG_FILE: paths.log,
+      TALYN_LAUNCH_ERR: paths.launchError, TALYN_LOG_PATHS: JSON.stringify(paths), TALYN_PID_FILE: pidFileFor(marker) },
   });
   if (result.exitCode !== 0) {
-    throw new Error('The agent could not start its output log.', { cause: new Error(result.stderr) });
+    throw new Error('The agent could not start its output log.', { cause: new Error(result.stderr.trim() || `launcher exited ${result.exitCode}`) });
   }
+}
+
+/**
+ * Start the supervisor detached and wait for its log and pid file. A box that
+ * has just been resumed can take many seconds to start node, so the wait is
+ * long; it ends as soon as both files appear. The supervisor's own stderr is
+ * kept, so a launch that fails says why.
+ */
+const LAUNCHER = (supervisor: string) => [
+  'mkdir -p "$(dirname "$TALYN_LOG_FILE")" || exit 1',
+  `nohup setsid node -e ${shellQuote(supervisor)} >/dev/null 2>"$TALYN_LAUNCH_ERR" < /dev/null &`,
+  'pid=$!',
+  'for i in $(seq 1 600); do',
+  '  [ -e "$TALYN_LOG_FILE" ] && [ -f "$TALYN_PID_FILE" ] && exit 0',
+  '  kill -0 "$pid" 2>/dev/null || break',
+  '  sleep 0.05',
+  'done',
+  '[ -e "$TALYN_LOG_FILE" ] && [ -f "$TALYN_PID_FILE" ] && exit 0',
+  'tail -c 2000 "$TALYN_LAUNCH_ERR" >&2 2>/dev/null',
+  'exit 1',
+].join('\n');
+
+/**
+ * After a failed launch: did the supervisor start after all? Creating the
+ * start marker with O_EXCL answers once and for all. When this call creates
+ * it, a supervisor that starts later finds it and exits, so the attempt can
+ * never run. `unwritable` means no supervisor could have written it either.
+ */
+export type DurableFence = 'fenced' | 'started' | 'unwritable';
+
+export async function fenceDurableExec(row: WorkbenchRow, key: string): Promise<DurableFence> {
+  const started = durablePaths(key).started;
+  const result = await runCapture(row, [
+    'mkdir -p "$(dirname "$TALYN_LOG_FENCE")" 2>/dev/null',
+    'if ( set -C; printf fenced > "$TALYN_LOG_FENCE" ) 2>/dev/null; then exit 0; fi',
+    '[ -e "$TALYN_LOG_FENCE" ] && exit 3',
+    'exit 4',
+  ].join('\n'), { quiet: true, env: { TALYN_LOG_FENCE: started } });
+  if (result.exitCode === 0) return 'fenced';
+  if (result.exitCode === 3) return 'started';
+  if (result.exitCode === 4) return 'unwritable';
+  throw new Error(`The start marker could not be checked (exit ${result.exitCode}).`, { cause: new Error(result.stderr) });
 }
 
 /** Each callback commits before the next record. A reconnect starts at the last accepted byte. */
@@ -219,8 +271,13 @@ export async function durableExecExists(row: WorkbenchRow, key: string): Promise
 }
 
 export async function removeDurableExec(row: WorkbenchRow, key: string, marker: string): Promise<void> {
-  const paths = durablePaths(key);
-  await runCapture(row, `rm -rf -- ${Object.values(paths).concat(pidFileFor(marker)).map(shellQuote).join(' ')}`, { quiet: true });
+  await removeDurableExecs(row, [{ key, marker }]);
+}
+
+/** One exec for every attempt of a turn. */
+export async function removeDurableExecs(row: WorkbenchRow, entries: Array<{ key: string; marker: string }>): Promise<void> {
+  const files = entries.flatMap(({ key, marker }) => [...Object.values(durablePaths(key)), pidFileFor(marker)]);
+  await runCapture(row, `rm -rf -- ${files.map(shellQuote).join(' ')}`, { quiet: true });
 }
 
 export const PRUNE_SEGMENTS = String.raw`
