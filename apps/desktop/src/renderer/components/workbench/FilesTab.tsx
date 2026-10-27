@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
+import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, X } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { FileIcon } from './FileIcon';
+
+// Monaco is large, so it loads only when a file opens.
+const CodeViewer = lazy(() => import('./CodeViewer'));
 
 /** Every file on the branch as a tree, and a read-only viewer for the one picked. */
 export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; ops: WorkbenchOps; visible: boolean }) {
@@ -63,7 +66,10 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
         </button>
       </div>
       {error && <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
-      <div className={cn('min-h-0 overflow-y-auto py-1', selected ? 'max-h-[40%] shrink-0 border-b' : 'flex-1')}>
+      <div
+        data-testid="file-tree"
+        className={cn('min-h-0 overflow-y-auto py-1', selected ? 'max-h-[40%] shrink-0 border-b' : 'flex-1')}
+      >
         {paths === null && loading && (
           <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading files…
@@ -73,7 +79,7 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
       </div>
       {selected && (
         <div className="min-h-0 flex-1">
-          <FileViewer key={selected} path={selected} ops={ops} />
+          <FileViewer key={selected} path={selected} ops={ops} onClose={() => setSelected(null)} />
         </div>
       )}
     </div>
@@ -141,7 +147,7 @@ function TreeLevel({
   );
 }
 
-function FileViewer({ path, ops }: { path: string; ops: WorkbenchOps }) {
+function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; onClose: () => void }) {
   const [file, setFile] = useState<{ content: string; binary: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -159,28 +165,49 @@ function FileViewer({ path, ops }: { path: string; ops: WorkbenchOps }) {
     };
   }, [path, ops]);
 
-  const lines = useMemo(() => (file && !file.binary ? file.content.split('\n') : []), [file]);
+  // Monaco stops the event when it uses Escape itself (to close find, say), so
+  // only an Escape that nothing inside wanted reaches this handler.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onClose();
+  };
 
-  if (error) return <p className="p-3 text-xs text-red-600 dark:text-red-400">{error}</p>;
-  if (!file) {
-    return (
-      <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading {path}…
-      </div>
+  const loading = (
+    <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading {path}…
+    </div>
+  );
+  let body: ReactNode;
+  if (error) body = <p className="p-3 text-xs text-red-600 dark:text-red-400">{error}</p>;
+  else if (!file) body = loading;
+  else if (file.binary) body = <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>;
+  else {
+    body = (
+      <Suspense fallback={loading}>
+        <CodeViewer path={path} content={file.content} />
+      </Suspense>
     );
   }
-  if (file.binary) return <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>;
+
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 border-b bg-background px-3 py-1 font-mono text-[11px] text-muted-foreground">{path}</div>
-      <pre className="font-mono text-[11px] leading-[1.45]">
-        {lines.map((line, i) => (
-          <div key={i} className="flex">
-            <span className="w-10 shrink-0 select-none pr-2 text-right text-muted-foreground/60">{i + 1}</span>
-            <span className="whitespace-pre pr-3">{line || ' '}</span>
-          </div>
-        ))}
-      </pre>
+    <div className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
+      <div className="flex shrink-0 items-center gap-2 border-b bg-background py-1 pl-3 pr-1.5 font-mono text-[11px] text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate" title={path}>
+          {path}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 hover:bg-accent hover:text-foreground"
+          title="Close file (Esc)"
+          aria-label="Close file"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }

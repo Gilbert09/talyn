@@ -33,6 +33,7 @@
     "lucide-react": "^0.468.0",
     "material-icon-theme": "5.39.0",
     "mermaid": "^11.16.1",
+    "monaco-editor": "0.57.0",
     "posthog-js": "^1.382.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

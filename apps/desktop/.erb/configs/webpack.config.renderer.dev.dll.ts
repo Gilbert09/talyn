@@ -31,7 +31,9 @@ const configuration: webpack.Configuration = {
   module: require('./webpack.config.renderer.dev').default.module,
 
   entry: {
-    renderer: Object.keys(dependencies || {}),
+    // Monaco stays out: it loads lazily, and its worker cannot read the DLL's
+    // global, so it must be bundled from node_modules like any other module.
+    renderer: Object.keys(dependencies || {}).filter((name) => name !== 'monaco-editor'),
   },
 
   output: {
