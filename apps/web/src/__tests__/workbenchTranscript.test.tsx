@@ -133,3 +133,12 @@ it('shows no paging row and full totals when the whole chat is loaded', () => {
   );
   expect(screen.getByText(/Last 1 turn/)).toBeInTheDocument();
 });
+
+it.each(['The agent stopped unexpectedly.', 'The tool connection failed.'])('shows an error result message: %s', (message) => {
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'result', is_error: true, result: message, subtype: 'error_during_execution' } as AgentEvent,
+  }];
+  render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(message)).toBeInTheDocument();
+});

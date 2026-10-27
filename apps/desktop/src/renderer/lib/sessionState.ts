@@ -59,7 +59,6 @@ export function sessionState(
     return { kind: 'failed', label: 'Failed to start' };
   }
   if (chats.some((c) => c.status === 'error')) return { kind: 'failed', label: 'A chat failed' };
-  if (workbench.status === 'moving') return { kind: 'starting', label: 'Moving to a fresh sandbox' };
   if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating') {
     return { kind: 'starting', label: 'Starting' };
   }

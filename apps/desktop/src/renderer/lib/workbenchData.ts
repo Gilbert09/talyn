@@ -39,6 +39,7 @@ export async function loadWorkbench(id: string): Promise<Workbench | null> {
     const wb = await api.workbenches.get(id);
     useWorkbenchStore.getState().upsertWorkbench(wb);
     absorbEmbeddedChats(wb);
+    if (wb.runtime === 'sandbox') void loadScriptOutput(wb.id);
     return wb;
   } catch {
     return null;
@@ -156,8 +157,19 @@ function lastHeldSeq(chatId: string): number {
 /** After a reconnect: re-list, and catch up every chat whose history was open. */
 export async function reconcileWorkbenches(workspaceId: string): Promise<void> {
   await loadWorkbenches(workspaceId);
-  const { chatEvents } = useWorkbenchStore.getState();
+  const { chatEvents, workbenches } = useWorkbenchStore.getState();
+  for (const wb of Object.values(workbenches)) {
+    if (wb.runtime === 'sandbox' && !wb.archivedAt) void loadScriptOutput(wb.id);
+  }
   for (const [chatId, state] of Object.entries(chatEvents)) {
     if (state.loaded) void ensureChatHistory(chatId, { force: true });
   }
+}
+
+export async function loadScriptOutput(workbenchId: string): Promise<void> {
+  try {
+    for (const frame of await api.workbenches.scriptOutput(workbenchId)) {
+      useWorkbenchStore.getState().appendScriptFrame(frame);
+    }
+  } catch { /* A later reconnect retries this read. */ }
 }

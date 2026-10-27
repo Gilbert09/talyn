@@ -288,8 +288,8 @@ describe('the chat note', () => {
   ] };
 
   it.each<['carried' | 'missing' | 'none', string | null, string[]]>([
-    ['carried', 'This conversation came along', ['starts fresh']],
-    ['missing', 'could not be found, so the agent starts fresh', ['came along, so the agent']],
+    ['carried', null, ['conversation']],
+    ['missing', 'the agent conversation could not be restored', ['came along, so the agent']],
     ['none', null, ['conversation']],
   ])('with the conversation %s', (conversation, present, absent) => {
     const text = movedNote({ reason: 'stale_golden', conversation, stopped: false, manifest });
@@ -299,8 +299,7 @@ describe('the chat note', () => {
 
   it('names what it left behind', () => {
     expect(skippedNote(manifest)).toBe(
-      'Not copied, because setup makes them again: node_modules (2 folders, 150 files), .venv (1 folder, 7 files). ' +
-        'Ignored files too large to copy (12): data/big.bin and 11 more.',
+      'these files did not carry over: data/big.bin and 11 more',
     );
     expect(skippedNote({ skipped: [], skippedCount: 0, skippedDirs: [] })).toBeNull();
   });

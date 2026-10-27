@@ -238,6 +238,7 @@ function ScriptOutput({ workbenchId, name, emptyText }: { workbenchId: string; n
   const { ref, term } = useXterm({ readOnly: true });
   const output = useWorkbenchStore((s) => s.scriptOutput[workbenchId]?.[name]);
   const written = useRef(0);
+  const revision = useRef<number | undefined>(undefined);
   const lastExit = useRef<number | null | undefined>(undefined);
 
   useEffect(() => {
@@ -245,7 +246,8 @@ function ScriptOutput({ workbenchId, name, emptyText }: { workbenchId: string; n
     const chunks = output?.chunks ?? [];
     const total = output?.total ?? 0;
     // A restart clears the output: start the screen over too.
-    if (total < written.current) {
+    if (total < written.current || revision.current !== output?.revision) {
+      revision.current = output?.revision;
       term.reset();
       written.current = 0;
       lastExit.current = undefined;

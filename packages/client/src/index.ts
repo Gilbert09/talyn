@@ -2801,6 +2801,7 @@ export const workbenches = {
   // ---- Scripts (output arrives as `workbench:script` WS frames) ----
   config: (id: string) => request<WorkbenchConfig>('GET', `/workbenches/${enc(id)}/config`),
   saveDetectedConfig: (id: string) => request<void>('POST', `/workbenches/${enc(id)}/config/detected`),
+  scriptOutput: (id: string) => request<import('@talyn/shared').WorkbenchScriptFrame[]>('GET', `/workbenches/${enc(id)}/scripts/output`),
   runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {})) =>
     request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}`),
   stopScript: (id: string, name: string) =>

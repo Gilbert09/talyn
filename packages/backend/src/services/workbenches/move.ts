@@ -1,7 +1,6 @@
 import { shellQuote, WORKBENCH_IMPORT_MAX_BYTES } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError, type FleetSandbox } from '../selfHosted/client.js';
-import { refreshDiffStat } from './changes.js';
 import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { userFacingError } from './errors.js';
@@ -84,12 +83,6 @@ import { closeWorkbenchTerminals } from './terminalBridge.js';
  */
 
 export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full';
-
-const REASON_TEXT: Record<MoveReason, string> = {
-  stale_golden: 'a newer sandbox image was ready',
-  low_disk: 'the disk was nearly full',
-  disk_full: 'the disk was full',
-};
 
 export type MoveResult =
   | { moved: true; row: WorkbenchRow }
@@ -752,7 +745,7 @@ interface Created {
 }
 
 async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions): Promise<MoveResult> {
-  if (row.runtime !== 'sandbox' || !row.sandboxId || held.has(row.id)) {
+  if (row.archivedAt || row.runtime !== 'sandbox' || !row.sandboxId || held.has(row.id)) {
     return { moved: false, reason: 'not_applicable' };
   }
   const from = row.sandboxId;
@@ -785,6 +778,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     step = 'export';
     manifest = await exportFromOldBox(claimed, sessions);
 
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'create';
     await setMessage(claimed, 'Starting a fresh sandbox');
     const { createWorkbenchSandbox } = await import('./lifecycle.js');
@@ -794,14 +788,17 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     await setMoveTargetHost(row.id, from, targetId, made.fleetHost);
     const fresh: WorkbenchRow = { ...claimed, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'clone';
     const cloned = await runCapture(fresh, cloneScript(claimed), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
     if (cloned.exitCode !== 0) throw new Error(`the clone failed: ${tail(cloned.stderr) || `exit ${cloned.exitCode}`}`);
 
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'transfer';
     await setMessage(claimed, 'Copying the work into the new sandbox');
     for (const file of manifest.files) await transferFile(claimed, fresh, file);
 
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'import';
     const imported = await runCapture(fresh, moveImportScript({ workbenchId: row.id, manifest }), {
       quiet: true,
@@ -812,11 +809,12 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
       throw new Error(`${what}${tail(imported.stderr) ? `: ${tail(imported.stderr)}` : ''}`);
     }
 
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'setup';
     const setupNote = await runSetup(claimed, fresh);
 
     step = 'commit';
-    if (lease.lost) throw new Error('the move lost its claim');
+    if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     committed = await commitMove(row.id, from, {
       sandboxId: made.sandboxId,
       fleetHost: made.fleetHost ?? null,
@@ -826,8 +824,11 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     });
     if (!committed) throw new Error('the session was archived, deleted or swept during the move');
   } catch (err) {
-    lease.stop();
-    return handleFailure({ row, claimed, from, targetId, previousMessage, created, step, err, reason, manifest, chats, stopped, opts });
+    try {
+      return await handleFailure({ row, claimed, from, targetId, previousMessage, created, step, err, reason, manifest, chats, stopped, opts });
+    } finally {
+      lease.stop();
+    }
   }
   lease.stop();
   await afterCommit(claimed, committed, reason, manifest, chats, stopped, opts);
@@ -932,53 +933,28 @@ async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow): Promise<str
   }
 }
 
-/** The chat note after a move. Every sentence is true of THIS chat. */
+/** Report only work that did not survive. */
 export function movedNote(input: {
   reason: MoveReason;
   conversation: 'carried' | 'missing' | 'none';
   stopped: boolean;
   manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>;
-}): string {
-  const parts = [
-    `Moved to a fresh sandbox (${REASON_TEXT[input.reason]}). Your branches, commits, stash and uncommitted changes came along.`,
-  ];
-  if (input.conversation === 'carried') parts.push('This conversation came along, so the agent remembers it.');
-  if (input.conversation === 'missing') {
-    parts.push('The agent’s copy of this conversation could not be found, so the agent starts fresh. This transcript is still here.');
-  }
-  parts.push(
-    input.stopped
-      ? 'Talyn stopped the running scripts and terminals first, so restart any you need.'
-      : 'Running processes stopped, so restart any dev servers.',
-  );
+}): string | null {
+  const parts: string[] = [];
   const skipped = skippedNote(input.manifest);
   if (skipped) parts.push(skipped);
-  return parts.join(' ');
+  if (input.conversation === 'missing') parts.push('the agent conversation could not be restored; the transcript is still available');
+  if (input.stopped) parts.push('running scripts and terminals were stopped; start them again');
+  if (!parts.length) return null;
+  const text = parts.join('; ');
+  return text.charAt(0).toUpperCase() + text.slice(1) + '.';
 }
 
-/** What was left behind: large ignored files by name, dependency folders as counts. */
 export function skippedNote(manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>): string | null {
-  const parts: string[] = [];
-  if (manifest.skippedDirs.length > 0) {
-    const byName = new Map<string, { folders: number; files: number }>();
-    for (const dir of manifest.skippedDirs) {
-      const name = dir.path.split('/').find((c) => (MOVE_SKIP_DIRS as readonly string[]).includes(c)) ?? dir.path;
-      const entry = byName.get(name) ?? { folders: 0, files: 0 };
-      entry.folders++;
-      entry.files += dir.files;
-      byName.set(name, entry);
-    }
-    const list = [...byName.entries()]
-      .map(([name, c]) => `${name} (${c.folders} ${c.folders === 1 ? 'folder' : 'folders'}, ${c.files} files)`)
-      .join(', ');
-    parts.push(`Not copied, because setup makes them again: ${list}.`);
-  }
-  if (manifest.skippedCount > 0) {
-    const names = manifest.skipped.slice(0, 10).join(', ');
-    const more = manifest.skippedCount - Math.min(10, manifest.skipped.length);
-    parts.push(`Ignored files too large to copy (${manifest.skippedCount}): ${names}${more > 0 ? ` and ${more} more` : ''}.`);
-  }
-  return parts.length > 0 ? parts.join(' ') : null;
+  if (!manifest.skippedCount) return null;
+  const names = manifest.skipped.slice(0, 10).join(', ');
+  const more = manifest.skippedCount - Math.min(10, manifest.skipped.length);
+  return `these files did not carry over: ${names}${more > 0 ? ` and ${more} more` : ''}`;
 }
 
 async function note(chat: ChatRow, subtype: string, text: string, extra: Record<string, unknown> = {}): Promise<void> {
@@ -1021,9 +997,10 @@ async function afterCommit(
 ): Promise<void> {
   staleChecks.delete(old.id);
   recordWorkbenchEvent(committed, 'moved', `${old.sandboxId} → ${committed.sandboxId} (${reason})`);
-  await bestEffort(committed, 'announcing the new sandbox', async () =>
-    emitWorkbenchUpdated(await publicWorkbench(committed)),
-  );
+  await bestEffort(committed, 'announcing the new sandbox', async () => {
+    const current = await getWorkbench(committed.id);
+    if (current) await emitWorkbenchUpdated(await publicWorkbench(current));
+  });
   await bestEffort(committed, 'stopping the old followers', () => stopAllScripts(old));
   await bestEffort(committed, `deleting the old sandbox ${old.sandboxId}`, async () =>
     (await fleetClientFor(old.workspaceId, old.fleetHost)).deleteSandbox(old.sandboxId!),
@@ -1049,10 +1026,9 @@ async function afterCommit(
         stopped,
         manifest: manifest ?? { skipped: [], skippedCount: 0, skippedDirs: [] },
       });
-      await note(current, 'sandbox_moved', text, manifest?.skipped.length ? { skippedFiles: manifest.skipped } : {});
+      if (text) await note(current, 'sandbox_moved', text, manifest?.skipped.length ? { skippedFiles: manifest.skipped } : {});
     });
   }
-  await bestEffort(committed, 'refreshing the diff', () => refreshDiffStat(committed));
   await bestEffort(committed, 'starting queued messages', () => startQueued(committed.id, opts.ownerChatId));
 }
 
@@ -1099,10 +1075,6 @@ async function handleFailure(f: {
   console.warn(`[workbench] moving ${row.id} ${blocked ? 'refused' : 'failed'} at ${f.step}:`, err);
   recordWorkbenchEvent(claimed, blocked ? 'move_blocked' : 'move_failed', `${f.step}: ${message}`, false, err);
 
-  const released = await releaseMove(row.id, from, targetId, f.previousMessage).catch((releaseErr) => {
-    console.warn(`[workbench] releasing the move of ${row.id} failed:`, releaseErr);
-    return null;
-  });
   if (created) {
     try {
       const client = await fleetClientFor(claimed.workspaceId, created.fleetHost);
@@ -1114,19 +1086,24 @@ async function handleFailure(f: {
   }
   const oldBoxLost = f.step === 'export' && err instanceof FleetRunNotFoundError;
   if (!oldBoxLost) await dropStaging(claimed);
+  const released = await releaseMove(row.id, from, targetId, f.previousMessage).catch((releaseErr) => {
+    console.warn(`[workbench] releasing the move of ${row.id} failed:`, releaseErr);
+    return null;
+  });
   await recordMoveFailure(row.id).catch(() => null);
   if (!released) return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
 
   await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);
-  await noteAll(
-    row.id,
-    blocked ? 'sandbox_move_blocked' : 'sandbox_move_failed',
-    blocked
-      ? `Talyn did not move this session to a fresh sandbox, because ${message}. It stays on its current sandbox. Finish or push that work, and Talyn tries again later.`
-      : `Talyn could not move this session to a fresh sandbox: ${message} It stays on its current sandbox.`,
-  ).catch(() => undefined);
-  if (oldBoxLost) await recoverLostSandbox(released, err).catch(() => undefined);
-  await startQueued(row.id, f.opts.ownerChatId).catch(() => undefined);
+  if (oldBoxLost && !released.archivedAt) await recoverLostSandbox(released, err).catch(() => undefined);
+  if (f.stopped && !released.archivedAt) {
+    await noteAll(row.id, 'sandbox_processes_stopped', 'Talyn stopped running scripts and terminals; start them again.').catch(() => undefined);
+  }
+  if (released.archivedAt) {
+    const { scheduleArchive } = await import('./lifecycle.js');
+    scheduleArchive(row.id);
+  } else {
+    await startQueued(row.id, f.opts.ownerChatId).catch(() => undefined);
+  }
   return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
 }
 
@@ -1157,7 +1134,7 @@ const staleChecks = new Map<string, { sandboxId: string; at: number }>();
  * record, which does not wake it, at most once per interval per box.
  */
 export async function needsFreshGolden(row: WorkbenchRow): Promise<boolean> {
-  if (row.runtime !== 'sandbox' || row.status !== 'ready' || !row.sandboxId) return false;
+  if (row.archivedAt || row.runtime !== 'sandbox' || row.status !== 'ready' || !row.sandboxId) return false;
   if (held.has(row.id) || backingOff(row)) return false;
   const last = staleChecks.get(row.id);
   if (last && last.sandboxId === row.sandboxId && Date.now() - last.at < STALE_CHECK_INTERVAL_MS) return false;
@@ -1244,7 +1221,10 @@ export async function growOrMove(
   reason: 'low_disk' | 'disk_full',
   opts: { ownerChatId?: string; probe?: DiskProbe | null } = {},
 ): Promise<DiskRecovery> {
-  if (held.has(row.id)) return { ok: false };
+  const current = await getWorkbench(row.id);
+  if (!current || current.archivedAt || current.status !== 'ready' || current.sandboxId !== row.sandboxId || held.has(row.id)) {
+    return { ok: false };
+  }
   const grown = await tryGrowDisk(row, opts.probe).catch((err) => {
     console.warn(`[workbench] growing the disk of ${row.id} failed:`, err);
     return false;
@@ -1262,7 +1242,7 @@ export async function growOrMove(
  */
 export async function growForDiskFull(row: WorkbenchRow): Promise<boolean> {
   const fresh = await getWorkbench(row.id);
-  if (!fresh || fresh.status !== 'ready' || fresh.sandboxId !== row.sandboxId || held.has(row.id)) return false;
+  if (!fresh || fresh.archivedAt || fresh.status !== 'ready' || fresh.sandboxId !== row.sandboxId || held.has(row.id)) return false;
   const grown = await tryGrowDisk(fresh).catch(() => false);
   if (grown) return true;
   if (!backingOff(fresh) && !(await alreadyFreshForDisk(fresh))) {
@@ -1295,8 +1275,10 @@ export async function sweepAbandonedMoves(): Promise<number> {
         .then((client) => client.deleteSandbox(target))
         .catch((err) => console.warn(`[workbench] deleting the abandoned sandbox ${target} failed:`, err));
     }
-    await dropStaging(released);
-    await startQueued(row.id).catch(() => undefined);
+    if (!released.archivedAt) {
+      await dropStaging(released);
+      await startQueued(row.id).catch(() => undefined);
+    }
   }
   return undone;
 }

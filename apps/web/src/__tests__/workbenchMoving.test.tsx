@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import { WORKBENCH_MOVING_MESSAGE, type Workbench } from '@talyn/shared';
+import { cleanup, render } from '@testing-library/react';
+import { type Workbench } from '@talyn/shared';
 import { isStarting, StartingHint } from '../components/workbench/WorkbenchStarting';
 import { sandboxUnavailableReason } from '../lib/workbenchOps';
 
@@ -13,14 +13,13 @@ const moving = { id: 'wb', runtime: 'sandbox', status: 'moving', sandboxState: '
 describe('a session moving to a fresh sandbox', () => {
   afterEach(cleanup);
 
-  it('says so where an action is refused', () => {
-    expect(sandboxUnavailableReason(moving)).toBe(WORKBENCH_MOVING_MESSAGE);
+  it('keeps the same controls available as a ready session', () => {
+    expect(sandboxUnavailableReason(moving)).toBeNull();
   });
 
-  it('shows the starting hint with the moving title, and queues a message', () => {
-    expect(isStarting(moving)).toBe(true);
-    render(<StartingHint workbench={moving} queued={1} />);
-    expect(screen.getByText('Moving to a fresh sandbox')).toBeTruthy();
-    expect(screen.getByText(/Your message is queued/)).toBeTruthy();
+  it('shows no starting hint during a sandbox refresh', () => {
+    expect(isStarting(moving)).toBe(false);
+    const { container } = render(isStarting(moving) ? <StartingHint workbench={moving} queued={1} /> : null);
+    expect(container.textContent).toBe('');
   });
 });

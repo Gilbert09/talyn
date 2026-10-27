@@ -37,7 +37,7 @@ const { setWorkbenchFleetClientForTests, runCapture } = await import('../service
 const store = await import('../services/workbenches/store.js');
 const move = await import('../services/workbenches/move.js');
 const turns = await import('../services/workbenches/turns.js');
-const { SESSION_SANDBOX_MEM_MIB } = await import('../services/workbenches/lifecycle.js');
+const { SESSION_SANDBOX_MEM_MIB, SESSION_SANDBOX_MILLI_VCPU, archiveWorkbench, processArchive, settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
 const { LOW_DISK_BYTES } = await import('../services/workbenches/execFailures.js');
 
 const WB = '11111111-2222-4333-8444-555555555555';
@@ -86,12 +86,12 @@ class MoveFleet extends FakeFleet {
   failDelete = new Set<string>();
 
   override async exec(id: string, req: FleetExecRequest): Promise<FleetExecFrame> {
-    this.log.push({ kind: kindOf(req.env?.TALYN_SCRIPT ?? ''), box: id });
+    this.log.push({ kind: kindOf(req.env?.TALYN_DURABLE_SCRIPT ?? req.env?.TALYN_SCRIPT ?? ''), box: id });
     return super.exec(id, req);
   }
 
   override async *execFollow(id: string, req: FleetExecRequest, signal: AbortSignal): AsyncGenerator<FleetExecFrame> {
-    this.log.push({ kind: kindOf(req.env?.TALYN_SCRIPT ?? ''), box: id });
+    this.log.push({ kind: kindOf(req.env?.TALYN_DURABLE_SCRIPT ?? req.env?.TALYN_SCRIPT ?? ''), box: id });
     yield* super.execFollow(id, req, signal);
   }
 
@@ -202,6 +202,7 @@ describe('moving a session to a fresh sandbox', () => {
 
   afterEach(async () => {
     await move.settleMovesForTests();
+    await settleArchivesForTests();
     setWorkbenchFleetClientForTests(null);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -214,6 +215,51 @@ describe('moving a session to a fresh sandbox', () => {
   const settings = async () => ((await row()).settings ?? {}) as Record<string, unknown>;
   const ageLease = (iso: string) =>
     testDb.db.execute(sql`UPDATE workbenches SET settings = settings || jsonb_build_object('moveHeartbeatAt', ${iso}::text)`);
+
+  it('posts no note after a clean refresh', async () => {
+    replies.export = { stdout: manifest().filter((line) => !line.startsWith('SKIP')) };
+    await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+    expect((await events()).filter((e) => e.subtype === 'sandbox_moved')).toEqual([]);
+  });
+
+  it('archives during a refresh and keeps the old box until the save succeeds', async () => {
+    let resume!: () => void;
+    const hold = new Promise<void>((resolve) => { resume = resolve; });
+    replies.import = async () => { await hold; return { exitCode: 0 }; };
+    const moving = move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+    await vi.waitFor(() => expect(fleet.has('import')).toBe(true));
+    const archived = await archiveWorkbench(WB);
+    expect(archived.archivedAt).toBeTruthy();
+    await processArchive(WB);
+    expect(fleet.deleted).toEqual([]);
+    resume();
+    expect((await moving).moved).toBe(false);
+    await settleArchivesForTests();
+    expect((await row()).sandboxId).toBe(OLD_BOX);
+    expect((await row()).archivePendingAt).toBeNull();
+    expect(fleet.deleted).toEqual([NEW_BOX, OLD_BOX]);
+    expect(fleet.has('checkpoint', OLD_BOX)).toBe(true);
+  });
+
+  it('archives the new box after the refresh committed', async () => {
+    await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+    await archiveWorkbench(WB);
+    await settleArchivesForTests();
+    expect((await row()).sandboxId).toBe(NEW_BOX);
+    expect(fleet.has('checkpoint', NEW_BOX)).toBe(true);
+    expect(fleet.deleted).toEqual([OLD_BOX, NEW_BOX]);
+  });
+
+  it('starts no refresh for an archived row', async () => {
+    await store.updateWorkbench(WB, { archivedAt: new Date() });
+    const archived = await row();
+    expect(await move.needsFreshGolden(archived)).toBe(false);
+    expect((await move.moveWorkbenchToFreshSandbox(archived, 'stale_golden')).moved).toBe(false);
+    expect(await move.growOrMove(archived, 'low_disk')).toEqual({ ok: false });
+    expect(await move.growForDiskFull(archived)).toBe(false);
+    expect(fleet.log).toEqual([]);
+    expect(await store.claimMove(WB, OLD_BOX, NEW_BOX, 'x')).toBeNull();
+  });
 
   describe('the claim and its lease', () => {
     it('lets one of two concurrent moves win', async () => {
@@ -313,7 +359,7 @@ describe('moving a session to a fresh sandbox', () => {
 
     it('asks for the session memory ceiling on the new box', async () => {
       await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
-      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX, memMib: SESSION_SANDBOX_MEM_MIB });
+      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX, memMib: SESSION_SANDBOX_MEM_MIB, milliVcpu: SESSION_SANDBOX_MILLI_VCPU });
       expect(SESSION_SANDBOX_MEM_MIB).toBe(4096);
     });
 
@@ -346,9 +392,7 @@ describe('moving a session to a fresh sandbox', () => {
       await store.insertChat({ id: 'chat-new', workbenchId: WB, workspaceId: 'ws-a', title: 'New', agent: 'claude' });
       await move.moveWorkbenchToFreshSandbox(await row(), 'disk_full');
       const withSession = (await events('chat-a')).find((e) => e.subtype === 'sandbox_moved')!.text!;
-      expect(withSession).toContain('Moved to a fresh sandbox (the disk was full).');
-      expect(withSession).toContain('This conversation came along');
-      expect(withSession).toContain('node_modules (1 folder, 120 files)');
+      expect(withSession).toBe('These files did not carry over: data/big.bin.');
       expect(withSession).toContain('data/big.bin');
       const without = (await events('chat-new')).find((e) => e.subtype === 'sandbox_moved')!.text!;
       expect(without).not.toContain('conversation');
@@ -359,7 +403,7 @@ describe('moving a session to a fresh sandbox', () => {
       replies.export = { stdout: manifest({ extra: [`MISSING_SESSION ${SESSION}`] }) };
       await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
       const text = (await events()).find((e) => e.subtype === 'sandbox_moved')!.text!;
-      expect(text).toContain('could not be found, so the agent starts fresh');
+      expect(text).toContain('the agent conversation could not be restored');
       expect(text).not.toContain('This conversation came along');
       expect(await store.getChat('chat-a')).toMatchObject({ agentSessionId: null });
     });
@@ -368,8 +412,18 @@ describe('moving a session to a fresh sandbox', () => {
       replies.stop = { stdout: '2' };
       await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
       expect((await events()).find((e) => e.subtype === 'sandbox_moved')!.text).toContain(
-        'Talyn stopped the running scripts and terminals first',
+        'running scripts and terminals were stopped; start them again',
       );
+    });
+
+    it('reports stopped scripts after an unsuccessful refresh without a move notice', async () => {
+      replies.stop = { stdout: '2' };
+      replies.clone = { exitCode: 1 };
+      await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+      const notes = (await events()).filter((e) => e.type === 'system');
+      expect(notes).toEqual([expect.objectContaining({
+        subtype: 'sandbox_processes_stopped', text: 'Talyn stopped running scripts and terminals; start them again.',
+      })]);
     });
 
     it('keeps the new box when a step after the commit throws', async () => {
@@ -424,7 +478,7 @@ describe('moving a session to a fresh sandbox', () => {
       expect(await row()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX, statusMessage: 'before' });
       expect(fleet.deleted).not.toContain(OLD_BOX);
       expect(fleet.deleted.includes(NEW_BOX)).toBe(createdNew);
-      expect((await events()).some((e) => e.subtype === 'sandbox_move_failed')).toBe(true);
+      expect((await events()).some((e) => e.subtype === 'sandbox_move_failed')).toBe(false);
       expect(await store.getChat('chat-a')).toMatchObject({ agentSessionId: SESSION });
       expect(await settings()).toMatchObject({ moveFailures: 1, moveFailedAt: expect.any(String) });
     });
@@ -438,7 +492,8 @@ describe('moving a session to a fresh sandbox', () => {
       expect(result).toMatchObject({ moved: false, reason: 'blocked' });
       expect(fleet.has('create')).toBe(false);
       const blocked = (await events()).find((e) => e.subtype === 'sandbox_move_blocked');
-      expect(blocked?.text).toContain(why);
+      expect(blocked).toBeUndefined();
+      expect(result).toMatchObject({ message: expect.stringContaining(why) });
       expect(await row()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
     });
 

@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
-import { WORKBENCH_MOVING_MESSAGE } from '@talyn/shared';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -133,15 +132,6 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
             )}
           </>
         }
-      />
-    );
-  }
-  if (workbench.status === 'moving') {
-    return (
-      <Banner
-        tone="muted"
-        icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}
-        text={[WORKBENCH_MOVING_MESSAGE, workbench.statusMessage].filter(Boolean).join(' ')}
       />
     );
   }

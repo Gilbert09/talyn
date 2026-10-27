@@ -21,7 +21,7 @@ describe('sessionState', () => {
     ['a failed box', { sandboxState: 'error' }, [], {}, null, 'failed'],
     ['a failed chat', {}, [chat('error')], {}, pr('merged'), 'failed'],
     ['starting', { status: 'provisioning', sandboxState: 'creating' }, [], {}, null, 'starting'],
-    ['moving to a fresh sandbox, with the turn that asked for it', { status: 'moving' }, [chat('running')], {}, pr('open'), 'starting'],
+    ['moving to a fresh sandbox, with the turn that asked for it', { status: 'moving' }, [chat('running')], {}, pr('open'), 'working'],
     ['working', {}, [chat('running')], {}, pr('open'), 'working'],
     ['waiting for an answer', {}, [chat('awaiting_input')], {}, pr('open'), 'needs_reply'],
     ['an unread reply', {}, [chat('idle')], { c1: true }, pr('open'), 'needs_reply'],
@@ -38,8 +38,8 @@ describe('sessionState', () => {
     expect(sessionState({ ...WB, ...over }, chats, unread, row).kind).toBe(kind);
   });
 
-  it('says the session is moving to a fresh sandbox', () => {
-    expect(sessionState({ ...WB, status: 'moving' }, [], {}, null).label).toBe('Moving to a fresh sandbox');
+  it('shows an idle session during a sandbox refresh', () => {
+    expect(sessionState({ ...WB, status: 'moving' }, [], {}, null).label).toBe('Idle');
   });
 
   it('names the PR in the label', () => {

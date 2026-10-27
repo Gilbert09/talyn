@@ -68,6 +68,9 @@ export interface NewWorkbenchRequest {
 }
 
 export interface ScriptOutputState {
+  generation?: string;
+  offset?: number;
+  revision?: number;
   /** Raw output chunks, in arrival order. Capped so a chatty dev server cannot grow it forever. */
   chunks: string[];
   /** Chunks ever received, including ones dropped by the cap — a reader's cursor. */
@@ -415,19 +418,29 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   appendScriptFrame: (frame) =>
     set((s) => {
       const byName = s.scriptOutput[frame.workbenchId] ?? {};
-      const cur = byName[frame.name] ?? { chunks: [], total: 0, running: true, exitCode: null };
+      let cur = byName[frame.name] ?? { chunks: [], total: 0, running: true, exitCode: null };
+      if (frame.generation && frame.generation === cur.generation && frame.offset !== undefined &&
+          (frame.offset < (cur.offset ?? 0) || (frame.offset === cur.offset && frame.stream !== 'exit'))) return s;
+      if (frame.generation && frame.generation !== cur.generation) {
+        cur = { chunks: [], total: 0, running: true, exitCode: null, revision: (cur.revision ?? 0) + 1 };
+      }
       let next: ScriptOutputState;
-      if (frame.stream === 'exit') {
+      if (frame.snapshot) {
+        next = { chunks: frame.data ? [frame.data] : [], total: frame.data ? 1 : 0,
+          running: frame.running ?? true, exitCode: frame.exitCode ?? null, revision: (cur.revision ?? 0) + 1 };
+      } else if (frame.stream === 'exit') {
         next = { ...cur, running: false, exitCode: frame.exitCode ?? null };
       } else {
         const chunks = frame.data ? [...cur.chunks, frame.data] : cur.chunks;
         next = {
+          ...cur,
           chunks: chunks.length > SCRIPT_OUTPUT_MAX_CHUNKS ? chunks.slice(-SCRIPT_OUTPUT_MAX_CHUNKS) : chunks,
           total: cur.total + (frame.data ? 1 : 0),
           running: true,
           exitCode: null,
         };
       }
+      if (frame.generation) next = { ...next, generation: frame.generation, offset: frame.offset };
       return { scriptOutput: { ...s.scriptOutput, [frame.workbenchId]: { ...byName, [frame.name]: next } } };
     }),
 

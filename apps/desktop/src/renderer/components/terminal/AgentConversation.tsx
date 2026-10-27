@@ -633,6 +633,7 @@ function SystemBlock({ text, subtype }: { text: string; subtype?: string }) {
 }
 
 function ResultBlock({
+  summary,
   costUsd,
   inputTokens,
   outputTokens,
@@ -646,20 +647,17 @@ function ResultBlock({
   isError: boolean;
   denials: number;
 }) {
-  // Intentionally no echo of the final assistant text here — it's
-  // already the last block above this footer, rendered in full.
-  // Repeating it as a truncated one-liner next to the cost/tokens
-  // was noisy.
   return (
     <div
       className={cn(
-        'mt-3 pt-2 border-t text-xs flex items-center gap-3',
+        'mt-3 pt-2 border-t text-xs flex flex-wrap items-center gap-3',
         isError ? 'border-destructive/30 text-destructive' : 'border-border text-muted-foreground'
       )}
     >
       <span className={isError ? 'font-medium' : ''}>
         {isError ? 'Ended with error' : 'Run complete'}
       </span>
+      {isError && <p className="basis-full whitespace-pre-wrap break-words">{summary || 'The agent stopped unexpectedly.'}</p>}
       {typeof costUsd === 'number' && <span>${costUsd.toFixed(4)}</span>}
       {(inputTokens ?? outputTokens) !== undefined && (
         <span>

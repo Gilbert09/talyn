@@ -367,6 +367,10 @@ export interface UpdateLocalWorkbenchChatInput {
 // ============================================================================
 
 export interface WorkbenchScriptFrame {
+  generation?: string;
+  offset?: number;
+  snapshot?: boolean;
+  running?: boolean;
   workbenchId: string;
   name: string;
   stream: 'stdout' | 'stderr' | 'exit';

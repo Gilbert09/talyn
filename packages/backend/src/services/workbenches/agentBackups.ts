@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { gunzip } from 'node:zlib';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, isNotNull, sql } from 'drizzle-orm';
 import { shellQuote } from '@talyn/shared';
 import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { workbenchAgentBackups as backups, workbenchChats as chats, workbenches } from '../../db/schema.js';
@@ -9,6 +9,7 @@ import { debugBus } from '../debugBus.js';
 import { boxSessionPath, MAX_IMPORTED_SESSION_BYTES } from './claudeImport.js';
 import { shellPath, writeSandboxFiles } from './sandboxFiles.js';
 import { repoDirFor, runCapture } from './sandboxRuntime.js';
+import { isWorkbenchDraining } from './ownership.js';
 import { getChat, getWorkbench, type ChatRow, type WorkbenchRow } from './store.js';
 
 const gunzipAsync = promisify(gunzip);
@@ -206,5 +207,25 @@ export async function restoreAgentSession(wb: WorkbenchRow, chat: ChatRow): Prom
     return false;
   } finally {
     await runCapture(wb, `rm -rf -- ${shellQuote(staging)}`, execOptions).catch(() => undefined);
+  }
+}
+
+/** Retry backups whose turn ended before the previous backend could finish them. */
+export async function sweepAgentBackups(): Promise<void> {
+  if (isWorkbenchDraining()) return;
+  const db = getPoolDbClient();
+  const pending = await db.select({ id: chats.id, sessionId: chats.agentSessionId }).from(chats).innerJoin(workbenches, eq(chats.workbenchId, workbenches.id))
+    .where(and(eq(chats.agentBackupPending, true), ne(chats.status, 'running'), isNotNull(chats.agentSessionId),
+      eq(workbenches.status, 'ready'), isNotNull(workbenches.sandboxId))).limit(20);
+  for (const chat of pending) {
+    try {
+      await backupAgentSession(chat.id);
+      await db.update(chats).set({ agentBackupPending: false }).where(and(
+        eq(chats.id, chat.id), eq(chats.agentSessionId, chat.sessionId!), ne(chats.status, 'running'),
+      ));
+    } catch (error) {
+      debugBus.recordEvent({ service: 'workbench', action: 'agent_backup_retry',
+        summary: 'The agent backup will retry.', ok: false, error });
+    }
   }
 }

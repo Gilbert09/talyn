@@ -2,6 +2,49 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Keep sandbox work through backend deploys (2026-10-27)
+
+Migration 0086 adds turn ownership, heartbeats, byte offsets, script runs, and pending backup markers.
+A turn renews its lease every 20 seconds. A sweep claims leases older than 90 seconds every 30 seconds.
+The claim compares the saved owner and heartbeat. Event writes also check the owner and turn number.
+Legacy turns remain protected for 30 minutes. They remain protected longer while their agent process is alive.
+
+A detached supervisor stores output and an exit file in the sandbox.
+Each parsed record and its byte offset commit together. A new owner rebuilds parser state from the saved prefix.
+It writes only events after the saved offset. It uses the same completion path, queue, PR link, and backup trigger.
+No turn sweep kills an agent. A dead agent without an exit file reports “The agent stopped unexpectedly.”
+Draining stops new turns. Existing followers continue until two seconds before the configured drain deadline.
+The default drain window is ten seconds. The backend leaves all sandbox processes running when it exits.
+
+Terminals already use stable tmux sessions. Both clients now reconnect without adding error lines.
+The bridge replays recent history. Both error renderers now display the result message they previously ignored.
+Scripts store their offsets and recent output. Clients reload that output after reconnect and reject repeated offsets.
+Setup and archive scripts reuse their stored run on the same sandbox. Pending agent backups retry after restart.
+
+Audit: moves and pending archives already have durable leases and recovery sweeps.
+Provisioning retries its idempotent steps at boot. It still lacks a lease across instances for clone operations.
+PR creation can find an existing PR for its branch. Adopted turns repeat completion when necessary.
+Imports still lack a durable completion record for partially copied transcripts.
+Preview servers survive, but an active forwarded HTTP request can end during deployment.
+Those import and preview gaps need separate changes before all session activity can be called deploy-transparent.
+Legacy agents have no output log, so their missing output cannot be recovered by this migration.
+
+Checks: the shared and client packages build. Backend, desktop, and web type checks pass.
+ESLint passes on all changed TypeScript files. Targeted database and stubbed-fleet tests pass.
+The desktop checks pass 52 tests. The web checks pass 50 tests.
+Socket checks cannot bind a local listener in this sandbox. They fail with EPERM before the test body.
+No production build, commit, push, or branch change was made.
+
+## Archive sessions immediately (2026-10-27)
+
+Migration 0085 adds a durable archive marker, a lease, and a retry count.
+Archive requests return after the marker is written. A detached worker saves the work before it deletes the sandbox.
+A sweep checks pending archives every minute. A timestamp comparison gives each archive to one worker across backend instances.
+Failed saves keep the sandbox. Retries use increasing delays. Restore waits until the archive completes.
+Archive can stop a sandbox refresh. The refresh keeps its lease through cleanup and cannot commit after archive starts.
+Both apps keep the composer and controls available during refreshes. Clean refreshes add no chat note.
+Notes report only files, conversations, or running processes that could not continue.
+
 ## Keep agent memory after sandbox loss (2026-10-27)
 
 Migration 0084 adds compressed backups for agent conversations. Each completed turn starts a backup without waiting for it.

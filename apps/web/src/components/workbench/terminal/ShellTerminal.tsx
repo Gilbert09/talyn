@@ -36,7 +36,7 @@ export function ShellTerminal({ workbench, active }: { workbench: Workbench; act
 type SizeRef = { current: { cols: number; rows: number } | null };
 type SinkRef = { current: ((cols: number, rows: number) => void) | null };
 
-function connectSandbox(term: Terminal, workbenchId: string, sizeRef: SizeRef, sinkRef: SinkRef): () => void {
+export function connectSandbox(term: Terminal, workbenchId: string, sizeRef: SizeRef, sinkRef: SinkRef): () => void {
   let ws: WebSocket | null = null;
   let attempt = 0;
   let timer: number | null = null;
@@ -59,28 +59,29 @@ function connectSandbox(term: Terminal, workbenchId: string, sizeRef: SizeRef, s
       term.writeln('\r\n\x1b[33m[signed out — sign in again to use the terminal]\x1b[0m');
       return;
     }
-    const socket = new WebSocket(api.workbenches.terminalUrl(workbenchId));
+    const socket = new WebSocket(`${api.workbenches.terminalUrl(workbenchId)}?session=main`);
     socket.binaryType = 'arraybuffer';
     ws = socket;
     socket.onopen = () => {
       socket.send(auth);
-      attempt = 0;
       if (sizeRef.current) sendResize(sizeRef.current.cols, sizeRef.current.rows);
     };
+    let firstOutput = true;
     socket.onmessage = (e) => {
+      attempt = 0;
+      if (firstOutput) { term.reset(); firstOutput = false; }
       if (typeof e.data === 'string') term.write(e.data);
       else term.write(new Uint8Array(e.data as ArrayBuffer));
     };
     socket.onclose = (e) => {
       if (disposed || ws !== socket) return;
       ws = null;
-      if (FATAL_CLOSE_CODES.has(e.code)) {
+      if (FATAL_CLOSE_CODES.has(e.code) || (e.code === 1008 && e.reason === 'not_ready')) {
         term.writeln(`\r\n\x1b[31m[terminal closed: ${e.reason || `code ${e.code}`}]\x1b[0m`);
         return;
       }
       const delay = TERMINAL_BACKOFF_MS[Math.min(attempt, TERMINAL_BACKOFF_MS.length - 1)];
       attempt += 1;
-      term.writeln(`\r\n\x1b[90m[disconnected — reconnecting in ${Math.round(delay / 1000)}s]\x1b[0m`);
       timer = window.setTimeout(() => void connect(), delay);
     };
   };

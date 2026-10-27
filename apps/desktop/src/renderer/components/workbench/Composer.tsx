@@ -67,7 +67,7 @@ export function Composer({
   }, [workbench.id]);
 
   useEffect(() => {
-    if (workbench.status === 'ready') setImageNotReady(false);
+    if (workbench.status === 'ready' || workbench.status === 'moving') setImageNotReady(false);
   }, [workbench.status]);
 
   // Autosize: grow with the text up to a third of the window, then scroll.
@@ -169,10 +169,10 @@ export function Composer({
         model,
         effort,
       });
-      if (res.queued) {
+      if (res.queued && workbench.status !== 'moving') {
         toast.info(
           'Queued',
-          workbenchQueuesMessages(workbench.status) ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
+          workbench.status === 'provisioning' ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
         );
       }
     } catch (err) {

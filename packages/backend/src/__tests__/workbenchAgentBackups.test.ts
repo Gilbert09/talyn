@@ -24,6 +24,7 @@ import {
 import { clearRecoveryRecap, MAX_RECAP_BYTES, recoveryRecap } from '../services/workbenches/agentRecap.js';
 import { MAX_IMPORTED_SESSION_BYTES, boxSessionPath } from '../services/workbenches/claudeImport.js';
 import { AGENT_MEMORY_RECAP_NOTE, AGENT_MEMORY_RESTORED_NOTE, recordRecoveredTranscript, recoverLostSandbox } from '../services/workbenches/recovery.js';
+import * as durable from '../services/workbenches/durableExec.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
 
@@ -137,7 +138,7 @@ describe('agent memory backups', () => {
     vi.spyOn(instructions, 'syncInstructionFiles').mockResolvedValue(undefined);
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
-    vi.spyOn(runtime, 'runStream').mockRejectedValue(new Error('The agent did not start.'));
+    vi.spyOn(durable, 'startDurableExec').mockRejectedValue(new Error('The agent did not start.'));
     await sendMessage('chat', { text: 'continue' });
     await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('error'));
     expect((await state()).pending).toBe(true);
@@ -154,9 +155,14 @@ describe('agent memory backups', () => {
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
     const prompts: string[] = [];
-    vi.spyOn(runtime, 'runStream').mockImplementation(async (_row, script, opts) => {
-      prompts.push(script);
-      for (const line of claudeTurnLines(SESSION, 'done')) opts?.onStdoutLine?.(line);
+    vi.spyOn(durable, 'startDurableExec').mockImplementation(async (_row, _key, _marker, script) => { prompts.push(script); });
+    vi.spyOn(durable, 'followDurableExec').mockImplementation(async (_row, _key, _marker, _offset, onRecord) => {
+      let offset = 0;
+      for (const line of claudeTurnLines(SESSION, 'done')) {
+        const record = { stream: 'stdout' as const, line };
+        offset += Buffer.byteLength(JSON.stringify(record) + '\n');
+        await onRecord(record, offset);
+      }
       return { exitCode: 0, stderrTail: '' };
     });
     const capture = vi.mocked(runtime.runCapture).getMockImplementation()!;

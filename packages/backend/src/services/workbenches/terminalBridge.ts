@@ -1,3 +1,4 @@
+import { shellQuote } from '@talyn/shared';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { eq } from 'drizzle-orm';
@@ -13,7 +14,7 @@ import {
   type FleetClient,
 } from '../selfHosted/client.js';
 import { userMayUseWorkbenches } from './access.js';
-import { fleetClientFor, recordWorkbenchEvent, repoDirFor } from './sandboxRuntime.js';
+import { fleetClientFor, recordWorkbenchEvent, repoDirFor, runCapture } from './sandboxRuntime.js';
 import { recoverLostSandbox } from './recovery.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
 
@@ -266,6 +267,9 @@ async function openSandboxTerminal(
   handlers: SessionHandlers,
 ): Promise<TerminalSession> {
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+  const capture = (session: string) => `tmux capture-pane -p -S -2000 -E -1 -t ${shellQuote(session)} 2>/dev/null`;
+  const history = await runCapture(row, `${capture(`talyn-${opts.session}`)} || ${capture(opts.session)} || true`, { quiet: true }).catch(() => null);
+  if (history?.stdout) handlers.onData(Buffer.from(history.stdout.replace(/\n/g, '\r\n')));
   try {
     return await openFleetPty(client, row, opts, handlers);
   } catch (err) {
@@ -355,13 +359,12 @@ export async function openFleetPty(
   };
 }
 
-/** The shell an SSH session runs: tmux when the image has it, so a reconnect reattaches. */
+/** The SSH shell always uses tmux, so a reconnect can attach again. */
 function sshShellCommand(row: WorkbenchRow, session: string): string {
   const dir = repoDirFor(row).replace(/'/g, '');
   return (
     `cd '${dir}' 2>/dev/null; ` +
-    `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s 'talyn-${session}'; ` +
-    `else exec "\${SHELL:-bash}" -l; fi`
+    `exec tmux new-session -A -s 'talyn-${session}'`
   );
 }
 

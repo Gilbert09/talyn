@@ -85,3 +85,15 @@ it('does not send to an archived session', () => {
   render(<Composer workbench={wb} chat={chat} ops={sandboxOps(wb)} todos={null} contextUsage={null} slashCommands={null} />);
   expect(screen.getByRole('button', { name: 'Send the message' })).toBeDisabled();
 });
+
+it('keeps the composer enabled during a sandbox refresh', async () => {
+  const send = jest.spyOn(api.workbenches, 'sendMessage').mockResolvedValue({ queued: true });
+  const wb = { ...workbench, status: 'moving' as const };
+  render(<Composer workbench={wb} chat={chat} ops={sandboxOps(wb)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Continue' } });
+  const button = screen.getByRole('button', { name: 'Send the message' });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  await waitFor(() => expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Continue' })));
+  expect(screen.queryByText(/moving to a fresh sandbox/i)).toBeNull();
+});

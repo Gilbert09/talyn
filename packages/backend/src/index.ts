@@ -1,3 +1,5 @@
+import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
+import { drainWorkbenchFollowers, workbenchDrainTimeoutMs } from './services/workbenches/lifecycle.js';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -432,6 +434,8 @@ async function main() {
 
   const shutdown = async () => {
     if (draining) return; // double SIGTERM/SIGINT — first one is already draining
+    beginWorkbenchDrain();
+    const followersDrained = drainWorkbenchFollowers();
     draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
     dbWatchdog.shutdown();
@@ -478,6 +482,7 @@ codeReviewReconciler.stop();
     server.closeIdleConnections();
 
     server.close(async () => {
+      await followersDrained;
       await shutdownWsBus();
       await closeRedis();
       await closeDbClient();
@@ -489,7 +494,7 @@ codeReviewReconciler.stop();
       console.log('Forcing exit...');
       server.closeAllConnections();
       process.exit(1);
-    }, 10000);
+    }, workbenchDrainTimeoutMs());
   };
 
   process.on('SIGTERM', () => { void shutdown(); });

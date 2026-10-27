@@ -39,7 +39,7 @@ export const localRuntimeError = (): WorkbenchError =>
 
 const NOT_READY_COPY: Record<string, string> = {
   provisioning: 'This session is still starting. Try again in a moment.',
-  moving: 'This session is moving to a fresh sandbox. Try again in a moment.',
+  moving: 'This session is still starting. Try again in a moment.',
   error: 'This session failed to start; retry it.',
   archived: 'This session is archived. Restore it first.',
   ready: 'This session has no sandbox yet.',
@@ -50,7 +50,7 @@ export const notReadyError = (status: string): WorkbenchError =>
   new WorkbenchError(NOT_READY_COPY[status] ?? 'This session is not ready.', 409, 'not_ready');
 
 /** Refused while the session moves to a new box. A client can retry once the move ends. */
-export const movingError = (): WorkbenchError => new WorkbenchError(NOT_READY_COPY.moving, 409, 'moving');
+export const movingError = (): WorkbenchError => notReadyError('moving');
 
 /**
  * The deployment variables the fleet still needs, or null when it has what it

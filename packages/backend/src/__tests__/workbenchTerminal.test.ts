@@ -195,6 +195,20 @@ describe('workbench terminal socket', () => {
     ws.close();
   });
 
+  it('reconnects to the same terminal session after the bridge closes', async () => {
+    const first = await connect('wb-ready', '?session=stable-terminal');
+    first.ws.send(auth('tok-a'));
+    await vi.waitFor(() => expect(opened).toHaveLength(1));
+    first.ws.close();
+    await first.closed;
+    const second = await connect('wb-ready', '?session=stable-terminal');
+    second.ws.send(auth('tok-a'));
+    await vi.waitFor(() => expect(opened).toHaveLength(2));
+    expect(opened.map((o) => o.session)).toEqual(['stable-terminal', 'stable-terminal']);
+    second.ws.close();
+    await second.closed;
+  });
+
   it('replays input typed while the shell was still opening', async () => {
     let finish!: () => void;
     const gate = new Promise<void>((r) => (finish = r));

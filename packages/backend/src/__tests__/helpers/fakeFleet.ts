@@ -46,6 +46,8 @@ export class FakeFleet {
   /** Lines another command "printed" into the same ring, interleaved with ours. */
   noise: string[] = ['dev server listening on 3000', '@@talyn:deadbeef:o {"type":"assistant","foreign":true}'];
   private seq = 0;
+  durableLogs = new Map<string, ExecReply>();
+  durableFollowOffsets: number[] = [];
 
   asClient(): FleetClient {
     return this as unknown as FleetClient;
@@ -81,6 +83,32 @@ export class FakeFleet {
   }
 
   private async run(req: FleetExecRequest, follow: boolean): Promise<ExecReply> {
+    if (req.env?.TALYN_DURABLE_SCRIPT) {
+      const script = req.env.TALYN_DURABLE_SCRIPT;
+      this.scripts.push(script);
+      this.execs.push({ script, req, follow });
+      const key = JSON.parse(req.env.TALYN_LOG_PATHS).log as string;
+      if (!this.durableLogs.has(key)) this.durableLogs.set(key, await this.handler(script, req));
+      return { exitCode: 0 };
+    }
+    if (req.env?.TALYN_LOG_OFFSET !== undefined) {
+      this.durableFollowOffsets.push(Number(req.env.TALYN_LOG_OFFSET));
+      const key = JSON.parse(req.env.TALYN_LOG_PATHS).log as string;
+      const reply = this.durableLogs.get(key);
+      if (!reply) return { exitCode: 125 };
+      const records: Array<{stream: string; line: string}> = [];
+      for (const line of Array.isArray(reply.stdout) ? reply.stdout : (reply.stdout ?? '').split('\n')) {
+        if (line) records.push({ stream: 'stdout', line });
+      }
+      for (const line of (reply.stderr ?? '').split('\n')) if (line) records.push({ stream: 'stderr', line });
+      let offset = 0;
+      const stdout = records.map((record) => {
+        const raw = JSON.stringify(record);
+        offset += Buffer.byteLength(raw + '\n');
+        return offset > Number(req.env?.TALYN_LOG_OFFSET) && (!Number(req.env?.TALYN_LOG_LIMIT) || offset <= Number(req.env?.TALYN_LOG_LIMIT)) ? `${offset} ${Buffer.from(raw).toString('base64')}` : '';
+      }).filter(Boolean);
+      return { ...reply, stdout, stderr: '', hold: Number(req.env?.TALYN_LOG_LIMIT) ? undefined : reply.hold, killed: false, exitCode: Number(req.env?.TALYN_LOG_LIMIT) ? 0 : reply.killed ? 125 : reply.exitCode };
+    }
     const script = req.env?.TALYN_SCRIPT ?? '';
     this.scripts.push(script);
     this.execs.push({ script, req, follow });
@@ -118,9 +146,16 @@ export class FakeFleet {
       yield { events, cursor: events[events.length - 1].seq, terminal: false };
     }
     let killed = reply.killed ?? false;
-    if (reply.hold) await reply.hold.catch(() => (killed = true));
+    let exitCode = reply.exitCode;
+    if (reply.hold) await Promise.race([
+      reply.hold.catch(() => {
+        if (req.env?.TALYN_LOG_OFFSET !== undefined) exitCode = 125;
+        else killed = true;
+      }),
+      new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
+    ]);
     if (signal.aborted) return;
-    const { trailer } = this.output(req, { ...reply, stdout: [], stderr: '', killed });
+    const { trailer } = this.output(req, { ...reply, stdout: [], stderr: '', killed, exitCode });
     yield { events: trailer, cursor: this.seq, terminal: true };
   }
 

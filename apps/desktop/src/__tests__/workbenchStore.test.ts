@@ -301,3 +301,15 @@ describe('workbench store', () => {
     expect('c1' in useWorkbenchStore.getState().drafts).toBe(false);
   });
 });
+
+it('replaces script output after reconnect and rejects repeated offsets', () => {
+  const append = useWorkbenchStore.getState().appendScriptFrame;
+  const frame = { workbenchId: 'wb1', name: 'run', generation: 'run-1', stream: 'stdout' as const };
+  append({ ...frame, offset: 10, data: 'first\n' });
+  append({ ...frame, offset: 20, snapshot: true, data: 'first\nsecond\n', running: true });
+  append({ ...frame, offset: 20, data: 'second\n' });
+  append({ ...frame, offset: 10, snapshot: true, data: 'first\n' });
+  expect(useWorkbenchStore.getState().scriptOutput.wb1.run.chunks.join('')).toBe('first\nsecond\n');
+  append({ ...frame, stream: 'exit', offset: 20, exitCode: 0 });
+  expect(useWorkbenchStore.getState().scriptOutput.wb1.run.running).toBe(false);
+});
