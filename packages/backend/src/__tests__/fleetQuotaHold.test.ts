@@ -194,14 +194,14 @@ describe('a held-back agent never boots a sandbox', () => {
     await connect(db, ['claude', 'codex']);
     await db
       .update(workspacesTable)
-      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-5.6-sol' } } })
+      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-6.1-sol' } } })
       .where(eq(workspacesTable.id, 'ws1'));
     await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.");
 
     await dispatchTaskToFleet(taskAt('claude-sonnet-5'), ENV);
 
     const body = createSandbox.mock.calls[0]![0] as { task?: { model?: string } };
-    expect(body.task?.model).toBe('gpt-5.6-sol');
+    expect(body.task?.model).toBe('gpt-6.1-sol');
   });
 
   it('falls back to the shipped default when the workspace chose nothing', async () => {
@@ -213,7 +213,7 @@ describe('a held-back agent never boots a sandbox', () => {
     await dispatchTaskToFleet(taskAt('claude-sonnet-5'), ENV);
 
     const body = createSandbox.mock.calls[0]![0] as { task?: { model?: string } };
-    expect(body.task?.model).toBe('gpt-5.6-terra');
+    expect(body.task?.model).toBe('gpt-6.1-terra');
   });
 
   it('dispatches normally once the hold has lapsed', async () => {

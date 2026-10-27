@@ -87,7 +87,7 @@ describe('PostHog Code models', () => {
     it.each([
       ['a legacy id', 'claude-opus-4-7'],
       ['a gateway-only id', 'claude-haiku-4-5'],
-      ['a codex id', 'gpt-5.6-sol'],
+      ['a codex id', 'gpt-6.1-sol'],
       ['an unknown string', 'claude-opus-9'],
       ['an empty string', ''],
     ])('rejects %s', (_label, value) => {

@@ -97,7 +97,7 @@ type RunRow = import('../services/codeReview/store.js').RunRow;
 const reconcile = (run: RunRow) =>
   (codeReviewPoller as unknown as { reconcileRun(run: RunRow): Promise<void> }).reconcileRun(run);
 
-const CODEX_MODEL = 'gpt-5.6-sol';
+const CODEX_MODEL = 'gpt-6.1-sol';
 const CLAUDE_MODEL = 'claude-opus-5';
 const LENS = { kind: 'lens' as const, lens: 'correctness', chunkIndex: 0 };
 

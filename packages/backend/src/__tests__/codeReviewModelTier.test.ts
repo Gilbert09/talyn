@@ -48,7 +48,7 @@ describe('topFleetModelForModel', () => {
     // Load-bearing: a run dispatched at an OpenAI model has no route to
     // api.anthropic.com at all, so escalating across vendors would produce a
     // sandbox that cannot make a single call.
-    expect(topFleetModelForModel('gpt-5.6-terra')).toMatch(/^gpt-/);
+    expect(topFleetModelForModel('gpt-6.1-terra')).toMatch(/^gpt-/);
     expect(topFleetModelForModel('claude-sonnet-5')).toMatch(/^claude-/);
   });
 

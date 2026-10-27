@@ -78,7 +78,7 @@ describe('cloudModelLabel', () => {
   it.each([
     { id: 'claude-sonnet-5', label: 'Sonnet 5' },
     { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+    { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
     { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
     { id: 'some-future-model', label: 'some-future-model' },
   ])('$id reads as $label', ({ id, label }) => {

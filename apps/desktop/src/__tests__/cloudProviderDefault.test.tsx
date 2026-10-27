@@ -100,7 +100,7 @@ describe('CloudProviderDefaultSelector', () => {
     await waitFor(() => expect(update).toHaveBeenCalled());
     expect(sentSettings(0)).toEqual({
       defaultCloudProvider: 'selfhosted',
-      fleetModel: 'gpt-5.6-terra',
+      fleetModel: 'gpt-6.1-terra',
       // The vendor being LEFT is remembered, or flipping to Codex and back
       // would hand Claude the shipped default and lose the picked model.
       fleetModels: { claude: 'claude-sonnet-5' },

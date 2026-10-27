@@ -132,12 +132,12 @@ describe('what the dispatch funnel is told about the run', () => {
   }
 
   it('names the model the run actually started at', async () => {
-    const props = await dispatchOne('gpt-5.6-sol');
-    expect(props).toMatchObject({ provider: 'selfhosted', model: 'gpt-5.6-sol' });
+    const props = await dispatchOne('gpt-6.1-sol');
+    expect(props).toMatchObject({ provider: 'selfhosted', model: 'gpt-6.1-sol' });
   });
 
   it.each([
-    ['gpt-5.6-sol', 'codex'],
+    ['gpt-6.1-sol', 'codex'],
     ['claude-sonnet-5', 'claude'],
   ])('reads the fleet agent off the model (%s → %s)', async (model, agent) => {
     expect(await dispatchOne(model)).toMatchObject({ fleet_agent: agent });
@@ -146,7 +146,7 @@ describe('what the dispatch funnel is told about the run', () => {
   it('says when the run is only here because a quota ran out', async () => {
     // Without this, a day of failover work is indistinguishable from a day of
     // work on the agent the user actually chose.
-    const props = await dispatchOne('gpt-5.6-terra', {
+    const props = await dispatchOne('gpt-6.1-terra', {
       quotaFailover: { exhausted: 'claude', movedTo: 'Codex on Talyn Fleet' },
     });
     expect(props).toMatchObject({ fleet_agent: 'codex', failed_over_from: 'claude' });

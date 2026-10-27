@@ -565,7 +565,7 @@ describe('loop scheduler', () => {
         connectedAgents: ['claude'],
         reauthAgents: [],
       });
-      const loop = await dueLoop(db, { provider: 'selfhosted', model: 'gpt-5.6-terra' });
+      const loop = await dueLoop(db, { provider: 'selfhosted', model: 'gpt-6.1-terra' });
 
       await loopScheduler.tick();
 

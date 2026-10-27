@@ -551,7 +551,7 @@ split by what each vendor actually exposes:
   migrates the workspace's stored choice onto the agent's default — no deploy.
 
 **Either agent alone is enough.** A workspace with only Codex connected is fully
-configured, and its runs default to `gpt-5.6-terra` rather than to a Claude
+configured, and its runs default to `gpt-6.1-terra` rather than to a Claude
 model it would then be refused for. Which agent runs a given task is decided by
 the MODEL — `Settings → Talyn Fleet → Model` for the workspace default, or the
 per-task agent menu (right-click the robot on any PR row).

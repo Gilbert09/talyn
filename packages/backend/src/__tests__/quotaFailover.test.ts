@@ -434,18 +434,18 @@ describe('quota failover', () => {
     await connectAgents(db, ['claude', 'codex']);
     await db
       .update(workspacesTable)
-      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-5.6-sol' } } })
+      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-6.1-sol' } } })
       .where(eq(workspacesTable.id, 'ws1'));
 
     expect(await run()).toBe(true);
 
-    expect((await task()).metadata.model).toBe('gpt-5.6-sol');
+    expect((await task()).metadata.model).toBe('gpt-6.1-sol');
   });
 
   it('hops onto the shipped default when the workspace chose nothing', async () => {
     await connectAgents(db, ['claude', 'codex']);
     expect(await run()).toBe(true);
-    expect((await task()).metadata.model).toBe('gpt-5.6-terra');
+    expect((await task()).metadata.model).toBe('gpt-6.1-terra');
   });
 
   it('leaves the workspace default model alone — a spent quota is not a preference', async () => {
