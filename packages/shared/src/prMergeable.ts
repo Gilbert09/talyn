@@ -392,11 +392,12 @@ export function postHogCodeGitRules(baseBranch: string): string {
 /**
  * The Talyn Fleet microVM's non-negotiable publishing rules.
  *
- * The guest holds no credential of any kind — the host-side credential proxy
- * injects them — and it holds no signing key either, so a raw `git push` is
- * refused by any base that requires verified signatures. `fleet-publish` is the
- * way through: it asks the proxy to create the commit through GitHub's API,
- * which signs it server-side.
+ * The guest holds no credential of any kind (the host-side credential proxy
+ * injects them) and no signing key. The sandbox's `git` wrapper handles that:
+ * when GitHub refuses a push for missing signatures, the box republishes the same
+ * local commits through GitHub, which signs them (merges are made by GitHub's
+ * server-side merge), using fast-forwards only. The agent pushes as normal.
+ * `fleet-publish` stays as a short fallback for older golden images.
  *
  * Shared verbatim by the mergeable prompt and the skill-run prompt so the two
  * can never drift, and deliberately consistent with the executor's own
@@ -405,10 +406,9 @@ export function postHogCodeGitRules(baseBranch: string): string {
  */
 export function fleetGitRules(baseBranch: string): string {
   return `NON-NEGOTIABLE PUBLISHING RULES — read these first, they apply to EVERYTHING below:
-  - This environment has NO signing key and NO outbound \`git push\`. A push is REJECTED on any repository that requires verified signatures, and that is by design — do not try to work around it. Changes reach the remote ONLY through:
-      - \`fleet-publish --branch <branch> --message "<headline>" [--body "<longer text>"]\` — publishes your working tree as ONE commit that GitHub signs server-side. Use this for all ordinary work: review fixes, CI fixes, etc. It diffs against the merge-base with the default branch, so commit locally or not as you prefer — only the final file contents matter.
-      - \`fleet-publish --move-branch <branch> --oid <sha> --drop <the scratch branch you published to>\` — repoints a branch at a commit you already published, then deletes the scratch branch it came from. This is the only sanctioned force-update, and the conflict flow below is its only sanctioned use here. It REWRITES the branch and discards its previous commits, so never reach for it while a server-side update would have worked. ALWAYS pass \`--drop\`: the scratch branch is an artifact of how publishing works, nobody asked for it, and one left behind per conflicted PR is one dead branch on the repository forever. The fleet refuses to drop the branch it just moved, the default branch, or any branch not sitting at \`<sha>\`, so there is no way for it to delete real work.
-  - Local git is fully available for inspection and for preparing changes: \`git fetch\`, \`git status\`, \`git diff\`, \`git log\`, \`git merge-base\`, \`git rev-list\`, and a LOCAL \`git rebase\` to resolve conflicts. None of it reaches the remote on its own — only \`fleet-publish\` and the GitHub API publish.
+  - Signed commits are handled for you. Commit or merge as normal, then run \`git push\`. When the repository requires signed commits, the sandbox republishes your commits through GitHub, which signs them. Merge commits are made by GitHub's server-side merge. Only fast-forwards are used. Your local commit ids then change to the ids from GitHub. The files do not change. Do not say that the sandbox cannot sign commits. Do not force-push. Do not use \`fleet-publish --move-branch\` to update a branch.
+  - Older sandbox: only if \`git push\` fails with \`GH013\` and its output does not say that the sandbox republished the commits, publish a single commit with \`fleet-publish --branch <branch> --message "<headline>" --base origin/<branch>\`. Then run \`git fetch origin <branch>\` and \`git reset --hard origin/<branch>\`. A merge or a history rewrite needs a newer sandbox: stop and say so. Do not move branches.
+  - Local git is fully available: \`git fetch\`, \`git status\`, \`git diff\`, \`git log\`, \`git merge-base\`, \`git rev-list\`, \`git merge\`, \`git commit\`, \`git push\`. Do not rebase a branch that is already on GitHub.
   - To incorporate changes from ${baseBranch}, make GITHUB perform the merge so the result is signed and the base becomes a true ANCESTOR of the PR branch — see the base-update flow below. NEVER fabricate a single-parent imitation of a merge (no \`git merge --squash\`, no \`git checkout ${baseBranch} -- .\`, no \`git read-tree\`, no "apply the base's diff"): that makes the base look like your work and leaks every file the base changed into the PR's diff (hundreds of unrelated files). Naming a single-parent commit "Merge branch '${baseBranch}'" does not make it a merge.
   - Never move the repository's default branch. The fleet will refuse it.
   - git and the GitHub API are ALREADY authenticated — there are no credentials here and you do not need any. Some API endpoints are deliberately unreachable; a refusal is a policy decision, not an obstacle to route around. Do not probe for alternatives, and never use a request that creates state (a review, a comment, a ref) to test whether something is permitted.`;
@@ -693,18 +693,16 @@ export function postHogCodeResignRule(baseBranch: string): string {
 }
 
 /**
- * Re-sign instructions for the Talyn Fleet microVM: `fleet-publish` commits are
- * created through GitHub's API and signed server-side, so republishing the
- * branch's contents through it makes the branch Verified.
- *
- * Publishing collapses the working tree into ONE commit, which is what makes
- * this simple: there is no per-commit re-signing to do, because the branch ends
- * up carrying a single signed commit.
+ * Re-sign instructions for the Talyn Fleet microVM. Unsigned commits are
+ * ALREADY on GitHub here, and the plain push path only fast-forwards, so it
+ * cannot replace them. Replacing them means moving the branch, which is the one
+ * sanctioned use of `fleet-publish --move-branch`. A branch that ends up as one
+ * GitHub-signed commit is Verified.
  */
 export function fleetResignRule(baseBranch: string): string {
   return `COMMIT SIGNING — REQUIRED FOR THIS MERGE (do this before anything else can land):
   - The base branch (${baseBranch}) enforces "require signed commits": GitHub REFUSES the merge while ANY commit on this PR branch is unsigned, and some commits here currently ARE unsigned. A signed merge/squash result is not enough — every commit on the branch must be Verified.
-  - \`fleet-publish\` creates its commit through GitHub's API, which signs it. Republish the branch's whole contents through it: bring the branch up to date with ${baseBranch} per the base-update flow, make sure the working tree holds exactly the final file contents you want, then publish to a NEW scratch branch and repoint the PR branch at it with \`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published> --drop <the scratch branch>\`, which deletes the scratch branch once the move lands. The branch then carries one Verified commit.
+  - Unsigned commits are already on GitHub, and a normal \`git push\` only adds commits. So this is the one case where the branch must move. Bring the branch up to date with ${baseBranch} per the base-update flow. Make sure the working tree holds exactly the final file contents you want. Then publish to a NEW scratch branch with \`fleet-publish --branch <scratch> --message "<headline>" --base origin/${baseBranch}\`. Then repoint the PR branch with \`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published> --drop <the scratch branch>\`. The \`--drop\` deletes the scratch branch. The branch then carries one Verified commit. If \`fleet-publish\` is not available, stop and say that this needs a newer sandbox.
   - VERIFY before you finish: every commit in \`origin/${baseBranch}..HEAD\` must show as Verified on GitHub. Do not stop until all of them are.`;
 }
 
@@ -768,9 +766,9 @@ ${baseUpdateWhenRule(baseBranch)}
  *
  * Rungs 1 and 2 make GITHUB perform the merge, so the result is signed and the
  * base genuinely becomes an ancestor; both refuse a merge that is not clean, and
- * a refusal means a real conflict rather than a misuse. Rung 3 rewrites the PR
- * branch and discards its previous commits, which is why it is last and why the
- * wording says so out loud.
+ * a refusal means a real conflict rather than a misuse. Rung 3 is a local merge
+ * and a normal push, which the sandbox signs through GitHub. It is last because
+ * a server-side merge needs no resolution.
  */
 export function fleetBaseUpdateFlow(baseBranch: string, number: number): string {
   return `   - Check mergeability via \`gh pr view ${number} --json mergeable,mergeStateStatus\` (or the equivalent GitHub API read).
@@ -782,10 +780,10 @@ ${baseUpdateWhenRule(baseBranch)}
        1. \`PUT /repos/{owner}/{repo}/pulls/${number}/update-branch\`
        2. \`POST /repos/{owner}/{repo}/merges\`, merging ${baseBranch} into the head branch
      Both make GitHub perform the merge server-side, so the result is signed, and both REFUSE when the merge is not clean. A refusal means there is a real conflict — not that you used them wrongly. If one succeeds, \`git fetch\` and continue to the verification step.
-   - ONLY if both refuse, resolve the conflict locally:
+   - ONLY if both refuse, resolve the conflict locally with a merge:
        git fetch origin ${baseBranch}
-       git rebase origin/${baseBranch}
-     For each conflicted file, resolve ONLY the genuine conflict: preserve the intent of BOTH sides; never blindly discard the PR's changes or the base's. Then \`git add\` the resolutions and \`git rebase --continue\` (NOT \`git commit\`), repeating until the rebase completes. Publish the resolved tree to a NEW scratch branch with \`fleet-publish --branch <scratch>\`, then repoint the PR branch with \`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published> --drop <scratch>\` — the \`--drop\` deletes the scratch branch, which exists only because publishing needs a ref to commit onto and must not be left on the repository. Only ever rebase onto the PR's own base branch (\`origin/${baseBranch}\`) — never any other branch. If the rebase goes sideways, \`git rebase --abort\` and start over; never leave it half-finished.
+       git merge origin/${baseBranch}
+     For each conflicted file, resolve ONLY the genuine conflict: preserve the intent of BOTH sides; never blindly discard the PR's changes or the base's. Then \`git add\` the resolutions, run the build and tests for the code you touched, commit the merge, and run \`git push\`. The sandbox signs the result through GitHub. Only ever merge the PR's own base branch (\`origin/${baseBranch}\`) — never any other branch. Do not rebase and do not force-push. If the merge goes sideways, \`git merge --abort\` and start over; never leave it half-finished.
    - VERIFY THE UPDATE ACTUALLY JOINED THE BASE, whichever rung ran (this is the #1 cause of mass file leaks — the base never truly becomes an ancestor). Both of these must hold (local reads):
        git fetch origin ${baseBranch}
        git merge-base --is-ancestor origin/${baseBranch} HEAD   # must exit 0 — the base tip is now an ancestor of your branch
@@ -796,8 +794,8 @@ ${baseUpdateWhenRule(baseBranch)}
             git diff --name-only origin/${baseBranch}...HEAD   # the "after" list
        b. Compare with the "before" list you saved. The two MUST be identical. A clean base update adds NOTHING to the PR's own diff — files that already live on ${baseBranch} must never appear as PR changes. Any file in "after" that wasn't in "before" is a leak.
        c. For every file still in the diff, eyeball it: \`git diff origin/${baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${baseBranch} is a leak.
-   - If you find ANY leaked file or hunk, do not publish. \`git rebase --abort\` (or reset to the remote branch state — the remote is untouched until you publish) and redo the update, taking the base side for files this PR never meant to touch.
-   - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and publish. A server-side update (rung 1 or 2) needs no publish step. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
+   - If you find ANY leaked file or hunk, do not push. \`git merge --abort\` (or reset to the remote branch state — the remote is untouched until you push) and redo the update, taking the base side for files this PR never meant to touch.
+   - Do not push until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and push. A server-side update (rung 1 or 2) needs no push. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
 }
 
 export function postHogCodeLoopRules(ref: string): string {

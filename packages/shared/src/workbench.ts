@@ -801,15 +801,16 @@ const SANDBOX_GIT_NOTE = [
     'fleet proxy, which attaches the credentials. Do not ask for a token, do not run `gh auth login`, ' +
     'and do not change the git remote URL.',
   '',
-  'Signed commits: the sandbox has no signing key. If `git push` fails with `GH013` ("Commits must ' +
-    'have verified signatures"), do not retry it. Publish with `fleet-publish`, which makes one commit ' +
-    'through the GitHub API, and GitHub signs it:',
-  '- Run `git fetch origin <branch>` first, and merge any new remote commits.',
-  '- `fleet-publish --branch <branch> --message "<headline>" --base origin/<branch>` puts the working ' +
-    'tree on top of the remote branch as one signed commit. Leave out `--base` when the branch is not on ' +
-    'GitHub yet. It also publishes untracked files, so remove build output first.',
-  '- Then run `git fetch origin <branch>` and `git reset --hard origin/<branch>`, so the local branch ' +
-    'matches GitHub. The files do not change; only the history does.',
+  'Signed commits are handled for you. Commit and run `git push` as normal. When the repository ' +
+    'requires signed commits, the sandbox republishes your commits through GitHub, which signs them. ' +
+    'Your local commit ids then change to the ids from GitHub. The files do not change. Do not say ' +
+    'that the sandbox cannot sign commits. Do not force-push. Do not use `fleet-publish --move-branch`, ' +
+    'unless the user asks you to replace the history of the branch.',
+  '',
+  'Older sandbox: if `git push` fails with `GH013` and its output does not say that the sandbox ' +
+    'republished the commits, publish with `fleet-publish --branch <branch> --message "<headline>" ' +
+    '--base origin/<branch>`. Then run `git fetch origin <branch>` and `git reset --hard origin/<branch>`. ' +
+    'For a merge, tell the user that it needs a newer sandbox. Do not move branches.',
   '',
   'A failed push is not a finished task. Never say that the branch is pushed until `git push` or ' +
     '`fleet-publish` succeeded. If both fail, stop and say that the branch on GitHub did not change, ' +
@@ -843,22 +844,9 @@ export const DEFAULT_WORKBENCH_ACTION_PROMPTS: Readonly<Record<WorkbenchPromptAc
     '   take one side.',
     '3. Run the build and the tests for the code you touched to make sure the merge result works.',
     '4. Commit the merge and push the current branch with `git push`.',
-    '5. Only if that push fails with `GH013` (the repository requires signed commits) and you are in a',
-    '   Talyn sandbox: `fleet-publish` cannot make a merge commit, and one commit on top of the branch',
-    '   does not clear the conflict on GitHub. Put the merge result on a new branch from `{{baseBranch}}`,',
-    '   then move this branch to it:',
-    '   a. Make sure `git status` shows no untracked files. `fleet-publish` publishes them too.',
-    '   b. `fleet-publish --branch {{branch}}-merge-<random suffix> --message "Merge {{baseBranch}} into {{branch}}" --base origin/{{baseBranch}}`',
-    '      Use a branch name that does not exist on GitHub yet.',
-    '   c. `git fetch origin <that branch>`, then `git rev-parse origin/<that branch>` for its full sha.',
-    '   d. `fleet-publish --move-branch {{branch}} --oid <the full sha>`',
-    '   e. `git push origin --delete <that branch>`',
-    '   f. `git fetch origin {{branch}}` and `git reset --hard origin/{{branch}}`.',
-    '   This replaces the history of `{{branch}}` with one signed commit on top of `{{baseBranch}}`. Say so in',
-    '   your reply.',
-    '6. Reply with the files that conflicted and how you resolved each one.',
+    '5. Reply with the files that conflicted and how you resolved each one.',
     '',
-    'Do not rebase and do not force-push, except for step 5: the branch may already have reviews on it.',
+    'Do not rebase and do not force-push: the branch may already have reviews on it.',
     '',
     SANDBOX_GIT_NOTE,
   ].join('\n'),

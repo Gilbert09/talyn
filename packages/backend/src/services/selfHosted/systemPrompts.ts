@@ -13,17 +13,15 @@
  * The publishing instruction is load-bearing, not boilerplate.
  *
  * The first real fleet run did its work correctly and then could not ship it:
- * `posthog/posthog` requires verified signatures, so every `git push` came back
- * `GH013: Commits must have verified signatures`. There is no signing key in the
- * VM and there must not be one. The agent then spent minutes probing GitHub API
- * routes looking for a way through — all correctly refused by the credential
- * proxy — and in the process created an empty review draft it could not delete.
- *
- * `fleet-publish` is the way through: it asks the credential proxy to create the
- * commit through GitHub's API, which signs it server-side. Telling the agent
- * that git push WILL fail matters as much as telling it the alternative exists,
- * because an agent that believes push should work treats the refusal as
- * something to route around.
+ * `posthog/posthog` requires verified signatures, and the VM has no signing key
+ * by design. The sandbox's `git` wrapper handles this: when GitHub refuses a push
+ * for missing signatures, the box republishes the same local commits through
+ * GitHub, which signs them, and the local branch then points at GitHub's commits.
+ * So the agent pushes as normal. Without that, the agent spent minutes probing
+ * GitHub API routes (all refused by the credential proxy) and created an empty
+ * review draft it could not delete. Older golden images lack the wrapper, so a
+ * short `fleet-publish` fallback stays. The agent must not claim the VM "cannot
+ * sign", because users read that as a fault.
  *
  * The `gh` sentence is the same lesson, learned twice. "The GitHub API is
  * already authenticated" is true of the PROXIED REST API and false of the `gh`
@@ -37,25 +35,21 @@ export const TASK_SYSTEM_PROMPT =
   'You are a coding agent working in an isolated microVM with the repository checked out. ' +
   'Make the requested change and open a pull request. ' +
   'Keep the change minimal and focused on what was asked; do not refactor unrelated code.\n\n' +
-  'PUBLISHING YOUR WORK: do not use `git push`. It will be rejected on any repository that ' +
-  'requires verified signatures, and there is no signing key in this VM by design. ' +
-  'Instead run `fleet-publish --branch <branch> --message "<headline>" [--body "<longer text>"]`, ' +
-  'which publishes your working tree as one commit that GitHub signs server-side. ' +
-  'It diffs against the merge-base with the default branch, so commit locally or not as you prefer — ' +
-  'only the final file contents matter. Then open the PR with the GitHub API as usual.\n\n' +
-  'BRINGING A PR UP TO DATE WITH ITS BASE: try these in order and stop at the first that ' +
-  'works. (1) `PUT /repos/{owner}/{repo}/pulls/{n}/update-branch`. (2) `POST /repos/{owner}/{repo}/merges` ' +
-  'merging the base branch into the head branch. Both make GitHub perform the merge server-side, so ' +
-  'the result is signed, and both refuse when the merge is not clean — a refusal means there is a real ' +
-  'conflict, not that you used them wrongly. (3) Only if both refuse: resolve the conflict in the working ' +
-  'tree, `fleet-publish` the result to a NEW scratch branch, then ' +
-  '`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published> ' +
-  '--drop <the scratch branch>`. Always pass `--drop`: the scratch branch exists only because ' +
-  'publishing needs a ref to commit onto, and one left behind per conflicted PR is a dead branch on ' +
-  'the repository forever. The fleet refuses to drop the branch it just moved, the default branch, or ' +
-  'any branch not sitting at that sha. ' +
-  'Rung 3 rewrites the PR branch and discards its previous commits, so do not reach for it while (1) or ' +
-  '(2) would have worked. Never move the repository default branch; the fleet will refuse.\n\n' +
+  'PUBLISHING YOUR WORK: commit and run `git push` as normal. Signed commits are handled for you. ' +
+  'When the repository requires signed commits, the sandbox republishes your commits through GitHub, ' +
+  'which signs them, and your local commit ids change to the ids from GitHub. The files do not change. ' +
+  'Do not say that the sandbox cannot sign commits. Do not force-push. ' +
+  'Do not use `fleet-publish --move-branch`.\n\n' +
+  'OLDER SANDBOX: only if `git push` fails with `GH013` and its output does not say that the sandbox ' +
+  'republished the commits, run `fleet-publish --branch <branch> --message "<headline>" ' +
+  '[--body "<longer text>"]`. It publishes your working tree as one commit that GitHub signs. ' +
+  'Then run `git fetch origin <branch>` and `git reset --hard origin/<branch>`. ' +
+  'Then open the PR with the GitHub API as usual.\n\n' +
+  'BRINGING A PR UP TO DATE WITH ITS BASE: merge the base branch into the head branch with git ' +
+  'and run `git push`. Or use `PUT /repos/{owner}/{repo}/pulls/{n}/update-branch`, ' +
+  'or `POST /repos/{owner}/{repo}/merges`. GitHub merges server-side, so the result is signed. ' +
+  'If GitHub refuses, a real conflict exists: resolve it in the working tree, commit the merge, and ' +
+  'run `git push`. Never move the repository default branch.\n\n' +
   'git and the GitHub API are already authenticated — there are no credentials in this VM and you ' +
   'do not need any. THE `gh` CLI IS NOT, and cannot be: it looks for a credential of its own, this ' +
   'guest holds none by design, and no amount of logging in will change that. Use the REST API ' +

@@ -112,7 +112,7 @@ describe('buildMergeablePrompt — provider dispatch', () => {
   });
 });
 
-describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: fleet-publish, no push)', () => {
+describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: plain push, signed through GitHub)', () => {
   const prompt = buildMergeablePrompt({
     owner: 'acme',
     repo: 'widgets',
@@ -129,33 +129,34 @@ describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: fleet-publis
     expect(prompt).not.toContain('git_signed_rewrite');
   });
 
-  it('publishes through fleet-publish and says a push will be rejected', () => {
-    expect(prompt).toContain('fleet-publish');
-    expect(prompt).toMatch(/NO outbound `git push`/);
-    expect(prompt).toMatch(/signs it server-side|GitHub signs server-side|signed server-side/i);
+  it('tells the agent to push as normal and that GitHub signs the republished commits', () => {
+    expect(prompt).toContain('Commit or merge as normal, then run `git push`');
+    expect(prompt).toContain('republishes your commits through GitHub, which signs them');
+    expect(prompt).toContain('Only fast-forwards are used');
+    expect(prompt).toContain('Do not say that the sandbox cannot sign commits');
+    expect(prompt).not.toMatch(/NO outbound `git push`/);
   });
 
-  it('gives the three-rung base-update ladder, in order', () => {
-    // Scoped to the base-update section: `--move-branch` also appears up in the
-    // git rules as one of the two publishing verbs, which is correct and much
-    // earlier in the prompt.
+  it('keeps a short older-sandbox fallback that never moves a branch', () => {
+    expect(prompt).toContain('Older sandbox');
+    expect(prompt).toContain('GH013');
+    expect(prompt).toContain('fleet-publish --branch <branch> --message "<headline>" --base origin/<branch>');
+    expect(prompt).toContain('needs a newer sandbox');
+  });
+
+  it('gives the base-update ladder in order, ending in a local merge and push', () => {
     const ladder = prompt.slice(prompt.indexOf('/update-branch'));
     expect(prompt).toContain('/update-branch');
     expect(ladder.indexOf('/merges')).toBeGreaterThan(-1);
-    expect(ladder.indexOf('--move-branch')).toBeGreaterThan(ladder.indexOf('/merges'));
+    expect(ladder.indexOf('git merge origin/main')).toBeGreaterThan(ladder.indexOf('/merges'));
+    expect(ladder).toContain('commit the merge, and run `git push`');
   });
 
-  // Rung 3 publishes to a scratch branch because GitHub's commit mutation must
-  // commit onto a ref. Nothing used to delete it, so a repository collected one
-  // dead `talyn/<pr>-conflict-resolution` ref per conflicted PR. The cleanup is
-  // only as good as the instruction to ask for it, so assert the instruction.
-  it('tells rung 3 to drop the scratch branch it published to', () => {
-    const ladder = prompt.slice(prompt.indexOf('/update-branch'));
-    expect(ladder).toContain('--drop');
-    // Every force-update in the prompt carries the cleanup, not just one of them.
-    const moves = prompt.match(/--move-branch/g) ?? [];
-    const drops = prompt.match(/--drop/g) ?? [];
-    expect(drops.length).toBeGreaterThanOrEqual(moves.length);
+  it('no longer teaches the scratch-branch dance outside the re-sign section', () => {
+    expect(prompt).not.toContain('--move-branch <');
+    expect(prompt).toContain('Do not use `fleet-publish --move-branch` to update a branch');
+    expect(prompt).not.toContain('--drop');
+    expect(prompt).not.toContain('NEW scratch branch');
   });
 
   it('keeps `gh` — the fleet golden ships a shim for it', () => {
@@ -172,8 +173,9 @@ describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: fleet-publis
     expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
   });
 
-  it('still permits local rebase for conflicts but never a single-parent base imitation', () => {
-    expect(prompt).toContain('git rebase origin/main');
+  it('resolves conflicts with a merge, never a rebase or a single-parent base imitation', () => {
+    expect(prompt).not.toContain('git rebase origin/main');
+    expect(prompt).toContain('Do not rebase');
     expect(prompt).toContain('git merge --squash');
     expect(prompt.toLowerCase()).toContain('single-parent');
   });
@@ -229,6 +231,7 @@ describe('buildMergeablePrompt — re-sign section (signed-commits repos)', () =
     expect(prompt).toContain('COMMIT SIGNING');
     expect(prompt).toContain('fleet-publish');
     expect(prompt).toContain('--move-branch');
+    expect(prompt).toContain('the one case where the branch must move');
     expect(prompt).not.toContain('git_signed_rewrite');
     expect(prompt.toLowerCase()).toContain('unsigned');
   });
