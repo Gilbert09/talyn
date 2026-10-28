@@ -90,7 +90,8 @@ export async function runWorkbenchAction(
     const context = await readFixChecksContext(row);
     if (context) text = `${text}\n\n${context}`;
   }
-  await sendMessage(chat.id, { text });
+  // The intent makes the end of the turn read the new branch, so the row follows it.
+  await sendMessage(chat.id, { text, ...(action === 'rename_branch' ? { intent: 'rename_branch' as const } : {}) });
   return { chatId: chat.id };
 }
 

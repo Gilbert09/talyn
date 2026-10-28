@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import {
   buildWorkbenchTitleArgv,
   sanitizeWorkbenchTitle,
+  workbenchBranchPrompt,
   workbenchTitlePrompt,
   WORKBENCH_TITLE_TIMEOUT_MS,
   type WorkbenchAgent,
@@ -71,6 +72,35 @@ export async function generateWorkbenchTitle(
     const result = await run(argv, timeoutMs);
     if (result.timedOut || result.exitCode !== 0) return null;
     return sanitizeWorkbenchTitle(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** A slug is a few words. An answer longer than this is not one, and Talyn refuses it anyway. */
+const MAX_BRANCH_ANSWER = 200;
+
+/**
+ * A model's one-line branch name for a local session's work, by the same CLI
+ * and cheap model as the title. The raw answer: the backend reads it and
+ * decides. Null when the call fails or times out.
+ */
+export async function suggestWorkbenchBranchName(
+  input: { agent: WorkbenchAgent; message: string; changedFiles: string[]; finalMessage: string },
+  run: TitleRunner = runTitleCommand,
+  timeoutMs = WORKBENCH_TITLE_TIMEOUT_MS,
+): Promise<string | null> {
+  if (input.agent !== 'claude' && input.agent !== 'codex') return null;
+  try {
+    const prompt = workbenchBranchPrompt({
+      firstMessage: typeof input.message === 'string' ? input.message : '',
+      changedFiles: Array.isArray(input.changedFiles) ? input.changedFiles.filter((f) => typeof f === 'string') : [],
+      finalMessage: typeof input.finalMessage === 'string' ? input.finalMessage : '',
+    });
+    const result = await run(buildWorkbenchTitleArgv(input.agent, prompt), timeoutMs);
+    if (result.timedOut || result.exitCode !== 0) return null;
+    const answer = result.stdout.trim();
+    return answer && answer.length <= MAX_BRANCH_ANSWER ? answer : null;
   } catch {
     return null;
   }

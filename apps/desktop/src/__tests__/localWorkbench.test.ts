@@ -9,7 +9,8 @@ import type {
   WorkbenchLocalBridge,
   WorkbenchTurnOutcome,
 } from '@talyn/shared';
-import { LocalTurnController } from '../renderer/lib/localWorkbench';
+import { createLocalWorkbench, LocalTurnController } from '../renderer/lib/localWorkbench';
+import { api as realApi } from '../renderer/lib/api';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { userMessageText } from '../renderer/lib/workbenchFormat';
 import { toast } from '../renderer/stores/toast';
@@ -607,5 +608,240 @@ describe('LocalTurnController session titles', () => {
     await settle();
     expect(bridge.startTurn).toHaveBeenCalledTimes(1);
     expect('update' in api).toBe(false);
+  });
+});
+
+describe('LocalTurnController branch naming', () => {
+  const REPLY =
+    'Added the thing.\n\n```talyn-pr\n{"title":"feat: add the thing","body":"Adds it.","commitMessage":"feat: wip","draft":false}\n```';
+  const done = (resultText: string) => ({ sessionId: 's1', isError: false, resultText, cancelled: false });
+  const NEW = 'tom/add-thing';
+  type Steps = Array<{ argv: string[] }>;
+  type Decision =
+    | { outcome: 'rename'; from: string; to: string }
+    | { outcome: 'suggest' }
+    | { outcome: 'keep'; reason: string }
+    | { outcome: 'not_now'; reason: string };
+
+  const flushAll = async () => {
+    for (let i = 0; i < 20; i++) await settle();
+  };
+
+  function withNaming(over: {
+    reserve?: (input: { chatId?: string; title?: string; suggestion?: string }) => Promise<Decision>;
+    rename?: (input: { path: string; from: string; to: string }) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    confirm?: () => Promise<{ outcome: 'renamed'; workbench: Workbench } | { outcome: 'refused'; reason: 'name_taken' | 'row_changed' }>;
+    head?: string;
+    deadlineMs?: number;
+  } = {}) {
+    const ctx = setup();
+    const order: string[] = [];
+    ctx.bridge.exec.mockImplementation(async (_path: string, steps: Steps) => {
+      const argv = steps.flatMap((s) => s.argv);
+      if (argv.includes('--absolute-git-dir')) return { exitCode: 0, stdout: '/repo/.git\n', stderr: '' };
+      if (argv.includes('--porcelain')) return { exitCode: 0, stdout: ' M a.ts\n', stderr: '' };
+      if (argv.includes('rev-list')) return { exitCode: 0, stdout: '2\n', stderr: '' };
+      if (argv.includes('push')) {
+        order.push('push');
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (argv.includes('merge-base')) return { exitCode: 0, stdout: 'b'.repeat(40), stderr: '' };
+      if (argv.includes('--name-only')) return { exitCode: 0, stdout: 'src/thing.ts\0', stderr: '' };
+      if (argv.includes('--others')) return { exitCode: 0, stdout: 'src/new.ts\0', stderr: '' };
+      if (argv.join(' ') === 'git rev-parse --abbrev-ref HEAD') return { exitCode: 0, stdout: `${over.head ?? 'lisbon'}\n`, stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const nameBranch = jest.fn(async (_id: string, input: { chatId?: string; title?: string; suggestion?: string }) => {
+      order.push(input.title !== undefined || input.suggestion !== undefined ? 'reserve' : 'check');
+      if (over.reserve) return over.reserve(input);
+      if (input.title === undefined && input.suggestion === undefined) return { outcome: 'suggest' } as Decision;
+      return { outcome: 'rename', from: 'lisbon', to: NEW } as Decision;
+    });
+    const confirmBranchName = jest.fn(async (_id: string, _input: { from: string; to: string }) => {
+      order.push('confirm');
+      return over.confirm ? over.confirm() : { outcome: 'renamed' as const, workbench: { ...WB, branch: NEW } };
+    });
+    const update = jest.fn(async (id: string, patch: { branch?: string }) => ({ ...WB, id, ...patch }));
+    const renameBranch = jest.fn(async (input: { path: string; from: string; to: string }) => {
+      order.push(`rename ${input.from} ${input.to}`);
+      return over.rename ? over.rename(input) : ({ ok: true } as const);
+    });
+    const suggestBranchName = jest.fn(async (_input: { agent: string; message: string; changedFiles: string[]; finalMessage: string }) =>
+      'add-thing'
+    );
+    // Like the backend: the PR answer carries the row as it is when the PR opens.
+    ctx.api.createPullRequest.mockImplementation(async (id: string) => ({
+      workbench: { ...useWorkbenchStore.getState().workbenches[id], pullRequestId: 'pr-12' },
+      pullRequest: { number: 12, url: 'https://github.com/acme/app/pull/12' },
+      existing: false,
+    }));
+    Object.assign(ctx.bridge, { renameBranch, suggestBranchName });
+    Object.assign(ctx.api, { nameBranch, confirmBranchName, update });
+    Object.assign((ctx.controller as unknown as { deps: object }).deps, { branchNamingDeadlineMs: over.deadlineMs ?? 60_000 });
+    return { ...ctx, order, nameBranch, confirmBranchName, renameBranch, suggestBranchName, update };
+  }
+
+  afterEach(() => jest.clearAllMocks());
+
+  describe('a turn that opens a PR', () => {
+    it('renames the branch from the PR title before the push, and the row follows', async () => {
+      const { controller, order, nameBranch, suggestBranchName } = withNaming();
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(nameBranch).toHaveBeenCalledWith('wb1', { chatId: 'c1', title: 'feat: add the thing' });
+      expect(suggestBranchName).not.toHaveBeenCalled();
+      expect(order).toEqual(['reserve', `rename lisbon ${NEW}`, 'confirm', 'push']);
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe(NEW);
+    });
+
+    it('renames the branch back when Talyn refuses the confirm, then pushes the old name', async () => {
+      const { controller, order } = withNaming({ confirm: async () => ({ outcome: 'refused', reason: 'name_taken' }) });
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(order).toEqual(['reserve', `rename lisbon ${NEW}`, 'confirm', `rename ${NEW} lisbon`, 'push']);
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe('lisbon');
+    });
+
+    it('sends a lost confirm again before it gives up', async () => {
+      const confirm = jest
+        .fn<Promise<{ outcome: 'renamed'; workbench: Workbench }>, []>()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce({ outcome: 'renamed', workbench: { ...WB, branch: NEW } });
+      const { controller, order } = withNaming({ confirm });
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(order).toEqual(['reserve', `rename lisbon ${NEW}`, 'confirm', 'confirm', 'push']);
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe(NEW);
+    });
+
+    it.each([
+      ['main refuses the rename', { rename: async () => ({ ok: false as const, reason: 'has_upstream' }) }, ['reserve', `rename lisbon ${NEW}`, 'push']],
+      ['Talyn keeps the name', { reserve: async () => ({ outcome: 'keep' as const, reason: 'on_github' }) }, ['reserve', 'push']],
+      ['Talyn cannot be reached', { reserve: async () => Promise.reject(new Error('offline')) }, ['reserve', 'push']],
+    ])('keeps the name and still pushes when %s', async (_name, over, expected) => {
+      const { controller, order, confirmBranchName, api } = withNaming(over as Parameters<typeof withNaming>[0]);
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(order).toEqual(expected);
+      expect(confirmBranchName).not.toHaveBeenCalled();
+      expect(api.createPullRequest).toHaveBeenCalledTimes(1);
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe('lisbon');
+    });
+
+    it('pushes the old name when Talyn does not answer in time, and never renames later', async () => {
+      let answer: (d: Decision) => void = () => {};
+      const { controller, order, renameBranch } = withNaming({
+        deadlineMs: 20,
+        reserve: () => new Promise<Decision>((resolve) => (answer = resolve)),
+      });
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(order).toEqual(['reserve', 'push']);
+      answer({ outcome: 'rename', from: 'lisbon', to: NEW });
+      await flushAll();
+      expect(renameBranch).not.toHaveBeenCalled();
+    });
+
+    it('does nothing with an older main process that cannot rename', async () => {
+      const { controller, bridge, order, nameBranch } = withNaming();
+      delete (bridge as Partial<typeof bridge> & { renameBranch?: unknown }).renameBranch;
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done(REPLY));
+      expect(nameBranch).not.toHaveBeenCalled();
+      expect(order).toEqual(['push']);
+    });
+  });
+
+  describe('a first turn that opens no PR', () => {
+    it('asks the local model, after a check, then renames and confirms', async () => {
+      const { controller, order, nameBranch, suggestBranchName } = withNaming();
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done('Added the thing.'));
+      await flushAll();
+      expect(suggestBranchName).toHaveBeenCalledWith({
+        agent: 'claude',
+        message: 'add the thing',
+        changedFiles: ['src/thing.ts', 'src/new.ts'],
+        finalMessage: 'Added the thing.',
+      });
+      expect(nameBranch.mock.calls.map((c) => c[1])).toEqual([{ chatId: 'c1' }, { chatId: 'c1', suggestion: 'add-thing' }]);
+      expect(order).toEqual(['check', 'reserve', `rename lisbon ${NEW}`, 'confirm']);
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe(NEW);
+    });
+
+    it('does not ask the model when Talyn says the branch keeps its name', async () => {
+      const { controller, order, suggestBranchName } = withNaming({ reserve: async () => ({ outcome: 'keep', reason: 'chosen_branch' }) });
+      await controller.send(WB, chat(), { text: 'add the thing' });
+      await controller.handleTurnEnd('c1', done('Added the thing.'));
+      await flushAll();
+      expect(suggestBranchName).not.toHaveBeenCalled();
+      expect(order).toEqual(['check']);
+    });
+
+    it.each([
+      ['a later turn', async (c: LocalTurnController) => {
+        useWorkbenchStore.getState().appendEvents('c1', [{ chatId: 'c1', seq: 1, turn: 1, event: { seq: 1, type: 'user' } as never }]);
+        await c.send(WB, chat(), { text: 'more' });
+      }],
+      ['a failed turn', async (c: LocalTurnController) => c.send(WB, chat(), { text: 'add the thing' })],
+      ['a queued message waiting', async (c: LocalTurnController) => {
+        await c.send(WB, chat(), { text: 'add the thing' });
+        await c.send(WB, chat({ status: 'running' }), { text: 'and then this' });
+      }],
+      ['a session with a PR', async (c: LocalTurnController) => {
+        const linked = { ...WB, pullRequestId: 'pr-1' };
+        useWorkbenchStore.getState().upsertWorkbench(linked);
+        await c.send(linked, chat(), { text: 'add the thing' });
+      }],
+    ])('does nothing after %s', async (name, start) => {
+      const { controller, nameBranch, renameBranch } = withNaming();
+      await start(controller);
+      await controller.handleTurnEnd('c1', { ...done('Added the thing.'), isError: name === 'a failed turn' });
+      await flushAll();
+      expect(nameBranch).not.toHaveBeenCalled();
+      expect(renameBranch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a rename_branch turn', () => {
+    it('reports the branch the agent left checked out', async () => {
+      const { controller, update } = withNaming({ head: 'feat/add-thing' });
+      await controller.send(WB, chat(), { text: 'rename it', intent: 'rename_branch' });
+      await controller.handleTurnEnd('c1', done('feat/add-thing'));
+      await flushAll();
+      expect(update).toHaveBeenCalledWith('wb1', { branch: 'feat/add-thing' });
+      expect(useWorkbenchStore.getState().workbenches.wb1.branch).toBe('feat/add-thing');
+    });
+
+    it.each([['an unchanged branch', 'lisbon'], ['a detached HEAD', 'HEAD']])('reports nothing for %s', async (_name, head) => {
+      const { controller, update } = withNaming({ head });
+      await controller.send(WB, chat(), { text: 'rename it', intent: 'rename_branch' });
+      await controller.handleTurnEnd('c1', done('lisbon'));
+      await flushAll();
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('createLocalWorkbench', () => {
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    ['a branch it names from the prompt', {}, 'tom/fix-login-redirect', true],
+    ['a branch a person chose', { branch: 'my-branch' }, 'my-branch', false],
+    ['a pull request branch', { branch: 'their-branch', fromPullRequestId: 'pr-1' }, 'their-branch', false],
+  ])('tells Talyn whether it is %s', async (_name, over, branch, generated) => {
+    const createWorktree = jest.fn(async () => ({ path: '/work/x' }));
+    (window as unknown as { electron: unknown }).electron = { workbench: { createWorktree, exec: jest.fn() } };
+    const create = jest.spyOn(realApi.workbenches, 'create').mockResolvedValue(WB);
+    await createLocalWorkbench({
+      workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app', agent: 'claude', baseBranch: 'main',
+      takenNames: [], branchPrefix: 'tom/', prompt: 'fix the login redirect', ...over,
+    });
+    expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ branch }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ branch, branchGenerated: generated }));
   });
 });

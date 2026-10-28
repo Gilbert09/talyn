@@ -24,7 +24,8 @@ import { PreviewForwarder } from './previewForward';
 import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
-import { generateWorkbenchTitle } from './title';
+import { generateWorkbenchTitle, suggestWorkbenchBranchName } from './title';
+import { renameWorktreeBranch } from './branchRename';
 
 export async function pickRepoFolder(repoPaths?: RepoPaths): Promise<{
   path: string;
@@ -113,6 +114,21 @@ export function registerWorkbenchIpc(
     'generate-title',
     (input: Parameters<NonNullable<WorkbenchLocalBridge['generateTitle']>>[0]) =>
       generateWorkbenchTitle(input),
+  );
+  handle(
+    'suggest-branch-name',
+    (input: Parameters<NonNullable<WorkbenchLocalBridge['suggestBranchName']>>[0]) =>
+      suggestWorkbenchBranchName(input),
+  );
+  handle(
+    'rename-branch',
+    async (input: Parameters<NonNullable<WorkbenchLocalBridge['renameBranch']>>[0]) => {
+      if (typeof input?.path !== 'string' || typeof input.from !== 'string' || typeof input.to !== 'string')
+        throw new Error('A path and two branch names are required.');
+      // Only a worktree Talyn made: never a person's own checkout.
+      if (!(await paths.load(input.path))) return { ok: false, reason: 'not_managed' };
+      return renameWorktreeBranch(input, exec);
+    },
   );
   handle('exec', async (worktree: string, steps: GitStep[]) => {
     // Give checkpoint steps a private index outside the worktree.

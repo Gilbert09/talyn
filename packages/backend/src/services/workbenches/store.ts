@@ -499,6 +499,46 @@ export async function renameAllocatedBranch(id: string, from: string, to: string
   return row ?? null;
 }
 
+/**
+ * Turns across every chat of a LOCAL workbench. The desktop runs those turns,
+ * so `turn_count` stays 0; the turn of each chat's newest uploaded event is
+ * the count. One index lookup per chat.
+ */
+export async function localSessionTurnCount(workbenchId: string): Promise<number> {
+  const [row] = await db()
+    .select({
+      turns: sql<number>`COALESCE(SUM((
+        SELECT ${eventsTable.turn} FROM ${eventsTable}
+        WHERE ${eventsTable.chatId} = ${chatsTable.id}
+        ORDER BY ${eventsTable.seq} DESC LIMIT 1
+      )), 0)::int`,
+    })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  return Number(row?.turns ?? 0);
+}
+
+/**
+ * The row follows a branch a person (or the agent, at a person's request)
+ * renamed: `from` becomes `to`, and the name is no longer Talyn's to move.
+ * `allocated_branch` goes false, so the unique index never applies to it, and
+ * the one naming attempt counts as decided. Null when the row no longer says
+ * `from`, or is archived.
+ */
+export async function followChosenBranch(id: string, from: string, to: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      branch: to,
+      allocatedBranch: false,
+      branchNamedAt: sql`COALESCE(${workbenchesTable.branchNamedAt}, now())`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.branch, from), isNull(workbenchesTable.archivedAt)))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
 export async function deleteWorkbenchRow(id: string): Promise<void> {
   await db().delete(workbenchesTable).where(eq(workbenchesTable.id, id));
 }

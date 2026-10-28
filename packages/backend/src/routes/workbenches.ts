@@ -16,7 +16,9 @@ import {
   WORKBENCH_MANUAL_TITLE_MAX,
   type ApiResponse,
   type CreateWorkbenchChatInput,
+  type ConfirmWorkbenchBranchNameInput,
   type CreateWorkbenchInput,
+  type NameWorkbenchBranchInput,
   type PutWorkbenchInstructionFileInput,
   type UpdateLocalWorkbenchChatInput,
   type UpdateWorkbenchChatInput,
@@ -50,6 +52,7 @@ import {
   putInstructionFile,
   removeInstructionFile,
 } from '../services/workbenches/instructions.js';
+import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -507,6 +510,10 @@ export function workbenchRoutes(): Router {
     // Only a branch Talyn names gets the workspace's prefix; a branch the
     // person picked (a PR, "from branch") is used as it is.
     const branchPrefix = branch ? '' : await sessionBranchPrefix(workspaceId);
+    // A local branch the desktop named from the prompt is Talyn's, like a
+    // sandbox one: in the unique index, and renamed after the first turn. If
+    // another session already holds that name, it stays a plain branch.
+    let localGenerated = body.runtime === 'local' && body.branchGenerated === true && Boolean(branch) && !pullRequestId;
     const id = uuid();
     let row: WorkbenchRow | null = null;
     for (let attempt = 0; attempt < 4 && !row; attempt++) {
@@ -524,7 +531,7 @@ export function workbenchRoutes(): Router {
           repoFullName,
           name,
           branch: branch || await allocateWorkbenchBranch(workspaceId, repoFullName, `${branchPrefix}${branchBase}`),
-          allocatedBranch: !branch,
+          allocatedBranch: !branch || localGenerated,
           baseBranch,
           runtime: body.runtime,
           agent: body.agent,
@@ -544,6 +551,10 @@ export function workbenchRoutes(): Router {
         });
       } catch (err) {
         const constraint = uniqueViolationConstraint(err);
+        if (constraint === 'uq_workbenches_allocated_branch' && localGenerated) {
+          localGenerated = false;
+          continue;
+        }
         if (constraint !== 'uq_workbenches_allocated_branch'
           && (constraint !== 'uq_workbenches_workspace_name_live' || requestedName)) throw err;
       }
@@ -579,6 +590,8 @@ export function workbenchRoutes(): Router {
         return bad(res, 400, 'branch is not a valid branch name.');
       }
       patch.branch = body.branch;
+      // A branch the desktop checked out (a PR's, a person's) is not Talyn's to rename.
+      if (body.branch !== row.branch) patch.allocatedBranch = false;
     }
     if (body.name !== undefined) {
       const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
@@ -858,6 +871,28 @@ export function workbenchRoutes(): Router {
     try {
       const chatId = (req.body as { chatId?: unknown } | undefined)?.chatId;
       ok(res, await runWorkbenchAction(row, req.params.action, typeof chatId === 'string' ? chatId : undefined));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // ---- A local session's branch name after its first turn: reserve, rename on the desktop, confirm ----
+
+  router.post('/:id/branch-name', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await reserveLocalBranchName(row, (req.body ?? {}) as NameWorkbenchBranchInput));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post('/:id/branch-name/confirm', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await confirmLocalBranchName(row, (req.body ?? {}) as ConfirmWorkbenchBranchNameInput));
     } catch (err) {
       fail(res, err);
     }

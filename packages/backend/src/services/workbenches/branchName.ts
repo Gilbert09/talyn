@@ -1,5 +1,6 @@
 import {
   branchSlugFromSuggestion,
+  currentBranch,
   branchSlugFromTitle,
   isValidBranchName,
   parseNulList,
@@ -15,11 +16,12 @@ import { mergeBaseLine } from './changes.js';
 import { askSessionAgent, type CheapAgentOptions, type SandboxRun } from './cheapAgent.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { parseSections, sectionsScript } from './execFraming.js';
-import { publicWorkbench } from './prLink.js';
+import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordWorkbenchEvent, runCapture } from './sandboxRuntime.js';
 import {
   branchNamingDecided,
   claimBranchNaming,
+  followChosenBranch,
   getWorkbench,
   otherRunningChats,
   releaseBranchNaming,
@@ -186,18 +188,12 @@ async function nameOnce(workbenchId: string, input: BranchNamingInput, opts: Bra
     slug = answer && answer.exitCode === 0 ? branchSlugFromSuggestion(answer.stdout) : null;
     if (!slug) return keep(answer ? 'no_suggestion' : 'no_answer', Boolean(answer));
   }
-  const prefix = await sessionBranchPrefix(row.workspaceId);
-  const wanted = `${prefix}${slug}`;
-  // `fix-login-2` already is `fix-login`: allocating again would only bump the suffix.
-  if (wanted === row.branch || new RegExp(`^${escapeRegExp(wanted)}-\\d+$`).test(row.branch)) return keep('same_name');
-  if (!isValidBranchName(wanted)) return keep('invalid_name');
-
+  const chosen = await chooseBranchTarget(row, slug);
+  if ('keep' in chosen) return keep(chosen.keep, chosen.keep !== 'github_error', chosen.error);
   let allocateError: unknown;
-  const allocate = () => allocateWorkbenchBranch(row.workspaceId, row.repoFullName, wanted)
+  const allocate = () => allocateWorkbenchBranch(row.workspaceId, row.repoFullName, chosen.wanted)
     .catch((err: unknown) => { allocateError = err; return null; });
-  const first = await allocate();
-  if (!first) return keep('github_error', false, allocateError);
-  let target = first;
+  let target = chosen.target;
   if (await otherRunningChats(workbenchId, input.chatId) > 0) {
     if (turns < BRANCH_NAMING_MAX_TURNS) {
       await releaseBranchNaming(workbenchId);
@@ -243,15 +239,61 @@ async function nameOnce(workbenchId: string, input: BranchNamingInput, opts: Bra
   return { outcome: 'renamed', branch: target };
 }
 
+/**
+ * The prefixed, unique name for `slug`, or why the branch keeps its name.
+ * Both runtimes decide the name here; only the rename itself differs.
+ */
+export async function chooseBranchTarget(
+  row: Pick<WorkbenchRow, 'workspaceId' | 'repoFullName' | 'branch'>,
+  slug: string,
+): Promise<{ wanted: string; target: string } | { keep: string; error?: unknown }> {
+  const prefix = await sessionBranchPrefix(row.workspaceId);
+  const wanted = `${prefix}${slug}`;
+  // `fix-login-2` already is `fix-login`: allocating again would only bump the suffix.
+  if (wanted === row.branch || new RegExp(`^${escapeRegExp(wanted)}-\\d+$`).test(row.branch)) return { keep: 'same_name' };
+  if (!isValidBranchName(wanted)) return { keep: 'invalid_name' };
+  try {
+    return { wanted, target: await allocateWorkbenchBranch(row.workspaceId, row.repoFullName, wanted) };
+  } catch (error) {
+    return { keep: 'github_error', error };
+  }
+}
+
 /** Why this session's branch must keep its name, or null when it may move. */
-function ineligible(row: WorkbenchRow): string | null {
-  if (row.runtime !== 'sandbox' || !row.sandboxId) return 'not_sandbox';
+export function ineligible(row: WorkbenchRow, runtime: 'sandbox' | 'local' = 'sandbox'): string | null {
+  if (runtime === 'sandbox' && (row.runtime !== 'sandbox' || !row.sandboxId)) return 'not_sandbox';
+  if (runtime === 'local' && row.runtime !== 'local') return 'not_local';
   if (!row.allocatedBranch) return 'chosen_branch';
   if (row.pullRequestId) return 'has_pr';
   if (row.pushedHeadShas.length > 0) return 'pushed';
   if (row.archivedAt || row.archivePendingAt) return 'archived';
   if (row.status !== 'ready') return 'not_ready';
   return null;
+}
+
+/**
+ * After a `rename_branch` turn: the agent ran `git branch -m`, so the row
+ * follows the branch the box now has checked out. A person asked for the
+ * rename, so the name is no longer Talyn's (`allocated_branch` false). The
+ * PR link is looked for again under the new name. Never throws; null when
+ * nothing changed.
+ */
+export async function followBranchRename(row: WorkbenchRow, run: SandboxRun = runCapture): Promise<WorkbenchRow | null> {
+  try {
+    if (row.runtime !== 'sandbox' || !row.sandboxId) return null;
+    const probe = await run(row, toShellScript([currentBranch()]), { quiet: true, timeoutMs: GIT_TIMEOUT_MS }).catch(() => null);
+    const branch = probe?.exitCode === 0 ? probe.stdout.trim() : '';
+    if (!branch || branch === row.branch || !isValidBranchName(branch)) return null;
+    const moved = await followChosenBranch(row.id, row.branch, branch);
+    if (!moved) return null;
+    recordWorkbenchEvent(row, 'branch_name', `followed the rename of ${row.branch} to ${branch}`);
+    const linked = await linkPullRequest(moved);
+    await emitWorkbenchUpdated(await publicWorkbench(linked));
+    return linked;
+  } catch (err) {
+    recordWorkbenchEvent(row, 'branch_name', `could not follow the rename of ${row.branch}`, false, err);
+    return null;
+  }
 }
 
 /** The box's current branch, its upstream, and the paths changed against the base. */

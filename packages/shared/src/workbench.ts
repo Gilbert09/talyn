@@ -70,11 +70,13 @@ export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'rename
 /**
  * Why a message was sent, when it was not typed. `create_pr`: the agent gets
  * Talyn's hidden PR instructions with the short visible text, and the end of
- * the turn opens the pull request from its answer.
+ * the turn opens the pull request from its answer. `rename_branch`: the end of
+ * the turn reads the branch the agent left checked out, and the session row
+ * follows it.
  */
-export type WorkbenchMessageIntent = 'create_pr';
+export type WorkbenchMessageIntent = 'create_pr' | 'rename_branch';
 
-export const WORKBENCH_MESSAGE_INTENTS: readonly WorkbenchMessageIntent[] = ['create_pr'];
+export const WORKBENCH_MESSAGE_INTENTS: readonly WorkbenchMessageIntent[] = ['create_pr', 'rename_branch'];
 
 // ============================================================================
 // Public shapes (what the API returns)
@@ -330,7 +332,49 @@ export interface CreateWorkbenchInput {
   prompt?: string;
   deviceId?: string;
   localPath?: string;
+  /**
+   * Local only: the desktop named `branch` itself (from the prompt, with the
+   * workspace prefix), so no person chose it. Such a branch is Talyn's to
+   * rename after the first turn. Ignored with `fromPullRequestId`.
+   */
+  branchGenerated?: boolean;
 }
+
+/**
+ * Ask Talyn for a better name for a LOCAL session's branch
+ * (`POST /workbenches/:id/branch-name`). With neither `title` nor
+ * `suggestion`, it only checks: `suggest` means "ask your model, then call
+ * again". `title` is the agent's PR title; `suggestion` is a model's one-line
+ * answer. Talyn turns either into a slug, adds the prefix and makes it unique.
+ */
+export interface NameWorkbenchBranchInput {
+  /** The chat whose turn just ended: its own `running` status does not count as busy. */
+  chatId?: string;
+  title?: string;
+  suggestion?: string;
+}
+
+/**
+ * `rename`: the attempt is claimed and the name is free now, but the row has
+ * not changed. Rename the local branch, then confirm. `keep`: decided, never
+ * ask again. `not_now`: ask again after a later turn.
+ */
+export type WorkbenchBranchNameDecision =
+  | { outcome: 'rename'; from: string; to: string }
+  | { outcome: 'suggest' }
+  | { outcome: 'keep'; reason: string }
+  | { outcome: 'not_now'; reason: string };
+
+/** `POST /workbenches/:id/branch-name/confirm`, after the local `git branch -m from to` succeeded. */
+export interface ConfirmWorkbenchBranchNameInput {
+  from: string;
+  to: string;
+}
+
+/** `refused`: the row did not move. Rename the local branch back. */
+export type ConfirmWorkbenchBranchNameResult =
+  | { outcome: 'renamed'; workbench: Workbench }
+  | { outcome: 'refused'; reason: 'name_taken' | 'row_changed' };
 
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
@@ -556,6 +600,23 @@ export interface WorkbenchLocalBridge {
    * not have it.
    */
   generateTitle?(input: { agent: WorkbenchAgent; message: string }): Promise<string | null>;
+  /**
+   * A model's one-line branch name for the work, by the local agent CLI with
+   * the title call's cheap model. The raw answer, or null on any failure:
+   * Talyn reads it. Optional: an older main process does not have it.
+   */
+  suggestBranchName?(input: {
+    agent: WorkbenchAgent;
+    message: string;
+    changedFiles: string[];
+    finalMessage: string;
+  }): Promise<string | null>;
+  /**
+   * `git branch -m from to` in a Talyn worktree, only while `from` is its
+   * current branch and has no upstream. Checked in main, not trusted from the
+   * caller. Optional: an older main process does not have it.
+   */
+  renameBranch?(input: { path: string; from: string; to: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Run argv steps (see `workbenchGit.ts` `GitStep`) in `path`, in order, stopping at the first failure. */
   exec(
     path: string,

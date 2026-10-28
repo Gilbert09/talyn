@@ -66,7 +66,7 @@ import {
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { startTitleGeneration } from './title.js';
-import { nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
+import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
   appendEvents,
   claimOrEnqueue,
@@ -966,7 +966,8 @@ async function finishSuccessfulAgent(
 ): Promise<void> {
   if (live.cancelRequested || isWorkbenchDetached()) return;
   if (!(await renewTurnLease(chatId, live.turn)) || await hasTurnEvent(chatId, live.turn, 'talyn_pr')) return;
-  const fresh = (await getWorkbench(wb.id)) ?? wb;
+  let fresh = (await getWorkbench(wb.id)) ?? wb;
+  if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;
   if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
       (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
     events.add(await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text));

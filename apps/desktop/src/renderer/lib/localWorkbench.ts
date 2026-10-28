@@ -1,5 +1,11 @@
 import {
   checkpointCreateSteps,
+  currentBranch,
+  isValidBranchName,
+  mergeBase,
+  parseNulList,
+  untrackedFiles,
+  WORKBENCH_BRANCH_PROMPT_FILES_MAX,
   workbenchTurnPrompt,
   DEFAULT_WORKBENCH_EFFORT,
   parsePrDetails,
@@ -10,6 +16,7 @@ import {
   workbenchBranchFromTask,
   workbenchNameFromTask,
   type AgentEventDraft,
+  type NameWorkbenchBranchInput,
   type SendWorkbenchMessageInput,
   type Workbench,
   type WorkbenchAgent,
@@ -42,8 +49,11 @@ import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 /** Upload cadence. One request a second keeps a busy turn to a handful of writes. */
 export const LOCAL_UPLOAD_INTERVAL_MS = 1000;
 
+/** How long a turn that opens a PR waits for a better branch name before it pushes the old one. */
+export const LOCAL_BRANCH_NAMING_DEADLINE_MS = 60_000;
+
 type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'> &
-  Partial<Pick<typeof api.workbenches, 'update' | 'adoptPullRequest'>>;
+  Partial<Pick<typeof api.workbenches, 'update' | 'adoptPullRequest' | 'nameBranch' | 'confirmBranchName'>>;
 
 export interface LocalControllerDeps {
   bridge: WorkbenchLocalBridge;
@@ -52,11 +62,15 @@ export interface LocalControllerDeps {
   loadHistory: (chatId: string) => Promise<void>;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  /** Overrides {@link LOCAL_BRANCH_NAMING_DEADLINE_MS}, for tests. */
+  branchNamingDeadlineMs?: number;
 }
 
 interface RunningTurn {
   workbenchId: string;
   turn: number;
+  /** The message that started the turn, for the branch-name prompt. */
+  text: string;
   intent?: WorkbenchMessageIntent;
   /** Set once the turn's pull request is under way, so a second end cannot open another. */
   pullRequestStarted?: boolean;
@@ -189,7 +203,7 @@ export class LocalTurnController {
     if (!path) throw new Error('This session has no local path.');
     const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
     const turn = Math.max(lastTurn(events), this.running.get(chat.id)?.turn ?? 0) + 1;
-    this.running.set(chat.id, { workbenchId: workbench.id, turn, intent: input.intent });
+    this.running.set(chat.id, { workbenchId: workbench.id, turn, text: input.text, intent: input.intent });
     this.setStatus(chat, 'running');
 
     await this.checkpoint(path, chat.id, turn);
@@ -288,10 +302,16 @@ export class LocalTurnController {
     const autoPr = wasRunning?.intent !== 'create_pr' && findChat(chatId)?.status !== 'awaiting_input' && Boolean(workbench) &&
       workbench?.settings?.autoCreatePr !== false && !workbench?.pullRequestId &&
       parseAutoPrDetails(outcome.resultText).ok;
-    if (wasRunning && (wasRunning.intent === 'create_pr' || autoPr) && !wasRunning.pullRequestStarted &&
-        !outcome.isError && !outcome.cancelled) {
+    const succeeded = Boolean(wasRunning) && !outcome.isError && !outcome.cancelled;
+    if (wasRunning && succeeded && wasRunning.intent === 'rename_branch') await this.followBranchRename(wasRunning);
+    let nameAfter = false;
+    if (wasRunning && (wasRunning.intent === 'create_pr' || autoPr) && !wasRunning.pullRequestStarted && succeeded) {
       wasRunning.pullRequestStarted = true;
+      // The push fixes the branch name, so a better one comes first, from the agent's PR title.
+      await this.nameBranchBeforePullRequest(chatId, wasRunning, outcome.resultText);
       await this.openPullRequest(chatId, wasRunning, outcome.resultText);
+    } else if (wasRunning && succeeded && wasRunning.turn === 1 && wasRunning.intent !== 'rename_branch') {
+      nameAfter = true;
     }
     this.running.delete(chatId);
     const errorText = outcome.resultText?.trim();
@@ -309,6 +329,11 @@ export class LocalTurnController {
     if (chat) this.setStatus({ ...chat, agentSessionId: outcome.sessionId ?? chat.agentSessionId }, status);
     await this.report(chatId, { status, agentSessionId: outcome.sessionId ?? undefined });
 
+    // Beside the turn loop. Not when a queued message is about to start a turn on this branch.
+    if (nameAfter && wasRunning && !useWorkbenchStore.getState().localQueues[chatId]?.length) {
+      void this.nameBranch(chatId, wasRunning, { finalMessage: outcome.resultText });
+    }
+
     const next = useWorkbenchStore.getState().dequeueLocal(chatId);
     if (!next) return;
     const workbenchId = wasRunning?.workbenchId ?? chat?.workbenchId;
@@ -316,6 +341,137 @@ export class LocalTurnController {
     const fresh = findChat(chatId);
     if (!nextWorkbench || !fresh) return;
     await this.startTurn(nextWorkbench, { ...fresh, status: 'idle' }, next);
+  }
+
+  /**
+   * Name the branch before the PR pushes it, waiting at most the deadline.
+   * A rename that has started is waited for, so the push always uses the
+   * name the row holds.
+   */
+  private async nameBranchBeforePullRequest(chatId: string, run: RunningTurn, finalText: string): Promise<void> {
+    const parsed = parsePrDetails(finalText);
+    if (!parsed.ok) return;
+    const controller = new AbortController();
+    let committed = false;
+    const work = this.nameBranch(chatId, run, { title: parsed.details.title }, {
+      signal: controller.signal,
+      onCommit: () => {
+        committed = true;
+      },
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.deps.branchNamingDeadlineMs ?? LOCAL_BRANCH_NAMING_DEADLINE_MS);
+    });
+    try {
+      if ((await Promise.race([work.then(() => 'done' as const), deadline])) === 'timeout') {
+        controller.abort();
+        if (committed) await work;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * A better branch name for a new local session, decided by Talyn
+   * (`api.workbenches.nameBranch`): reserve the name, rename the branch in
+   * the worktree (main checks it), then confirm so the row moves last. A
+   * refused or failed confirm renames the branch back. Never throws; every
+   * failure keeps the name.
+   */
+  async nameBranch(
+    chatId: string,
+    run: RunningTurn,
+    source: { title: string } | { finalMessage: string },
+    opts: { signal?: AbortSignal; onCommit?: () => void } = {}
+  ): Promise<void> {
+    const { bridge, api: workbenches } = this.deps;
+    const { nameBranch, confirmBranchName } = workbenches;
+    const renameBranch = bridge.renameBranch?.bind(bridge);
+    if (!nameBranch || !confirmBranchName || !renameBranch) return;
+    const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
+    const path = workbench?.localPath;
+    if (!workbench || workbench.runtime !== 'local' || !path || workbench.pullRequestId) return;
+    const stopped = () => opts.signal?.aborted || this.otherTurnRunning(workbench.id, chatId);
+    try {
+      // The backend counts turns from the uploaded events.
+      await this.flush(chatId);
+      const input: NameWorkbenchBranchInput = { chatId };
+      if ('title' in source) input.title = source.title;
+      else {
+        if (!bridge.suggestBranchName) return;
+        // Ask the model only for a session whose branch may move.
+        if ((await nameBranch(workbench.id, { chatId })).outcome !== 'suggest') return;
+        const changedFiles = await this.changedFiles(path, workbench.baseBranch);
+        const suggestion = await bridge.suggestBranchName({
+          agent: workbench.agent,
+          message: run.text,
+          changedFiles,
+          finalMessage: source.finalMessage,
+        });
+        input.suggestion = suggestion ?? '';
+      }
+      if (stopped()) return;
+      const decision = await nameBranch(workbench.id, input);
+      if (decision.outcome !== 'rename' || stopped()) return;
+      opts.onCommit?.();
+      const renamed = await renameBranch({ path, from: decision.from, to: decision.to });
+      if (!renamed.ok) return;
+      const confirm = () => confirmBranchName(workbench.id, { from: decision.from, to: decision.to }).catch(() => null);
+      // A confirm is idempotent, so one whose answer was lost is sent again.
+      const result = (await confirm()) ?? (await confirm());
+      if (result?.outcome === 'renamed') {
+        useWorkbenchStore.getState().upsertWorkbench(result.workbench);
+        return;
+      }
+      await renameBranch({ path, from: decision.to, to: decision.from }).catch(() => undefined);
+    } catch {
+      // The name stays.
+    }
+  }
+
+  /** After a `rename_branch` turn: the row follows the branch the agent left checked out. */
+  private async followBranchRename(run: RunningTurn): Promise<void> {
+    const update = this.deps.api.update;
+    const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
+    if (!update || !workbench?.localPath) return;
+    try {
+      const head = await this.deps.bridge.exec(workbench.localPath, [currentBranch()]);
+      const branch = head.exitCode === 0 ? head.stdout.trim() : '';
+      if (!branch || branch === workbench.branch || !isValidBranchName(branch)) return;
+      useWorkbenchStore.getState().upsertWorkbench(await update(workbench.id, { branch }));
+    } catch {
+      // The row keeps the old name; a later checkout report corrects it.
+    }
+  }
+
+  private otherTurnRunning(workbenchId: string, chatId: string): boolean {
+    for (const [id, run] of this.running) if (id !== chatId && run.workbenchId === workbenchId) return true;
+    return false;
+  }
+
+  /** Paths changed against the base, for the branch-name prompt. Empty when git cannot say. */
+  private async changedFiles(path: string, baseBranch: string): Promise<string[]> {
+    try {
+      let sha = '';
+      for (const ref of [`origin/${baseBranch}`, baseBranch]) {
+        const res = await this.deps.bridge.exec(path, [mergeBase(ref)]);
+        if (res.exitCode === 0 && res.stdout.trim()) {
+          sha = res.stdout.trim();
+          break;
+        }
+      }
+      if (!sha) return [];
+      const [diff, untracked] = await Promise.all([
+        this.deps.bridge.exec(path, [{ argv: ['git', 'diff', '--name-only', '-z', sha, '--'] }]),
+        this.deps.bridge.exec(path, [untrackedFiles()]),
+      ]);
+      const files = [...parseNulList(diff.stdout), ...parseNulList(untracked.stdout)];
+      return files.slice(0, WORKBENCH_BRANCH_PROMPT_FILES_MAX + 1);
+    } catch {
+      return [];
+    }
   }
 
   /** Open the PR from the agent's block, and record the result. */
@@ -467,6 +623,8 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
     branch,
     name,
     fromPullRequestId: input.fromPullRequestId,
+    // Named here from the prompt, so Talyn may rename it after the first turn.
+    branchGenerated: input.branch === undefined && !input.fromPullRequestId,
     // No `prompt`: the backend cannot run a local turn. The caller sends the
     // first message through the controller once the chat exists.
     deviceId: getDeviceId(),
