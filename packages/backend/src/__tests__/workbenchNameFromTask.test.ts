@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   WORKBENCH_CITY_NAMES,
+  WORKBENCH_BRANCH_SLUG_MAX,
   WORKBENCH_TASK_NAME_MAX,
+  workbenchBranchFromTask,
   workbenchNameFromTask,
 } from '../../../shared/src/workbench';
+import { isValidBranchName } from '../../../shared/src/workbenchGit';
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -23,9 +26,11 @@ describe('workbenchNameFromTask', () => {
     ['digits kept', 'v2 API pagination', 'v2-api-pagination'],
     ['diacritics folded', 'Café menü überarbeiten', 'cafe-menu-uberarbeiten'],
     ['only the first line matters in practice', 'Fix flaky test\n\nIt fails on CI half the time', 'fix-flaky-test'],
-    ['urls skipped', 'Look at https://github.com/acme/app/issues/12 and fix it', 'look-fix'],
+    ['urls skipped', 'Look at https://github.com/acme/app/issues/12 and fix it', 'fix'],
     ['markdown and slashes', '`/review` the **auth** module', 'review-auth-module'],
     ['leading and trailing whitespace', '   tidy   imports   ', 'tidy-imports'],
+    ['drops weak words', 'look at the login redirect', 'login-redirect'],
+    ['drops weak question words', 'why is the cache still stale', 'cache-stale'],
     ['mixed scripts keep the ASCII words', '修复 login 页面 bug', 'login-bug'],
   ])('%s', (_label, text, expected) => {
     expect(workbenchNameFromTask(text, new Set())).toBe(expected);
@@ -90,5 +95,68 @@ describe('workbenchNameFromTask', () => {
     for (const text of ['Fix: it', 'Ünïcödé wörds', '__init__ cleanup', '-leading dash', '123 456']) {
       expect(workbenchNameFromTask(text, new Set())).toMatch(NAME_PATTERN);
     }
+  });
+});
+
+describe('workbenchBranchFromTask', () => {
+  it.each([
+    ['weak words dropped', 'look at the flaky login test', 'flaky-login-test'],
+    ['keeps fix as a verb', 'Please fix the login redirect bug', 'fix-login-redirect-bug'],
+    ['keeps issue and error', 'the new issue with error pages', 'new-issue-error-pages'],
+    ['up to six words', 'rename user model fields in api docs and tests', 'rename-user-model-fields-api-docs'],
+    ['github pull request link', 'review https://github.com/acme/app/pull/42 for races', 'pr-42-review-races'],
+    ['github issue link', 'fix https://github.com/acme/app/issues/1234', 'issue-1234-fix'],
+    ['pull request link with a files suffix', 'look at https://github.com/acme/app/pull/7/files', 'pr-7'],
+    ['linear key in text', 'ENG-123 login crashes on Safari', 'eng-123-login-crashes-safari'],
+    ['linear key in a url', 'do https://linear.app/acme/issue/ENG-456/fix-thing please', 'eng-456'],
+    ['same key twice', 'ENG-9 and again ENG-9 broken', 'eng-9-broken'],
+    ['other urls give nothing', 'https://example.com/docs/page add search', 'add-search'],
+    ['lowercase key-like text is not a key', 'bump eng-123 dep', 'bump-eng-123-dep'],
+    ['encoding names are not keys', 'switch to UTF-8 output', 'switch-utf-8-output'],
+    ['diacritics folded', 'Café menü überarbeiten', 'cafe-menu-uberarbeiten'],
+    ['mixed scripts keep the ASCII words', '修复 login 页面 bug', 'login-bug'],
+  ])('%s', (_label, text, expected) => {
+    expect(workbenchBranchFromTask(text)).toBe(expected);
+  });
+
+  it('stops before the word that would pass the limit', () => {
+    const slug = workbenchBranchFromTask('internationalisation localisation accessibility improvements');
+    expect(slug).toBe('internationalisation-localisation');
+    expect(slug!.length).toBeLessThanOrEqual(WORKBENCH_BRANCH_SLUG_MAX);
+  });
+
+  it('cuts a first word longer than the limit', () => {
+    const slug = workbenchBranchFromTask('x'.repeat(80));
+    expect(slug).toBe('x'.repeat(WORKBENCH_BRANCH_SLUG_MAX));
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  \n '],
+    ['only stop words', 'can you please do this for me'],
+    ['only weak words', 'look at what this is really about'],
+    ['only non-latin', '修复登录页面'],
+    ['only emoji', '🚀🔥'],
+    ['only a url', 'https://example.com/path'],
+  ])('is null for %s', (_label, text) => {
+    expect(workbenchBranchFromTask(text)).toBeNull();
+  });
+
+  it.each([
+    'Fix: it',
+    '__init__ cleanup',
+    '-leading dash',
+    '123 456',
+    'a.lock file..handling',
+    'ENG-1 https://github.com/a/b/pull/2 look at the very long description of everything that is wrong here',
+    'x'.repeat(100),
+    'Ünïcödé wörds',
+  ])('gives a valid branch name for %j', (text) => {
+    const slug = workbenchBranchFromTask(text);
+    expect(slug).not.toBeNull();
+    expect(isValidBranchName(slug!)).toBe(true);
+    expect(isValidBranchName(`tom/${slug}`)).toBe(true);
+    expect(slug!.length).toBeLessThanOrEqual(WORKBENCH_BRANCH_SLUG_MAX);
+    expect(slug).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
 });

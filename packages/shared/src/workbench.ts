@@ -672,6 +672,18 @@ const TASK_NAME_STOP_WORDS = new Set([
   'just', 'also', 'now', 'need', 'needs', 'want', 'wants', 'try', 'help', 'hey', 'hi', 'ok', 'okay',
 ]);
 
+/**
+ * Words that carry no meaning for a name or a branch ("look at the login
+ * redirect" is about the login redirect). `issue`, `bug`, `error` and `new`
+ * stay: they say what the task is.
+ */
+const TASK_WEAK_WORDS = new Set([
+  'look', 'looks', 'looking', 'check', 'checks', 'checking', 'see', 'seeing', 'investigate', 'take', 'have', 'has',
+  'had', 'go', 'going', 'think', 'why', 'what', 'whats', 'how', 'hows', 'where', 'which', 'who',
+  'thing', 'things', 'stuff', 'something', 'like', 'really', 'very', 'quick', 'quickly', 'maybe', 'actually',
+  'currently', 'still', 'again',
+]);
+
 function taskNameWords(text: string): string[] {
   return text
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ')
@@ -680,7 +692,7 @@ function taskNameWords(text: string): string[] {
     .toLowerCase()
     .replace(/['’`]/g, '')
     .split(/[^a-z0-9]+/)
-    .filter((w) => w && !TASK_NAME_STOP_WORDS.has(w));
+    .filter((w) => w && !TASK_NAME_STOP_WORDS.has(w) && !TASK_WEAK_WORDS.has(w));
 }
 
 /**
@@ -716,6 +728,60 @@ export function workbenchNameFromTask(
     const candidate = `${base}-${n}`;
     if (!used.has(candidate)) return candidate;
   }
+}
+
+/** Longest branch slug `workbenchBranchFromTask` builds, before the prefix and a `-2` suffix. */
+export const WORKBENCH_BRANCH_SLUG_MAX = 40;
+const BRANCH_SLUG_WORDS = 6;
+const NOT_ISSUE_KEY_PREFIXES = new Set(['UTF', 'SHA', 'ISO', 'MD', 'AES', 'RSA', 'TLS', 'HTTP', 'IPV', 'X']);
+
+/** `pr-12`, `issue-34` and `eng-123` from the links and keys in a message, in order, once each. */
+function taskReferenceTokens(text: string): string[] {
+  const found: { index: number; token: string }[] = [];
+  const add = (re: RegExp, build: (m: RegExpExecArray) => string | null) => {
+    for (const m of text.matchAll(re)) {
+      const token = build(m as RegExpExecArray);
+      if (token) found.push({ index: m.index ?? 0, token });
+    }
+  };
+  add(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/]+\/[^\s]*?\/(pull|issues)\/(\d{1,7})\b/gi, (m) =>
+    `${m[1].toLowerCase() === 'pull' ? 'pr' : 'issue'}-${Number(m[2])}`
+  );
+  add(/(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-(\d{1,6})(?![A-Za-z0-9])/g, (m) =>
+    NOT_ISSUE_KEY_PREFIXES.has(m[1]) ? null : `${m[1].toLowerCase()}-${Number(m[2])}`
+  );
+  const seen = new Set<string>();
+  return found
+    .sort((a, b) => a.index - b.index)
+    .map((f) => f.token)
+    .filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
+}
+
+/**
+ * A branch slug (no workspace prefix) from the user's first message: a PR,
+ * issue or Linear reference first, then up to six significant words, at most
+ * `WORKBENCH_BRANCH_SLUG_MAX` characters. Null when nothing usable is left.
+ * The slug holds only `a-z`, `0-9` and single hyphens, so it is a valid git
+ * ref segment.
+ */
+export function workbenchBranchFromTask(text: string): string | null {
+  const keys = taskReferenceTokens(text);
+  const withoutKeys = text
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ')
+    .replace(/(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-\d{1,6}(?![A-Za-z0-9])/g, (m, prefix: string) =>
+      NOT_ISSUE_KEY_PREFIXES.has(prefix) ? m : ' '
+    );
+  const parts = [...keys, ...taskNameWords(withoutKeys).slice(0, BRANCH_SLUG_WORDS)];
+  let slug = '';
+  for (const part of parts) {
+    const next = slug ? `${slug}-${part}` : part;
+    if (next.length > WORKBENCH_BRANCH_SLUG_MAX) {
+      if (!slug) slug = part.slice(0, WORKBENCH_BRANCH_SLUG_MAX);
+      break;
+    }
+    slug = next;
+  }
+  return slug || null;
 }
 
 // ============================================================================
