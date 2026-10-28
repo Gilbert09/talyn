@@ -93,6 +93,10 @@ const SERVICE_INFO: Record<string, string> = {
     'Anthropic\u2019s private usage endpoint \u2014 how much of a connected Claude subscription is used, read so the fleet can move to the next account before one runs out.',
   chatgpt:
     'ChatGPT\u2019s private usage endpoint \u2014 how much of a connected Codex subscription is used, read so the fleet can move to the next account before one runs out.',
+  slack:
+    'Slack Web API \u2014 the install and \u201cSign in with Slack\u201d token exchanges, the bot-token refresh (tokens rotate about every 12 hours, so a connected team shows one refresh per 12 hours), and, later, session reactions.',
+  slack_events:
+    'Inbound Slack Events API deliveries \u2014 verified by signature, stored once per event id, then processed (uninstall and token revocation today).',
   workflows:
     'User-defined PR automation — one event per workflow that matched a webhook delivery, plus the two refusals worth seeing: a self-echo (Talyn hearing its own label back) and a per-PR rate cap.',
 };

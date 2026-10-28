@@ -37,7 +37,6 @@ import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { FindingsTab, findingsBadge } from './codeReview/FindingsTab';
-import { codeReviewOffered } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import {
@@ -133,7 +132,6 @@ export function PRDetailSheet({
   const [cachedBody, setCachedBody] = useState<string | null>(null);
   // Owned here so the header's actions can open a tab — see DetailTabs.
   const [tab, setTab] = useState<TabKey>(initialTab);
-  const features = useWorkspaceStore((s) => s.features);
   const [refreshing, setRefreshing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
@@ -635,7 +633,7 @@ export function PRDetailSheet({
                 tab rather than starting a review — the tab is where the depth
                 picker and the existing findings are, and a button that silently
                 spends a subscription is not one to put beside "Merge". */}
-            {view.row.state === 'open' && codeReviewOffered(features) && (
+            {view.row.state === 'open' && (
               <Button
                 variant="outline"
                 className="h-7 px-2 text-xs"
@@ -929,17 +927,6 @@ function DetailTabs({
   tab: TabKey;
   setTab: (tab: TabKey) => void;
 }) {
-  // Whether to draw the Findings tab at all.
-  //
-  // Gated like the nav items are, and it has to be: without this an account
-  // outside the flag's audience saw a Findings tab whose primary button the
-  // backend answers 403 to — a visible dead end, which is worse than an absent
-  // feature. Three-state, so `null` (still loading) draws nothing rather than
-  // flashing the tab in on every launch.
-  const codeReviewOffered_ = codeReviewOffered(useWorkspaceStore((s) => s.features));
-  // A remembered tab must not strand somebody on a panel that no longer exists —
-  // the same reason MainLayout re-checks `activePanel` against the flag.
-  const effectiveTab: TabKey = tab === 'findings' && !codeReviewOffered_ ? 'overview' : tab;
   // Started on open, not on first click — see usePRFiles.
   const filesState = usePRFiles(data.row.id);
   // The loaded list is authoritative; the cached count is what the tab wears
@@ -952,15 +939,14 @@ function DetailTabs({
     <>
       <nav className="flex shrink-0 border-b text-xs">
         <TabButton
-          active={effectiveTab === 'overview'}
+          active={tab === 'overview'}
           onClick={() => setTab('overview')}
           icon={<Layers className="h-3.5 w-3.5" />}
         >
           Overview
         </TabButton>
-        {codeReviewOffered_ && (
         <TabButton
-          active={effectiveTab === 'findings'}
+          active={tab === 'findings'}
           onClick={() => setTab('findings')}
           icon={<ScanSearch className="h-3.5 w-3.5" />}
           // What the user is being asked about, never the raw total: nitpicks and
@@ -970,9 +956,8 @@ function DetailTabs({
         >
           Findings
         </TabButton>
-        )}
         <TabButton
-          active={effectiveTab === 'checks'}
+          active={tab === 'checks'}
           onClick={() => setTab('checks')}
           icon={<CheckCircle2 className="h-3.5 w-3.5" />}
           badge={
@@ -984,7 +969,7 @@ function DetailTabs({
           Checks
         </TabButton>
         <TabButton
-          active={effectiveTab === 'reviews'}
+          active={tab === 'reviews'}
           onClick={() => setTab('reviews')}
           icon={<MessageSquare className="h-3.5 w-3.5" />}
           badge={
@@ -996,7 +981,7 @@ function DetailTabs({
           Reviews
         </TabButton>
         <TabButton
-          active={effectiveTab === 'files'}
+          active={tab === 'files'}
           onClick={() => setTab('files')}
           icon={<FileText className="h-3.5 w-3.5" />}
           // Undefined (not 0) on a row cached before `changedFiles` shipped and
@@ -1020,14 +1005,14 @@ function DetailTabs({
               Detail fetch unavailable (env offline?). Showing cached state only.
             </p>
           )}
-          {effectiveTab === 'overview' && (
+          {tab === 'overview' && (
             <OverviewTab
               data={data}
               detailPending={detailPending}
               cachedBody={cachedBody}
             />
           )}
-          {effectiveTab === 'findings' && (
+          {tab === 'findings' && (
             <FindingsTab
               pullRequestId={data.row.id}
               seedReview={data.row.codeReview ?? null}
@@ -1036,9 +1021,9 @@ function DetailTabs({
               files={filesState.files}
             />
           )}
-          {effectiveTab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
-          {effectiveTab === 'reviews' && <ReviewsTab data={data} />}
-          {effectiveTab === 'files' && <FilesTab data={data} filesState={filesState} />}
+          {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
+          {tab === 'reviews' && <ReviewsTab data={data} />}
+          {tab === 'files' && <FilesTab data={data} filesState={filesState} />}
         </div>
       </ScrollArea>
     </>

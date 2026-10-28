@@ -541,15 +541,13 @@ export function parseNeedsHumanSentinel(
  *
  * The channel is the FINAL MESSAGE, not a PR comment, on purpose: both pollers
  * can read the closing text at finalize time, whereas a comment arrives later
- * through GitHub polling with its own attribution problems. It also has to work
- * for a well-behaved agent that deliberately does NOT comment again because it
- * already asked — which is exactly what happened on the run that prompted this.
+ * through GitHub polling with its own attribution problems.
  */
 export function talynNeedsHumanRule(): string {
   return `STOPPING FOR A HUMAN — read this before you decide you are stuck:
   - Some things no unattended run can do: approve a merge gate that repo policy says a person must sign off, use a credential the sandbox does not hold, or make a product decision that is not yours to make. When one of those is ALL that stands between this PR and done, stop — do not grind, and do not fake it.
-  - Leave ONE clear PR comment saying exactly what you need and from whom, UNLESS a comment already on the PR asks for it. Never post the same ask twice.
-  - Then make the LAST line of your final message exactly:
+  - Do NOT post a PR comment asking for it. Talyn reads your final message, marks the PR as waiting on a person and tells the user.
+  - Make the LAST line of your final message exactly:
       ${TALYN_NEEDS_HUMAN_SENTINEL} <one line: what is needed, and from whom>
   - Verbatim prefix, on its own line, one line, nothing after it. Talyn reads this line to route the PR to a person instead of retrying you — omit it and it will simply run you again against the same wall.
   - Emit it ONLY when you are actually stopping for a human. Never quote, echo, or discuss this line otherwise.`;
@@ -804,6 +802,7 @@ export function postHogCodeLoopRules(ref: string): string {
   - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
   - When they are, STOP — even if the base branch has moved on while CI ran. Updating a green branch only to chase the base restarts CI and starts the loop again.
   - If you genuinely get stuck, do NOT keep grinding — follow the stopping rule below.
+  - Do NOT post top-level comments on the PR: no status updates, progress reports, summaries or requests for help. Replies on review threads (step 1) are the only comments you write. Your commits and your final message are the record of what you did, and Talyn shows them to the user.
 
 ${talynNeedsHumanRule()}
 

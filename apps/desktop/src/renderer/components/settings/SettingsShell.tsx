@@ -9,6 +9,7 @@ import {
   GitPullRequest,
   Info,
   Keyboard,
+  MessageSquare,
   Palette,
   Plug,
   PlugZap,
@@ -19,7 +20,7 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { codeReviewOffered, mcpServersOffered } from '@talyn/shared';
+import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace';
@@ -27,6 +28,7 @@ import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsC
 import { InstructionsSettings } from '../panels/InstructionsSettings';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { SkillsSettings } from '../panels/SkillsSettings';
+import { SlackSettings } from '../panels/SlackSettings';
 import { TeamSettings } from '../panels/TeamBilling';
 import { PageHeader } from '../ui/page-header';
 import { ScrollArea } from '../ui/scroll-area';
@@ -69,12 +71,19 @@ function InstructionsPage() {
 }
 
 function CodeReviewPage() {
-  const features = useWorkspaceStore((s) => s.features);
-  if (!codeReviewOffered(features)) return null;
   return (
     <SettingsPage title="Code review">
       <CodeReviewSettingsCard />
     </SettingsPage>
+  );
+}
+
+// SlackSettings draws its own heading, so it gets the page padding without a title.
+function SlackPage() {
+  return (
+    <div className="mx-auto max-w-xl px-6 py-5">
+      <SlackSettings />
+    </div>
   );
 }
 
@@ -107,6 +116,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   codeReview: CodeReviewPage,
   workspace: WorkspaceSettings,
   integrations: IntegrationsSettings,
+  slack: SlackPage,
   teams: TeamPage,
   billing: BillingSettings,
   account: AccountSettings,
@@ -135,7 +145,8 @@ export function SettingsShell() {
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
         { id: 'skills', icon: Wand2, label: 'Skills' },
-        // Gated in the nav for the reason Code review is, below.
+        // Gated in the NAV, not only in the body: the page renders null when the
+        // feature is not offered, so an unconditional entry would open onto nothing.
         ...(mcpServersOffered(features)
           ? [{ id: 'mcpServers' as const, icon: PlugZap, label: 'MCP servers' }]
           : []),
@@ -145,12 +156,7 @@ export function SettingsShell() {
       label: 'Pull requests',
       entries: [
         { id: 'pullRequests', icon: GitPullRequest, label: 'Pull requests' },
-        // Gated in the NAV, not only in the body: the card renders null when the
-        // feature is not offered, so an unconditional entry would give anyone
-        // outside the flag's audience a nav item that opens onto nothing.
-        ...(codeReviewOffered(features)
-          ? [{ id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' }]
-          : []),
+        { id: 'codeReview', icon: ScanSearch, label: 'Code review' },
       ],
     },
     {
@@ -158,6 +164,10 @@ export function SettingsShell() {
       entries: [
         { id: 'workspace', icon: FolderKanban, label: 'Workspace' },
         { id: 'integrations', icon: Settings, label: 'Integrations' },
+        // Slack starts sessions, so it shares the workbenches flag.
+        ...(workbenchesOffered(features)
+          ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
+          : []),
         // Drawn for anyone the flag offers teams to, and for anyone already on a
         // team whatever the flag says: a seated member must always be able to
         // see who pays for them, and leave.

@@ -92,7 +92,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(65);
+    expect(names).toHaveLength(78);
     for (const expected of [
       'talyn_list_workspaces',
       'talyn_get_workspace',
@@ -124,6 +124,8 @@ describe('mcp tool registry', () => {
       'talyn_list_code_reviews',
       'talyn_create_task',
       'talyn_list_tasks',
+      'talyn_list_sessions',
+      'talyn_get_session_transcript',
       'talyn_get_task',
       'talyn_stop_task',
       'talyn_retry_task',
@@ -268,12 +270,11 @@ const features: Features = {
   workflows: true,
   loops: true,
   mcpServers: true,
-  codeReview: true,
   reviewPriority: true,
   reviewRankingCandidate: false,
   reviewRankingExport: false,
   teams: false,
-  workbenches: false,
+  workbenches: true,
   trunkMergeEta: false,
   reviewPriorityMode: true,
 };
@@ -624,7 +625,7 @@ describe('MCP product coverage', () => {
     }
   );
 
-  it.each(['workflows', 'loops', 'mcpServers', 'codeReview'] as const)(
+  it.each(['workflows', 'loops', 'mcpServers', 'workbenches'] as const)(
     'hides tools when %s is off',
     (feature) => {
       const visible = listToolsFor({ ...features, [feature]: false });

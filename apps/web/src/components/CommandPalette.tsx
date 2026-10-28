@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { GitPullRequest, History, Home, Settings, Workflow } from 'lucide-react';
-import { codeReviewOffered, mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
@@ -26,6 +26,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   shortcuts: 'Shortcuts',
   workspace: 'Workspace',
   integrations: 'Integrations',
+  slack: 'Slack',
   skills: 'Skills',
   instructions: 'Instructions',
   codeReview: 'Code review',
@@ -80,7 +81,6 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       items.push({ key: 'history', label: 'History', icon: History, route: { view: 'history' } });
     }
     for (const tab of PR_TABS) {
-      if (tab === 'code_reviews' && !codeReviewOffered(features)) continue;
       items.push({
         key: `prs:${tab}`,
         label: PR_PAGE_TABS.includes(tab) ? `Pull requests: ${PR_TAB_LABEL[tab]}` : PR_TAB_LABEL[tab],
@@ -100,7 +100,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       items.push({ key: 'mcp_servers', label: 'MCP servers', icon: Settings, route: { view: 'mcp_servers' } });
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
-      if (section === 'sessions' && !workbenchesOffered(features)) continue;
+      if ((section === 'sessions' || section === 'slack') && !workbenchesOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,

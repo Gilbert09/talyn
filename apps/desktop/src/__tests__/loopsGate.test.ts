@@ -89,7 +89,7 @@ describe('the editor’s Save button', () => {
       cron: '0 2 * * *',
       timezone: 'Europe/London',
       provider: 'selfhosted',
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       concurrency: 'allow',
       repositoryId: 'repo-1',
       repoFullName: 'acme/widget',
@@ -103,7 +103,7 @@ describe('the editor’s Save button', () => {
     // a field the toggle would silently reset.
     expect(loopInputProblem(loopToInput(loop))).toBeNull();
     expect(loopToInput(loop).concurrency).toBe('allow');
-    expect(loopToInput(loop).model).toBe('gpt-5.6-terra');
+    expect(loopToInput(loop).model).toBe('gpt-6.1-terra');
   });
 });
 

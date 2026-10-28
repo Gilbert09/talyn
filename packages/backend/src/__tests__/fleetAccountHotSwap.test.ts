@@ -389,7 +389,7 @@ describe('fleet accounts on a running run', () => {
     it('does not push a Claude key into a Codex run', async () => {
       const c = await add('codex_oauth', 'C', 99);
       await add('claude_oauth', 'A', 1);
-      const extra = { repo: 'acme/widgets', llm: 'openai', model: 'gpt-5.6-sol', accountId: c.id };
+      const extra = { repo: 'acme/widgets', llm: 'openai', model: 'gpt-6.1-sol', accountId: c.id };
       await seedTask({ cloudTask: { provider: 'selfhosted', status: 'running', remoteTaskId: 'talyn-t1', extra } });
       sandboxRunning();
 
@@ -401,7 +401,7 @@ describe('fleet accounts on a running run', () => {
     it('moves a Codex run to the next Codex account with the OpenAI key', async () => {
       const c = await add('codex_oauth', 'C', 99);
       await add('codex_oauth', 'D', 1);
-      const extra = { repo: 'acme/widgets', llm: 'openai', model: 'gpt-5.6-sol', accountId: c.id };
+      const extra = { repo: 'acme/widgets', llm: 'openai', model: 'gpt-6.1-sol', accountId: c.id };
       await seedTask({ cloudTask: { provider: 'selfhosted', status: 'running', remoteTaskId: 'talyn-t1', extra } });
       sandboxRunning();
 

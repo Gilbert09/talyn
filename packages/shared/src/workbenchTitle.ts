@@ -34,7 +34,7 @@ const PROMPT_MESSAGE_MAX = 2000;
  */
 export const WORKBENCH_TITLE_MODELS: Readonly<{ claude: 'haiku'; codex: FleetModelId }> = {
   claude: 'haiku',
-  codex: 'gpt-5.6-luna',
+  codex: 'gpt-6-luna',
 };
 
 export function workbenchTitlePrompt(firstMessage: string): string {

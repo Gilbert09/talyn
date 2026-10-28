@@ -2128,3 +2128,93 @@ export const workbenchScriptRuns = pgTable('workbench_script_runs', {
   running: boolean('running').notNull().default(true),
   exitCode: integer('exit_code'),
 });
+
+// ---------- Slack sessions (migration 0090) ----------
+//
+// Backend-only, like the team tables: RLS on, no policy, no talyn_backend
+// grant. Every read and write is on the pool; the routes authorise explicitly.
+
+/** One row per Slack workspace (team) with the Talyn app installed. */
+export const slackInstallations = pgTable('slack_installations', {
+  teamId: text('team_id').primaryKey(),
+  teamName: text('team_name'),
+  teamUrl: text('team_url'),
+  appId: text('app_id').notNull(),
+  botUserId: text('bot_user_id').notNull(),
+  botName: text('bot_name'),
+  scope: text('scope'),
+  // Token rotation is on, so both rotate. Null after Slack refuses a refresh.
+  accessTokenEnc: jsonb('access_token_enc').$type<EncryptedEnvelope>(),
+  refreshTokenEnc: jsonb('refresh_token_enc').$type<EncryptedEnvelope>(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  // Slack's own error code when a refresh was refused for good. Recorded so
+  // later callers stop retrying a dead refresh token and the UI can say so.
+  tokenError: text('token_error'),
+  tokenErrorAt: timestamp('token_error_at', { withTimezone: true }),
+  // Cross-replica refresh lease: a refresh token is single-use, so only the
+  // replica holding this may spend it. A lease rather than a lock, so no pool
+  // connection waits across the HTTP call.
+  refreshLeaseUntil: timestamp('refresh_lease_until', { withTimezone: true }),
+  installedByUserId: text('installed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** A Talyn user's verified Slack identity in one team. */
+export const slackUserLinks = pgTable(
+  'slack_user_links',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id').notNull(),
+    slackUserId: text('slack_user_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Where new sessions go. SET NULL rather than cascade: deleting a workspace
+    // must not silently unlink Slack; null means "the first workspace".
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
+    triggerEmojis: text('trigger_emojis').array().notNull().default(sql`'{}'`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    teamSlackUserUq: uniqueIndex('uq_slack_user_links_team_slack_user').on(t.teamId, t.slackUserId),
+    teamUserUq: uniqueIndex('uq_slack_user_links_team_user').on(t.teamId, t.userId),
+    userIdx: index('idx_slack_user_links_user').on(t.userId),
+  })
+);
+
+/** Every Events API delivery, keyed by Slack's event id for idempotency. */
+export const slackEvents = pgTable('slack_events', {
+  eventId: text('event_id').primaryKey(),
+  teamId: text('team_id'),
+  eventType: text('event_type').notNull(),
+  payload: jsonb('payload').notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp('claimed_at', { withTimezone: true }),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+  outcome: text('outcome'), // 'handled' | 'ignored' | 'failed'
+  attempts: integer('attempts').notNull().default(0),
+  error: text('error'),
+});
+
+/** A pending Slack OAuth flow. Single use: the callback deletes the row. */
+export const slackOauthStates = pgTable(
+  'slack_oauth_states',
+  {
+    // sha256 of the `state` parameter, so a leaked table row cannot finish a flow.
+    stateHash: text('state_hash').primaryKey(),
+    flow: text('flow').notNull(), // 'install' | 'link'
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    codeVerifierEnc: jsonb('code_verifier_enc').$type<EncryptedEnvelope>().notNull(),
+    client: text('client').notNull().default('desktop'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    expiresAtIdx: index('idx_slack_oauth_states_expires_at').on(t.expiresAt),
+  })
+);

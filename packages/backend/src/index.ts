@@ -17,6 +17,7 @@ import { webhookWorker } from './services/webhookWorker.js';
 import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
+import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv, retiredEnvWarnings } from './services/validateEnv.js';
@@ -251,6 +252,11 @@ async function main() {
   // banner. GITHUB_STATUS_POLL_ENABLED=false stops the status-page reads.
   githubHealthMonitor.init();
 
+  // Slack events: retries any delivery a crash left unprocessed and deletes
+  // processed ones after 7 days. Cheap when Slack is not in use: one indexed
+  // SELECT a minute that finds nothing.
+  slackEventSweep.init();
+
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
   await markCloudEnvironmentsConnected();
@@ -316,6 +322,20 @@ async function main() {
         if (!res.headersSent) {
           res.status(500).json({ success: false, error: 'Webhook processing failed' });
         }
+      });
+    }
+  );
+
+  // Slack Events API receiver. Raw body for the v0 HMAC, pre-json, no auth:
+  // the signature IS the auth. Verifies, stores, answers 200; processing is
+  // after the response (services/slack/events.ts).
+  app.post(
+    '/api/v1/webhooks/slack',
+    express.raw({ type: () => true, limit: '1mb' }),
+    (req, res) => {
+      handleSlackWebhook(req, res).catch((err) => {
+        console.error('[slack] events webhook failed:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Webhook processing failed' });
       });
     }
   );
@@ -459,6 +479,7 @@ async function main() {
     stopWorkbenches();
 codeReviewPoller.stop();
 codeReviewReconciler.stop();
+    slackEventSweep.stop();
     // posthog-node batches the `$feature_flag_called` events that make a flag's
     // rollout visible in PostHog. Without this flush they are lost on every
     // deploy — and a deploy is when a rollout is most interesting to look at.

@@ -162,6 +162,27 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_list_loop_runs` | Read run history with `limit` and `cursor`. |
 | `talyn_run_loop_now` | Start a run through the normal task and billing checks. |
 
+### Sessions
+
+Sessions are called workbenches in the code. These tools serve sandbox sessions.
+A local session runs in the desktop app. Tools that act on one answer: "This session runs on the user's own machine in the Talyn desktop app; open it there."
+
+| Tool | What it does |
+| --- | --- |
+| `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
+| `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
+| `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. |
+| `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |
+| `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
+| `talyn_cancel_session_turn` | Stop the running turn of a chat. |
+| `talyn_get_session_changes` | List changed files with line counts. |
+| `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. |
+| `talyn_open_session_pull_request` | Commit, push, and open a pull request. |
+| `talyn_run_session_script` | Start a named script in the sandbox. |
+| `talyn_stop_session_script` | Stop a running script. |
+| `talyn_archive_session` | Archive a session. |
+| `talyn_restore_session` | Restore an archived session, or retry a failed start. |
+
 ### MCP connections
 
 | Tool | What it does |
@@ -198,7 +219,7 @@ API-key servers must be added in the Talyn app, so the key never passes through 
 ### Feature-gated tools
 
 Tool listing checks `/features` once per request.
-The flags `workflows`, `loops`, `mcpServers`, and `codeReview` control their tool groups.
+The flags `workflows`, `loops`, `mcpServers`, and `workbenches` control their tool groups. The code review tools are always listed.
 A false flag hides the group. If the feature request fails, all tools remain listed.
 Each REST route checks access independently. Tool calls use the route's error message and code.
 HTTP 402 errors also explain the free-plan limit and point to Settings → Billing.
@@ -211,6 +232,7 @@ HTTP 402 errors also explain the free-plan limit and point to Settings → Billi
 - `admin/*`, `debug/*`, and `fleet/*` serve operators only.
 - `teams/*` and billing checkout or portal actions stay in the app.
 - Review-ranking telemetry and poll, view, or focus hints are UI signals. Agents must not generate them.
+- Session terminals, port previews, checkpoint restore, and instruction files stay in the app. Local sessions are refused because their turns run in the desktop app.
 
 ## Implementation
 

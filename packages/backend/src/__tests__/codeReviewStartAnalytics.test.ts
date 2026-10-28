@@ -35,9 +35,6 @@ vi.mock('../services/codeReview/store.js', () => ({
   casTransition: vi.fn(async () => true),
 }));
 vi.mock('../services/codeReview/findings.js', () => ({ discardFindings: vi.fn(async () => 0) }));
-vi.mock('../services/codeReviewAccess.js', () => ({
-  workspaceMayUseCodeReview: vi.fn(async () => true),
-}));
 vi.mock('../db/client.js', () => ({
   getDbClient: () => ({
     select: () => ({

@@ -29,7 +29,7 @@ describe('generateWorkbenchTitle', () => {
     const run = jest.fn(runner({ stdout: 'Explain merge queue' }));
     await generateWorkbenchTitle({ agent: 'codex', message: 'explain it' }, run);
     expect(run.mock.calls[0][0].slice(0, 3)).toEqual(['codex', 'exec', '--ephemeral']);
-    expect(run.mock.calls[0][0]).toContain('gpt-5.6-luna');
+    expect(run.mock.calls[0][0]).toContain('gpt-6-luna');
   });
 
   it.each([

@@ -37,7 +37,7 @@ function run(overrides: Partial<RunRow>): RunRow {
     failureDetail: null,
     failedOverFrom: null,
     provider: 'selfhosted',
-    model: 'gpt-5.6-sol',
+    model: 'gpt-6.1-sol',
     sandboxId: 'sb-1',
     remoteTaskId: null,
     remoteRunId: null,
@@ -74,14 +74,14 @@ const failed = (lens: string, failureCode: string, over: Partial<RunRow> = {}) =
 
 describe('classifyFleetFailure', () => {
   it.each([
-    ['the incident sentence on a Codex model', INCIDENT, 'gpt-5.6-sol', 'usage_limit', 'codex'],
-    ['a sentence naming no vendor on a Codex model', 'usage limit reached', 'gpt-5.6-sol', 'usage_limit', 'codex'],
+    ['the incident sentence on a Codex model', INCIDENT, 'gpt-6.1-sol', 'usage_limit', 'codex'],
+    ['a sentence naming no vendor on a Codex model', 'usage limit reached', 'gpt-6.1-sol', 'usage_limit', 'codex'],
     ['a ChatGPT sentence on a Claude model', INCIDENT, 'claude-sonnet-5', 'usage_limit', 'claude'],
     ['a spent Claude subscription', "You're out of extra usage.", 'claude-sonnet-5', 'quota_exhausted', 'claude'],
-    ['a spent OpenAI key', 'insufficient_quota', 'gpt-5.6-sol', 'quota_exhausted', 'codex'],
+    ['a spent OpenAI key', 'insufficient_quota', 'gpt-6.1-sol', 'quota_exhausted', 'codex'],
     ['the text alone when no model was recorded', INCIDENT, null, 'usage_limit', 'codex'],
-    ['an unrelated error', 'guest exited 137', 'gpt-5.6-sol', null, null],
-    ['no error', null, 'gpt-5.6-sol', null, null],
+    ['an unrelated error', 'guest exited 137', 'gpt-6.1-sol', null, null],
+    ['no error', null, 'gpt-6.1-sol', null, null],
   ])('reads %s', (_label, detail, model, reason, agent) => {
     expect(classifyFleetFailure(detail, model)).toEqual({ reason, agent });
   });

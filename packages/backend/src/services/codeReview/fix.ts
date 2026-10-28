@@ -13,7 +13,6 @@ import { createCloudTask } from '../taskCreate.js';
 import { githubService } from '../github.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
-import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import {
   findingsForFix,
   markFixed,
@@ -50,7 +49,7 @@ import { workspaceReviewSettings } from './cycle.js';
 
 export type FixOutcome =
   | { ok: true; taskId: string }
-  | { ok: false; code: 'not_available' | 'nothing_selected' | 'busy' | 'no_provider' | 'deferred'; message: string };
+  | { ok: false; code: 'nothing_selected' | 'busy' | 'no_provider' | 'deferred'; message: string };
 
 export async function startFixRun(
   review: ReviewRow,
@@ -60,14 +59,6 @@ export async function startFixRun(
   if (!findingIds.length) {
     return { ok: false, code: 'nothing_selected', message: 'Pick at least one finding to fix.' };
   }
-  if (!(await workspaceMayUseCodeReview(review.workspaceId))) {
-    return {
-      ok: false,
-      code: 'not_available',
-      message: 'Code review is not available for this workspace.',
-    };
-  }
-
   const findings = await findingsForFix(review.id, findingIds);
   if (!findings.length) {
     return {

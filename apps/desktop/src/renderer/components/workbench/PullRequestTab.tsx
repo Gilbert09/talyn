@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
-  codeReviewOffered,
   coarseQueueStatus,
   queueBlockNeedsHuman,
   type CodeReviewPublic,
@@ -24,7 +23,6 @@ import { api, type PRChecks, type PRRow } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { useWorkspaceStore } from '../../stores/workspace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { MergeQueueSection, PRDetailSheet, ReviewsTab, usePrAutoKeep } from '../widgets/PRDetailSheet';
 import { PRStatusPill, blockingReasonText } from '../widgets/PRStatusPill';
@@ -64,7 +62,6 @@ export function PullRequestTab({
   const { data, error, loading, stale, loadCount, refresh } = usePrDetail(pr, { visible, turnsEnded });
   const autoKeep = usePrAutoKeep(pr);
   const { setMergeQueue } = useGitHubActions();
-  const features = useWorkspaceStore((s) => s.features);
   const [sheet, setSheet] = useState<SheetTab | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -90,7 +87,6 @@ export function PullRequestTab({
   const open = pr.state === 'open';
   const summary = pr.summary;
   const review = pr.codeReview ?? null;
-  const reviewOffered = codeReviewOffered(features);
   const reviewRunning = review ? !CODE_REVIEW_PHASE_AT_REST[(review as unknown as CodeReviewPublic).phase] : false;
   const mergedAgo = pr.mergedAt ? timeAgo(pr.mergedAt) : null;
 
@@ -208,7 +204,7 @@ export function PullRequestTab({
               {pr.autoKeepMergeable ? (pr.autoMergeState?.paused ? 'Auto-fix paused' : 'Auto-keeping') : 'Auto-keep'}
             </Button>
           )}
-          {open && reviewOffered && (
+          {open && (
             <Button
               variant="outline"
               className="h-6 px-2 text-[11px]"
@@ -230,7 +226,7 @@ export function PullRequestTab({
             Details
           </Button>
         </div>
-        {reviewOffered && review && (
+        {review && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="pr-code-review">
             <span>Code review</span>
             <CodeReviewRowChip review={review} onOpen={() => setSheet('findings')} />

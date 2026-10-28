@@ -90,6 +90,7 @@ export type SettingsSection =
   | 'shortcuts'
   | 'workspace'
   | 'integrations'
+  | 'slack'
   | 'skills'
   | 'instructions'
   | 'codeReview'

@@ -2,15 +2,14 @@
  * The once-ever introduction's guards.
  *
  * Every case here is a way of showing the modal to the wrong person, and each has
- * a cheaper cost to get right than to discover: showing it to somebody outside the
- * flag's audience, showing it to somebody who saw the wizard step ninety seconds
- * ago, showing it twice, or showing it with no pull request to offer.
+ * a cheaper cost to get right than to discover: showing it to somebody who saw the
+ * wizard step ninety seconds ago, showing it twice, or showing it with no pull
+ * request to offer.
  */
 import { describe, expect, it } from 'vitest';
 import { INTRO_VERSION, shouldShowCodeReviewIntro } from '../hooks/useCodeReviewIntro';
 
 const base = {
-  offered: true,
   onboardingComplete: true,
   justOnboarded: false,
   openPrCount: 3,
@@ -20,13 +19,6 @@ const base = {
 describe('shouldShowCodeReviewIntro', () => {
   it('shows it to an existing user who has never seen it', () => {
     expect(shouldShowCodeReviewIntro(base)).toBe(true);
-  });
-
-  it('never shows it when the feature is not offered', () => {
-    // Includes the three-state `null` case, which `codeReviewOffered` resolves to
-    // false: showing this and then discovering the account is outside the audience
-    // is the worst version of it.
-    expect(shouldShowCodeReviewIntro({ ...base, offered: false })).toBe(false);
   });
 
   it('waits until onboarding is done', () => {

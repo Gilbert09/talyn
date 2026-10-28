@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { codeReviewOffered, workbenchesOffered } from '@talyn/shared';
+import { workbenchesOffered } from '@talyn/shared';
 import {
   ChevronLeft,
   ChevronRight,
@@ -41,7 +41,7 @@ export function AppSidebar() {
   const { user } = useAuth();
 
   const offered = workbenchesOffered(features);
-  const prCounts = usePrBadgeCounts(codeReviewOffered(features));
+  const prCounts = usePrBadgeCounts();
   const automationTabs = offeredAutomationTabs(features);
 
   const newWorkbench = () => openNewWorkbench();

@@ -11,7 +11,7 @@ export type PrBadgeCounts = Record<PrTab, number>;
  * current by usePullRequestSync). Each count uses its page's own rule, so a
  * badge never counts a PR its page has dropped.
  */
-export function usePrBadgeCounts(codeReviewShown: boolean): PrBadgeCounts {
+export function usePrBadgeCounts(): PrBadgeCounts {
   const rows = usePullRequestStore((s) => s.rows);
   const tasks = useWorkspaceStore((s) => s.tasks);
   return useMemo(() => {
@@ -19,9 +19,9 @@ export function usePrBadgeCounts(codeReviewShown: boolean): PrBadgeCounts {
     const my_prs = rows.filter((r) => r.authored || r.watching).length;
     const reviews = visibleReviewCohort(rows).length;
     // Reviews with findings nobody has dealt with yet.
-    const code_reviews = codeReviewShown ? rows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length : 0;
+    const code_reviews = rows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length;
     const merge_queue = rows.filter((r) => r.mergeQueued).length;
     const queue = tasks.filter((t) => t.status === 'in_progress').length;
     return { my_prs, reviews, code_reviews, merge_queue, queue };
-  }, [rows, tasks, codeReviewShown]);
+  }, [rows, tasks]);
 }

@@ -30,7 +30,7 @@ describe('fleet model choice', () => {
   });
 
   it('defaults a Codex-only workspace to a Codex model', () => {
-    expect(DEFAULT_FLEET_CODEX_MODEL_ID).toBe('gpt-5.6-terra');
+    expect(DEFAULT_FLEET_CODEX_MODEL_ID).toBe('gpt-6.1-terra');
     expect(fleetProviderForModel(DEFAULT_FLEET_CODEX_MODEL_ID)).toBe('openai');
     expect(defaultFleetModelForAgent('codex')).toBe(DEFAULT_FLEET_CODEX_MODEL_ID);
     expect(defaultFleetModelForAgent('claude')).toBe(DEFAULT_FLEET_MODEL_ID);
@@ -124,7 +124,7 @@ describe('retired Codex models', () => {
     for (const dead of Object.keys(RETIRED_FLEET_MODELS)) {
       expect(openai).not.toContain(dead);
     }
-    expect(openai).toContain('gpt-5.6-terra');
+    expect(openai).toContain('gpt-6.1-terra');
   });
 
   it('migrates a retired pin forward instead of preserving it', () => {
@@ -137,10 +137,19 @@ describe('retired Codex models', () => {
     }
   });
 
+  it.each([
+    ['gpt-5.5', 'gpt-6.1-sol'],
+    ['gpt-5.6-sol', 'gpt-6.1-sol'],
+    ['gpt-5.6-terra', 'gpt-6.1-terra'],
+    ['gpt-5.6-luna', 'gpt-6-luna'],
+  ])('moves a %s pin to %s, the same tier', (dead, live) => {
+    expect(resolveFleetModel(dead)).toBe(live);
+  });
+
   it('leaves a live id and an unknown id alone', () => {
     // Not a rewrite-everything hook — only the ids we know are dead.
     expect(resolveFleetModel('claude-sonnet-5')).toBe('claude-sonnet-5');
-    expect(resolveFleetModel('gpt-5.6-sol')).toBe('gpt-5.6-sol');
+    expect(resolveFleetModel('gpt-6.1-sol')).toBe('gpt-6.1-sol');
     expect(resolveFleetModel('some-future-model')).toBe('some-future-model');
     expect(resolveFleetModel(undefined)).toBeUndefined();
   });
@@ -199,8 +208,8 @@ describe('per-agent model selection', () => {
     expect(storedFleetModelForAgent(claudePinned, 'claude')).toBe('claude-opus-5');
     expect(storedFleetModelForAgent(claudePinned, 'codex')).toBeUndefined();
 
-    const codexPinned = { fleetModel: 'gpt-5.6-sol' } as const;
-    expect(storedFleetModelForAgent(codexPinned, 'codex')).toBe('gpt-5.6-sol');
+    const codexPinned = { fleetModel: 'gpt-6.1-sol' } as const;
+    expect(storedFleetModelForAgent(codexPinned, 'codex')).toBe('gpt-6.1-sol');
     expect(storedFleetModelForAgent(codexPinned, 'claude')).toBeUndefined();
   });
 
@@ -223,8 +232,8 @@ describe('per-agent model selection', () => {
   it('applies the shipped default only when nothing was chosen', () => {
     expect(fleetModelForAgent(undefined, 'claude')).toBe(DEFAULT_FLEET_MODEL_ID);
     expect(fleetModelForAgent(undefined, 'codex')).toBe(DEFAULT_FLEET_CODEX_MODEL_ID);
-    expect(fleetModelForAgent({ fleetModels: { codex: 'gpt-5.6-luna' } }, 'codex')).toBe(
-      'gpt-5.6-luna'
+    expect(fleetModelForAgent({ fleetModels: { codex: 'gpt-6-luna' } }, 'codex')).toBe(
+      'gpt-6-luna'
     );
   });
 

@@ -109,6 +109,7 @@ export type SettingsSection =
   | 'pullRequests'
   | 'workspace'
   | 'integrations'
+  | 'slack'
   | 'skills'
   | 'instructions'
   | 'codeReview'

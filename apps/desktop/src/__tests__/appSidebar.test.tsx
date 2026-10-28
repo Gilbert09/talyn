@@ -68,7 +68,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  setFeatures({ workbenches: true, codeReview: true });
+  setFeatures({ workbenches: true });
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore.getState().setWorkbenches('ws1', [
     wb('lisbon', { repoFullName: 'acme/web', diffStat: { added: 12, removed: 3, files: 2 } }),
@@ -216,7 +216,7 @@ describe('AppSidebar', () => {
   });
 
   it('the Pull requests badge counts PRs only, not Code review', () => {
-    setFeatures({ workbenches: true, codeReview: false });
+    setFeatures({ workbenches: true });
     usePullRequestStore.setState({ rows: [pr({ id: 'a', authored: true }), pr({ id: 'e', codeReview: { openCount: 1 } } as Partial<PRRow>)] });
     render(<AppSidebar />);
     expect(screen.getByText('1', { selector: '[data-attr="nav-pull-requests-badge"]' })).toBeInTheDocument();

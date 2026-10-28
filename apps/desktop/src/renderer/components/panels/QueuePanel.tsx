@@ -39,7 +39,6 @@ import {
 import {
   cloudModelLabel,
   isAgentTask,
-  readCloudTaskMeta,
   readDispatchedModel,
   TERMINAL_TASK_STATUSES,
 } from '@talyn/shared';
@@ -380,7 +379,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const task = tasks.find((t) => t.id === taskId);
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
-  const cloudMeta = task ? readCloudTaskMeta(task) : null;
   const provider = task ? taskCloudProvider(task, environments) : null;
   const model = task ? readDispatchedModel(task, provider) : null;
 
@@ -445,31 +443,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
 
   const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
 
-  // The cloud-run banner — provider, remote status, deep link to the run.
-  const cloudBanner = cloudMeta && (
-    <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
-      <ProviderIcon provider={provider ?? cloudMeta.provider} className="h-3.5 w-3.5" />
-      <span className="text-muted-foreground">
-        Cloud run on {providerLabel(provider ?? cloudMeta.provider) ?? cloudMeta.provider}
-      </span>
-      {cloudMeta.status && (
-        <Badge variant="secondary">
-          {cloudMeta.status}
-        </Badge>
-      )}
-      {cloudMeta.logUrl && (
-        <button
-          type="button"
-          onClick={() => window.open(cloudMeta.logUrl!, '_blank')}
-          className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
-        >
-          <ExternalLink className="w-3 h-3" />
-          View run
-        </button>
-      )}
-    </div>
-  );
-
   // If task is running, show terminal
   if (isRunning) {
     return (
@@ -527,7 +500,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
         </div>
 
-        {cloudBanner}
 
         {/* Cloud tasks have no local Files/Git data — the agent log is the
             whole story. */}
@@ -871,7 +843,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           );
         })()}
 
-      {cloudBanner}
 
       {/* The run transcript — read-only, hydrated on demand from the
           provider's durable logs even for finished tasks. */}

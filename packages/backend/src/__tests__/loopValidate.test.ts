@@ -88,8 +88,8 @@ describe('validateLoop', () => {
     });
 
     it('accepts either vendor on the fleet', () => {
-      expect(validateLoop(withField({ provider: 'selfhosted', model: 'gpt-5.6-terra' })).model).toBe(
-        'gpt-5.6-terra'
+      expect(validateLoop(withField({ provider: 'selfhosted', model: 'gpt-6.1-terra' })).model).toBe(
+        'gpt-6.1-terra'
       );
       expect(validateLoop(withField({ provider: 'selfhosted', model: 'claude-fable-5-1' })).model).toBe(
         'claude-fable-5-1'
@@ -100,7 +100,7 @@ describe('validateLoop', () => {
       // The directed message is the point. "Invalid model" costs the reader ten
       // minutes; naming which catalogue it belongs to costs them none.
       expect(() =>
-        validateLoop(withField({ provider: 'posthog_code', model: 'gpt-5.6-sol' }))
+        validateLoop(withField({ provider: 'posthog_code', model: 'gpt-6.1-sol' }))
       ).toThrow(/Talyn Fleet model — PostHog Code runs Claude models only/);
     });
 
@@ -192,7 +192,7 @@ describe('loopInputProblem', () => {
   it('returns exactly the message the server would 400 with', () => {
     // One definition of "valid", so the disabled button and the server cannot
     // disagree about what is wrong.
-    const bad = withField({ model: 'gpt-5.6-sol' });
+    const bad = withField({ model: 'gpt-6.1-sol' });
     let thrown = '';
     try {
       validateLoop(bad);

@@ -55,8 +55,7 @@ export const CODEREVIEW = [
           .filter((f) => status === 'all' || f.disposition === status)
           .map(findingLine),
       ].join('\n');
-    },
-    'codeReview'
+    }
   ),
   defineTool(
     'start_code_review',
@@ -70,8 +69,7 @@ export const CODEREVIEW = [
         ...(args.reset !== undefined ? { reset: bool(args, 'reset') } : {}),
       });
       return reviewLine(data);
-    },
-    'codeReview'
+    }
   ),
   defineTool(
     'cancel_code_review',
@@ -80,8 +78,7 @@ export const CODEREVIEW = [
     ['pull_request_id'],
     { destructiveHint: true, openWorldHint: true },
     async (ownerId, args) =>
-      reviewLine(await callApi<CodeReviewPublic>(ownerId, 'DELETE', base(args))),
-    'codeReview'
+      reviewLine(await callApi<CodeReviewPublic>(ownerId, 'DELETE', base(args)))
   ),
   defineTool(
     'get_code_review_finding',
@@ -102,8 +99,7 @@ export const CODEREVIEW = [
         `anchor: ${finding.anchor ?? 'none'}`,
         `verdict reason: ${finding.verdictReason ?? 'none'}`,
       ].join('\n');
-    },
-    'codeReview'
+    }
   ),
   defineTool(
     'fix_code_review_findings',
@@ -125,8 +121,7 @@ export const CODEREVIEW = [
         { findingIds: args.finding_ids }
       );
       return `${data.taskId} fix task started.\n${reviewLine(data.review)}`;
-    },
-    'codeReview'
+    }
   ),
   defineTool(
     'dismiss_code_review_finding',
@@ -150,8 +145,7 @@ export const CODEREVIEW = [
         undo ? undefined : { ...(reason ? { reason } : {}) }
       );
       return `${requireId(args, 'finding_id')} ${undo ? 'restored' : 'dismissed'}.\n${reviewLine(data)}`;
-    },
-    'codeReview'
+    }
   ),
   defineTool(
     'list_code_reviews',
@@ -172,7 +166,6 @@ export const CODEREVIEW = [
         ({ review, pullRequest }) =>
           `${reviewLine(review)}  PR ${pullRequest.id} ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`
       );
-    },
-    'codeReview'
+    }
   ),
 ];

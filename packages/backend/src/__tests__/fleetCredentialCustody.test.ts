@@ -119,7 +119,7 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
     getSelfHostedCredentials.mockResolvedValue({ claudeToken: 'sk-ant-oat01-mine' });
 
     const res = await dispatchTaskToFleet(
-      task({ metadata: { model: 'gpt-5.6-terra' } }),
+      task({ metadata: { model: 'gpt-6.1-terra' } }),
       env,
     );
 
@@ -168,7 +168,7 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
       openaiKey: 'ey.codex.token',
     });
 
-    const res = await dispatchTaskToFleet(task({ metadata: { model: 'gpt-5.6-terra' } }), env);
+    const res = await dispatchTaskToFleet(task({ metadata: { model: 'gpt-6.1-terra' } }), env);
     expect(res.ok).toBe(true);
 
     const body = createSandbox.mock.calls[0][0] as Record<string, unknown>;
@@ -225,7 +225,7 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
       openaiKey: 'ey.codex.token',
     });
 
-    for (const model of ['claude-sonnet-5', 'gpt-5.6-terra']) {
+    for (const model of ['claude-sonnet-5', 'gpt-6.1-terra']) {
       createSandbox.mockClear();
       await dispatchTaskToFleet(task({ metadata: { model } }), env);
       const policy = (createSandbox.mock.calls[0][0] as { policy: { credentials: object } }).policy;
@@ -247,21 +247,21 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
 
   it('records the vendor it spent, so the re-credential paths can agree', async () => {
     getSelfHostedCredentials.mockResolvedValue({ openaiKey: 'ey.codex.token' });
-    await dispatchTaskToFleet(task({ metadata: { model: 'gpt-5.6-terra' } }), env);
+    await dispatchTaskToFleet(task({ metadata: { model: 'gpt-6.1-terra' } }), env);
     // `patchTaskMetadata` takes an updater, so apply it the way the mutex would.
     const update = patchTaskMetadata.mock.calls[0][1] as unknown as (
       m: Record<string, unknown>,
     ) => { cloudTask: { extra: { llm: string; model: string } } };
     const patched = update({});
     expect(patched.cloudTask.extra.llm).toBe('openai');
-    expect(patched.cloudTask.extra.model).toBe('gpt-5.6-terra');
+    expect(patched.cloudTask.extra.model).toBe('gpt-6.1-terra');
   });
 
   it('tells clients the model, and nothing about where the run is hosted', async () => {
     getSelfHostedCredentials.mockResolvedValue({ openaiKey: 'ey.codex.token' });
-    await dispatchTaskToFleet(task({ metadata: { model: 'gpt-5.6-terra' } }), env);
+    await dispatchTaskToFleet(task({ metadata: { model: 'gpt-6.1-terra' } }), env);
     expect(emitTaskUpdate).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
-      metadata: { cloudTask: { provider: 'selfhosted', extra: { model: 'gpt-5.6-terra' } } },
+      metadata: { cloudTask: { provider: 'selfhosted', extra: { model: 'gpt-6.1-terra' } } },
     });
   });
 
@@ -273,7 +273,7 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
     const res = await dispatchTaskToFleet(task(), env);
     expect(res.ok).toBe(true);
     const body = createSandbox.mock.calls[0][0] as { task: { model: string; provider: string } };
-    expect(body.task.model).toBe('gpt-5.6-terra');
+    expect(body.task.model).toBe('gpt-6.1-terra');
     expect(body.task.provider).toBe('openai');
   });
 });

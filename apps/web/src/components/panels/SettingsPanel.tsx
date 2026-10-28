@@ -13,6 +13,7 @@ import {
   Check,
   AlertCircle,
   ChevronDown,
+  MessageSquare,
   Loader2,
   Unlink,
   RefreshCw,
@@ -39,11 +40,12 @@ import {
   Keyboard,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
+import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
-import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
+import { highlightsForSurface } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -125,19 +127,23 @@ export function SettingsPanel() {
   const features = useWorkspaceStore((s) => s.features);
   const billingStatus = useBillingStore((s) => s.status);
 
+  // Slack's callback lands on /settings?slack=…; show the Slack section so the
+  // result is visible.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('slack')) setActiveSection('slack');
+  }, [setActiveSection]);
+
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
     { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
+    ...(features?.workbenches === true
+      ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
+      : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
-    // Gated in the NAV, not only in the body: the card renders null when the
-    // feature is not offered, so an unconditional entry would give anyone
-    // outside the flag's audience a nav item that opens onto nothing.
-    ...(codeReviewOffered(features)
-      ? [{ id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' }]
-      : []),
+    { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
 
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
@@ -186,6 +192,7 @@ export function SettingsPanel() {
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
+            {activeSection === 'slack' && <SlackSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && <InstructionsSettings />}
             {activeSection === 'account' && <AccountSettings />}

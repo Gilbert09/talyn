@@ -32,7 +32,9 @@ export function featureRoutes(): Router {
   router.get('/', async (req, res) => {
     const user = assertUser(req);
     const features = await featuresForUser({ distinctId: user.id, email: user.email });
-    res.json({ success: true, data: features } as ApiResponse<Features>);
+    // Code review is no longer flagged, but desktop builds from before
+    // 2026-10-26 still read this key and hide the feature without it.
+    res.json({ success: true, data: { ...features, codeReview: true } } as ApiResponse<Features>);
   });
 
   return router;

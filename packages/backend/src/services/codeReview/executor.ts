@@ -25,7 +25,6 @@ import { dispatchSandboxRun } from '../selfHosted/sandboxRun.js';
 import { reviewSystemPrompt } from '../selfHosted/systemPrompts.js';
 import { startCodeRun } from '../posthogCode/codeRun.js';
 import { listFleetHosts, hostIsDispatchable } from '../fleetHosts.js';
-import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import {
   buildJudgePrompt,
   buildLensPrompt,
@@ -421,20 +420,6 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   if (!claim.fresh && !moved) return;
   // What the unit settles with when its second dispatch finds nowhere to run.
   const movedReason = moved && isLimitReason(moved.failureCode) ? moved.failureCode : 'usage_limit';
-
-  // Re-checked at FIRE time as well as at the route, because a workspace can
-  // lose the flag's audience without anything touching a row, and a gate that
-  // only runs where a client can see it is a decoration.
-  if (!(await workspaceMayUseCodeReview(review.workspaceId))) {
-    await settleRun(claim.id, { status: 'skipped', failureCode: 'no_provider' });
-    await appendReviewEvent(review.id, {
-      toPhase: review.phase as CodeReviewPhase,
-      trigger: 'executor',
-      code: 'not_in_audience',
-      message: 'Code review is no longer available for this workspace.',
-    });
-    return;
-  }
 
   const loaded = await loadPromptContext(review);
   if (!loaded) {

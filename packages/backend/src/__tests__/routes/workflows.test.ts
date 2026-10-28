@@ -223,7 +223,6 @@ describe('workflow routes', () => {
         workflows: true,
         loops: false,
         mcpServers: false,
-        codeReview: false,
         reviewPriority: false,
         reviewPriorityMode: true,
         reviewRankingCandidate: false,
@@ -231,6 +230,7 @@ describe('workflow routes', () => {
         teams: false,
         workbenches: false,
         trunkMergeEta: false,
+        codeReview: true,
       });
     });
 
@@ -248,7 +248,6 @@ describe('workflow routes', () => {
         workflows: false,
         loops: false,
         mcpServers: false,
-        codeReview: false,
         reviewPriority: false,
         reviewPriorityMode: true,
         reviewRankingCandidate: false,
@@ -256,6 +255,7 @@ describe('workflow routes', () => {
         teams: false,
         workbenches: false,
         trunkMergeEta: false,
+        codeReview: true,
       });
     });
   });

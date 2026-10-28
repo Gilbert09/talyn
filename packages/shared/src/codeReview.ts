@@ -1,4 +1,3 @@
-import type { Features } from './featureFlags.js';
 import { parseSkillKey } from './skills.js';
 
 /**
@@ -1546,19 +1545,6 @@ export function codeReviewStartProblem(input: unknown): string | null {
   }
 }
 
-// ---------- Offered ----------
-
-/**
- * Whether to DRAW code review for this account.
- *
- * Three-state, exactly `loopsOffered`: `null` features means still loading and
- * must render nothing, because conflating "loading" with "not offered" is how a
- * tab flashes in on every launch. Never a permission check — every route, the
- * engine and the fix action gate independently.
- */
-export function codeReviewOffered(features: Features | null | undefined): boolean {
-  return features?.codeReview === true;
-}
 
 // ---------- Findings, rendered for an agent ----------
 

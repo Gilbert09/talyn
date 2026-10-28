@@ -20,6 +20,12 @@ import type {
   GithubHealth,
   MergeEtaAnswer,
   TrunkIntegrationStatus,
+  SlackAuthorizeResponse,
+  SlackForgetInstallationResponse,
+  SlackStartInput,
+  SlackStatus,
+  SlackUserLinkView,
+  UpdateSlackLinkInput,
   LoopInput,
   LoopRun,
   LoopWithStats,
@@ -2420,6 +2426,38 @@ export const trunk = {
 };
 
 // ============================================================================
+// Slack sessions — install the Talyn app in a Slack workspace, link your Slack
+// account, and pick trigger emojis. Behind `features.workbenches`; every route
+// answers 403 `code: 'slack_unavailable'` when the flag is off, and the two
+// start routes 503 `code: 'slack_not_configured'` on a deployment with no app.
+// ============================================================================
+
+export const slack = {
+  /** Installs the caller can see (installed by them or linked in) and the caller's links. */
+  getStatus: () => request<SlackStatus>('GET', '/slack'),
+  /**
+   * Start installing the app in a Slack workspace. Open `authorizeUrl` in a
+   * browser; the callback links the installer too. Re-read `getStatus` after.
+   */
+  install: (input: SlackStartInput = {}) =>
+    request<SlackAuthorizeResponse>('POST', '/slack/install', input),
+  /** Start "Sign in with Slack" to link the caller's Slack account. Same pattern as `install`. */
+  link: (input: SlackStartInput = {}) =>
+    request<SlackAuthorizeResponse>('POST', '/slack/link', input),
+  /** Change one of the caller's links. Emoji names are normalized and deduped server-side. */
+  updateLink: (linkId: string, input: UpdateSlackLinkInput) =>
+    request<SlackUserLinkView>('PATCH', `/slack/links/${encodeURIComponent(linkId)}`, input),
+  unlink: (linkId: string) =>
+    request<void>('DELETE', `/slack/links/${encodeURIComponent(linkId)}`),
+  /** Installer only. Forgets the bot token; the app stays installed in Slack. */
+  forgetInstallation: (teamId: string) =>
+    request<SlackForgetInstallationResponse>(
+      'DELETE',
+      `/slack/installations/${encodeURIComponent(teamId)}`
+    ),
+};
+
+// ============================================================================
 // Features (allow-listed capabilities)
 // ============================================================================
 
@@ -2896,6 +2934,7 @@ export const api = {
   repositories,
   pullRequests,
   trunk,
+  slack,
   skills,
   mcpTokens,
   debug,

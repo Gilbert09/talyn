@@ -63,9 +63,6 @@ vi.mock('../services/selfHosted/client.js', async () => {
 vi.mock('../services/selfHosted/quotaProbe.js', () => ({ verifyAgentQuota: vi.fn() }));
 vi.mock('../services/github.js', () => ({ githubService: github }));
 vi.mock('../services/codeReview/evaluator.js', () => ({ scheduleReviewEvaluation }));
-vi.mock('../services/codeReviewAccess.js', () => ({
-  workspaceMayUseCodeReview: vi.fn(async () => true),
-}));
 vi.mock('../services/prCloudFix.js', () => ({
   resolveCloudEnvChain: vi.fn(async () => [{ provider: 'selfhosted', envId: 'env-fleet' }]),
 }));

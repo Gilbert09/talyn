@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PostHog Code logs stopped streaming (2026-10-28)
+
+Running PostHog Code tasks showed "Running in the cloud — fetching logs…" for their whole run. The watch heartbeats arrived, and no stream ever logged `opening SSE stream`.
+
+Cause: `refresh-logs` calls `postHogCodeStreamer.ensure()` while it holds the request's owner-scoped transaction. `ensure()` starts `run()` without waiting, so `run()` inherited that transaction through AsyncLocalStorage. The transaction commits when the response is sent. The stream's next query (the OAuth token read or the transcript write) then waited on a finished transaction and never returned. The entry stayed in `active`, so every later `ensure()` from the poller returned early, and the run never streamed. Cancelling a task removed its entry, and only then did the poller's backfill run.
+
+Fix: `ensure()` starts `run()` under `runWithoutScope`, the same pattern as the workbench turn loop. The test puts `ensure()` inside a fake request scope and checks that the stream's calls see no scope, for a live attach and for a backfill.
+
+Lesson: any fire-and-forget work that a route starts must leave the owner scope. Code that awaits inside the request is safe. Code that keeps running after the response is not.
 ## Keep session credentials available during saves (2026-10-27)
 
 Pending archives and live restores can obtain credentials for their current sandbox.
@@ -115,6 +124,36 @@ Recovery and archive restoration restore each usable conversation before queued 
 Other chats receive a hidden recap on their first turn. It contains recent user and assistant text, up to 24 KiB.
 A database trigger removes old backups when a session ID changes. Chat deletion removes backups through the foreign key.
 
+## Code review flag removed (2026-10-26)
+
+The `code-review` PostHog flag was released to every account, so the code no longer reads it. Code review is always available.
+
+**What changed.**
+- **Register.** `codeReview` is gone from `packages/shared/src/featureFlags.ts` and from `ACCOUNT_FEATURE_FLAGS`. `GET /features` no longer carries a `codeReview` key, and the `Features` type no longer has one.
+- **Backend.** `services/codeReviewAccess.ts` and its test are deleted. The routes no longer answer 403 `code_review_unavailable`. The cycle start, the fix run, the unit dispatch and the snapshot trigger no longer check the flag. The `not_available` refusal is gone from the start and fix outcomes. The MCP code review tools are always listed.
+- **Clients.** Both forks draw the nav item, the panel, the settings section, the settings card, the onboarding step and the once-ever intro without a flag check. `onboarding_completed` no longer sends `code_review_offered`. `codeReviewOffered` stays in `@talyn/shared` as a deprecated stub that answers `true`, only because both `PRDetailSheet.tsx` forks still call it. Delete it with those calls.
+- **Kept.** The plan gates are unchanged: the free-plan cycle limit and the Unlimited gate on automatic review. The workflow code `code_review_unavailable` stays, because a start with no reviewer still uses it and stored run history holds it.
+
+**Release notes.** The flag went to `availability: 'general'` on 2026-09-28, which already replayed the withheld `code-review` highlights. Deleting the flag changes nothing more: `isGatedFeature` answers false for a key the register does not know, so stored highlights tagged `codeReview` stay visible to everyone. New `feat(code-review)` commits are not tagged.
+
+**Older desktop builds.** A build from before this deploy reads `features.codeReview === true`. The key is now absent, so that build hides code review until it updates.
+
+**Next step, AFTER this deploy.** Delete the PostHog flag `code-review` (id 913388 in project 459813). Do not delete it first. The backend fallback for this flag was OFF, so a backend that still reads it would turn code review off for everyone.
+
+## Trunk merge-queue ETAs on PR rows (2026-10-26)
+
+A PR in Trunk's merge queue now shows when it will merge: "Will merge in ~12 min · Starts testing in ~3 min · 2 PRs ahead", with a muted "running long" when Trunk says a time is behind. Talyn read Trunk's queue state only from GitHub before (its PR comment and `trunk-*` labels). This is the first call to Trunk's own API.
+
+**What was built.**
+- **Flag.** `trunkMergeEta` (`trunk-merge-eta` in PostHog), fallback OFF, `availability: 'gated'`, env override `TRUNK_MERGE_ETA_ENABLED`. It is in `ACCOUNT_FEATURE_FLAGS`. Every route gates on the caller, the same subject `GET /features` answers for.
+- **Token.** A per-workspace Trunk org API token on an `integrations` row of type `trunk`, encrypted with `tokenCrypto`. No migration. `GET /trunk/status` says only `connected` and `needsReauth`. `PUT` and `DELETE /trunk/token` set and remove it. A 401 or 403 from Trunk writes `reauthRequiredAt` on the row, and only for the token that failed (matched on the envelope's ciphertext). A new token or a later successful call clears it.
+- **Call.** `services/trunk/client.ts` sends `POST https://api.trunk.io/v1/getSubmittedPullRequest` with `x-api-token`, the spec's by-number body (`repo { host, owner, name }`, `pr { number }`, `targetBranch`) and `includeEstimatedTimeToMerge: true`. The timeout is 8 s. Each call goes through `debugBus.recordHttp` as service `trunk`. `targetBranch` is the PR's landing branch (a stack's base), read from `last_summary` in SQL.
+- **Parser.** `services/trunk/parse.ts`. The ETA block is not in Trunk's published OpenAPI spec yet, so every field is optional. Any `status` but `available` means no ETA. An unknown enum value reads as `unknown`. The parser never throws. "Running long" comes only from pace values that clearly mean late (`behind`, `late`, `overdue` and similar), because Trunk documents only `on_track` and `holding`.
+- **Endpoint.** `GET /pull-requests/:id/merge-eta` answers `{ eta, reason?, queueState?, stateChangedAt?, fetchedAt }`. It does not call Trunk when there is no token, the PR is not open, or Talyn already knows Trunk does not hold the PR (the cached comment observation, then the labels). Answers are cached in memory for 60 s per PR and token, and concurrent asks share one call. There is no poll loop.
+- **Clients.** `api.pullRequests.mergeEta` and `api.trunk` in `@talyn/client`. `formatEtaDuration` and `describeMergeEta` in `@talyn/shared` do the wording for both apps: round up to whole minutes, nearest 5 minutes from an hour up, "any moment" for a time that has passed. `TrunkMergeEtaChip` sits in the PR row's badge group on every page, for a PR whose external queue state says Trunk still holds it. It asks only while the row is on screen and the window is visible, refreshes every 60 s and counts down every 30 s. `TrunkSettingsCard` sits under the GitHub card in Settings → Integrations. Both are forked into `apps/web`.
+
+**Not verified.** The ETA fields and `includeEstimatedTimeToMerge` come from Trunk's example, not from its spec. The token is not checked against Trunk when it is saved, because the API has no endpoint for that without a PR. A bad token shows as "Reconnect needed" after the first ETA request.
+
 ## Session previews, the web sessions UI, and a PR tab (2026-10-24)
 
 **Previews.** A session can run its repository's app and open it in a browser. A
@@ -161,20 +200,6 @@ It tracks each PR with its real state and merge time.
 Open PRs keep their branch checkout rules. Closed PRs leave the session branch and worktree unchanged.
 The link dialog now has one search field, a filter for closed PRs, and keyboard selection.
 Link errors appear in the dialog so the user can try again.
-## Trunk merge-queue ETAs on PR rows (2026-10-26)
-
-A PR in Trunk's merge queue now shows when it will merge: "Will merge in ~12 min · Starts testing in ~3 min · 2 PRs ahead", with a muted "running long" when Trunk says a time is behind. Talyn read Trunk's queue state only from GitHub before (its PR comment and `trunk-*` labels). This is the first call to Trunk's own API.
-
-**What was built.**
-- **Flag.** `trunkMergeEta` (`trunk-merge-eta` in PostHog), fallback OFF, `availability: 'gated'`, env override `TRUNK_MERGE_ETA_ENABLED`. It is in `ACCOUNT_FEATURE_FLAGS`. Every route gates on the caller, the same subject `GET /features` answers for.
-- **Token.** A per-workspace Trunk org API token on an `integrations` row of type `trunk`, encrypted with `tokenCrypto`. No migration. `GET /trunk/status` says only `connected` and `needsReauth`. `PUT` and `DELETE /trunk/token` set and remove it. A 401 or 403 from Trunk writes `reauthRequiredAt` on the row, and only for the token that failed (matched on the envelope's ciphertext). A new token or a later successful call clears it.
-- **Call.** `services/trunk/client.ts` sends `POST https://api.trunk.io/v1/getSubmittedPullRequest` with `x-api-token`, the spec's by-number body (`repo { host, owner, name }`, `pr { number }`, `targetBranch`) and `includeEstimatedTimeToMerge: true`. The timeout is 8 s. Each call goes through `debugBus.recordHttp` as service `trunk`. `targetBranch` is the PR's landing branch (a stack's base), read from `last_summary` in SQL.
-- **Parser.** `services/trunk/parse.ts`. The ETA block is not in Trunk's published OpenAPI spec yet, so every field is optional. Any `status` but `available` means no ETA. An unknown enum value reads as `unknown`. The parser never throws. "Running long" comes only from pace values that clearly mean late (`behind`, `late`, `overdue` and similar), because Trunk documents only `on_track` and `holding`.
-- **Endpoint.** `GET /pull-requests/:id/merge-eta` answers `{ eta, reason?, queueState?, stateChangedAt?, fetchedAt }`. It does not call Trunk when there is no token, the PR is not open, or Talyn already knows Trunk does not hold the PR (the cached comment observation, then the labels). Answers are cached in memory for 60 s per PR and token, and concurrent asks share one call. There is no poll loop.
-- **Clients.** `api.pullRequests.mergeEta` and `api.trunk` in `@talyn/client`. `formatEtaDuration` and `describeMergeEta` in `@talyn/shared` do the wording for both apps: round up to whole minutes, nearest 5 minutes from an hour up, "any moment" for a time that has passed. `TrunkMergeEtaChip` sits in the PR row's badge group on every page, for a PR whose external queue state says Trunk still holds it. It asks only while the row is on screen and the window is visible, refreshes every 60 s and counts down every 30 s. `TrunkSettingsCard` sits under the GitHub card in Settings → Integrations. Both are forked into `apps/web`.
-
-**Not verified.** The ETA fields and `includeEstimatedTimeToMerge` come from Trunk's example, not from its spec. The token is not checked against Trunk when it is saved, because the API has no endpoint for that without a PR. A bad token shows as "Reconnect needed" after the first ETA request.
-
 ## A GitHub search incident took the authored PRs off the list (2026-10-22)
 
 During a GitHub incident ("Errors loading Issues, Pull Requests, and search results"), most of the authored PRs left the PR list. They came back when GitHub recovered.

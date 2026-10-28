@@ -6,6 +6,8 @@
  * - admin/*, debug/*, fleet/*: operator actions.
  * - teams/*, billing checkout/portal: account and payment actions belong in the app.
  * - Review-ranking telemetry and poll/view/focus hints: UI-only signals.
+ * - Session terminal, port previews, checkpoint restore and instruction files: interactive
+ *   or editor features. Local sessions are refused because their turns run in the desktop app.
  */
 import type { AccountFeatureFlagKey } from '@talyn/shared';
 import { ACCOUNT } from './account.js';
@@ -15,6 +17,7 @@ import { MCPSERVERS } from './mcpServers.js';
 import { MERGEQUEUE } from './mergeQueue.js';
 import { PULLREQUESTS } from './pullRequests.js';
 import { REPOSITORIES } from './repositories.js';
+import { SESSIONS } from './sessions.js';
 import { SKILLS } from './skills.js';
 import { TASKS } from './tasks.js';
 import { WORKFLOWS } from './workflows.js';
@@ -44,6 +47,7 @@ export const TOOLS: McpToolDefinition[] = [
   ...MERGEQUEUE,
   ...CODEREVIEW,
   ...TASKS,
+  ...SESSIONS,
   ...SKILLS,
   ...WORKFLOWS,
   ...LOOPS,

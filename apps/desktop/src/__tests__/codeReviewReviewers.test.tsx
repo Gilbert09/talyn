@@ -81,7 +81,6 @@ function setStore(codeReview: CodeReviewSettings | undefined) {
     currentWorkspaceId: 'ws1',
     workspaces: [{ id: 'ws1', name: 'ws', settings: codeReview ? { codeReview } : {} }],
     setWorkspaces: jest.fn(),
-    features: { codeReview: true },
     repositories: [
       { id: 'r1', workspaceId: 'ws1', owner: 'acme', repo: 'api', fullName: 'acme/api' },
       { id: 'r2', workspaceId: 'ws1', owner: 'acme', repo: 'web', fullName: 'acme/web' },
