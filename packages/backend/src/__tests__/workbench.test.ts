@@ -221,7 +221,7 @@ describe('workbenches feature flag', () => {
       fallback: false,
       description: expect.any(String),
       availability: 'gated',
-      releaseScopes: ['workbenches'],
+      releaseScopes: ['workbenches', 'slack'],
     });
   });
 
