@@ -2427,7 +2427,7 @@ export const trunk = {
 
 // ============================================================================
 // Slack sessions — install the Talyn app in a Slack workspace, link your Slack
-// account, and pick trigger emojis. Behind `features.slack`; every route
+// account, and pick trigger emojis. Behind `features.workbenches`; every route
 // answers 403 `code: 'slack_unavailable'` when the flag is off, and the two
 // start routes 503 `code: 'slack_not_configured'` on a deployment with no app.
 // ============================================================================

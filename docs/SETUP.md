@@ -822,9 +822,9 @@ is the default, and no OAuth UI appears at all.
 
 People start Talyn sessions from Slack: a trigger emoji reaction, an @mention
 of the bot, or a DM. Talyn never posts in Slack. It shows status only as
-reactions on the triggering message. The feature is behind the `slack` flag
-(fallback OFF; `SLACK_ENABLED=true` turns it on locally, `false` turns it off
-everywhere).
+reactions on the triggering message. Slack sessions use the `workbenches` flag.
+The flag is OFF by default. Set `WORKBENCHES_ENABLED=true` to enable it locally.
+Set `WORKBENCHES_ENABLED=false` to disable it everywhere.
 
 One Slack app ("Talyn Internal") serves this and the Slack MCP connector.
 

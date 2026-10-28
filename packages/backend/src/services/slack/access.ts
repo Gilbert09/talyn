@@ -10,16 +10,16 @@ import { evaluateFlag, type FlagSubject } from '../featureFlags.js';
  * asks about the Talyn user the Slack identity is linked to.
  */
 export async function userMayUseSlack(subject: FlagSubject): Promise<boolean> {
-  return (await evaluateFlag('slack', subject)).enabled;
+  return (await evaluateFlag('workbenches', subject)).enabled;
 }
 
 export function slackRefusalReason(): string {
-  const name = FEATURE_FLAGS.slack.envOverride;
-  if (readFlagOverride('slack', process.env) === false) {
-    return `Slack sessions are switched off on this deployment (${name}=false)`;
+  const name = FEATURE_FLAGS.workbenches.envOverride;
+  if (readFlagOverride('workbenches', process.env) === false) {
+    return `the workbenches flag is switched off on this deployment (${name}=false)`;
   }
   if (!process.env.TALYN_POSTHOG_KEY) {
-    return `this deployment has no PostHog key, so Slack sessions stay off (set ${name}=true to use them anyway)`;
+    return `this deployment has no PostHog key (set ${name}=true to enable workbenches)`;
   }
-  return 'this account is not in the audience for the "slack" feature flag';
+  return 'this account is not in the audience for the "workbenches" feature flag';
 }

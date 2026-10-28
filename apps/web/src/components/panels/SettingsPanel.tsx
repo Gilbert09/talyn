@@ -130,7 +130,7 @@ export function SettingsPanel() {
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
-    ...(features?.slack === true
+    ...(features?.workbenches === true
       ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
       : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },

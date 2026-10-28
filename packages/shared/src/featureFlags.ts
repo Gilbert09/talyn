@@ -181,7 +181,7 @@ export const FEATURE_FLAGS = {
     fallback: false,
     description: 'Workbenches — a branch with an agent chat, diff and terminal, in a sandbox or a local worktree',
     availability: 'gated',
-    releaseScopes: ['workbenches'],
+    releaseScopes: ['workbenches', 'slack'],
   },
 
   /**
@@ -338,25 +338,6 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['trunk-eta'],
   },
 
-  /**
-   * Slack sessions — start a Talyn session from a Slack reaction, mention or DM.
-   *
-   * Fallback OFF and gated while it rolls out. It stores a bot token for a
-   * whole Slack workspace and reads its messages, so an outage must not offer
-   * it to accounts nobody chose. `SLACK_ENABLED` runs it locally with no
-   * PostHog project, and `SLACK_ENABLED=false` switches it off everywhere.
-   *
-   * The routes ask about the caller. Event processing asks about the Talyn
-   * user the Slack identity is linked to, because a webhook has no caller.
-   */
-  slack: {
-    posthogKey: 'slack',
-    envOverride: 'SLACK_ENABLED',
-    fallback: false,
-    description: 'Slack sessions — start a Talyn session from Slack',
-    availability: 'gated',
-    releaseScopes: ['slack'],
-  },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -481,7 +462,6 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'teams',
   'workbenches',
   'trunkMergeEta',
-  'slack',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

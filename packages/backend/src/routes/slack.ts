@@ -37,7 +37,7 @@ import {
 } from '../services/slack/store.js';
 
 /**
- * Slack sessions, behind the `slack` flag.
+ * Slack sessions, behind the `workbenches` flag.
  *
  *   GET    /slack                          installs I can see + my links
  *   POST   /slack/install   { workspaceId? }   → { authorizeUrl }
@@ -62,7 +62,7 @@ async function refuseUnlessEnabled(req: Request, res: Response): Promise<boolean
   if (await userMayUseSlack({ distinctId: user.id, email: user.email })) return false;
   res.status(403).json({
     success: false,
-    error: `Slack sessions are not available: ${slackRefusalReason()}.`,
+    error: `Slack sessions are not available for this account: ${slackRefusalReason()}.`,
     code: SLACK_UNAVAILABLE_CODE,
   });
   return true;
@@ -131,7 +131,7 @@ export function slackPublicRoutes(): Router {
       return finish(client, {
         ok: false,
         status: 403,
-        message: `Slack sessions are not available: ${slackRefusalReason()}.`,
+        message: `Slack sessions are not available for this account: ${slackRefusalReason()}.`,
       });
     }
 

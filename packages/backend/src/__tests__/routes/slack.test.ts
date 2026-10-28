@@ -41,7 +41,7 @@ const OTHER = 'user-other';
 const REDIRECT = 'https://prod.talyn.dev/api/v1/slack/oauth/callback';
 const ENV_KEYS = [
   'TALYN_TOKEN_KEY',
-  'SLACK_ENABLED',
+  'WORKBENCHES_ENABLED',
   'SLACK_APP_CLIENT_ID',
   'SLACK_APP_CLIENT_SECRET',
   'SLACK_MCP_CLIENT_ID',
@@ -73,7 +73,7 @@ describe('Slack routes', () => {
     for (const k of ENV_KEYS) prior[k] = process.env[k];
     for (const k of ENV_KEYS) delete process.env[k];
     process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
-    process.env.SLACK_ENABLED = 'true';
+    process.env.WORKBENCHES_ENABLED = 'true';
     // Only the MCP pair is set: the app pair falls back to it.
     process.env.SLACK_MCP_CLIENT_ID = 'cid';
     process.env.SLACK_MCP_CLIENT_SECRET = 'csecret';
@@ -195,12 +195,13 @@ describe('Slack routes', () => {
     ['PATCH', '/slack/links/l1'],
     ['DELETE', '/slack/links/l1'],
     ['DELETE', '/slack/installations/T1'],
-  ])('%s %s answers 403 slack_unavailable when the flag is off', async (method, path) => {
-    process.env.SLACK_ENABLED = 'false';
+  ])('%s %s answers 403 slack_unavailable when workbenches is off', async (method, path) => {
+    process.env.WORKBENCHES_ENABLED = 'false';
     resetFeatureFlagsForTests();
     const res = await call(method, path, { body: method === 'GET' || method === 'DELETE' ? undefined : {} });
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('slack_unavailable');
+    expect(res.body.error).toContain('Slack sessions are not available for this account');
   });
 
   it.each(['install', 'link'])('POST /%s answers 503 slack_not_configured without a redirect URI', async (flow) => {
@@ -360,7 +361,7 @@ describe('Slack routes', () => {
 
   it('refuses at the callback when the flag was switched off after the start', async () => {
     const { state } = await start('install');
-    process.env.SLACK_ENABLED = 'false';
+    process.env.WORKBENCHES_ENABLED = 'false';
     resetFeatureFlagsForTests();
     const res = await callback({ code: 'c', state });
     expect(res.status).toBe(403);

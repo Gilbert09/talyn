@@ -40,7 +40,7 @@ export function emojiInputError(raw: string, current: string[]): string | null {
 }
 
 export function SlackSettings() {
-  const offered = useWorkspaceStore((s) => s.features?.slack === true);
+  const offered = useWorkspaceStore((s) => s.features?.workbenches === true);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
 

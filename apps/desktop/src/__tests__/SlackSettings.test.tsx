@@ -31,11 +31,11 @@ jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
-const state: { slack: boolean } = { slack: true };
+const state: { workbenches: boolean } = { workbenches: true };
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({
-      features: { slack: state.slack },
+      features: { workbenches: state.workbenches },
       currentWorkspaceId: 'ws1',
       workspaces: [
         { id: 'ws1', name: 'Acme' },
@@ -70,15 +70,15 @@ function status(overrides: Partial<SlackStatus> = {}): SlackStatus {
 }
 
 beforeEach(() => {
-  state.slack = true;
+  state.workbenches = true;
   jest.clearAllMocks();
   mockGetStatus.mockResolvedValue(status());
 });
 afterEach(cleanup);
 
 describe('SlackSettings', () => {
-  it('renders nothing and calls nothing when the flag is off', () => {
-    state.slack = false;
+  it('renders nothing and calls nothing when workbenches is off', () => {
+    state.workbenches = false;
     const { container } = render(<SlackSettings />);
     expect(container).toBeEmptyDOMElement();
     expect(mockGetStatus).not.toHaveBeenCalled();

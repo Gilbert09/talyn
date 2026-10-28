@@ -481,7 +481,6 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
-      'slack',
       'teams',
       'trunkMergeEta',
       'workbenches',
@@ -502,7 +501,6 @@ describe('featuresForUser', () => {
       teams: false,
       workbenches: false,
       trunkMergeEta: false,
-      slack: false,
     });
   });
 
@@ -524,7 +522,6 @@ describe('featuresForUser', () => {
       teams: false,
       workbenches: false,
       trunkMergeEta: false,
-      slack: false,
     });
   });
 

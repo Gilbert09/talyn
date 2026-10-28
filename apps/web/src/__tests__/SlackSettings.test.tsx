@@ -28,11 +28,11 @@ vi.mock('../stores/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-const state: { slack: boolean } = { slack: true };
+const state: { workbenches: boolean } = { workbenches: true };
 vi.mock('../stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({
-      features: { slack: state.slack },
+      features: { workbenches: state.workbenches },
       currentWorkspaceId: 'ws1',
       workspaces: [
         { id: 'ws1', name: 'Acme' },
@@ -71,15 +71,15 @@ beforeEach(() => {
     configurable: true,
     value: { ...window.location, assign, search: '', pathname: '/settings' },
   });
-  state.slack = true;
+  state.workbenches = true;
   vi.clearAllMocks();
   mockGetStatus.mockResolvedValue(status());
 });
 afterEach(cleanup);
 
 describe('SlackSettings', () => {
-  it('renders nothing and calls nothing when the flag is off', () => {
-    state.slack = false;
+  it('renders nothing and calls nothing when workbenches is off', () => {
+    state.workbenches = false;
     const { container } = render(<SlackSettings />);
     expect(container.innerHTML).toBe('');
     expect(mockGetStatus).not.toHaveBeenCalled();
