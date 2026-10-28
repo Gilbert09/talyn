@@ -12,6 +12,8 @@ import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbe
 import { openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
+import { SlackSessionMark } from './workbench/SlackThreadChip';
+import { slackSourceOf } from '../lib/slackSession';
 import {
   CommandDialog,
   CommandEmpty,
@@ -202,6 +204,7 @@ function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onS
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
         <SessionStateIcon state={state} />
       </span>
+      <SlackSessionMark source={slackSourceOf(workbench)} />
       <span className="truncate">{workbenchDisplayName(workbench)}</span>
       <span className="truncate font-mono text-[11px] text-muted-foreground">{workbench.repoFullName}</span>
     </CommandItem>

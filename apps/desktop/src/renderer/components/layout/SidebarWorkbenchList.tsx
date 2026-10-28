@@ -17,6 +17,8 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { SlackSessionMark } from '../workbench/SlackThreadChip';
+import { slackSourceOf } from '../../lib/slackSession';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
@@ -128,6 +130,7 @@ function WorkbenchRow({
                 <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
               </span>
             )}
+            <SlackSessionMark source={slackSourceOf(workbench)} />
             <RuntimeIcon
               className={cn('h-3 w-3 shrink-0 text-muted-foreground', (suspended || done) && !selected && 'opacity-60')}
               aria-label={runtimeLabel}

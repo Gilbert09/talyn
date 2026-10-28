@@ -17,6 +17,8 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { SlackSessionMark } from '../workbench/SlackThreadChip';
+import { slackSourceOf } from '../../lib/slackSession';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
@@ -126,6 +128,7 @@ function WorkbenchRow({
                 <span className="text-destructive">−{diff.removed}</span>
               </span>
             )}
+            <SlackSessionMark source={slackSourceOf(workbench)} />
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">

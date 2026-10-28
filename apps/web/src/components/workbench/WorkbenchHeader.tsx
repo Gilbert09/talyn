@@ -46,6 +46,8 @@ import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
+import { SlackThreadChip } from './SlackThreadChip';
+import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { timeAgo } from './new/RecentWorkbenches';
 
@@ -243,6 +245,7 @@ export function WorkbenchHeader({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold">{workbenchDisplayName(workbench)}</h1>
+          {slackSourceOf(workbench) && <SlackThreadChip source={slackSourceOf(workbench)!} />}
           {workbench.settings?.internetAccess === false && (
             <span
               className="shrink-0 text-[10px] text-muted-foreground"

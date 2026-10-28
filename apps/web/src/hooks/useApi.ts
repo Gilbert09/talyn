@@ -23,7 +23,8 @@ import type {
   EnvironmentCreatedEvent,
   WorkspaceSettings,
 } from '@talyn/shared';
-import type { WorkbenchWsPayloads } from '@talyn/shared';
+import { workbenchesOffered, type SlackNoticeEvent, type WorkbenchWsPayloads } from '@talyn/shared';
+import { handleSlackNotice, loadSlackPending } from '../lib/slackNotices';
 import { toast } from '../stores/toast';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -318,7 +319,14 @@ export function useApiConnection() {
     if (workbenchWorkspace && workbenchWorkspace === useWorkspaceStore.getState().currentWorkspaceId) {
       void reconcileWorkbenches(workbenchWorkspace);
     }
+    if (workbenchesOffered(useWorkspaceStore.getState().features)) void loadSlackPending();
   });
+
+  // Slack requests waiting for a repository, once the sessions UI is on.
+  const sessionsOffered = useWorkspaceStore((s) => workbenchesOffered(s.features));
+  useEffect(() => {
+    if (sessionsOffered) void loadSlackPending();
+  }, [sessionsOffered]);
 
   // Billing snapshot: fetch once on mount, and re-fetch on window focus —
   // the backstop for plan changes made in the browser (checkout / portal)
@@ -470,6 +478,13 @@ export function useApiConnection() {
       })
     );
     unsubscribers.push(installWorkbenchNotifications());
+    // Slack requests that need a person. The event is not replayed, so the
+    // list is also fetched on mount and after a reconnect.
+    unsubscribers.push(
+      wsClient.on<SlackNoticeEvent>('slack:notice', (payload) => {
+        if (workbenchesOffered(useWorkspaceStore.getState().features)) handleSlackNotice(payload);
+      })
+    );
 
     // Plan changes (Polar webhook applied server-side). Per-user event; also
     // ends the post-checkout poll burst early via setStatus.

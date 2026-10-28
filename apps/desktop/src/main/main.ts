@@ -47,6 +47,15 @@ function openExternalGuarded(url: string): void {
     // Not a parseable URL — drop it.
   }
 }
+function isSlackChannelLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'slack:' && parsed.hostname === 'channel';
+  } catch {
+    return false;
+  }
+}
+
 // Buffer callbacks that arrive before the renderer is ready — macOS
 // open-url can fire during app launch, before any window exists.
 let pendingAuthCallbackUrl: string | null = null;
@@ -126,6 +135,12 @@ if (!gotLock) {
 // Renderer asks us to open OAuth URLs in the default browser. The URL is
 // renderer-supplied, so it goes through the http(s)-only guard.
 ipcMain.handle('auth:open-external', async (_event, url: string) => {
+  // The one non-http link allowed: Slack's own "open this channel" deep link.
+  // It rejects when no Slack app handles it, so the renderer can fall back.
+  if (isSlackChannelLink(url)) {
+    await shell.openExternal(url);
+    return;
+  }
   openExternalGuarded(url);
 });
 

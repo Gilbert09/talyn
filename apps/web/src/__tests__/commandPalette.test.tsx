@@ -144,7 +144,7 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Pull requests: PRs')).toBeInTheDocument();
     expect(screen.getByText('Review requests')).toBeInTheDocument();
     expect(screen.getByText('Merge queue')).toBeInTheDocument();
-    expect(screen.queryByText('Pull requests: Code review')).not.toBeInTheDocument();
+    expect(screen.getByText('Pull requests: Code review')).toBeInTheDocument();
     expect(screen.getByText('Automations: Workflows')).toBeInTheDocument();
     expect(screen.queryByText('Automations: Loops')).not.toBeInTheDocument();
     expect(screen.getByText('Settings: Billing')).toBeInTheDocument();

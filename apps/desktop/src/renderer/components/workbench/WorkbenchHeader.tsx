@@ -49,6 +49,8 @@ import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
 import { SessionPreviewChips } from './SessionPreviewChips';
+import { SlackThreadChip } from './SlackThreadChip';
+import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { timeAgo } from './new/RecentWorkbenches';
 
@@ -248,6 +250,7 @@ export function WorkbenchHeader({
               No internet
             </span>
           )}
+          {slackSourceOf(workbench) && <SlackThreadChip source={slackSourceOf(workbench)!} />}
           <SessionPreviewChips workbench={workbench} ops={ops} />
           {pr?.state === 'open' && (
             <PRStatusPill

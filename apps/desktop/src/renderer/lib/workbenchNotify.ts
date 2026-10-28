@@ -145,24 +145,22 @@ export function openFromNotification(chat: Pick<WorkbenchChat, 'id' | 'workbench
   store.markRead(chat.id);
 }
 
-function notifyChatFinished(chat: WorkbenchChat, workbench: Workbench | undefined): void {
-  if (!readSessionDefaults().notifyOnFinish) return;
+/** Fires an OS notification, asking for permission once. Skipped while the window has focus. */
+export function showNativeNotification(title: string, body: string, onClick?: () => void): void {
   if (typeof document !== 'undefined' && document.hasFocus()) return;
   if (typeof Notification === 'undefined') return;
-  const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
-  const { title, body } = notificationText(chat, workbench, events);
   const fire = () => {
     try {
       const n = new Notification(title, { body, silent: false });
       n.onclick = () => {
         try {
-          openFromNotification(chat);
+          onClick?.();
         } catch {
           // ignore
         }
       };
     } catch {
-      // Permission denied or a renderer quirk: the unread dot still shows.
+      // Permission denied or a renderer quirk: the in-app signal still shows.
     }
   };
   if (Notification.permission === 'granted') fire();
@@ -173,6 +171,13 @@ function notifyChatFinished(chat: WorkbenchChat, workbench: Workbench | undefine
       })
       .catch(() => {});
   }
+}
+
+function notifyChatFinished(chat: WorkbenchChat, workbench: Workbench | undefined): void {
+  if (!readSessionDefaults().notifyOnFinish) return;
+  const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
+  const { title, body } = notificationText(chat, workbench, events);
+  showNativeNotification(title, body, () => openFromNotification(chat));
 }
 
 export function installWorkbenchNotifications(): () => void {
