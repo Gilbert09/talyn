@@ -125,8 +125,14 @@ export function WorkbenchTranscript({
             );
           })}
           {running && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> Working…
+            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />{' '}
+                {chat.phase === 'restoring' ? 'Restoring the sandbox…' : 'Working…'}
+              </div>
+              {chat.phase === 'restoring' && (
+                <div className="pl-5 opacity-70">This can take a few minutes after a long idle.</div>
+              )}
             </div>
           )}
         </div>
