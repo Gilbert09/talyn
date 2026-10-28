@@ -29,6 +29,8 @@ const HOST = 'source-host';
 const TARGET_HOST = 'target-host';
 const ERROR = "fatal: could not read Username for 'http://127.0.0.1:8080': No such device or address";
 const archived = { archivedAt: new Date(), status: 'archived' };
+// A fixed lease far ahead: a lease computed when the file loads can expire before a slow CI runner reaches the row.
+const LIVE_LEASE = new Date('2999-01-01T00:00:00Z');
 type Patch = Parameters<typeof updateWorkbench>[1] & { settings?: Record<string, unknown> };
 
 // Call the real route handler without opening a socket.
@@ -75,7 +77,7 @@ describe('session credentials during lifecycle operations', () => {
   it.each<[string, Patch, string, string]>([
     ['current session', {}, BOX, HOST],
     ['pending archive', { ...archived, archivePendingAt: new Date() }, BOX, HOST],
-    ['claimed archive', { ...archived, archivePendingAt: new Date(), archiveLeaseUntil: new Date(Date.now() + 60_000) }, BOX, HOST],
+    ['claimed archive', { ...archived, archivePendingAt: new Date(), archiveLeaseUntil: LIVE_LEASE }, BOX, HOST],
     ['retrying archive', { ...archived, archivePendingAt: new Date(), archiveRetryAt: new Date(), archiveFailures: 9 }, BOX, HOST],
     ['move source after archive request', { ...archived, status: 'moving', settings: { moveSandboxId: TARGET, moveTargetHost: TARGET_HOST } }, BOX, HOST],
     ['move target', { status: 'moving', settings: { moveSandboxId: TARGET, moveTargetHost: TARGET_HOST } }, TARGET, TARGET_HOST],
@@ -175,7 +177,7 @@ describe('session credentials during lifecycle operations', () => {
     { sandboxState: 'deleted' }, { sandboxState: 'lost' }, { sandboxId: null }, { runtime: 'local' },
     { statusMessage: 'Protected branch' }, { archivedAt: null, status: 'ready' },
     { archivePendingAt: new Date() }, { restoreRequestedAt: new Date() },
-    { archiveLeaseUntil: new Date(Date.now() + 60_000) }, { status: 'moving' },
+    { archiveLeaseUntil: LIVE_LEASE }, { status: 'moving' },
   ])('does not re-arm an ineligible archive: %j', async (patch) => {
     await updateWorkbench(ID, { ...archived, statusMessage: ERROR, ...patch });
     const before = await row();
