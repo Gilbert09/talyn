@@ -818,6 +818,50 @@ is the default, and no OAuth UI appears at all.
 
 ---
 
+### 6c. Slack sessions
+
+People start Talyn sessions from Slack: a trigger emoji reaction, an @mention
+of the bot, or a DM. Talyn never posts in Slack. It shows status only as
+reactions on the triggering message. The feature is behind the `slack` flag
+(fallback OFF; `SLACK_ENABLED=true` turns it on locally, `false` turns it off
+everywhere).
+
+One Slack app ("Talyn Internal") serves this and the Slack MCP connector.
+
+| Variable | Value | Notes |
+| --- | --- | --- |
+| `SLACK_APP_CLIENT_ID` / `SLACK_APP_CLIENT_SECRET` | The app's client id and secret | Optional. When unset, Talyn uses `SLACK_MCP_CLIENT_ID` / `SLACK_MCP_CLIENT_SECRET`. Set these only for a separate app. |
+| `SLACK_SIGNING_SECRET` | Basic Information → Signing Secret | Verifies every Events API request. Without it the events endpoint answers 500. |
+| `SLACK_OAUTH_REDIRECT_URI` | `https://prod.talyn.dev/api/v1/slack/oauth/callback` | Must match the app's redirect URL exactly. Both flows (install and "Sign in with Slack") use it. Without it, the install and link buttons answer 503. |
+
+App settings (api.slack.com/apps → the app):
+
+- **OAuth & Permissions → Redirect URLs**: `https://prod.talyn.dev/api/v1/slack/oauth/callback`.
+- **Bot token scopes**: `app_mentions:read`, `reactions:read`, `reactions:write`,
+  `channels:history`, `groups:history`, `im:history`, `mpim:history`,
+  `channels:read`, `groups:read`, `users:read`. No `chat:write`.
+- **User token scopes**: `openid`, `profile` (for "Sign in with Slack").
+- **Token rotation**: ON. Bot tokens then expire after about 12 hours. Talyn
+  refreshes them with `oauth.v2.access` (`grant_type=refresh_token`) and stores
+  each new refresh token, because a refresh token works once.
+- **PKCE**: ON. Talyn sends an S256 challenge on every authorize request.
+- **App Home → Messages tab**: ON, with "Allow users to send messages" ticked, so
+  people can DM the bot.
+- **Event Subscriptions**: ON. Request URL
+  `https://prod.talyn.dev/api/v1/webhooks/slack`. Bot events: `app_mention`,
+  `reaction_added`, `message.im`, `app_uninstalled`, `tokens_revoked`.
+
+Notes:
+
+- Installing links the installer's Slack account too. Other people link theirs
+  with "Sign in with Slack" in Settings. A link to a Slack workspace without the
+  app installed is refused.
+- "Remove" in Talyn only forgets the bot token. To uninstall the app, remove it
+  in Slack. Slack then sends `app_uninstalled`, and Talyn deletes the token and
+  every link in that workspace.
+- Events are stored in `slack_events` (one row per Slack `event_id`) and
+  deleted 7 days after processing.
+
 ## 🧰 Nice-to-have: MCP servers for Claude Code
 
 Wiring these up lets Claude Code answer questions about GitHub state, DB schema, PostHog events without manual copy-pasting. Add them to `~/.claude/mcp_servers.json` or via `claude mcp add`.

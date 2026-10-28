@@ -24,6 +24,7 @@ import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
 import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingRoutes } from './billing.js';
+import { slackPublicRoutes, slackRoutes } from './slack.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
 import { mcpRoutes } from '../mcp/transport.js';
@@ -118,6 +119,10 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/mcp-servers/complete`, rateLimit({ windowMs: 60_000, max: 60 }));
   app.use(`${api}/mcp-servers`, mount(mcpOAuthCallbackRoutes()));
 
+  // Slack's OAuth redirect (install and "Sign in with Slack" share it). A
+  // browser hop with no session; the single-use state row authenticates it.
+  app.use(`${api}/slack`, mount(slackPublicRoutes()));
+
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.
   app.use(`${api}`, asyncHandler(requireAuth));
@@ -193,6 +198,11 @@ export function setupRoutes(app: Express): void {
   // would pin a pooled connection for that whole round-trip. Hard-scoped to
   // req.user.id. See routes/billing.ts.
   app.use(`${api}/billing`, mount(billingRoutes()));
+
+  // Slack sessions. Pre-ownerScope like billing: the Slack tables are
+  // backend-only, so every read is on the pool and each handler scopes to
+  // req.user.id itself. See routes/slack.ts.
+  app.use(`${api}/slack`, mount(slackRoutes()));
 
   // Which allow-listed features this account may see. Pre-ownerScope: the
   // answer is about the caller, not about any workspace's rows, so there is

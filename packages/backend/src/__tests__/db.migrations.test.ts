@@ -261,4 +261,28 @@ describe('Drizzle migration', () => {
     `);
     expect(fkRes.rows).toHaveLength(0);
   });
+  it('creates the Slack tables as backend-pool-only (RLS on, no policy) with their unique keys', async () => {
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    const slackTables = ['slack_installations', 'slack_user_links', 'slack_events', 'slack_oauth_states'];
+
+    const rls = await testDb.pglite.query<{ tablename: string; rowsecurity: boolean }>(`
+      SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname = 'public'
+    `);
+    const map = new Map(rls.rows.map((r) => [r.tablename, r.rowsecurity]));
+    for (const table of slackTables) expect(map.get(table)).toBe(true);
+
+    const policies = await testDb.pglite.query<{ tablename: string }>(`
+      SELECT tablename FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'slack_%'
+    `);
+    expect(policies.rows).toHaveLength(0);
+
+    // One Slack identity per (team, Slack user), and one per Talyn user per team.
+    const idx = await testDb.pglite.query<{ indexname: string; indexdef: string }>(`
+      SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'slack_user_links'
+    `);
+    const byName = new Map(idx.rows.map((r) => [r.indexname, r.indexdef]));
+    expect(byName.get('uq_slack_user_links_team_slack_user')).toMatch(/UNIQUE.*team_id.*slack_user_id/);
+    expect(byName.get('uq_slack_user_links_team_user')).toMatch(/UNIQUE.*team_id.*user_id/);
+  });
 });

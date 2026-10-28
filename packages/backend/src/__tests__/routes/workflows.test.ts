@@ -230,6 +230,7 @@ describe('workflow routes', () => {
         teams: false,
         workbenches: false,
         trunkMergeEta: false,
+        slack: false,
         codeReview: true,
       });
     });
@@ -255,6 +256,7 @@ describe('workflow routes', () => {
         teams: false,
         workbenches: false,
         trunkMergeEta: false,
+        slack: false,
         codeReview: true,
       });
     });

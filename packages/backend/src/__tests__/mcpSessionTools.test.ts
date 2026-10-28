@@ -86,6 +86,7 @@ const features: Features = {
   teams: false,
   workbenches: true,
   trunkMergeEta: false,
+  slack: false,
   reviewPriorityMode: true,
 };
 

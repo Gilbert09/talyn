@@ -83,6 +83,10 @@ export * from './loops.js';
 // an hour later.
 export * from './mcpServers.js';
 
+// Slack sessions — the /slack routes' contract and the trigger-emoji validator
+// both the route and the settings editor run.
+export * from './slack.js';
+
 // Code review — AI findings on a pull request, shown in the app rather than
 // posted on the PR. The parser and the dedupe key live here because both are
 // pure and both have to mean the same thing to the engine that writes findings
