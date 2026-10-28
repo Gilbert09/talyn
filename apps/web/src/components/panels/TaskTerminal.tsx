@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Square, Loader2, AlertCircle } from 'lucide-react';
+import { Square, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { AgentConversation } from '../terminal/AgentConversation';
@@ -7,6 +7,7 @@ import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
+import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
 import { readCloudTaskMeta } from '@talyn/shared';
 import type { Task } from '@talyn/shared';
 
@@ -57,6 +58,9 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   // The task carries a remote cloud run (provider-neutral; covers legacy
   // posthog* metadata too). Null until dispatch stamps the remote ids.
   const cloudMeta = readCloudTaskMeta(task);
+  const providerType = cloudMeta
+    ? (taskCloudProvider(task, environments) ?? cloudMeta.provider)
+    : null;
 
   // Cloud tasks run remotely and their transcript is NOT included in the
   // task-list payload, so the store opens them with an empty transcript.
@@ -145,8 +149,39 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           />
           <span className="font-medium text-sm">Run</span>
           <span className="text-xs text-muted-foreground">{runState.label}</span>
+          {cloudMeta && providerType && (
+            <>
+              <span aria-hidden className="text-xs text-muted-foreground/50">
+                ·
+              </span>
+              <span
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground min-w-0"
+                data-attr="task-run-provider"
+                title={
+                  cloudMeta.status
+                    ? `Cloud run on ${providerLabel(providerType) ?? providerType} (${cloudMeta.status})`
+                    : `Cloud run on ${providerLabel(providerType) ?? providerType}`
+                }
+              >
+                <ProviderIcon provider={providerType} className="h-3.5 w-3.5 flex-none" />
+                <span className="truncate">{providerLabel(providerType) ?? providerType}</span>
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1">
+          {cloudMeta?.logUrl && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-attr="task-view-run"
+              className="h-8 text-muted-foreground hover:text-foreground"
+              onClick={() => window.open(cloudMeta.logUrl!, '_blank')}
+            >
+              <ExternalLink className="w-3.5 h-3.5 mr-1" />
+              View run
+            </Button>
+          )}
           {/* Abort only makes sense while the cloud run is alive
               (task.status === 'in_progress'); afterwards the task is
               already terminal and /stop would 400. */}
