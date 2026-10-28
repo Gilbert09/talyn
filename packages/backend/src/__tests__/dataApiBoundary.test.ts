@@ -167,11 +167,13 @@ describe('Data API database boundary', () => {
       fleet_accounts: crud,
     });
     await testDb.pglite.exec('SET ROLE talyn_backend');
-    // The Slack tables (migration 0090) are pool-only too: one holds a bot token
-    // that reads a whole Slack workspace.
+    // The Slack tables (migrations 0090 and 0092) are pool-only too: one holds a
+    // bot token that reads a whole Slack workspace, and event processing has no
+    // request to scope by.
     for (const table of [
       'settings', 'admin_audit_log', 'billing_events', 'fleet_hosts', 'github_installations',
       'slack_installations', 'slack_user_links', 'slack_events', 'slack_oauth_states',
+      'slack_threads', 'slack_trigger_messages', 'slack_repo_memory',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

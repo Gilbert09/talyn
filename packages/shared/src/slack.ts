@@ -130,3 +130,113 @@ export function validateSlackTriggerEmojis(input: unknown): SlackEmojiValidation
   }
   return { ok: true, emojis: out };
 }
+
+// ============================================================================
+// Sessions started from Slack
+// ============================================================================
+
+/**
+ * `Workbench.source` for a session started from Slack. Everything here is
+ * display data copied from Slack when the session started; none of it is a
+ * credential.
+ */
+export interface SlackSessionSource {
+  kind: 'slack';
+  teamId: string;
+  /** The Slack workspace's name, null when Slack did not tell us. */
+  teamName: string | null;
+  channelId: string;
+  /** `general` (no `#`), or null for a direct message or an unknown channel. */
+  channelName: string | null;
+  /** The message that started the session (the reacted, mentioning or DM message). */
+  messageTs: string;
+  /** The thread the session follows. Equal to `messageTs` for a top-level message. */
+  threadTs: string;
+  /** A link that opens the message in Slack. Null when Slack would not give one. */
+  permalink: string | null;
+}
+
+/** Why Talyn chose the repository for a Slack session, in the order it tries them. */
+export type SlackRepoChoiceReason =
+  /** A GitHub URL or `owner/repo` in the request or its thread. */
+  | 'explicit'
+  /** The repository's name (or a learned alias) as a whole word. */
+  | 'name'
+  /** Earlier sessions from this channel, and the user's own recent sessions. */
+  | 'memory'
+  /** A GitHub code search for a distinctive token in the request. */
+  | 'code_search'
+  /** The workspace has one repository. */
+  | 'only_repository'
+  /** A person picked it in Talyn. */
+  | 'picked';
+
+/** A repository Talyn could not choose between, for the "pick a repository" prompt. */
+export interface SlackRepoCandidate {
+  repositoryId: string;
+  repoFullName: string;
+}
+
+/**
+ * A Slack request waiting for the user to pick a repository. `GET
+ * /slack/pending` lists them; `POST /slack/pending/:id/start` starts one.
+ */
+export interface SlackPendingRequest {
+  id: string;
+  /** The Talyn workspace the session will be created in. */
+  workspaceId: string;
+  /** The prompt the session will start with (instruction, quoted thread, link). */
+  prompt: string;
+  source: SlackSessionSource;
+  /**
+   * The repositories that were closest, best first. May be empty (nothing
+   * pointed anywhere); the composer then offers every repository.
+   */
+  candidates: SlackRepoCandidate[];
+  createdAt: string;
+}
+
+/** Body of `POST /slack/pending/:id/start`. */
+export interface StartSlackPendingInput {
+  repositoryId: string;
+}
+
+/**
+ * What a `slack:notice` is about.
+ * - `pick_repository`: Talyn could not tell which repository; `pending` is set.
+ * - `start_failed`: the session could not start; `message` says why.
+ * - `not_set_up`: the request reached Talyn, but the account cannot run it
+ *   (no workspace, no access); `message` says what to fix.
+ */
+export type SlackNoticeKind = 'pick_repository' | 'start_failed' | 'not_set_up';
+
+/**
+ * Payload of the `slack:notice` WebSocket event, sent to the linked user's
+ * own connections only. Fired once per occurrence and not replayed, so a
+ * client that was offline sees pending requests through `GET /slack/pending`.
+ */
+export interface SlackNoticeEvent {
+  kind: SlackNoticeKind;
+  /** One sentence for a toast or an OS notification. */
+  message: string;
+  /** The workspace it concerns, when known. */
+  workspaceId: string | null;
+  /** Set for `pick_repository`: open the new-session composer prefilled with it. */
+  pending?: SlackPendingRequest;
+  /** Set when a session exists (a follow-up that failed). */
+  workbenchId?: string;
+  source: SlackSessionSource;
+}
+
+/** The reactions Talyn sets on the triggering message, one at a time. */
+export const SLACK_STATUS_REACTIONS = {
+  starting: 'eyes',
+  working: 'hourglass_flowing_sand',
+  done: 'white_check_mark',
+  pr_open: 'link',
+  merged: 'tada',
+  failed: 'x',
+  needs_input: 'question',
+} as const;
+
+export type SlackStatusState = keyof typeof SLACK_STATUS_REACTIONS;

@@ -18,6 +18,7 @@ import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
 import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
+import { registerSlackStatusReactions } from './services/slack/statusReactions.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv, retiredEnvWarnings } from './services/validateEnv.js';
@@ -256,6 +257,8 @@ async function main() {
   // processed ones after 7 days. Cheap when Slack is not in use: one indexed
   // SELECT a minute that finds nothing.
   slackEventSweep.init();
+  // Slack sessions show their state as a reaction on the triggering message.
+  registerSlackStatusReactions();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).

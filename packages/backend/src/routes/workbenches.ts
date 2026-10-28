@@ -1,16 +1,11 @@
-import { allocateWorkbenchBranch, sessionBranchPrefix, uniqueViolationConstraint } from '../services/workbenches/branchAllocation.js';
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
 import { Readable } from 'stream';
 import { v4 as uuid } from 'uuid';
-import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
-  pickWorkbenchName,
   sanitizeWorkbenchTitle,
-  workbenchBranchFromTask,
-  workbenchNameFromTask,
   WORKBENCH_EFFORTS,
   WORKBENCH_IMPORT_MAX_BYTES,
   WORKBENCH_MANUAL_TITLE_MAX,
@@ -29,10 +24,8 @@ import {
   type WorkbenchEvent,
   type WorkbenchSettings,
 } from '@talyn/shared';
-import { getPoolDbClient, runWithoutScope } from '../db/client.js';
-import { pullRequests as prTable, repositories as reposTable } from '../db/schema.js';
+import { runWithoutScope } from '../db/client.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { reconcileDefaultBranch } from '../services/repoDefaultBranch.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
@@ -40,12 +33,12 @@ import { importClaudeSession, importTargetChat, parseImportBody } from '../servi
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
+import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
   restoreWorkbench,
   retryWorkbench,
-  scheduleProvision,
 } from '../services/workbenches/lifecycle.js';
 import {
   listInstructionFiles,
@@ -56,13 +49,12 @@ import { confirmLocalBranchName, reserveLocalBranchName } from '../services/work
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
-import { fleetClientFor, loadWorkbenchConfigWithDetection, sandboxIdFor, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
+import { fleetClientFor, loadWorkbenchConfigWithDetection, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
   getWorkbench,
   insertChat,
-  insertWorkbench,
   listChats,
   listCheckpoints,
   listEvents,
@@ -78,7 +70,7 @@ import {
   type ChatRow,
   type WorkbenchRow,
 } from '../services/workbenches/store.js';
-import { cancelTurn, normaliseMessage, restoreCheckpoint, sendMessage } from '../services/workbenches/turns.js';
+import { cancelTurn, restoreCheckpoint, sendMessage } from '../services/workbenches/turns.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -419,164 +411,16 @@ export function workbenchRoutes(): Router {
     const body = (req.body ?? {}) as CreateWorkbenchInput;
     const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
     if (!(await gate(req, res, workspaceId))) return;
-    if (body.runtime !== 'sandbox' && body.runtime !== 'local') return bad(res, 400, 'runtime must be "sandbox" or "local"');
-    if (body.agent !== 'claude' && body.agent !== 'codex') return bad(res, 400, 'agent must be "claude" or "codex"');
-    if (body.internetAccess !== undefined && typeof body.internetAccess !== 'boolean') {
-      return bad(res, 400, 'internetAccess must be a boolean');
-    }
-    if (body.autoCreatePr !== undefined && typeof body.autoCreatePr !== 'boolean') {
-      return bad(res, 400, 'autoCreatePr must be a boolean');
-    }
-
-    const db = getPoolDbClient();
-    const repo = (
-      await db
-        .select({ id: reposTable.id, url: reposTable.url, name: reposTable.name, defaultBranch: reposTable.defaultBranch })
-        .from(reposTable)
-        .where(and(eq(reposTable.id, body.repositoryId ?? ''), eq(reposTable.workspaceId, workspaceId)))
-        .limit(1)
-    )[0];
-    if (!repo) return bad(res, 400, 'That repository is not connected to this workspace.');
-    const slugMatch = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(repo.url);
-    const repoFullName = slugMatch ? `${slugMatch[1]}/${slugMatch[2]}` : repo.name;
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repoFullName)) return bad(res, 400, 'Could not work out the GitHub owner/name of that repository.');
-
-    let branch = typeof body.branch === 'string' ? body.branch.trim() : '';
-    let baseBranch = typeof body.baseBranch === 'string' ? body.baseBranch.trim() : '';
-    let pullRequestId: string | null = null;
-    if (body.fromPullRequestId) {
-      const pr = (
-        await db
-          .select({
-            id: prTable.id,
-            headBranch: sql<string | null>`${prTable.lastSummary} ->> 'headBranch'`,
-            baseBranch: sql<string | null>`${prTable.lastSummary} ->> 'baseBranch'`,
-          })
-          .from(prTable)
-          .where(
-            and(
-              eq(prTable.id, body.fromPullRequestId),
-              eq(prTable.workspaceId, workspaceId),
-              eq(prTable.repositoryId, repo.id),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!pr?.headBranch) return bad(res, 400, 'That pull request is not in this repository, or its branch is not known yet.');
-      pullRequestId = pr.id;
-      branch = pr.headBranch;
-      baseBranch = baseBranch || pr.baseBranch || '';
-    }
-    if (!baseBranch) {
-      baseBranch = await reconcileDefaultBranch({
-        repositoryId: repo.id,
-        workspaceId,
-        url: repo.url,
-        stored: repo.defaultBranch,
-      }).catch(() => repo.defaultBranch || 'main');
-    }
-    if (!isValidBranchName(baseBranch)) return bad(res, 400, 'baseBranch is not a valid branch name');
-    if (branch && !isValidBranchName(branch)) return bad(res, 400, 'branch is not a valid branch name');
-
-    if (body.runtime === 'local') {
-      if (typeof body.deviceId !== 'string' || !body.deviceId || typeof body.localPath !== 'string' || !body.localPath) {
-        return bad(res, 400, 'A local session needs deviceId and localPath.');
-      }
-    } else {
-      // A sandbox workbench needs fleet hardware, a deployed fleet, the fleet
-      // audience and the subscription for ITS agent: the box's vendor is fixed
-      // when it boots. The same answer GET /readiness gives, so nothing is
-      // inserted that would only fail later.
-      const user = assertUser(req);
-      const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, { id: user.id, email: user.email }), body.agent);
-      if (refusal) return fail(res, refusal);
-    }
-
-    const requestedName = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
-    if (requestedName && !NAME_PATTERN.test(requestedName)) {
-      return bad(res, 400, 'name must be lowercase letters, digits and hyphens.');
-    }
-    const prompt = typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt : null;
-    let firstMessage = null;
+    const user = assertUser(req);
     try {
-      firstMessage = prompt ? normaliseMessage({ text: prompt }) : null;
+      // `source` and `namingText` are the service's own inputs, never a client's.
+      const input: CreateWorkbenchServiceInput = { ...body, workspaceId };
+      delete input.source;
+      delete input.namingText;
+      ok(res, await createWorkbench(input, { id: user.id, email: user.email }));
     } catch (err) {
-      return fail(res, err);
+      fail(res, err);
     }
-
-    // The name is unique among live workbenches. It comes from the first
-    // message when there is one, else a city. Two creates in the same moment
-    // can pick the same name; the index decides, and the loser picks again.
-    // Only a branch Talyn names gets the workspace's prefix; a branch the
-    // person picked (a PR, "from branch") is used as it is.
-    const branchPrefix = branch ? '' : await sessionBranchPrefix(workspaceId);
-    // A local branch the desktop named from the prompt is Talyn's, like a
-    // sandbox one: in the unique index, and renamed after the first turn. If
-    // another session already holds that name, it stays a plain branch.
-    let localGenerated = body.runtime === 'local' && body.branchGenerated === true && Boolean(branch) && !pullRequestId;
-    const id = uuid();
-    let row: WorkbenchRow | null = null;
-    for (let attempt = 0; attempt < 4 && !row; attempt++) {
-      const taken = await liveWorkbenchNames(workspaceId);
-      if (requestedName && taken.includes(requestedName)) {
-        return bad(res, 409, `A session named "${requestedName}" already exists.`, 'name_taken');
-      }
-      const name = requestedName || (prompt ? workbenchNameFromTask(prompt, taken) : pickWorkbenchName(taken));
-      const branchBase = (prompt ? workbenchBranchFromTask(prompt) : null) ?? name;
-      try {
-        row = await insertWorkbench({
-          id,
-          workspaceId,
-          repositoryId: repo.id,
-          repoFullName,
-          name,
-          branch: branch || await allocateWorkbenchBranch(workspaceId, repoFullName, `${branchPrefix}${branchBase}`),
-          allocatedBranch: !branch || localGenerated,
-          baseBranch,
-          runtime: body.runtime,
-          agent: body.agent,
-          model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null,
-          deviceId: body.runtime === 'local' ? body.deviceId : null,
-          localPath: body.runtime === 'local' ? body.localPath : null,
-          sandboxId: body.runtime === 'sandbox' ? sandboxIdFor(id) : null,
-          sandboxState: body.runtime === 'sandbox' ? 'creating' : 'none',
-          // A local worktree exists by the time the desktop asks for the row.
-          status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
-          statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
-          pullRequestId,
-          settings: {
-            ...(body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess }),
-            ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),
-          },
-        });
-      } catch (err) {
-        const constraint = uniqueViolationConstraint(err);
-        if (constraint === 'uq_workbenches_allocated_branch' && localGenerated) {
-          localGenerated = false;
-          continue;
-        }
-        if (constraint !== 'uq_workbenches_allocated_branch'
-          && (constraint !== 'uq_workbenches_workspace_name_live' || requestedName)) throw err;
-      }
-    }
-    if (!row) return bad(res, 409, 'Could not find a free name for the session; try again.', 'name_taken');
-
-    // The first chat exists from the start, with the prompt waiting in its
-    // queue: a sandbox workbench drains it when the box is ready, a local one
-    // hands it to the desktop.
-    await insertChat({
-      id: uuid(),
-      workbenchId: row.id,
-      workspaceId,
-      title: prompt ? prompt.trim().split('\n')[0].slice(0, 60) : 'Chat',
-      agent: row.agent,
-      model: row.model,
-      queuedMessages: firstMessage ? [firstMessage] : [],
-    });
-    const data = await publicWorkbench(row);
-    await emitWorkbenchUpdated(data);
-    if (row.runtime === 'sandbox') scheduleProvision(row.id);
-    ok(res, data);
   });
 
   router.patch('/:id', async (req, res) => {

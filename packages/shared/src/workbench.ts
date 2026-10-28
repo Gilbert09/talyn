@@ -13,6 +13,7 @@ import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
+import type { SlackSessionSource } from './slack.js';
 
 // ============================================================================
 // Vocabulary
@@ -188,10 +189,22 @@ export interface Workbench {
   error?: string | null;
   /** The open chats, oldest first. Embedded in the list and single GET responses. */
   chats?: WorkbenchChat[];
+  /**
+   * Where the session was started from, when it was not the app. Null or
+   * absent: the app's own composer. Set once at creation and never changed.
+   * A Slack source lets the UI draw "Open thread" (`permalink`).
+   */
+  source?: WorkbenchSource | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Where a session came from. One kind today; a union so a later source (an
+ * issue tracker, say) is a new member, not a new field.
+ */
+export type WorkbenchSource = SlackSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {

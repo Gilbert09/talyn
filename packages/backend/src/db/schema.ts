@@ -25,6 +25,9 @@ import type {
   WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
+  WorkbenchSource,
+  SlackRepoCandidate,
+  SlackSessionSource,
 } from '@talyn/shared';
 // The envelope every stored credential uses. From services/ rather than
 // shared/ because the key handling is the backend's alone — tokenCrypto
@@ -1960,6 +1963,8 @@ export const workbenches = pgTable(
     /** When the one post-first-turn branch rename was decided (renamed or kept). Null: not yet. */
     branchNamedAt: timestamp('branch_named_at', { withTimezone: true }),
     settings: jsonb('settings').$type<WorkbenchSettings>().notNull().default({}),
+    /** Where the session started, when not the app (migration 0092). Set once. */
+    source: jsonb('source').$type<WorkbenchSource>(),
     diffStat: jsonb('diff_stat').$type<WorkbenchStoredDiffStat | null>(),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2216,5 +2221,79 @@ export const slackOauthStates = pgTable(
   },
   (t) => ({
     expiresAtIdx: index('idx_slack_oauth_states_expires_at').on(t.expiresAt),
+  })
+);
+
+// ---------- Slack sessions, phase 2 (migration 0092) ----------
+
+/** A Slack thread Talyn acted on, and the session it belongs to. */
+export const slackThreads = pgTable(
+  'slack_threads',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    threadTs: text('thread_ts').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
+    /** 'starting' | 'needs_repository' | 'started' | 'failed' */
+    phase: text('phase').notNull(),
+    triggerMessageTs: text('trigger_message_ts').notNull(),
+    /** The one reaction Talyn set on `trigger_message_ts`. */
+    statusReaction: text('status_reaction'),
+    /** The `SlackStatusState` that reaction shows. */
+    lastState: text('last_state'),
+    pendingPrompt: text('pending_prompt'),
+    pendingSource: jsonb('pending_source').$type<SlackSessionSource>(),
+    pendingCandidates: jsonb('pending_candidates').$type<SlackRepoCandidate[]>(),
+    pendingNamingText: text('pending_naming_text'),
+    repoReason: text('repo_reason'),
+    repoReasonDetail: text('repo_reason_detail'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    threadUq: uniqueIndex('uq_slack_threads_thread').on(t.teamId, t.channelId, t.threadTs),
+    workbenchIdx: index('idx_slack_threads_workbench').on(t.workbenchId).where(sql`${t.workbenchId} IS NOT NULL`),
+    pendingUserIdx: index('idx_slack_threads_pending_user').on(t.userId).where(sql`${t.phase} = 'needs_repository'`),
+  })
+);
+
+/** A message that already triggered something; the key is the guard. */
+export const slackTriggerMessages = pgTable(
+  'slack_trigger_messages',
+  {
+    teamId: text('team_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    messageTs: text('message_ts').notNull(),
+    eventId: text('event_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.teamId, t.channelId, t.messageTs] }),
+  })
+);
+
+/** Which repositories a channel's Slack sessions used, for choosing the next one. */
+export const slackRepoMemory = pgTable(
+  'slack_repo_memory',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    uses: integer('uses').notNull().default(0),
+    /** A person picked or changed the repository: weighs double. */
+    corrections: integer('corrections').notNull().default(0),
+    corrected: boolean('corrected').notNull().default(false),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    memoryUq: uniqueIndex('uq_slack_repo_memory').on(t.teamId, t.channelId, t.repositoryId),
   })
 );

@@ -22,8 +22,10 @@ import type {
   TrunkIntegrationStatus,
   SlackAuthorizeResponse,
   SlackForgetInstallationResponse,
+  SlackPendingRequest,
   SlackStartInput,
   SlackStatus,
+  StartSlackPendingInput,
   SlackUserLinkView,
   UpdateSlackLinkInput,
   LoopInput,
@@ -2455,6 +2457,19 @@ export const slack = {
       'DELETE',
       `/slack/installations/${encodeURIComponent(teamId)}`
     ),
+  /**
+   * The caller's Slack requests waiting for a repository, oldest first. The
+   * `slack:notice` event (kind `pick_repository`) announces each one once;
+   * this is how a client that was offline finds them.
+   */
+  listPending: () => request<SlackPendingRequest[]>('GET', '/slack/pending'),
+  /**
+   * Start a pending request in `repositoryId` (one of the request's workspace's
+   * repositories). Answers the new session; 404 when it is not the caller's or
+   * was already started. Talyn remembers the pick for that Slack channel.
+   */
+  startPending: (pendingId: string, input: StartSlackPendingInput) =>
+    request<Workbench>('POST', `/slack/pending/${encodeURIComponent(pendingId)}/start`, input),
 };
 
 // ============================================================================

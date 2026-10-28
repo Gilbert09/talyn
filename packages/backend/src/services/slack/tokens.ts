@@ -190,20 +190,7 @@ async function refreshClaimed(teamId: string, row: TokenRow): Promise<string | n
     return doc.access_token;
   } catch (err) {
     if (err instanceof SlackApiError && TERMINAL_REFRESH_ERRORS.has(err.code)) {
-      // Recorded, not only reported: later callers stop spending a dead refresh
-      // token, and GET /slack can say "install again".
-      await getPoolDbClient()
-        .update(slackInstallations)
-        .set({
-          tokenError: err.code,
-          tokenErrorAt: new Date(),
-          accessTokenEnc: null,
-          refreshTokenEnc: null,
-          refreshLeaseUntil: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(slackInstallations.teamId, teamId));
-      console.warn(`[slack] team ${teamId}: Slack refused the token refresh (${err.code}); reinstall needed`);
+      await markSlackNeedsReinstall(teamId, err.code, 'the token refresh');
       return null;
     }
     // Transient. Leave the grant alone; the current token may still be valid.
@@ -212,6 +199,55 @@ async function refreshClaimed(teamId: string, row: TokenRow): Promise<string | n
     );
     await releaseLease(teamId);
     return usable(row, Date.now());
+  }
+}
+
+/**
+ * Record that Slack refused this team's grant for good. Recorded, not only
+ * reported: later callers stop spending a dead token, and GET /slack can say
+ * "install again" (`needsReinstall`).
+ */
+export async function markSlackNeedsReinstall(teamId: string, code: string, what: string): Promise<void> {
+  await getPoolDbClient()
+    .update(slackInstallations)
+    .set({
+      tokenError: code,
+      tokenErrorAt: new Date(),
+      accessTokenEnc: null,
+      refreshTokenEnc: null,
+      refreshLeaseUntil: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(slackInstallations.teamId, teamId));
+  console.warn(`[slack] team ${teamId}: Slack refused ${what} (${code}); reinstall needed`);
+}
+
+/**
+ * Errors from an ordinary Web API call that mean the bot token itself is dead.
+ * `not_authed` is not here: it means no token was sent, which is our bug.
+ */
+const REVOKED_CALL_ERRORS = new Set(['token_revoked', 'invalid_auth', 'account_inactive', 'token_expired', 'app_uninstalled']);
+
+/**
+ * Call a Web API method as the team's bot, with the current (refreshed when
+ * near expiry) token. A team with no usable token throws `no_bot_token`; a
+ * call Slack answers with a dead-token error marks the installation
+ * `needsReinstall` and rethrows.
+ */
+export async function callSlackAsBot<T extends Record<string, unknown>>(
+  teamId: string,
+  method: string,
+  form: Record<string, string | undefined> = {}
+): Promise<T> {
+  const token = await getSlackBotToken(teamId);
+  if (!token) throw new SlackApiError(method, 'no_bot_token');
+  try {
+    return await callSlack<T>(method, { token, form });
+  } catch (err) {
+    if (err instanceof SlackApiError && REVOKED_CALL_ERRORS.has(err.code)) {
+      await markSlackNeedsReinstall(teamId, err.code, method).catch(() => undefined);
+    }
+    throw err;
   }
 }
 
