@@ -243,6 +243,8 @@ export interface WorkbenchChat {
   queuedMessages: WorkbenchQueuedMessage[];
   /** Set when the chat continues a local Claude Code conversation. */
   importedFrom?: WorkbenchImportedFrom | null;
+  /** Set while a running turn waits for its sleeping sandbox to restore. Absent otherwise. */
+  phase?: 'restoring' | null;
   createdAt: string;
   updatedAt: string;
 }

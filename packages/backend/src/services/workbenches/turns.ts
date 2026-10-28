@@ -25,6 +25,7 @@ import {
   type WorkbenchStatus,
 } from '@talyn/shared';
 import { debugBus, describeError } from '../debugBus.js';
+import { withRestorePhase } from './restorePhase.js';
 import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExecs, durableMarker, fenceDurableExec } from './durableExec.js';
 import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { runWithoutScope } from '../../db/client.js';
@@ -63,6 +64,7 @@ import {
   sandboxScriptEnv,
   startAccountWatch,
   workbenchFleetAccountId,
+  fleetClientFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { startTitleGeneration } from './title.js';
@@ -562,7 +564,19 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs. It reports the free disk too (T2).
     // A relaunch keeps the turn's first checkpoint: an earlier attempt may have run.
-    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) wb = await checkpointAndCheckDisk(wb, chatId, turn);
+    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) {
+      const awake = wb;
+      wb = await withRestorePhase(chatId, () => checkpointAndCheckDisk(awake, chatId, turn), {
+        readSandbox: async () => {
+          const client = await fleetClientFor(awake.workspaceId, awake.fleetHost);
+          return (await client.getSandbox(awake.sandboxId!)).sandbox;
+        },
+        publish: async () => {
+          const current = await getChat(chatId);
+          if (current) emitWorkbenchChat(current.workspaceId, rowToChat(current));
+        },
+      });
+    }
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.

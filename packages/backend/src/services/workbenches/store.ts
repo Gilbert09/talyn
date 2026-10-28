@@ -25,6 +25,7 @@ import {
 } from '../../db/schema.js';
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
+import { isRestoring } from './restorePhase.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -153,6 +154,7 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     status: row.status as WorkbenchChatStatus,
     queuedMessages: row.queuedMessages ?? [],
     importedFrom: row.importedFrom ?? null,
+    phase: row.status === 'running' && isRestoring(row.id) ? 'restoring' : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

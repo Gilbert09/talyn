@@ -174,3 +174,16 @@ it('shows a stopped tool without its canned rejection text', () => {
   expect(screen.getByText('Interrupted')).toHaveClass('text-muted-foreground');
   expect(screen.queryByText(rejection)).not.toBeInTheDocument();
 });
+
+it.each([
+  ['restoring', 'Restoring the sandbox…', 'Working…'],
+  [null, 'Working…', 'Restoring the sandbox…'],
+  [undefined, 'Working…', 'Restoring the sandbox…'],
+] as const)('shows the right spinner text for phase %s', (phase, shown, hidden) => {
+  const running = { id: 'c1', workbenchId: 'wb1', status: 'running', phase } as WorkbenchChat;
+  render(<WorkbenchTranscript chat={running} events={[]} loading={false} error={null} ops={{ unavailable: null } as unknown as WorkbenchOps} />);
+  expect(screen.getByText(shown)).toBeInTheDocument();
+  expect(screen.queryByText(hidden)).not.toBeInTheDocument();
+  if (phase === 'restoring') expect(screen.getByText(/after a long idle/)).toBeInTheDocument();
+  else expect(screen.queryByText(/after a long idle/)).not.toBeInTheDocument();
+});
