@@ -377,13 +377,15 @@ describe('workbench store', () => {
       lastSummary: { createdAt: new Date().toISOString(), closedAt: new Date(Date.now() + 60_000).toISOString(), headBranch, mergeable: 'MERGEABLE', ciStatus: 'passing', ...extra },
     });
 
+    // Rows are built inside the test: their times must be close to the workbench's
+    // creation, and it.each tables are evaluated when the file loads.
     it.each([
-      ['no PR for the branch', [pr('p1', 1, 'open', 'other')], null],
-      ['one PR', [pr('p1', 1, 'open', 'paris')], 'p1'],
-      ['an open PR beats a closed one', [pr('p1', 9, 'closed', 'paris'), pr('p2', 2, 'open', 'paris')], 'p2'],
-      ['the newest of several closed', [pr('p1', 1, 'closed', 'paris'), pr('p2', 5, 'merged', 'paris')], 'p2'],
+      ['no PR for the branch', () => [pr('p1', 1, 'open', 'other')], null],
+      ['one PR', () => [pr('p1', 1, 'open', 'paris')], 'p1'],
+      ['an open PR beats a closed one', () => [pr('p1', 9, 'closed', 'paris'), pr('p2', 2, 'open', 'paris')], 'p2'],
+      ['the newest of several closed', () => [pr('p1', 1, 'closed', 'paris'), pr('p2', 5, 'merged', 'paris')], 'p2'],
     ])('links: %s', async (_name, rows, expected) => {
-      await testDb.db.insert(pullRequests).values(rows);
+      await testDb.db.insert(pullRequests).values(rows());
       const row = await linkPullRequest((await getWorkbench('wb-1'))!);
       expect(row.pullRequestId).toBe(expected);
     });
