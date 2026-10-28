@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  MessageSquare,
   FileText,
   Users,
   Settings,
@@ -38,6 +39,7 @@ import {
   ScanSearch,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
+import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
@@ -122,6 +124,9 @@ export function SettingsPanel() {
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
+    ...(features?.slack === true
+      ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
+      : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
     { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
@@ -171,6 +176,7 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
+            {activeSection === 'slack' && <SlackSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && <InstructionsSettings />}
             {activeSection === 'account' && <AccountSettings />}

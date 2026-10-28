@@ -73,6 +73,7 @@ export const HISTORY_STATUS_PARAM = HISTORY_TASK_STATUSES.join(',');
 export type SettingsSection =
   | 'workspace'
   | 'integrations'
+  | 'slack'
   | 'skills'
   | 'instructions'
   | 'codeReview'

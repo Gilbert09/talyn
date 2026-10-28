@@ -13,6 +13,7 @@ import {
   Check,
   AlertCircle,
   ChevronDown,
+  MessageSquare,
   Loader2,
   Unlink,
   RefreshCw,
@@ -37,6 +38,7 @@ import {
   ScanSearch,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
+import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
@@ -119,9 +121,18 @@ export function SettingsPanel() {
   const features = useWorkspaceStore((s) => s.features);
   const billingStatus = useBillingStore((s) => s.status);
 
+  // Slack's callback lands on /settings?slack=…; show the Slack section so the
+  // result is visible.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('slack')) setActiveSection('slack');
+  }, [setActiveSection]);
+
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
+    ...(features?.slack === true
+      ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
+      : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
     { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
@@ -171,6 +182,7 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
+            {activeSection === 'slack' && <SlackSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && <InstructionsSettings />}
             {activeSection === 'account' && <AccountSettings />}
