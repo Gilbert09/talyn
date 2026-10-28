@@ -390,6 +390,21 @@ describe('workbench routes', () => {
       expect(named.name).not.toContain('/');
     });
 
+    it.each([
+      ['weak words are dropped', 'look at the flaky login test', 'tom/flaky-login-test'],
+      ['a pull request link leads', 'review https://github.com/acme/app/pull/42 for races', 'tom/pr-42-review-races'],
+      ['no usable word falls back to the session name', 'can you please do this', null],
+    ])('names a new branch from the prompt: %s', async (_label, prompt, expected) => {
+      await testDb.db.update(workspaces).set({ settings: { sessionBranchPrefix: 'tom/' } }).where(eq(workspaces.id, 'ws-a'));
+      const wb = await createSandboxWorkbench({ prompt });
+      expect(wb.branch).toBe(expected ?? `tom/${wb.name}`);
+    });
+
+    it('keeps an explicit branch when there is a prompt', async () => {
+      const wb = await createSandboxWorkbench({ prompt: 'look at the flaky login test', branch: 'feat/thing' });
+      expect(wb.branch).toBe('feat/thing');
+    });
+
     it('starts from a pull request on its head branch, linked', async () => {
       await testDb.db.insert(pullRequests).values({
         id: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 42, state: 'open',

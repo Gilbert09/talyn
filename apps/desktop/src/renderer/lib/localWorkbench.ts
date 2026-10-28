@@ -7,6 +7,7 @@ import {
   pickWorkbenchName,
   pullRequestOutcomeEvent,
   withSeq,
+  workbenchBranchFromTask,
   workbenchNameFromTask,
   type AgentEventDraft,
   type SendWorkbenchMessageInput,
@@ -445,7 +446,8 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
   const name = input.prompt?.trim()
     ? workbenchNameFromTask(input.prompt, input.takenNames)
     : pickWorkbenchName(input.takenNames);
-  const branch = input.branch ?? `${input.branchPrefix ?? ''}${name}`;
+  const branchBase = (input.prompt?.trim() ? workbenchBranchFromTask(input.prompt) : null) ?? name;
+  const branch = input.branch ?? `${input.branchPrefix ?? ''}${branchBase}`;
   const baseBranch = input.baseBranch || (await detectDefaultBranch(bridge, input.repoPath)) || 'main';
   const { path } = await bridge.createWorktree({
     repoPath: input.repoPath,

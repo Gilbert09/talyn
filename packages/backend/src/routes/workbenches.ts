@@ -10,6 +10,7 @@ import {
   normaliseBranchPrefix,
   pickWorkbenchName,
   sanitizeWorkbenchTitle,
+  workbenchBranchFromTask,
   workbenchNameFromTask,
   WORKBENCH_EFFORTS,
   WORKBENCH_IMPORT_MAX_BYTES,
@@ -526,6 +527,7 @@ export function workbenchRoutes(): Router {
         return bad(res, 409, `A session named "${requestedName}" already exists.`, 'name_taken');
       }
       const name = requestedName || (prompt ? workbenchNameFromTask(prompt, taken) : pickWorkbenchName(taken));
+      const branchBase = (prompt ? workbenchBranchFromTask(prompt) : null) ?? name;
       try {
         row = await insertWorkbench({
           id,
@@ -533,7 +535,7 @@ export function workbenchRoutes(): Router {
           repositoryId: repo.id,
           repoFullName,
           name,
-          branch: branch || await allocateWorkbenchBranch(workspaceId, repoFullName, `${branchPrefix}${name}`),
+          branch: branch || await allocateWorkbenchBranch(workspaceId, repoFullName, `${branchPrefix}${branchBase}`),
           allocatedBranch: !branch,
           baseBranch,
           runtime: body.runtime,
