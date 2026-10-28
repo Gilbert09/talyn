@@ -443,6 +443,62 @@ export async function setGeneratedTitle(id: string, title: string): Promise<Work
   return row ?? null;
 }
 
+/**
+ * Claim the one branch-naming attempt (see `branchName.ts`). One statement,
+ * so two replicas cannot both claim it. False when it was already decided.
+ */
+export async function claimBranchNaming(id: string): Promise<boolean> {
+  const rows = await db()
+    .update(workbenchesTable)
+    .set({ branchNamedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.branchNamedAt)))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+/** Give the claim back, so a later turn end tries again. */
+export async function releaseBranchNaming(id: string): Promise<void> {
+  await db().update(workbenchesTable).set({ branchNamedAt: null }).where(eq(workbenchesTable.id, id));
+}
+
+export async function branchNamingDecided(id: string): Promise<boolean> {
+  const [row] = await db()
+    .select({ at: workbenchesTable.branchNamedAt })
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.id, id))
+    .limit(1);
+  return !row || row.at !== null;
+}
+
+/** Turns started across every chat of the workbench. */
+export async function sessionTurnCount(workbenchId: string): Promise<number> {
+  const [row] = await db()
+    .select({ turns: sql<number>`COALESCE(SUM(${chatsTable.turnCount}), 0)::int` })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  return Number(row?.turns ?? 0);
+}
+
+/**
+ * Move a Talyn-named branch from `from` to `to`, but only while the row still
+ * says `from` and has no PR. Null when nothing matched. A clash on
+ * `uq_workbenches_allocated_branch` throws.
+ */
+export async function renameAllocatedBranch(id: string, from: string, to: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ branch: to, updatedAt: new Date() })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.branch, from),
+      eq(workbenchesTable.allocatedBranch, true),
+      isNull(workbenchesTable.pullRequestId),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
 export async function deleteWorkbenchRow(id: string): Promise<void> {
   await db().delete(workbenchesTable).where(eq(workbenchesTable.id, id));
 }

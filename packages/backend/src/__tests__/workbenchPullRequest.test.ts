@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { buildBlocks } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
-import { pullRequests, repositories, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workbenches, workspaces } from '../db/schema.js';
 
 /**
  * Create PR: the chat turn with the `create_pr` intent, which opens the PR
@@ -50,6 +50,7 @@ const { GitHubApiError, githubService } = await import('../services/github.js');
 const { prMonitorService } = await import('../services/prMonitor.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
+const { setPrBranchNamingDeadlineForTests } = await import('../services/workbenches/branchName.js');
 const { getChat, getWorkbench, listChats, listEvents, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -681,6 +682,93 @@ describe('workbench Create PR', () => {
       await vi.waitFor(async () => expect((await getChat(chatId))?.status).toBe('idle'), { timeout: 5000 });
       expect(createPr).not.toHaveBeenCalled();
       expect(prEvents((await listEvents(chatId, 0, 200)).events.map((e: Loose) => e.event))).toEqual([]);
+    });
+
+    describe('naming the branch before the push', () => {
+      const TITLED_PR_TEXT =
+        'Done.\n\n```talyn-pr\n{"title":"feat(billing): add seat counts to the team page","body":"Adds them.","commitMessage":"feat: wip","draft":false}\n```';
+      const section = (label: string, value: string) => `${label} ${Buffer.from(value).toString('base64')}`;
+
+      /** The box's side of the naming: the probe, and `git branch -m`. */
+      function namingBox(start: string, hold?: Promise<void>) {
+        const box = { branch: start };
+        const base = fleet.handler;
+        fleet.handler = async (script, req) => {
+          if (script.includes('emit BRANCH')) {
+            await hold;
+            return { stdout: [section('BRANCH', `${box.branch}\n`), section('UPSTREAM', ''), section('FILES', 'src/team.ts\0')].join('\n') };
+          }
+          const rename = /^git branch -m (\S+) (\S+)$/m.exec(script);
+          if (rename) {
+            box.branch = rename[2];
+            return { exitCode: 0 };
+          }
+          return base(script, req);
+        };
+        return box;
+      }
+      const index = (pattern: string) => scriptsSinceMark().findIndex((s) => s.includes(pattern));
+
+      afterEach(() => setPrBranchNamingDeadlineForTests(null));
+
+      it.each([
+        ['an automatic PR', { text: 'Look at the team page' }],
+        ['a Create PR message', createPrMessage],
+      ])('renames the branch from the PR title before %s pushes it', async (_label, message) => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(TITLED_PR_TEXT) };
+        world.status = ' M src/team.ts\n';
+        const box = namingBox(wb.branch);
+        mark = fleet.scripts.length;
+        const events = await sendAndSettle(chatId, message);
+
+        expect(box.branch).toBe('add-seat-counts-team-page');
+        expect((await getWorkbench(wb.id))?.branch).toBe('add-seat-counts-team-page');
+        const renamed = index(`git branch -m ${wb.branch} add-seat-counts-team-page`);
+        expect(renamed).toBeGreaterThan(-1);
+        expect(renamed).toBeLessThan(index('git commit --no-verify -m'));
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: 'add-seat-counts-team-page' }));
+        const updated = emitted.findIndex((e) => e.type === 'workbench:updated' && (e.payload as Loose).workbench.branch === 'add-seat-counts-team-page');
+        const linked = emitted.findIndex((e) => e.type === 'workbench:updated' && (e.payload as Loose).workbench.pullRequestId === 'pr-7');
+        expect(updated).toBeGreaterThan(-1);
+        expect(updated).toBeLessThan(linked);
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: true, number: 7 })]);
+      });
+
+      it('opens the PR under the old name when the naming misses its deadline', async () => {
+        setPrBranchNamingDeadlineForTests(50);
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(TITLED_PR_TEXT) };
+        let release!: () => void;
+        const box = namingBox(wb.branch, new Promise<void>((resolve) => { release = resolve; }));
+        mark = fleet.scripts.length;
+        const events = await sendAndSettle(chatId, { text: 'Look at the team page' });
+        release();
+
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: true, number: 7 })]);
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: wb.branch }));
+        expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(box.branch).toBe(wb.branch);
+        expect(index('git branch -m')).toBe(-1);
+      });
+
+      it('goes straight to the PR when the name was already decided', async () => {
+        const wb = await sandboxWorkbench();
+        await testDb.db.update(workbenches).set({ branchNamedAt: new Date('2099-01-01T00:00:00Z') }).where(eq(workbenches.id, wb.id));
+        const chatId = (await listChats(wb.id))[0].id;
+        turnReply = { stdout: claudeResult(TITLED_PR_TEXT) };
+        namingBox(wb.branch);
+        mark = fleet.scripts.length;
+        const events = await sendAndSettle(chatId, { text: 'Look at the team page' });
+
+        expect(index('emit BRANCH')).toBe(-1);
+        expect(index('git branch -m')).toBe(-1);
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: wb.branch }));
+        expect(prEvents(events)).toEqual([expect.objectContaining({ ok: true, number: 7 })]);
+      });
     });
 
     it('refuses an unknown intent', async () => {

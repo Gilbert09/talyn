@@ -1,4 +1,4 @@
-import { allocateWorkbenchBranch } from '../services/workbenches/branchAllocation.js';
+import { allocateWorkbenchBranch, sessionBranchPrefix, uniqueViolationConstraint } from '../services/workbenches/branchAllocation.js';
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
@@ -7,7 +7,6 @@ import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
-  normaliseBranchPrefix,
   pickWorkbenchName,
   sanitizeWorkbenchTitle,
   workbenchBranchFromTask,
@@ -29,7 +28,7 @@ import {
   type WorkbenchSettings,
 } from '@talyn/shared';
 import { getPoolDbClient, runWithoutScope } from '../db/client.js';
-import { pullRequests as prTable, repositories as reposTable, workspaces as workspacesTable } from '../db/schema.js';
+import { pullRequests as prTable, repositories as reposTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { reconcileDefaultBranch } from '../services/repoDefaultBranch.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
@@ -507,18 +506,7 @@ export function workbenchRoutes(): Router {
     // can pick the same name; the index decides, and the loser picks again.
     // Only a branch Talyn names gets the workspace's prefix; a branch the
     // person picked (a PR, "from branch") is used as it is.
-    let branchPrefix = '';
-    if (!branch) {
-      const stored = (
-        await db
-          .select({ prefix: sql<string | null>`${workspacesTable.settings} ->> 'sessionBranchPrefix'` })
-          .from(workspacesTable)
-          .where(eq(workspacesTable.id, workspaceId))
-          .limit(1)
-      )[0]?.prefix;
-      const checked = normaliseBranchPrefix(stored ?? '');
-      if (checked.ok) branchPrefix = checked.value;
-    }
+    const branchPrefix = branch ? '' : await sessionBranchPrefix(workspaceId);
     const id = uuid();
     let row: WorkbenchRow | null = null;
     for (let attempt = 0; attempt < 4 && !row; attempt++) {
@@ -555,13 +543,7 @@ export function workbenchRoutes(): Router {
           },
         });
       } catch (err) {
-        let cause: unknown = err;
-        let constraint: string | undefined;
-        while (cause && typeof cause === 'object') {
-          const detail = cause as { code?: string; constraint?: string; constraint_name?: string; cause?: unknown };
-          if (detail.code === '23505') constraint = detail.constraint ?? detail.constraint_name;
-          cause = detail.cause;
-        }
+        const constraint = uniqueViolationConstraint(err);
         if (constraint !== 'uq_workbenches_allocated_branch'
           && (constraint !== 'uq_workbenches_workspace_name_live' || requestedName)) throw err;
       }

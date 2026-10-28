@@ -1,14 +1,8 @@
-import {
-  buildWorkbenchTitleArgv,
-  CLAUDE_SANDBOX_ENV,
-  sanitizeWorkbenchTitle,
-  shellQuote,
-  workbenchTitlePrompt,
-  WORKBENCH_TITLE_TIMEOUT_MS,
-} from '@talyn/shared';
+import { sanitizeWorkbenchTitle, workbenchTitlePrompt } from '@talyn/shared';
+import { askSessionAgent, type CheapAgentOptions } from './cheapAgent.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
-import { recordWorkbenchEvent, runCapture, sandboxScriptEnv, type SandboxExecResult } from './sandboxRuntime.js';
+import { recordWorkbenchEvent } from './sandboxRuntime.js';
 import { setGeneratedTitle, type WorkbenchRow } from './store.js';
 
 /**
@@ -23,8 +17,6 @@ import { setGeneratedTitle, type WorkbenchRow } from './store.js';
 /** Workbenches this process has already asked about. One attempt each. */
 const attempted = new Set<string>();
 
-type Run = (row: WorkbenchRow, script: string, opts: Parameters<typeof runCapture>[2]) => Promise<SandboxExecResult>;
-
 /** Start the title call once per workbench, in the background. */
 export function startTitleGeneration(row: WorkbenchRow, firstMessage: string): void {
   if (row.title || row.runtime !== 'sandbox' || attempted.has(row.id)) return;
@@ -38,29 +30,10 @@ export function startTitleGeneration(row: WorkbenchRow, firstMessage: string): v
 export async function generateSandboxTitle(
   row: WorkbenchRow,
   firstMessage: string,
-  opts: { run?: Run; timeoutMs?: number; graceMs?: number } = {},
+  opts: CheapAgentOptions = {},
 ): Promise<WorkbenchRow | null> {
-  const run = opts.run ?? runCapture;
-  const timeoutMs = opts.timeoutMs ?? WORKBENCH_TITLE_TIMEOUT_MS;
   if (!firstMessage.trim()) return null;
-  const agent = row.agent === 'codex' ? 'codex' : 'claude';
-  const argv = buildWorkbenchTitleArgv(agent, workbenchTitlePrompt(firstMessage));
-  const env = { ...sandboxScriptEnv(row), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) };
-  let timer: NodeJS.Timeout | undefined;
-  // The guest bounds the command; this bounds a fleet call that never answers.
-  const timedOut = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs + (opts.graceMs ?? 5_000));
-  });
-  let result: SandboxExecResult | null;
-  try {
-    result = await Promise.race([
-      // `/tmp`, not the repository: the title needs no project instructions.
-      run(row, argv.map(shellQuote).join(' '), { cwd: '/tmp', env, timeoutMs, quiet: true }).catch(() => null),
-      timedOut,
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await askSessionAgent(row, workbenchTitlePrompt(firstMessage), opts);
   const title = result && result.exitCode === 0 ? sanitizeWorkbenchTitle(result.stdout) : null;
   if (!title) {
     recordWorkbenchEvent(row, 'title', result ? `no usable title (exit ${result.exitCode})` : 'no answer from the sandbox', false);

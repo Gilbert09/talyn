@@ -771,7 +771,11 @@ export function workbenchBranchFromTask(text: string): string | null {
     .replace(/(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-\d{1,6}(?![A-Za-z0-9])/g, (m, prefix: string) =>
       NOT_ISSUE_KEY_PREFIXES.has(prefix) ? m : ' '
     );
-  const parts = [...keys, ...taskNameWords(withoutKeys).slice(0, BRANCH_SLUG_WORDS)];
+  return joinBranchSlug([...keys, ...taskNameWords(withoutKeys).slice(0, BRANCH_SLUG_WORDS)]);
+}
+
+/** Join slug words with hyphens, stopping before `WORKBENCH_BRANCH_SLUG_MAX`. A first word over it is cut. */
+function joinBranchSlug(parts: string[]): string | null {
   let slug = '';
   for (const part of parts) {
     const next = slug ? `${slug}-${part}` : part;
@@ -782,6 +786,62 @@ export function workbenchBranchFromTask(text: string): string | null {
     slug = next;
   }
   return slug || null;
+}
+
+/** `feat:`, `fix(billing):`, `refactor!:` at the start of a conventional-commit title. */
+const CONVENTIONAL_PREFIX = /^[a-z]+(?:\([^)]*\))?!?:\s*/i;
+
+/**
+ * A branch slug (no workspace prefix) from a pull request title, such as
+ * "fix(billing): Fix webhook retry when Stripe returns 409". The
+ * conventional-commit prefix goes, then the title is read the way a first
+ * message is (`workbenchBranchFromTask`): references first, filler words
+ * dropped, six words and `WORKBENCH_BRANCH_SLUG_MAX` characters at most.
+ * Only the first line counts. Null when no letter is left.
+ */
+export function branchSlugFromTitle(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const line = raw.trim().split(/\r?\n/)[0].replace(/["“”„«»`*]/g, '').trim();
+  const slug = workbenchBranchFromTask(line.replace(CONVENTIONAL_PREFIX, ''));
+  return slug && /[a-z]/.test(slug) ? slug : null;
+}
+
+/** A model answer this long is a reply, not a slug, and is refused rather than cut. */
+const BRANCH_SUGGESTION_REFUSE_OVER = 100;
+/** More words than this is a sentence, not a slug. */
+const BRANCH_SUGGESTION_REFUSE_WORDS = 12;
+
+/**
+ * A branch slug (no workspace prefix) from a model's one-line answer, or null
+ * when the answer is not one. Null means "keep the branch name".
+ *
+ * Refuses empty output, more than one line, and a reply too long to be a
+ * slug. Strips quotes, backticks, markdown and a `branch:` label. A prefix the
+ * model added (`tom/`, `feature/`, `refs/heads/`) is dropped, because the
+ * prefix is the workspace's to choose. The rest is folded to `a-z`, `0-9` and
+ * single hyphens, cut to six words and `WORKBENCH_BRANCH_SLUG_MAX` characters,
+ * and must hold at least one letter.
+ */
+export function branchSlugFromSuggestion(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const line = raw.trim();
+  if (!line || /[\r\n]/.test(line) || line.length > BRANCH_SUGGESTION_REFUSE_OVER) return null;
+  let text = line
+    .replace(/["“”„«»`*]/g, '')
+    .replace(/^git\s+(?:checkout|switch)\s+-[bc]\s+/i, '');
+  // A label such as `Branch name:` comes before the answer.
+  text = text.slice(text.lastIndexOf(':') + 1);
+  text = text.split('/').filter((part) => part.trim()).pop() ?? '';
+  const words = text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['‘’]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (words.length > BRANCH_SUGGESTION_REFUSE_WORDS) return null;
+  const slug = joinBranchSlug(words.slice(0, BRANCH_SLUG_WORDS));
+  return slug && /[a-z]/.test(slug) ? slug : null;
 }
 
 // ============================================================================

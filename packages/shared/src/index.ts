@@ -112,6 +112,7 @@ export * from './sse.js';
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
 export * from './workbenchTitle.js';
+export * from './workbenchBranchName.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';

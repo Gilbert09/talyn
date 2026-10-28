@@ -161,9 +161,9 @@ export function statusPorcelain(): GitStep {
   return git('status', '--porcelain=v2', '-z', '--branch');
 }
 
-/** Rename the current branch. Validate with {@link isValidBranchName} first. */
-export function renameBranch(newName: string): GitStep {
-  return git('branch', '-m', newName);
+/** Rename `from`, or the current branch when absent. Validate with {@link isValidBranchName} first. */
+export function renameBranch(newName: string, from?: string): GitStep {
+  return from ? git('branch', '-m', from, newName) : git('branch', '-m', newName);
 }
 
 export function fetchOrigin(): GitStep {

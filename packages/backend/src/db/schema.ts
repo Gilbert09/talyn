@@ -1957,6 +1957,8 @@ export const workbenches = pgTable(
     pullRequestLinkedAt: timestamp('pull_request_linked_at', { withTimezone: true }),
     pushedHeadShas: text('pushed_head_shas').array().notNull().default([]),
     allocatedBranch: boolean('allocated_branch').notNull().default(false),
+    /** When the one post-first-turn branch rename was decided (renamed or kept). Null: not yet. */
+    branchNamedAt: timestamp('branch_named_at', { withTimezone: true }),
     settings: jsonb('settings').$type<WorkbenchSettings>().notNull().default({}),
     diffStat: jsonb('diff_stat').$type<WorkbenchStoredDiffStat | null>(),
     archivedAt: timestamp('archived_at', { withTimezone: true }),

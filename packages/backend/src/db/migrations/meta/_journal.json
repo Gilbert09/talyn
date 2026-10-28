@@ -631,6 +631,13 @@
       "when": 1790900000008,
       "tag": "0089_workbench_safety",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1790900000009,
+      "tag": "0090_workbench_branch_naming",
+      "breakpoints": true
     }
   ]
 }
