@@ -24,7 +24,7 @@ import {
 } from '../services/posthogCode/streamer.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
-import type { Database } from '../db/client.js';
+import { getScopedDb, runInScopedDb, type Database } from '../db/client.js';
 import type { AgentEvent } from '@talyn/shared';
 
 const WS = 'ws-1';
@@ -502,6 +502,30 @@ describe('postHogCodeStreamer', () => {
     });
     await waitForInactive();
     expect(await transcriptFinal(db)).toBe(true);
+  });
+
+  // The refresh-logs route calls ensure() inside the request's owner-scoped
+  // transaction, which commits when the response is sent. A stream that kept
+  // it hung on its next query and blocked every later ensure() for the task.
+  it.each([
+    ['a live attach', false],
+    ['a durable backfill', true],
+  ])('%s runs off the caller\'s owner scope', async (_label, backfillOnly) => {
+    const requestScope = { requestScope: true } as unknown as Database;
+    const scopesSeen: Array<Database | undefined> = [];
+    mockClient.getSessionLogs.mockImplementation(async () => {
+      scopesSeen.push(getScopedDb());
+      return EMPTY_PAGE;
+    });
+    mockClient.openRunStream.mockRejectedValue(STREAM_GONE);
+
+    runInScopedDb(requestScope, () => {
+      postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr', backfillOnly });
+    });
+    await waitForInactive();
+
+    expect(scopesSeen.length).toBeGreaterThan(0);
+    expect(scopesSeen.every((scope) => scope === undefined)).toBe(true);
   });
 });
 

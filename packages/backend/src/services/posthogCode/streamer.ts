@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@talyn/shared';
+import { runWithoutScope } from '../../db/client.js';
 import { emitTaskEvent, emitTaskUpdate } from '../websocket.js';
 import {
   markTranscriptFinal,
@@ -127,7 +128,12 @@ class PostHogCodeStreamer {
       backfillOnly: Boolean(input.backfillOnly),
     };
     this.active.set(input.taskId, stream);
-    void this.run(stream).catch((err) => {
+    // Off the caller's owner scope. The refresh-logs route calls this while it
+    // holds the request's transaction, and that transaction commits when the
+    // response is sent. A stream that inherited it hung on its next query and
+    // stayed registered here, so every later `ensure` was a no-op and the run
+    // showed no live log (2026-10-28).
+    void runWithoutScope(() => this.run(stream)).catch((err) => {
       console.warn(
         `[posthogCode] stream failed for task ${input.taskId.slice(0, 8)}:`,
         err instanceof Error ? err.message : err,

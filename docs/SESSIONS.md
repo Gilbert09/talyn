@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PostHog Code logs stopped streaming (2026-10-28)
+
+Running PostHog Code tasks showed "Running in the cloud — fetching logs…" for their whole run. The watch heartbeats arrived, and no stream ever logged `opening SSE stream`.
+
+Cause: `refresh-logs` calls `postHogCodeStreamer.ensure()` while it holds the request's owner-scoped transaction. `ensure()` starts `run()` without waiting, so `run()` inherited that transaction through AsyncLocalStorage. The transaction commits when the response is sent. The stream's next query (the OAuth token read or the transcript write) then waited on a finished transaction and never returned. The entry stayed in `active`, so every later `ensure()` from the poller returned early, and the run never streamed. Cancelling a task removed its entry, and only then did the poller's backfill run.
+
+Fix: `ensure()` starts `run()` under `runWithoutScope`, the same pattern as the workbench turn loop. The test puts `ensure()` inside a fake request scope and checks that the stream's calls see no scope, for a live attach and for a backfill.
+
+Lesson: any fire-and-forget work that a route starts must leave the owner scope. Code that awaits inside the request is safe. Code that keeps running after the response is not.
+
 ## Keep agent memory after sandbox loss (2026-10-27)
 
 Migration 0084 adds compressed backups for agent conversations. Each completed turn starts a backup without waiting for it.
