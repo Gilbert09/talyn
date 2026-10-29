@@ -223,16 +223,21 @@ function TriggerEmojiRow({
     loadStandardEmoji()
       .then((i) => live && setIndex(i))
       .catch(() => undefined);
-    api.slack
-      .listEmoji(teamId)
-      .then((r) => {
-        if (!live) return;
-        setCustom(r.emoji);
-        setNeedsScope(r.needsScope === 'emoji:read');
-      })
-      .catch(() => undefined);
+    const loadCustom = () =>
+      api.slack
+        .listEmoji(teamId)
+        .then((r) => {
+          if (!live) return;
+          setCustom(r.emoji);
+          setNeedsScope(r.needsScope === 'emoji:read');
+        })
+        .catch(() => undefined);
+    void loadCustom();
+    // Reconnect happens in the browser: read the list again when the user comes back.
+    window.addEventListener('focus', loadCustom);
     return () => {
       live = false;
+      window.removeEventListener('focus', loadCustom);
     };
   }, [teamId]);
 
