@@ -4,6 +4,7 @@ import {
   findTurnPlan,
   parsePlanBlock,
   stripPlanBlocks,
+  SANDBOX_SERVICES_NOTE,
   workbenchTurnPrompt,
   type AgentEvent,
 } from '@talyn/shared';
@@ -84,7 +85,7 @@ describe('workbenchTurnPrompt', () => {
   it.each([[false, false], [true, true]] as const)('omits the standing PR instruction when on=%s, linked=%s', (autoCreatePr, hasPullRequest) => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr,
       autoCreatePr, hasPullRequest });
-    expect(turn).toEqual({ prompt: 'hi' });
+    expect(turn).toEqual({ prompt: 'hi', appendSystemPrompt: SANDBOX_SERVICES_NOTE });
   });
 
   it.each(['claude', 'codex'] as const)('tells %s about limited access only when it is off', (agent) => {
@@ -118,7 +119,9 @@ describe('workbenchTurnPrompt', () => {
     const turn = workbenchTurnPrompt({ agent, text: 'carry on', planMode: false, createPr, autoCreatePr: false, imported });
     const hidden = turn.appendSystemPrompt ?? turn.prompt;
     if (!imported) {
-      expect(turn).toEqual({ prompt: 'carry on' });
+      expect(turn).toEqual(agent === 'claude'
+        ? { prompt: 'carry on', appendSystemPrompt: SANDBOX_SERVICES_NOTE }
+        : { prompt: `${SANDBOX_SERVICES_NOTE}\n\n---\n\ncarry on` });
       return;
     }
     expect(hidden).toContain('started on the user\'s machine in /Users/x/dev/app');

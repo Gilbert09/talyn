@@ -1,4 +1,5 @@
 import { parseToml } from './toml.js';
+import type { CachedSandboxSize, SandboxSizeSetting } from './sandboxSize.js';
 
 export type PreviewTarget = 'sandbox' | 'coder' | 'off';
 
@@ -279,6 +280,9 @@ export function detectPreview(input: { files: Record<string, string | null>; pat
 }
 
 export interface RepositorySettings {
+  /** Absent means auto. */
+  sandboxSize?: SandboxSizeSetting;
+  detectedSandboxSize?: CachedSandboxSize;
   preview?: {
     target?: 'auto' | PreviewTarget;
     ports?: PreviewPort[];

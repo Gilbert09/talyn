@@ -1,4 +1,4 @@
-import type { RepositoryPreviewChoice, RepositoryPreviewResponse } from '@talyn/shared';
+import type { RepositoryPreviewChoice, RepositoryPreviewResponse, RepositorySandboxSizeResponse, SandboxSizeSetting } from '@talyn/shared';
 import {
   getApiRoot,
   getConfig,
@@ -1571,6 +1571,11 @@ export const repositories = {
     patch: (id: string, choice: RepositoryPreviewChoice) =>
       request<RepositoryPreviewResponse>('PATCH', `/repositories/${enc(id)}/preview`, choice),
     detect: (id: string) => request<RepositoryPreviewResponse>('POST', `/repositories/${enc(id)}/preview/detect`),
+  },
+  sandboxSize: {
+    get: (id: string) => request<RepositorySandboxSizeResponse>('GET', `/repositories/${enc(id)}/sandbox-size`),
+    set: (id: string, sandboxSize: SandboxSizeSetting) =>
+      request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
   },
   list: (workspaceId: string) =>
     request<WatchedRepo[]>('GET', `/repositories?workspaceId=${workspaceId}`),

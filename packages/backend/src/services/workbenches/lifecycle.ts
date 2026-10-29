@@ -4,7 +4,7 @@ import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
 import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
-import { pickWorkbenchName } from '@talyn/shared';
+import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
@@ -22,6 +22,7 @@ import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } fro
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
+import { isSizeRefusal, noteSizeFallback, sizeFallbackNote, sizeForSession } from './sandboxSize.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -118,14 +119,14 @@ export function scheduleProvision(workbenchId: string, opts: { restore?: boolean
  * but `yasctl -reseed-quotas` resets tenant defaults from the plan, so Talyn
  * asks for it explicitly rather than inherit whatever the plan says.
  */
-export const SESSION_SANDBOX_MEM_MIB = 4096;
+export const SESSION_SANDBOX_MEM_MIB = SANDBOX_SIZES.standard.memMib;
 
 /**
  * The CPU allowance of a session's box: 4 vCPUs. The tenant default is 1, or
  * 0.5 on a plan, which made a PostHog test run or build take many minutes. It
  * is a ceiling, not a reservation: the host shares its 12 threads by load.
  */
-export const SESSION_SANDBOX_MILLI_VCPU = 4000;
+export const SESSION_SANDBOX_MILLI_VCPU = SANDBOX_SIZES.standard.milliVcpu;
 
 export type CreatedWorkbenchSandbox =
   | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
@@ -167,7 +168,19 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   });
   if (!built.ok) return { ok: false, error: built.error };
   const target = await fleetCreateTarget(row.workspaceId);
-  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB, milliVcpu: SESSION_SANDBOX_MILLI_VCPU });
+  const withSize = (size: SandboxSize) => ({ ...built.body, memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu });
+  const wanted = await sizeForSession(row);
+  let created;
+  try {
+    created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
+  } catch (err) {
+    // The tenant maximum refuses a size it cannot hold. Ask once for the standard box.
+    if (wanted !== 'large' || !isSizeRefusal(err)) throw err;
+    const text = sizeFallbackNote(err);
+    recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
+    await noteSizeFallback(row, text).catch(() => undefined);
+    created = await createSandboxRetryingUncertain(target.client, withSize('standard'));
+  }
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
