@@ -157,7 +157,7 @@ describe('SlackSettings', () => {
     mockLink.mockResolvedValue({ authorizeUrl: 'https://slack.com/oauth/link' });
     render(<SlackSettings />);
     expect(await screen.findByText('Not linked')).toBeTruthy();
-    expect(screen.queryByText('Sessions go to')).toBeNull();
+    expect(screen.queryByText('Workspace')).toBeNull();
     expect(screen.queryByText('Add emoji')).toBeNull();
     fireEvent.click(screen.getByText('Link my Slack account'));
     await waitFor(() => expect(mockOpenExternal).toHaveBeenCalledWith('https://slack.com/oauth/link'));

@@ -359,10 +359,17 @@ function TargetWorkspaceRow({
     }
   }
 
+  // One Talyn workspace: nothing to choose.
+  if (workspaces.length <= 1) return null;
+
   return (
-    <div className="flex items-center gap-3" data-attr="settings-slack-target-row">
+    <div
+      className="flex items-center gap-3"
+      data-attr="settings-slack-target-row"
+      title="Sessions started from this Slack workspace are created in this Talyn workspace, and the repository is picked from its repositories."
+    >
       <label className="w-28 shrink-0 text-sm text-muted-foreground" htmlFor={`slack-ws-${link.id}`}>
-        Sessions go to
+        Workspace
       </label>
       <div className="w-56">
         <Select
