@@ -629,6 +629,9 @@ function PullRequestLine({ text, url, isError }: { text: string; url?: string; i
 }
 
 function SystemBlock({ text, subtype }: { text: string; subtype?: string }) {
+  if (subtype === 'talyn_interruption') {
+    return <div className="text-xs text-muted-foreground">Interrupted</div>;
+  }
   return (
     <div className="text-xs text-muted-foreground italic border-l-2 border-border pl-2">
       {subtype ? <span className="uppercase tracking-wide mr-1">{subtype}</span> : null}

@@ -159,6 +159,17 @@ it.each(['[Request interrupted by user]', '[Request interrupted by user for tool
   },
 );
 
+it('shows an interruption system block as a quiet note without its subtype', () => {
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'system', subtype: 'talyn_interruption', text: 'Interrupted' } as AgentEvent,
+  }];
+  const { container } = render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText('Interrupted')).toHaveClass('text-xs', 'text-muted-foreground');
+  expect(screen.getByText('Interrupted')).not.toHaveClass('border-l-2');
+  expect(container).not.toHaveTextContent('TALYN_INTERRUPTION');
+});
+
 it('shows a stopped tool without its canned rejection text', () => {
   const rejection = "The user doesn't want to proceed with this tool use. STOP what you are doing.";
   const events: WorkbenchEvent[] = [userEvent(1, 1), {
