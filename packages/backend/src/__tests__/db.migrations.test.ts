@@ -261,6 +261,24 @@ describe('Drizzle migration', () => {
     `);
     expect(fkRes.rows).toHaveLength(0);
   });
+  it('creates session_mcp_tokens as backend-pool-only with one token per session', async () => {
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    const rls = await testDb.pglite.query<{ rowsecurity: boolean }>(
+      `SELECT rowsecurity FROM pg_tables WHERE schemaname = 'public' AND tablename = 'session_mcp_tokens'`
+    );
+    expect(rls.rows).toEqual([{ rowsecurity: true }]);
+    const policies = await testDb.pglite.query(
+      `SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'session_mcp_tokens'`
+    );
+    expect(policies.rows).toHaveLength(0);
+    const idx = await testDb.pglite.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'session_mcp_tokens'`
+    );
+    const byName = new Map(idx.rows.map((r) => [r.indexname, r.indexdef]));
+    expect(byName.get('uq_session_mcp_tokens_workbench')).toMatch(/UNIQUE.*workbench_id/);
+    expect(byName.get('uq_session_mcp_tokens_token_hash')).toMatch(/UNIQUE.*token_hash/);
+  });
   it('creates the Slack tables as backend-pool-only (RLS on, no policy) with their unique keys', async () => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;

@@ -798,13 +798,14 @@ const RETURNING_CHAT = sql.raw(
  */
 function workbenchState(chatId: string) {
   return sql`wb_state AS (
-      SELECT w.status, w.archived_at, w.settings ->> 'archiveOnIdle' AS archive_on_idle FROM workbenches w
+      SELECT w.status, w.archived_at, w.settings ->> 'archiveOnIdle' AS archive_on_idle,
+        w.settings ->> 'archiveAfterTurn' AS archive_after_turn FROM workbenches w
       WHERE w.id = (SELECT workbench_id FROM workbench_chats WHERE id = ${chatId})
       FOR SHARE
     )`;
 }
 
-const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL OR archive_on_idle IS NOT NULL)`);
+const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL OR archive_on_idle IS NOT NULL OR archive_after_turn IS NOT NULL)`);
 
 export interface ClaimResult {
   chat: ChatRow;
@@ -1259,11 +1260,12 @@ export async function markArchive(id: string, autoForMergedPr = false): Promise<
       archiveFailures: 0, archiveRetryAt: null, restoreRequestedAt: null,
       status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
       statusMessage: null,
-      settings: sql`CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
+      // An archive also ends a request to archive after the turn, so a restore does not archive again.
+      settings: sql`(CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
         THEN ${workbenchesTable.settings}
         ELSE (${workbenchesTable.settings} - 'archiveOnIdle') || jsonb_build_object('autoArchivedForPr',
           COALESCE(${workbenchesTable.settings} -> 'autoArchivedForPr', '[]'::jsonb)
-          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END`,
+          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'`,
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),

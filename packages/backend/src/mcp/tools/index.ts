@@ -10,6 +10,7 @@
  *   or editor features. Local sessions are refused because their turns run in the desktop app.
  */
 import type { AccountFeatureFlagKey } from '@talyn/shared';
+import type { SessionMcpBinding } from '../../services/sessionMcpToken.js';
 import { ACCOUNT } from './account.js';
 import { CODEREVIEW } from './codeReview.js';
 import { LOOPS } from './loops.js';
@@ -37,7 +38,13 @@ export interface McpToolDefinition {
   };
   /** Hide the tool when this account feature is off. Routes check access independently. */
   feature?: AccountFeatureFlagKey;
-  handler: (ownerId: string, args: Record<string, unknown>) => Promise<string>;
+  handler: (ownerId: string, args: Record<string, unknown>, ctx?: McpCallContext) => Promise<string>;
+}
+
+/** Who is calling, beyond the owner. */
+export interface McpCallContext {
+  /** Set when the caller is a session sandbox's own token (`talyn_mcs_`). */
+  session?: SessionMcpBinding;
 }
 
 export const TOOLS: McpToolDefinition[] = [

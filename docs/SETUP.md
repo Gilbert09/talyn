@@ -900,6 +900,12 @@ claude mcp add --transport http talyn http://localhost:4747/api/v1/mcp \
 
 See [`docs/MCP_SERVER.md`](./MCP_SERVER.md) for the tool list and the production URL.
 
+Session sandboxes get the same server as `talyn`. For that the backend must know
+its public origin: set `TALYN_PUBLIC_API_URL` (for example
+`https://prod.talyn.dev`). Without it, the backend reads the origin of
+`POSTHOG_OAUTH_REDIRECT_URI` or `SLACK_OAUTH_REDIRECT_URI`. It must be https on
+a public host, so a local backend gives its sessions no `talyn` server.
+
 After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prompt.
 
 ---

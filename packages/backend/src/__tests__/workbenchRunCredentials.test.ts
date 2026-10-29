@@ -7,7 +7,9 @@ import { mcpIntegrationSecrets } from '../services/mcpServers/dispatch.js';
 import { resolveRunCredential } from '../services/selfHosted/accountSelection.js';
 import { resolveRunCredentials } from '../services/selfHosted/runCredentials.js';
 import { processArchive, restoreWorkbench, sweepPendingArchives } from '../services/workbenches/lifecycle.js';
-import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
+import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import { ensureSessionMcpToken, validateSessionMcpToken } from '../services/sessionMcpToken.js';
+import { refreshSandboxCredentials, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import {
   backfillCredentialArchives, claimMove, getWorkbench, insertWorkbench, markArchive,
   setMoveTargetHost, updateWorkbench,
@@ -183,5 +185,69 @@ describe('session credentials during lifecycle operations', () => {
     const before = await row();
     expect(await backfillCredentialArchives()).toBe(0);
     expect(await row()).toEqual(before);
+  });
+});
+
+describe("Talyn's own MCP server in a session's credentials", () => {
+  let testDb: Awaited<ReturnType<typeof createTestDb>>;
+  let fleet: FakeFleet;
+
+  beforeEach(async () => {
+    vi.stubEnv('FLEET_REPORT_TOKEN', 'fleet-test');
+    vi.stubEnv('TALYN_PUBLIC_API_URL', 'https://api.talyn.test');
+    vi.stubEnv('TALYN_TOKEN_KEY', Buffer.from('k'.repeat(32)).toString('base64'));
+    testDb = await createTestDb();
+    await seedUser(testDb.db);
+    await testDb.db.insert(workspaces).values({ id: 'ws', ownerId: 'user-test', name: 'Test' });
+    await testDb.db.insert(repositories).values({ id: 'repo', workspaceId: 'ws', name: 'a/b', url: 'https://github.com/a/b' });
+    await insertWorkbench({ id: ID, workspaceId: 'ws', repositoryId: 'repo', repoFullName: 'a/b',
+      name: 'paris', branch: 'paris', baseBranch: 'main', runtime: 'sandbox', agent: 'claude',
+      status: 'ready', sandboxState: 'running', sandboxId: BOX, fleetHost: HOST });
+    fleet = new FakeFleet();
+    setWorkbenchFleetClientForTests(async () => fleet.asClient());
+    vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'agent-token' }, githubToken: 'github-token' });
+  });
+
+  afterEach(async () => {
+    setWorkbenchFleetClientForTests(null);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+    await testDb.cleanup();
+  });
+
+  it.each([
+    ['a host pull after a fleetd restart', async () => ((await credentials()).body as { integrations?: Record<string, string> }).integrations],
+    ['the per-turn credential push', async () => {
+      await refreshSandboxCredentials((await getWorkbench(ID))!);
+      return fleet.credentialPushes.at(-1)!.creds.integrations as Record<string, string> | undefined;
+    }],
+  ])('%s carries the talyn token beside the workspace servers', async (_name, read) => {
+    const token = await ensureSessionMcpToken({ id: ID, workspaceId: 'ws' });
+    expect(await read()).toEqual({ linear: 'tool-token', talyn: token });
+  });
+
+  it.each([
+    ['a host pull', async () => ((await credentials()).body as { integrations?: Record<string, string> }).integrations],
+    ['a push', async () => {
+      await refreshSandboxCredentials((await getWorkbench(ID))!);
+      return fleet.credentialPushes.at(-1)!.creds.integrations as Record<string, string> | undefined;
+    }],
+  ])('%s for a box made before the session had a token sends none', async (_name, read) => {
+    expect(await read()).toEqual({ linear: 'tool-token' });
+  });
+
+  it('sends no talyn token when this deployment has no public MCP URL', async () => {
+    vi.stubEnv('TALYN_PUBLIC_API_URL', '');
+    await ensureSessionMcpToken({ id: ID, workspaceId: 'ws' });
+    expect(((await credentials()).body as { integrations?: Record<string, string> }).integrations).toEqual({ linear: 'tool-token' });
+  });
+
+  it('stops serving the token once the session is archived', async () => {
+    const token = await ensureSessionMcpToken({ id: ID, workspaceId: 'ws' });
+    await updateWorkbench(ID, { ...archived, archivePendingAt: new Date() });
+    // The box still gets its credentials to save the work; the token itself is refused at /mcp.
+    expect(((await credentials()).body as { integrations?: Record<string, string> }).integrations).toEqual({ linear: 'tool-token', talyn: token });
+    expect(await validateSessionMcpToken(token)).toBeNull();
   });
 });

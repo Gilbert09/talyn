@@ -652,6 +652,13 @@
       "when": 1790900000011,
       "tag": "0092_slack_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1790900000012,
+      "tag": "0093_session_mcp_tokens",
+      "breakpoints": true
     }
   ]
 }

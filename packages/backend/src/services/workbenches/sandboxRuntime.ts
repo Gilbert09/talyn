@@ -20,7 +20,6 @@ import {
 import { debugBus } from '../debugBus.js';
 import { githubService } from '../github.js';
 import { getFleetHost } from '../fleetHosts.js';
-import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import {
   FleetCapacityError,
   FleetClient,
@@ -45,6 +44,7 @@ import {
   HOT_SWAP_CHECK_INTERVAL_MS,
   recordHotSwap,
 } from '../selfHosted/hotSwap.js';
+import { workbenchIntegrationSecrets } from './talynMcp.js';
 import {
   aliveMarkerScript,
   frameCommand,
@@ -918,7 +918,7 @@ export async function refreshSandboxCredentials(
       'credentials_unavailable',
     );
   }
-  const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
+  const integrations = await workbenchIntegrationSecrets(row);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, {
     githubToken: resolved.githubToken,
@@ -962,7 +962,7 @@ export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string): Pr
   if (!decision) return null;
   const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
   if (!githubToken) return null;
-  const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
+  const integrations = await workbenchIntegrationSecrets(row);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(row.sandboxId!, {
     githubToken,

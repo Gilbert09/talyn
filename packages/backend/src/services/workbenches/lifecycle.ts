@@ -42,6 +42,7 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
+import { talynMcpServerFor } from './talynMcp.js';
 import {
   claimArchive,
   backfillCredentialArchives,
@@ -155,6 +156,7 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     console.warn(`[workbench] resolving the default branch for ${row.id} failed:`, err);
     return null;
   });
+  const talynServer = await talynMcpServerFor(row);
   const built = await buildSandboxCreateBody({
     id: sandboxId,
     workspaceId: row.workspaceId,
@@ -163,6 +165,7 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     creds: resolved.creds,
     githubToken: resolved.githubToken,
     mcpServerIds: null,
+    extraMcpServers: talynServer ? [talynServer] : [],
     internetAccess: row.settings?.internetAccess !== false,
     gitAuthor: await gitAuthorFor(row.workspaceId),
     // No `task` and no `ephemeral`: a bare box that outlives every turn.
