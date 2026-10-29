@@ -16,7 +16,7 @@ import {
   sectionsScript,
 } from '../services/workbenches/execFraming.js';
 import { encodePtyFrame, matchTerminalPath, PtyFrameDecoder } from '../services/workbenches/terminalBridge.js';
-import { archiveRef, archiveSaveScript, restoreSavedWorkScript } from '../services/workbenches/lifecycle.js';
+import { workRestoreScript, workSaveScript } from '../services/workbenches/workCheckpointScripts.js';
 import {
   cloneScript,
   GOLDEN_REPO_DIR,
@@ -369,32 +369,39 @@ describe('sandbox naming and scripts', () => {
     });
   });
 
-  it.each(['rev-list', 'rev-parse', 'status'])('fails the archive when git %s cannot read the work', (command) => {
-    const script = archiveSaveScript({ id: 'w1', branch: 'paris', baseBranch: 'main' });
+  it.each(['rev-parse', 'add', 'write-tree', 'commit-tree', 'update-ref', 'bundle'])('fails the save when git %s fails', (command) => {
+    const script = workSaveScript({ id: 'w1', baseBranch: 'main' }, { kind: 'archive', previousSha: null });
     const stub = `git() {
       if [ "$1" = "$TALYN_FAIL_GIT" ]; then return 1; fi
       case "$1" in
-        rev-list) echo 0 ;;
         rev-parse) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
-        status) return 0 ;;
+        write-tree|commit-tree) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+        rev-list) echo 1 ;;
+        add|update-ref) return 0 ;;
         *) return 97 ;;
       esac
     }`;
-    const result = spawnSync('bash', ['-c', `${stub}\n${script}`], {
-      encoding: 'utf8', env: { ...process.env, TALYN_FAIL_GIT: command },
-    });
-    expect(result.status).toBe(1);
+    const tmp = mkdtempSync(join(tmpdir(), 'wb-save-'));
+    try {
+      const result = spawnSync('bash', ['-c', `${stub}\n${script}`], {
+        encoding: 'utf8', env: { ...process.env, TALYN_FAIL_GIT: command, TMPDIR: tmp },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toMatch(/BUNDLE|CLEAN/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
-  it('saves work on archive without ever forcing the branch', () => {
-    const script = archiveSaveScript({ id: 'w1', branch: 'paris', baseBranch: 'main' });
-    expect(script).toContain('git push origin HEAD:refs/heads/paris');
-    expect(script).not.toMatch(/push --force origin HEAD:refs\/heads/);
-    expect(script).toContain(`"$sha":${archiveRef('w1')}`);
-    expect(script).toContain('exit 1');
-    const restore = restoreSavedWorkScript({ id: 'w1', branch: 'paris' });
-    expect(restore).toContain(`git fetch origin ${archiveRef('w1')}`);
-    expect(restore).toContain('git read-tree "$sha"');
+  it('saves and restores work without ever pushing', () => {
+    for (const kind of ['checkpoint', 'archive'] as const) {
+      const script = workSaveScript({ id: 'w1', baseBranch: 'main' }, { kind, previousSha: null });
+      expect(script).not.toMatch(/git push/);
+      expect(script).toContain('git bundle create');
+    }
+    const restore = workRestoreScript({ id: 'w1', branch: 'paris' }, { sha: 'a'.repeat(40), size: 10, sha256: 'b'.repeat(64) });
+    expect(restore).not.toMatch(/git push/);
+    expect(restore).toContain('git read-tree "$cp"');
   });
 
   it.each(['a/b.ts', 'src/x y.ts', '.env'])('accepts the repository path %s', (p) => {

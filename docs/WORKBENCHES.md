@@ -262,9 +262,61 @@ Talyn's.
 - **The router is mounted before `ownerScope`**, like billing. Handlers wait on the fleet,
   and a scoped transaction would hold a pool connection for that time.
 - **Seq allocation** is one CTE statement on `workbench_chats.next_seq`. No advisory lock.
-- **Archive** pushes commits to the branch (never forced) and saves uncommitted work as a
-  hidden commit at `refs/talyn/archive/<id>`. A failed save keeps the sandbox.
+- **Archive** saves the work (uncommitted changes and commits that were not pushed) as a git
+  bundle in Talyn's storage. It pushes nothing. A failed save keeps the sandbox. See "Saved work"
+  below.
 - **Terminal**: the fleet `/pty` first; on `409 pty_unsupported`, `ssh2` over `ssh-stream`.
+
+### Saved work: checkpoints, archives and recovery (2026-10-29)
+
+A sandbox can be lost with work in it (in one incident, a guest ran out of memory three times, the
+fleet stopped it as wedged, and 30 minutes of uncommitted work went with it). Talyn now keeps each
+session's unsaved work in **Talyn storage**, never in a git ref: nothing is pushed to save work.
+The only pushes left are the ones a person asks for (Create PR, auto-PR, the agent's own push).
+Code: `services/workbenches/workCheckpoint.ts`, `workCheckpointScripts.ts`, `workStorage.ts`.
+
+- **Format.** In the box, the work tree is staged into a temporary copy of the index (`add -A`, so
+  untracked files that are not ignored are included), written as a tree, and committed with HEAD
+  as its parent. The branch, HEAD, the real index and the work tree are never touched. That commit
+  goes into a `git bundle` that excludes `origin/<base>` (a full bundle when the box does not know
+  the base), so the bundle also carries every commit that was not pushed. The bundle is staged on
+  `/dev/shm`.
+- **Transport.** The bundle leaves the box through quiet exec, 2 MiB at a time (the move's
+  `moveReadChunkScript`). Each part is uploaded as it arrives, so the backend holds one part, not
+  the bundle. A restore reverses this: each part is downloaded and written into the new box
+  (`writeSandboxFiles`), then size and SHA-256 are checked before git reads it.
+- **Storage.** Supabase Storage, private bucket `workbench-work`, used only from the backend with
+  the service-role key. No public or signed URLs. Keys:
+  `<workspaceId>/<workbenchId>/<checkpoint|archive>/meta.json` (sha, base, branch, takenAt,
+  size, sha256, parts, generation) and `.../<generation>/part-NNNNN`. A save writes a new
+  generation, then replaces `meta.json`, then deletes the old generation. A save that fails
+  half-way leaves the last whole one in place.
+- **Limit.** 96 MiB compressed (`WORK_BUNDLE_MAX_BYTES`), the most a move carries over the same
+  exec channel. Parts stay far under Storage's per-object limit. A larger checkpoint is refused,
+  with one chat note until a save works again. A larger archive keeps the sandbox and says why.
+- **Checkpoint triggers.** After every turn (`afterTurn`), and during a turn at most every 5
+  minutes after the agent used a tool that can change files (anything but read-only and MCP
+  tools). A box whose HEAD and tree match the recorded checkpoint saves nothing. A box with no
+  uncommitted work and no unpushed commit deletes the stored checkpoint. Bounded and best effort:
+  never fails or delays a turn. The same tool signal refreshes the sidebar's diff stat at most
+  every 20 s, and the Changes route stores and broadcasts the stat it reads.
+- **Record.** `workbenches.work_checkpoint_sha`, `work_checkpoint_at` and
+  `work_checkpoint_bytes` (migration `0094`), written only while the row still names the box the
+  checkpoint came from.
+- **Restore.** A lost box's replacement (`provisionWorkbench`, and a move whose old box went away
+  during the export or the transfer) reads the checkpoint after the clone. An archive restore
+  reads the archive, then takes a checkpoint of the restored work. When the branch on GitHub is
+  the saved commit's parent or behind it (or does not exist), the branch is moved to the parent,
+  which keeps the commits that were not pushed, and the saved tree is written as uncommitted
+  changes. When the branch on GitHub moved past it, the work is not applied, because it would undo
+  the newer commits; it stays in storage. The chat note says which case happened and the
+  checkpoint's time. With no checkpoint, the note says that changes that were not pushed are lost.
+- **Cleanup.** An archive deletes the session's checkpoint (the archive supersedes it). Deleting a
+  session deletes every stored object of it, before the row.
+- **The old box first.** Before replacing a box, `recoverLostSandbox` asks the fleet
+  (`getSandbox`). A `suspended` box (also hibernated) is resumed and kept. Only a box that is gone,
+  retired, terminal or in another state is replaced.
+- **Signed-commit repositories** no longer matter here: nothing is pushed to save work.
 
 ### Known gaps
 
@@ -279,8 +331,8 @@ Talyn's.
   log excerpts are included for either runtime.
 - `stores/workspace.ts` keeps `setActivePanel` / `openSettings` as adapters over the route store.
 - `apps/web` has none of this; it is a separate fork.
-- No billing gates. Not verified on a real fleet: Codex in a sandbox, and GitHub accepting a
-  push to `refs/talyn/*`.
+- No billing gates. Not verified on a real fleet: Codex in a sandbox, and a saved-work round
+  trip through real Supabase Storage.
 - The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden. The
   golden was baked again on 2026-10-14 for Claude Code 2.1.296. This is not checked yet.
 - A box keeps the Claude Code version it was created with, and nothing updates it.

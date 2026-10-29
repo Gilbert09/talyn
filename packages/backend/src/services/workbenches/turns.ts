@@ -67,6 +67,7 @@ import {
   fleetClientFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
+import { checkpointWork, noteTurnActivity, settleTurnActivity } from './workCheckpoint.js';
 import { startTitleGeneration } from './title.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
@@ -392,7 +393,10 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
   try {
     let wb = await getWorkbench(chat.workbenchId);
     if (!wb) return;
+    settleTurnActivity(wb.id);
     wb = await refreshDiffStat(wb);
+    // After the stat, not beside it: two git reads at once on a box near its memory ceiling is worse than a second's wait.
+    void checkpointWork(wb, 'turn_end');
     const linked = await linkPullRequest(wb);
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
@@ -1150,6 +1154,7 @@ async function followTurnOutput(
       offset = nextOffset;
       onStored?.();
       emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+      noteTurnActivity(wb, drafts);
       if (parser.sessionId && parser.sessionId !== sessionId) {
         const updated = await getChat(chat.id);
         if (updated) emitWorkbenchChat(chat.workspaceId, rowToChat(updated));

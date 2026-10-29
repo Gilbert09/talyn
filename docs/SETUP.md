@@ -217,6 +217,7 @@ For Postgres + auth when Phase 18.1/18.2 lands.
    - Authorization callback URL: `https://<project-ref>.supabase.co/auth/v1/callback`
    - Paste the client ID/secret into Supabase Authentication → Providers → GitHub
 5. Add `fastowl://auth-callback` to **Redirect URLs** in Supabase (Authentication → URL Configuration → Redirect URLs). Without this, the desktop deep-link flow fails silently with an "invalid redirect URL" error.
+6. **Storage bucket for session work** (required for session checkpoints and archives). In Storage → **New bucket**, create `workbench-work` with **Public bucket OFF**. Leave the file size limit at the default: Talyn writes parts of 2 MiB. Add no storage policies: only the backend reads and writes it, with `SUPABASE_SERVICE_ROLE_KEY`, which bypasses RLS. No new env var. Without the bucket, checkpoints fail (logged, never a failed turn) and an archive with unsaved work keeps its sandbox and says the save failed. Local dev gets the bucket from `supabase/config.toml` (`[storage.buckets.workbench-work]`) after `npm run dev:db`.
 
 ### Single-user allow-list (optional, recommended while Talyn is pre-invites)
 

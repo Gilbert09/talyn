@@ -652,6 +652,13 @@
       "when": 1790900000011,
       "tag": "0092_slack_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1790900000013,
+      "tag": "0094_workbench_work_checkpoints",
+      "breakpoints": true
     }
   ]
 }

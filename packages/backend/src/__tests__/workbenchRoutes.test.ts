@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { eq } from 'drizzle-orm';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, type ExecReply } from './helpers/fakeFleet.js';
+import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
 
@@ -47,6 +48,7 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
 }));
 
 const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
+const { memoryWorkObjectStore, setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
@@ -164,6 +166,7 @@ describe('workbench routes', () => {
 
   afterEach(async () => {
     await settleArchivesForTests();
+    setWorkObjectStoreForTests(null);
     setWorkbenchFleetClientForTests(null);
     await new Promise((resolve) => server.close(resolve));
     await testDb.cleanup();
@@ -726,22 +729,34 @@ describe('workbench routes', () => {
   describe('archive and restore', () => {
     it('answers immediately, then saves and deletes the box', async () => {
       const wb = await createSandboxWorkbench();
-      scriptedFleet((script) => (script.includes('PUSHED_BRANCH') ? { stdout: 'PUSHED_BRANCH 3\nSAVED_WORK\n' } : null));
+      const store = memoryWorkObjectStore();
+      setWorkObjectStoreForTests(store);
+      const bundle = 'pretend bundle';
+      const sum = createHash('sha256').update(bundle).digest('hex');
+      scriptedFleet((script) => {
+        if (isWorkSaveScript(script, 'archive')) return { stdout: `BUNDLE ${'d'.repeat(40)} 4070944800 - ${bundle.length} ${sum}\n` };
+        if (script.startsWith('dd if=/dev/shm/talyn-work-')) return { stdout: bundle };
+        return null;
+      });
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
       expect(res.body.data).toMatchObject({ status: 'archived' });
       await settleArchivesForTests();
       expect((await getWorkbench(wb.id))?.sandboxState).toBe('deleted');
       expect(res.body.data.archivedAt).toBeTruthy();
       expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
-      const save = fleet.scripts.findIndex((s) => s.includes(`git push origin HEAD:refs/heads/${wb.branch}`));
-      expect(save).toBeGreaterThan(-1);
+      // Saved into Talyn's storage, and nothing pushed anywhere.
+      expect(fleet.scripts.some((s) => isWorkSaveScript(s, 'archive'))).toBe(true);
+      expect(fleet.scripts.some((s) => s.includes('git push'))).toBe(false);
+      const meta = JSON.parse(store.objects.get(`ws-a/${wb.id}/archive/meta.json`)!.toString());
+      expect(meta).toMatchObject({ kind: 'archive', sha: 'd'.repeat(40), size: bundle.length, sha256: sum, parts: 1 });
+      expect(store.objects.get(`ws-a/${wb.id}/archive/${meta.generation}/part-00000`)?.toString()).toBe(bundle);
       expect((await call('GET', '/workbenches?workspaceId=ws-a')).body.data).toEqual([]);
       expect((await call('GET', '/workbenches?workspaceId=ws-a&includeArchived=true')).body.data).toHaveLength(1);
     });
 
     it('keeps the box when the work could not be saved', async () => {
       const wb = await createSandboxWorkbench();
-      scriptedFleet((script) => (script.includes('PUSHED_BRANCH') ? { exitCode: 1, stderr: 'remote: Permission denied' } : null));
+      scriptedFleet((script) => (isWorkSaveScript(script, 'archive') ? { exitCode: 1, stderr: 'remote: Permission denied' } : null));
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
       expect(res.status).toBe(200);
       await settleArchivesForTests();
@@ -762,7 +777,8 @@ describe('workbench routes', () => {
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
       expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id)}`, `${sandboxIdFor(wb.id, 1)}`]);
       expect(fleet.created.map((c) => c.policy?.egress)).toEqual([undefined, undefined]);
-      expect(fleet.scripts.some((s) => s.includes(`git fetch origin refs/talyn/archive/${wb.id}`))).toBe(true);
+      // Nothing was saved (the fake box is clean), so there is nothing to put back.
+      expect(fleet.scripts.some((s) => s.includes('git read-tree "$cp"'))).toBe(false);
       expect((await getChat(chatId))?.agentSessionId).toBeNull();
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
       expect(page.body.data.events.at(-1).event).toMatchObject({ type: 'system', subtype: 'sandbox_restored' });
@@ -1046,7 +1062,7 @@ describe('workbench routes', () => {
     it('records a fleet failure after answering the archive request', async () => {
       const wb = await createSandboxWorkbench();
       scriptedFleet((script) => {
-        if (script.includes('PUSHED_BRANCH')) throw new FleetCapacityError('http://10.0.0.7:8080 down', undefined, 'unreachable');
+        if (isWorkSaveScript(script, 'archive')) throw new FleetCapacityError('http://10.0.0.7:8080 down', undefined, 'unreachable');
         return null;
       });
       const res = await call('POST', `/workbenches/${wb.id}/archive`);
@@ -1192,6 +1208,18 @@ describe('workbench routes', () => {
           { path: 'src/a.ts', status: 'modified', added: 3, removed: 1, binary: false },
         ],
       });
+      // The read itself stores the stat and tells the sidebar: no turn has to end first.
+      await vi.waitFor(async () => expect(rowToWorkbench((await getWorkbench(wb.id))!)).toMatchObject({
+        diffStat: res.body.data.uncommittedStats,
+        committedStats: res.body.data.committedStats,
+      }));
+      expect(emitted.findLast((event) => event.type === 'workbench:updated')?.payload).toMatchObject({
+        workbench: { id: wb.id, diffStat: res.body.data.uncommittedStats },
+      });
+      const updates = emitted.filter((event) => event.type === 'workbench:updated').length;
+      await call('GET', `/workbenches/${wb.id}/changes`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(emitted.filter((event) => event.type === 'workbench:updated')).toHaveLength(updates);
       const updated = await refreshDiffStat((await getWorkbench(wb.id))!);
       expect(rowToWorkbench(updated)).toMatchObject({
         diffStat: res.body.data.uncommittedStats,

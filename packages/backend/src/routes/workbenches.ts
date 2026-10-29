@@ -28,7 +28,8 @@ import { runWithoutScope } from '../db/client.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
+import { getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from '../services/workbenches/changes.js';
+import { noteDiffStatFresh } from '../services/workbenches/workCheckpoint.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
@@ -596,7 +597,12 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       await requireReadySandbox(row, true);
-      ok(res, await getChanges(row));
+      const changes = await getChanges(row);
+      ok(res, changes);
+      noteDiffStatFresh(row.id);
+      void storeDiffStat(row, changes).catch((err) =>
+        console.warn(`[workbench] storing the diff stat for ${row.id} failed:`, err),
+      );
     } catch (err) {
       fail(res, err);
     }

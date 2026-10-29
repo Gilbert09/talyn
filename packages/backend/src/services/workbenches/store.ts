@@ -84,6 +84,9 @@ export const WORKBENCH_COLUMNS = {
   settings: workbenchesTable.settings,
   source: workbenchesTable.source,
   diffStat: workbenchesTable.diffStat,
+  workCheckpointSha: workbenchesTable.workCheckpointSha,
+  workCheckpointAt: workbenchesTable.workCheckpointAt,
+  workCheckpointBytes: workbenchesTable.workCheckpointBytes,
   archivedAt: workbenchesTable.archivedAt,
   createdAt: workbenchesTable.createdAt,
   updatedAt: workbenchesTable.updatedAt,
@@ -208,6 +211,28 @@ export async function updateWorkbench(
     .where(eq(workbenchesTable.id, id))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
+}
+
+/**
+ * Record a stored work checkpoint, only while the row still names the box it
+ * was taken on: a late answer from a lost box must not overwrite a newer one.
+ * `updated_at` is left alone, because nothing a person sees changed.
+ */
+export async function recordWorkCheckpoint(id: string, sandboxId: string, sha: string, at: Date, bytes: number): Promise<boolean> {
+  const rows = await db()
+    .update(workbenchesTable)
+    .set({ workCheckpointSha: sha, workCheckpointAt: at, workCheckpointBytes: bytes })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+/** The work is all on GitHub, or an archive superseded the checkpoint: there is none to restore. */
+export async function clearWorkCheckpoint(id: string, sandboxId?: string): Promise<void> {
+  await db()
+    .update(workbenchesTable)
+    .set({ workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null })
+    .where(sandboxId ? and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)) : eq(workbenchesTable.id, id));
 }
 
 /** Claim a lost box once. The old sandbox id keeps late calls from replacing its new box. */

@@ -12,7 +12,7 @@ import {
   backfillCredentialArchives, claimMove, getWorkbench, insertWorkbench, markArchive,
   setMoveTargetHost, updateWorkbench,
 } from '../services/workbenches/store.js';
-import { FakeFleet } from './helpers/fakeFleet.js';
+import { FakeFleet, isWorkSaveScript } from './helpers/fakeFleet.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 
 vi.mock('../services/github.js', () => ({ githubService: { getVerifiedAccessToken: vi.fn(async () => 'github-token') } }));
@@ -137,7 +137,7 @@ describe('session credentials during lifecycle operations', () => {
   it('retries a refused save beyond the failure limit and clears the error after success', async () => {
     let refused = true;
     fleet.handler = async (script) => {
-      if (!script.includes('PUSHED_BRANCH')) return {};
+      if (!isWorkSaveScript(script, 'archive')) return {};
       const result = refused ? { ok: false } : await resolveRunCredentials(HOST, BOX);
       return result.ok ? { exitCode: 0 } : { exitCode: 1, stderr: ERROR };
     };
@@ -166,7 +166,7 @@ describe('session credentials during lifecycle operations', () => {
     await updateWorkbench(ID, { archivePendingAt: null });
     expect(await backfillCredentialArchives()).toBe(0);
     await updateWorkbench(ID, { archivePendingAt: new Date(0) });
-    fleet.handler = async (script) => script.includes('PUSHED_BRANCH')
+    fleet.handler = async (script) => isWorkSaveScript(script, 'archive')
       ? { exitCode: (await resolveRunCredentials(HOST, BOX)).ok ? 0 : 1 } : {};
     await sweepPendingArchives();
     expect(await row()).toMatchObject({ archivePendingAt: null, sandboxState: 'deleted', statusMessage: null });

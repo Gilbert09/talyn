@@ -218,23 +218,34 @@ function sameStat(a: WorkbenchDiffStat | null, b: WorkbenchDiffStat): boolean {
 }
 
 /**
+ * Store the stat a read of the box just produced and, when it moved, tell the
+ * clients. The sidebar shows this number, so the Changes panel and the sidebar
+ * cannot disagree for longer than one read.
+ */
+export async function storeDiffStat(
+  row: WorkbenchRow,
+  changes: Pick<WorkbenchChanges, 'uncommittedStats' | 'committedStats'>,
+): Promise<WorkbenchRow> {
+  const uncommittedStats = changes.uncommittedStats ?? { added: 0, removed: 0, files: 0 };
+  const committedStats = changes.committedStats ?? { added: 0, removed: 0, files: 0 };
+  if (sameStat(row.diffStat ?? null, uncommittedStats)
+    && sameStat(row.diffStat?.uncommittedStats ?? null, uncommittedStats)
+    && sameStat(row.diffStat?.committedStats ?? null, committedStats)) return row;
+  const updated = (await updateWorkbench(row.id, {
+    diffStat: { ...uncommittedStats, uncommittedStats, committedStats },
+  })) ?? row;
+  await emitWorkbenchUpdated(await publicWorkbench(updated));
+  return updated;
+}
+
+/**
  * Recompute the diff stat and, when it moved, store it and tell the clients.
  * Best effort: a sandbox that cannot answer leaves the old number in place.
  */
 export async function refreshDiffStat(row: WorkbenchRow): Promise<WorkbenchRow> {
   if (row.runtime !== 'sandbox' || !row.sandboxId) return row;
   try {
-    const changes = await getChanges(row);
-    const uncommittedStats = changes.uncommittedStats;
-    const committedStats = changes.committedStats;
-    if (sameStat(row.diffStat ?? null, uncommittedStats)
-      && sameStat(row.diffStat?.uncommittedStats ?? null, uncommittedStats)
-      && sameStat(row.diffStat?.committedStats ?? null, committedStats)) return row;
-    const updated = (await updateWorkbench(row.id, {
-      diffStat: { ...uncommittedStats, uncommittedStats, committedStats },
-    })) ?? row;
-    await emitWorkbenchUpdated(await publicWorkbench(updated));
-    return updated;
+    return await storeDiffStat(row, await getChanges(row));
   } catch (err) {
     console.warn(`[workbench] diff stat for ${row.id} failed:`, err instanceof Error ? err.message : err);
     return row;

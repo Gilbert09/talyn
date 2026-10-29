@@ -1966,6 +1966,11 @@ export const workbenches = pgTable(
     /** Where the session started, when not the app (migration 0092). Set once. */
     source: jsonb('source').$type<WorkbenchSource>(),
     diffStat: jsonb('diff_stat').$type<WorkbenchStoredDiffStat | null>(),
+    /** The last checkpoint of unsaved work, kept in Talyn's storage (migration 0094). */
+    workCheckpointSha: text('work_checkpoint_sha'),
+    workCheckpointAt: timestamp('work_checkpoint_at', { withTimezone: true }),
+    /** The checkpoint bundle's size, compressed. */
+    workCheckpointBytes: integer('work_checkpoint_bytes'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
