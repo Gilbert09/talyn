@@ -1135,20 +1135,20 @@ export async function sweepOrphanedTurns(): Promise<number> {
 
 async function followTurnOutput(
   wb: WorkbenchRow, chat: ChatRow, turn: number, attempt: number, parser: AgentStreamParser,
-  startOffset: number, signal: AbortSignal, onParsed?: () => void,
+  startOffset: number, signal: AbortSignal, onStored?: () => void,
 ) {
   let offset = startOffset;
   let sessionId = chat.agentSessionId;
   return followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
     async (records) => {
       const drafts = records.flatMap(({ record }) => record.stream === 'stdout' ? parser.push(record.line) : []);
-      onParsed?.();
       const nextOffset = records[records.length - 1].offset;
       const snapshot = parser.snapshot();
       const stored = await retryBatchWrite(() => appendEvents(chat.id, drafts.map((event) => ({ turn, event })), {
         owner: TURN_OWNER, turn, offset: nextOffset, previousOffset: offset, parser: snapshot,
       }));
       offset = nextOffset;
+      onStored?.();
       emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
       if (parser.sessionId && parser.sessionId !== sessionId) {
         const updated = await getChat(chat.id);

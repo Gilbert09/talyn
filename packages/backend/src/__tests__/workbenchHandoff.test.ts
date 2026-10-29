@@ -13,7 +13,7 @@ import { appendEvents, claimOrEnqueue, claimTurnLease, finishTurn, getChat, getT
   insertChat, insertWorkbench, listEvents, renewTurnLease, saveOwnedSessionId } from '../services/workbenches/store.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests, TURN_OWNER } from '../services/workbenches/ownership.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
-import { ORPHAN_MESSAGE, LEGACY_INTERRUPTED_MESSAGE, sweepOrphanedTurns, turnLogKey, launchTurnLoopForTests, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
+import { ORPHAN_MESSAGE, LEGACY_INTERRUPTED_MESSAGE, LOST_CONTACT_MESSAGE, sweepOrphanedTurns, turnLogKey, launchTurnLoopForTests, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import { durablePaths, followDurableExec } from '../services/workbenches/durableExec.js';
 import { claimScript, appendScriptOutput, scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { settleAgentBackupsForTests } from '../services/workbenches/agentBackups.js';
@@ -179,6 +179,62 @@ describe('workbench deploy handoff', () => {
     expect(writes).toHaveBeenCalledTimes(3);
     expect((await getChat('chat'))?.status).toBe('running');
     expect((await getTurnLease('chat'))?.offset).toBe(0);
+  });
+  describe('adoption failures', () => {
+    let skew = 0;
+    const realNow = Date.now.bind(Date);
+    beforeEach(() => {
+      skew = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    });
+    // Each sweep waits out the back-off of the failure before it.
+    async function sweepAfterBackoff() {
+      skew += 5 * 60_000;
+      await db.db.update(workbenchChats).set({ turnHeartbeatAt: new Date(0) });
+      expect(await sweepOrphanedTurns()).toBe(1);
+      await vi.waitFor(async () => {
+        const chat = await getChat('chat');
+        const lease = await getTurnLease('chat');
+        expect(chat?.status !== 'running' || lease?.heartbeat?.getTime() === 0).toBe(true);
+      }, { timeout: 5000 });
+    }
+    const failureNumbers = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls
+      .map((c) => String(c[0]).match(/\(failure (\d+)\)/)?.[1]).filter(Boolean).map(Number);
+
+    it('counts adoptions whose events cannot be stored and then settles the turn as lost contact', async () => {
+      await running();
+      fleet.durableLogs.set(durablePaths(turnLogKey('chat', 1, 0)).log, { stdout: claudeTurnLines('session', 'done') });
+      const original = store.appendEvents;
+      vi.spyOn(store, 'appendEvents').mockImplementation(async (chatId, items, progress) => {
+        if (items.some((i) => (i.event as { result?: string }).result === LOST_CONTACT_MESSAGE)) return original(chatId, items, progress);
+        throw new Error('invalid input syntax for type json');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      for (let i = 0; i < 5; i++) await sweepAfterBackoff();
+      expect(failureNumbers(warn)).toEqual([1, 2, 3, 4]);
+      await vi.waitFor(async () => expect((await getChat('chat'))).toMatchObject({ status: 'error', statusMessage: LOST_CONTACT_MESSAGE }));
+    });
+
+    it('resets the count when a batch was stored before the failure', async () => {
+      await running();
+      const lines = Array.from({ length: 121 }, (_, i) => JSON.stringify({ type: 'assistant', text: String(i) }));
+      fleet.durableLogs.set(durablePaths(turnLogKey('chat', 1, 0)).log, { stdout: lines });
+      const original = store.appendEvents;
+      let stored = 0;
+      let allowOne = false;
+      vi.spyOn(store, 'appendEvents').mockImplementation(async (chatId, items, progress) => {
+        if (allowOne && stored === 0) { stored++; return original(chatId, items, progress); }
+        throw new Error('database unavailable');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      await sweepAfterBackoff();
+      await sweepAfterBackoff();
+      allowOne = true;
+      await sweepAfterBackoff();
+      expect(stored).toBe(1);
+      expect(failureNumbers(warn)).toEqual([1, 2, 1]);
+      expect((await getTurnLease('chat'))?.offset).toBeGreaterThan(0);
+    });
   });
   it('hands a pre-start turn on when drain starts during its adoption', async () => {
     await running();
