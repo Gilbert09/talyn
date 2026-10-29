@@ -294,9 +294,10 @@ Code: `services/workbenches/workCheckpoint.ts`, `workCheckpointScripts.ts`, `wor
 - **Limit.** 96 MiB compressed (`WORK_BUNDLE_MAX_BYTES`), the most a move carries over the same
   exec channel. Parts stay far under Storage's per-object limit. A larger checkpoint is refused,
   with one chat note until a save works again. A larger archive keeps the sandbox and says why.
-- **Checkpoint triggers.** After every turn (`afterTurn`), and during a turn at most every 5
-  minutes after the agent used a tool that can change files (anything but read-only and MCP
-  tools). A box whose HEAD and tree match the recorded checkpoint saves nothing. A box with no
+- **Checkpoint triggers.** After every turn (`afterTurn`), and during a turn at most once a minute
+  after the agent used a tool that can change files (anything but read-only and MCP tools).
+  When a save takes more than 12 seconds, the next gap is five times its duration, up to five
+  minutes. A box whose HEAD and tree match the recorded checkpoint saves nothing. A box with no
   uncommitted work and no unpushed commit deletes the stored checkpoint. Bounded and best effort:
   never fails or delays a turn. The same tool signal refreshes the sidebar's diff stat at most
   every 20 s, and the Changes route stores and broadcasts the stat it reads.

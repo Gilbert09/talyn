@@ -17,10 +17,13 @@ import { getWorkbench, insertChat, insertWorkbench, listEvents, recordWorkCheckp
 import {
   checkpointWork,
   CHECKPOINT_DURING_TURN_MS,
+  CHECKPOINT_MAX_GAP_MS,
+  CHECKPOINT_SLOW_FRACTION,
   createThrottle,
   DIFF_STAT_DURING_TURN_MS,
   draftsMayChangeFiles,
   noteTurnActivity,
+  nextCheckpointGapMs,
   setWorkCheckpointClockForTests,
   settleTurnActivity,
   WORK_PART_BYTES,
@@ -392,6 +395,25 @@ describe('the cheap "did files change" check', () => {
   });
 });
 
+describe('the checkpoint gap', () => {
+  it.each([
+    [0, 60_000],
+    [5_000, 60_000],
+    [12_000, 60_000],
+    [12_001, 60_005],
+    [30_000, 150_000],
+    [120_000, 300_000],
+  ])('uses %i ms of save time for a %i ms gap', (duration, gap) => {
+    expect(nextCheckpointGapMs(duration)).toBe(gap);
+  });
+
+  it('exports the gap limits', () => {
+    expect(CHECKPOINT_DURING_TURN_MS).toBe(60_000);
+    expect(CHECKPOINT_SLOW_FRACTION).toBe(0.2);
+    expect(CHECKPOINT_MAX_GAP_MS).toBe(300_000);
+  });
+});
+
 describe('the throttle', () => {
   it('runs at once, then once more at the end of the interval, however often it is poked', async () => {
     const { clock, advance, pending } = fakeClock();
@@ -614,7 +636,7 @@ describe('saved work in a session', () => {
       reply = (script) => (script.includes('talyn work checkpoint') ? { stdout: bundleLine() } : null);
     });
 
-    it('checkpoints at most every five minutes', async () => {
+    it('checkpoints at most once a minute after a fast save', async () => {
       const row = (await getWorkbench(WB))!;
       noteTurnActivity(row, [toolUse('Read')]);
       await flush();
@@ -624,9 +646,53 @@ describe('saved work in a session', () => {
       await flush();
       expect(saves()).toHaveLength(1);
 
-      clock.advance(60_000);
+      clock.advance(CHECKPOINT_DURING_TURN_MS - 1);
       noteTurnActivity(row, [toolUse('Write')]);
-      clock.advance(CHECKPOINT_DURING_TURN_MS - 60_000 - 1);
+      await flush();
+      expect(saves()).toHaveLength(1);
+      clock.advance(1);
+      await flush();
+      expect(saves()).toHaveLength(2);
+    });
+
+    it('widens the next gap after a slow save', async () => {
+      const row = (await getWorkbench(WB))!;
+      const put = store.put;
+      let slowed = false;
+      store.put = async (key, body) => {
+        if (!slowed) {
+          slowed = true;
+          clock.advance(30_000);
+        }
+        return put(key, body);
+      };
+      noteTurnActivity(row, [toolUse('Edit')]);
+      await flush();
+      expect(saves()).toHaveLength(1);
+
+      noteTurnActivity(row, [toolUse('Write')]);
+      clock.advance(120_000 - 1);
+      await flush();
+      expect(saves()).toHaveLength(1);
+      clock.advance(1);
+      await flush();
+      expect(saves()).toHaveLength(2);
+    });
+
+    it('counts a slow unchanged probe when it sets the next gap', async () => {
+      await updateWorkbench(WB, { workCheckpointSha: SHA });
+      const row = (await getWorkbench(WB))!;
+      reply = (script) => {
+        if (!script.includes('talyn work checkpoint')) return null;
+        clock.advance(30_000);
+        return { stdout: `UNCHANGED ${SHA}` };
+      };
+      noteTurnActivity(row, [toolUse('Edit')]);
+      await flush();
+      expect(saves()).toHaveLength(1);
+
+      noteTurnActivity(row, [toolUse('Write')]);
+      clock.advance(120_000 - 1);
       await flush();
       expect(saves()).toHaveLength(1);
       clock.advance(1);
@@ -651,8 +717,8 @@ describe('saved work in a session', () => {
       expect(changes.refreshDiffStat).toHaveBeenCalledTimes(2);
     });
 
-    it('waits five minutes from the last recorded checkpoint, and a turn end drops what was waiting', async () => {
-      await updateWorkbench(WB, { workCheckpointSha: SHA, workCheckpointAt: new Date(T0 - 60_000) });
+    it('waits one minute from the last recorded checkpoint, and a turn end drops what was waiting', async () => {
+      await updateWorkbench(WB, { workCheckpointSha: SHA, workCheckpointAt: new Date(T0 - 30_000) });
       const row = (await getWorkbench(WB))!;
       noteTurnActivity(row, [toolUse('Edit')]);
       await flush();

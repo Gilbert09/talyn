@@ -47,7 +47,15 @@ import { WorkStorageUnavailableError, workObjectStore } from './workStorage.js';
  * whole bundle, and a save that fails half-way leaves the last one in place.
  */
 
-export const CHECKPOINT_DURING_TURN_MS = 5 * 60_000;
+export const CHECKPOINT_DURING_TURN_MS = 60_000;
+export const CHECKPOINT_SLOW_FRACTION = 0.2;
+export const CHECKPOINT_MAX_GAP_MS = 5 * 60_000;
+// A fast repo saves every minute; a slow repo spends no more than about a fifth of its time saving.
+export function nextCheckpointGapMs(lastDurationMs: number): number {
+  return lastDurationMs > CHECKPOINT_DURING_TURN_MS * CHECKPOINT_SLOW_FRACTION
+    ? Math.min(5 * lastDurationMs, CHECKPOINT_MAX_GAP_MS)
+    : CHECKPOINT_DURING_TURN_MS;
+}
 export const DIFF_STAT_DURING_TURN_MS = 20_000;
 /** One part: a quiet exec answer is cut at 4 MiB, and capture mode sends base64. Same as a move's chunk. */
 export const WORK_PART_BYTES = 2 * 1024 * 1024;
@@ -218,6 +226,7 @@ export interface Throttle {
   poke(key: string, floor?: number): void;
   /** Count a run that happened elsewhere, so the next poke waits a full interval. */
   mark(key: string): void;
+  recordDuration(key: string, durationMs: number): void;
   cancel(key: string): void;
 }
 
@@ -238,30 +247,80 @@ const realClock: ThrottleClock = {
 };
 
 /** Leading edge, plus one trailing run, so a change right after a run is still caught within one interval. */
-export function createThrottle(intervalMs: number, run: (key: string) => Promise<unknown> | unknown, clock: ThrottleClock = realClock): Throttle {
+export function createThrottle(
+  intervalMs: number,
+  run: (key: string) => Promise<unknown> | unknown,
+  clock: ThrottleClock = realClock,
+  gapForDuration?: (durationMs: number) => number,
+): Throttle {
   const last = new Map<string, number>();
-  const timers = new Map<string, unknown>();
+  const lastDuration = new Map<string, number>();
+  const timers = new Map<string, { timer: unknown; floor: number }>();
+  const running = new Set<string>();
+  const pending = new Map<string, number>();
+  const schedule = (key: string, floor: number) => {
+    const interval = gapForDuration?.(lastDuration.get(key) ?? 0) ?? intervalMs;
+    const wait = Math.max(last.get(key) ?? -Infinity, floor) + interval - clock.now();
+    if (wait <= 0) {
+      if (running.has(key)) {
+        pending.set(key, Math.max(pending.get(key) ?? -Infinity, floor));
+      } else {
+        fire(key);
+      }
+      return;
+    }
+    const timer = clock.setTimer(() => {
+      timers.delete(key);
+      schedule(key, floor);
+    }, wait);
+    timers.set(key, { timer, floor });
+  };
   const fire = (key: string) => {
     last.set(key, clock.now());
-    void Promise.resolve().then(() => run(key)).catch(() => undefined);
+    running.add(key);
+    const finish = () => {
+      running.delete(key);
+      const floor = pending.get(key);
+      if (floor !== undefined) {
+        pending.delete(key);
+        schedule(key, floor);
+      }
+    };
+    void Promise.resolve().then(() => {
+      try {
+        const result = run(key);
+        if (result && typeof (result as Promise<unknown>).then === 'function') {
+          void Promise.resolve(result).catch(() => undefined).finally(finish);
+        } else {
+          finish();
+        }
+      } catch {
+        finish();
+      }
+    });
   };
   return {
     poke(key, floor = -Infinity) {
       if (timers.has(key)) return;
-      const wait = Math.max(last.get(key) ?? -Infinity, floor) + intervalMs - clock.now();
-      if (wait <= 0) return fire(key);
-      timers.set(key, clock.setTimer(() => {
-        timers.delete(key);
-        fire(key);
-      }, wait));
+      schedule(key, floor);
     },
     mark(key) {
       last.set(key, clock.now());
     },
+    recordDuration(key, durationMs) {
+      lastDuration.set(key, durationMs);
+      const waiting = timers.get(key);
+      if (waiting) {
+        clock.clearTimer(waiting.timer);
+        timers.delete(key);
+        schedule(key, waiting.floor);
+      }
+    },
     cancel(key) {
-      const timer = timers.get(key);
-      if (timer !== undefined) clock.clearTimer(timer);
+      const waiting = timers.get(key);
+      if (waiting) clock.clearTimer(waiting.timer);
       timers.delete(key);
+      pending.delete(key);
     },
   };
 }
@@ -280,13 +339,15 @@ async function checkpointOf(id: string): Promise<void> {
   if (row) await checkpointWork(row, 'during_turn');
 }
 
+let checkpointClock = realClock;
 let diffThrottle = createThrottle(DIFF_STAT_DURING_TURN_MS, refreshDiffStatOf);
-let checkpointThrottle = createThrottle(CHECKPOINT_DURING_TURN_MS, checkpointOf);
+let checkpointThrottle = createThrottle(CHECKPOINT_DURING_TURN_MS, checkpointOf, checkpointClock, nextCheckpointGapMs);
 
 /** Tests drive the throttles with a fake clock. */
 export function setWorkCheckpointClockForTests(clock: ThrottleClock | null): void {
+  checkpointClock = clock ?? realClock;
   diffThrottle = createThrottle(DIFF_STAT_DURING_TURN_MS, refreshDiffStatOf, clock ?? realClock);
-  checkpointThrottle = createThrottle(CHECKPOINT_DURING_TURN_MS, checkpointOf, clock ?? realClock);
+  checkpointThrottle = createThrottle(CHECKPOINT_DURING_TURN_MS, checkpointOf, checkpointClock, nextCheckpointGapMs);
   tooLargeNoted.clear();
 }
 
@@ -348,10 +409,13 @@ export function checkpointWork(row: WorkbenchRow, reason: 'turn_end' | 'during_t
 
 async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason: string): Promise<SaveOutcome> {
   let result: SaveOutcome;
+  const startedAt = checkpointClock.now();
   try {
     result = await saveWork(row, 'checkpoint', { previousSha: row.workCheckpointSha });
   } catch (err) {
     result = { kind: 'failed', detail: err instanceof Error ? err.message : String(err) };
+  } finally {
+    checkpointThrottle.recordDuration(row.id, Math.max(0, checkpointClock.now() - startedAt));
   }
   try {
     if (result.kind === 'saved') {
