@@ -2329,3 +2329,28 @@ export const sessionMcpTokens = pgTable(
     tokenHashUq: uniqueIndex('uq_session_mcp_tokens_token_hash').on(t.tokenHash),
   })
 );
+
+/**
+ * Instructions written in Talyn for one repository (migration 0095). Pool-only.
+ * A delete empties `body` and keeps the row, so the next turn removes the files.
+ */
+export const repositoryInstructions = pgTable(
+  'repository_instructions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    body: text('body').notNull().default(''),
+    agents: text('agents').notNull().default('both'),
+    bytes: integer('bytes').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    repositoryUq: uniqueIndex('uq_repository_instructions_repository').on(t.repositoryId),
+    workspaceIdx: index('idx_repository_instructions_workspace').on(t.workspaceId),
+  })
+);

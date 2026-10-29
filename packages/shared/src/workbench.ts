@@ -607,6 +607,12 @@ export interface WorkbenchLocalBridge {
     resumeSessionId?: string;
     appendSystemPrompt?: string;
     attachments?: WorkbenchAttachment[];
+    /**
+     * The text of the repository's Talyn instructions when they apply to this
+     * agent; null when there are none, so a file written for an earlier turn
+     * is removed. Absent from an older renderer: the files are left alone.
+     */
+    repositoryInstructions?: string | null;
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
   /**

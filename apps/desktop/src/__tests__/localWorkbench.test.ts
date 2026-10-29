@@ -127,7 +127,7 @@ function chat(over: Partial<WorkbenchChat> = {}): WorkbenchChat {
 
 const initial = useWorkbenchStore.getState();
 
-function setup(history: WorkbenchEvent[] = []) {
+function setup(history: WorkbenchEvent[] = [], extra: Partial<ConstructorParameters<typeof LocalTurnController>[0]> = {}) {
   useWorkbenchStore.setState(initial, true);
   const store = useWorkbenchStore.getState();
   store.setWorkspace('ws1');
@@ -142,6 +142,7 @@ function setup(history: WorkbenchEvent[] = []) {
     bridge,
     api,
     loadHistory,
+    ...extra,
     setTimer: (fn) => {
       timers.push(fn);
       return timers.length;
@@ -175,6 +176,24 @@ describe('LocalTurnController', () => {
     expect(bridge.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({ chatId: 'c1', turn: 2, path: '/work/lisbon', prompt: 'next step', model: 'claude-sonnet-5-5', effort: 'high' })
     );
+  });
+
+  it.each([
+    ['the text when it applies', 'Use tabs.', 'Use tabs.'],
+    ['null when none applies, so the file is removed', null, null],
+  ])('hands the bridge the repository instructions: %s', async (_name, loaded, sent) => {
+    const repositoryInstructions = jest.fn(async () => loaded);
+    const { controller, bridge } = setup([], { repositoryInstructions });
+    await controller.send(WB, chat(), { text: 'go' });
+    expect(repositoryInstructions).toHaveBeenCalledWith('r1', 'claude');
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({ repositoryInstructions: sent }));
+  });
+
+  it('leaves the field out when the instructions could not be read, so the files stay', async () => {
+    const { controller, bridge } = setup([], { repositoryInstructions: async () => undefined });
+    await controller.send(WB, chat(), { text: 'go' });
+    const [input] = bridge.startTurn.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(input).not.toHaveProperty('repositoryInstructions');
   });
 
   it('takes a checkpoint before the turn, outside the working tree', async () => {

@@ -33,6 +33,13 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
+describe('SessionsSettings', () => {
+  it('no longer draws "Your instructions", which lives on the Instructions page', () => {
+    render(<SessionsSettings />);
+    expect(screen.queryByText('Your instructions')).toBeNull();
+  });
+});
+
 describe('SessionsSettings branch prefix', () => {
   it('shows the live example', () => {
     render(<SessionsSettings />);

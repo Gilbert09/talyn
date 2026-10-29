@@ -16,7 +16,6 @@ import { useWorkspaceStore } from '../../../stores/workspace';
 import type { WorkbenchRuntime } from '../../../lib/readiness';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
-import { InstructionFilesSection } from '../InstructionFilesSection';
 
 const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
   low: 'Low',
@@ -214,7 +213,6 @@ export function SessionsSettings() {
       <SettingsSection title="Branches">
         <BranchPrefixRow />
       </SettingsSection>
-      <InstructionFilesSection />
       <SettingsSection title="Notifications">
         <SettingToggle
           label="Notify me when an agent finishes"

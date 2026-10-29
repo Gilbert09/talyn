@@ -254,3 +254,53 @@ export async function inlineInstructionImports(
   const expanded = await expand(content, filePath, 0, [await identity(filePath)]);
   return { content: expanded, imports, missingImports };
 }
+
+// ============================================================================
+// Repository instructions: written in Talyn, per repository
+// ============================================================================
+
+/** Which agents a repository's instructions go to. */
+export type RepositoryInstructionAgents = WorkbenchAgent | 'both';
+
+export const REPOSITORY_INSTRUCTION_AGENTS: readonly RepositoryInstructionAgents[] = ['claude', 'codex', 'both'];
+
+/**
+ * The text goes into every turn of every session on the repository, as the
+ * Mac files above do. 64 KiB is about 16k tokens: a long house style guide
+ * fits, and a pasted codebase does not.
+ */
+export const MAX_REPOSITORY_INSTRUCTION_BYTES = 64 * 1024;
+
+/** Put between a synced file and the Talyn text when both target one path. */
+export const REPOSITORY_INSTRUCTIONS_HEADING = '## Talyn repository instructions';
+
+export function repositoryInstructionsTooLargeMessage(bytes: number): string {
+  const kb = Math.ceil(bytes / 1024);
+  return `Repository instructions load into every turn; these are ${kb} KB. Trim them below 64 KB.`;
+}
+
+/** One repository's instructions. */
+export interface RepositoryInstructions {
+  repositoryId: string;
+  body: string;
+  agents: RepositoryInstructionAgents;
+  bytes: number;
+  updatedAt: string;
+}
+
+/** What the list returns: which repositories have instructions, never the text. */
+export type RepositoryInstructionsSummary = Omit<RepositoryInstructions, 'body'>;
+
+export interface PutRepositoryInstructionsInput {
+  body: string;
+  agents: RepositoryInstructionAgents;
+}
+
+/** The Mac file's text, then the Talyn text under its heading. Either may be empty. */
+export function joinRepositoryInstructions(synced: string | null | undefined, body: string): string {
+  const own = body.replace(/\s+$/, '');
+  if (!own) return synced ?? '';
+  const first = (synced ?? '').replace(/\s+$/, '');
+  if (!first) return own;
+  return `${first}\n\n${REPOSITORY_INSTRUCTIONS_HEADING}\n\n${own}`;
+}
