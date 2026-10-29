@@ -31,6 +31,7 @@ import {
   toShellScript,
   workbenchTurnPrompt,
   type AgentEvent,
+  SANDBOX_SERVICES_NOTE,
 } from '@talyn/shared';
 
 describe('parsePrDetails', () => {
@@ -149,8 +150,9 @@ describe('workbenchTurnPrompt for a Create PR turn', () => {
   it('Claude: the instructions go in front of the text AND in an appended system prompt', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: CREATE_PR_MESSAGE, planMode: false, intent: 'create_pr', createPr });
     const instructions = buildCreatePrTurnInstructions(createPr);
-    expect(turn.appendSystemPrompt).toBe(instructions);
-    expect(turn.prompt).toBe(`${instructions}\n\n---\n\nCreate a pull request`);
+    const hidden = `${instructions}\n\n${SANDBOX_SERVICES_NOTE}`;
+    expect(turn.appendSystemPrompt).toBe(hidden);
+    expect(turn.prompt).toBe(`${hidden}\n\n---\n\nCreate a pull request`);
     const argv = buildClaudeArgv({ prompt: turn.prompt, appendSystemPrompt: turn.appendSystemPrompt });
     expect(argv[argv.indexOf('--append-system-prompt') + 1]).toBe(turn.appendSystemPrompt);
     expect(argv.slice(-2)).toEqual(['--', turn.prompt]);

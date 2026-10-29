@@ -117,6 +117,12 @@ enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
+# Session work (checkpoints and archives). Private: only the backend reads it, with the
+# service-role key. Talyn writes 2 MiB parts. See docs/WORKBENCHES.md, "Saved work".
+[storage.buckets.workbench-work]
+public = false
+file_size_limit = "50MiB"
+
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
 # public = false

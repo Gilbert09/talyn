@@ -10,6 +10,7 @@ import type { AgentEvent } from './index.js';
 import type { WorkbenchAgent, WorkbenchMessageIntent } from './workbench.js';
 import { buildAutoCreatePrInstructions, buildCreatePrTurnInstructions } from './workbenchPullRequest.js';
 import { importedPathsNote } from './claudeSessionImport.js';
+import { SANDBOX_SERVICES_NOTE } from './sandboxSize.js';
 
 export const PLAN_BLOCK_FENCE = 'talyn-plan';
 
@@ -72,7 +73,7 @@ export function workbenchTurnPrompt(input: {
     : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
   const talynNote = input.talynTools ? TALYN_TOOLS_NOTE : null;
-  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, input.recap]
+  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, SANDBOX_SERVICES_NOTE, input.recap]
     .filter(Boolean)
     .join('\n\n');
   if (!instructions) return { prompt: input.text };

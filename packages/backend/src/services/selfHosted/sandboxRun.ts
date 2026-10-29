@@ -383,6 +383,17 @@ export async function buildSandboxCreateBody(
   return { ok: true, body };
 }
 
+export function withGithubReadAllRepos(body: CreateSandboxInput): CreateSandboxInput {
+  if (body.policy?.credentials?.github === 'none') return body;
+  return {
+    ...body,
+    policy: {
+      ...body.policy,
+      github: { ...body.policy?.github, readAllRepos: true },
+    },
+  };
+}
+
 /**
  * Boot one ephemeral fleet sandbox and hand back what it is.
  *

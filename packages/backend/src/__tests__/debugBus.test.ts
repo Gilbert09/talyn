@@ -502,6 +502,13 @@ describe('describeError', () => {
     );
   });
 
+  it('drops the bound params from a failed query and shows the Postgres code', () => {
+    const cause = Object.assign(new Error('unsupported Unicode escape sequence'), { code: '22P05' });
+    const err = new Error('Failed query: insert into t\nparams: 50,' + 'x'.repeat(100_000), { cause });
+    const text = describeError(err);
+    expect(text).toBe('Failed query: insert into t ← caused by: unsupported Unicode escape sequence [22P05]');
+  });
+
   it('keeps a lone message unchanged', () => {
     expect(describeError(new Error('boom'))).toBe('boom');
   });

@@ -26,6 +26,7 @@ import {
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
+import { cleanJsonbString, stringifyJsonbSafe } from './jsonSafe.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -83,6 +84,9 @@ export const WORKBENCH_COLUMNS = {
   settings: workbenchesTable.settings,
   source: workbenchesTable.source,
   diffStat: workbenchesTable.diffStat,
+  workCheckpointSha: workbenchesTable.workCheckpointSha,
+  workCheckpointAt: workbenchesTable.workCheckpointAt,
+  workCheckpointBytes: workbenchesTable.workCheckpointBytes,
   archivedAt: workbenchesTable.archivedAt,
   createdAt: workbenchesTable.createdAt,
   updatedAt: workbenchesTable.updatedAt,
@@ -207,6 +211,28 @@ export async function updateWorkbench(
     .where(eq(workbenchesTable.id, id))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
+}
+
+/**
+ * Record a stored work checkpoint, only while the row still names the box it
+ * was taken on: a late answer from a lost box must not overwrite a newer one.
+ * `updated_at` is left alone, because nothing a person sees changed.
+ */
+export async function recordWorkCheckpoint(id: string, sandboxId: string, sha: string, at: Date, bytes: number): Promise<boolean> {
+  const rows = await db()
+    .update(workbenchesTable)
+    .set({ workCheckpointSha: sha, workCheckpointAt: at, workCheckpointBytes: bytes })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+/** The work is all on GitHub, or an archive superseded the checkpoint: there is none to restore. */
+export async function clearWorkCheckpoint(id: string, sandboxId?: string): Promise<void> {
+  await db()
+    .update(workbenchesTable)
+    .set({ workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null })
+    .where(sandboxId ? and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)) : eq(workbenchesTable.id, id));
 }
 
 /** Claim a lost box once. The old sandbox id keeps late calls from replacing its new box. */
@@ -833,7 +859,7 @@ export async function claimOrEnqueue(
 ): Promise<ClaimResult | null> {
   const deferred = canStart && isWorkbenchDraining();
   canStart = canStart && !isWorkbenchDraining();
-  const add = JSON.stringify(message ? [message] : []);
+  const add = stringifyJsonbSafe(message ? [message] : []);
   const result = await db().execute(sql`
     WITH ${workbenchState(chatId)}, old AS (
       SELECT status, queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
@@ -932,7 +958,7 @@ export async function finishTurn(
 export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
   const result = await db().execute(sql`
     UPDATE workbench_chats c SET
-      queued_messages = ${JSON.stringify([message])}::jsonb || c.queued_messages,
+      queued_messages = ${stringifyJsonbSafe([message])}::jsonb || c.queued_messages,
       status = 'idle',
       turn_message = NULL,
       drain_pending = true,
@@ -1030,13 +1056,13 @@ export async function appendEvents(
   progress?: { owner: string; turn: number; offset?: number; previousOffset?: number; parser?: AgentStreamSnapshot },
 ): Promise<WorkbenchEvent[]> {
   if (items.length === 0 && !progress) return [];
-  const payload = JSON.stringify(items.map((i) => ({ turn: i.turn, event: i.event })));
+  const payload = stringifyJsonbSafe(items.map((i) => ({ turn: i.turn, event: i.event })));
   const result = await db().execute(sql`
     WITH alloc AS (
       UPDATE workbench_chats SET next_seq = next_seq + ${items.length}, updated_at = now(),
         turn_offset = COALESCE(${progress?.offset ?? null}::bigint, turn_offset),
-        turn_parser = COALESCE(${progress?.parser ? JSON.stringify(progress.parser) : null}::jsonb, turn_parser),
-        agent_session_id = COALESCE(${progress?.parser?.sessionId ?? null}::text, agent_session_id)
+        turn_parser = COALESCE(${progress?.parser ? stringifyJsonbSafe(progress.parser) : null}::jsonb, turn_parser),
+        agent_session_id = COALESCE(${progress?.parser?.sessionId ? cleanJsonbString(progress.parser.sessionId) : null}::text, agent_session_id)
       WHERE id = ${chatId}
         AND (${progress?.owner ?? null}::text IS NULL OR
           (turn_owner = ${progress?.owner ?? null} AND turn_count = ${progress?.turn ?? null}

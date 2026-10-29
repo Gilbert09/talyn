@@ -24,6 +24,7 @@ import { SettingsPage, SettingsSection } from '../../ui/settings';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
 import { RepositoryPreviewSettings } from './RepositoryPreviewSettings';
 import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
+import { RepoSandboxSize } from '../../widgets/RepoSandboxSize';
 
 export function RepositoriesSettings() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -590,6 +591,7 @@ function RepoRow({
       )}
       {error && <p className="pl-[22px] text-xs text-destructive">{error}</p>}
       <RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} />
+      <RepoSandboxSize repositoryId={repo.id} />
       {path && <RepoScripts path={path} />}
     </div>
   );

@@ -1,6 +1,9 @@
 import { runWithoutScope } from '../db/client.js';
 import { userMayUseWorkbenches } from '../services/workbenches/access.js';
 import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
+import {
+  detectRepoSandboxSize, getSizeRepository, mergeSandboxSize, sandboxSizeResponse, validateSandboxSizeChoice,
+} from '../services/workbenches/sandboxSize.js';
 import { Router, type Request, type Response } from 'express';
 import type { PutRepositoryInstructionsInput } from '@talyn/shared';
 import { WorkbenchError } from '../services/workbenches/errors.js';
@@ -160,6 +163,26 @@ export function repositoryRoutes(): Router {
     const detected = await detectRepoPreview(row.workspaceId, row, { force: true });
     row.settings = { ...row.settings, preview: { ...row.settings?.preview, ...(detected ? { detected } : {}) } };
     res.json({ success: true, data: previewResponse(row) });
+  });
+
+  router.get('/:id/sandbox-size', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getSizeRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    const detected = await detectRepoSandboxSize(row.workspaceId, row);
+    row.settings = { ...row.settings, ...(detected ? { detectedSandboxSize: detected } : {}) };
+    res.json({ success: true, data: sandboxSizeResponse(row) });
+  });
+
+  router.patch('/:id/sandbox-size', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    let sandboxSize;
+    try { sandboxSize = validateSandboxSizeChoice(req.body); }
+    catch (err) { return res.status(400).json({ success: false, error: (err as Error).message }); }
+    await mergeSandboxSize(req.params.id, { sandboxSize });
+    const row = await getSizeRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    res.json({ success: true, data: sandboxSizeResponse(row) });
   });
 
   router.delete('/:id', async (req, res) => {

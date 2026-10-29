@@ -74,6 +74,7 @@ import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
 import { PollingOnlyBadge } from '../widgets/PollingOnlyBadge';
+import { RepoSandboxSize } from '../widgets/RepoSandboxSize';
 import { openExternal } from '../../lib/openExternal';
 import { openGithubAppFlow } from '../../lib/githubInstall';
 import { APP_VERSION } from '../../lib/env';
@@ -568,6 +569,7 @@ function WorkspaceSettings() {
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
+                    <RepoSandboxSize repositoryId={repo.id} />
                   </div>
                 ))}
               </div>

@@ -4,6 +4,8 @@ import type {
   RepositoryInstructionsSummary,
   RepositoryPreviewChoice,
   RepositoryPreviewResponse,
+  RepositorySandboxSizeResponse,
+  SandboxSizeSetting,
 } from '@talyn/shared';
 import {
   getApiRoot,
@@ -1578,6 +1580,11 @@ export const repositories = {
     patch: (id: string, choice: RepositoryPreviewChoice) =>
       request<RepositoryPreviewResponse>('PATCH', `/repositories/${enc(id)}/preview`, choice),
     detect: (id: string) => request<RepositoryPreviewResponse>('POST', `/repositories/${enc(id)}/preview/detect`),
+  },
+  sandboxSize: {
+    get: (id: string) => request<RepositorySandboxSizeResponse>('GET', `/repositories/${enc(id)}/sandbox-size`),
+    set: (id: string, sandboxSize: SandboxSizeSetting) =>
+      request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
   },
   /** Instructions written in Talyn for a repository, added to every session on it. */
   instructions: {

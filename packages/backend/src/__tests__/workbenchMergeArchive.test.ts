@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { buildBlocks } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { FakeFleet, claudeTurnLines } from './helpers/fakeFleet.js';
+import { FakeFleet, claudeTurnLines, isWorkSaveScript } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
 import * as graphql from '../services/githubGraphql.js';
@@ -128,7 +128,7 @@ describe('archive sessions after a PR merge', () => {
   });
 
   it('leaves a restored session open for the same PR', async () => {
-    fleet.handler = (script) => script.includes('PUSHED_BRANCH') ? { exitCode: 1, stderr: 'Try later' } : {};
+    fleet.handler = (script) => isWorkSaveScript(script, 'archive') ? { exitCode: 1, stderr: 'Try later' } : {};
     await deliver();
     await settleArchivesForTests();
     await restoreWorkbench('wb');
@@ -244,7 +244,7 @@ describe('archive sessions after a PR merge', () => {
     await updateWorkbench('wb', { settings: { autoCreatePr: true } });
     expect((await row()).settings).toMatchObject({ archiveOnIdle: 'acme/widget#7', autoCreatePr: true });
     await finishTurn('chat-wb', { finalStatus: 'idle', statusMessage: null, drain: true });
-    fleet.handler = (script) => script.includes('PUSHED_BRANCH') ? { exitCode: 1 } : {};
+    fleet.handler = (script) => isWorkSaveScript(script, 'archive') ? { exitCode: 1 } : {};
     await sweepMergeArchives();
     await settleArchivesForTests();
     await restoreWorkbench('wb');
@@ -256,7 +256,7 @@ describe('archive sessions after a PR merge', () => {
   });
 
   it('can archive a new linked PR without forgetting the previous PR', async () => {
-    fleet.handler = (script) => script.includes('PUSHED_BRANCH') ? { exitCode: 1 } : {};
+    fleet.handler = (script) => isWorkSaveScript(script, 'archive') ? { exitCode: 1 } : {};
     await deliver();
     await settleArchivesForTests();
     await restoreWorkbench('wb');

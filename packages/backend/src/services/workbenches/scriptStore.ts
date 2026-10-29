@@ -3,6 +3,7 @@ import { and, eq, ne, or, lt, sql } from 'drizzle-orm';
 import type { WorkbenchScriptFrame } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { workbenchScriptRuns as runs } from '../../db/schema.js';
+import { cleanJsonbString } from './jsonSafe.js';
 import { TURN_OWNER } from './ownership.js';
 import type { WorkbenchRow } from './store.js';
 
@@ -26,7 +27,7 @@ export async function renewScript(lease: ScriptLease): Promise<boolean> {
   return rows.length === 1;
 }
 export async function appendScriptOutput(lease: ScriptLease, data: string, offset: number): Promise<boolean> {
-  const rows = await getPoolDbClient().update(runs).set({ output: sql`right(${runs.output} || ${data}, 65536)`, offset })
+  const rows = await getPoolDbClient().update(runs).set({ output: sql`right(${runs.output} || ${cleanJsonbString(data)}, 65536)`, offset })
     .where(and(owned(lease), eq(runs.offset, lease.offset))).returning({ id: runs.id });
   if (rows.length) lease.offset = offset;
   return rows.length === 1;

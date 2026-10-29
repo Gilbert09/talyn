@@ -67,6 +67,16 @@ function truncate(s: string): string {
 }
 
 /**
+ * A drizzle "Failed query" message ends with the bound parameters, which can be
+ * megabytes of user content and push the real cause out of the line. Cut them.
+ */
+function withoutQueryParams(message: string): string {
+  const at = message.indexOf('\nparams:');
+  const head = at === -1 ? message : message.slice(0, at);
+  return head.length > 300 ? `${head.slice(0, 300)}…` : head;
+}
+
+/**
  * An error as a line worth reading — INCLUDING its cause chain.
  *
  * `err.message` alone is what the panel used to show, and for a whole class of
@@ -91,7 +101,9 @@ export function describeError(err: unknown): string {
   let current: unknown = err;
   for (let depth = 0; depth < 4 && current instanceof Error && !seen.has(current); depth += 1) {
     seen.add(current);
-    parts.push(current.message || current.name);
+    const code = (current as { code?: unknown }).code;
+    const text = withoutQueryParams(current.message || current.name);
+    parts.push(typeof code === 'string' && code && !text.includes(code) ? `${text} [${code}]` : text);
     current = (current as { cause?: unknown }).cause;
   }
   if (current !== undefined && current !== null && !(current instanceof Error) && !seen.has(current)) {

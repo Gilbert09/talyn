@@ -60,6 +60,8 @@ const CATEGORY_INFO: Record<DebugCategory, string> = {
 // rows. Keep this in sync when a new outbound integration or emitter lands.
 const SERVICE_INFO: Record<string, string> = {
   github: 'GitHub REST + GraphQL API — PR data, checks, reviews, merges, and OAuth.',
+  supabase_storage:
+    'Supabase Storage, private bucket `workbench-work` — session checkpoints and archives, written and read 2 MiB at a time by the backend only.',
   github_status:
     'GitHub’s public status page (githubstatus.com) — read once a minute, with no key. One of the two signals behind the in-app GitHub outage banner; the other is the share of our own GitHub calls that fail.',
   postgres: 'The Supabase Postgres database — every query funnels through here. Rows show the operation, target table, and estimated result size.',

@@ -68,6 +68,7 @@ import {
   fleetClientFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
+import { checkpointWork, noteTurnActivity, settleTurnActivity } from './workCheckpoint.js';
 import { startTitleGeneration } from './title.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
@@ -393,7 +394,10 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
   try {
     let wb = await getWorkbench(chat.workbenchId);
     if (!wb) return;
+    settleTurnActivity(wb.id);
     wb = await refreshDiffStat(wb);
+    // After the stat, not beside it: two git reads at once on a box near its memory ceiling is worse than a second's wait.
+    void checkpointWork(wb, 'turn_end');
     const linked = await linkPullRequest(wb);
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
@@ -1137,21 +1141,22 @@ export async function sweepOrphanedTurns(): Promise<number> {
 
 async function followTurnOutput(
   wb: WorkbenchRow, chat: ChatRow, turn: number, attempt: number, parser: AgentStreamParser,
-  startOffset: number, signal: AbortSignal, onParsed?: () => void,
+  startOffset: number, signal: AbortSignal, onStored?: () => void,
 ) {
   let offset = startOffset;
   let sessionId = chat.agentSessionId;
   return followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
     async (records) => {
       const drafts = records.flatMap(({ record }) => record.stream === 'stdout' ? parser.push(record.line) : []);
-      onParsed?.();
       const nextOffset = records[records.length - 1].offset;
       const snapshot = parser.snapshot();
       const stored = await retryBatchWrite(() => appendEvents(chat.id, drafts.map((event) => ({ turn, event })), {
         owner: TURN_OWNER, turn, offset: nextOffset, previousOffset: offset, parser: snapshot,
       }));
       offset = nextOffset;
+      onStored?.();
       emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+      noteTurnActivity(wb, drafts);
       if (parser.sessionId && parser.sessionId !== sessionId) {
         const updated = await getChat(chat.id);
         if (updated) emitWorkbenchChat(chat.workspaceId, rowToChat(updated));

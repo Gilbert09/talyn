@@ -4,13 +4,7 @@ import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
 import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
-import {
-  checkpointCreateSteps,
-  checkpointRestoreSteps,
-  pickWorkbenchName,
-  shellQuote,
-  toShellScript,
-} from '@talyn/shared';
+import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
@@ -20,6 +14,7 @@ import {
   createSandboxRetryingUncertain,
   resolveRepository,
   resolveSandboxCredentials,
+  withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
@@ -28,6 +23,7 @@ import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } fro
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
+import { isSizeRefusal, noteSizeFallback, sizeFallbackNote, sizeForSession } from './sandboxSize.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -42,10 +38,13 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
+import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
+import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor } from './talynMcp.js';
 import {
   claimArchive,
   backfillCredentialArchives,
+  clearWorkCheckpoint,
   requestArchiveRestore, cancelPendingArchive, releaseArchive, ensureSandboxGeneration,
   finishArchive,
   markArchive,
@@ -77,12 +76,6 @@ import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollow
 const CLONE_TIMEOUT_MS = 20 * 60_000;
 /** An archive script is cleanup, not a build; past this it is stopped and the archive goes on. */
 const ARCHIVE_SCRIPT_TIMEOUT_MS = 2 * 60_000;
-const ARCHIVE_PUSH_TIMEOUT_MS = 5 * 60_000;
-
-/** The hidden remote ref that holds a workbench's uncommitted work while it is archived. */
-export function archiveRef(workbenchId: string): string {
-  return `refs/talyn/archive/${workbenchId}`;
-}
 
 const provisioning = new Set<string>();
 
@@ -127,14 +120,14 @@ export function scheduleProvision(workbenchId: string, opts: { restore?: boolean
  * but `yasctl -reseed-quotas` resets tenant defaults from the plan, so Talyn
  * asks for it explicitly rather than inherit whatever the plan says.
  */
-export const SESSION_SANDBOX_MEM_MIB = 4096;
+export const SESSION_SANDBOX_MEM_MIB = SANDBOX_SIZES.standard.memMib;
 
 /**
  * The CPU allowance of a session's box: 4 vCPUs. The tenant default is 1, or
  * 0.5 on a plan, which made a PostHog test run or build take many minutes. It
  * is a ceiling, not a reservation: the host shares its 12 threads by load.
  */
-export const SESSION_SANDBOX_MILLI_VCPU = 4000;
+export const SESSION_SANDBOX_MILLI_VCPU = SANDBOX_SIZES.standard.milliVcpu;
 
 export type CreatedWorkbenchSandbox =
   | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
@@ -176,7 +169,23 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   });
   if (!built.ok) return { ok: false, error: built.error };
   const target = await fleetCreateTarget(row.workspaceId);
-  const created = await createSandboxRetryingUncertain(target.client, { ...built.body, memMib: SESSION_SANDBOX_MEM_MIB, milliVcpu: SESSION_SANDBOX_MILLI_VCPU });
+  const withSize = (size: SandboxSize) => withGithubReadAllRepos({
+    ...built.body,
+    memMib: SANDBOX_SIZES[size].memMib,
+    milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+  });
+  const wanted = await sizeForSession(row);
+  let created;
+  try {
+    created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
+  } catch (err) {
+    // The tenant maximum refuses a size it cannot hold. Ask once for the standard box.
+    if (wanted !== 'large' || !isSizeRefusal(err)) throw err;
+    const text = sizeFallbackNote(err);
+    recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
+    await noteSizeFallback(row, text).catch(() => undefined);
+    created = await createSandboxRetryingUncertain(target.client, withSize('standard'));
+  }
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
@@ -220,11 +229,16 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       );
     }
     if (isWorkbenchDraining()) return;
-    if (opts.restore || row.memoryRestorePending === 'archive') {
-      const restored = await runCapture(row, restoreSavedWorkScript(row), { timeoutMs: CLONE_TIMEOUT_MS });
-      if (restored.exitCode !== 0) {
-        console.warn(`[workbench] restoring saved work for ${row.id} failed:`, restored.stderr.slice(-300));
-      }
+    // The saved work comes back from Talyn's storage before the setup script
+    // runs against the files: the archive's for a restore, the last
+    // checkpoint's for a lost box.
+    const restoringArchive = opts.restore || row.memoryRestorePending === 'archive';
+    let workNote: string | undefined;
+    if (restoringArchive) {
+      workNote = archiveRestoreNote(await restoreWork(row, 'archive'));
+    } else if (replacingLostSandbox) {
+      const restore = await restoreWork(row, 'checkpoint');
+      workNote = recoveryWorkNote(restore, { lostAt: new Date(), recordedAt: row.workCheckpointAt });
     }
 
     // 3. The setup script. A failure leaves the workbench usable — the agent
@@ -245,11 +259,13 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     if (isWorkbenchDraining()) return;
     row = await linkPullRequest(row);
     if (row.memoryRestorePending || replacingLostSandbox) {
-      await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
+      await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive', workNote);
     }
     row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
     void refreshDiffStat(row);
+    // The archive's work is on this box now: make it the checkpoint, so a loss before the first turn keeps it.
+    if (restoringArchive) void checkpointWork(row, 'restored');
 
     // 4. Messages sent while the box was coming up.
     for (const chat of await listChats(row.id)) {
@@ -264,68 +280,6 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
   } finally {
     provisioning.delete(workbenchId);
   }
-}
-
-/**
- * Save everything the box holds that origin does not, before the box goes.
- *
- * Prints one line per saved item:
- *   PUSHED_BRANCH <n>   n commits pushed to the branch itself
- *   PUSHED_HEAD         the branch had moved on origin; HEAD saved to the archive ref instead
- *   SAVED_WORK          uncommitted changes saved as a hidden commit on the archive ref
- * and exits non-zero when something could NOT be saved — the caller then
- * keeps the box, because deleting it would lose the work.
- *
- * Committed work goes to `refs/heads/<branch>` only as a fast-forward push; it
- * never force-pushes. Uncommitted work never touches the branch at all.
- */
-export function archiveSaveScript(row: Pick<WorkbenchRow, 'id' | 'branch' | 'baseBranch'>): string {
-  const branchRef = shellQuote(`refs/heads/${row.branch}`);
-  const base = shellQuote(`origin/${row.baseBranch}`);
-  const ref = archiveRef(row.id);
-  const checkpoint = toShellScript(
-    checkpointCreateSteps({ chatId: `archive-${row.id}`, turn: 0, tmpIndexPath: `/tmp/talyn-archive-${row.id}.index` }),
-  );
-  return [
-    'set -u',
-    `ahead=$(git rev-list --count ${base}..HEAD) || exit 1`,
-    'head=$(git rev-parse HEAD) || exit 1',
-    `if [ "$ahead" -gt 0 ]; then`,
-    `  remote=$(git ls-remote origin ${branchRef} | cut -f1)`,
-    `  if [ "$remote" != "$head" ]; then`,
-    `    if git push origin HEAD:${branchRef} >&2; then echo "PUSHED_BRANCH $ahead"`,
-    `    elif git push --force origin HEAD:${shellQuote(`${ref}-head`)} >&2; then echo PUSHED_HEAD`,
-    '    else echo "could not push the commits on this branch" >&2; exit 1; fi',
-    '  fi',
-    'fi',
-    'work=$(git status --porcelain) || exit 1',
-    'if [ -n "$work" ]; then',
-    `  sha=$(bash -c ${shellQuote(checkpoint)} | tail -n 1)`,
-    `  if [ -n "$sha" ] && git push --force origin "$sha":${shellQuote(ref)} >&2; then echo SAVED_WORK`,
-    '  else echo "could not save the uncommitted changes" >&2; exit 1; fi',
-    'fi',
-  ].join('\n');
-}
-
-/** After a restore's clone: put back what `archiveSaveScript` saved, when it saved anything. */
-export function restoreSavedWorkScript(row: Pick<WorkbenchRow, 'id' | 'branch'>): string {
-  const ref = archiveRef(row.id);
-  const headRef = shellQuote(`${ref}-head`);
-  // The sha is not known until the fetch, so the restore steps are built for a
-  // placeholder and the real sha substituted in the shell.
-  const placeholder = '0'.repeat(40);
-  const restore = toShellScript(
-    checkpointRestoreSteps({ sha: placeholder, tmpIndexPath: `/tmp/talyn-unarchive-${row.id}.index` }),
-  ).replace(placeholder, '"$sha"');
-  return [
-    'set -u',
-    `if git fetch origin ${headRef} 2>/dev/null; then git checkout -B ${shellQuote(row.branch)} FETCH_HEAD; fi`,
-    `if git fetch origin ${shellQuote(ref)} 2>/dev/null; then`,
-    '  sha=$(git rev-parse FETCH_HEAD)',
-    `  export sha; bash -c ${shellQuote(restore)}`,
-    '  echo RESTORED_WORK',
-    'fi',
-  ].join('\n');
 }
 
 /** Archive answers after the durable marker is written. */
@@ -385,11 +339,17 @@ export async function processArchive(workbenchId: string): Promise<void> {
         await done;
       }
       await checkLease();
-      const saved = await runCapture(row, archiveSaveScript(row), { marker: archiveSaveMarker(row), timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS, diskRecovery: false });
-      if (saved.exitCode !== 0) {
-        throw new Error(`Could not save the session: ${saved.stderr.trim().slice(-300) || `git exited ${saved.exitCode}`}`);
-      }
+      // Into Talyn's storage, never a push: the branch on GitHub is the
+      // person's, and a hidden ref on a public repository is public.
+      const saved = await saveWork(row, 'archive', { marker: archiveSaveMarker(row) });
+      if (saved.kind === 'too_large') throw new Error(archiveTooLargeMessage(saved.size));
+      if (saved.kind === 'failed') throw saved.error ?? new Error(`Could not save the session: ${saved.detail}`);
       await checkLease();
+      // The archive supersedes the checkpoint; a stale one must not come back after a restore.
+      await deleteSavedWork(row, ['checkpoint']).catch((err) =>
+        console.warn(`[workbench] removing the checkpoint of ${row.id} after its archive failed:`, err),
+      );
+      await clearWorkCheckpoint(row.id);
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     }
@@ -543,6 +503,10 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
       console.warn(`[workbench] deleting sandbox ${row.sandboxId} failed; removing the workbench anyway:`, err);
     }
   }
+  // Before the row: a failure leaves objects behind, never a row that names nothing.
+  await deleteSavedWork(row).catch((err) =>
+    console.warn(`[workbench] deleting the saved work of ${row.id} failed; removing the workbench anyway:`, err),
+  );
   await deleteWorkbenchRow(row.id);
   emitWorkbenchDeleted(row.workspaceId, row.id);
   if (row.pullRequestId) await emitPrSession(row.workspaceId, row.pullRequestId);

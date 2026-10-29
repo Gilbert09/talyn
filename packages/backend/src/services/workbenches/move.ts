@@ -866,6 +866,9 @@ async function stopOldBoxWork(row: WorkbenchRow): Promise<boolean> {
   return terminals + followed + remote > 0;
 }
 
+/** A read from the OLD box during the transfer found it gone. A failure on the new box is not this. */
+class OldBoxLost extends FleetRunNotFoundError {}
+
 async function exportFromOldBox(row: WorkbenchRow, sessions: MoveSession[]): Promise<MoveManifest> {
   const r = await runCapture(row, moveExportScript({ workbenchId: row.id, sessions }), {
     env: moveExportEnv(row.id),
@@ -907,6 +910,8 @@ async function transferFile(oldRow: WorkbenchRow, newRow: WorkbenchRow, file: Mo
       env: moveExportEnv(oldRow.id),
       quiet: true,
       timeoutMs: CHUNK_TIMEOUT_MS,
+    }).catch((err: unknown) => {
+      throw err instanceof FleetRunNotFoundError ? new OldBoxLost(err.message) : err;
     });
     if (r.exitCode !== 0) throw new Error(`could not read ${file.name} on the old sandbox: ${tail(r.stderr)}`);
     if (r.truncated || r.stdoutBytes.length !== length) {
@@ -1085,7 +1090,9 @@ async function handleFailure(f: {
       recordWorkbenchEvent(claimed, 'move_cleanup', `new sandbox ${created.sandboxId} not deleted`, false, deleteErr);
     }
   }
-  const oldBoxLost = f.step === 'export' && err instanceof FleetRunNotFoundError;
+  // The old box went away under the move. Its work is not in the half-made
+  // new box, so the recovery starts from the branch and the last checkpoint.
+  const oldBoxLost = (f.step === 'export' && err instanceof FleetRunNotFoundError) || err instanceof OldBoxLost;
   if (!oldBoxLost) await dropStaging(claimed);
   const released = await releaseMove(row.id, from, targetId, f.previousMessage).catch((releaseErr) => {
     console.warn(`[workbench] releasing the move of ${row.id} failed:`, releaseErr);

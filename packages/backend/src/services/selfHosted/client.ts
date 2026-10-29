@@ -319,8 +319,8 @@ export interface CreateSandboxInput {
   anthropicKey?: string;
   openaiKey?: string;
   /**
-   * The sandbox's privacy posture. Talyn sets exactly one thing on it:
-   * `credentials.<the other vendor> = 'none'`.
+   * The sandbox's privacy posture. Talyn suppresses the unused LLM vendor.
+   * Session boxes can also read repositories visible to their GitHub token.
    *
    * That is not decoration. The gateway fills an absent credential from its
    * tenant's sealed custody, and the fleet applies this policy at every door a
@@ -335,6 +335,7 @@ export interface CreateSandboxInput {
    */
   policy?: {
     credentials?: { github?: 'none'; anthropic?: 'none'; openai?: 'none' };
+    github?: { readAllRepos?: boolean };
     /**
      * How far the box may reach. Absent means the fleet's default, `proxy`:
      * no routed network at all, everything through the credential proxy.

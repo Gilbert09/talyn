@@ -34,6 +34,11 @@ function nonceOf(req: FleetExecRequest): { nonce: string; capture: boolean } {
   return { nonce: match[1], capture: match[2] === 'O' };
 }
 
+/** The script that saves a session's work into Talyn's storage (`workSaveScript`). */
+export function isWorkSaveScript(script: string, kind?: 'checkpoint' | 'archive'): boolean {
+  return script.includes('git commit-tree') && script.includes(kind ? `talyn work ${kind} ` : 'talyn work ');
+}
+
 export class FakeFleet {
   created: CreateSandboxInput[] = [];
   deleted: string[] = [];
@@ -151,7 +156,15 @@ export class FakeFleet {
     const script = req.env?.TALYN_SCRIPT ?? '';
     this.scripts.push(script);
     this.execs.push({ script, req, follow });
-    return this.handler(script, req);
+    const reply = await this.handler(script, req);
+    // A box with nothing to save, unless the test says otherwise: a saved-work
+    // script that "printed" nothing would read as a failure to save.
+    // A handler that answers every `git commit-tree` with a sha is answering the turn checkpoint, not this.
+    const out = Array.isArray(reply.stdout) ? reply.stdout.join('\n') : reply.stdout ?? '';
+    if (isWorkSaveScript(script) && !reply.exitCode && !reply.killed && !reply.hold && !/^(CLEAN|UNCHANGED|BUNDLE|TOO_LARGE)\b/m.test(out)) {
+      return { ...reply, stdout: 'CLEAN' };
+    }
+    return reply;
   }
 
   async createSandbox(input: CreateSandboxInput) {
