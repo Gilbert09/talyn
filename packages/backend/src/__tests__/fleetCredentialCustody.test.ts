@@ -160,6 +160,7 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
     // credential it could not use and should not be handed.
     expect(body).not.toHaveProperty('openaiKey');
     expect(body.policy).toEqual({ credentials: { openai: 'none' } });
+    expect(body.policy).not.toHaveProperty('github');
   });
 
   it('sends the workspace key and suppresses the OTHER vendor (Codex run)', async () => {

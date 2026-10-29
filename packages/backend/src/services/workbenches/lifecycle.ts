@@ -14,6 +14,7 @@ import {
   createSandboxRetryingUncertain,
   resolveRepository,
   resolveSandboxCredentials,
+  withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
@@ -168,7 +169,11 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   });
   if (!built.ok) return { ok: false, error: built.error };
   const target = await fleetCreateTarget(row.workspaceId);
-  const withSize = (size: SandboxSize) => ({ ...built.body, memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu });
+  const withSize = (size: SandboxSize) => withGithubReadAllRepos({
+    ...built.body,
+    memMib: SANDBOX_SIZES[size].memMib,
+    milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+  });
   const wanted = await sizeForSession(row);
   let created;
   try {

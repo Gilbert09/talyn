@@ -307,7 +307,11 @@ describe('workbench routes', () => {
         const body = fleet.created[0];
         expect(body).toMatchObject({ id: `${sandboxIdFor(wb.id)}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', ...key });
         expect(body).not.toHaveProperty(otherKey);
-        expect(body.policy).toEqual({ credentials: suppressed, egress: { mode: 'open' } });
+        expect(body.policy).toEqual({
+          credentials: suppressed,
+          egress: { mode: 'open' },
+          github: { readAllRepos: true },
+        });
         // Bare and long-lived: no task, and no `ephemeral` to stop it after one.
         expect(body).not.toHaveProperty('task');
         expect(body).not.toHaveProperty('ephemeral');

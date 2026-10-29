@@ -359,7 +359,12 @@ describe('moving a session to a fresh sandbox', () => {
 
     it('asks for the session memory ceiling on the new box', async () => {
       await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
-      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX, memMib: SESSION_SANDBOX_MEM_MIB, milliVcpu: SESSION_SANDBOX_MILLI_VCPU });
+      expect(fleet.created[0]).toMatchObject({
+        id: NEW_BOX,
+        memMib: SESSION_SANDBOX_MEM_MIB,
+        milliVcpu: SESSION_SANDBOX_MILLI_VCPU,
+        policy: { github: { readAllRepos: true } },
+      });
       expect(SESSION_SANDBOX_MEM_MIB).toBe(4096);
     });
 

@@ -200,7 +200,23 @@ describe('sandbox size for a repository', () => {
 
   it('creates the box at the detected size', async () => {
     expect((await create()).ok).toBe(true);
-    expect(fleet.created[0]).toMatchObject({ memMib: SANDBOX_SIZES.large.memMib, milliVcpu: SANDBOX_SIZES.large.milliVcpu });
+    expect(fleet.created[0]).toMatchObject({
+      memMib: SANDBOX_SIZES.large.memMib,
+      milliVcpu: SANDBOX_SIZES.large.milliVcpu,
+      policy: {
+        credentials: { openai: 'none' },
+        github: { readAllRepos: true },
+      },
+    });
+  });
+
+  it('does not request cross-repository reads when GitHub is suppressed', async () => {
+    vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockResolvedValueOnce({
+      ok: true,
+      body: { id: 'talyn-wb-paris', workspaceId: 'ws', policy: { credentials: { github: 'none' } } },
+    });
+    await create();
+    expect(fleet.created[0].policy).toEqual({ credentials: { github: 'none' } });
   });
 
   it('creates a standard box when the setting says so', async () => {
