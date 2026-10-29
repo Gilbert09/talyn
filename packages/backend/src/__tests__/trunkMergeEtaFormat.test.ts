@@ -108,6 +108,20 @@ describe('describeMergeEta', () => {
     ).toEqual({ headline: 'Will merge in ~20 min', details: ['Testing · ~15 min left'], runningLong: false });
   });
 
+  it.each([
+    ['the same minute', at(20 * MIN), at(20 * MIN), 'Will merge in ~20 min'],
+    ['times that have passed', at(-MIN), at(-2 * MIN), 'Will merge any moment'],
+  ])('leaves the time off a testing PR when it matches the headline: %s', (_name, estimatedAt, testsFinishAt, headline) => {
+    const view = describeMergeEta(answer(eta({ estimatedAt, testsFinishAt }), { queueState: 'testing' }), NOW);
+    expect(view?.headline).toBe(headline);
+    expect(view?.details[0]).toBe('Testing');
+  });
+
+  it('keeps the time left when Trunk gave no merge time', () => {
+    const view = describeMergeEta(answer(eta({ estimatedAt: null }), { queueState: 'testing' }), NOW);
+    expect(view).toMatchObject({ headline: null, details: ['Testing · ~15 min left', '2 PRs ahead'] });
+  });
+
   it('infers testing from the times when Trunk did not send a state', () => {
     const view = describeMergeEta(answer(eta({ startsTestingAt: at(-1 * MIN) })), NOW);
     expect(view?.details[0]).toBe('Testing · ~15 min left');
@@ -125,11 +139,12 @@ describe('describeMergeEta', () => {
 
   it('says "any moment" for times that have passed', () => {
     const view = describeMergeEta(
-      answer(eta({ estimatedAt: at(-MIN), testsFinishAt: at(-2 * MIN) }), { queueState: 'testing' }),
+      answer(eta({ estimatedAt: at(5 * MIN), testsFinishAt: at(-2 * MIN) }), { queueState: 'testing' }),
       NOW
     );
-    expect(view?.headline).toBe('Will merge any moment');
+    expect(view?.headline).toBe('Will merge in ~5 min');
     expect(view?.details[0]).toBe('Testing · finishing any moment');
+    expect(describeMergeEta(answer(eta({ estimatedAt: at(-MIN) })), NOW)?.headline).toBe('Will merge any moment');
   });
 
   it.each([
