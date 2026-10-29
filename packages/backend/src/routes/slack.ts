@@ -7,6 +7,7 @@ import {
   validateSlackTriggerEmojis,
   type ApiResponse,
   type SlackAuthorizeResponse,
+  type SlackEmojiResponse,
   type SlackForgetInstallationResponse,
   type SlackPendingRequest,
   type SlackStatus,
@@ -22,6 +23,7 @@ import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
 import { slackRefusalReason, userMayUseSlack } from '../services/slack/access.js';
 import { SlackApiError } from '../services/slack/api.js';
 import { getSlackAppConfig } from '../services/slack/config.js';
+import { listTeamEmoji } from '../services/slack/emoji.js';
 import {
   completeSlackInstall,
   completeSlackLink,
@@ -37,6 +39,7 @@ import {
   ownLink,
   slackStatusFor,
   updateOwnLink,
+  userHasTeam,
 } from '../services/slack/store.js';
 import { pendingRequestsFor } from '../services/slack/threads.js';
 import { startPendingRequest } from '../services/slack/triggers.js';
@@ -51,6 +54,7 @@ import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
  *   PATCH  /slack/links/:id { triggerEmojis?, workspaceId? }
  *   DELETE /slack/links/:id
  *   DELETE /slack/installations/:teamId    installer only
+ *   GET    /slack/teams/:teamId/emoji      the team's custom emoji (installer or linked)
  *   GET    /slack/pending                  my Slack requests waiting for a repository
  *   POST   /slack/pending/:id/start { repositoryId }  owner only → Workbench
  *   GET    /slack/oauth/callback           public; Slack's browser redirect
@@ -259,6 +263,22 @@ export function slackRoutes(): Router {
       return handleAccessError(new AccessError('link not found'), res);
     }
     res.json({ success: true });
+  });
+
+  router.get('/teams/:teamId/emoji', async (req, res) => {
+    if (await refuseUnlessEnabled(req, res)) return;
+    const teamId = req.params.teamId;
+    // 404 for a team the caller has nothing to do with, so team ids do not leak.
+    if (!(await userHasTeam(assertUser(req).id, teamId))) {
+      return handleAccessError(new AccessError('team not found'), res);
+    }
+    try {
+      const data = await listTeamEmoji(teamId);
+      res.json({ success: true, data } as ApiResponse<SlackEmojiResponse>);
+    } catch (err) {
+      if (!(err instanceof SlackApiError)) throw err;
+      res.status(502).json({ success: false, error: `Slack refused the emoji list (${err.code}).` });
+    }
   });
 
   router.get('/pending', async (req, res) => {

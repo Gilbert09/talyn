@@ -839,7 +839,8 @@ App settings (api.slack.com/apps → the app):
 - **OAuth & Permissions → Redirect URLs**: `https://prod.talyn.dev/api/v1/slack/oauth/callback`.
 - **Bot token scopes**: `app_mentions:read`, `reactions:read`, `reactions:write`,
   `channels:history`, `groups:history`, `im:history`, `mpim:history`,
-  `channels:read`, `groups:read`, `users:read`. No `chat:write`.
+  `channels:read`, `groups:read`, `users:read`, `emoji:read` (shows the workspace's
+  custom emoji in the trigger picker). No `chat:write`.
 - **User token scopes**: `openid`, `profile` (for "Sign in with Slack").
 - **Token rotation**: ON. Bot tokens then expire after about 12 hours. Talyn
   refreshes them with `oauth.v2.access` (`grant_type=refresh_token`) and stores

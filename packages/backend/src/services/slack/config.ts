@@ -26,6 +26,7 @@ export const SLACK_BOT_SCOPES = [
   'channels:read',
   'groups:read',
   'users:read',
+  'emoji:read',
 ] as const;
 
 /** "Sign in with Slack" (OpenID Connect) scopes for linking an account. */

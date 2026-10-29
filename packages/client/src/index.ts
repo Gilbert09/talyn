@@ -21,6 +21,7 @@ import type {
   MergeEtaAnswer,
   TrunkIntegrationStatus,
   SlackAuthorizeResponse,
+  SlackEmojiResponse,
   SlackForgetInstallationResponse,
   SlackPendingRequest,
   SlackStartInput,
@@ -2451,6 +2452,9 @@ export const slack = {
     request<SlackUserLinkView>('PATCH', `/slack/links/${encodeURIComponent(linkId)}`, input),
   unlink: (linkId: string) =>
     request<void>('DELETE', `/slack/links/${encodeURIComponent(linkId)}`),
+  /** The team's custom emoji (installer or linked). `needsScope` means the app must be reinstalled. */
+  listEmoji: (teamId: string) =>
+    request<SlackEmojiResponse>('GET', `/slack/teams/${encodeURIComponent(teamId)}/emoji`),
   /** Installer only. Forgets the bot token; the app stays installed in Slack. */
   forgetInstallation: (teamId: string) =>
     request<SlackForgetInstallationResponse>(
