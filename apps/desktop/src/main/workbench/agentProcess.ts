@@ -15,6 +15,7 @@ import {
 } from '@talyn/shared';
 import { processEnv } from './environment';
 import { exec, safeFilePath } from './git';
+import { applyRepositoryInstructions } from './repositoryInstructions';
 import { WorkbenchPaths } from './paths';
 import { stopGroup, type Emit } from './processes';
 
@@ -79,6 +80,11 @@ export class AgentProcesses {
         createdAt: new Date().toISOString(),
       });
       const prepared = await this.prepareAttachments(input);
+      if (input.repositoryInstructions !== undefined) {
+        await applyRepositoryInstructions(input.path, input.agent, input.repositoryInstructions).catch((err) =>
+          console.warn('[workbench] repository instructions failed:', err),
+        );
+      }
       const env = await processEnv();
       if (turn.cancelled) {
         this.emit('workbench:turn-end', {

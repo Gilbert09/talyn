@@ -42,6 +42,7 @@ import {
 import { SkillsSettings } from './SkillsSettings';
 import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
+import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
@@ -194,7 +195,12 @@ export function SettingsPanel() {
             {activeSection === 'integrations' && <IntegrationsSettings />}
             {activeSection === 'slack' && <SlackSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
-            {activeSection === 'instructions' && <InstructionsSettings />}
+            {activeSection === 'instructions' && (
+              <div className="space-y-6">
+                {features?.workbenches === true && <RepositoryInstructionsSection />}
+                <InstructionsSettings />
+              </div>
+            )}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'billing' && <BillingSettings />}
             {activeSection === 'teams' && <TeamSettings />}

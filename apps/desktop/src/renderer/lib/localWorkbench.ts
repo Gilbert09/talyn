@@ -60,6 +60,11 @@ export interface LocalControllerDeps {
   api: WorkbenchApi;
   /** Load a chat's stored history before numbering new events after it. */
   loadHistory: (chatId: string) => Promise<void>;
+  /**
+   * The repository's Talyn instructions for `agent`: the text, null when none
+   * apply, undefined when they could not be read (the files are then left alone).
+   */
+  repositoryInstructions?: (repositoryId: string, agent: WorkbenchAgent) => Promise<string | null | undefined>;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
   /** Overrides {@link LOCAL_BRANCH_NAMING_DEADLINE_MS}, for tests. */
@@ -223,6 +228,7 @@ export class LocalTurnController {
       autoCreatePr: workbench.settings?.autoCreatePr,
       hasPullRequest: Boolean(workbench.pullRequestId),
     });
+    const repositoryInstructions = await this.deps.repositoryInstructions?.(workbench.repositoryId, chat.agent);
     try {
       await this.deps.bridge.startTurn({
         workbenchId: workbench.id,
@@ -237,6 +243,7 @@ export class LocalTurnController {
         resumeSessionId: chat.agentSessionId ?? undefined,
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         attachments: input.attachments,
+        ...(repositoryInstructions !== undefined ? { repositoryInstructions } : {}),
       });
     } catch (err) {
       this.record(chat.id, turn, {
@@ -562,6 +569,15 @@ export function getLocalController(): LocalTurnController | null {
     bridge,
     api: api.workbenches,
     loadHistory: (chatId) => ensureChatHistory(chatId),
+    repositoryInstructions: async (repositoryId, agent) => {
+      try {
+        const found = await api.repositories.instructions.get(repositoryId);
+        if (!found) return null;
+        return found.agents === 'both' || found.agents === agent ? found.body : null;
+      } catch {
+        return undefined;
+      }
+    },
   });
   controller.start();
   return controller;

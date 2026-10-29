@@ -74,7 +74,8 @@ export function sessionState(
     if (pr.summary.draft) return { kind: 'draft', label: `Draft PR #${pr.number}` };
     const next = primaryWorkbenchAction(workbench, { state: pr.state, summary: pr.summary });
     if (next === 'resolve_conflicts') return { kind: 'pr_attention', label: `#${pr.number} has conflicts` };
-    if (next === 'fix_checks') return { kind: 'pr_attention', label: `#${pr.number} checks are failing` };
+    // Failing CI is not a session failure: keep the open-PR icon and say it in the label.
+    if (next === 'fix_checks') return { kind: 'pr_waiting', label: `#${pr.number} open, checks are failing` };
     if (next === 'merge') return { kind: 'ready_to_merge', label: `#${pr.number} is ready to merge` };
     return { kind: 'pr_waiting', label: `#${pr.number} open, waiting on checks or review` };
   }

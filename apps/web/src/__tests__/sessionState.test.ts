@@ -29,7 +29,7 @@ describe('sessionState', () => {
     ['closed', {}, [], {}, pr('closed'), 'closed'],
     ['draft', {}, [], {}, pr('open', { draft: true }), 'draft'],
     ['conflicts need you', {}, [], {}, pr('open', { mergeable: 'CONFLICTING' }), 'pr_attention'],
-    ['failing checks need you', {}, [], {}, pr('open', { ciStatus: 'failing_required' }), 'pr_attention'],
+    ['failing checks keep the open-PR state', {}, [], {}, pr('open', { ciStatus: 'failing_required' }), 'pr_waiting'],
     ['green is ready to merge', {}, [], {}, pr('open'), 'ready_to_merge'],
     ['running checks wait', {}, [], {}, pr('open', { ciStatus: 'running' }), 'pr_waiting'],
     ['changes with no PR', { diffStat: { files: 2, added: 5, removed: 1 } } as Partial<Wb>, [], {}, null, 'unshipped'],

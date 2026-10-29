@@ -20,7 +20,7 @@ export function useInstructionFileSync(): void {
     if (!workspaceId || !offered || !bridge?.instructionFiles) return;
     syncChangedInstructionFiles(workspaceId, bridge)
       .then(({ failed }) => {
-        if (failed > 0) toast.error('Could not upload your changed instruction files', 'Open Settings → Sessions to try again.');
+        if (failed > 0) toast.error('Could not upload your changed instruction files', 'Open Settings → Instructions to try again.');
       })
       .catch((err) => console.warn('[instructions] sync at start failed:', err));
   }, [workspaceId, offered]);

@@ -214,7 +214,7 @@ describe('workbench instruction files', () => {
   });
 
   describe('syncInstructionFiles', () => {
-    const row = (repoFullName = 'acme/app') => ({ id: 'wb-1', workspaceId: 'ws-a', repoFullName, agent: 'claude' }) as Loose;
+    const row = (repoFullName = 'acme/app') => ({ id: 'wb-1', workspaceId: 'ws-a', repositoryId: 'repo-none', repoFullName, agent: 'claude' }) as Loose;
     const put = (file: Parameters<typeof putInstructionFile>[1]) => putInstructionFile('ws-a', file);
     const home = (...p: string[]) => path.join(sandbox.home, ...p);
     const read = (p: string) => fs.readFile(p, 'utf8');

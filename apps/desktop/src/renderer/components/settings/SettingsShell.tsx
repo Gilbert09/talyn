@@ -25,11 +25,11 @@ import { cn } from '../../lib/utils';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace';
 import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsCard';
-import { InstructionsSettings } from '../panels/InstructionsSettings';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { SkillsSettings } from '../panels/SkillsSettings';
 import { SlackSettings } from '../panels/SlackSettings';
 import { TeamSettings } from '../panels/TeamBilling';
+import { InstructionsPage } from './InstructionsPage';
 import { PageHeader } from '../ui/page-header';
 import { ScrollArea } from '../ui/scroll-area';
 import { SettingsPage } from '../ui/settings';
@@ -58,14 +58,6 @@ function SkillsPage() {
   return (
     <SettingsPage title="Skills">
       <SkillsSettings />
-    </SettingsPage>
-  );
-}
-
-function InstructionsPage() {
-  return (
-    <SettingsPage title="Instructions">
-      <InstructionsSettings />
     </SettingsPage>
   );
 }
