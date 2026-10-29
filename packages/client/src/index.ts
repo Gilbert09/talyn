@@ -1,4 +1,12 @@
-import type { RepositoryPreviewChoice, RepositoryPreviewResponse, RepositorySandboxSizeResponse, SandboxSizeSetting } from '@talyn/shared';
+import type {
+  PutRepositoryInstructionsInput,
+  RepositoryInstructions,
+  RepositoryInstructionsSummary,
+  RepositoryPreviewChoice,
+  RepositoryPreviewResponse,
+  RepositorySandboxSizeResponse,
+  SandboxSizeSetting,
+} from '@talyn/shared';
 import {
   getApiRoot,
   getConfig,
@@ -1577,6 +1585,17 @@ export const repositories = {
     get: (id: string) => request<RepositorySandboxSizeResponse>('GET', `/repositories/${enc(id)}/sandbox-size`),
     set: (id: string, sandboxSize: SandboxSizeSetting) =>
       request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
+  },
+  /** Instructions written in Talyn for a repository, added to every session on it. */
+  instructions: {
+    /** Which repositories of the workspace have instructions. Never the text. */
+    list: (workspaceId: string) =>
+      request<RepositoryInstructionsSummary[]>('GET', `/repositories/instructions?workspaceId=${enc(workspaceId)}`),
+    /** The text, or null when the repository has none. */
+    get: (id: string) => request<RepositoryInstructions | null>('GET', `/repositories/${enc(id)}/instructions`),
+    put: (id: string, input: PutRepositoryInstructionsInput) =>
+      request<RepositoryInstructions>('PUT', `/repositories/${enc(id)}/instructions`, input),
+    remove: (id: string) => request<void>('DELETE', `/repositories/${enc(id)}/instructions`),
   },
   list: (workspaceId: string) =>
     request<WatchedRepo[]>('GET', `/repositories?workspaceId=${workspaceId}`),

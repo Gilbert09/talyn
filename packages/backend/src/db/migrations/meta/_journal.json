@@ -666,6 +666,13 @@
       "when": 1790900000013,
       "tag": "0094_workbench_work_checkpoints",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1790900000014,
+      "tag": "0095_repository_instructions",
+      "breakpoints": true
     }
   ]
 }

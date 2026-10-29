@@ -5,6 +5,14 @@ import {
   detectRepoSandboxSize, getSizeRepository, mergeSandboxSize, sandboxSizeResponse, validateSandboxSizeChoice,
 } from '../services/workbenches/sandboxSize.js';
 import { Router, type Request, type Response } from 'express';
+import type { PutRepositoryInstructionsInput } from '@talyn/shared';
+import { WorkbenchError } from '../services/workbenches/errors.js';
+import {
+  getRepositoryInstructions,
+  listRepositoryInstructions,
+  putRepositoryInstructions,
+  removeRepositoryInstructions,
+} from '../services/workbenches/repositoryInstructions.js';
 import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
 import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
@@ -83,6 +91,50 @@ export function repositoryRoutes(): Router {
     }
     return true;
   }
+
+  // ---- Instructions written in Talyn for a repository ----
+
+  /** Which of the workspace's repositories have instructions. No text. */
+  router.get('/instructions', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    if (!workspaceId) return res.status(400).json({ success: false, error: 'workspaceId is required' });
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const user = assertUser(req);
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      return res.status(403).json({ success: false, error: 'Sessions are not available for this account.' });
+    }
+    res.json({ success: true, data: await listRepositoryInstructions(workspaceId) });
+  });
+
+  router.get('/:id/instructions', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    res.json({ success: true, data: await getRepositoryInstructions(req.params.id) });
+  });
+
+  router.put('/:id/instructions', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    try {
+      const data = await putRepositoryInstructions(req.params.id, req.body as Partial<PutRepositoryInstructionsInput>);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err instanceof WorkbenchError) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+  });
+
+  router.delete('/:id/instructions', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    if (!(await removeRepositoryInstructions(req.params.id))) {
+      return res.status(404).json({ success: false, error: 'This repository has no instructions.' });
+    }
+    res.json({ success: true, data: null });
+  });
 
   router.get('/:id/preview', async (req, res) => {
     if (!(await previewGate(req, res))) return;

@@ -3,6 +3,8 @@ import { v4 as uuid } from 'uuid';
 import { and, asc, eq, or, sql } from 'drizzle-orm';
 import {
   instructionFileTooLargeMessage,
+  joinRepositoryInstructions,
+  REPOSITORY_INSTRUCTIONS_HEADING,
   MAX_WORKBENCH_INSTRUCTION_BYTES,
   parseWorkbenchInstructionKey,
   type PutWorkbenchInstructionFileInput,
@@ -13,6 +15,7 @@ import {
 import { getPoolDbClient, type Database } from '../../db/client.js';
 import { workbenchInstructionFiles as filesTable } from '../../db/schema.js';
 import { WorkbenchError } from './errors.js';
+import { repositoryInstructionsForTurn } from './repositoryInstructions.js';
 import { repoDirFor } from './sandboxRuntime.js';
 import { shellPath, writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import type { WorkbenchRow } from './store.js';
@@ -29,6 +32,13 @@ import type { WorkbenchRow } from './store.js';
  *   `CLAUDE.local.md` goes in the repository, listed in `.git/info/exclude`.
  * - Codex: one marked block at the end of `$HOME/.codex/AGENTS.md`, stripped
  *   and appended again on every sync, because Codex has no rules directory.
+ *
+ * Instructions written in Talyn for a repository (`repositoryInstructions.ts`)
+ * take the repository-scoped route: Claude's `<repo>/CLAUDE.local.md` (after
+ * the synced Mac file, when there is one) and Codex's
+ * `<repo>/AGENTS.override.md`. Codex reads at most one of `AGENTS.override.md`
+ * and `AGENTS.md` per directory, so the override starts with the repository's
+ * own `AGENTS.md`. Both files are listed in `.git/info/exclude`.
  */
 
 const db = (): Database => getPoolDbClient();
@@ -40,6 +50,10 @@ export const CODEX_BLOCK_END = '<!-- talyn:instructions:end -->';
 /** Marks a `CLAUDE.local.md` this sync wrote, so switching it off removes only ours. */
 const CLAUDE_LOCAL_STAMP = 'talyn-claude-local';
 const CODEX_BLOCK_TMP = '~/.talyn/codex-instructions.md';
+const CODEX_REPO_TMP = '~/.talyn/codex-repo-instructions.md';
+export const CODEX_REPO_FILE = 'AGENTS.override.md';
+/** Marks an `AGENTS.override.md` this sync wrote, so a file from the repository is left alone. */
+const CODEX_OVERRIDE_STAMP = 'talyn-agents-override';
 
 /** Every column but `content`. The list never ships the text. */
 const LIST_COLUMNS = {
@@ -177,20 +191,50 @@ interface SyncRow {
   content: string;
 }
 
-/** `.git/info/exclude` gets `CLAUDE.local.md` once; the stamp says the file is ours. */
-function claudeLocalBefore(repoDir: string): string {
+/** `.git/info/exclude` gets `file` once; the stamp says the file is ours. */
+function excludeAndStamp(repoDir: string, file: string, stamp: string | null): string {
   return [
     `cd ${shellPath(repoDir)}`,
     'ex=$(git rev-parse --git-path info/exclude)',
     'mkdir -p "$(dirname "$ex")"',
     'touch "$ex"',
-    `if ! grep -qxF CLAUDE.local.md "$ex"; then`,
+    `if ! grep -qxF ${file} "$ex"; then`,
     `  if [ -s "$ex" ] && [ -n "$(tail -c1 "$ex")" ]; then echo >> "$ex"; fi`,
-    '  echo CLAUDE.local.md >> "$ex"',
+    `  echo ${file} >> "$ex"`,
     'fi',
-    `: > "$(git rev-parse --git-path ${CLAUDE_LOCAL_STAMP})"`,
+    ...(stamp ? [`: > "$(git rev-parse --git-path ${stamp})"`] : []),
     'cd /',
   ].join('\n');
+}
+
+function claudeLocalBefore(repoDir: string): string {
+  return excludeAndStamp(repoDir, 'CLAUDE.local.md', CLAUDE_LOCAL_STAMP);
+}
+
+/**
+ * Write `AGENTS.override.md`: the repository's own `AGENTS.md` first (Codex
+ * would otherwise skip it), then the Talyn text. A file in the repository
+ * that we did not write is never replaced.
+ */
+function codexRepoOverrideScript(repoDir: string, hasBody: boolean): string {
+  const tmp = shellPath(CODEX_REPO_TMP);
+  const lines = [
+    `if cd ${shellPath(repoDir)} 2>/dev/null; then`,
+    `  stamp=$(git rev-parse --git-path ${CODEX_OVERRIDE_STAMP} 2>/dev/null || true)`,
+  ];
+  if (hasBody) {
+    lines.push(
+      `  if [ -e ${CODEX_REPO_FILE} ] && [ ! -e "$stamp" ]; then :; else`,
+      `    { if [ -s AGENTS.md ]; then cat AGENTS.md; printf '\\n%s\\n\\n' ${shellQuoteRaw(REPOSITORY_INSTRUCTIONS_HEADING)}; fi; cat ${tmp}; } > ${CODEX_REPO_FILE}.talyn-tmp`,
+      `    mv -f ${CODEX_REPO_FILE}.talyn-tmp ${CODEX_REPO_FILE}`,
+      '    [ -n "$stamp" ] && : > "$stamp"',
+      '  fi',
+    );
+  } else {
+    lines.push(`  if [ -n "$stamp" ] && [ -e "$stamp" ]; then rm -f ${CODEX_REPO_FILE} "$stamp"; fi`);
+  }
+  lines.push('  cd /', 'fi', `rm -f ${tmp}`);
+  return lines.join('\n');
 }
 
 /** Remove a `CLAUDE.local.md` an earlier sync wrote. Leaves one the user made in the box. */
@@ -244,30 +288,33 @@ function shellQuoteRaw(value: string): string {
  * feature pays no exec for it.
  */
 export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAgent = row.agent as WorkbenchAgent): Promise<void> {
+  const repo = await repositoryInstructionsForTurn(row.repositoryId, agent);
   const [any] = await db()
     .select({ key: filesTable.key })
     .from(filesTable)
     .where(and(eq(filesTable.workspaceId, row.workspaceId), eq(filesTable.agent, agent)))
     .limit(1);
-  if (!any) return;
+  if (!any && !repo.hasRow) return;
 
-  const rows: SyncRow[] = await db()
-    .select({ key: filesTable.key, target: filesTable.target, sourcePath: filesTable.sourcePath, content: filesTable.content })
-    .from(filesTable)
-    .where(
-      and(
-        eq(filesTable.workspaceId, row.workspaceId),
-        eq(filesTable.agent, agent),
-        eq(filesTable.enabled, true),
-        or(
-          eq(filesTable.target, 'user'),
-          and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
-        ),
-      ),
-    )
-    .orderBy(asc(filesTable.key));
+  const rows: SyncRow[] = any
+    ? await db()
+        .select({ key: filesTable.key, target: filesTable.target, sourcePath: filesTable.sourcePath, content: filesTable.content })
+        .from(filesTable)
+        .where(
+          and(
+            eq(filesTable.workspaceId, row.workspaceId),
+            eq(filesTable.agent, agent),
+            eq(filesTable.enabled, true),
+            or(
+              eq(filesTable.target, 'user'),
+              and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
+            ),
+          ),
+        )
+        .orderBy(asc(filesTable.key))
+    : [];
 
-  await writeSandboxFiles(row, ...instructionSyncPlan(row, agent, rows));
+  await writeSandboxFiles(row, ...instructionSyncPlan(row, agent, rows, repo.body));
 }
 
 /** The files to write and the scripts around them. Split out so a test can read it. */
@@ -275,6 +322,7 @@ export function instructionSyncPlan(
   row: Pick<WorkbenchRow, 'repoFullName'>,
   agent: WorkbenchAgent,
   rows: SyncRow[],
+  repoBody: string | null = null,
 ): [SandboxFile[], { before?: string; after: string }] {
   const repoDir = repoDirFor(row);
   if (agent === 'codex') {
@@ -283,7 +331,14 @@ export function instructionSyncPlan(
       .map((r) => `<!-- from ${r.sourcePath} -->\n${r.content.replace(/\n+$/, '')}`)
       .join('\n\n');
     const files = body ? [{ path: CODEX_BLOCK_TMP, base64: b64(body) }] : [];
-    return [files, { after: codexBlockScript(Boolean(body)) }];
+    if (repoBody) files.push({ path: CODEX_REPO_TMP, base64: b64(repoBody) });
+    return [
+      files,
+      {
+        ...(repoBody ? { before: excludeAndStamp(repoDir, CODEX_REPO_FILE, null) } : {}),
+        after: [codexBlockScript(Boolean(body)), codexRepoOverrideScript(repoDir, Boolean(repoBody))].join('\n'),
+      },
+    ];
   }
 
   const files: SandboxFile[] = [];
@@ -294,7 +349,8 @@ export function instructionSyncPlan(
     keep.push(name);
     files.push({ path: `${INSTRUCTION_RULES_DIR}/${name}`, base64: b64(r.content) });
   }
-  const local = rows.find((r) => r.target === 'repo');
+  const synced = rows.find((r) => r.target === 'repo');
+  const local = synced || repoBody ? { content: joinRepositoryInstructions(synced?.content, repoBody ?? '') } : null;
   if (local) files.push({ path: `${repoDir}/CLAUDE.local.md`, base64: b64(local.content) });
   return [
     files,
