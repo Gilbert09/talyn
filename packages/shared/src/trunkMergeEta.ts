@@ -163,7 +163,8 @@ export function describeMergeEta(answer: MergeEtaAnswer | null, nowMs: number): 
       eta.testsFinishAt !== null);
   if (testing) {
     const left = formatEtaDuration(eta.testsFinishAt, nowMs);
-    if (left === null) details.push('Testing');
+    // Tests usually finish when the PR merges, so the headline already says it.
+    if (left === null || left === mergeIn) details.push('Testing');
     else if (left === 'any moment') details.push('Testing · finishing any moment');
     else details.push(`Testing · ${left} left`);
   } else {
