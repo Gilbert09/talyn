@@ -3,10 +3,15 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { debugBus } from '../services/debugBus.js';
 import { callApi } from './api.js';
-import { TOOLS } from './tools/index.js';
+import { toolAllowedForCaller } from './sessionScope.js';
+import { TOOLS, type McpCallContext } from './tools/index.js';
 
-export function listToolsFor(features: Features | null) {
-  return TOOLS.filter((tool) => !tool.feature || features?.[tool.feature] !== false).map(
+export function listToolsFor(features: Features | null, ctx: McpCallContext = {}) {
+  return TOOLS.filter(
+    (tool) =>
+      (!tool.feature || features?.[tool.feature] !== false) &&
+      toolAllowedForCaller(tool.name, ctx.session)
+  ).map(
     (tool) => ({
       name: tool.name,
       description: tool.description,
@@ -21,8 +26,11 @@ export function listToolsFor(features: Features | null) {
  * matching tool as `ownerId` and records each invocation on the debug bus
  * (name + ok + duration only — never arguments or secrets) so the Debug
  * panel's event stream stays honest.
+ *
+ * `ctx.session` is set for a session sandbox's own token: it sees and may call
+ * only `SESSION_TOKEN_TOOLS`, and the session tools guard calls on itself.
  */
-export function buildMcpServer(ownerId: string): Server {
+export function buildMcpServer(ownerId: string, ctx: McpCallContext = {}): Server {
   const server = new Server({ name: 'talyn', version: '0.1.0' }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -34,7 +42,7 @@ export function buildMcpServer(ownerId: string): Server {
         // A temporary failure must not hide tools. Each route still checks access.
       }
     }
-    return { tools: listToolsFor(features) };
+    return { tools: listToolsFor(features, ctx) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -45,11 +53,29 @@ export function buildMcpServer(ownerId: string): Server {
         content: [{ type: 'text' as const, text: `unknown tool: ${req.params.name}` }],
       };
     }
+    if (!toolAllowedForCaller(tool.name, ctx.session)) {
+      debugBus.recordEvent({
+        service: 'mcp',
+        action: tool.name,
+        summary: 'refused for a session token',
+        ok: false,
+      });
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text: `${tool.name} is not available inside a session. Ask the person to do it in the Talyn app.`,
+          },
+        ],
+      };
+    }
     const startedAt = Date.now();
     try {
       const text = await tool.handler(
         ownerId,
-        (req.params.arguments ?? {}) as Record<string, unknown>
+        (req.params.arguments ?? {}) as Record<string, unknown>,
+        ctx
       );
       debugBus.recordEvent({
         service: 'mcp',

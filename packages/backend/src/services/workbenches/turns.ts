@@ -1,4 +1,5 @@
-import { autoArchiveForMergedPr } from './autoArchive.js';
+import { archiveIdleSession } from './autoArchive.js';
+import { sessionHasTalynMcp } from './talynMcp.js';
 import { v4 as uuid } from 'uuid';
 import {
   buildClaudeArgv,
@@ -273,7 +274,7 @@ export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
   if (isWorkbenchDraining()) { await markDrainPending(chatId); return false; }
   const claim = await claimOrEnqueue(chatId, null, true);
   if (!claim?.started) {
-    if (claim) await autoArchiveForMergedPr({ workbenchId: claim.chat.workbenchId });
+    if (claim) await archiveIdleSession(claim.chat.workbenchId);
     return false;
   }
   emitWorkbenchChat(claim.chat.workspaceId, rowToChat(claim.chat));
@@ -371,7 +372,7 @@ async function runTurnLoopBody(
     adoptFailures.delete(chatId);
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
-      await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
+      await archiveIdleSession(fin.chat.workbenchId);
     }
     if (fin) {
       scheduleAgentBackup(chatId);
@@ -619,6 +620,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       autoCreatePr: wb.settings?.autoCreatePr,
       hasPullRequest: Boolean(wb.pullRequestId),
       imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
+      talynTools: await sessionHasTalynMcp(wb),
     });
     const argv =
       agent === 'codex'
@@ -931,7 +933,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
-      await autoArchiveForMergedPr({ workbenchId: fin.chat.workbenchId });
+      await archiveIdleSession(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
     }
   }

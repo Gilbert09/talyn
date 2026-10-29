@@ -9,6 +9,11 @@ import {
   type WorkbenchChat,
   type WorkbenchEvent,
 } from '@talyn/shared';
+import {
+  chatWorkbenchId,
+  recordSessionSpawn,
+  reserveSessionCreate,
+} from '../../services/sessionMcpToken.js';
 import { callApi, McpApiError } from '../api.js';
 import {
   bool,
@@ -22,6 +27,7 @@ import {
   trim,
   workspaceSchema,
 } from './helpers.js';
+import type { McpCallContext } from './index.js';
 
 const FEATURE = 'workbenches' as const;
 const LOCAL_MESSAGE =
@@ -107,6 +113,28 @@ async function resolveChat(ownerId: string, args: Record<string, unknown>): Prom
   if (!chat) throw new Error(`Session ${sessionId} has no open chat.`);
   return chat.id;
 }
+
+/**
+ * Whether a call from a session's own token targets that same session. Only
+ * then do the self-call rules apply; calls on other sessions run as usual.
+ */
+async function targetsSelf(
+  ctx: McpCallContext | undefined,
+  args: Record<string, unknown>,
+  chatId?: string
+): Promise<boolean> {
+  const self = ctx?.session?.workbenchId;
+  if (!self) return false;
+  if (chatId) return (await chatWorkbenchId(chatId)) === self;
+  return str(args.session_id) === self;
+}
+
+const SELF_MESSAGE =
+  'This is your own session. A message to it would start another turn of yourself after this one. Answer in this reply instead.';
+const SELF_CANCEL = 'That would stop the reply you are writing now. To stop, end your reply.';
+const SELF_RESTORE = 'This is your own session, and it is running. There is nothing to restore.';
+const SELF_ARCHIVE_DEFERRED =
+  'This session will be archived when this reply ends. Finish the reply now, and do not start more work.';
 
 const eventSeq = (key: string): number | null => {
   const match = /^(\d+)(?:\.|$)/.exec(key);
@@ -250,7 +278,7 @@ export const SESSIONS = [
     },
     ['repository_id', 'agent'],
     { openWorldHint: true },
-    async (ownerId, args) => {
+    async (ownerId, args, ctx) => {
       const agent = str(args.agent);
       if (agent !== 'claude' && agent !== 'codex') throw new Error('agent must be "claude" or "codex"');
       const body: Record<string, unknown> = {
@@ -271,7 +299,12 @@ export const SESSIONS = [
       }
       if (args.internet_access !== undefined) body.internetAccess = bool(args, 'internet_access');
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
-      return sessionDetail(await callApi<Workbench>(ownerId, 'POST', '/workbenches', body));
+      // A session starting sessions: capped in depth and per hour, and the
+      // child records its parent so its own token knows its depth.
+      if (ctx?.session) await reserveSessionCreate(ctx.session);
+      const created = await callApi<Workbench>(ownerId, 'POST', '/workbenches', body);
+      if (ctx?.session) await recordSessionSpawn(created.id, ctx.session);
+      return sessionDetail(created);
     },
     FEATURE
   ),
@@ -287,10 +320,11 @@ export const SESSIONS = [
     },
     ['text'],
     { openWorldHint: true },
-    async (ownerId, args) =>
+    async (ownerId, args, ctx) =>
       sandboxOnly(async () => {
         const text = requireId(args, 'text');
         const chatId = await resolveChat(ownerId, args);
+        if (await targetsSelf(ctx, args, chatId)) throw new Error(SELF_MESSAGE);
         const body: Record<string, unknown> = { text };
         if (args.plan_mode !== undefined) body.planMode = bool(args, 'plan_mode');
         if (str(args.model)) body.model = str(args.model);
@@ -358,9 +392,10 @@ export const SESSIONS = [
     chatTargetSchema,
     [],
     { destructiveHint: true, idempotentHint: true },
-    async (ownerId, args) =>
+    async (ownerId, args, ctx) =>
       sandboxOnly(async () => {
         const chatId = await resolveChat(ownerId, args);
+        if (await targetsSelf(ctx, args, chatId)) throw new Error(SELF_CANCEL);
         await callApi(ownerId, 'POST', `/workbenches/chats/${encodeURIComponent(chatId)}/cancel`);
         return `Chat ${chatId}: cancel requested.`;
       }),
@@ -480,18 +515,20 @@ export const SESSIONS = [
   ),
   defineTool(
     'archive_session',
-    'Archive a session. It leaves the default list and its sandbox stops. Restore it to use it again.',
+    'Archive a session. It leaves the default list and its sandbox stops. Restore it to use it again. Inside a session, archiving that same session happens after the current reply ends.',
     sessionIdSchema,
     ['session_id'],
     { destructiveHint: true, idempotentHint: true },
-    async (ownerId, args) =>
-      sessionLine(
-        await callApi<Workbench>(
-          ownerId,
-          'POST',
-          `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/archive`
-        )
-      ),
+    async (ownerId, args, ctx) => {
+      const id = requireId(args, 'session_id');
+      const path = `/workbenches/${encodeURIComponent(id)}/archive`;
+      // Archiving now would cancel the turn that asked and delete its box.
+      if (await targetsSelf(ctx, args)) {
+        const wb = await callApi<Workbench>(ownerId, 'POST', path, { afterTurn: true });
+        return wb.archivedAt ? sessionLine(wb) : SELF_ARCHIVE_DEFERRED;
+      }
+      return sessionLine(await callApi<Workbench>(ownerId, 'POST', path));
+    },
     FEATURE
   ),
   defineTool(
@@ -500,16 +537,17 @@ export const SESSIONS = [
     sessionIdSchema,
     ['session_id'],
     { idempotentHint: true, openWorldHint: true },
-    async (ownerId, args) =>
-      sandboxOnly(async () =>
-        sessionLine(
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        if (await targetsSelf(ctx, args)) throw new Error(SELF_RESTORE);
+        return sessionLine(
           await callApi<Workbench>(
             ownerId,
             'POST',
             `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/restore`
           )
-        )
-      ),
+        );
+      }),
     FEATURE
   ),
 ];

@@ -53,11 +53,54 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
   for (const id of ids) await archiveWorkbench(id, { autoForMergedPr: true });
 }
 
+const noRunningChat = sql`NOT EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${workbenches.id} AND c.status = 'running')`;
+const archiveAfterTurnSet = sql`${workbenches.settings} ->> 'archiveAfterTurn' IS NOT NULL`;
+
+/**
+ * A session asked to archive ITSELF (its agent called `archive_session` on its
+ * own session). Archiving now would cancel the very turn that asked, mid-reply,
+ * and delete the box under it. So the request is recorded, no new turn may
+ * start while it stands (the turn claim reads `archiveAfterTurn`), and the
+ * archive runs when no chat of the session is running.
+ *
+ * Returns 'archived' when nothing was running and the archive started now,
+ * 'deferred' when it waits for the turn, and null when the session is already
+ * archived or gone.
+ */
+export async function requestArchiveAfterTurn(workbenchId: string): Promise<'archived' | 'deferred' | null> {
+  const marked = await getPoolDbClient().update(workbenches).set({
+    settings: sql`COALESCE(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('archiveAfterTurn', now()::text)`,
+  }).where(and(eq(workbenches.id, workbenchId), isNull(workbenches.archivedAt)))
+    .returning({ id: workbenches.id });
+  if (marked.length === 0) return null;
+  return (await archiveAfterTurnIfRequested(workbenchId)) ? 'archived' : 'deferred';
+}
+
+/** Archive a session whose agent asked for it, once none of its chats is running. */
+export async function archiveAfterTurnIfRequested(workbenchId: string): Promise<boolean> {
+  const due = await getPoolDbClient().select({ id: workbenches.id }).from(workbenches).where(and(
+    eq(workbenches.id, workbenchId), isNull(workbenches.archivedAt), archiveAfterTurnSet, noRunningChat,
+  ));
+  if (due.length === 0) return false;
+  await archiveWorkbench(workbenchId);
+  return true;
+}
+
+/** The turn-end hook: both rules that archive a session once it goes idle. */
+export async function archiveIdleSession(workbenchId: string): Promise<void> {
+  await autoArchiveForMergedPr({ workbenchId });
+  await archiveAfterTurnIfRequested(workbenchId);
+}
+
 /** Recover a crash between the last turn and the archive through the existing sweep. */
 export async function sweepMergeArchives(): Promise<void> {
-  const rows = await getPoolDbClient().select({ id: workbenches.id }).from(workbenches).where(and(
-    isNull(workbenches.archivedAt), sql`${workbenches.settings} ->> 'archiveOnIdle' IS NOT NULL`,
-    sql`NOT EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${workbenches.id} AND c.status = 'running')`,
+  const db = getPoolDbClient();
+  const rows = await db.select({ id: workbenches.id }).from(workbenches).where(and(
+    isNull(workbenches.archivedAt), sql`${workbenches.settings} ->> 'archiveOnIdle' IS NOT NULL`, noRunningChat,
   )).limit(100);
   for (const row of rows) await autoArchiveForMergedPr({ workbenchId: row.id });
+  const selfArchives = await db.select({ id: workbenches.id }).from(workbenches).where(and(
+    isNull(workbenches.archivedAt), archiveAfterTurnSet, noRunningChat,
+  )).limit(100);
+  for (const row of selfArchives) await archiveAfterTurnIfRequested(row.id);
 }

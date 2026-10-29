@@ -224,6 +224,50 @@ A false flag hides the group. If the feature request fails, all tools remain lis
 Each REST route checks access independently. Tool calls use the route's error message and code.
 HTTP 402 errors also explain the free-plan limit and point to Settings → Billing.
 
+## Inside a session sandbox
+
+Every cloud session's sandbox gets this server as the MCP server named
+`talyn`, authenticated as the session's owner. A session agent can archive its
+own session, start another session, add a pull request to the merge queue, and
+so on. Cloud tasks do not get it.
+
+**The credential.** Each session has one `talyn_mcs_` token in
+`session_mcp_tokens` (migration `0093`, backend-pool only). The hash is what
+`requireMcpToken` looks up. The plaintext is also stored, encrypted with the
+integration-token key, because the fleet keeps an inline MCP secret nowhere and
+a restarted fleetd asks Talyn for it again. The token is minted when a box is
+created, and it reaches the fleet on the same three paths as a workspace's MCP
+servers: the create body, the per-turn credential push, and the run-credentials
+pull (`services/workbenches/talynMcp.ts`). The guest gets a plain proxy URL;
+the host's proxy attaches the token. The token is refused while its session is
+archived, and it is deleted with its session.
+
+**The URL.** `TALYN_PUBLIC_API_URL` (the backend's public origin), else the
+origin of `POSTHOG_OAUTH_REDIRECT_URI` or `SLACK_OAUTH_REDIRECT_URI`. It must be
+https on a public host. Without one (local development), sessions have no
+`talyn` server and their prompt does not mention it.
+
+**What it may call.** An allowlist in `mcp/sessionScope.ts`, checked by the
+server on every list and every call. The agent reads untrusted text, so these
+are refused: MCP server tools, account tools, repository add and remove, and
+every skill, workflow and loop change. Their reads are allowed. Sessions, the
+merge queue, pull requests, code review and tasks are allowed. A new tool is
+refused until somebody adds it.
+
+**Calls on its own session.**
+
+- `talyn_archive_session` on itself is done after the current reply ends.
+  Archiving at once would cancel the turn that asked. No new turn starts while
+  the request waits (`settings.archiveAfterTurn`).
+- `talyn_cancel_session_turn`, `talyn_send_session_message` and
+  `talyn_restore_session` on itself are refused.
+- Calls on other sessions work as they do for a personal token.
+
+**Sessions that start sessions.** A session started through a session token
+records its parent and its depth. A session at depth 2 cannot start another.
+One session token can start 3 sessions an hour, so one root session causes at
+most 3 + 9 = 12 sandboxes an hour. Personal tokens have neither limit.
+
 ## Deliberately not exposed
 
 - Account wipe and workspace creation or deletion stay in the app. Account deletion is irreversible.
@@ -246,5 +290,8 @@ Backend, under `packages/backend/src/`:
 - `mcp/tools/index.ts` + area modules + `mcp/api.ts` — the tool registry and the loopback API client.
 - `services/mcpToken.ts` + `routes/mcpTokens.ts` — token mint/list/revoke
   (`mcp_tokens` table, migration `0025`).
+- `services/sessionMcpToken.ts`, `services/workbenches/talynMcp.ts` and
+  `mcp/sessionScope.ts` — the session sandbox's own token, how it reaches the
+  box, and its tool allowlist.
 
 Desktop: `components/panels/SettingsPanel.tsx` → `MCPServerSettings`.

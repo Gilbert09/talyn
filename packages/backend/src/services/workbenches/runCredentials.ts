@@ -1,9 +1,9 @@
 import { githubService } from '../github.js';
-import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { resolveRunCredential } from '../selfHosted/accountSelection.js';
 import type { RunCredentialsResult } from '../selfHosted/runCredentials.js';
 import { providerForAgent, setWorkbenchFleetAccount, workbenchFleetAccountId } from './sandboxRuntime.js';
 import { workbenchForCredentials } from './store.js';
+import { workbenchIntegrationSecrets } from './talynMcp.js';
 
 /** Every workbench sandbox id starts with this (`sandboxIdFor`). */
 export const WORKBENCH_SANDBOX_PREFIX = 'talyn-wb-';
@@ -45,7 +45,7 @@ export async function resolveWorkbenchRunCredentials(host: string, sandboxId: st
   if (credential.accountId && credential.accountId !== recorded) {
     await setWorkbenchFleetAccount(row, credential.accountId).catch(() => undefined);
   }
-  const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
+  const integrations = await workbenchIntegrationSecrets(row);
   return {
     ok: true,
     credentials: {

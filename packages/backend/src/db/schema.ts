@@ -2302,3 +2302,35 @@ export const slackRepoMemory = pgTable(
     memoryUq: uniqueIndex('uq_slack_repo_memory').on(t.teamId, t.channelId, t.repositoryId),
   })
 );
+
+/**
+ * Talyn's own MCP credential for one session's sandbox (migration 0093).
+ * Pool-only: the plaintext is recoverable (encrypted) because a fleetd restart
+ * re-pulls it, and the row goes with its session.
+ */
+export const sessionMcpTokens = pgTable(
+  'session_mcp_tokens',
+  {
+    id: text('id').primaryKey(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    tokenCiphertext: jsonb('token_ciphertext').$type<EncryptedEnvelope>().notNull(),
+    parentWorkbenchId: text('parent_workbench_id').references(() => workbenches.id, {
+      onDelete: 'set null',
+    }),
+    spawnDepth: integer('spawn_depth').notNull().default(0),
+    createsWindowStartedAt: timestamp('creates_window_started_at', { withTimezone: true }),
+    createsInWindow: integer('creates_in_window').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => ({
+    workbenchUq: uniqueIndex('uq_session_mcp_tokens_workbench').on(t.workbenchId),
+    tokenHashUq: uniqueIndex('uq_session_mcp_tokens_token_hash').on(t.tokenHash),
+  })
+);

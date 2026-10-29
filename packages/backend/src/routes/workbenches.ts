@@ -34,6 +34,7 @@ import { importClaudeSession, importTargetChat, parseImportBody } from '../servi
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
+import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
 import {
   archiveWorkbench,
@@ -502,6 +503,13 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      // `afterTurn`: archive once no chat is running. A session's own agent
+      // asks this way, so its archive does not cancel the reply that asked.
+      if (req.body?.afterTurn === true && !row.archivedAt) {
+        await requestArchiveAfterTurn(row.id);
+        ok(res, await publicWorkbench((await getWorkbench(row.id)) ?? row));
+        return;
+      }
       ok(res, await publicWorkbench(await archiveWorkbench(row.id)));
     } catch (err) {
       fail(res, err);

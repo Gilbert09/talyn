@@ -30,6 +30,12 @@ export function buildPlanTurnInstructions(): string {
   ].join('\n');
 }
 
+/** Told to every turn of a session whose box has Talyn's own MCP server. */
+export const TALYN_TOOLS_NOTE =
+  "Talyn's own tools are available through the `talyn` MCP server, as the person who owns this session: " +
+  'for example to archive this session, start another session, or use the merge queue. ' +
+  'If you archive this session, Talyn does it after your reply ends.';
+
 /**
  * The prompt for one turn, with the hidden instructions it needs. Claude takes
  * them as an appended system prompt, and on a Create PR turn also in front of
@@ -49,6 +55,8 @@ export function workbenchTurnPrompt(input: {
   /** A chat that continues a local conversation: where it came from and the box's repo folder. */
   imported?: { root: string; repoDir: string } | null;
   recap?: string;
+  /** The box has Talyn's own MCP server, named `talyn`. */
+  talynTools?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -63,7 +71,10 @@ export function workbenchTurnPrompt(input: {
     ? buildAutoCreatePrInstructions()
     : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
-  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, input.recap].filter(Boolean).join('\n\n');
+  const talynNote = input.talynTools ? TALYN_TOOLS_NOTE : null;
+  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, input.recap]
+    .filter(Boolean)
+    .join('\n\n');
   if (!instructions) return { prompt: input.text };
   if (input.agent === 'codex') return { prompt: `${instructions}\n\n---\n\n${input.text}` };
   // A Create PR turn also puts its instructions in Claude's prompt. In a system

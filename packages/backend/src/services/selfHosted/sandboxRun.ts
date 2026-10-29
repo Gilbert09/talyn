@@ -267,6 +267,12 @@ export interface SandboxCreateBodySpec {
   internetAccess?: boolean;
   /** Tri-state, never collapsed: null = every enabled server, [] = none, a list = exactly those. */
   mcpServerIds: string[] | null;
+  /**
+   * Servers Talyn adds itself, outside the workspace's set and its flag: a
+   * session box's `talyn` server. A workspace server with the same name is
+   * left out, so a name means one server.
+   */
+  extraMcpServers?: FleetMcpServerInline[];
   /** Task dispatch: true. A workbench's long-lived box: omitted. */
   ephemeral?: boolean;
   /** Task dispatch: the initial work order. A bare workbench box: omitted. */
@@ -322,7 +328,13 @@ export async function buildSandboxCreateBody(
 
   // Resolved before the body is built, so a workspace whose credentials will
   // not open costs a log line here instead of an exception halfway through.
-  const mcpServers = await mcpServersFor(spec.workspaceId, spec.mcpServerIds);
+  const extra = spec.extraMcpServers ?? [];
+  const mcpServers = [
+    ...(await mcpServersFor(spec.workspaceId, spec.mcpServerIds)).filter(
+      (s) => !extra.some((e) => e.name === s.name)
+    ),
+    ...extra,
+  ];
 
   const body: CreateSandboxInput = {
     id: spec.id,

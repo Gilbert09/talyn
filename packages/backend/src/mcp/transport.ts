@@ -20,7 +20,7 @@ export function mcpRoutes(): Router {
     }
 
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const server = buildMcpServer(ownerId);
+    const server = buildMcpServer(ownerId, req.mcpSession ? { session: req.mcpSession } : {});
     res.on('close', () => {
       void transport.close();
       void server.close();
