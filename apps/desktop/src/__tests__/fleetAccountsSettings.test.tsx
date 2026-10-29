@@ -149,17 +149,18 @@ it('uses the highest window when no all-model weekly window exists', () => {
 });
 
 it.each([
-  [new Date(2026, 9, 23, 20), 'today', false],
-  [new Date(2026, 9, 24, 20, 30), 'tomorrow', true],
-  [new Date(2026, 9, 26, 20), 'weekday', false],
-  [new Date(2026, 9, 31, 20, 30), 'date', true],
-] as const)('formats reset time for %s as %s', (reset, dayLabel, hasMinutes) => {
+  [new Date(2026, 9, 23, 20), 'today'],
+  [new Date(2026, 9, 24, 20, 30), 'tomorrow'],
+  [new Date(2026, 9, 26, 20), 'weekday'],
+  [new Date(2026, 9, 31, 20, 30), 'date'],
+] as const)('formats reset time for %s as %s', (reset, dayLabel) => {
   const now = new Date(2026, 9, 23, 12);
-  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', ...(hasMinutes ? { minute: '2-digit' } : {}) }).format(reset);
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(reset);
   const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(reset);
   const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(reset);
   const suffix = dayLabel === 'weekday' ? weekday : dayLabel === 'date' ? `${weekday} ${date}` : dayLabel;
-  expect(formatResetAt(reset.toISOString(), now)).toBe(`resets ${time} ${suffix}`);
+  const day = dayLabel === 'today' || dayLabel === 'tomorrow' ? dayLabel : suffix;
+  expect(formatResetAt(reset.toISOString(), now)).toBe(`resets ${day} at ${time}`);
 });
 
 it.each([

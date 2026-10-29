@@ -21,20 +21,18 @@ export function formatResetAt(iso: string, now = new Date()): string {
   const reset = new Date(iso);
   if (Number.isNaN(reset.getTime())) return 'resets at an unknown time';
 
-  const time = new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    ...(reset.getMinutes() ? { minute: '2-digit' } : {}),
-  }).format(reset);
+  // Always with minutes: an hour alone ("22") read as a date.
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(reset);
   const localDay = (date: Date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
   const daysAway = (localDay(reset) - localDay(now)) / 86_400_000;
-  if (daysAway === 0) return `resets ${time} today`;
-  if (daysAway === 1) return `resets ${time} tomorrow`;
+  if (daysAway === 0) return `resets today at ${time}`;
+  if (daysAway === 1) return `resets tomorrow at ${time}`;
 
   const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(reset);
-  if (daysAway > 1 && daysAway <= 6) return `resets ${time} ${weekday}`;
+  if (daysAway > 1 && daysAway <= 6) return `resets ${weekday} at ${time}`;
 
   const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(reset);
-  return `resets ${time} ${weekday} ${date}`;
+  return `resets ${weekday} ${date} at ${time}`;
 }
 
 function updatedTime(value: string): string {
