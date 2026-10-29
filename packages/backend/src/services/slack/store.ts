@@ -159,6 +159,23 @@ export async function slackStatusFor(userId: string): Promise<SlackStatus> {
   return { installations, links: linkViews };
 }
 
+/** Whether the caller installed the app in this team or has a link in it. */
+export async function userHasTeam(userId: string, teamId: string): Promise<boolean> {
+  const db = getPoolDbClient();
+  const installed = await db
+    .select({ teamId: slackInstallations.teamId })
+    .from(slackInstallations)
+    .where(and(eq(slackInstallations.teamId, teamId), eq(slackInstallations.installedByUserId, userId)))
+    .limit(1);
+  if (installed.length > 0) return true;
+  const linked = await db
+    .select({ id: slackUserLinks.id })
+    .from(slackUserLinks)
+    .where(and(eq(slackUserLinks.teamId, teamId), eq(slackUserLinks.userId, userId)))
+    .limit(1);
+  return linked.length > 0;
+}
+
 /** One of the caller's own links, or null (also for someone else's link). */
 export async function ownLink(
   userId: string,

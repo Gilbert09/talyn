@@ -26,6 +26,7 @@ import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 import { resetWebAppUrlCacheForTests } from '../../services/webApp.js';
 import { decryptString, encryptString, type EncryptedEnvelope } from '../../services/tokenCrypto.js';
 import { hashState } from '../../services/slack/oauth.js';
+import { resetSlackEmojiCacheForTests } from '../../services/slack/emoji.js';
 
 /**
  * The /slack routes and the shared OAuth callback.
@@ -90,6 +91,7 @@ describe('Slack routes', () => {
     ]);
 
     slackCalls = [];
+    resetSlackEmojiCacheForTests();
     slackAnswers = {
       'oauth.v2.access': () =>
         Response.json({
@@ -195,6 +197,7 @@ describe('Slack routes', () => {
     ['PATCH', '/slack/links/l1'],
     ['DELETE', '/slack/links/l1'],
     ['DELETE', '/slack/installations/T1'],
+    ['GET', '/slack/teams/T1/emoji'],
   ])('%s %s answers 403 slack_unavailable when workbenches is off', async (method, path) => {
     process.env.WORKBENCHES_ENABLED = 'false';
     resetFeatureFlagsForTests();
@@ -222,6 +225,84 @@ describe('Slack routes', () => {
   // Authorize URLs
   // -------------------------------------------------------------------------
 
+  describe('GET /slack/teams/:teamId/emoji', () => {
+    const LIST = {
+      party: 'https://emoji.slack-edge.com/T1/party/a.png',
+      celebrate: 'alias:party',
+      chain: 'alias:celebrate',
+      thumbs: 'alias:thumbsup',
+      dangling: 'alias:nowhere',
+      cat: 'https://emoji.slack-edge.com/T1/cat/b.gif',
+    };
+
+    it('resolves aliases, drops ones without an image, and sorts by name', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['emoji.list'] = () => Response.json({ ok: true, emoji: LIST });
+      const res = await call<{ emoji: Array<{ name: string; url: string }> }>('GET', '/slack/teams/T1/emoji');
+      expect(res.status).toBe(200);
+      expect(res.body.data!.emoji).toEqual([
+        { name: 'cat', url: LIST.cat },
+        { name: 'celebrate', url: LIST.party },
+        { name: 'chain', url: LIST.party },
+        { name: 'party', url: LIST.party },
+      ]);
+      expect(slackCalls.find((c) => c.method === 'emoji.list')?.auth).toBe('Bearer xoxb');
+    });
+
+    it('works for a linked user who did not install', async () => {
+      await seedInstall('T1', OTHER);
+      await db.insert(slackUserLinks).values({ id: 'l1', teamId: 'T1', slackUserId: 'U1', userId: TEST_USER_ID });
+      slackAnswers['emoji.list'] = () => Response.json({ ok: true, emoji: LIST });
+      const res = await call('GET', '/slack/teams/T1/emoji');
+      expect(res.status).toBe(200);
+    });
+
+    it('answers 404 for a team the caller has no part in, and never calls Slack', async () => {
+      await seedInstall('T1', OTHER);
+      const res = await call('GET', '/slack/teams/T1/emoji');
+      expect(res.status).toBe(404);
+      expect(slackCalls.filter((c) => c.method === 'emoji.list')).toHaveLength(0);
+      expect((await call('GET', '/slack/teams/T-none/emoji')).status).toBe(404);
+    });
+
+    it('caches the list for ten minutes per team', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      await seedInstall('T2', TEST_USER_ID);
+      slackAnswers['emoji.list'] = () => Response.json({ ok: true, emoji: LIST });
+      await call('GET', '/slack/teams/T1/emoji');
+      await call('GET', '/slack/teams/T1/emoji');
+      expect(slackCalls.filter((c) => c.method === 'emoji.list')).toHaveLength(1);
+      await call('GET', '/slack/teams/T2/emoji');
+      expect(slackCalls.filter((c) => c.method === 'emoji.list')).toHaveLength(2);
+
+      const realNow = Date.now;
+      Date.now = () => realNow() + 10 * 60_000 + 1000;
+      try {
+        await call('GET', '/slack/teams/T1/emoji');
+      } finally {
+        Date.now = realNow;
+      }
+      expect(slackCalls.filter((c) => c.method === 'emoji.list')).toHaveLength(3);
+    });
+
+    it('answers needsScope on missing_scope and does not cache it', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['emoji.list'] = () => Response.json({ ok: false, error: 'missing_scope' });
+      const res = await call<{ emoji: unknown[]; needsScope?: string }>('GET', '/slack/teams/T1/emoji');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ emoji: [], needsScope: 'emoji:read' });
+      await call('GET', '/slack/teams/T1/emoji');
+      expect(slackCalls.filter((c) => c.method === 'emoji.list')).toHaveLength(2);
+    });
+
+    it('answers 502 on another Slack error', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['emoji.list'] = () => Response.json({ ok: false, error: 'ratelimited' });
+      const res = await call('GET', '/slack/teams/T1/emoji');
+      expect(res.status).toBe(502);
+    });
+  });
+
   it('builds the install URL with the bot scopes and PKCE, and stores only a state hash', async () => {
     const { url, state } = await start('install');
     expect(url.origin + url.pathname).toBe('https://slack.com/oauth/v2/authorize');
@@ -229,7 +310,7 @@ describe('Slack routes', () => {
     expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT);
     expect(url.searchParams.get('scope')!.split(',')).toEqual([
       'app_mentions:read', 'reactions:read', 'reactions:write', 'channels:history', 'groups:history',
-      'im:history', 'mpim:history', 'channels:read', 'groups:read', 'users:read',
+      'im:history', 'mpim:history', 'channels:read', 'groups:read', 'users:read', 'emoji:read',
     ]);
     expect(url.searchParams.get('scope')).not.toContain('chat:write');
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');

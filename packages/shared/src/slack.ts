@@ -75,6 +75,23 @@ export interface SlackForgetInstallationResponse {
   message: string;
 }
 
+/** One custom emoji of a Slack workspace, with its image address. */
+export interface SlackCustomEmoji {
+  /** Shortcode without colons, e.g. `partyparrot`. */
+  name: string;
+  url: string;
+}
+
+/** `GET /slack/teams/:teamId/emoji`. */
+export interface SlackEmojiResponse {
+  emoji: SlackCustomEmoji[];
+  /**
+   * Set when Slack refused the list because the bot lacks this scope. The
+   * install has to be repeated before custom emoji can show.
+   */
+  needsScope?: 'emoji:read';
+}
+
 /** The 403 code every `/slack` route answers when the `slack` flag is off. */
 export const SLACK_UNAVAILABLE_CODE = 'slack_unavailable';
 /** The 503 code when this deployment has no Slack app configured. */
