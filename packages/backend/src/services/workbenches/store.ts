@@ -25,6 +25,7 @@ import {
 } from '../../db/schema.js';
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
+import { isRestoring } from './restorePhase.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -80,6 +81,7 @@ export const WORKBENCH_COLUMNS = {
   pushedHeadShas: workbenchesTable.pushedHeadShas,
   allocatedBranch: workbenchesTable.allocatedBranch,
   settings: workbenchesTable.settings,
+  source: workbenchesTable.source,
   diffStat: workbenchesTable.diffStat,
   archivedAt: workbenchesTable.archivedAt,
   createdAt: workbenchesTable.createdAt,
@@ -131,6 +133,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     statusMessage: row.statusMessage,
     pullRequestId: row.pullRequestId,
     settings: row.settings ?? {},
+    source: row.source ?? null,
     diffStat: row.diffStat ? { added: row.diffStat.added, removed: row.diffStat.removed, files: row.diffStat.files } : null,
     uncommittedStats: row.diffStat?.uncommittedStats ?? null,
     committedStats: row.diffStat?.committedStats ?? null,
@@ -153,6 +156,7 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     status: row.status as WorkbenchChatStatus,
     queuedMessages: row.queuedMessages ?? [],
     importedFrom: row.importedFrom ?? null,
+    phase: row.status === 'running' && isRestoring(row.id) ? 'restoring' : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -439,6 +443,102 @@ export async function setGeneratedTitle(id: string, title: string): Promise<Work
     .update(workbenchesTable)
     .set({ title, updatedAt: new Date() })
     .where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.title), isNull(workbenchesTable.archivedAt)))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Claim the one branch-naming attempt (see `branchName.ts`). One statement,
+ * so two replicas cannot both claim it. False when it was already decided.
+ */
+export async function claimBranchNaming(id: string): Promise<boolean> {
+  const rows = await db()
+    .update(workbenchesTable)
+    .set({ branchNamedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), isNull(workbenchesTable.branchNamedAt)))
+    .returning({ id: workbenchesTable.id });
+  return rows.length > 0;
+}
+
+/** Give the claim back, so a later turn end tries again. */
+export async function releaseBranchNaming(id: string): Promise<void> {
+  await db().update(workbenchesTable).set({ branchNamedAt: null }).where(eq(workbenchesTable.id, id));
+}
+
+export async function branchNamingDecided(id: string): Promise<boolean> {
+  const [row] = await db()
+    .select({ at: workbenchesTable.branchNamedAt })
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.id, id))
+    .limit(1);
+  return !row || row.at !== null;
+}
+
+/** Turns started across every chat of the workbench. */
+export async function sessionTurnCount(workbenchId: string): Promise<number> {
+  const [row] = await db()
+    .select({ turns: sql<number>`COALESCE(SUM(${chatsTable.turnCount}), 0)::int` })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  return Number(row?.turns ?? 0);
+}
+
+/**
+ * Move a Talyn-named branch from `from` to `to`, but only while the row still
+ * says `from` and has no PR. Null when nothing matched. A clash on
+ * `uq_workbenches_allocated_branch` throws.
+ */
+export async function renameAllocatedBranch(id: string, from: string, to: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ branch: to, updatedAt: new Date() })
+    .where(and(
+      eq(workbenchesTable.id, id),
+      eq(workbenchesTable.branch, from),
+      eq(workbenchesTable.allocatedBranch, true),
+      isNull(workbenchesTable.pullRequestId),
+      isNull(workbenchesTable.archivedAt),
+    ))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Turns across every chat of a LOCAL workbench. The desktop runs those turns,
+ * so `turn_count` stays 0; the turn of each chat's newest uploaded event is
+ * the count. One index lookup per chat.
+ */
+export async function localSessionTurnCount(workbenchId: string): Promise<number> {
+  const [row] = await db()
+    .select({
+      turns: sql<number>`COALESCE(SUM((
+        SELECT ${eventsTable.turn} FROM ${eventsTable}
+        WHERE ${eventsTable.chatId} = ${chatsTable.id}
+        ORDER BY ${eventsTable.seq} DESC LIMIT 1
+      )), 0)::int`,
+    })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  return Number(row?.turns ?? 0);
+}
+
+/**
+ * The row follows a branch a person (or the agent, at a person's request)
+ * renamed: `from` becomes `to`, and the name is no longer Talyn's to move.
+ * `allocated_branch` goes false, so the unique index never applies to it, and
+ * the one naming attempt counts as decided. Null when the row no longer says
+ * `from`, or is archived.
+ */
+export async function followChosenBranch(id: string, from: string, to: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      branch: to,
+      allocatedBranch: false,
+      branchNamedAt: sql`COALESCE(${workbenchesTable.branchNamedAt}, now())`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.branch, from), isNull(workbenchesTable.archivedAt)))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }

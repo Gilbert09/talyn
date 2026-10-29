@@ -172,7 +172,7 @@ describe('Slack events webhook', () => {
   });
 
   it.each(['app_mention', 'reaction_added', 'message', 'channel_created'])(
-    'stores %s and marks it ignored (P2 fills the triggers)',
+    'stores %s and marks it ignored when no installation or link applies',
     async (type) => {
       await post(callback(`Ev-${type}`, { type }));
       expect((await settled(`Ev-${type}`)).outcome).toBe('ignored');

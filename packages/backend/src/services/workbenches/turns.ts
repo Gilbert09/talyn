@@ -8,6 +8,7 @@ import {
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
   parseAutoPrDetails,
+  parsePrDetails,
   workbenchTurnPrompt,
   shellQuote,
   toShellScript,
@@ -24,6 +25,7 @@ import {
   type WorkbenchStatus,
 } from '@talyn/shared';
 import { debugBus, describeError } from '../debugBus.js';
+import { withRestorePhase } from './restorePhase.js';
 import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExecs, durableMarker, fenceDurableExec } from './durableExec.js';
 import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { runWithoutScope } from '../../db/client.js';
@@ -62,9 +64,11 @@ import {
   sandboxScriptEnv,
   startAccountWatch,
   workbenchFleetAccountId,
+  fleetClientFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { startTitleGeneration } from './title.js';
+import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
   appendEvents,
   claimOrEnqueue,
@@ -373,7 +377,7 @@ async function runTurnLoopBody(
       const wb = await getWorkbench(fin.chat.workbenchId);
       if (wb?.sandboxId) await removeTurnLogs(wb, chatId, heldTurn);
     }
-    void afterTurn(fin?.chat ?? null);
+    void afterTurn(fin?.chat ?? null, outcome.succeeded);
     if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
       const wb = await getWorkbench(fin.chat.workbenchId);
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
@@ -383,7 +387,7 @@ async function runTurnLoopBody(
 }
 
 /** After a turn: the diff stat and the PR link may both have moved. Best effort. */
-async function afterTurn(chat: ChatRow | null): Promise<void> {
+async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): Promise<void> {
   if (!chat) return;
   try {
     let wb = await getWorkbench(chat.workbenchId);
@@ -393,6 +397,8 @@ async function afterTurn(chat: ChatRow | null): Promise<void> {
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
+    // After the link: a PR this turn opened keeps the branch its name.
+    if (succeeded && linked.runtime === 'sandbox') startBranchNaming(linked.id, succeeded);
   } catch (err) {
     console.warn(`[workbench] after-turn refresh for chat ${chat.id} failed:`, err);
   }
@@ -416,6 +422,8 @@ interface TurnOutcome {
   handoffError?: unknown;
   /** The adopted attempt never started: run the turn again, from this attempt. */
   relaunch?: { message: WorkbenchQueuedMessage; attempt: number };
+  /** The agent finished the turn: its message and final text, for the branch name. */
+  succeeded?: BranchNamingInput;
 }
 
 export const DISK_FULL_MOVED_NOTE =
@@ -556,7 +564,19 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs. It reports the free disk too (T2).
     // A relaunch keeps the turn's first checkpoint: an earlier attempt may have run.
-    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) wb = await checkpointAndCheckDisk(wb, chatId, turn);
+    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) {
+      const awake = wb;
+      wb = await withRestorePhase(chatId, () => checkpointAndCheckDisk(awake, chatId, turn), {
+        readSandbox: async () => {
+          const client = await fleetClientFor(awake.workspaceId, awake.fleetHost);
+          return (await client.getSandbox(awake.sandboxId!)).sandbox;
+        },
+        publish: async () => {
+          const current = await getChat(chatId);
+          if (current) emitWorkbenchChat(current.workspaceId, rowToChat(current));
+        },
+      });
+    }
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.
@@ -696,7 +716,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (outcome.exitCode === 0 && !parserResult?.isError) {
       await events.flush();
       await finishSuccessfulAgent(wb, chatId, message, parserResult?.text ?? '', events, live);
-      return { status: 'idle', statusMessage: null, cancelled: false };
+      return { status: 'idle', statusMessage: null, cancelled: false, succeeded: { message: message.text, finalMessage: parserResult?.text ?? '' } };
     }
     const why =
       parserResult?.text?.trim() ||
@@ -960,12 +980,24 @@ async function finishSuccessfulAgent(
 ): Promise<void> {
   if (live.cancelRequested || isWorkbenchDetached()) return;
   if (!(await renewTurnLease(chatId, live.turn)) || await hasTurnEvent(chatId, live.turn, 'talyn_pr')) return;
-  const fresh = (await getWorkbench(wb.id)) ?? wb;
+  let fresh = (await getWorkbench(wb.id)) ?? wb;
+  if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;
   if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
       (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
-    events.add(await openPullRequestFromTurn(fresh, text));
+    events.add(await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text));
     await events.flush();
   }
+}
+
+/**
+ * The PR is about to push the branch, after which its name is fixed. Name it
+ * first, from the agent's own PR title, and return the row as it now is.
+ */
+async function nameBeforePush(wb: WorkbenchRow, chatId: string, message: WorkbenchQueuedMessage, text: string): Promise<WorkbenchRow> {
+  const details = parsePrDetails(text);
+  if (wb.runtime !== 'sandbox' || !details.ok) return wb;
+  await nameBranchBeforePullRequest(wb.id, { message: message.text, finalMessage: text, suggestion: details.details.title, chatId });
+  return (await getWorkbench(wb.id)) ?? wb;
 }
 
 async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean): Promise<TurnOutcome> {
@@ -1021,7 +1053,10 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     if (live.cancelRequested) return cancelledOutcome(events, Boolean(parser.result));
     if (outcome.exitCode === 0 && !parser.result?.isError) {
       if (lease.message) await finishSuccessfulAgent(wb, chatId, lease.message, parser.result?.text ?? '', events, live);
-      return { status: 'idle', statusMessage: null, cancelled: false };
+      return {
+        status: 'idle', statusMessage: null, cancelled: false,
+        succeeded: { message: lease.message?.text ?? '', finalMessage: parser.result?.text ?? '' },
+      };
     }
     const why = outcome.exitCode === 125 ? ORPHAN_MESSAGE :
       parser.result?.text?.trim() || outcome.stderrTail.trim() || `The agent exited with code ${outcome.exitCode}.`;

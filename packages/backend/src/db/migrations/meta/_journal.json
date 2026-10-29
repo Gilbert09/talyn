@@ -638,6 +638,20 @@
       "when": 1790900000009,
       "tag": "0090_slack",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1790900000010,
+      "tag": "0091_workbench_branch_naming",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790900000011,
+      "tag": "0092_slack_sessions",
+      "breakpoints": true
     }
   ]
 }

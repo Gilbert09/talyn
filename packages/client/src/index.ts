@@ -22,8 +22,10 @@ import type {
   TrunkIntegrationStatus,
   SlackAuthorizeResponse,
   SlackForgetInstallationResponse,
+  SlackPendingRequest,
   SlackStartInput,
   SlackStatus,
+  StartSlackPendingInput,
   SlackUserLinkView,
   UpdateSlackLinkInput,
   LoopInput,
@@ -2455,6 +2457,19 @@ export const slack = {
       'DELETE',
       `/slack/installations/${encodeURIComponent(teamId)}`
     ),
+  /**
+   * The caller's Slack requests waiting for a repository, oldest first. The
+   * `slack:notice` event (kind `pick_repository`) announces each one once;
+   * this is how a client that was offline finds them.
+   */
+  listPending: () => request<SlackPendingRequest[]>('GET', '/slack/pending'),
+  /**
+   * Start a pending request in `repositoryId` (one of the request's workspace's
+   * repositories). Answers the new session; 404 when it is not the caller's or
+   * was already started. Talyn remembers the pick for that Slack channel.
+   */
+  startPending: (pendingId: string, input: StartSlackPendingInput) =>
+    request<Workbench>('POST', `/slack/pending/${encodeURIComponent(pendingId)}/start`, input),
 };
 
 // ============================================================================
@@ -2881,6 +2896,18 @@ export const workbenches = {
       `/workbenches/${enc(id)}/actions/${enc(action)}`,
       chatId ? { chatId } : undefined
     ),
+
+  /**
+   * A local session's branch name after its first turn. With no `title` or
+   * `suggestion` it only checks (`suggest`: ask your model, then call again).
+   * `rename` reserves the name without changing the row: rename the local
+   * branch, then {@link workbenches.confirmBranchName}.
+   */
+  nameBranch: (id: string, input: import('@talyn/shared').NameWorkbenchBranchInput) =>
+    request<import('@talyn/shared').WorkbenchBranchNameDecision>('POST', `/workbenches/${enc(id)}/branch-name`, input),
+  /** The local `git branch -m from to` succeeded: move the row. `refused` means rename the branch back. */
+  confirmBranchName: (id: string, input: import('@talyn/shared').ConfirmWorkbenchBranchNameInput) =>
+    request<import('@talyn/shared').ConfirmWorkbenchBranchNameResult>('POST', `/workbenches/${enc(id)}/branch-name/confirm`, input),
 
   // ---- Local runtime reporting (the desktop owns the process, the backend owns the rows) ----
   uploadLocalEvents: (chatId: string, events: WorkbenchEvent[]) =>

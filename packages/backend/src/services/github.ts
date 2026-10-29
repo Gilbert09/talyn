@@ -2559,6 +2559,35 @@ class GitHubService extends EventEmitter {
     });
   }
 
+  /**
+   * How many code-search hits `query` has in each of `repoFullNames`, keyed
+   * by the lower-cased `owner/repo`. `query` is the search text without repo
+   * qualifiers (`"someIdentifier"`, `filename:foo.ts`). One request, one page:
+   * the caller compares repositories, so the first 100 hits say enough, and
+   * code search has the smallest budget GitHub gives (10 requests a minute).
+   * Serialized per account like the other searches.
+   */
+  async searchCodeHitsByRepo(
+    workspaceId: string,
+    query: string,
+    repoFullNames: string[]
+  ): Promise<Map<string, number>> {
+    const hits = new Map<string, number>();
+    if (!query.trim() || repoFullNames.length === 0) return hits;
+    const q = [query.trim(), ...repoFullNames.map((r) => `repo:${r}`)].join(' ');
+    return this.serializeByAccount(this.accountKeyFor(workspaceId), async () => {
+      const params = new URLSearchParams({ q, per_page: '100' });
+      const res = await this.apiRequest<{
+        items?: Array<{ repository?: { full_name?: string } }>;
+      }>(workspaceId, `/search/code?${params}`);
+      for (const item of res.items ?? []) {
+        const key = item.repository?.full_name?.toLowerCase();
+        if (key) hits.set(key, (hits.get(key) ?? 0) + 1);
+      }
+      return hits;
+    });
+  }
+
   async getCheckRuns(
     workspaceId: string,
     owner: string,

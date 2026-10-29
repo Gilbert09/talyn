@@ -337,7 +337,6 @@ export const FEATURE_FLAGS = {
     availability: 'gated',
     releaseScopes: ['trunk-eta'],
   },
-
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */

@@ -1,13 +1,14 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { getPoolDbClient } from '../../db/client.js';
+import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { slackEvents, slackInstallations, slackOauthStates, slackUserLinks } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import { slackSigningSecret } from './config.js';
 import { removeTeam } from './store.js';
+import { onAppMention, onMessage, onReactionAdded } from './triggers.js';
 
 /**
  * Slack Events API: verify, store, answer 200, process later.
@@ -167,6 +168,8 @@ export interface SlackEventContext {
   payload: Record<string, unknown>;
   /** `payload.event`, for convenience. */
   event: Record<string, unknown>;
+  /** This is the last try: a handler that fails now is settled `failed`. */
+  finalAttempt: boolean;
 }
 
 type SlackEventHandler = (ctx: SlackEventContext) => Promise<SlackEventOutcome>;
@@ -209,18 +212,22 @@ async function onTokensRevoked(ctx: SlackEventContext): Promise<SlackEventOutcom
 
 /**
  * What each event type does. An absent type is stored and marked `ignored`.
- * P2 fills the three session triggers.
+ * The three session triggers are in `triggers.ts`.
  */
 export const SLACK_EVENT_HANDLERS: Record<string, SlackEventHandler> = {
   app_uninstalled: onAppUninstalled,
   tokens_revoked: onTokensRevoked,
-  // P2: start a session from a mention, a trigger reaction, or a DM.
-  app_mention: ignore,
-  reaction_added: ignore,
-  message: ignore,
+  app_mention: onAppMention,
+  reaction_added: onReactionAdded,
+  message: onMessage,
 };
 
-/** A claim older than this is presumed dead (a crash mid-processing). */
+/**
+ * A claim older than this is presumed dead (a crash mid-processing), and a
+ * second replica may take the event. Longer than one trigger takes: a few
+ * Slack reads, at most two code searches and a create, each with its own
+ * 10-30 s timeout.
+ */
 const CLAIM_TIMEOUT_MS = 2 * 60_000;
 /** After this many failed tries an event is settled `failed` and stops retrying. */
 export const MAX_EVENT_ATTEMPTS = 5;
@@ -254,12 +261,16 @@ export async function processSlackEvent(eventId: string): Promise<SlackEventOutc
   const payload = (row.payload ?? {}) as Record<string, unknown>;
   const handler = SLACK_EVENT_HANDLERS[row.eventType] ?? ignore;
   try {
-    const outcome = await handler({
-      eventId,
-      teamId: row.teamId,
-      payload,
-      event: (payload.event ?? {}) as Record<string, unknown>,
-    });
+    // No request and no owner scope: a handler's queries go to the pool.
+    const outcome = await runWithoutScope(() =>
+      handler({
+        eventId,
+        teamId: row.teamId,
+        payload,
+        event: (payload.event ?? {}) as Record<string, unknown>,
+        finalAttempt: row.attempts >= MAX_EVENT_ATTEMPTS,
+      })
+    );
     await db
       .update(slackEvents)
       .set({ processedAt: new Date(), outcome, error: null })

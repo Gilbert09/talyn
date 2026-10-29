@@ -113,6 +113,16 @@ export function mergeBase(base: string): GitStep {
   return git('merge-base', 'HEAD', base);
 }
 
+/** stdout: the checked-out branch, or `HEAD` when detached. */
+export function currentBranch(): GitStep {
+  return git('rev-parse', '--abbrev-ref', 'HEAD');
+}
+
+/** Exit 0 with the upstream on stdout; non-zero when the current branch has none. */
+export function currentUpstream(): GitStep {
+  return git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}');
+}
+
 /** stdout: the HEAD sha. */
 export function headSha(): GitStep {
   return git('rev-parse', 'HEAD');
@@ -161,9 +171,9 @@ export function statusPorcelain(): GitStep {
   return git('status', '--porcelain=v2', '-z', '--branch');
 }
 
-/** Rename the current branch. Validate with {@link isValidBranchName} first. */
-export function renameBranch(newName: string): GitStep {
-  return git('branch', '-m', newName);
+/** Rename `from`, or the current branch when absent. Validate with {@link isValidBranchName} first. */
+export function renameBranch(newName: string, from?: string): GitStep {
+  return from ? git('branch', '-m', from, newName) : git('branch', '-m', newName);
 }
 
 export function fetchOrigin(): GitStep {

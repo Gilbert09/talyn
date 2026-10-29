@@ -11,8 +11,37 @@ function send<K extends keyof WorkbenchWsPayloads>(workspaceId: string, type: K,
   broadcastToWorkspace(workspaceId, { type, payload, timestamp: new Date().toISOString() });
 }
 
+/**
+ * Things that follow a session's state without being a WebSocket client: the
+ * Slack status reactions. A listener is called after the broadcast and must
+ * not throw or block; a throw is caught and logged.
+ */
+export interface WorkbenchEmitListener {
+  workbench?: (workbench: Workbench) => void;
+  chat?: (workspaceId: string, chat: WorkbenchChat) => void;
+}
+
+const listeners = new Set<WorkbenchEmitListener>();
+
+/** Register a listener. Returns the function that removes it. */
+export function onWorkbenchEmit(listener: WorkbenchEmitListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function notify(call: (l: WorkbenchEmitListener) => void): void {
+  for (const l of listeners) {
+    try {
+      call(l);
+    } catch (err) {
+      console.warn('[workbench] an emit listener failed:', err);
+    }
+  }
+}
+
 export async function emitWorkbenchUpdated(workbench: Workbench): Promise<void> {
   send(workbench.workspaceId, 'workbench:updated', { workbench });
+  notify((l) => l.workbench?.(workbench));
   // Link, archive, restore and status changes all pass here, and each can change
   // which session a pull request shows.
   if (workbench.pullRequestId) await emitPrSession(workbench.workspaceId, workbench.pullRequestId);
@@ -24,6 +53,7 @@ export function emitWorkbenchDeleted(workspaceId: string, id: string): void {
 
 export function emitWorkbenchChat(workspaceId: string, chat: WorkbenchChat): void {
   send(workspaceId, 'workbench:chat', { chat });
+  notify((l) => l.chat?.(workspaceId, chat));
 }
 
 export function emitWorkbenchEvents(workspaceId: string, chatId: string, events: WorkbenchEvent[]): void {

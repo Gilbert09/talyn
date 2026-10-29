@@ -8,8 +8,11 @@ import {
   type ApiResponse,
   type SlackAuthorizeResponse,
   type SlackForgetInstallationResponse,
+  type SlackPendingRequest,
   type SlackStatus,
+  type StartSlackPendingInput,
   type UpdateSlackLinkInput,
+  type Workbench,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../db/client.js';
 import { users as usersTable } from '../db/schema.js';
@@ -35,6 +38,9 @@ import {
   slackStatusFor,
   updateOwnLink,
 } from '../services/slack/store.js';
+import { pendingRequestsFor } from '../services/slack/threads.js';
+import { startPendingRequest } from '../services/slack/triggers.js';
+import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
 
 /**
  * Slack sessions, behind the `workbenches` flag.
@@ -45,6 +51,8 @@ import {
  *   PATCH  /slack/links/:id { triggerEmojis?, workspaceId? }
  *   DELETE /slack/links/:id
  *   DELETE /slack/installations/:teamId    installer only
+ *   GET    /slack/pending                  my Slack requests waiting for a repository
+ *   POST   /slack/pending/:id/start { repositoryId }  owner only → Workbench
  *   GET    /slack/oauth/callback           public; Slack's browser redirect
  *
  * Mounted BEFORE ownerScope: the Slack tables are backend-only, so every read
@@ -251,6 +259,38 @@ export function slackRoutes(): Router {
       return handleAccessError(new AccessError('link not found'), res);
     }
     res.json({ success: true });
+  });
+
+  router.get('/pending', async (req, res) => {
+    if (await refuseUnlessEnabled(req, res)) return;
+    const data = await pendingRequestsFor(assertUser(req).id);
+    res.json({ success: true, data } as ApiResponse<SlackPendingRequest[]>);
+  });
+
+  router.post('/pending/:id/start', async (req, res) => {
+    if (await refuseUnlessEnabled(req, res)) return;
+    const user = assertUser(req);
+    const body = (req.body ?? {}) as Partial<StartSlackPendingInput>;
+    if (typeof body.repositoryId !== 'string' || !body.repositoryId) {
+      return res.status(400).json({ success: false, error: 'repositoryId must be a string' });
+    }
+    // 404 for someone else's request too, so ids do not leak.
+    const pending = (await pendingRequestsFor(user.id)).find((p) => p.id === req.params.id);
+    if (!pending) return handleAccessError(new AccessError('pending request not found'), res);
+    try {
+      await requireWorkspaceAccess(req, pending.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    try {
+      const wb = await startPendingRequest(pending.id, { id: user.id, email: user.email }, body.repositoryId);
+      if (!wb) return handleAccessError(new AccessError('pending request not found'), res);
+      res.json({ success: true, data: wb } as ApiResponse<Workbench>);
+    } catch (err) {
+      const refusal = fleetErrorAsRefusal(err);
+      if (!refusal) throw err;
+      res.status(refusal.status).json({ success: false, error: refusal.message, ...(refusal.code ? { code: refusal.code } : {}) });
+    }
   });
 
   router.delete('/installations/:teamId', async (req, res) => {

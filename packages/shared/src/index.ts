@@ -116,6 +116,7 @@ export * from './sse.js';
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
 export * from './workbenchTitle.js';
+export * from './workbenchBranchName.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';
@@ -1141,6 +1142,10 @@ export type WSEventType =
   // page). Broadcast to all clients; payload is the whole GithubHealth. It
   // holds no tenant data.
   | 'github:health'
+  // A Slack trigger needs the user (pick a repository) or could not start a
+  // session. Per user (broadcastToUser), fired once per occurrence; payload
+  // is `SlackNoticeEvent`.
+  | 'slack:notice'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.

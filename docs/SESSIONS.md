@@ -11,6 +11,109 @@ Cause: `refresh-logs` calls `postHogCodeStreamer.ensure()` while it holds the re
 Fix: `ensure()` starts `run()` under `runWithoutScope`, the same pattern as the workbench turn loop. The test puts `ensure()` inside a fake request scope and checks that the stream's calls see no scope, for a live attach and for a backfill.
 
 Lesson: any fire-and-forget work that a route starts must leave the owner scope. Code that awaits inside the request is safe. Code that keeps running after the response is not.
+## Keep session credentials available during saves (2026-10-27)
+
+Pending archives and live restores can obtain credentials for their current sandbox.
+Moves can obtain credentials for the recorded source and target, each on its recorded host.
+Completed archives and unrelated or obsolete sandbox IDs remain forbidden.
+Git saves that fail with `could not read Username` keep their retry schedule, including after eight failures.
+A successful retry clears the stored error.
+The boot repair re-arms affected archives once when their recorded sandbox state is running or suspended.
+This repair runs before sandbox maintenance starts, so the reaper preserves those pending saves.
+
+## Protect session identity and remove unused sandboxes (2026-10-27)
+
+Generated branches now skip all session branches, including archives, and existing GitHub refs.
+PR links require a recent PR or a recorded push. Earlier closed or merged PRs cannot match.
+Migration 0089 records link times and pushed commits. It also adds branch reservations and maintenance claims.
+Legacy link times use the last session write only when that write precedes the merge.
+Unknown legacy link times stay unset. The backfill does not guess them.
+The merge backfill runs at boot and every ten minutes. It removes stale links and uses the existing archive function.
+The sandbox reaper runs at boot and every five minutes. Both jobs use atomic claims with expiry checks.
+The reaper keeps current boxes, active move targets, and pending archives. Known orphans have a thirty-minute grace period.
+Boxes without a session row have a twenty-four-hour grace period. Only names with `talyn-wb-` qualify.
+Set `WORKBENCH_REAPER_DRY_RUN=1` to log proposed deletions. The default permits deletion.
+
+
+## Archive sessions when their PR merges (2026-10-27)
+
+Merged webhook payloads, monitor close-outs, and PR refreshes now request the same session archive.
+The lookup matches the linked PR by repository and number across owner workspaces.
+Migration 0088 adds lookup indexes and guards for overlapping backend versions.
+The rule waits until every running chat finishes. Queued messages stay queued.
+The normal archive service saves the branch and uncommitted work before it deletes the sandbox.
+The archive and one system note commit together. Stored PR identities prevent another archive after a restore.
+The existing archive sweep recovers a crash after the last turn commits. No GitHub polling was added.
+
+
+## Repair session continuity during deploys (2026-10-27)
+
+Migration 0087 adds parser snapshots, deferred queue flags, archive retry dates, sandbox generations, and backup leases.
+Turn records commit in batches of 50 records or 250 ms, with their offset and parser state.
+Script output commits every 150 ms or 64 KiB. Each batch produces one socket frame.
+Detached followers release their leases. Adoption runs every five seconds during startup, then every fifteen seconds.
+A failed database batch retries three times. Continued failure releases the turn without ending its agent.
+Turn attempts have separate process files. Finished turns remove those files after their events commit.
+Script logs use 8 MiB segments. The follower removes committed segments and retains the last segment.
+
+Restore cancels pending archives and uses an existing sandbox when possible.
+Eight archive failures retain the sandbox and show the reason and Retry action in both History views.
+Provisioning stops safely during a drain. Setup results belong to the sandbox generation that ran them.
+Cancelled queues stay stopped. Only a deferred drain starts messages from the sweep.
+Backup workers claim one row at a time, clear successful work, and delay failed work.
+
+## Split session changes (2026-10-27)
+
+The changes route returns uncommitted and committed files in one quiet exec.
+Uncommitted changes compare the working tree with HEAD and include untracked files.
+Committed changes compare HEAD with the merge base.
+The old combined fields remain available. Diff requests accept a scope and default to the combined comparison.
+The existing statistics column stores both totals. Its legacy totals now contain only uncommitted changes.
+Both clients show separate collapsible groups. Their sidebar counts use only uncommitted changes.
+
+
+## Keep sandbox work through backend deploys (2026-10-27)
+
+Migration 0086 adds turn ownership, heartbeats, byte offsets, script runs, and pending backup markers.
+A turn renews its lease every 20 seconds. A sweep claims leases older than 90 seconds every 30 seconds.
+The claim compares the saved owner and heartbeat. Event writes also check the owner and turn number.
+Legacy turns remain protected for 30 minutes. They remain protected longer while their agent process is alive.
+
+A detached supervisor stores output and an exit file in the sandbox.
+Each parsed record and its byte offset commit together. A new owner rebuilds parser state from the saved prefix.
+It writes only events after the saved offset. It uses the same completion path, queue, PR link, and backup trigger.
+No turn sweep kills an agent. A dead agent without an exit file reports “The agent stopped unexpectedly.”
+Draining stops new turns. Existing followers continue until two seconds before the configured drain deadline.
+The default drain window is ten seconds. The backend leaves all sandbox processes running when it exits.
+
+Terminals already use stable tmux sessions. Both clients now reconnect without adding error lines.
+The bridge replays recent history. Both error renderers now display the result message they previously ignored.
+Scripts store their offsets and recent output. Clients reload that output after reconnect and reject repeated offsets.
+Setup and archive scripts reuse their stored run on the same sandbox. Pending agent backups retry after restart.
+
+Audit: moves and pending archives already have durable leases and recovery sweeps.
+Provisioning retries its idempotent steps at boot. It still lacks a lease across instances for clone operations.
+PR creation can find an existing PR for its branch. Adopted turns repeat completion when necessary.
+Imports still lack a durable completion record for partially copied transcripts.
+Preview servers survive, but an active forwarded HTTP request can end during deployment.
+Those import and preview gaps need separate changes before all session activity can be called deploy-transparent.
+Legacy agents have no output log, so their missing output cannot be recovered by this migration.
+
+Checks: the shared and client packages build. Backend, desktop, and web type checks pass.
+ESLint passes on all changed TypeScript files. Targeted database and stubbed-fleet tests pass.
+The desktop checks pass 52 tests. The web checks pass 50 tests.
+Socket checks cannot bind a local listener in this sandbox. They fail with EPERM before the test body.
+No production build, commit, push, or branch change was made.
+
+## Archive sessions immediately (2026-10-27)
+
+Migration 0085 adds a durable archive marker, a lease, and a retry count.
+Archive requests return after the marker is written. A detached worker saves the work before it deletes the sandbox.
+A sweep checks pending archives every minute. A timestamp comparison gives each archive to one worker across backend instances.
+Failed saves keep the sandbox. Retries use increasing delays. Restore waits until the archive completes.
+Archive can stop a sandbox refresh. The refresh keeps its lease through cleanup and cannot commit after archive starts.
+Both apps keep the composer and controls available during refreshes. Clean refreshes add no chat note.
+Notes report only files, conversations, or running processes that could not continue.
 
 ## Keep agent memory after sandbox loss (2026-10-27)
 
@@ -51,6 +154,52 @@ A PR in Trunk's merge queue now shows when it will merge: "Will merge in ~12 min
 
 **Not verified.** The ETA fields and `includeEstimatedTimeToMerge` come from Trunk's example, not from its spec. The token is not checked against Trunk when it is saved, because the API has no endpoint for that without a PR. A bad token shows as "Reconnect needed" after the first ETA request.
 
+## Session previews, the web sessions UI, and a PR tab (2026-10-24)
+
+**Previews.** A session can run its repository's app and open it in a browser. A
+per-repository target decides where the app runs: the session's sandbox, or the person's
+own Coder workspace. See "Previews" in [`WORKBENCHES.md`](./WORKBENCHES.md).
+- Coder is for preview only. The agent stays in the sandbox. Talyn applies the session's
+  patch to a worktree in the Coder workspace, because a PostHog-sized stack does not fit in
+  a sandbox.
+- The desktop does all Coder work through the person's `coder` CLI. PostHog's deployment is
+  reachable only on the tailnet, and Talyn must never hold a Coder token.
+- Previews use the `workbenches` flag. A separate `session-previews` flag was added and then
+  removed: previews exist only inside sessions, so a second switch decided nothing.
+- The YAS ports route costs one request token per request, but production sets no tenant
+  API rate. So a separate ports bucket is not needed now.
+
+**Background runs wait for a live session.** The merge queue, auto-keep, workflows and code
+review auto-fix stand down while a session works the same pull request. A manual fix that
+would race a session answers 409 `pr_has_session`.
+
+**Other work.** The web app has the sessions UI (sandbox only, with its own key table). The
+session panel has a "Pull request" tab. The desktop finds local checkouts at startup and
+does not read network mounts. Sidebar state icons have colour, and merged is purple. YAS
+session boxes send loopback traffic directly (`NO_PROXY`), so a repository's local MCP
+server is reachable.
+
+## Open a pull request when the agent finishes (2026-10-22)
+
+New sessions enable automatic PR creation by default. The person can change the device default in Settings.
+The session Actions menu changes the setting for one session.
+Both runtimes give the agent a standing instruction while the session has no linked PR.
+A successful turn opens a PR when its final reply contains valid PR details. Talyn commits and pushes the branch.
+The transcript shows a PR card in place of the JSON block. Explicit Create PR turns keep their existing path.
+
+## Image previews in session chat (2026-10-22)
+
+User message events now keep each attachment path. The transcript shows image previews and file chips below the user's text.
+The composer caches new previews. Older sandbox images load through a private, authenticated route with a 10 MB limit.
+Local images load through a restricted desktop bridge read. Clicking a preview opens a dialog.
+
+## Link merged and closed pull requests to sessions (2026-10-22)
+
+The session link route accepts open, merged, and closed PRs from its repository.
+It tracks each PR with its real state and merge time.
+Open PRs keep their branch checkout rules. Closed PRs leave the session branch and worktree unchanged.
+The link dialog now has one search field, a filter for closed PRs, and keyboard selection.
+Link errors appear in the dialog so the user can try again.
 ## A GitHub search incident took the authored PRs off the list (2026-10-22)
 
 During a GitHub incident ("Errors loading Issues, Pull Requests, and search results"), most of the authored PRs left the PR list. They came back when GitHub recovered.
@@ -161,6 +310,70 @@ reconcile sweep is unchanged: it still resolves mergeability inline, because no
 person waits on it. Measured for scale: one 5-PR batch against PostHog/posthog
 takes about 5.3 s, and Tom has about 124 open PRs there (34 authored, 90
 review-requested).
+
+## Images in sandbox sessions (2026-10-21)
+
+The desktop can upload pasted, dropped, and selected images to a ready sandbox.
+The backend checks each image type and writes the file under `.context/attachments/` in the clone.
+The clone's Git exclude file hides `.context/` from Changes and commits.
+Messages carry a repository path. They do not carry image bytes through the database or chat updates.
+Large PNG images become JPEG files before upload. Codex receives their paths through `-i`.
+
+## Link an existing session to a pull request (2026-10-21)
+
+The session Actions menu can link or unlink an open PR from its repository.
+The dialog lists recent PRs and accepts a PR number or repository URL.
+Both runtimes use shared git steps to fetch and check out the head branch.
+Fork PRs use GitHub's pull ref. A dirty worktree blocks checkout.
+The existing PR tracking path stores the link. Transcript events record each link and unlink.
+Unlink keeps the branch and saves the PR number in settings. Automatic branch matching skips that number.
+The local runtime reports its branch through the session update route after checkout.
+
+## Workbenches, and a desktop app rebuilt around them (2026-10-13 to 2026-10-14, branch only)
+
+On branch `tom/workbenches`, not on `main`. Design and state: [`WORKBENCHES.md`](./WORKBENCHES.md).
+
+**What it is.** A Conductor.build-style unit, the workbench: one branch of one repo, long agent
+chats (the real `claude` / `codex` CLIs, one process per turn), a diff, a terminal, scripts and
+checkpoints. Two runtimes sit behind one UI: a long-lived Talyn Fleet sandbox (the default) and a
+local git worktree. The first pass added it as one nav item. Tom then asked for the whole desktop
+app to be code-first, so the shell was rebuilt: workbenches are home, and the PR panels are one
+"Pull requests" area.
+
+**What the first real run found.** Every unit and route test passed against a fake fleet, and the
+first run against the real one still failed in four ways that no fake could show:
+- The local backend had no fleet key, and the UI hid that: a stale "Starting…" banner, and a
+  message queued forever. Failures now go through one path that sets a readable reason, clears the
+  queue, and offers Retry. A readiness endpoint answers before create, so a doomed workbench is
+  never inserted.
+- The fleet refuses box names over 40 characters. Ours were 48.
+- The fleet's 404 for a missing FILE was read as a missing sandbox.
+- A push was refused because the local-dev GitHub App has Contents: read. Production has write.
+  Separately, a bare box named no repository, so the fleet proxy refused its commit, checks and
+  review-thread endpoints. YAS branch `tom/bare-box-repo` adds a top-level `repo`, not deployed.
+
+**Fleet.** `tom/workbench-endpoints` (quiet exec, diff, files, pty, ports, idle TTL, a hold count
+for busy) was merged to YAS `main` and deployed on 2026-10-14. It also changed one existing
+behaviour: a box adopted after a restart or resumed now keeps its own idle timeout (normally
+600 s) instead of the 30-minute default.
+
+**Later on 2026-10-14.**
+- **Hibernated boxes.** A box that was idle long enough moves to object storage. The fleet then
+  refuses every call with 409 `remote_resume_required`, which named the call that may wait:
+  `POST /resume`. Nothing called it, so an old workbench showed the refusal as an error. The
+  workbench fleet client now resumes the box, and then sends the call again.
+- **Claude Code too old for Opus 5.5.** The image pinned Claude Code 2.1.245. With Tom's OK it
+  went to 2.1.296 on YAS `main`. That changes the golden id, so every golden was baked again.
+  Existing boxes keep their old CLI.
+- **The UI name is now "session".** Only the words users see changed.
+- **CI was red on every push to the branch, and nobody looked.** The typecheck failed first,
+  so the test suites never ran. Behind it there were two more failures. A local typecheck
+  passed because `node-pty` was installed on this machine and not in CI. The lesson: on a long
+  branch, watch the branch's own CI run, not only the local checks.
+
+**Process note.** Five parallel agents each running `tsc` and multi-worker tests slowed Tom's
+laptop badly. Agents now run no typecheck; one serial, `nice`d typecheck per package runs after
+they finish, and tests run single-worker on the touched files only.
 
 ## No code review ever finished, and the judge could not keep two lenses (2026-10-13)
 

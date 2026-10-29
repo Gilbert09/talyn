@@ -13,6 +13,7 @@ import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
+import type { SlackSessionSource } from './slack.js';
 
 // ============================================================================
 // Vocabulary
@@ -70,11 +71,13 @@ export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'rename
 /**
  * Why a message was sent, when it was not typed. `create_pr`: the agent gets
  * Talyn's hidden PR instructions with the short visible text, and the end of
- * the turn opens the pull request from its answer.
+ * the turn opens the pull request from its answer. `rename_branch`: the end of
+ * the turn reads the branch the agent left checked out, and the session row
+ * follows it.
  */
-export type WorkbenchMessageIntent = 'create_pr';
+export type WorkbenchMessageIntent = 'create_pr' | 'rename_branch';
 
-export const WORKBENCH_MESSAGE_INTENTS: readonly WorkbenchMessageIntent[] = ['create_pr'];
+export const WORKBENCH_MESSAGE_INTENTS: readonly WorkbenchMessageIntent[] = ['create_pr', 'rename_branch'];
 
 // ============================================================================
 // Public shapes (what the API returns)
@@ -186,10 +189,22 @@ export interface Workbench {
   error?: string | null;
   /** The open chats, oldest first. Embedded in the list and single GET responses. */
   chats?: WorkbenchChat[];
+  /**
+   * Where the session was started from, when it was not the app. Null or
+   * absent: the app's own composer. Set once at creation and never changed.
+   * A Slack source lets the UI draw "Open thread" (`permalink`).
+   */
+  source?: WorkbenchSource | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Where a session came from. One kind today; a union so a later source (an
+ * issue tracker, say) is a new member, not a new field.
+ */
+export type WorkbenchSource = SlackSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {
@@ -241,6 +256,8 @@ export interface WorkbenchChat {
   queuedMessages: WorkbenchQueuedMessage[];
   /** Set when the chat continues a local Claude Code conversation. */
   importedFrom?: WorkbenchImportedFrom | null;
+  /** Set while a running turn waits for its sleeping sandbox to restore. Absent otherwise. */
+  phase?: 'restoring' | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -330,7 +347,49 @@ export interface CreateWorkbenchInput {
   prompt?: string;
   deviceId?: string;
   localPath?: string;
+  /**
+   * Local only: the desktop named `branch` itself (from the prompt, with the
+   * workspace prefix), so no person chose it. Such a branch is Talyn's to
+   * rename after the first turn. Ignored with `fromPullRequestId`.
+   */
+  branchGenerated?: boolean;
 }
+
+/**
+ * Ask Talyn for a better name for a LOCAL session's branch
+ * (`POST /workbenches/:id/branch-name`). With neither `title` nor
+ * `suggestion`, it only checks: `suggest` means "ask your model, then call
+ * again". `title` is the agent's PR title; `suggestion` is a model's one-line
+ * answer. Talyn turns either into a slug, adds the prefix and makes it unique.
+ */
+export interface NameWorkbenchBranchInput {
+  /** The chat whose turn just ended: its own `running` status does not count as busy. */
+  chatId?: string;
+  title?: string;
+  suggestion?: string;
+}
+
+/**
+ * `rename`: the attempt is claimed and the name is free now, but the row has
+ * not changed. Rename the local branch, then confirm. `keep`: decided, never
+ * ask again. `not_now`: ask again after a later turn.
+ */
+export type WorkbenchBranchNameDecision =
+  | { outcome: 'rename'; from: string; to: string }
+  | { outcome: 'suggest' }
+  | { outcome: 'keep'; reason: string }
+  | { outcome: 'not_now'; reason: string };
+
+/** `POST /workbenches/:id/branch-name/confirm`, after the local `git branch -m from to` succeeded. */
+export interface ConfirmWorkbenchBranchNameInput {
+  from: string;
+  to: string;
+}
+
+/** `refused`: the row did not move. Rename the local branch back. */
+export type ConfirmWorkbenchBranchNameResult =
+  | { outcome: 'renamed'; workbench: Workbench }
+  | { outcome: 'refused'; reason: 'name_taken' | 'row_changed' };
 
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
@@ -556,6 +615,23 @@ export interface WorkbenchLocalBridge {
    * not have it.
    */
   generateTitle?(input: { agent: WorkbenchAgent; message: string }): Promise<string | null>;
+  /**
+   * A model's one-line branch name for the work, by the local agent CLI with
+   * the title call's cheap model. The raw answer, or null on any failure:
+   * Talyn reads it. Optional: an older main process does not have it.
+   */
+  suggestBranchName?(input: {
+    agent: WorkbenchAgent;
+    message: string;
+    changedFiles: string[];
+    finalMessage: string;
+  }): Promise<string | null>;
+  /**
+   * `git branch -m from to` in a Talyn worktree, only while `from` is its
+   * current branch and has no upstream. Checked in main, not trusted from the
+   * caller. Optional: an older main process does not have it.
+   */
+  renameBranch?(input: { path: string; from: string; to: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Run argv steps (see `workbenchGit.ts` `GitStep`) in `path`, in order, stopping at the first failure. */
   exec(
     path: string,
@@ -771,7 +847,11 @@ export function workbenchBranchFromTask(text: string): string | null {
     .replace(/(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-\d{1,6}(?![A-Za-z0-9])/g, (m, prefix: string) =>
       NOT_ISSUE_KEY_PREFIXES.has(prefix) ? m : ' '
     );
-  const parts = [...keys, ...taskNameWords(withoutKeys).slice(0, BRANCH_SLUG_WORDS)];
+  return joinBranchSlug([...keys, ...taskNameWords(withoutKeys).slice(0, BRANCH_SLUG_WORDS)]);
+}
+
+/** Join slug words with hyphens, stopping before `WORKBENCH_BRANCH_SLUG_MAX`. A first word over it is cut. */
+function joinBranchSlug(parts: string[]): string | null {
   let slug = '';
   for (const part of parts) {
     const next = slug ? `${slug}-${part}` : part;
@@ -782,6 +862,62 @@ export function workbenchBranchFromTask(text: string): string | null {
     slug = next;
   }
   return slug || null;
+}
+
+/** `feat:`, `fix(billing):`, `refactor!:` at the start of a conventional-commit title. */
+const CONVENTIONAL_PREFIX = /^[a-z]+(?:\([^)]*\))?!?:\s*/i;
+
+/**
+ * A branch slug (no workspace prefix) from a pull request title, such as
+ * "fix(billing): Fix webhook retry when Stripe returns 409". The
+ * conventional-commit prefix goes, then the title is read the way a first
+ * message is (`workbenchBranchFromTask`): references first, filler words
+ * dropped, six words and `WORKBENCH_BRANCH_SLUG_MAX` characters at most.
+ * Only the first line counts. Null when no letter is left.
+ */
+export function branchSlugFromTitle(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const line = raw.trim().split(/\r?\n/)[0].replace(/["“”„«»`*]/g, '').trim();
+  const slug = workbenchBranchFromTask(line.replace(CONVENTIONAL_PREFIX, ''));
+  return slug && /[a-z]/.test(slug) ? slug : null;
+}
+
+/** A model answer this long is a reply, not a slug, and is refused rather than cut. */
+const BRANCH_SUGGESTION_REFUSE_OVER = 100;
+/** More words than this is a sentence, not a slug. */
+const BRANCH_SUGGESTION_REFUSE_WORDS = 12;
+
+/**
+ * A branch slug (no workspace prefix) from a model's one-line answer, or null
+ * when the answer is not one. Null means "keep the branch name".
+ *
+ * Refuses empty output, more than one line, and a reply too long to be a
+ * slug. Strips quotes, backticks, markdown and a `branch:` label. A prefix the
+ * model added (`tom/`, `feature/`, `refs/heads/`) is dropped, because the
+ * prefix is the workspace's to choose. The rest is folded to `a-z`, `0-9` and
+ * single hyphens, cut to six words and `WORKBENCH_BRANCH_SLUG_MAX` characters,
+ * and must hold at least one letter.
+ */
+export function branchSlugFromSuggestion(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const line = raw.trim();
+  if (!line || /[\r\n]/.test(line) || line.length > BRANCH_SUGGESTION_REFUSE_OVER) return null;
+  let text = line
+    .replace(/["“”„«»`*]/g, '')
+    .replace(/^git\s+(?:checkout|switch)\s+-[bc]\s+/i, '');
+  // A label such as `Branch name:` comes before the answer.
+  text = text.slice(text.lastIndexOf(':') + 1);
+  text = text.split('/').filter((part) => part.trim()).pop() ?? '';
+  const words = text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['‘’]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (words.length > BRANCH_SUGGESTION_REFUSE_WORDS) return null;
+  const slug = joinBranchSlug(words.slice(0, BRANCH_SLUG_WORDS));
+  return slug && /[a-z]/.test(slug) ? slug : null;
 }
 
 // ============================================================================
@@ -867,15 +1003,16 @@ const SANDBOX_GIT_NOTE = [
     'fleet proxy, which attaches the credentials. Do not ask for a token, do not run `gh auth login`, ' +
     'and do not change the git remote URL.',
   '',
-  'Signed commits: the sandbox has no signing key. If `git push` fails with `GH013` ("Commits must ' +
-    'have verified signatures"), do not retry it. Publish with `fleet-publish`, which makes one commit ' +
-    'through the GitHub API, and GitHub signs it:',
-  '- Run `git fetch origin <branch>` first, and merge any new remote commits.',
-  '- `fleet-publish --branch <branch> --message "<headline>" --base origin/<branch>` puts the working ' +
-    'tree on top of the remote branch as one signed commit. Leave out `--base` when the branch is not on ' +
-    'GitHub yet. It also publishes untracked files, so remove build output first.',
-  '- Then run `git fetch origin <branch>` and `git reset --hard origin/<branch>`, so the local branch ' +
-    'matches GitHub. The files do not change; only the history does.',
+  'Signed commits are handled for you. Commit and run `git push` as normal. When the repository ' +
+    'requires signed commits, the sandbox republishes your commits through GitHub, which signs them. ' +
+    'Your local commit ids then change to the ids from GitHub. The files do not change. Do not say ' +
+    'that the sandbox cannot sign commits. Do not force-push. Do not use `fleet-publish --move-branch`, ' +
+    'unless the user asks you to replace the history of the branch.',
+  '',
+  'Older sandbox: if `git push` fails with `GH013` and its output does not say that the sandbox ' +
+    'republished the commits, publish with `fleet-publish --branch <branch> --message "<headline>" ' +
+    '--base origin/<branch>`. Then run `git fetch origin <branch>` and `git reset --hard origin/<branch>`. ' +
+    'For a merge, tell the user that it needs a newer sandbox. Do not move branches.',
   '',
   'A failed push is not a finished task. Never say that the branch is pushed until `git push` or ' +
     '`fleet-publish` succeeded. If both fail, stop and say that the branch on GitHub did not change, ' +
@@ -909,22 +1046,9 @@ export const DEFAULT_WORKBENCH_ACTION_PROMPTS: Readonly<Record<WorkbenchPromptAc
     '   take one side.',
     '3. Run the build and the tests for the code you touched to make sure the merge result works.',
     '4. Commit the merge and push the current branch with `git push`.',
-    '5. Only if that push fails with `GH013` (the repository requires signed commits) and you are in a',
-    '   Talyn sandbox: `fleet-publish` cannot make a merge commit, and one commit on top of the branch',
-    '   does not clear the conflict on GitHub. Put the merge result on a new branch from `{{baseBranch}}`,',
-    '   then move this branch to it:',
-    '   a. Make sure `git status` shows no untracked files. `fleet-publish` publishes them too.',
-    '   b. `fleet-publish --branch {{branch}}-merge-<random suffix> --message "Merge {{baseBranch}} into {{branch}}" --base origin/{{baseBranch}}`',
-    '      Use a branch name that does not exist on GitHub yet.',
-    '   c. `git fetch origin <that branch>`, then `git rev-parse origin/<that branch>` for its full sha.',
-    '   d. `fleet-publish --move-branch {{branch}} --oid <the full sha>`',
-    '   e. `git push origin --delete <that branch>`',
-    '   f. `git fetch origin {{branch}}` and `git reset --hard origin/{{branch}}`.',
-    '   This replaces the history of `{{branch}}` with one signed commit on top of `{{baseBranch}}`. Say so in',
-    '   your reply.',
-    '6. Reply with the files that conflicted and how you resolved each one.',
+    '5. Reply with the files that conflicted and how you resolved each one.',
     '',
-    'Do not rebase and do not force-push, except for step 5: the branch may already have reviews on it.',
+    'Do not rebase and do not force-push: the branch may already have reviews on it.',
     '',
     SANDBOX_GIT_NOTE,
   ].join('\n'),
