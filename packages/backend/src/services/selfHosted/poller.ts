@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@talyn/shared';
 import {
   fleetAgentForModel,
@@ -50,6 +50,17 @@ export { shouldPersistTranscript } from '../cloudProviders/transcriptStore.js';
  * task nobody will ever finish stops claiming to be running within one coffee.
  */
 export const DISPATCH_GRACE_MS = 5 * 60_000;
+const FINAL_ASSISTANT_TAIL_EVENTS = 20;
+
+export function finalAssistantTailQuery(taskId: string) {
+  return getDbClient()
+    .select({
+      events: sql<AgentEvent[] | null>`jsonb_path_query_array(${tasksTable.transcript}, ${`$[last - ${FINAL_ASSISTANT_TAIL_EVENTS - 1} to last]`}::jsonpath)`,
+    })
+    .from(tasksTable)
+    .where(eq(tasksTable.id, taskId))
+    .limit(1);
+}
 
 /** A sandbox is terminal exactly when the fleet says so — it owns the
  *  lifecycle. Terminal = stopped | failed | cancelled (fleet docs/MERGE.md). */
@@ -777,6 +788,8 @@ class SelfHostedPoller {
     sandbox: FleetSandbox,
     prUrl: string | null,
   ): Promise<void> {
+    // Kept before `stopStreaming` deletes it: the sentinel is read from it below.
+    const events = this.transcripts.get(taskId);
     this.stopStreaming(taskId);
     clearWatched(taskId);
 
@@ -839,12 +852,11 @@ class SelfHostedPoller {
 
     // Did the agent hand back to a person? The fleet has no structured field
     // for it either, so the sentinel is read from the two places its closing
-    // words can land: the task's error string, and the tail of the transcript
-    // we have been accumulating for this run. Exact match only, so an infra
-    // failure is never re-read as a refusal.
+    // words can land: the task's error string, and the last assistant text.
+    // Exact match only, so an infra failure is never re-read as a refusal.
     const needsHuman =
       parseNeedsHumanSentinel(failureDetail) ??
-      parseNeedsHumanSentinel(this.finalAssistantText(taskId));
+      parseNeedsHumanSentinel(await this.finalAssistantText(taskId, events));
 
     const outcome: TaskStatus = needsHuman ? 'needs_human' : status;
     const result: TaskResult = needsHuman
@@ -879,22 +891,22 @@ class SelfHostedPoller {
   }
 
   /**
-   * The last thing the agent said on this run, from the transcript this
-   * process has been accumulating.
-   *
-   * Prefers the Claude Agent SDK `result` event, which carries the run's
-   * closing summary as a plain string and is emitted last. Falls back to the
-   * final assistant text block for a transcript that ended some other way.
-   *
-   * Memory only, deliberately. The persisted copy lives in `tasks.transcript`,
-   * the largest jsonb column we have, and re-reading it on every finalize is
-   * exactly the egress regression the projection rules exist to stop. A
-   * backend restart mid-run therefore loses the sentinel and the task settles
-   * the way it does today — the same degrade-to-status-quo the parser
-   * documents, and much cheaper than the alternative.
+   * Read the final assistant text from memory when this process has events.
+   * Otherwise, read the last 20 stored events. SQL slices the transcript so
+   * the database sends only that tail.
    */
-  private finalAssistantText(taskId: string): string | null {
-    return finalTextFromEvents(this.transcripts.get(taskId) ?? []);
+  private async finalAssistantText(
+    taskId: string,
+    events: readonly AgentEvent[] | undefined,
+  ): Promise<string | null> {
+    if (events?.length) return finalTextFromEvents(events);
+    try {
+      const [row] = await finalAssistantTailQuery(taskId);
+      return finalTextFromEvents(row?.events ?? []);
+    } catch (err) {
+      console.error(`[selfhosted] failed to read transcript tail for ${taskId.slice(0, 8)}:`, err);
+      return null;
+    }
   }
 
   private async captureOutcome(
