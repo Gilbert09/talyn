@@ -15,8 +15,7 @@ import {
  *
  * Same storage as the PostHog Code key: the key is an AES-GCM envelope in
  * `config`, and nothing returns it. Clients learn only `connected` and
- * `needsReauth` through {@link trunkStatus}. (The field names still say
- * "token": rows written before v2 hold a v1 organization API token there.)
+ * `needsReauth` through {@link trunkStatus}.
  */
 
 export const TRUNK_INTEGRATION_TYPE = 'trunk';

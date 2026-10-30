@@ -163,7 +163,7 @@ describe('parseTrunkQueueState', () => {
   it.each([
     ['an undocumented state', 'bisecting', 'unknown'],
     ['a different case', 'TESTING', 'unknown'],
-    ['a v1 spelling', 'tests_passed', 'unknown'],
+    ['a snake_case spelling', 'tests_passed', 'unknown'],
     ['an empty string', '', null],
     ['a number', 3, null],
     ['null', null, null],

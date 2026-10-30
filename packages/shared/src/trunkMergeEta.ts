@@ -54,7 +54,7 @@ export interface TrunkMergeEta {
 export type MergeEtaReason =
   /** The workspace has no Trunk API key. */
   | 'no_token'
-  /** Trunk refused the key (401/403), or it is a v1 token. Settings shows "Reconnect". */
+  /** Trunk refused the key (401/403). Settings shows "Reconnect". */
   | 'reauth_required'
   /** The PR is not in Trunk's queue (or is closed). */
   | 'not_queued'
@@ -77,7 +77,7 @@ export interface MergeEtaAnswer {
 /** The body of `GET /trunk/status`. The key itself never leaves the backend. */
 export interface TrunkIntegrationStatus {
   connected: boolean;
-  /** Trunk refused the stored key, or it is a v1 token. Saving a new key clears this. */
+  /** Trunk refused the stored key. Saving a new one clears this. */
   needsReauth: boolean;
   reauthReason?: string;
   connectedAt?: string;
