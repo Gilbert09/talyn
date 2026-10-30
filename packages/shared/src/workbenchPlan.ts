@@ -38,6 +38,29 @@ export const TALYN_TOOLS_NOTE =
   'If you archive this session, Talyn does it after your reply ends.';
 
 /**
+ * The built-in skills Talyn writes into a session box before each turn, for
+ * Claude in `~/.claude/skills/<name>/` and for Codex in `~/.codex/skills/<name>/`.
+ * The files live in the backend (`services/workbenches/skillPack/<name>/SKILL.md`);
+ * this list is what both the delivery and the turn prompt name.
+ */
+export const TALYN_SKILL_PACK = [
+  'talyn-multi-repo',
+  'talyn-delegate',
+  'talyn-ci-triage',
+  'talyn-ship-pr',
+  'talyn-review-loop',
+  'talyn-wrap-up',
+] as const;
+
+export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
+
+/** Added to {@link TALYN_TOOLS_NOTE} when the box has the skill pack. */
+export const TALYN_SKILLS_NOTE =
+  'Talyn installed the skills `talyn-multi-repo`, `talyn-delegate`, `talyn-ci-triage`, `talyn-ship-pr`, ' +
+  '`talyn-review-loop` and `talyn-wrap-up`: use them for other repositories, child sessions, failing CI, ' +
+  'the pull request, review feedback and ending the session.';
+
+/**
  * The prompt for one turn, with the hidden instructions it needs. Claude takes
  * them as an appended system prompt, and on a Create PR turn also in front of
  * the prompt. Codex has no such flag, so they go in front of the prompt. The
@@ -58,6 +81,8 @@ export function workbenchTurnPrompt(input: {
   recap?: string;
   /** The box has Talyn's own MCP server, named `talyn`. */
   talynTools?: boolean;
+  /** The box has Talyn's skill pack. Named only together with `talynTools`. */
+  talynSkills?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -72,7 +97,11 @@ export function workbenchTurnPrompt(input: {
     ? buildAutoCreatePrInstructions()
     : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
-  const talynNote = input.talynTools ? TALYN_TOOLS_NOTE : null;
+  const talynNote = input.talynTools
+    ? input.talynSkills
+      ? `${TALYN_TOOLS_NOTE} ${TALYN_SKILLS_NOTE}`
+      : TALYN_TOOLS_NOTE
+    : null;
   const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, SANDBOX_SERVICES_NOTE, input.recap]
     .filter(Boolean)
     .join('\n\n');

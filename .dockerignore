@@ -30,3 +30,5 @@ apps/desktop/.erb/dll
 docs
 *.md
 !CLAUDE.md
+# The session skill pack is Markdown the backend ships (build:copy-skill-pack).
+!packages/backend/src/services/workbenches/skillPack/**

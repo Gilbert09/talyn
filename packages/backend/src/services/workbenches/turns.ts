@@ -47,6 +47,7 @@ import { notifyPrSessionChanged } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
+import { syncSkillPack } from './skillPack.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
@@ -599,6 +600,15 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
       recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
     });
+    const talynTools = await sessionHasTalynMcp(wb);
+    // Talyn's built-in skills, on the same terms: every turn, and a failure
+    // costs the skills for one turn, not the turn.
+    const talynSkills = await syncSkillPack(wb, { talynTools }).catch((err) => {
+      if (err instanceof FleetRunNotFoundError) throw err;
+      console.warn(`[workbench] syncing the skill pack for chat ${chatId} failed:`, err);
+      recordWorkbenchEvent(wb, 'skill_pack_sync', err instanceof Error ? err.message : String(err), false);
+      return false;
+    });
     if (live.cancelRequested) return cancelledOutcome(events);
 
     const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
@@ -620,7 +630,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       autoCreatePr: wb.settings?.autoCreatePr,
       hasPullRequest: Boolean(wb.pullRequestId),
       imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
-      talynTools: await sessionHasTalynMcp(wb),
+      talynTools,
+      talynSkills,
     });
     const argv =
       agent === 'codex'

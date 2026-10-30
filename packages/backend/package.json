@@ -6,8 +6,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' tsx watch src/index.ts",
-    "build": "tsc && npm run build:copy-migrations",
+    "build": "tsc && npm run build:copy-migrations && npm run build:copy-skill-pack",
     "build:copy-migrations": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve('src/db/migrations'),dst=p.resolve('dist/db/migrations');fs.rmSync(dst,{recursive:true,force:true});fs.cpSync(src,dst,{recursive:true});console.log('copied migrations to',dst)\"",
+    "build:copy-skill-pack": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve('src/services/workbenches/skillPack'),dst=p.resolve('dist/services/workbenches/skillPack');fs.rmSync(dst,{recursive:true,force:true});fs.cpSync(src,dst,{recursive:true});console.log('copied the session skill pack to',dst)\"",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",

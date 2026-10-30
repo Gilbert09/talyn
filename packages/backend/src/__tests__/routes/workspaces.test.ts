@@ -324,6 +324,30 @@ describe('routes/workspaces', () => {
       });
     });
 
+    describe('settings.sessionSkillPack', () => {
+      it.each([[true], [false]])('stores %j', async (sent) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { sessionSkillPack: sent } }),
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).data.settings.sessionSkillPack).toBe(sent);
+      });
+
+      it.each([['true'], [0], [1], [null], [{}]])('rejects %j with a 400', async (sent) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { sessionSkillPack: sent } }),
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toMatch(/sessionSkillPack/);
+      });
+    });
+
     it('updates name + description independently', async () => {
       await db.insert(workspacesTable).values({
         id: 'a',
