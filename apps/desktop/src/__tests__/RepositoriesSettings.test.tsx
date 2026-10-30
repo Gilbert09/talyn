@@ -9,6 +9,8 @@ const previewPatch = jest.fn();
 const previewDetect = jest.fn();
 const sizeGet = jest.fn();
 const sizeSet = jest.fn();
+const bakeGet = jest.fn();
+const bakePut = jest.fn();
 const instructionsList = jest.fn();
 const removeRepo = jest.fn();
 const detect = jest.fn();
@@ -46,7 +48,7 @@ jest.mock('../renderer/components/widgets/PollingOnlyBadge', () => ({ PollingOnl
 jest.mock('../renderer/components/widgets/GithubInstallStatus', () => ({ GithubInstallStatus: () => null }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
-    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
+    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, bake: { get: (...args: unknown[]) => bakeGet(...args), put: (...args: unknown[]) => bakePut(...args) }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
     github: { getStatus: jest.fn().mockResolvedValue({ connected: false }) },
   },
 }));
@@ -74,6 +76,8 @@ beforeEach(() => {
   removeScanRoot.mockResolvedValue([]);
   sizeGet.mockResolvedValue({ setting: 'auto', effective: 'standard', detected: null });
   sizeSet.mockResolvedValue({ setting: 'large', effective: 'large', detected: null });
+  bakeGet.mockResolvedValue(null);
+  bakePut.mockImplementation(async (_id, bake) => bake);
   instructionsList.mockResolvedValue([{ repositoryId: 'r1' }]);
   removeRepo.mockResolvedValue(undefined);
 });
@@ -224,6 +228,12 @@ test('shows the selected size in the row', async () => {
   expect(await screen.findByText('X-Large · 16 GB')).toBeInTheDocument();
 });
 
+test('shows a bake pill before the detail opens', async () => {
+  bakeGet.mockResolvedValue({ steps: [{ name: 'Install', run: 'echo ok' }] });
+  render(<RepositoriesSettings />);
+  expect(await screen.findByText('Bake steps', { selector: '[data-attr="settings-repo-bake-pill"]' })).toBeInTheDocument();
+});
+
 test('changes size and confirms removal inline', async () => {
   render(<RepositoriesSettings />);
   fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
@@ -234,4 +244,19 @@ test('changes size and confirms removal inline', async () => {
   expect(removeRepo).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
   await waitFor(() => expect(removeRepo).toHaveBeenCalledWith('r1'));
+});
+
+test('adds, validates, saves, and removes bake steps', async () => {
+  render(<RepositoriesSettings />);
+  fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add step' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Step 1 name');
+  fireEvent.change(screen.getByLabelText('Step 1 name'), { target: { value: 'Install database' } });
+  fireEvent.change(screen.getByLabelText('Step 1 command'), { target: { value: 'echo ready' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
+  await waitFor(() => expect(bakePut).toHaveBeenCalledWith('r1', { steps: [{ name: 'Install database', run: 'echo ready', timeoutSec: 300 }], hosts: [] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove step 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
+  await waitFor(() => expect(bakePut).toHaveBeenLastCalledWith('r1', { steps: [] }));
 });

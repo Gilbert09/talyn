@@ -280,6 +280,7 @@ export function detectPreview(input: { files: Record<string, string | null>; pat
 }
 
 export interface RepositorySettings {
+  bake?: import('./bake.js').RepositoryBake | null;
   /** Absent means auto. */
   sandboxSize?: SandboxSizeSetting;
   detectedSandboxSize?: CachedSandboxSize;

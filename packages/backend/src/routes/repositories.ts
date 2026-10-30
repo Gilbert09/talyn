@@ -1,4 +1,5 @@
 import { runWithoutScope } from '../db/client.js';
+import { putRepositoryBake } from '../services/workbenches/bake.js';
 import { userMayUseWorkbenches } from '../services/workbenches/access.js';
 import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
 import {
@@ -183,6 +184,24 @@ export function repositoryRoutes(): Router {
     const row = await getSizeRepository(req.params.id);
     if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
     res.json({ success: true, data: sandboxSizeResponse(row) });
+  });
+
+  router.get('/:id/bake', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getSizeRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    res.json({ success: true, data: row.settings?.bake ?? null });
+  });
+
+  router.put('/:id/bake', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getSizeRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    try {
+      res.json({ success: true, data: await putRepositoryBake(req.params.id, req.body) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: (err as Error).message });
+    }
   });
 
   router.delete('/:id', async (req, res) => {

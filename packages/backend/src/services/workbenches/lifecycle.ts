@@ -24,6 +24,7 @@ import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.j
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sizeFallbackNote, sizeForSession } from './sandboxSize.js';
+import { getRepositoryBake } from './bake.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -168,9 +169,11 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
+  const bake = repository ? await getRepositoryBake(row.repositoryId) : null;
   const target = await fleetCreateTarget(row.workspaceId);
   const withSize = (size: SandboxSize) => withGithubReadAllRepos({
     ...built.body,
+    ...(repository && bake ? { bake } : {}),
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
   });

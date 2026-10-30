@@ -123,6 +123,7 @@ export * from './workbenchConfig.js';
 export * from './workbenchDetect.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
+export * from './bake.js';
 export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';

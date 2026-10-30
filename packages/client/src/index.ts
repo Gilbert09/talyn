@@ -5,6 +5,7 @@ import type {
   RepositoryPreviewChoice,
   RepositoryPreviewResponse,
   RepositorySandboxSizeResponse,
+  RepositoryBake,
   SandboxSizeSetting,
 } from '@talyn/shared';
 import {
@@ -1587,6 +1588,10 @@ export const repositories = {
     get: (id: string) => request<RepositorySandboxSizeResponse>('GET', `/repositories/${enc(id)}/sandbox-size`),
     set: (id: string, sandboxSize: SandboxSizeSetting) =>
       request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
+  },
+  bake: {
+    get: (id: string) => request<RepositoryBake | null>('GET', `/repositories/${enc(id)}/bake`),
+    put: (id: string, bake: RepositoryBake) => request<RepositoryBake>('PUT', `/repositories/${enc(id)}/bake`, bake),
   },
   /** Instructions written in Talyn for a repository, added to every session on it. */
   instructions: {

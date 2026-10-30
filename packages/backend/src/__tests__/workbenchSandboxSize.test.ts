@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  detectSandboxSize, isComposeFileName, resolveSandboxSize, SANDBOX_SERVICES_NOTE, SANDBOX_SIZES, workbenchTurnPrompt,
+  detectSandboxSize, isComposeFileName, resolveSandboxSize, SANDBOX_SERVICES_NOTE, SANDBOX_SIZES, validateRepositoryBake, workbenchTurnPrompt,
   type RepositorySandboxSizeResponse, type SandboxSize,
 } from '@talyn/shared';
 import { repositories, workspaces } from '../db/schema.js';
@@ -36,6 +36,32 @@ services:
 
 const compose = (...services: Array<[string, string]>) =>
   `version: '3'\nservices:\n${services.map(([name, image]) => `  ${name}:\n    image: ${image}\n    ports:\n      - "1:1"\n`).join('')}volumes:\n  data:\n`;
+
+describe('validateRepositoryBake', () => {
+  const step = { name: 'Install ClickHouse', run: 'curl -fsSL https://example.com/ch | tar x', timeoutSec: 300 };
+  it.each([
+    { steps: [] },
+    { steps: [step], hosts: ['downloads.example.com', '*.example.org'] },
+    { steps: [{ name: 'a', run: 'true' }] },
+  ])('accepts %j', (value) => { expect(validateRepositoryBake(value)).toEqual(value); });
+  it.each<[string, unknown]>([
+    ['missing steps', {}], ['extra field', { steps: [], extra: 1 }],
+    ['eleven steps', { steps: Array(11).fill(step) }],
+    ['empty name', { steps: [{ ...step, name: '' }] }],
+    ['line break in name', { steps: [{ ...step, name: 'a\nb' }] }],
+    ['long UTF-8 name', { steps: [{ ...step, name: 'é'.repeat(65) }] }],
+    ['empty command', { steps: [{ ...step, run: '' }] }],
+    ['long UTF-8 command', { steps: [{ ...step, run: 'é'.repeat(2049) }] }],
+    ['NUL command', { steps: [{ ...step, run: 'a\0b' }] }],
+    ['zero timeout', { steps: [{ ...step, timeoutSec: 0 }] }],
+    ['large timeout', { steps: [{ ...step, timeoutSec: 1801 }] }],
+    ['fractional timeout', { steps: [{ ...step, timeoutSec: 1.5 }] }],
+    ['eleven hosts', { steps: [], hosts: Array(11).fill('example.com') }],
+    ['IP host', { steps: [], hosts: ['127.0.0.1'] }],
+    ['URL host', { steps: [], hosts: ['https://example.com'] }],
+    ['embedded wildcard', { steps: [], hosts: ['a.*.example.com'] }],
+  ])('rejects %s', (_name, value) => { expect(() => validateRepositoryBake(value)).toThrow(); });
+});
 
 describe('detectSandboxSize', () => {
   it.each<[string, Array<{ path: string; content: string | null }>, 'standard' | 'large', RegExp]>([
@@ -222,6 +248,19 @@ describe('sandbox size for a repository', () => {
     });
   });
 
+  it('forwards the saved bake and an explicit empty recipe to session creates', async () => {
+    const recipe = { steps: [{ name: 'Install database', run: 'echo ready' }], hosts: ['downloads.example.com'] };
+    const bakeCall = (method: string, body?: unknown) => invokeRoute<{ data: typeof recipe }>(router, method, '/:id/bake', {
+      params: { id: 'repo' }, body, user: { id: TEST_USER_ID, email: 'owner@test.invalid', isAdmin: false },
+    });
+    expect((await bakeCall('PUT', recipe)).status).toBe(200);
+    await create();
+    expect(fleet.created.at(-1)?.bake).toEqual(recipe);
+    expect((await bakeCall('PUT', { steps: [] })).status).toBe(200);
+    await create();
+    expect(fleet.created.at(-1)?.bake).toEqual({ steps: [] });
+  });
+
   it('does not request cross-repository reads when GitHub is suppressed', async () => {
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockResolvedValueOnce({
       ok: true,
@@ -280,6 +319,18 @@ describe('sandbox size for a repository', () => {
   });
 
   describe('the route', () => {
+    it('reads, validates, and saves bake steps for the owner', async () => {
+      const invoke = (method: string, body?: unknown, id = 'repo') => invokeRoute<{ data: unknown }>(router, method, '/:id/bake', {
+        params: { id }, body, user: { id: TEST_USER_ID, email: 'owner@test.invalid', isAdmin: false },
+      });
+      expect((await invoke('GET')).body.data).toBeNull();
+      const bake = { steps: [{ name: 'Install', run: 'echo ok' }] };
+      expect((await invoke('PUT', bake)).body.data).toEqual(bake);
+      expect((await invoke('GET')).body.data).toEqual(bake);
+      expect((await invoke('PUT', { steps: [{ name: '', run: '' }] })).status).toBe(400);
+      expect((await invoke('GET', undefined, 'other-repo')).status).toBeGreaterThanOrEqual(403);
+      expect((await invoke('PUT', bake, 'other-repo')).status).toBeGreaterThanOrEqual(403);
+    });
     it('reports auto with the detected answer', async () => {
       const res = await call('GET');
       expect(res.status).toBe(200);
