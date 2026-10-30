@@ -85,7 +85,7 @@ export function trunkRoutes(): Router {
       return res.status(400).json({
         success: false,
         error:
-          'That is not a Trunk v2 API key, which starts with trunk_v2_. Create one in Trunk under Settings → Developer → API Keys. The v1 organization API token no longer works.',
+          'That is not a Trunk v2 API key, which starts with trunk_v2_. Create one in Trunk under Settings → Developer → API Keys.',
       });
     }
     if (await refuseUnlessEnabled(req, res)) return;
