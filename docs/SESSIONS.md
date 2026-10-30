@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Trunk merge ETAs move to the v2 API (2026-10-29)
+
+Trunk is retiring its v1 API and the organization API token that goes with it. The merge ETA now reads Trunk's v2 API with a v2 API key (`Authorization: Bearer trunk_v2_…`). An organization admin creates the key under Settings → Developer → API Keys. A key with no permissions is enough, because every read is allowed without one.
+
+One v1 call became up to three v2 reads. `GET /v2/repositories?providerUrl=` gives the repository id, which is cached for an hour per key and repository. `GET /v2/pull-requests?repositoryId&number` gives the PR record and its `queueEntry`. `GET /v2/pull-requests/{id}/queue-entry-estimate` gives the estimate, and it is called only while the entry is active. The PR is looked up by number, so the landing branch is no longer read. `ESTIMATE_NOT_ENABLED` (404) answers `no_estimate`. `PR_NOT_IN_ACTIVE_STATE` (409) answers `not_queued`. The v2 API answers 404 for a read it will not authorize, so Talyn cannot tell that 404 from "not found" and reads both as not queued.
+
+The parser maps v2's camelCase onto the shared snake_case vocabulary. For example, `testsPassed` becomes `tests_passed`, `onTrack` becomes `on_track`, and `pastTypical`/`pastP95` become `behind`. The front ends did not change, apart from the Settings card's copy. The guessed list of "late" values went away because the enum is now published.
+
+Saving a key refuses anything that does not start with `trunk_v2_`. A row that still holds a v1 token reports "Reconnect needed" with a reason that says it is a v1 token, and the ETA route answers `reauth_required` without calling Trunk.
+
+Open: nothing reads the estimate's `kind`. A `pendingFailureResolution` estimate's `estimatedAt` is when the failure resolves, but the row headline still says "Will merge in …".
+
 ## Lost session work, a stuck turn and Slack sessions (2026-10-29)
 
 Three problems and one new feature landed on 2026-10-28 and 2026-10-29. Each has its own section below.

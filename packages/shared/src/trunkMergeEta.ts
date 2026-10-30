@@ -1,17 +1,16 @@
 // Trunk merge-queue ETAs: the shape `GET /pull-requests/:id/merge-eta` answers,
 // and the one formatter both front ends render it with.
 //
-// The backend asks Trunk's `getSubmittedPullRequest` with
-// `includeEstimatedTimeToMerge: true`. Those ETA fields are not in Trunk's
-// published OpenAPI spec yet, so the backend parser treats every field as
-// optional and maps any enum value it does not know to `unknown`.
+// The backend reads Trunk's v2 `queue-entry-estimate`. Trunk may add enum
+// members within v2, so the backend parser treats every field as optional and
+// maps any enum value it does not know to `unknown`.
 
 import type { ExternalQueueState } from './externalMergeQueue.js';
 
 /**
- * A PR's state in Trunk's queue, as Trunk's API names it. This is a different
- * vocabulary from {@link ExternalQueueState}, which is read off Trunk's PR
- * comment. `unknown` is any value the spec does not list.
+ * A PR's state in Trunk's queue: Trunk's `QueueEntryState`, in snake case.
+ * This is a different vocabulary from {@link ExternalQueueState}, which is
+ * read off Trunk's PR comment. `unknown` is any value the spec does not list.
  */
 export type TrunkQueueState =
   | 'not_ready'
@@ -25,8 +24,8 @@ export type TrunkQueueState =
   | 'unknown';
 
 /**
- * Whether one of Trunk's predicted times is keeping to plan. Trunk sends
- * `on_track` and `holding`. `behind` covers only values that clearly mean late.
+ * Whether one of Trunk's predicted times is keeping to plan. Trunk's `onTrack`
+ * and `holding` map across; `behind` is its `pastTypical` and `pastP95`.
  * Everything else is `unknown`, and nothing renders from `unknown`.
  */
 export type TrunkEtaPace = 'on_track' | 'holding' | 'behind' | 'unknown';
@@ -53,9 +52,9 @@ export interface TrunkMergeEta {
 
 /** Why an answer carries no ETA. */
 export type MergeEtaReason =
-  /** The workspace has no Trunk token. */
+  /** The workspace has no Trunk API key. */
   | 'no_token'
-  /** Trunk refused the token (401/403). Settings shows "Reconnect". */
+  /** Trunk refused the key (401/403). Settings shows "Reconnect". */
   | 'reauth_required'
   /** The PR is not in Trunk's queue (or is closed). */
   | 'not_queued'
@@ -75,10 +74,10 @@ export interface MergeEtaAnswer {
   fetchedAt: string;
 }
 
-/** The body of `GET /trunk/status`. The token itself never leaves the backend. */
+/** The body of `GET /trunk/status`. The key itself never leaves the backend. */
 export interface TrunkIntegrationStatus {
   connected: boolean;
-  /** Trunk refused the stored token. Saving a new one clears this. */
+  /** Trunk refused the stored key. Saving a new one clears this. */
   needsReauth: boolean;
   reauthReason?: string;
   connectedAt?: string;

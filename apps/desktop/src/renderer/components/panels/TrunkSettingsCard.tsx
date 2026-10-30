@@ -10,9 +10,9 @@ import { Card } from '../ui/card';
 import { Input } from '../ui/input';
 
 /**
- * Settings → Integrations: the workspace's Trunk org API token, which lets PR
+ * Settings → Integrations: the workspace's Trunk v2 API key, which lets PR
  * rows show when Trunk's merge queue will merge them. The backend never
- * returns the token; this card sees only whether one is set and whether Trunk
+ * returns the key; this card sees only whether one is set and whether Trunk
  * refused it.
  *
  * Drawn only when the `trunkMergeEta` feature is on. Duplicated in apps/web on
@@ -56,7 +56,7 @@ export function TrunkSettingsCard() {
       setToken('');
       setEditing(false);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Could not save the Trunk token');
+      setError(e instanceof Error ? e.message : 'Could not save the Trunk API key');
     } finally {
       setBusy(false);
     }
@@ -70,7 +70,7 @@ export function TrunkSettingsCard() {
       setStatus(await api.trunk.removeToken(workspaceId));
       setEditing(false);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Could not remove the Trunk token');
+      setError(e instanceof Error ? e.message : 'Could not remove the Trunk API key');
     } finally {
       setBusy(false);
     }
@@ -100,8 +100,8 @@ export function TrunkSettingsCard() {
           </div>
           <p className="text-sm text-muted-foreground mt-1">
             {needsReauth
-              ? 'Trunk refused the saved token. Paste a new organization API token to see merge ETAs again.'
-              : 'Show when pull requests in Trunk’s merge queue will merge. Paste your Trunk organization API token. Talyn stores it encrypted and never shows it again.'}
+              ? `${status?.reauthReason ?? 'Trunk refused the saved API key.'} Paste a new key to see merge ETAs again.`
+              : 'Show when pull requests in Trunk’s merge queue will merge. In Trunk, open Settings → Developer → API Keys and create a key; it needs no permissions. Talyn stores it encrypted and never shows it again.'}
           </p>
           {error && (
             <p className="mt-2 flex items-center gap-1 text-sm text-red-500">
@@ -120,8 +120,8 @@ export function TrunkSettingsCard() {
               <Input
                 type="password"
                 autoComplete="off"
-                placeholder="Trunk organization API token"
-                aria-label="Trunk organization API token"
+                placeholder="trunk_v2_…"
+                aria-label="Trunk API key"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 disabled={busy}
@@ -140,9 +140,9 @@ export function TrunkSettingsCard() {
         {connected && !editing && (
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => setEditing(true)} disabled={busy}>
-              {needsReauth ? 'Reconnect' : 'Replace token'}
+              {needsReauth ? 'Reconnect' : 'Replace key'}
             </Button>
-            <Button variant="outline" onClick={() => void remove()} disabled={busy} title="Remove the Trunk token">
+            <Button variant="outline" onClick={() => void remove()} disabled={busy} title="Remove the Trunk API key">
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
             </Button>
           </div>
