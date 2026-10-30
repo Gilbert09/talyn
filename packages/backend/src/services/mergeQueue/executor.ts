@@ -590,7 +590,10 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     case 'verify_live_then_merge':
       return verifyLiveThenMerge(ctx);
     case 'rerequest_failed_checks': {
-      ctx.extras.rerunOutcome = await rerequestFailedChecks(ctx.pr);
+      ctx.extras.rerunOutcome = await rerequestFailedChecks(
+        ctx.pr,
+        action.allowBranchUpdate !== false
+      );
       return { redecide: true };
     }
     case 'resolve_visual_review':
@@ -1418,13 +1421,17 @@ async function resolveVisualReview(
   return { redecide: true };
 }
 
-async function rerequestFailedChecks(pr: PrEvalRow): Promise<RerunOutcome> {
+async function rerequestFailedChecks(
+  pr: PrEvalRow,
+  allowBranchUpdate: boolean
+): Promise<RerunOutcome> {
   try {
     return await githubService.rerequestFailedCheckRuns(
       pr.workspaceId,
       pr.owner,
       pr.repo,
-      pr.number
+      pr.number,
+      { allowBranchUpdate }
     );
   } catch (err) {
     console.warn(

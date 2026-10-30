@@ -490,6 +490,52 @@ describe('mergeQueue v2 pipeline', () => {
     expect((await entryOf(db, behind.prId))?.status).toBe('queued');
   });
 
+  describe('red CI is re-run once before a fix run', () => {
+    const redCiSummary = () => ({
+      ...cleanSummary(),
+      mergeStateStatus: 'BLOCKED',
+      blockingReason: 'checks_failed',
+      checks: { total: 3, failed: 1, inProgress: 0 },
+    });
+
+    it('re-runs without the branch-update fallback, fires no fix run, and lets the sibling merge', async () => {
+      const rerunSpy = vi
+        .spyOn(githubService, 'rerequestFailedCheckRuns')
+        .mockResolvedValue({ requested: 1 });
+      const head = await insertQueuedPr(db, { summary: redCiSummary() });
+      const behind = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(rerunSpy).toHaveBeenCalledTimes(1);
+      expect(rerunSpy.mock.calls[0][4]).toEqual({ allowBranchUpdate: false });
+      expect(await countTasks(db)).toBe(0);
+      const entry = await entryOf(db, head.prId);
+      expect(entry?.status).toBe('awaiting_ci');
+      expect(entry?.rerunAttempts).toBe(1);
+      const codes = (await eventsOf(db, head.entryId)).map((e) => e.code);
+      expect(codes).toContain('rerun_fired');
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(await entryOf(db, behind.prId)).toBeNull();
+    });
+
+    it('fires the fix run in the same evaluation when nothing can be re-run', async () => {
+      // The suite default: the rerun finds nothing it can re-run.
+      const head = await insertQueuedPr(db, { summary: redCiSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(await countTasks(db)).toBe(1);
+      const entry = await entryOf(db, head.prId);
+      expect(entry?.status).toBe('fixing');
+      expect(entry?.rerunAttempts).toBe(1);
+      expect(entry?.blockedCode ?? null).toBeNull();
+      const codes = (await eventsOf(db, head.entryId)).map((e) => e.code);
+      expect(codes).toContain('rerun_impossible');
+      expect(blockedSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it('renders the workspace mergeable prompt override into the fix run', async () => {
     await db
       .update(workspacesTable)

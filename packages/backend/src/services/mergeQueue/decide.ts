@@ -1428,8 +1428,129 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   }
   const sessionPark = parkForSession(d, ctx);
   if (sessionPark) return sessionPark;
+  const rerunFirst = decideRerunBeforeFix(d, pr, ctx);
+  if (rerunFirst) return rerunFirst;
   d.act({ kind: 'fire_fix_run', resign: false });
   return d.done('hold');
+}
+
+/**
+ * How long after a rerun a red reading is still taken to be the OLD result.
+ * GitHub accepts the rerun before it creates the new check runs, so the
+ * snapshot refreshed right after the rerun can still show the failure. Two
+ * minutes is the reconciler's re-evaluation interval for a quiet entry, so a
+ * rerun that really fails that fast waits at most one more pass.
+ */
+export const RERUN_PICKUP_GRACE_MS = 2 * 60_000;
+
+/**
+ * Re-run the failed checks ONCE on a head before the first fix run for them.
+ *
+ * PostHog/posthog#125410 (2026-10-29): CI failed on a runner timeout. The queue
+ * spent two fix runs, each agent found nothing to fix and said a maintainer
+ * must re-run the job, and the entry ended `no_progress` with no rerun tried.
+ * A rerun is free and a fix run is not, so a flake gets one rerun first.
+ *
+ * Only when the failing checks are the WHOLE problem. A conflict, requested
+ * changes, a BEHIND branch or unsigned commits need a push anyway, and the push
+ * runs CI again, so a rerun there only delays the fix run.
+ *
+ * `rerunAttempts` is the "once": the rerun spends it, R2 resets it on a new
+ * head, and a spent one sends a red reading straight to the fix run. A rerun
+ * that is impossible or errors spends it too, and goes to the fix run in the
+ * same pass. It never blocks: the fix run is the fallback, not a person.
+ *
+ * Returns a Decision while the rerun owns the entry, or null to fire the fix run.
+ */
+function decideRerunBeforeFix(
+  d: DecisionBuilder,
+  pr: PrSnapshot,
+  ctx: DecisionContext
+): Decision | null {
+  if (!onlyFailingChecksBlock(d.entry, pr, ctx)) return null;
+
+  if (d.entry.rerunAttempts > 0) {
+    // A rerun already ran on this head. Let it report before reading red as a
+    // real failure.
+    if (ciInFlight(pr) || rerunJustFired(d.entry, ctx)) return waitForRerun(d);
+    return null;
+  }
+
+  // GitHub re-runs a failed Actions job only after its workflow run completes,
+  // so let the rest of CI finish first.
+  if (ciInFlight(pr)) return waitForRerun(d);
+
+  if (ctx.rerunOutcome === undefined) {
+    // No branch-update fallback: that pushes a new head, R2 resets the budget,
+    // and a check that fails again would be re-run forever.
+    d.act({ kind: 'rerequest_failed_checks', allowBranchUpdate: false });
+    return d.done('hold');
+  }
+
+  const outcome = ctx.rerunOutcome;
+  const attempts = d.entry.rerunAttempts + 1;
+  if (!('errored' in outcome) && outcome.requested > 0) {
+    d.transition(rerunWaitStatus(d.entry), {
+      set: {
+        rerunAttempts: attempts,
+        lastError: `CI failed; re-ran ${outcome.requested} failing check(s) before a fix run`,
+        lastErrorAt: ctx.nowIso,
+      },
+      event: {
+        code: 'rerun_fired',
+        message:
+          `CI failed — re-ran ${outcome.requested} failing check(s) once before starting a ` +
+          'fix run. A fix run starts only if they fail again.',
+      },
+    });
+    // Background work, like the other rerun paths: the PRs behind keep draining.
+    d.act({ kind: 'refresh_snapshot' });
+    return d.done('advance');
+  }
+
+  const why = 'errored' in outcome ? 'the re-run call failed' : (outcome.reason ?? 'nothing re-ran');
+  d.transition(d.entry.status, {
+    blockedCode: d.entry.blockedCode,
+    blockedReason: d.entry.blockedReason,
+    set: { rerunAttempts: attempts },
+    event: {
+      code: 'rerun_impossible',
+      message: `Couldn't re-run the failing check(s) (${why}) — starting a fix run instead.`,
+    },
+  });
+  return null;
+}
+
+/** Failing CI is the only blocker, so a rerun alone could clear it. */
+function onlyFailingChecksBlock(
+  entry: EntrySnapshot,
+  pr: PrSnapshot,
+  ctx: DecisionContext
+): boolean {
+  const s = pr.summary;
+  if (s.blockingReason !== 'checks_failed' || !checksFailing(s)) return false;
+  if (s.mergeable === 'CONFLICTING' || s.reviewDecision === 'CHANGES_REQUESTED') return false;
+  if (mergeStateOf(pr) === 'BEHIND' && ctx.externalGate === null) return false;
+  if (entry.signingCheckedSha === pr.headSha && (entry.unsignedCount ?? 0) > 0) return false;
+  return true;
+}
+
+function rerunJustFired(entry: EntrySnapshot, ctx: DecisionContext): boolean {
+  if (!entry.lastErrorAt) return false;
+  const age = Date.parse(ctx.nowIso) - Date.parse(entry.lastErrorAt);
+  return Number.isFinite(age) && age >= 0 && age < RERUN_PICKUP_GRACE_MS;
+}
+
+/** Keep a status that tracks GitHub's or the provider's own state; else awaiting_ci. */
+function rerunWaitStatus(entry: EntrySnapshot): EntryStatus {
+  return entry.status === 'automerge_armed' || entry.status === 'awaiting_external'
+    ? entry.status
+    : 'awaiting_ci';
+}
+
+function waitForRerun(d: DecisionBuilder): Decision {
+  d.ensure(rerunWaitStatus(d.entry));
+  return d.done('advance');
 }
 
 /**
