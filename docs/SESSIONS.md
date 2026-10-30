@@ -2,6 +2,78 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Trunk merge ETAs move to the v2 API (2026-10-29)
+
+Trunk is retiring its v1 API and the organization API token that goes with it. The merge ETA now reads Trunk's v2 API with a v2 API key (`Authorization: Bearer trunk_v2_…`). An organization admin creates the key under Settings → Developer → API Keys. A key with no permissions is enough, because every read is allowed without one.
+
+One v1 call became up to three v2 reads. `GET /v2/repositories?providerUrl=` gives the repository id, which is cached for an hour per key and repository. `GET /v2/pull-requests?repositoryId&number` gives the PR record and its `queueEntry`. `GET /v2/pull-requests/{id}/queue-entry-estimate` gives the estimate, and it is called only while the entry is active. The PR is looked up by number, so the landing branch is no longer read. `ESTIMATE_NOT_ENABLED` (404) answers `no_estimate`. `PR_NOT_IN_ACTIVE_STATE` (409) answers `not_queued`. The v2 API answers 404 for a read it will not authorize, so Talyn cannot tell that 404 from "not found" and reads both as not queued.
+
+The parser maps v2's camelCase onto the shared snake_case vocabulary. For example, `testsPassed` becomes `tests_passed`, `onTrack` becomes `on_track`, and `pastTypical`/`pastP95` become `behind`. The front ends did not change, apart from the Settings card's copy. The guessed list of "late" values went away because the enum is now published.
+
+Saving a key refuses anything that does not start with `trunk_v2_`. A row that still holds a v1 token reports "Reconnect needed" with a reason that says it is a v1 token, and the ETA route answers `reauth_required` without calling Trunk.
+
+Open: nothing reads the estimate's `kind`. A `pendingFailureResolution` estimate's `estimatedAt` is when the failure resolves, but the row headline still says "Will merge in …".
+
+## Lost session work, a stuck turn and Slack sessions (2026-10-29)
+
+Three problems and one new feature landed on 2026-10-28 and 2026-10-29. Each has its own section below.
+
+### Slack sessions
+
+Migrations 0090 (`slack`) and 0092 (`slack_sessions`) add Slack as a way to start a session. The code is in `services/slack/*` and `routes/slack.ts`.
+
+Talyn never posts in Slack. The bot has no `chat:write` scope. Status shows as one reaction on the trigger message: eyes, hourglass, check, link, tada, x or question. Talyn removes only the reactions it added.
+
+A session starts from three triggers. The first is a per-user trigger emoji (`slack_user_links.trigger_emojis`, skin-tone suffix removed). The second is an @mention. The third is a DM. The `workbenches` flag gates all of them. There is no separate Slack flag, and the `releaseScopes` of `workbenches` include `slack`.
+
+A person links Slack with Sign in with Slack (OIDC). The link never uses email. Rotating bot tokens refresh under a lease column, so no pool connection stays held. Signed events are stored once, by `event_id`.
+
+Repository choice follows a fixed order. First an explicit link. Then a name or alias. Then per-channel memory, where corrections count double. Then at most two GitHub code searches. Then Talyn asks: it adds the question reaction, sends a `slack:notice`, and keeps a pending start route. Thread text is quoted as untrusted, inside a fence it cannot close.
+
+The custom emoji endpoint `GET /slack/teams/:teamId/emoji` needs the `emoji:read` BOT scope.
+
+Production problems found live: Event Subscriptions were Off in the Slack app. The `SLACK_APP_CLIENT_ID` and `SLACK_APP_CLIENT_SECRET` variables were missing. The settings card fetched custom emoji only once, so a Reconnect did not show the new list. The card now fetches again when the window gets focus.
+
+### Lost session work (2026-10-29)
+
+Session 2f57581c ran Postgres, Redis, ClickHouse and Zookeeper in a 4 GiB box. The host balloon kept inflating. The guest console showed `virtio_balloon: Out of puff!`. The guest worker lost its control channel three times. The fleet stopped the box as wedged. Talyn rebuilt it from the GitHub branch and lost about 30 minutes of uncommitted work.
+
+Fix in YAS: commit 2fcdd8b changes the balloon policy. It deflates fully under pressure, waits 10 minutes before the next inflate, and inflates only from free memory. Restored guests keep their size. Commit 934d079 limits `/dev/shm` to 25% of RAM. Commit 81caba0 sets `oom_score_adj` to -1000 for the guest worker. Tenant processes start through an `--exec-killable` shim.
+
+Fix in Talyn (migration 0094, `workCheckpoint.ts`, `workStorage.ts`): the box bundles the work and streams it to the private Supabase Storage bucket `workbench-work`. A save runs after every turn and every minute during a turn. A slow save backs off, up to 5 minutes. After a loss, Talyn restores from the bundle. It tries to resume the old box first. Talyn pushes no git refs to save work. The owner decided this, because a public repository would expose unreleased fixes.
+
+Lesson: saved work must never depend on the box surviving.
+
+### Stuck turn (2026-10-29)
+
+An agent produced output with characters that Postgres jsonb rejects. Every batch failed the same insert. The adopt-failure counter reset when bytes were read, not when a batch was stored. It always said "failure 1" and looped forever.
+
+Fix (fbfdedf6de): `jsonSafe.ts` removes NUL and lone surrogates before the jsonb write. The counter resets only after a stored batch. The log shows the Postgres cause without query parameters.
+
+Lesson: a retry counter must reset on the step that proves progress, never on an earlier step.
+
+### Session branch names
+
+After the first turn, the agent's suggestion renames the allocated branch before any push. The suggestion is the PR title on the auto-PR path. Otherwise the cheap model gives it. Local sessions reserve and confirm the name through the backend (migration 0091).
+
+### Session sandboxes
+
+The Talyn MCP server `talyn` runs inside sessions with a per-session token (migration 0093). It has an allowlist. A session archives itself after the turn. The limits are 3 creates per hour and depth 2.
+
+Sandbox size is per repository. Standard is 4 GiB and 4 vCPU. Large is 12 GiB and 6 vCPU. Talyn detects large from compose files. Talyn's YAS tenant has no memory maximum, so only the host budget limits it. Sessions send `policy.github.readAllRepos`.
+
+YAS commit 9fdb09b makes GitHub REST open by default, with a blocklist: settings, access, protection, secrets and fake CI results. Git pushes reach only the box's own repository. Commit 9395ff9 closed a hole. Before it, a git push to ANY repository that the token could write passed the proxy.
+
+Repository instructions written in Talyn (migration 0095) reach the box as `CLAUDE.local.md` or `AGENTS.override.md`. Both names go in `.git/info/exclude`.
+
+### Operations lessons
+
+Migrations on parallel branches collided twice (0090 and 0094). Pick the number at ship time. Keep the journal `when` values increasing in ship order. If not, drizzle silently skips a migration.
+
+For CI, run one watch loop at a time, at most every 3 minutes. Five 1-minute loops hit the owner's 5000 per hour GitHub limit.
+
+A test that pins a flag definition must change with the flag.
+
 ## PostHog Code logs stopped streaming (2026-10-28)
 
 Running PostHog Code tasks showed "Running in the cloud — fetching logs…" for their whole run. The watch heartbeats arrived, and no stream ever logged `opening SSE stream`.

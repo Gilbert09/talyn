@@ -2369,7 +2369,8 @@ class GitHubService extends EventEmitter {
     workspaceId: string,
     owner: string,
     repo: string,
-    number: number
+    number: number,
+    opts: { allowBranchUpdate?: boolean } = {}
   ): Promise<{
     requested: number;
     reason?: 'no-failing-check-runs' | 'needs-actions-permission' | 'not-rerequestable';
@@ -2442,6 +2443,8 @@ class GitHubService extends EventEmitter {
       }
     }
     if (requested > 0) return { requested };
+    const reason = actionsPermFailure ? 'needs-actions-permission' : 'not-rerequestable';
+    if (opts.allowBranchUpdate === false) return { requested: 0, reason };
 
     // Last resort: every rerequest flavour was refused (verified live: the
     // Checks API is owner-app-only at both run and suite level). Updating the
@@ -2469,10 +2472,7 @@ class GitHubService extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[github] update-branch fallback on ${owner}/${repo}#${number} failed: ${msg}`);
     }
-    return {
-      requested: 0,
-      reason: actionsPermFailure ? 'needs-actions-permission' : 'not-rerequestable',
-    };
+    return { requested: 0, reason };
   }
 
   /**

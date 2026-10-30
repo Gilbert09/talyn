@@ -326,6 +326,181 @@ describe('decide — settled blockers fire the fix run', () => {
   });
 });
 
+describe('decide — re-run failed CI once before the first fix run', () => {
+  // PostHog/posthog#125410: a runner timeout cost two fix runs that found
+  // nothing to fix, and no rerun was ever tried.
+  const redCi = (o: Partial<PrSnapshot> = {}, s: Partial<PRMergeableSummary> = {}) =>
+    pr(
+      { mergeStateStatus: 'BLOCKED', ...o },
+      { blockingReason: 'checks_failed', checks: { total: 5, failed: 1, inProgress: 0 }, ...s }
+    );
+  const rerunOf = (d: Decision) =>
+    d.actions.find(
+      (a): a is Extract<Action, { kind: 'rerequest_failed_checks' }> =>
+        a.kind === 'rerequest_failed_checks'
+    );
+  const rerunEvent = (d: Decision) =>
+    transitions(d).find((t) => t.event.code === 'rerun_fired' || t.event.code === 'rerun_impossible');
+  const minutesAgo = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+
+  it.each([
+    ['queued', entry()],
+    ['after a fix run for something else', entry({ status: 'fixing', fixAttempts: 1 })],
+    ['auto-merge armed', entry({ status: 'automerge_armed', automergeArmedBy: 'talyn' })],
+  ])('re-runs the failed checks instead of firing a fix run (%s)', (_label, e) => {
+    const d = decide(e, redCi({ autoMergeEnabledBy: 'talyn' }), ctx());
+    expect(rerunOf(d)).toEqual({ kind: 'rerequest_failed_checks', allowBranchUpdate: false });
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('re-runs under an external gate too (the rerun pushes nothing)', () => {
+    const d = decide(entry(), redCi(), ctx({ externalGate: 'confirmed' }));
+    expect(rerunOf(d)).toBeTruthy();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it.each([
+    [1, 'awaiting_ci', entry()],
+    [3, 'awaiting_ci', entry({ status: 'fixing' })],
+    [2, 'automerge_armed', entry({ status: 'automerge_armed', automergeArmedBy: 'talyn' })],
+  ])(
+    'records rerun_fired for %i check(s) and advances, spending the one rerun (→ %s)',
+    (requested, status, e) => {
+      const d = decide(
+        e,
+        redCi({ autoMergeEnabledBy: 'talyn' }),
+        ctx({ rerunOutcome: { requested } })
+      );
+      const t = rerunEvent(d)!;
+      expect(t.event.code).toBe('rerun_fired');
+      expect(t.to).toBe(status);
+      expect(t.set?.rerunAttempts).toBe(1);
+      expect(t.set?.lastErrorAt).toBe(NOW);
+      expect(kinds(d)).toContain('refresh_snapshot');
+      expect(fixRun(d)).toBeUndefined();
+      // The PRs behind it keep draining while the rerun reports.
+      expect(d.verdict).toBe('advance');
+    }
+  );
+
+  it('merges with no fix run when the rerun comes back green', () => {
+    const d = decide(
+      entry({ status: 'awaiting_ci', rerunAttempts: 1, lastErrorAt: minutesAgo(10) }),
+      cleanPr(),
+      ctx()
+    );
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(fixRun(d)).toBeUndefined();
+    expect(rerunOf(d)).toBeUndefined();
+  });
+
+  it.each([
+    ['the rerun is still running', redCi({}, { checks: { total: 5, failed: 1, inProgress: 1 } }), minutesAgo(10)],
+    ['the snapshot predates the rerun', redCi(), minutesAgo(1)],
+  ])('waits without a fix run or a second rerun while %s', (_label, snapshot, firedAt) => {
+    const d = decide(
+      entry({ status: 'awaiting_ci', rerunAttempts: 1, lastErrorAt: firedAt }),
+      snapshot,
+      ctx()
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(rerunOf(d)).toBeUndefined();
+    expect(d.verdict).toBe('advance');
+  });
+
+  it.each([1, 2, 3])(
+    'fires the fix run, never a second rerun, when the rerun comes back red (rerunAttempts=%i)',
+    (rerunAttempts) => {
+      const d = decide(
+        entry({ status: 'awaiting_ci', rerunAttempts, lastErrorAt: minutesAgo(10) }),
+        redCi(),
+        ctx()
+      );
+      expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+      expect(rerunOf(d)).toBeUndefined();
+      expect(d.verdict).toBe('hold');
+    }
+  );
+
+  it.each([
+    ['needs-actions-permission', { requested: 0, reason: 'needs-actions-permission' as const }],
+    ['not-rerequestable', { requested: 0, reason: 'not-rerequestable' as const }],
+    ['no-failing-check-runs', { requested: 0, reason: 'no-failing-check-runs' as const }],
+    ['errored', { errored: true as const }],
+  ])('goes straight to the fix run when the rerun is impossible (%s), never blocking', (_label, outcome) => {
+    const d = decide(entry(), redCi(), ctx({ rerunOutcome: outcome }));
+    const t = rerunEvent(d)!;
+    expect(t.event.code).toBe('rerun_impossible');
+    expect(t.to).toBe('queued');
+    expect(t.set?.rerunAttempts).toBe(1);
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+    expect(transitions(d).some((x) => x.to === 'blocked' || x.to === 'blocked_manual')).toBe(false);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it.each([
+    ['merge conflicts', redCi({ mergeStateStatus: 'DIRTY' }, { mergeable: 'CONFLICTING' }), {}],
+    ['requested changes', redCi({}, { reviewDecision: 'CHANGES_REQUESTED' }), {}],
+    ['a branch behind its base', redCi({ mergeStateStatus: 'BEHIND' }), {}],
+    [
+      'unsigned commits on this head',
+      redCi(),
+      { signingCheckedSha: 'sha1', unsignedCount: 2 } as Partial<EntrySnapshot>,
+    ],
+    [
+      'a merge-conflict blocking reason',
+      redCi({ mergeStateStatus: 'DIRTY' }, { blockingReason: 'merge_conflicts', mergeable: 'CONFLICTING' }),
+      {},
+    ],
+  ])('fires the fix run at once when red CI comes with %s', (_label, snapshot, o) => {
+    const d = decide(entry(o), snapshot, ctx());
+    expect(fixRun(d)).toBeTruthy();
+    expect(rerunOf(d)).toBeUndefined();
+  });
+
+  it('waits for the rest of CI to finish before the first rerun', () => {
+    const d = decide(entry(), redCi({}, { checks: { total: 5, failed: 1, inProgress: 2 } }), ctx());
+    expect(rerunOf(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+    expect(lastTransition(d)?.to).toBe('awaiting_ci');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('applies again on a new head pushed from outside the queue', () => {
+    const d = decide(
+      entry({ status: 'awaiting_ci', headSha: 'sha0', rerunAttempts: 1, lastErrorAt: minutesAgo(30) }),
+      redCi({ headSha: 'sha1' }),
+      ctx()
+    );
+    expect(kinds(d)[0]).toBe('reset_budgets');
+    expect(rerunOf(d)).toBeTruthy();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('does not re-run again on a head pushed by its own fix run', () => {
+    const d = decide(
+      entry({
+        status: 'fixing',
+        headSha: 'sha0',
+        rerunAttempts: 1,
+        fixTaskId: 't1',
+        fixTaskAccounted: false,
+      }),
+      redCi({ headSha: 'sha1' }, { failingChecksDigest: 'other' }),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    expect(kinds(d)[0]).toBe('adopt_head');
+    expect(rerunOf(d)).toBeUndefined();
+    expect(fixRun(d)).toBeTruthy();
+  });
+
+  it('a failed check GitHub still lets the App merge past is not this rule', () => {
+    const d = decide(entry(), optionalFailPr(), ctx());
+    expect(rerunOf(d)).toBeUndefined();
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+});
+
 describe('decide — update-branch beats a paid fix run for BEHIND', () => {
   it('updates the branch server-side when available and nothing else is wrong', () => {
     const d = decide(entry(), behindPr(), ctx({ updateBranchAvailable: true }));
@@ -503,6 +678,8 @@ describe('decide — fix-run accounting bounded by PROGRESS, not a retry count',
         blockedCode: 'agent_needs_human',
         fixTaskAccounted: true,
         seenSignatures: [sigOf(conflictingPr())],
+        // The one rerun before a fix run is already spent on this head.
+        rerunAttempts: 1,
       }),
       moved,
       ctx({ fixTaskState: 'none' })
@@ -528,7 +705,8 @@ describe('decide — fix-run accounting bounded by PROGRESS, not a retry count',
   // THE point of the rewrite: a PR clearing one blocker per run used to be
   // declared blocked on the 4th, however well it was going.
   it('keeps going indefinitely while each run changes what is blocking the PR', () => {
-    let e = entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false });
+    // rerunAttempts: 1 — the one rerun before a fix run is already spent.
+    let e = entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, rerunAttempts: 1 });
     // Ten runs, each leaving a different number of failing checks.
     for (let i = 0; i < 10; i++) {
       const snapshot = pr(
@@ -548,6 +726,7 @@ describe('decide — fix-run accounting bounded by PROGRESS, not a retry count',
         fixTaskAccounted: false,
         fixAttempts: acct.set?.fixAttempts ?? 0,
         seenSignatures: acct.set?.seenSignatures ?? e.seenSignatures,
+        rerunAttempts: 1,
       });
     }
     expect(e.fixAttempts).toBe(10);
@@ -1442,12 +1621,14 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       expect(d.verdict).toBe('advance');
     });
 
+    // The failing-check row has its one rerun spent already; a first red reading
+    // re-runs the checks before any fix run (see "re-run failed CI once").
     it.each([
-      ['merge conflicts', { mergeable: 'CONFLICTING' as const, blockingReason: 'merge_conflicts' as const }],
-      ['requested changes', { reviewDecision: 'CHANGES_REQUESTED' as const }],
-      ['a failing required check', { blockingReason: 'checks_failed' as const, checks: { total: 3, failed: 1, inProgress: 0 } }],
-    ])('still fixes %s under a gate — real work, whoever performs the merge', (_label, over) => {
-      const d = decide(entry(), gateBlockedPr(over), ctx({ externalGate: 'confirmed' }));
+      ['merge conflicts', { mergeable: 'CONFLICTING' as const, blockingReason: 'merge_conflicts' as const }, 0],
+      ['requested changes', { reviewDecision: 'CHANGES_REQUESTED' as const }, 0],
+      ['a failing required check', { blockingReason: 'checks_failed' as const, checks: { total: 3, failed: 1, inProgress: 0 } }, 1],
+    ])('still fixes %s under a gate — real work, whoever performs the merge', (_label, over, rerunAttempts) => {
+      const d = decide(entry({ rerunAttempts }), gateBlockedPr(over), ctx({ externalGate: 'confirmed' }));
       expect(kinds(d)).toContain('fire_fix_run');
       expect(kinds(d)).not.toContain('submit_external');
     });
@@ -1718,7 +1899,8 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
     // sat here 9½ hours with three required checks red.
     it('DOES remediate a not_ready PR — trunk is waiting on the blocker', () => {
       const d = decide(
-        submitted(),
+        // The one rerun before a fix run is already spent on this head.
+        submitted({ rerunAttempts: 1 }),
         trunkPr('trunk-not-ready', { mergeStateStatus: 'BLOCKED' }, {
           blockingReason: 'checks_failed',
           checks: { total: 10, passed: 7, failed: 3, inProgress: 0, skipped: 0 },

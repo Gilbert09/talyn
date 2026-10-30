@@ -2440,11 +2440,11 @@ export const system = {
 };
 
 // ============================================================================
-// Trunk (merge-queue ETAs) — the per-workspace Trunk org API token
+// Trunk (merge-queue ETAs) — the per-workspace Trunk v2 API key
 // ============================================================================
 
 export const trunk = {
-  /** Whether a token is set, and whether Trunk refused it. Never the token. */
+  /** Whether a key is set, and whether Trunk refused it. Never the key. */
   getStatus: (workspaceId: string) =>
     request<TrunkIntegrationStatus>(
       'GET',

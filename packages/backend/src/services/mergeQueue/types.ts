@@ -635,8 +635,11 @@ export type Action =
   | { kind: 'verify_merged' }
   /** Fetch the unsigned-commit count (GraphQL) and memoize it per head. */
   | { kind: 'probe_signatures' }
-  /** POST re-runs for the head's failing check runs. Outcome → ctx.rerunOutcome. */
-  | { kind: 'rerequest_failed_checks' }
+  /**
+   * POST re-runs for the head's failing check runs. Outcome → ctx.rerunOutcome.
+   * `allowBranchUpdate: false` skips the update-branch fallback, which pushes.
+   */
+  | { kind: 'rerequest_failed_checks'; allowBranchUpdate?: false }
   /** PUT update-branch — merge the base into the head server-side (Push E). */
   | { kind: 'update_branch' }
   /**
