@@ -6,9 +6,12 @@ import {
 } from '@talyn/shared';
 import { peekExternalQueueState } from '../externalQueueState.js';
 import {
+  clearTrunkPause,
   getQueueEntryEstimate,
   resolvePullRequest,
   resolveRepository,
+  trunkKeyHash,
+  trunkPauseUntil,
   TrunkAuthError,
   TrunkNotFoundError,
   TrunkRequestError,
@@ -66,11 +69,11 @@ const OUT_OF_QUEUE: ReadonlySet<ExternalQueueState> = new Set<ExternalQueueState
 const answers = new Map<string, { answer: MergeEtaAnswer; expiresAt: number }>();
 const inflight = new Map<string, Promise<MergeEtaAnswer>>();
 const repositoryIds = new Map<string, { id: string; expiresAt: number }>();
+const repositoryInflight = new Map<string, Promise<string | null>>();
 
-// The token is part of the key, so an answer fetched with a replaced token is
-// never served for the new one.
-function cacheKey(workspaceId: string, prId: string, tokenFingerprint: string): string {
-  return `${workspaceId}:${prId}:${tokenFingerprint.slice(0, 16)}`;
+// The key hash separates answers after a key change.
+function cacheKey(workspaceId: string, prId: string, keyHash: string): string {
+  return `${workspaceId}:${prId}:${keyHash}`;
 }
 
 function none(reason: MergeEtaReason, extra: Partial<MergeEtaAnswer> = {}): MergeEtaAnswer {
@@ -108,12 +111,13 @@ export async function mergeEtaForPr(pr: MergeEtaPr): Promise<MergeEtaAnswer> {
   const creds = await getTrunkCredentials(pr.workspaceId);
   if (!creds) return none('no_token');
   if (!isTrunkApiKey(creds.token)) return none('reauth_required');
+  if (trunkPauseUntil(creds.token) > Date.now()) return none('unavailable');
 
   if (pr.state !== 'open') return none('not_queued');
   const known = knownExternalState(pr);
   if (known && OUT_OF_QUEUE.has(known)) return none('not_queued');
 
-  const key = cacheKey(pr.workspaceId, pr.id, creds.tokenFingerprint);
+  const key = cacheKey(pr.workspaceId, pr.id, trunkKeyHash(creds.token));
   const now = Date.now();
   const hit = answers.get(key);
   if (hit && hit.expiresAt > now) return hit.answer;
@@ -125,7 +129,11 @@ export async function mergeEtaForPr(pr: MergeEtaPr): Promise<MergeEtaAnswer> {
     .then((answer) => {
       const at = Date.now();
       prune(at);
-      answers.set(key, { answer, expiresAt: at + CACHE_TTL_MS });
+      const pause = trunkPauseUntil(creds.token);
+      answers.set(key, {
+        answer,
+        expiresAt: answer.reason === 'unavailable' && pause > at ? pause : at + CACHE_TTL_MS,
+      });
       return answer;
     })
     .finally(() => inflight.delete(key));
@@ -136,15 +144,28 @@ export async function mergeEtaForPr(pr: MergeEtaPr): Promise<MergeEtaAnswer> {
 type Credentials = NonNullable<Awaited<ReturnType<typeof getTrunkCredentials>>>;
 
 async function repositoryIdFor(pr: MergeEtaPr, creds: Credentials): Promise<string | null> {
-  const key = `${creds.tokenFingerprint.slice(0, 16)}:${pr.owner.toLowerCase()}/${pr.repo.toLowerCase()}`;
+  const key = `${trunkKeyHash(creds.token)}:${pr.owner.toLowerCase()}/${pr.repo.toLowerCase()}`;
   const hit = repositoryIds.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.id;
-  const id = parseTrunkRepositoryId(
-    await resolveRepository(creds.token, pr, { workspaceId: pr.workspaceId })
-  );
-  if (id) repositoryIds.set(key, { id, expiresAt: Date.now() + REPOSITORY_TTL_MS });
-  return id;
+  const pending = repositoryInflight.get(key);
+  if (pending) return pending;
+  const lookup = (async () => {
+    try {
+      const id = parseTrunkRepositoryId(
+        await resolveRepository(creds.token, pr, { workspaceId: pr.workspaceId })
+      );
+      if (id) repositoryIds.set(key, { id, expiresAt: Date.now() + REPOSITORY_TTL_MS });
+      return id;
+    } catch (err) {
+      if (err instanceof TrunkNotFoundError) throw new TrunkRepositoryAccessError();
+      throw err;
+    }
+  })().finally(() => repositoryInflight.delete(key));
+  repositoryInflight.set(key, lookup);
+  return lookup;
 }
+
+class TrunkRepositoryAccessError extends Error {}
 
 async function askTrunk(pr: MergeEtaPr, creds: Credentials): Promise<MergeEtaAnswer> {
   const opts = { workspaceId: pr.workspaceId };
@@ -175,6 +196,9 @@ async function askTrunk(pr: MergeEtaPr, creds: Credentials): Promise<MergeEtaAns
     if (!eta) return none('no_estimate', extra);
     return { eta, ...extra, fetchedAt: new Date().toISOString() };
   } catch (err) {
+    if (err instanceof TrunkRepositoryAccessError) {
+      return none('no_access', { message: `This Trunk key cannot see ${pr.owner}/${pr.repo}` });
+    }
     if (err instanceof TrunkAuthError) {
       if (!creds.reauthRequired) {
         await markTrunkReauthRequired(pr.workspaceId, creds.tokenFingerprint, err.message).catch(
@@ -210,6 +234,8 @@ export function clearMergeEtaCache(workspaceId?: string): void {
   if (!workspaceId) {
     answers.clear();
     repositoryIds.clear();
+    repositoryInflight.clear();
+    clearTrunkPause();
     return;
   }
   const prefix = `${workspaceId}:`;

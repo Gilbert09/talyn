@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { debugBus } from '../debugBus.js';
 import { fetchWithTimeout } from '../httpTimeout.js';
 
@@ -16,6 +17,30 @@ export const TRUNK_API_BASE = 'https://api.trunk.io';
  * ETA that is late is worth nothing, so a slow Trunk reads as "unavailable".
  */
 const TRUNK_TIMEOUT_MS = 8_000;
+const DEFAULT_RETRY_MS = 60_000;
+const MAX_RETRY_MS = 15 * 60_000;
+
+// Each replica keeps its own pause. Only a hash of the API key enters this map.
+const pausedUntil = new Map<string, number>();
+
+export function trunkKeyHash(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex');
+}
+
+export function trunkPauseUntil(apiKey: string): number {
+  return pausedUntil.get(trunkKeyHash(apiKey)) ?? 0;
+}
+
+export function clearTrunkPause(): void {
+  pausedUntil.clear();
+}
+
+function retryAfterMs(raw: string | null): number {
+  if (!raw?.trim()) return DEFAULT_RETRY_MS;
+  const seconds = Number(raw);
+  const duration = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
+  return Number.isFinite(duration) ? Math.min(MAX_RETRY_MS, Math.max(0, duration)) : DEFAULT_RETRY_MS;
+}
 
 /** Trunk refused the key (401 or 403). */
 export class TrunkAuthError extends Error {
@@ -60,6 +85,9 @@ async function trunkGet(
   query: Record<string, string>,
   opts: { workspaceId?: string }
 ): Promise<unknown> {
+  if (trunkPauseUntil(apiKey) > Date.now()) {
+    throw new TrunkRequestError('Trunk reads are paused', 429);
+  }
   const qs = new URLSearchParams(query).toString();
   const url = `${TRUNK_API_BASE}${path}${qs ? `?${qs}` : ''}`;
   const startedAt = Date.now();
@@ -97,6 +125,13 @@ async function trunkGet(
 
   if (res.status === 401 || res.status === 403) throw new TrunkAuthError(res.status);
   if (res.status === 404) throw new TrunkNotFoundError(errorCode(res.bodyText));
+  if (res.status === 429 || (res.status === 503 && res.headers.has('retry-after'))) {
+    const key = trunkKeyHash(apiKey);
+    pausedUntil.set(
+      key,
+      Math.max(pausedUntil.get(key) ?? 0, Date.now() + retryAfterMs(res.headers.get('retry-after')))
+    );
+  }
   if (!res.ok) {
     const code = errorCode(res.bodyText);
     throw new TrunkRequestError(
