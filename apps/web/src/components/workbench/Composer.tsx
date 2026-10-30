@@ -1,9 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ImageIcon, Loader2, Square, X } from 'lucide-react';
+import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
   type Workbench,
-  type WorkbenchAttachment,
   type WorkbenchChat,
   type WorkbenchContextUsage,
   type WorkbenchEffort,
@@ -12,8 +11,6 @@ import {
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
-import { downscaleImage } from '../../lib/imageDownscale';
-import { rememberAttachmentPreview } from '../../lib/attachmentPreviews';
 import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -22,8 +19,7 @@ import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createChatTab } from './ChatTabs';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from './ComposerPopover';
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
-
-const LARGE_PNG_BYTES = 1.5 * 1024 * 1024;
+import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 
 export function Composer({
   workbench,
@@ -44,12 +40,10 @@ export function Composer({
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
   const setDraft = useWorkbenchStore((s) => s.setDraft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
-  const [imageNotReady, setImageNotReady] = useState(false);
-  const [pendingUploads, setPendingUploads] = useState(0);
+  const images = useComposerImages(ops.runtime, ops, workbench.status);
+  const { attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste, onDrop } = images;
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
   const [active, setActive] = useState(0);
   const [paths, setPaths] = useState<string[] | null>(null);
@@ -198,47 +192,6 @@ export function Composer({
     }
   };
 
-  const attachFiles = async (files: File[]) => {
-    if (files.length === 0) return;
-    if (ops.unavailable || !ops.canAttach) {
-      if (ops.runtime === 'sandbox' && workbenchQueuesMessages(workbench.status)) setImageNotReady(true);
-      else toast.error('Could not attach the image', ops.unavailable ?? 'Attachments are unavailable.');
-      return;
-    }
-    setImageNotReady(false);
-    setPendingUploads((count) => count + files.length);
-    for (const file of files) {
-      try {
-        let dataUrl = await downscaleImage(file, 1600);
-        let mimeType = 'image/png';
-        let name = file.name || 'pasted.png';
-        if (ops.runtime === 'sandbox' && atob(dataUrl.slice(dataUrl.indexOf(',') + 1)).length > LARGE_PNG_BYTES) {
-          dataUrl = await attachmentJpeg(dataUrl);
-          mimeType = 'image/jpeg';
-          name = name.replace(/\.[^.]+$/, '') + '.jpg';
-        }
-        const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-        const attachment = await ops.attach({ name, mimeType, dataBase64 });
-        if (attachment.path) rememberAttachmentPreview(attachment.path, dataUrl);
-        setAttachments((cur) => [...cur, attachment]);
-      } catch (err) {
-        toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);
-      } finally {
-        setPendingUploads((count) => count - 1);
-      }
-    }
-  };
-
-  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...e.clipboardData.items]
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter((f): f is File => f !== null);
-    if (files.length === 0) return;
-    e.preventDefault();
-    void attachFiles(files);
-  };
-
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (trigger && (items.length > 0 || e.key === 'Escape')) {
       if (e.key === 'ArrowDown') {
@@ -277,10 +230,7 @@ export function Composer({
     <div
       className="border-t bg-background px-3 pb-3 pt-2"
       onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        void attachFiles([...e.dataTransfer.files].filter((file) => file.type.startsWith('image/')));
-      }}
+      onDrop={onDrop}
     >
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
@@ -322,34 +272,7 @@ export function Composer({
             onHover={setActive}
           />
         )}
-        {(attachments.length > 0 || pendingUploads > 0 || imageNotReady) && (
-          <div className="flex flex-wrap gap-1 px-2 pt-2">
-            {attachments.map((a, i) => (
-              <span
-                key={`${a.path}-${i}`}
-                className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"
-              >
-                <ImageIcon className="h-3 w-3" />
-                {a.name}
-                <button
-                  type="button"
-                  onClick={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
-                  aria-label={`Remove ${a.name}`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            {pendingUploads > 0 && (
-              <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                <Loader2 className="h-3 w-3 animate-spin" /> Uploading image…
-              </span>
-            )}
-            {imageNotReady && (
-              <span className="text-[11px] text-warning">Images can be attached once the sandbox is ready.</span>
-            )}
-          </div>
-        )}
+        <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
         <textarea
           ref={textareaRef}
           value={draft}
@@ -373,27 +296,7 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            multiple
-            className="hidden"
-            aria-label="Choose images"
-            onChange={(e) => {
-              void attachFiles([...(e.target.files ?? [])]);
-              e.target.value = '';
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="rounded p-1 hover:bg-accent"
-            aria-label="Attach images"
-            title="Attach images"
-          >
-            <ImageIcon className="h-4 w-4" />
-          </button>
+          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
           <ModelPicker
             agent={workbench.agent}
             value={model}
@@ -445,21 +348,4 @@ export function Composer({
       </div>
     </div>
   );
-}
-
-function attachmentJpeg(source: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext('2d');
-      if (!context) return reject(new Error('Could not encode the image.'));
-      context.drawImage(image, 0, 0);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
-    };
-    image.onerror = () => reject(new Error('Could not read the image.'));
-    image.src = source;
-  });
 }

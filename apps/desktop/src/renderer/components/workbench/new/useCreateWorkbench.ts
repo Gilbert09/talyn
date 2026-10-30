@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { DEFAULT_WORKBENCH_EFFORT, type Workbench, type WorkbenchAgent, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
+import { DEFAULT_WORKBENCH_EFFORT, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { createLocalWorkbench } from '../../../lib/localWorkbench';
 import { opsFor } from '../../../lib/workbenchOps';
@@ -21,6 +21,7 @@ export interface NewWorkbenchSpec {
   autoCreatePr?: boolean;
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
+  attachments?: WorkbenchAttachment[];
   baseBranch?: string;
   /** An existing branch to check out instead of a new one. */
   branch?: string;
@@ -59,6 +60,17 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
       if (spec.runtime === 'local') void startLocalChat(wb, spec);
+      else if (spec.attachments?.length) {
+        try {
+          const chat = wb.chats?.[0] ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
+          await api.workbenches.sendMessage(chat.id, {
+            text: spec.prompt.trim(), attachments: spec.attachments,
+            model: spec.model, effort: spec.effort, planMode: spec.planMode,
+          });
+        } catch (err) {
+          toast.error('The session is ready, but the first message did not start', err instanceof Error ? err.message : undefined);
+        }
+      }
       return wb;
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not create the session.');
@@ -105,7 +117,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     baseBranch,
     branch,
     fromPullRequestId: spec.fromPullRequestId,
-    prompt: prompt || undefined,
+    prompt: spec.attachments?.length ? undefined : prompt || undefined,
     internetAccess: spec.internetAccess,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
@@ -135,7 +147,15 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec): Promise<vo
     store.upsertChat(chat);
     store.setChatEventsState(chat.id, { loaded: true });
     store.selectChat(wb.id, chat.id);
-    if (prompt) await opsFor(wb).send(chat, { text: prompt, model: spec.model, planMode: spec.planMode, effort });
+    if (prompt) {
+      const ops = opsFor(wb);
+      const attachments = spec.attachments?.length
+        ? await Promise.all(spec.attachments.map(async (attachment) => attachment.dataBase64
+          ? ops.attach({ name: attachment.name, mimeType: attachment.mimeType, dataBase64: attachment.dataBase64 })
+          : attachment))
+        : undefined;
+      await ops.send(chat, { text: prompt, attachments, model: spec.model, planMode: spec.planMode, effort });
+    }
   } catch (err) {
     toast.error('The session is ready, but the first message did not start', err instanceof Error ? err.message : undefined);
   }

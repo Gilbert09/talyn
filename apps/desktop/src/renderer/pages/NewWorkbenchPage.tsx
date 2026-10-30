@@ -16,6 +16,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
+import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from '../components/workbench/useComposerImages';
 import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 import {
   AgentPicker,
@@ -85,6 +86,7 @@ export function NewWorkbenchPage() {
   const autoCreatePr = defaults.autoCreatePr;
   const [pathError, setPathError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const images = useComposerImages(runtime);
 
   const repo = repositories.find((r) => r.id === repositoryId) ?? null;
   const defaultBranch = workspace?.repos.find((r) => r.name.toLowerCase() === repo?.fullName.toLowerCase())?.defaultBranch ?? '';
@@ -206,7 +208,7 @@ export function NewWorkbenchPage() {
         : runtime === 'local' && !repoPath
           ? `Choose the folder of your ${repo.fullName} checkout.`
           : null;
-  const canCreate = Boolean(workspaceId && repo) && !blockedReason && !busy;
+  const canCreate = Boolean(workspaceId && repo) && !blockedReason && !busy && images.pendingUploads === 0;
 
   const submit = async (text: string) => {
     if (!canCreate || !workspaceId || !repo) return;
@@ -223,6 +225,7 @@ export function NewWorkbenchPage() {
       internetAccess,
       autoCreatePr,
       prompt: text,
+      attachments: images.attachments.length ? images.attachments : undefined,
       baseBranch: baseBranch.trim() || (source.kind === 'pr' ? source.baseBranch : undefined),
       branch: source.kind === 'branch' ? source.branch : source.kind === 'pr' ? source.headBranch || undefined : undefined,
       fromPullRequestId: source.kind === 'pr' ? source.pullRequestId : undefined,
@@ -231,6 +234,7 @@ export function NewWorkbenchPage() {
     if (wb) {
       writeLastRepository(workspaceId, repo.id);
       setPrompt('');
+      images.clear();
       setSource(NEW_BRANCH);
     }
   };
@@ -286,6 +290,8 @@ export function NewWorkbenchPage() {
 
           <div className="space-y-2">
             <div
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={images.onDrop}
               className={cn(
                 'rounded-xl border border-border bg-card shadow-sm transition-colors focus-within:border-ring/60',
                 busy && 'opacity-80'
@@ -299,13 +305,16 @@ export function NewWorkbenchPage() {
                   if (createError) clearError();
                 }}
                 onKeyDown={onKeyDown}
+                onPaste={images.onPaste}
                 placeholder={PLACEHOLDER}
                 aria-label="Task"
                 rows={3}
                 disabled={busy}
                 className="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 pb-2 pt-4 text-[15px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
               />
+              <ImageAttachmentChips attachments={images.attachments} pendingUploads={images.pendingUploads} imageNotReady={images.imageNotReady} onRemove={(index) => images.setAttachments((current) => current.filter((_, i) => i !== index))} />
               <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+                <ImageAttachButton inputRef={images.fileInputRef} onFiles={(files) => void images.attachFiles(files)} />
                 <RepoPicker
                   repositories={repositories}
                   value={repositoryId}

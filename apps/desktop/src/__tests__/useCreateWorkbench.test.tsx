@@ -15,6 +15,7 @@ const mockApi = {
   create: jest.fn(),
   updateChat: jest.fn(),
   createChat: jest.fn(),
+  sendMessage: jest.fn(),
 };
 jest.mock('../renderer/lib/api', () => ({
   api: {
@@ -22,6 +23,7 @@ jest.mock('../renderer/lib/api', () => ({
       create: (...args: unknown[]) => mockApi.create(...args),
       updateChat: (...args: unknown[]) => mockApi.updateChat(...args),
       createChat: (...args: unknown[]) => mockApi.createChat(...args),
+      sendMessage: (...args: unknown[]) => mockApi.sendMessage(...args),
     },
   },
 }));
@@ -32,8 +34,9 @@ jest.mock('../renderer/lib/localWorkbench', () => ({
 }));
 
 const mockSend = jest.fn();
+const mockAttach = jest.fn();
 jest.mock('../renderer/lib/workbenchOps', () => ({
-  opsFor: () => ({ send: (...args: unknown[]) => mockSend(...args) }),
+  opsFor: () => ({ send: (...args: unknown[]) => mockSend(...args), attach: (...args: unknown[]) => mockAttach(...args) }),
 }));
 
 function chat(id: string, over: Partial<WorkbenchChat> = {}): WorkbenchChat {
@@ -119,6 +122,18 @@ beforeEach(() => {
 });
 
 describe('useCreateWorkbench: sandbox', () => {
+  it('sends an inline image in the first message without queuing the text twice', async () => {
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockResolvedValue({ queued: true });
+    const attachment = { name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' };
+    await run(spec({ attachments: [attachment] }));
+    expect(mockApi.create.mock.calls[0][0].prompt).toBeUndefined();
+    expect(mockApi.sendMessage).toHaveBeenCalledWith('c1', expect.objectContaining({
+      text: 'Fix the login redirect', attachments: [attachment],
+    }));
+    expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('creates with the trimmed prompt, stores the workbench and opens it', async () => {
     mockApi.create.mockResolvedValue(workbench());
     const { result, created } = await run(spec({ baseBranch: ' develop ' }));
@@ -208,6 +223,18 @@ describe('useCreateWorkbench: sandbox', () => {
 
 describe('useCreateWorkbench: local', () => {
   const local = (over: Partial<NewWorkbenchSpec> = {}) => spec({ runtime: 'local', repoPath: '/code/app', ...over });
+
+  it('saves a prepared image and sends its path with the first message', async () => {
+    mockCreateLocal.mockResolvedValue(workbench({ runtime: 'local', status: 'ready', localPath: '/wt/fix-login' }));
+    mockAttach.mockResolvedValue({ name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/shot.png' });
+    mockSend.mockResolvedValue({ queued: false });
+    await run(local({ attachments: [{ name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' }] }));
+    expect(mockAttach).toHaveBeenCalledWith({ name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' });
+    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }), expect.objectContaining({
+      text: 'Fix the login redirect',
+      attachments: [{ name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/shot.png' }],
+    }));
+  });
 
   it('makes the worktree from the recorded checkout, opens it, and sends the first message', async () => {
     const wb = workbench({ runtime: 'local', status: 'ready', localPath: '/wt/fix-login' });

@@ -13,11 +13,14 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { downscaleImage } from '../renderer/lib/imageDownscale';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+jest.mock('../renderer/lib/imageDownscale', () => ({ downscaleImage: jest.fn() }));
 
 const mockReadiness = jest.fn();
 const mockCreate = jest.fn();
+const mockSend = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   ApiNetworkError: class ApiNetworkError extends Error {
     online = true;
@@ -27,6 +30,8 @@ jest.mock('../renderer/lib/api', () => ({
       readiness: (...args: unknown[]) => mockReadiness(...args),
       create: (...args: unknown[]) => mockCreate(...args),
       updateChat: jest.fn(),
+      createChat: jest.fn(),
+      sendMessage: (...args: unknown[]) => mockSend(...args),
     },
     pullRequests: {},
   },
@@ -145,6 +150,34 @@ const textarea = () => screen.getByRole('textbox', { name: 'Task' });
 const radio = (name: string) => screen.getByRole('radio', { name });
 
 describe('NewWorkbenchPage', () => {
+  it('adds a pasted image chip and removes it', async () => {
+    jest.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
+    await renderPage();
+    const file = new File(['image'], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(textarea(), { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] } });
+    expect(await screen.findByText('shot.png')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove shot.png' }));
+    expect(screen.queryByText('shot.png')).toBeNull();
+  });
+
+  it('sends a dropped image with the first message once', async () => {
+    jest.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
+    mockCreate.mockResolvedValue(wb('new-with-image', { chats: [{ id: 'first-chat' }] as Workbench['chats'] }));
+    mockSend.mockResolvedValue({ queued: true });
+    await renderPage();
+    const file = new File(['image'], 'shot.png', { type: 'image/png' });
+    fireEvent.drop(textarea(), { dataTransfer: { files: [file] } });
+    await screen.findByText('shot.png');
+    fireEvent.change(textarea(), { target: { value: 'Inspect this image' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    await waitFor(() => expect(mockSend).toHaveBeenCalledWith('first-chat', expect.objectContaining({
+      text: 'Inspect this image',
+      attachments: [{ name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' }],
+    })));
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ prompt: undefined }));
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
   it('defaults to the first watched repository and its default branch', async () => {
     await renderPage();
     expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('acme/api');
