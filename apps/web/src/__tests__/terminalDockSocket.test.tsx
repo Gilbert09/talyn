@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   input: null as ((data: string) => void) | null,
   resize: null as ((cols: number, rows: number) => void) | null,
-  term: { write: vi.fn(), writeln: vi.fn(), focus: vi.fn(), onData: vi.fn() },
+  term: { write: vi.fn(), writeln: vi.fn(), focus: vi.fn(), onData: vi.fn(), reset: vi.fn() },
   dispose: vi.fn(),
 }));
 vi.mock('../lib/api', () => ({
@@ -75,7 +75,7 @@ describe('sandbox terminal', () => {
     expect(socket.send).not.toHaveBeenCalled();
     socket.open();
     mocks.input?.('ls\r');
-    expect(socket.url).toBe('wss://example.test/workbenches/wb1/terminal');
+    expect(socket.url).toBe('wss://example.test/workbenches/wb1/terminal?session=main');
     expect(socket.binaryType).toBe('arraybuffer');
     expect(socket.send.mock.calls[0][0]).toBe('{"type":"auth","token":"test-token"}');
     expect(JSON.parse(socket.send.mock.calls[1][0])).toEqual({ type: 'resize', cols: 80, rows: 24 });

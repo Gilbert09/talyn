@@ -446,7 +446,8 @@ describe('Pull request tab', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('offers no Review while one runs, or when code review is off', () => {
+  // Code review has no feature flag since 2026-10-26, so the only case left is a review in progress.
+  it('offers no Review while one runs', () => {
     getPr.mockResolvedValue({ row: PR, fresh });
     const running = prWith({
       codeReview: {
@@ -458,9 +459,6 @@ describe('Pull request tab', () => {
     const { unmount } = render(<PullRequestTab workbench={WB} chat={chat} pr={running} visible turnsEnded={0} />);
     expect(screen.getByRole('button', { name: 'Review' })).toBeDisabled();
     unmount();
-    features = {};
-    render(<PullRequestTab workbench={WB} chat={chat} pr={PR} visible turnsEnded={0} />);
-    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
   });
 
   it('a finished review with no findings says so and opens the findings', () => {
