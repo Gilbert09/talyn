@@ -82,6 +82,26 @@ describe('TrunkMergeEtaChip', () => {
     expect(screen.queryByText(/running long/)).toBeNull();
   });
 
+  it('labels a failure resolution estimate', async () => {
+    setFlag(true);
+    jest.spyOn(api.pullRequests, 'mergeEta').mockResolvedValue({
+      eta: eta({ kind: 'pendingFailureResolution', estimatedAt: at(12) }),
+      fetchedAt: at(0),
+    });
+    render(<TrunkMergeEtaChip prId="pr-1" />);
+    await waitFor(() => expect(screen.getByText('Waiting for a failure to resolve (est. ~12 min)')).toBeInTheDocument());
+    expect(screen.queryByText(/Will merge/)).toBeNull();
+  });
+
+  it('shows a repository access error', async () => {
+    setFlag(true);
+    jest.spyOn(api.pullRequests, 'mergeEta').mockResolvedValue({
+      eta: null, reason: 'no_access', message: 'This Trunk key cannot see PostHog/posthog', fetchedAt: at(0),
+    });
+    render(<TrunkMergeEtaChip prId="pr-1" />);
+    await waitFor(() => expect(screen.getByText('This Trunk key cannot see PostHog/posthog')).toBeInTheDocument());
+  });
+
   it('marks a late estimate as running long', async () => {
     setFlag(true);
     jest.spyOn(api.pullRequests, 'mergeEta').mockResolvedValue({

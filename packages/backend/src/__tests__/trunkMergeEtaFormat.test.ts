@@ -91,6 +91,19 @@ function answer(e: TrunkMergeEta | null, over: Partial<MergeEtaAnswer> = {}): Me
 }
 
 describe('describeMergeEta', () => {
+  it('labels failure resolution without claiming a merge time', () => {
+    const view = describeMergeEta(answer(eta({ kind: 'pendingFailureResolution', estimatedAt: at(12 * MIN) })), NOW);
+    expect(view?.headline).toBe('Waiting for a failure to resolve (est. ~12 min)');
+  });
+
+  it('does not claim a merge time for an unfamiliar kind', () => {
+    expect(describeMergeEta(answer(eta({ kind: 'other' })), NOW)?.headline).toBe('Trunk estimates an update in ~20 min');
+  });
+
+  it('shows the repository access error', () => {
+    expect(describeMergeEta(answer(null, { reason: 'no_access', message: 'This Trunk key cannot see PostHog/posthog' }), NOW)?.headline)
+      .toBe('This Trunk key cannot see PostHog/posthog');
+  });
   it('draws a queued PR: when it merges, when it starts testing, and the queue ahead', () => {
     expect(describeMergeEta(answer(eta(), { queueState: 'pending' }), NOW)).toEqual({
       headline: 'Will merge in ~20 min',

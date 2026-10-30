@@ -101,7 +101,7 @@ describe('Trunk merge ETAs', () => {
   /** Every request the backend sent to Trunk. */
   let trunkCalls: Array<{ url: URL; headers: Record<string, string> }>;
   /** What Trunk answers next, per endpoint. */
-  let repositoryAnswer: () => Response;
+  let repositoryAnswer: () => Response | Promise<Response>;
   let pullRequestAnswer: (number: number) => Response;
   let estimateAnswer: () => Response;
 
@@ -364,6 +364,54 @@ describe('Trunk merge ETAs', () => {
       expect(callsTo('lookup')).toHaveLength(2);
     });
 
+    it('shares a cold repository lookup across concurrent PRs', async () => {
+      await saveToken();
+      repositoryAnswer = () => new Promise((resolve) => setTimeout(() => resolve(json({ data: [{ id: 'trunk-repo' }] })), 100));
+      const ids = await Promise.all([insertPr(), insertPr(), insertPr()]);
+      await Promise.all(ids.map(getEta));
+      expect(callsTo('repositories')).toHaveLength(1);
+      expect(callsTo('lookup')).toHaveLength(3);
+    });
+
+    it('retries a failed repository lookup for another PR', async () => {
+      await saveToken();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      repositoryAnswer = () => new Response('error', { status: 500 });
+      expect((await getEta(await insertPr())).body.data?.reason).toBe('unavailable');
+      repositoryAnswer = () => json({ data: [{ id: 'trunk-repo' }] });
+      expect((await getEta(await insertPr())).body.data?.eta).not.toBeNull();
+      expect(callsTo('repositories')).toHaveLength(2);
+    });
+
+    it.each([
+      ['seconds', '120'],
+      ['HTTP date', new Date(Date.now() + 120_000).toUTCString()],
+    ])('pauses all reads after a 429 with Retry-After in %s', async (_name, retryAfter) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await saveToken();
+      repositoryAnswer = () => new Response('slow down', { status: 429, headers: { 'Retry-After': retryAfter } });
+      const first = await getEta(await insertPr());
+      expect(first.body.data?.reason).toBe('unavailable');
+      const ids = await Promise.all([insertPr(), insertPr(), insertPr()]);
+      const paused = await Promise.all(ids.map(getEta));
+      expect(paused.every(({ body }) => body.data?.reason === 'unavailable')).toBe(true);
+      expect(trunkCalls).toHaveLength(1);
+
+      vi.setSystemTime(Date.now() + 121_000);
+      repositoryAnswer = () => json({ data: [{ id: 'trunk-repo' }] });
+      expect((await getEta(ids[0])).body.data?.eta).not.toBeNull();
+      expect(callsTo('repositories')).toHaveLength(2);
+      vi.useRealTimers();
+    });
+
+    it('pauses a 503 with Retry-After', async () => {
+      await saveToken();
+      repositoryAnswer = () => new Response('busy', { status: 503, headers: { 'Retry-After': '120' } });
+      await getEta(await insertPr());
+      await getEta(await insertPr());
+      expect(trunkCalls).toHaveLength(1);
+    });
+
     it('serves a second ask within a minute from the cache', async () => {
       await saveToken();
       const id = await insertPr();
@@ -438,8 +486,9 @@ describe('Trunk merge ETAs', () => {
       [
         'a repository Trunk does not know',
         () => (repositoryAnswer = () => trunkError(404, 'PROVIDER_URL_NOT_FOUND')),
-        'not_queued',
+        'no_access',
       ],
+      ['a PR lookup 404', () => (pullRequestAnswer = () => trunkError(404, 'PR_NOT_FOUND')), 'not_queued'],
       ['a PR Trunk has not indexed', () => (pullRequestAnswer = () => json({ data: [] })), 'not_queued'],
       [
         'a PR never submitted',

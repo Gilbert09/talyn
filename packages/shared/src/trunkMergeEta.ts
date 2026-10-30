@@ -35,8 +35,8 @@ export type TrunkEtaConfidence = 'high' | 'medium' | 'low' | 'unknown';
 /** Trunk's estimate for one PR. Times are ISO strings; any can be null. */
 export interface TrunkMergeEta {
   computedAt: string | null;
-  /** Trunk's `kind`, verbatim (for example `merge`). Not interpreted. */
-  kind: string | null;
+  /** Trunk's `kind`, verbatim. Older answers can omit it. */
+  kind?: string | null;
   estimatedAt: string | null;
   estimatedAtState: TrunkEtaPace;
   confidence: TrunkEtaConfidence;
@@ -58,6 +58,8 @@ export type MergeEtaReason =
   | 'reauth_required'
   /** The PR is not in Trunk's queue (or is closed). */
   | 'not_queued'
+  /** The key cannot see this repository. */
+  | 'no_access'
   /** Trunk has the PR but no estimate for it. */
   | 'no_estimate'
   /** Trunk could not be reached or answered with an error. */
@@ -67,6 +69,8 @@ export type MergeEtaReason =
 export interface MergeEtaAnswer {
   eta: TrunkMergeEta | null;
   reason?: MergeEtaReason;
+  /** An explanation for an ETA error. */
+  message?: string;
   /** Trunk's own state for the PR, when Trunk was asked and said. */
   queueState?: TrunkQueueState;
   stateChangedAt?: string;
@@ -129,7 +133,7 @@ export function formatEtaDuration(
 
 /** What a PR row draws for an ETA. */
 export interface MergeEtaView {
-  /** "Will merge in ~N min", or null when Trunk gave no merge time. */
+  /** The estimate label, or null when Trunk gave no estimate time. */
   headline: string | null;
   /** "Testing · ~N min left" / "Starts testing in ~N min", then "N PRs ahead". */
   details: string[];
@@ -144,11 +148,23 @@ export interface MergeEtaView {
  */
 export function describeMergeEta(answer: MergeEtaAnswer | null, nowMs: number): MergeEtaView | null {
   const eta = answer?.eta;
-  if (!eta) return null;
+  if (!eta) {
+    return answer?.reason === 'no_access'
+      ? { headline: answer.message ?? 'This Trunk key cannot see this repository', details: [], runningLong: false }
+      : null;
+  }
 
   const mergeIn = formatEtaDuration(eta.estimatedAt, nowMs);
-  const headline =
-    mergeIn === null ? null : mergeIn === 'any moment' ? 'Will merge any moment' : `Will merge in ${mergeIn}`;
+  let headline: string | null = null;
+  if (mergeIn !== null) {
+    if (eta.kind === 'pendingFailureResolution') {
+      headline = `Waiting for a failure to resolve (est. ${mergeIn})`;
+    } else if (eta.kind && eta.kind !== 'merge') {
+      headline = `Trunk estimates an update ${mergeIn === 'any moment' ? 'any moment' : `in ${mergeIn}`}`;
+    } else {
+      headline = mergeIn === 'any moment' ? 'Will merge any moment' : `Will merge in ${mergeIn}`;
+    }
+  }
 
   const details: string[] = [];
   const startsMs = eta.startsTestingAt ? Date.parse(eta.startsTestingAt) : NaN;
@@ -162,8 +178,8 @@ export function describeMergeEta(answer: MergeEtaAnswer | null, nowMs: number): 
       eta.testsFinishAt !== null);
   if (testing) {
     const left = formatEtaDuration(eta.testsFinishAt, nowMs);
-    // Tests usually finish when the PR merges, so the headline already says it.
-    if (left === null || left === mergeIn) details.push('Testing');
+    // A merge estimate can also describe when tests finish.
+    if (left === null || (eta.kind === 'merge' && left === mergeIn)) details.push('Testing');
     else if (left === 'any moment') details.push('Testing · finishing any moment');
     else details.push(`Testing · ${left} left`);
   } else {

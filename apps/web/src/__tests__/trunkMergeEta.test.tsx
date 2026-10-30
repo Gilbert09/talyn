@@ -100,6 +100,25 @@ describe('TrunkMergeEtaChip', () => {
     expect(screen.queryByText(/running long/)).toBeNull();
   });
 
+  it('labels a failure resolution estimate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    setFlag(true);
+    mergeEta.mockResolvedValue({ eta: eta({ kind: 'pendingFailureResolution', estimatedAt: at(12) }), fetchedAt: at(0) });
+    render(<TrunkMergeEtaChip prId="pr-1" />);
+    await flush();
+    expect(screen.getByText('Waiting for a failure to resolve (est. ~12 min)')).toBeTruthy();
+    expect(screen.queryByText(/Will merge/)).toBeNull();
+  });
+
+  it('shows a repository access error', async () => {
+    setFlag(true);
+    mergeEta.mockResolvedValue({ eta: null, reason: 'no_access', message: 'This Trunk key cannot see PostHog/posthog', fetchedAt: at(0) });
+    render(<TrunkMergeEtaChip prId="pr-1" />);
+    await flush();
+    expect(screen.getByText('This Trunk key cannot see PostHog/posthog')).toBeTruthy();
+  });
+
   it('marks a late estimate as running long', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
