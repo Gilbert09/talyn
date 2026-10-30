@@ -73,8 +73,7 @@ import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
-import { PollingOnlyBadge } from '../widgets/PollingOnlyBadge';
-import { RepoSandboxSize } from '../widgets/RepoSandboxSize';
+import { WebRepoRow } from '../settings/RepositoryRow';
 import { openExternal } from '../../lib/openExternal';
 import { openGithubAppFlow } from '../../lib/githubInstall';
 import { APP_VERSION } from '../../lib/env';
@@ -227,6 +226,7 @@ function WorkspaceSettings() {
     setRepositories,
   } = useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
+  const setSettingsSection = useWorkspaceStore((s) => s.setSettingsSection);
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
   // Editable name, re-seeded whenever the active workspace changes.
@@ -234,6 +234,16 @@ function WorkspaceSettings() {
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const [instructionIds, setInstructionIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let active = true;
+    void api.repositories.instructions.list(currentWorkspaceId).then((list) => {
+      if (active) setInstructionIds(new Set(list.map((item) => item.repositoryId)));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [currentWorkspaceId]);
 
   useEffect(() => {
     setName(currentWorkspace?.name ?? '');
@@ -408,6 +418,7 @@ function WorkspaceSettings() {
     try {
       await api.repositories.remove(repoId);
       setRepositories(watchedRepos.filter((r) => r.id !== repoId));
+      setSelectedRepoId(null);
       void refreshWorkspaces();
     } finally {
       setLoadingRepos(false);
@@ -550,27 +561,9 @@ function WorkspaceSettings() {
                 No repositories being watched.
               </p>
             ) : (
-              <div className="space-y-2 mb-3">
+              <div className="mb-3 overflow-hidden rounded-md border">
                 {watchedRepos.map((repo) => (
-                  <div key={repo.id} className="p-2 rounded bg-secondary">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Github className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="text-sm truncate">{repo.fullName}</span>
-                        <PollingOnlyBadge owner={repo.owner} />
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                        onClick={() => handleRemoveRepo(repo.id)}
-                        disabled={loadingRepos}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    </div>
-                    <RepoSandboxSize repositoryId={repo.id} />
-                  </div>
+                  <WebRepoRow key={repo.id} repo={repo} open={selectedRepoId === repo.id} onToggle={() => setSelectedRepoId(selectedRepoId === repo.id ? null : repo.id)} disabled={loadingRepos} hasInstructions={instructionIds.has(repo.id)} onInstructions={() => setSettingsSection('instructions')} onRemove={() => void handleRemoveRepo(repo.id)} />
                 ))}
               </div>
             )}

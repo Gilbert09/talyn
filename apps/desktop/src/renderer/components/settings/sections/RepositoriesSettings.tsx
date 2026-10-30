@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FolderOpen, Github, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import type { WorkbenchConfig } from '@talyn/shared';
+import { ChevronDown, FolderOpen, Github, Plus, RefreshCw, X } from 'lucide-react';
+import { type RepositoryPreviewResponse, type RepositorySandboxSizeResponse, type WorkbenchConfig } from '@talyn/shared';
 import { api, GitHubRepo } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
 import { isOwnerCovered, parseRepoInput } from '../../../lib/githubInstall';
@@ -30,6 +30,7 @@ export function RepositoriesSettings() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const watchedRepos = useWorkspaceStore((s) => s.repositories);
   const setRepositories = useWorkspaceStore((s) => s.setRepositories);
+  const setSettingsSection = useWorkspaceStore((s) => s.setSettingsSection);
   const { refreshWorkspaces } = useWorkspaceActions();
   const local = useLocalCheckouts(watchedRepos);
 
@@ -47,6 +48,16 @@ export function RepositoriesSettings() {
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const [instructionIds, setInstructionIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let active = true;
+    void api.repositories.instructions.list(currentWorkspaceId).then((list) => {
+      if (active) setInstructionIds(new Set(list.map((item) => item.repositoryId)));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [currentWorkspaceId]);
   // App-installation coverage for the watched repos' orgs.
   const {
     installations,
@@ -133,6 +144,7 @@ export function RepositoriesSettings() {
     try {
       await api.repositories.remove(repoId);
       setRepositories(watchedRepos.filter((r) => r.id !== repoId));
+      setSelectedRepoId(null);
       void refreshWorkspaces();
     } finally {
       setLoadingRepos(false);
@@ -221,6 +233,10 @@ export function RepositoriesSettings() {
               local={local}
               disabled={loadingRepos}
               onRemove={() => void handleRemoveRepo(repo.id)}
+              open={selectedRepoId === repo.id}
+              onToggle={() => setSelectedRepoId(selectedRepoId === repo.id ? null : repo.id)}
+              hasInstructions={instructionIds.has(repo.id)}
+              onInstructions={() => setSettingsSection('instructions')}
             />
           ))
         )}
@@ -388,6 +404,10 @@ interface LocalCheckouts {
   clear: (repoFullName: string) => Promise<void>;
 }
 
+function middlePath(path: string): string {
+  return path.length > 48 ? `${path.slice(0, 24)}…${path.slice(-20)}` : path;
+}
+
 /**
  * `useRepoPaths` plus Clear. After a clear the hook's own map is stale until
  * the next pick (which re-reads it), so the bridge's answer is kept here.
@@ -505,16 +525,34 @@ function RepoRow({
   local,
   disabled,
   onRemove,
+  open,
+  onToggle,
+  hasInstructions,
+  onInstructions,
 }: {
   repo: WatchedRepo;
   local: LocalCheckouts;
   disabled: boolean;
   onRemove: () => void;
+  open: boolean;
+  onToggle: () => void;
+  hasInstructions: boolean;
+  onInstructions: () => void;
 }) {
   const path = local.pathFor(repo.fullName);
   const candidates = path ? [] : local.candidatesFor(repo.fullName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [size, setSize] = useState<RepositorySandboxSizeResponse | null>(null);
+  const [preview, setPreview] = useState<RepositoryPreviewResponse | null>(null);
+  const previewsEnabled = useWorkspaceStore((s) => s.features?.workbenches === true);
+  useEffect(() => {
+    let active = true;
+    void api.repositories.sandboxSize.get(repo.id).then((value) => { if (active) setSize(value); }).catch(() => undefined);
+    if (previewsEnabled) void api.repositories.preview.get(repo.id).then((value) => { if (active) setPreview(value); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [repo.id, previewsEnabled]);
 
   const run = async (fn: () => Promise<string | null | void>) => {
     setBusy(true);
@@ -529,29 +567,29 @@ function RepoRow({
   };
 
   return (
-    <div className="space-y-1 px-3 py-2 text-[13px]">
-      <div className="flex items-center gap-2">
-        <Github className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{repo.fullName}</span>
+    <div className="border-b last:border-b-0 text-[13px]">
+      <button type="button" data-attr="settings-repo-row" aria-expanded={open} aria-controls={`repo-detail-${repo.id}`} onClick={onToggle} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <Github className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{repo.fullName}</span>
+          {local.available && <span className="block truncate font-mono text-[11px] text-muted-foreground" title={path ?? undefined}>{path ? middlePath(local.displayPath(path)) : 'No local checkout'}</span>}
+        </span>
         <PollingOnlyBadge owner={repo.owner} />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-7 w-7 p-0 text-red-500 hover:bg-red-500/10 hover:text-red-600"
-          onClick={onRemove}
-          disabled={disabled}
-          title="Stop watching"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+        <span className="flex shrink-0 flex-wrap justify-end gap-1">
+          {size && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-size-pill">{size.effective === 'large' ? 'Large · 12 GB' : 'Standard · 4 GB'}{size.setting === 'auto' ? ' (auto)' : ''}</span>}
+          {previewsEnabled && preview?.target && preview.target !== 'off' && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-preview-pill">Preview: {preview.user?.target ?? 'auto'}</span>}
+          {hasInstructions && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-instructions-pill">Instructions</span>}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && <div id={`repo-detail-${repo.id}`} data-attr="settings-repo-detail" className="space-y-3 border-t bg-muted/20 px-3 py-3">
       {local.available && (
-        <div className="flex items-center gap-2 pl-[22px]">
+        <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3">
+          <span className="pt-1 text-xs text-muted-foreground">Local checkout</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
           {path ? (
             <>
-              <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" title={path}>
-                {path}
-              </span>
+              <span className="min-w-0 max-w-full truncate font-mono text-[11px] text-muted-foreground" title={path}>{local.displayPath(path)}</span>
               {local.foundAutomatically(repo.fullName) && (
                 <span className="shrink-0 text-[11px] text-muted-foreground">Found automatically</span>
               )}
@@ -573,9 +611,9 @@ function RepoRow({
               </select>
             </>
           ) : (
-            <span className="text-[11px] text-muted-foreground">No local checkout on this computer</span>
+            <span className="text-[11px] text-muted-foreground">No local checkout</span>
           )}
-          <div className="ml-auto flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => void run(() => local.choose(repo.fullName))} disabled={busy}>
               <FolderOpen className="h-3.5 w-3.5" />
               Choose folder…
@@ -588,11 +626,17 @@ function RepoRow({
             )}
           </div>
         </div>
+        </div>
       )}
-      {error && <p className="pl-[22px] text-xs text-destructive">{error}</p>}
-      <RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} />
-      <RepoSandboxSize repositoryId={repo.id} />
-      {path && <RepoScripts path={path} />}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3">
+        <span className="pt-1 text-xs text-muted-foreground">Sessions</span>
+        <div className="min-w-0 space-y-2"><RepoSandboxSize repositoryId={repo.id} hideLabel onInfoChange={setSize} />{path && <RepoScripts path={path} />}</div>
+      </div>
+      {previewsEnabled && <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3"><span className="pt-1 text-xs text-muted-foreground">Preview</span><RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} onConfigChange={setPreview} /></div>}
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3"><span className="text-xs text-muted-foreground">Instructions</span><button type="button" data-attr="settings-repo-edit-instructions" className="w-fit text-xs text-primary hover:underline" onClick={onInstructions}>Edit instructions</button></div>
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 border-t pt-3"><span />{confirmRemove ? <div className="flex items-center gap-2 text-xs"><span>Remove {repo.fullName}?</span><Button data-attr="settings-repo-confirm-remove" variant="destructive" size="sm" disabled={disabled} onClick={onRemove}>Remove</Button><Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>Cancel</Button></div> : <Button data-attr="settings-repo-remove" variant="ghost" size="sm" className="w-fit text-destructive hover:text-destructive" disabled={disabled} onClick={() => setConfirmRemove(true)}>Remove repository</Button>}</div>
+      </div>}
     </div>
   );
 }
@@ -628,7 +672,7 @@ function RepoScripts({ path }: { path: string }) {
   ];
 
   return (
-    <div className="space-y-0.5 pl-[22px] text-[11px] text-muted-foreground">
+    <div className="space-y-0.5 text-[11px] text-muted-foreground">
       {scripts.length === 0 ? (
         <p>No scripts. Add them in .talyn/settings.toml.</p>
       ) : (

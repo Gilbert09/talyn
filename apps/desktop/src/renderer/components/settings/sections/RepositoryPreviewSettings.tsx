@@ -3,7 +3,7 @@ import { workbenchesOffered, type RepositoryPreviewChoice, type RepositoryPrevie
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 
-export function RepositoryPreviewSettings({ repositoryId, repoName }: { repositoryId: string; repoName: string }) {
+export function RepositoryPreviewSettings({ repositoryId, repoName, onConfigChange }: { repositoryId: string; repoName: string; onConfigChange?: (config: RepositoryPreviewResponse) => void }) {
   const enabled = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const [config, setConfig] = useState<RepositoryPreviewResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function RepositoryPreviewSettings({ repositoryId, repoName }: { reposito
     let cancelled = false;
     setConfig(null);
     if (enabled) void api.repositories.preview.get(repositoryId).then((value) => {
-      if (!cancelled) setConfig(value);
+      if (!cancelled) { setConfig(value); onConfigChange?.(value); }
     }).catch((err) => { if (!cancelled) setError(String(err)); });
     return () => { cancelled = true; };
   }, [enabled, repositoryId]);
@@ -35,6 +35,7 @@ export function RepositoryPreviewSettings({ repositoryId, repoName }: { reposito
         : await api.repositories.preview.detect(repositoryId);
       current.current = value;
       setConfig(value);
+      onConfigChange?.(value);
       window.dispatchEvent(new Event('repository-preview-changed'));
     });
     queue.current = operation;
@@ -44,11 +45,11 @@ export function RepositoryPreviewSettings({ repositoryId, repoName }: { reposito
   };
   const inputClass = 'min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground';
   return (
-    <div className="space-y-2 pl-[22px] text-xs">
+    <div className="space-y-2 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span>Preview: {config ? config.target ?? 'Auto' : 'Loading…'}</span>
         {config && <select
           aria-label={`Preview target for ${repoName}`}
+          data-attr="settings-repo-preview-target"
           className={inputClass}
           value={config.user?.target ?? 'auto'}
           disabled={busy}
@@ -56,7 +57,7 @@ export function RepositoryPreviewSettings({ repositoryId, repoName }: { reposito
         >
           <option value="auto">Auto</option><option value="sandbox">Sandbox</option><option value="coder">Coder</option><option value="off">Off</option>
         </select>}
-        <button type="button" className="rounded border px-2 py-1 hover:bg-accent disabled:opacity-50" disabled={busy} onClick={() => update()}>Detect again</button>
+        <button type="button" data-attr="settings-repo-preview-detect" className="rounded border px-2 py-1 hover:bg-accent disabled:opacity-50" disabled={busy} onClick={() => update()}>Detect again</button>
       </div>
       {config?.reasons.map((reason) => <p key={reason} className="text-muted-foreground">Detected: {reason}</p>)}
       {config?.target === 'coder' && (['url', 'workspace', 'checkout', 'run'] as const).map((field) => (
