@@ -5,6 +5,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 
 export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
   const providers = useWorkspaceStore((s) => s.cloudProviders);
+  const posthogNeedsReauth = useWorkspaceStore((s) => s.posthogStatus?.needsReauth === true);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
 
   if (!providers || providers.length === 0) return null;
@@ -15,7 +16,9 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
         <p className="px-4 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Agents</p>
       )}
       {providers.map((p) => {
-        const status = cloudProviderStatus(p);
+        const status = cloudProviderStatus(p.type === 'posthog_code'
+          ? { ...p, needsReconnect: p.needsReconnect || posthogNeedsReauth }
+          : p);
         const title = `${p.displayName}: ${status.detail}`;
         const dimmed = status.tone === 'disconnected';
         if (collapsed) {
@@ -60,9 +63,8 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
             {status.agents.map((agent) => (
               <FleetAgentMark key={agent} agent={agent} className="h-3 w-3" />
             ))}
-            {status.tone === 'connected' ? (
-              <StatusDot tone="connected" className="ring-[3px] ring-success/20" />
-            ) : (
+            <StatusDot tone={status.tone} className={status.tone === 'connected' ? 'ring-[3px] ring-success/20' : undefined} />
+            {status.tone !== 'connected' && (
               <span
                 className={cn(
                   'text-[10px] font-medium',

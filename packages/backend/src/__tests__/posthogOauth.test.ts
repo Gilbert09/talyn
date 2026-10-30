@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomBytes, createHash } from 'node:crypto';
+import type { Request, Response as ExpressResponse } from 'express';
 import { eq } from 'drizzle-orm';
 import {
   completeAuthorization,
@@ -22,6 +23,9 @@ import {
   storePostHogCodeCredentials,
 } from '../services/posthogCode/credentials.js';
 import { readPostHogIntegration } from '../services/posthogCode/integrationRow.js';
+import { cloudProviderRoutes } from '../routes/cloudProviders.js';
+import { registerCloudProvider } from '../services/cloudProviders/registry.js';
+import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
 import { encryptString } from '../services/tokenCrypto.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -84,6 +88,43 @@ describe('PostHog OAuth', () => {
       headers: { 'Content-Type': 'application/json' },
     });
   }
+
+  it('lists the same stored reconnect state used by PostHog settings', async () => {
+    registerCloudProvider(postHogCodeProvider);
+    const router = cloudProviderRoutes() as unknown as {
+      stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: Request, res: ExpressResponse) => Promise<unknown> }> } }>;
+    };
+    const route = router.stack.find((layer) => layer.route?.path === '/' && layer.route.methods.get)?.route;
+    if (!route) throw new Error('Provider list route missing');
+    const list = async () => {
+      let payload: { data: Array<{ type: string; connected: boolean; needsReconnect?: boolean }> } | undefined;
+      await route.stack[0].handle({
+        query: { workspaceId: WS },
+        user: { id: TEST_USER_ID, email: 'test@example.com', isAdmin: false },
+      } as unknown as Request, {
+        json(value: typeof payload) { payload = value; return this; },
+      } as unknown as ExpressResponse);
+      return payload?.data.find((provider) => provider.type === 'posthog_code');
+    };
+
+    expect(await list()).toMatchObject({ connected: false, needsReconnect: false });
+    await db.insert(integrationsTable).values({
+      id: 'int-reconnect', workspaceId: WS, type: 'posthog', enabled: true,
+      config: {
+        projectId: '42', host: HOST, authMethod: 'oauth',
+        oauth: {
+          accessTokenEnc: encryptString('access'), refreshTokenEnc: encryptString('refresh'),
+          expiresAt: new Date(0).toISOString(), clientId: CLIENT_ID,
+          reauthRequiredAt: new Date().toISOString(),
+        },
+      },
+    });
+    expect(await list()).toMatchObject({ connected: true, needsReconnect: true });
+    expect((await getPostHogCodeCredentials(WS))?.reauthRequired).toBe(true);
+    await storePostHogCodeCredentials(WS, { apiKey: 'key', projectId: '42', host: HOST });
+    expect(await list()).toMatchObject({ connected: true, needsReconnect: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   /** Script the token endpoint + self-introspection in the order they're called. */
   function scriptTokenExchange(opts: {

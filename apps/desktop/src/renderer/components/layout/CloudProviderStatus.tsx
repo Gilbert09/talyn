@@ -5,6 +5,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 
 export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
   const providers = useWorkspaceStore((s) => s.cloudProviders);
+  const posthogNeedsReauth = useWorkspaceStore((s) => s.posthogStatus?.needsReauth === true);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
 
   if (!providers || providers.length === 0) return null;
@@ -22,7 +23,9 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
         </p>
       )}
       {providers.map((p) => {
-        const status = cloudProviderStatus(p);
+        const status = cloudProviderStatus(p.type === 'posthog_code'
+          ? { ...p, needsReconnect: p.needsReconnect || posthogNeedsReauth }
+          : p);
         const title = `${p.displayName}: ${status.detail}`;
         const dimmed = status.tone === 'disconnected';
         if (collapsed) {
@@ -30,7 +33,7 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
             <button
               key={p.type}
               type="button"
-              onClick={() => openSettings('agents')}
+              onClick={() => openSettings('integrations')}
               title={title}
               aria-label={title}
               className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
@@ -48,7 +51,7 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
           <button
             key={p.type}
             type="button"
-            onClick={() => openSettings('agents')}
+            onClick={() => openSettings('integrations')}
             title={title}
             className="group flex h-7 w-full items-center gap-3 rounded-md px-4 text-xs transition-colors hover:bg-accent"
           >
@@ -70,9 +73,8 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
             {status.agents.map((agent) => (
               <FleetAgentMark key={agent} agent={agent} className="h-3 w-3" />
             ))}
-            {status.tone === 'connected' ? (
-              <StatusDot tone="connected" className="ring-[3px] ring-green-500/20" />
-            ) : (
+            <StatusDot tone={status.tone} className={status.tone === 'connected' ? 'ring-[3px] ring-green-500/20' : undefined} />
+            {status.tone !== 'connected' && (
               <span
                 className={cn(
                   'text-[10px] font-medium',

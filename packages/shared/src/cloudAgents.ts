@@ -134,16 +134,17 @@ function agentList(agents: readonly string[]): string {
 
 export function cloudProviderStatus(provider: {
   connected: boolean;
+  needsReconnect?: boolean;
   connectedAgents?: string[];
   reauthAgents?: string[];
 }): CloudProviderStatusSummary {
   const agents = provider.connectedAgents ?? [];
   const reauth = provider.reauthAgents ?? [];
-  if (reauth.length > 0) {
-    return { tone: 'reauth', agents, detail: `Reconnect ${agentList(reauth)}` };
-  }
   if (!provider.connected) {
     return { tone: 'disconnected', agents: [], detail: 'Not connected' };
+  }
+  if (provider.needsReconnect || reauth.length > 0) {
+    return { tone: 'reauth', agents, detail: reauth.length > 0 ? `Reconnect needed: ${agentList(reauth)}` : 'Reconnect needed' };
   }
   return {
     tone: 'connected',

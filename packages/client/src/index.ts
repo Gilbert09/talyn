@@ -683,6 +683,8 @@ export interface CloudProviderInfo {
   displayName: string;
   capabilities?: { model?: boolean; runtimeAdapter?: boolean };
   connected: boolean;
+  /** Stored authorization requires the user to reconnect. */
+  needsReconnect?: boolean;
   /**
    * Which agent vendors are connected behind this provider — Talyn Fleet only,
    * which runs on the workspace's own Claude or Codex subscription.
