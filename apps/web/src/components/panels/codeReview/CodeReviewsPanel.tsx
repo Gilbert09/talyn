@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
@@ -13,6 +13,7 @@ import { useWorkspaceStore } from '../../../stores/workspace';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
+import { lazyWithReload } from '../../../lib/lazyWithReload';
 import { activeFixStatus } from './activeFix';
 import { reviewStage, reviewStageChipClass, reviewStageEdgeClass } from './reviewStage';
 
@@ -22,7 +23,7 @@ import { reviewStage, reviewStageChipClass, reviewStageEdgeClass } from './revie
  * panel's chunk for everyone who opens the list — including the many who never
  * open a row.
  */
-const PRDetailSheet = lazy(() =>
+const PRDetailSheet = lazyWithReload(() =>
   import('../../widgets/PRDetailSheet').then((m) => ({ default: m.PRDetailSheet }))
 );
 
