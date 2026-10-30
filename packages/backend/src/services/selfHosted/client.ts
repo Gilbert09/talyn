@@ -11,7 +11,7 @@ import { createHash, randomBytes } from 'crypto';
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
 import type { Duplex } from 'stream';
-import { createSseJsonParser } from '@talyn/shared';
+import { createSseJsonParser, type BakeStepResult, type RepositoryBake } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 
 /**
@@ -93,6 +93,11 @@ export interface FleetSandbox {
   memUsedMib?: number;
   vcpuCount?: number;
   golden?: string;
+  bake?: RepositoryBake;
+  bakeSteps?: BakeStepResult[];
+  bakeStepsSpecHash?: string;
+  bakePending?: boolean;
+  bakeError?: string;
   /** 'base' | 'repo' — which layer selection landed on. */
   goldenLayer?: string;
   /** The rootfs this box was given. Absent or 0 means the golden's own size. */
@@ -215,6 +220,7 @@ export interface FleetGoldensView {
 export interface FleetRebakeStatus {
   slug?: string;
   baseBranch?: string;
+  bake?: RepositoryBake;
   actor?: string;
   reason?: string;
   startedAt?: string;

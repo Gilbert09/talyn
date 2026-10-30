@@ -179,6 +179,7 @@ describe('cloud task tenant isolation', () => {
   });
 
   it('sends the verified token for the dispatch workspace', async () => {
+    await db.update(repositories).set({ settings: { bake: { steps: [{ name: 'Install', run: 'echo ok' }] } } }).where(eq(repositories.id, 'repo1'));
     vi.mocked(githubService.getVerifiedAccessToken).mockImplementation(async (workspaceId) =>
       workspaceId === 'ws1' ? 'own-verified-token' : 'other-verified-token',
     );
@@ -186,6 +187,7 @@ describe('cloud task tenant isolation', () => {
     expect(FleetClient.prototype.createSandbox).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'ws1', githubToken: 'own-verified-token',
     }));
+    expect(vi.mocked(FleetClient.prototype.createSandbox).mock.calls[0][0]).not.toHaveProperty('bake');
     expect(githubService.getAccessToken).not.toHaveBeenCalled();
   });
 

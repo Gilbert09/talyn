@@ -5,6 +5,7 @@ import type {
   RepositoryPreviewChoice,
   RepositoryPreviewResponse,
   RepositorySandboxSizeResponse,
+  RepositoryBake,
   SandboxSizeSetting,
 } from '@talyn/shared';
 import {
@@ -683,6 +684,8 @@ export interface CloudProviderInfo {
   displayName: string;
   capabilities?: { model?: boolean; runtimeAdapter?: boolean };
   connected: boolean;
+  /** Stored authorization requires the user to reconnect. */
+  needsReconnect?: boolean;
   /**
    * Which agent vendors are connected behind this provider — Talyn Fleet only,
    * which runs on the workspace's own Claude or Codex subscription.
@@ -1585,6 +1588,10 @@ export const repositories = {
     get: (id: string) => request<RepositorySandboxSizeResponse>('GET', `/repositories/${enc(id)}/sandbox-size`),
     set: (id: string, sandboxSize: SandboxSizeSetting) =>
       request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
+  },
+  bake: {
+    get: (id: string) => request<RepositoryBake | null>('GET', `/repositories/${enc(id)}/bake`),
+    put: (id: string, bake: RepositoryBake) => request<RepositoryBake>('PUT', `/repositories/${enc(id)}/bake`, bake),
   },
   /** Instructions written in Talyn for a repository, added to every session on it. */
   instructions: {

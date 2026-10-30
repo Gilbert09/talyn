@@ -11,6 +11,7 @@ import {
   readSelfHostedConfig,
 } from '../services/selfHosted/credentials.js';
 import { createPkcePair } from '../services/posthogCode/oauth.js';
+import { getPostHogCodeCredentials } from '../services/posthogCode/credentials.js';
 import { decryptString, encryptString } from '../services/tokenCrypto.js';
 
 /**
@@ -89,6 +90,7 @@ interface CloudProviderInfo {
   displayName: string;
   capabilities?: { model?: boolean; runtimeAdapter?: boolean };
   connected: boolean;
+  needsReconnect?: boolean;
   /**
    * Which agent vendors are connected behind this provider.
    *
@@ -246,13 +248,23 @@ export function cloudProviderRoutes(): Router {
       listCloudProviders()
         .filter((p) => p.type !== 'selfhosted' || mayUseFleet)
         .sort((a, b) => cloudProviderRank(a.type) - cloudProviderRank(b.type))
-        .map(async (p) => ({
-          type: p.type,
-          displayName: p.displayName,
-          capabilities: p.capabilities,
-          connected: await p.hasCredentials(workspaceId),
-          ...(p.type === 'selfhosted' ? await fleetAgentStatus(workspaceId) : {}),
-        })),
+        .map(async (p) => {
+          const posthogCredentials = p.type === 'posthog_code'
+            ? await getPostHogCodeCredentials(workspaceId)
+            : null;
+          return {
+            type: p.type,
+            displayName: p.displayName,
+            capabilities: p.capabilities,
+            connected: p.type === 'posthog_code'
+              ? Boolean(posthogCredentials)
+              : await p.hasCredentials(workspaceId),
+            ...(p.type === 'posthog_code'
+              ? { needsReconnect: posthogCredentials?.reauthRequired ?? false }
+              : {}),
+            ...(p.type === 'selfhosted' ? await fleetAgentStatus(workspaceId) : {}),
+          };
+        }),
     );
     res.json({ success: true, data: providers } as ApiResponse<CloudProviderInfo[]>);
   });
