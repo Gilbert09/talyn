@@ -1,5 +1,5 @@
 import {
-  detectSandboxSize, isComposeFileName, MAX_COMPOSE_FILES, resolveSandboxSize, SANDBOX_SIZES,
+  detectSandboxSize, isComposeFileName, isSandboxSizeSetting, MAX_COMPOSE_FILES, resolveSandboxSize, SANDBOX_SIZES,
   type CachedSandboxSize, type RepositorySandboxSizeResponse, type SandboxSize, type SandboxSizeSetting,
 } from '@talyn/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -81,7 +81,7 @@ export function validateSandboxSizeChoice(value: unknown): SandboxSizeSetting {
   const choice = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   if (!choice || Object.keys(choice).some((key) => key !== 'sandboxSize')) throw new Error('Send only sandboxSize.');
   const size = choice.sandboxSize;
-  if (size !== 'auto' && size !== 'standard' && size !== 'large') throw new Error('Sandbox size must be auto, standard, or large.');
+  if (!isSandboxSizeSetting(size)) throw new Error('Sandbox size must be auto or a supported size.');
   return size;
 }
 
@@ -91,7 +91,7 @@ export async function sizeForSession(row: Pick<WorkbenchRow, 'repositoryId' | 'w
     const repo = await getSizeRepository(row.repositoryId);
     if (!repo) return 'standard';
     const setting = repo.settings?.sandboxSize;
-    if (setting === 'standard' || setting === 'large') return setting;
+    if (setting && setting !== 'auto') return setting;
     const detected = await detectRepoSandboxSize(row.workspaceId, repo);
     return resolveSandboxSize(setting, detected?.size);
   } catch (err) {
@@ -105,12 +105,12 @@ export function isSizeRefusal(err: unknown): err is FleetThrottleError {
   return err instanceof FleetThrottleError && /MiB|milli-vCPU|vCPU|tenant_memory|tenant_vcpu/i.test(err.message);
 }
 
-export function sizeFallbackNote(err: Error): string {
+export function sizeFallbackNote(err: Error, size: SandboxSize): string {
   const limit = err.message.match(/exceeds the (\d+) MiB permitted/);
   const standard = SANDBOX_SIZES.standard.memMib;
   return limit
-    ? `This repository asks for a large sandbox, but the fleet allows at most ${limit[1]} MiB; using 4 GB.`
-    : `This repository asks for a large sandbox, but the fleet refused that size; using ${standard / 1024} GB.`;
+    ? `This repository asks for ${SANDBOX_SIZES[size].label}, but the fleet allows at most ${limit[1]} MiB; using ${standard / 1024} GB.`
+    : `This repository asks for ${SANDBOX_SIZES[size].label}, but the fleet refused that size; using ${standard / 1024} GB.`;
 }
 
 /** Tell the person, in each open chat of the session. */

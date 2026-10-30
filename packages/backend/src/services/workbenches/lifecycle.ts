@@ -180,8 +180,8 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
   } catch (err) {
     // The tenant maximum refuses a size it cannot hold. Ask once for the standard box.
-    if (wanted !== 'large' || !isSizeRefusal(err)) throw err;
-    const text = sizeFallbackNote(err);
+    if (SANDBOX_SIZES[wanted].memMib <= SANDBOX_SIZES.standard.memMib || !isSizeRefusal(err)) throw err;
+    const text = sizeFallbackNote(err, wanted);
     recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
     await noteSizeFallback(row, text).catch(() => undefined);
     created = await createSandboxRetryingUncertain(target.client, withSize('standard'));
