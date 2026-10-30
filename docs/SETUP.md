@@ -35,36 +35,32 @@ Local endpoints (stable across restarts):
 - Studio: `http://127.0.0.1:54323`
 - Keys: `npx supabase status` prints the local anon + service_role keys
 
-One **dev-only** classic GitHub OAuth app backs this. Create it once in the browser
-(GitHub has no API for it) under GitHub → Settings → Developer settings → OAuth
-Apps → New OAuth App:
+One **dev-only** classic GitHub OAuth app backs desktop login. Create it once in the
+browser (GitHub has no API for it) under GitHub → Settings → Developer settings →
+OAuth Apps → New OAuth App:
 
 | Field | Value |
 |---|---|
 | Application name | anything, e.g. `talyn-dev` |
 | Homepage URL | anything, e.g. your fork's GitHub URL |
-| Redirect URI | `http://127.0.0.1:54321/auth/v1/callback` (desktop login via local Supabase auth) |
-| Redirect URI | `http://localhost:4747/api/v1/github/callback` (the workspace GitHub integration: PR monitoring etc.) |
-| Allow wildcard matching | off, on both |
+| Redirect URI | `http://127.0.0.1:54321/auth/v1/callback` |
+| Allow wildcard matching | off |
 | Enable Device Flow | off |
-| Expire user access tokens | **off** |
+| Expire user access tokens | off |
 
-**Turn "Expire user access tokens" off.** The backend refreshes user tokens only for
-the GitHub App flow; a classic OAuth token is never refreshed (`services/github.ts`,
-`refreshToken`), so with expiry on, PR monitoring stops after about 8 hours.
+Copy the client id, generate a client secret, and put them in the gitignored
+`supabase/.env` as `SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID` /
+`SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET`. The provider is wired up in
+`supabase/config.toml`. The dev desktop deep link `fastowl-dev://auth-callback` is
+already in `additional_redirect_urls` (dev builds use the `fastowl-dev://` scheme so
+the OAuth callback reopens your dev build instead of an installed production
+FastOwl.app).
 
-Copy the client id, generate a client secret, and put the same pair in two
-gitignored files:
-
-- `supabase/.env` as `SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID` / `SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET`.
-  The provider is wired up in `supabase/config.toml`. The dev desktop deep link
-  `fastowl-dev://auth-callback` is already in `additional_redirect_urls` (dev builds
-  use the `fastowl-dev://` scheme so the OAuth callback reopens your dev build
-  instead of an installed production FastOwl.app).
-- `packages/backend/.env` as `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`.
-
-(This used to be two apps, one per callback, from when GitHub allowed one redirect
-URI per OAuth app. Two separate apps still work if you already have them.)
+**This app is login only.** Connecting a workspace to GitHub (onboarding step 1,
+Settings → Integrations → GitHub) needs a dev **GitHub App** — see §3b. The
+classic-OAuth connect flow and its `/api/v1/github/callback` route are gone, so a
+second OAuth app, or a `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` pair in
+`packages/backend/.env`, no longer connects anything.
 
 `packages/backend/.env` and `apps/desktop/.env` must point at the local stack —
 never at Railway/prod values (those live only in Railway service variables).
