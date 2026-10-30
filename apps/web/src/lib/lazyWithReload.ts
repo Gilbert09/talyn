@@ -32,11 +32,12 @@ export function lazyWithReload<T extends ComponentType<any>>(
 }
 
 /** Reload the page unless that would not help. True when it reloads. */
-export function reloadForStaleChunk(now = Date.now()): boolean {
+export function reloadForStaleChunk(): boolean {
   // Offline, a reload lands on the browser's own error page — worse than the
   // boundary's card, which keeps the app shell.
   if (navigator.onLine === false) return false;
   try {
+    const now = Date.now();
     const last = Number(sessionStorage.getItem(RELOAD_AT_KEY));
     if (last && now - last < RELOAD_WINDOW_MS) return false;
     sessionStorage.setItem(RELOAD_AT_KEY, String(now));

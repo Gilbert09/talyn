@@ -18,15 +18,14 @@ afterEach(() => {
 });
 
 describe('reloadForStaleChunk', () => {
-  it('reloads once, then not again inside the window', () => {
-    expect(reloadForStaleChunk(1_000_000)).toBe(true);
-    expect(reloadForStaleChunk(1_030_000)).toBe(false);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
-
-  it('reloads again after the window has passed', () => {
-    expect(reloadForStaleChunk(1_000_000)).toBe(true);
-    expect(reloadForStaleChunk(1_061_000)).toBe(true);
+  it('reloads once per window', () => {
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000_000);
+    expect(reloadForStaleChunk()).toBe(true);
+    now.mockReturnValue(1_030_000);
+    expect(reloadForStaleChunk()).toBe(false);
+    now.mockReturnValue(1_061_000);
+    expect(reloadForStaleChunk()).toBe(true);
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
