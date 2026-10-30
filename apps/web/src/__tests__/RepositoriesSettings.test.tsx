@@ -44,6 +44,12 @@ test('shows summary pills and opens the detail without a trash icon', async () =
   expect(screen.getByText('Sessions')).toBeInTheDocument();
 });
 
+test('shows the selected size in the row', async () => {
+  getSize.mockResolvedValue({ setting: 'xlarge', effective: 'xlarge', detected: null });
+  render(<Row />);
+  expect(await screen.findByText('X-Large · 16 GB')).toBeInTheDocument();
+});
+
 test('saves size and preview choices, then confirms removal inline', async () => {
   const onRemove = vi.fn();
   render(<Row onRemove={onRemove} />);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, Github } from 'lucide-react';
-import type { RepositoryPreviewResponse, RepositorySandboxSizeResponse } from '@talyn/shared';
+import { SANDBOX_SIZES, type RepositoryPreviewResponse, type RepositorySandboxSizeResponse } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
@@ -35,7 +35,7 @@ export function WebRepoRow({ repo, open, onToggle, disabled, hasInstructions, on
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{repo.fullName}</span>
       <PollingOnlyBadge owner={repo.owner} />
       <span className="flex shrink-0 flex-wrap justify-end gap-1">
-        {size && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-size-pill">{size.effective === 'large' ? 'Large · 12 GB' : 'Standard · 4 GB'}{size.setting === 'auto' ? ' (auto)' : ''}</span>}
+        {size && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-size-pill">{SANDBOX_SIZES[size.effective].label}{size.setting === 'auto' ? ' (auto)' : ''}</span>}
         {previewsEnabled && preview?.target && preview.target !== 'off' && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-preview-pill">Preview: {preview.user?.target ?? 'auto'}</span>}
         {hasInstructions && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground" data-attr="settings-repo-instructions-pill">Instructions</span>}
       </span>

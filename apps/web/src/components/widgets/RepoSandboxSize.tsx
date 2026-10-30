@@ -48,8 +48,9 @@ export function RepoSandboxSize({ repositoryId, hideLabel = false, onInfoChange 
           onChange={(e) => void change(e.target.value as SandboxSizeSetting)}
         >
           <option value="auto">Auto</option>
-          <option value="standard">{SANDBOX_SIZES.standard.label}</option>
-          <option value="large">{SANDBOX_SIZES.large.label}</option>
+          {Object.entries(SANDBOX_SIZES).map(([size, config]) => (
+            <option key={size} value={size}>{config.label} — {config.hint}</option>
+          ))}
         </Select>
       </div>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}

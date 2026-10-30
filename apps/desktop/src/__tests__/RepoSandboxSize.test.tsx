@@ -14,14 +14,20 @@ describe('RepoSandboxSize', () => {
   beforeEach(() => { get.mockReset(); set.mockReset(); });
   afterEach(cleanup);
 
-  it('shows the three choices and the detected answer for Auto', async () => {
+  it('shows all five sizes with hints and the detected answer for Auto', async () => {
     get.mockResolvedValue(auto);
     render(<RepoSandboxSize repositoryId="r1" />);
     expect(await screen.findByLabelText('Sandbox size')).toHaveValue('auto');
     expect(screen.getByRole('option', { name: 'Auto' })).toBeTruthy();
-    expect(screen.getByRole('option', { name: 'Standard (4 GB)' })).toBeTruthy();
-    expect(screen.getByRole('option', { name: 'Large (12 GB)' })).toBeTruthy();
-    expect(screen.getByText(/Auto picks Large \(12 GB\): compose.yml runs kafka\./)).toBeTruthy();
+    expect([...screen.getAllByRole('option')].map((option) => [option.getAttribute('value'), option.textContent])).toEqual([
+      ['auto', 'Auto'],
+      ['small', 'Small · 2 GB — Docs and scripts'],
+      ['standard', 'Standard · 4 GB — Most repos'],
+      ['medium', 'Medium · 8 GB — Big builds, one database'],
+      ['large', 'Large · 12 GB — Full test stacks'],
+      ['xlarge', 'X-Large · 16 GB — The heaviest stacks'],
+    ]);
+    expect(screen.getByText(/Auto picks Large · 12 GB: compose.yml runs kafka\./)).toBeTruthy();
   });
 
   it('saves a choice and drops the Auto hint', async () => {

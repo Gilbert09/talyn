@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   detectSandboxSize, isComposeFileName, resolveSandboxSize, SANDBOX_SERVICES_NOTE, SANDBOX_SIZES, workbenchTurnPrompt,
-  type RepositorySandboxSizeResponse,
+  type RepositorySandboxSizeResponse, type SandboxSize,
 } from '@talyn/shared';
 import { repositories, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
@@ -69,9 +69,12 @@ describe('detectSandboxSize', () => {
 });
 
 describe('resolveSandboxSize', () => {
-  it.each<[Parameters<typeof resolveSandboxSize>[0], Parameters<typeof resolveSandboxSize>[1], 'standard' | 'large']>([
+  it.each<[Parameters<typeof resolveSandboxSize>[0], Parameters<typeof resolveSandboxSize>[1], SandboxSize]>([
+    ['small', 'large', 'small'],
     ['large', 'standard', 'large'],
     ['standard', 'large', 'standard'],
+    ['medium', 'large', 'medium'],
+    ['xlarge', 'standard', 'xlarge'],
     ['auto', 'large', 'large'],
     [undefined, 'large', 'large'],
     ['auto', 'standard', 'standard'],
@@ -79,6 +82,18 @@ describe('resolveSandboxSize', () => {
     [undefined, undefined, 'standard'],
   ])('setting %s with detection %s gives %s', (setting, detected, expected) => {
     expect(resolveSandboxSize(setting, detected)).toBe(expected);
+  });
+});
+
+describe('sandbox resources', () => {
+  it.each<[SandboxSize, number, number, string]>([
+    ['small', 2048, 2000, 'Small · 2 GB'],
+    ['standard', 4096, 4000, 'Standard · 4 GB'],
+    ['medium', 8192, 4000, 'Medium · 8 GB'],
+    ['large', 12288, 6000, 'Large · 12 GB'],
+    ['xlarge', 16384, 8000, 'X-Large · 16 GB'],
+  ])('%s has the expected resources and label', (size, memMib, milliVcpu, label) => {
+    expect(SANDBOX_SIZES[size]).toMatchObject({ memMib, milliVcpu, label });
   });
 });
 
@@ -92,7 +107,7 @@ describe('the prompt', () => {
 });
 
 describe('validateSandboxSizeChoice', () => {
-  it.each(['auto', 'standard', 'large'])('accepts %s', (value) => {
+  it.each(['auto', 'small', 'standard', 'medium', 'large', 'xlarge'])('accepts %s', (value) => {
     expect(validateSandboxSizeChoice({ sandboxSize: value })).toBe(value);
   });
   it.each<[string, unknown]>([
@@ -180,13 +195,10 @@ describe('sandbox size for a repository', () => {
     expect(await sizeForSession({ repositoryId: 'nope', workspaceId: 'ws' })).toBe('standard');
   });
 
-  it('lets the setting beat detection without reading GitHub', async () => {
-    await mergeSandboxSize('repo', { sandboxSize: 'standard' });
-    expect(await sizeForSession({ repositoryId: 'repo', workspaceId: 'ws' })).toBe('standard');
+  it.each<SandboxSize>(['small', 'standard', 'medium', 'large', 'xlarge'])('uses the %s setting without reading GitHub', async (size) => {
+    await mergeSandboxSize('repo', { sandboxSize: size });
+    expect(await sizeForSession({ repositoryId: 'repo', workspaceId: 'ws' })).toBe(size);
     expect(githubService.getRefSha).not.toHaveBeenCalled();
-    await mergeSandboxSize('repo', { sandboxSize: 'large' });
-    vi.mocked(githubService.getFileContent).mockResolvedValue({ content: 'services: {}', size: 1 });
-    expect(await sizeForSession({ repositoryId: 'repo', workspaceId: 'ws' })).toBe('large');
   });
 
   it('removes the setting when it goes back to auto and keeps the detection', async () => {
@@ -219,22 +231,23 @@ describe('sandbox size for a repository', () => {
     expect(fleet.created[0].policy).toEqual({ credentials: { github: 'none' } });
   });
 
-  it('creates a standard box when the setting says so', async () => {
-    await mergeSandboxSize('repo', { sandboxSize: 'standard' });
+  it.each<SandboxSize>(['small', 'standard', 'medium', 'large', 'xlarge'])('creates a %s box with its resources', async (size) => {
+    await mergeSandboxSize('repo', { sandboxSize: size });
     await create();
-    expect(fleet.created[0]).toMatchObject({ memMib: 4096, milliVcpu: 4000 });
+    expect(fleet.created[0]).toMatchObject({ memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu });
   });
 
-  it('asks again for a standard box when the fleet refuses the large one, and says so', async () => {
+  it.each<SandboxSize>(['medium', 'large', 'xlarge'])('asks again for standard when the fleet refuses %s', async (size) => {
+    await mergeSandboxSize('repo', { sandboxSize: size });
     const client = fleet.asClient();
     const real = client.createSandbox.bind(client);
-    const refuse = new FleetThrottleError('tenant_memory: 4096 MiB held + 12288 MiB requested exceeds the 10240 MiB permitted');
+    const refuse = new FleetThrottleError(`tenant_memory: 4096 MiB held + ${SANDBOX_SIZES[size].memMib} MiB requested exceeds the 10240 MiB permitted`);
     const spy = vi.spyOn(client, 'createSandbox').mockRejectedValueOnce(refuse);
     spy.mockImplementation(real);
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client });
     expect((await create()).ok).toBe(true);
     expect(spy).toHaveBeenCalledTimes(2);
-    expect(spy.mock.calls[0][0]).toMatchObject({ memMib: 12288 });
+    expect(spy.mock.calls[0][0]).toMatchObject({ memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu });
     expect(spy.mock.calls[1][0]).toMatchObject({ memMib: 4096, milliVcpu: 4000 });
   });
 
@@ -273,9 +286,10 @@ describe('sandbox size for a repository', () => {
       expect(res.body.data).toMatchObject({ setting: 'auto', effective: 'large', detected: { size: 'large', sha: 'sha1' } });
     });
 
-    it('saves a choice and returns it', async () => {
-      const res = await call('PATCH', '', { sandboxSize: 'standard' });
-      expect(res.body.data).toMatchObject({ setting: 'standard', effective: 'standard' });
+    it.each<SandboxSize>(['small', 'standard', 'medium', 'large', 'xlarge'])('saves %s and returns it', async (size) => {
+      const res = await call('PATCH', '', { sandboxSize: size });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ setting: size, effective: size });
       expect((await call('PATCH', '', { sandboxSize: 'auto' })).body.data).toMatchObject({ setting: 'auto' });
     });
 

@@ -218,6 +218,12 @@ test('shows summary pills and opens one detail panel', async () => {
   expect(screen.getByRole('button', { name: 'Edit instructions' })).toBeInTheDocument();
 });
 
+test('shows the selected size in the row', async () => {
+  sizeGet.mockResolvedValue({ setting: 'xlarge', effective: 'xlarge', detected: null });
+  render(<RepositoriesSettings />);
+  expect(await screen.findByText('X-Large · 16 GB')).toBeInTheDocument();
+});
+
 test('changes size and confirms removal inline', async () => {
   render(<RepositoriesSettings />);
   fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));

@@ -1,16 +1,16 @@
-/**
- * How big a session's sandbox is. Two sizes, one definition: the backend sizes
- * the box from it and both apps label it from it.
- */
-export type SandboxSize = 'standard' | 'large';
+/** The ordered sizes supply resources and labels to the backend and both apps. */
+export const SANDBOX_SIZES = {
+  small: { memMib: 2048, milliVcpu: 2000, label: 'Small · 2 GB', hint: 'Docs and scripts' },
+  standard: { memMib: 4096, milliVcpu: 4000, label: 'Standard · 4 GB', hint: 'Most repos' },
+  medium: { memMib: 8192, milliVcpu: 4000, label: 'Medium · 8 GB', hint: 'Big builds, one database' },
+  large: { memMib: 12288, milliVcpu: 6000, label: 'Large · 12 GB', hint: 'Full test stacks' },
+  xlarge: { memMib: 16384, milliVcpu: 8000, label: 'X-Large · 16 GB', hint: 'The heaviest stacks' },
+} as const;
+
+export type SandboxSize = keyof typeof SANDBOX_SIZES;
 export type SandboxSizeSetting = 'auto' | SandboxSize;
 
-export const SANDBOX_SIZES: Record<SandboxSize, { memMib: number; milliVcpu: number; label: string }> = {
-  standard: { memMib: 4096, milliVcpu: 4000, label: 'Standard (4 GB)' },
-  large: { memMib: 12288, milliVcpu: 6000, label: 'Large (12 GB)' },
-};
-
-export const SANDBOX_SIZE_SETTINGS: readonly SandboxSizeSetting[] = ['auto', 'standard', 'large'];
+export const SANDBOX_SIZE_SETTINGS: readonly SandboxSizeSetting[] = ['auto', ...(Object.keys(SANDBOX_SIZES) as SandboxSize[])];
 
 export function isSandboxSizeSetting(value: unknown): value is SandboxSizeSetting {
   return typeof value === 'string' && (SANDBOX_SIZE_SETTINGS as readonly string[]).includes(value);
@@ -35,7 +35,7 @@ export interface RepositorySandboxSizeResponse {
 
 /** Resolution order: the person's choice, then detection, then standard. */
 export function resolveSandboxSize(setting: SandboxSizeSetting | undefined, detected: SandboxSize | null | undefined): SandboxSize {
-  if (setting === 'standard' || setting === 'large') return setting;
+  if (setting && setting !== 'auto' && Object.hasOwn(SANDBOX_SIZES, setting)) return setting;
   return detected ?? 'standard';
 }
 
