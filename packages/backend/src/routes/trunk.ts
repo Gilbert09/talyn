@@ -5,6 +5,7 @@ import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
+  isTrunkApiKey,
   removeTrunkToken,
   storeTrunkToken,
   trunkStatus,
@@ -18,16 +19,15 @@ import {
 /**
  * Trunk merge ETAs, behind the `trunk-merge-eta` flag.
  *
- *   GET    /trunk/status?workspaceId=          is a token set (never the token)
- *   PUT    /trunk/token        { workspaceId, token }
+ *   GET    /trunk/status?workspaceId=          is a key set (never the key)
+ *   PUT    /trunk/token        { workspaceId, token }   a Trunk v2 API key
  *   DELETE /trunk/token?workspaceId=
  *   GET    /pull-requests/:id/merge-eta        Trunk's ETA for one PR
  */
 
 /**
- * The PR columns the ETA needs. The landing branch and the labels are read out
- * of `last_summary` in SQL, so the blob itself never ships. The branch mirrors
- * `prLandingBranch`: a stack's base when there is one, else the PR's own base.
+ * The PR columns the ETA needs. The labels are read out of `last_summary` in
+ * SQL, so the blob itself never ships.
  */
 const MERGE_ETA_COLUMNS = {
   id: pullRequestsTable.id,
@@ -36,11 +36,10 @@ const MERGE_ETA_COLUMNS = {
   repo: pullRequestsTable.repo,
   number: pullRequestsTable.number,
   state: pullRequestsTable.state,
-  landingBranch: sql<string | null>`COALESCE(NULLIF(${pullRequestsTable.lastSummary} -> 'stack' ->> 'baseRefName', ''), ${pullRequestsTable.lastSummary} ->> 'baseBranch')`,
   labels: sql<unknown>`${pullRequestsTable.lastSummary} -> 'labels'`,
 } as const;
 
-// The token goes into an HTTP header, so it must be visible ASCII with no spaces.
+// The key goes into an HTTP header, so it must be visible ASCII with no spaces.
 const TOKEN_SHAPE = /^[\x21-\x7e]+$/;
 
 async function refuseUnlessEnabled(req: Request, res: Response): Promise<boolean> {
@@ -80,7 +79,14 @@ export function trunkRoutes(): Router {
     if (!trimmed || !TOKEN_SHAPE.test(trimmed)) {
       return res
         .status(400)
-        .json({ success: false, error: 'Paste the Trunk organization API token, with no spaces.' });
+        .json({ success: false, error: 'Paste the Trunk API key, with no spaces.' });
+    }
+    if (!isTrunkApiKey(trimmed)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'That is not a Trunk v2 API key, which starts with trunk_v2_. Create one in Trunk under Settings → Developer → API Keys. The v1 organization API token no longer works.',
+      });
     }
     if (await refuseUnlessEnabled(req, res)) return;
     try {
@@ -91,9 +97,9 @@ export function trunkRoutes(): Router {
     try {
       await storeTrunkToken(workspaceId, trimmed);
     } catch (err) {
-      // Most likely TALYN_TOKEN_KEY is not set. The message never holds the token.
-      console.error('[trunk] failed to store the token:', err instanceof Error ? err.message : err);
-      return res.status(500).json({ success: false, error: 'Could not store the Trunk token.' });
+      // Most likely TALYN_TOKEN_KEY is not set. The message never holds the key.
+      console.error('[trunk] failed to store the key:', err instanceof Error ? err.message : err);
+      return res.status(500).json({ success: false, error: 'Could not store the Trunk API key.' });
     }
     clearMergeEtaCache(workspaceId);
     res.json({ success: true, data: await trunkStatus(workspaceId) } as ApiResponse<TrunkIntegrationStatus>);

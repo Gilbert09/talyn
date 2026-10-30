@@ -169,7 +169,7 @@ describe('TrunkSettingsCard', () => {
     jest.spyOn(api.trunk, 'getStatus').mockResolvedValue({ connected: false, needsReauth: false });
     render(<TrunkSettingsCard />);
     await waitFor(() =>
-      expect(screen.getByLabelText('Trunk organization API token')).toBeInTheDocument()
+      expect(screen.getByLabelText('Trunk API key')).toBeInTheDocument()
     );
     expect(screen.queryByText('Connected')).toBeNull();
   });
@@ -179,8 +179,8 @@ describe('TrunkSettingsCard', () => {
     jest.spyOn(api.trunk, 'getStatus').mockResolvedValue({ connected: true, needsReauth: false });
     render(<TrunkSettingsCard />);
     await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
-    expect(screen.getByText('Replace token')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Trunk organization API token')).toBeNull();
+    expect(screen.getByText('Replace key')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Trunk API key')).toBeNull();
   });
 
   it('asks for a reconnect when Trunk refused the token', async () => {

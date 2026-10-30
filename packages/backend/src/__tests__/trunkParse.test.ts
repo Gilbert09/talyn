@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseTrunkEstimate,
+  parseTrunkPullRequest,
   parseTrunkQueueState,
-  parseTrunkSubmittedPullRequest,
+  parseTrunkRepositoryId,
 } from '../services/trunk/parse.js';
-import { getSubmittedPullRequestBody } from '../services/trunk/client.js';
 
 /**
- * Trunk's ETA block is not in its published OpenAPI spec yet, so the parser
- * trusts nothing about it. These pin the two promises that follow: a malformed
- * answer is "no ETA" (never a throw), and an enum value we do not know is
- * `unknown` (never a guess).
+ * Trunk may add enum members and fields within v2, so the parser trusts
+ * nothing. These pin the two promises that follow: a malformed answer is "no
+ * ETA" (never a throw), and an enum value we do not know is `unknown` (never a
+ * guess).
  */
 
 const AVAILABLE = {
@@ -18,7 +18,7 @@ const AVAILABLE = {
   computedAt: '2026-10-23T12:00:00.000Z',
   kind: 'merge',
   estimatedAt: '2026-10-23T12:20:00.000Z',
-  estimatedAtState: 'on_track',
+  estimatedAtState: 'onTrack',
   confidence: 'high',
   pullRequestsAhead: 2,
   waitingForPullRequestNumbers: [],
@@ -26,7 +26,7 @@ const AVAILABLE = {
   startsTestingAt: '2026-10-23T12:05:00.000Z',
   startsTestingAtState: 'holding',
   testsFinishAt: '2026-10-23T12:15:00.000Z',
-  testsFinishAtState: 'on_track',
+  testsFinishAtState: 'onTrack',
   typicalTestDurationSeconds: 600,
 };
 
@@ -67,17 +67,13 @@ describe('parseTrunkEstimate', () => {
   });
 
   it.each([
-    ['on_track', 'on_track'],
+    ['onTrack', 'on_track'],
     ['holding', 'holding'],
-    ['ON_TRACK', 'on_track'],
-    ['behind', 'behind'],
-    ['late', 'behind'],
-    ['running_late', 'behind'],
-    ['overdue', 'behind'],
-    ['delayed', 'behind'],
-    ['taking_longer_than_usual', 'behind'],
+    ['pastTypical', 'behind'],
+    ['pastP95', 'behind'],
+    ['on_track', 'unknown'],
+    ['ontrack', 'unknown'],
     ['ahead', 'unknown'],
-    ['stalled', 'unknown'],
     ['', 'unknown'],
     [7, 'unknown'],
     [null, 'unknown'],
@@ -152,21 +148,22 @@ describe('parseTrunkEstimate', () => {
 
 describe('parseTrunkQueueState', () => {
   it.each([
-    'not_ready',
-    'pending',
-    'testing',
-    'tests_passed',
-    'merged',
-    'failed',
-    'cancelled',
-    'pending_failure',
-  ])('keeps the documented state %s', (state) => {
-    expect(parseTrunkQueueState(state)).toBe(state);
+    ['notReady', 'not_ready'],
+    ['pending', 'pending'],
+    ['testing', 'testing'],
+    ['testsPassed', 'tests_passed'],
+    ['merged', 'merged'],
+    ['failed', 'failed'],
+    ['cancelled', 'cancelled'],
+    ['pendingFailure', 'pending_failure'],
+  ])('maps the documented state %s to %s', (state, expected) => {
+    expect(parseTrunkQueueState(state)).toBe(expected);
   });
 
   it.each([
     ['an undocumented state', 'bisecting', 'unknown'],
     ['a different case', 'TESTING', 'unknown'],
+    ['a v1 spelling', 'tests_passed', 'unknown'],
     ['an empty string', '', null],
     ['a number', 3, null],
     ['null', null, null],
@@ -175,56 +172,65 @@ describe('parseTrunkQueueState', () => {
   });
 });
 
-describe('parseTrunkSubmittedPullRequest', () => {
-  it('reads the state, the change time, the submission flag and the ETA', () => {
-    expect(
-      parseTrunkSubmittedPullRequest({
-        id: 'entry-1',
-        state: 'testing',
-        stateChangedAt: '2026-10-23T12:05:00.000Z',
-        isCurrentlySubmittedToQueue: true,
-        prNumber: 7,
-        estimatedTimeToMerge: AVAILABLE,
-      })
-    ).toEqual({
+describe('parseTrunkRepositoryId', () => {
+  it('reads the first repository on the page', () => {
+    expect(parseTrunkRepositoryId({ data: [{ id: 'repo-uuid', path: 'PostHog/posthog' }] })).toBe(
+      'repo-uuid'
+    );
+  });
+
+  it.each([null, 'oops', {}, { data: [] }, { data: 'x' }, { data: [{ id: 7 }] }])(
+    'answers null for %j',
+    (raw) => {
+      expect(parseTrunkRepositoryId(raw)).toBeNull();
+    }
+  );
+});
+
+describe('parseTrunkPullRequest', () => {
+  const QUEUED = {
+    id: 'pr-uuid',
+    repositoryId: 'repo-uuid',
+    number: 7,
+    isCurrentlySubmittedToQueue: true,
+    queueEntry: { id: 'entry-1', state: 'testing', stateChangedAt: '2026-10-23T12:05:00.000Z' },
+  };
+
+  it('reads the id, the queue state, the change time and the submission flag', () => {
+    expect(parseTrunkPullRequest({ data: [QUEUED] }, 7)).toEqual({
+      id: 'pr-uuid',
       queueState: 'testing',
       stateChangedAt: '2026-10-23T12:05:00.000Z',
       isCurrentlySubmitted: true,
-      eta: parseTrunkEstimate(AVAILABLE),
     });
   });
 
-  it('answers the response without an ETA block (an older Trunk) with eta null', () => {
-    expect(
-      parseTrunkSubmittedPullRequest({ state: 'pending', isCurrentlySubmittedToQueue: true })
-    ).toEqual({ queueState: 'pending', stateChangedAt: null, isCurrentlySubmitted: true, eta: null });
+  it('picks the row with the asked number, not the first row', () => {
+    const other = { ...QUEUED, id: 'other', number: 6 };
+    expect(parseTrunkPullRequest({ data: [other, QUEUED] }, 7)?.id).toBe('pr-uuid');
   });
 
-  it.each([null, undefined, 'oops', 42, [], true])('never throws on %j', (raw) => {
-    expect(parseTrunkSubmittedPullRequest(raw)).toEqual({
+  it('reads a PR that was never submitted (no queue entry) with no state', () => {
+    const { queueEntry: _entry, ...never } = QUEUED;
+    expect(parseTrunkPullRequest({ data: [{ ...never, isCurrentlySubmittedToQueue: false }] }, 7)).toEqual({
+      id: 'pr-uuid',
       queueState: null,
       stateChangedAt: null,
-      isCurrentlySubmitted: null,
-      eta: null,
+      isCurrentlySubmitted: false,
     });
   });
+
+  it.each([null, undefined, 'oops', 42, [], true, { data: [] }, { data: [QUEUED] }])(
+    'answers null for %j when number 8 is not on the page',
+    (raw) => {
+      expect(parseTrunkPullRequest(raw, 8)).toBeNull();
+    }
+  );
 
   it('reads a non-boolean submission flag as unknown', () => {
     expect(
-      parseTrunkSubmittedPullRequest({ isCurrentlySubmittedToQueue: 'false' }).isCurrentlySubmitted
+      parseTrunkPullRequest({ data: [{ ...QUEUED, isCurrentlySubmittedToQueue: 'false' }] }, 7)
+        ?.isCurrentlySubmitted
     ).toBeNull();
-  });
-});
-
-describe('the request body', () => {
-  it('matches the spec’s by-number shape and asks for the ETA', () => {
-    expect(
-      getSubmittedPullRequestBody({ owner: 'PostHog', repo: 'posthog', number: 123, targetBranch: 'master' })
-    ).toEqual({
-      repo: { host: 'github.com', owner: 'PostHog', name: 'posthog' },
-      pr: { number: 123 },
-      targetBranch: 'master',
-      includeEstimatedTimeToMerge: true,
-    });
   });
 });

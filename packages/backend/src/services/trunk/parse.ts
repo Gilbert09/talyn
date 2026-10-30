@@ -6,46 +6,40 @@ import type {
 } from '@talyn/shared';
 
 /**
- * Parsing Trunk's `getSubmittedPullRequest` answer.
+ * Parsing Trunk's v2 answers into the shared vocabulary.
  *
- * The ETA block (`estimatedTimeToMerge`) is not in Trunk's published OpenAPI
- * spec yet, so nothing here trusts its shape. Every field is optional, a wrong
- * type reads as absent, and an enum value we do not know reads as `unknown`.
- * The parser never throws: a malformed answer is "no ETA", not a 500.
+ * Trunk may add enum members and fields within v2, so nothing here fails on one
+ * it does not know: a wrong type reads as absent, an unknown enum value reads as
+ * `unknown`, and no parser throws. A malformed answer is "no ETA", not a 500.
  */
 
-/** What the merge-eta route needs out of one answer. */
+/** What the merge-eta route needs out of Trunk's pull-request record. */
 export interface ParsedTrunkPullRequest {
+  /** Trunk's own id for the PR, which the estimate is addressed by. */
+  id: string | null;
   queueState: TrunkQueueState | null;
   stateChangedAt: string | null;
   /** Trunk's own "is this PR in the queue now". Null when absent. */
   isCurrentlySubmitted: boolean | null;
-  eta: TrunkMergeEta | null;
 }
 
-const QUEUE_STATES: ReadonlySet<string> = new Set([
-  'not_ready',
-  'pending',
-  'testing',
-  'tests_passed',
-  'merged',
-  'failed',
-  'cancelled',
-  'pending_failure',
-]);
+const QUEUE_STATES: Readonly<Record<string, TrunkQueueState>> = {
+  notReady: 'not_ready',
+  pending: 'pending',
+  testing: 'testing',
+  testsPassed: 'tests_passed',
+  merged: 'merged',
+  failed: 'failed',
+  cancelled: 'cancelled',
+  pendingFailure: 'pending_failure',
+};
 
-// Only values that clearly mean late. A guess here would draw "running long"
-// on an estimate that is fine, so an unlisted value stays `unknown`.
-const BEHIND_VALUES: ReadonlySet<string> = new Set([
-  'behind',
-  'late',
-  'running_late',
-  'running_long',
-  'overdue',
-  'delayed',
-  'overrun',
-  'taking_longer_than_usual',
-]);
+const PACES: Readonly<Record<string, TrunkEtaPace>> = {
+  onTrack: 'on_track',
+  holding: 'holding',
+  pastTypical: 'behind',
+  pastP95: 'behind',
+};
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -66,27 +60,52 @@ function count(x: unknown): number | null {
 }
 
 function pace(x: unknown): TrunkEtaPace {
-  const s = str(x)?.toLowerCase();
-  if (!s) return 'unknown';
-  if (s === 'on_track' || s === 'holding') return s;
-  return BEHIND_VALUES.has(s) ? 'behind' : 'unknown';
+  const s = str(x);
+  return (s !== null && PACES[s]) || 'unknown';
 }
 
 function confidence(x: unknown): TrunkEtaConfidence {
-  const s = str(x)?.toLowerCase();
+  const s = str(x);
   return s === 'high' || s === 'medium' || s === 'low' ? s : 'unknown';
+}
+
+function pageRows(raw: unknown): Record<string, unknown>[] {
+  if (!isRecord(raw) || !Array.isArray(raw.data)) return [];
+  return raw.data.filter(isRecord);
 }
 
 export function parseTrunkQueueState(x: unknown): TrunkQueueState | null {
   const s = str(x);
   if (s === null) return null;
-  return QUEUE_STATES.has(s) ? (s as TrunkQueueState) : 'unknown';
+  return QUEUE_STATES[s] ?? 'unknown';
+}
+
+/** The repository id out of a `GET /v2/repositories` page, or null. */
+export function parseTrunkRepositoryId(raw: unknown): string | null {
+  return str(pageRows(raw)[0]?.id);
 }
 
 /**
- * The ETA block alone. Null unless `status` is exactly `available` AND at least
- * one of the three predicted times is a real time — an "available" estimate
- * with no time in it has nothing to count down to.
+ * The record for PR `number` out of a `GET /v2/pull-requests` page, or null
+ * when Trunk has not indexed it.
+ */
+export function parseTrunkPullRequest(raw: unknown, number: number): ParsedTrunkPullRequest | null {
+  const row = pageRows(raw).find((r) => r.number === number);
+  if (!row) return null;
+  const entry = isRecord(row.queueEntry) ? row.queueEntry : null;
+  return {
+    id: str(row.id),
+    queueState: entry ? parseTrunkQueueState(entry.state) : null,
+    stateChangedAt: entry ? time(entry.stateChangedAt) : null,
+    isCurrentlySubmitted:
+      typeof row.isCurrentlySubmittedToQueue === 'boolean' ? row.isCurrentlySubmittedToQueue : null,
+  };
+}
+
+/**
+ * A `queue-entry-estimate` answer. Null unless `status` is exactly `available`
+ * AND at least one of the three predicted times is a real time — an
+ * "available" estimate with no time in it has nothing to count down to.
  */
 export function parseTrunkEstimate(raw: unknown): TrunkMergeEta | null {
   if (!isRecord(raw) || raw.status !== 'available') return null;
@@ -113,19 +132,5 @@ export function parseTrunkEstimate(raw: unknown): TrunkMergeEta | null {
     testsFinishAt,
     testsFinishAtState: pace(raw.testsFinishAtState),
     typicalTestDurationSeconds: count(raw.typicalTestDurationSeconds),
-  };
-}
-
-/** The whole answer. Accepts anything; never throws. */
-export function parseTrunkSubmittedPullRequest(raw: unknown): ParsedTrunkPullRequest {
-  if (!isRecord(raw)) {
-    return { queueState: null, stateChangedAt: null, isCurrentlySubmitted: null, eta: null };
-  }
-  return {
-    queueState: parseTrunkQueueState(raw.state),
-    stateChangedAt: time(raw.stateChangedAt),
-    isCurrentlySubmitted:
-      typeof raw.isCurrentlySubmittedToQueue === 'boolean' ? raw.isCurrentlySubmittedToQueue : null,
-    eta: parseTrunkEstimate(raw.estimatedTimeToMerge),
   };
 }

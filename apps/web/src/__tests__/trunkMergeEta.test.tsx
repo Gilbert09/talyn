@@ -190,7 +190,7 @@ describe('TrunkSettingsCard', () => {
     setFlag(true);
     getStatus.mockResolvedValue({ connected: false, needsReauth: false });
     render(<TrunkSettingsCard />);
-    await waitFor(() => expect(screen.getByLabelText('Trunk organization API token')).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText('Trunk API key')).toBeTruthy());
     expect(screen.queryByText('Connected')).toBeNull();
   });
 
@@ -199,8 +199,8 @@ describe('TrunkSettingsCard', () => {
     getStatus.mockResolvedValue({ connected: true, needsReauth: false });
     render(<TrunkSettingsCard />);
     await waitFor(() => expect(screen.getByText('Connected')).toBeTruthy());
-    expect(screen.getByText('Replace token')).toBeTruthy();
-    expect(screen.queryByLabelText('Trunk organization API token')).toBeNull();
+    expect(screen.getByText('Replace key')).toBeTruthy();
+    expect(screen.queryByLabelText('Trunk API key')).toBeNull();
   });
 
   it('asks for a reconnect when Trunk refused the token', async () => {
