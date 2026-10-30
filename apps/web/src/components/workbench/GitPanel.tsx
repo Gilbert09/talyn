@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import type { PRRow } from '../../lib/api';
@@ -9,7 +9,8 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { ChangesTab } from './ChangesTab';
 import { FilesTab } from './FilesTab';
 import { PullRequestTab } from './PullRequestTab';
-const TerminalPanel = lazy(() =>
+import { lazyWithReload } from '../../lib/lazyWithReload';
+const TerminalPanel = lazyWithReload(() =>
   import('./terminal/TerminalPanel').then((module) => ({
     default: module.TerminalPanel,
   })),

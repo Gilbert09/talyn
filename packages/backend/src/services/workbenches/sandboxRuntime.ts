@@ -135,13 +135,18 @@ export function providerForAgent(agent: string): 'anthropic' | 'openai' {
 /** The variables every script and turn in this workbench gets. */
 export function sandboxScriptEnv(row: WorkbenchRow): Record<string, string> {
   const dir = repoDirFor(row);
-  return workbenchEnv({
-    workbenchPath: dir,
-    rootPath: dir,
-    name: row.name,
-    port: SANDBOX_PORT_BASE,
-    defaultBranch: row.baseBranch,
-  });
+  return {
+    ...workbenchEnv({
+      workbenchPath: dir,
+      rootPath: dir,
+      name: row.name,
+      port: SANDBOX_PORT_BASE,
+      defaultBranch: row.baseBranch,
+    }),
+    // The id Talyn's MCP tools take. The skill pack tells the agent to read it
+    // here rather than search `talyn_list_sessions` for its own branch.
+    TALYN_SESSION_ID: row.id,
+  };
 }
 
 // ============================================================================

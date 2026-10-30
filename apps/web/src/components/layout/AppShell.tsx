@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { useRouteUrlSync } from '../../hooks/useRouteUrlSync';
 import { AppSidebar } from './AppSidebar';
@@ -24,6 +24,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
+import { lazyWithReload } from '../../lib/lazyWithReload';
 
 export function AppShell() {
   const paletteOpen = useNavigationStore((s) => s.paletteOpen);
@@ -125,12 +126,12 @@ function useWorkbenchList(): void {
   }, [route, workbenches, listLoaded, offered]);
 }
 
-const CommandPalette = lazy(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));
+const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));
 
-const WorkbenchPage = lazy(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
+const WorkbenchPage = lazyWithReload(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
 
-const SettingsPanel = lazy(() => import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel })));
+const SettingsPanel = lazyWithReload(() => import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel })));
 
-const McpServersPanel = lazy(() =>
+const McpServersPanel = lazyWithReload(() =>
   import('../panels/mcpServers/McpServersPanel').then((m) => ({ default: m.McpServersPanel }))
 );

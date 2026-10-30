@@ -1,13 +1,14 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, X } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { FileIcon } from './FileIcon';
+import { lazyWithReload } from '../../lib/lazyWithReload';
 
 // Monaco is large, so it loads only when a file opens.
-const CodeViewer = lazy(() => import('./CodeViewer'));
+const CodeViewer = lazyWithReload(() => import('./CodeViewer'));
 
 /** Every file on the branch as a tree, and a read-only viewer for the one picked. */
 export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; ops: WorkbenchOps; visible: boolean }) {

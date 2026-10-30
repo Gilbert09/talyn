@@ -1,13 +1,14 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useNavigationStore, type AutomationTab } from '../stores/navigation';
 import { AUTOMATION_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-const WorkflowsPanel = lazy(() =>
+import { lazyWithReload } from '../lib/lazyWithReload';
+const WorkflowsPanel = lazyWithReload(() =>
   import('../components/panels/workflows/WorkflowsPanel').then((m) => ({ default: m.WorkflowsPanel }))
 );
-const LoopsPanel = lazy(() => import('../components/panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel })));
+const LoopsPanel = lazyWithReload(() => import('../components/panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel })));
 
 export function AutomationsView({ tab }: { tab: AutomationTab }) {
   const features = useWorkspaceStore((s) => s.features);

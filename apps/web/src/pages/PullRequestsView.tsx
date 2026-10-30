@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
 import { useNavigationStore, type PrTab } from '../stores/navigation';
 import { usePrBadgeCounts } from '../hooks/usePrBadgeCounts';
 import { PR_PAGE_TABS, PR_TAB_LABEL } from '../lib/routeLabels';
@@ -7,9 +7,10 @@ import { PageHeader } from '../components/ui/page-header';
 import { MyPRsPanel } from '../components/panels/github/MyPRsPanel';
 import { ReviewsPanel } from '../components/panels/github/ReviewsPanel';
 import { MergeQueuePanel } from '../components/panels/github/MergeQueuePanel';
+import { lazyWithReload } from '../lib/lazyWithReload';
 
-const QueuePanel = lazy(() => import('../components/panels/QueuePanel').then((m) => ({ default: m.QueuePanel })));
-const CodeReviewsPanel = lazy(() =>
+const QueuePanel = lazyWithReload(() => import('../components/panels/QueuePanel').then((m) => ({ default: m.QueuePanel })));
+const CodeReviewsPanel = lazyWithReload(() =>
   import('../components/panels/codeReview/CodeReviewsPanel').then((m) => ({ default: m.CodeReviewsPanel }))
 );
 

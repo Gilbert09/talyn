@@ -605,6 +605,12 @@ export interface WorkspaceSettings {
   /** Prefix for every new session branch Talyn names (e.g. `tom/`). Empty or unset: none. */
   sessionBranchPrefix?: string;
   /**
+   * Whether session sandboxes get Talyn's built-in skills (`TALYN_SKILL_PACK`),
+   * written into the agent's skills directory before each turn. Unset or
+   * `true`: on. `false` removes them from the box on the next turn.
+   */
+  sessionSkillPack?: boolean;
+  /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and
    * backend auto-fixes fall back to a deterministic order); unset = auto
