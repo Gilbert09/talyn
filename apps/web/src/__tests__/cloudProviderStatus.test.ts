@@ -26,7 +26,7 @@ describe('cloudProviderStatus', () => {
     [
       'a rejected sign-in on one agent',
       { connected: true, connectedAgents: ['claude', 'codex'], reauthAgents: ['codex'] },
-      { tone: 'reauth', agents: ['claude', 'codex'], detail: 'Reconnect Codex' },
+      { tone: 'reauth', agents: ['claude', 'codex'], detail: 'Reconnect needed: Codex' },
     ],
     [
       'an agent this build has never heard of',
