@@ -57,6 +57,7 @@ import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
+import { useWorkspaceStore } from '../../../stores/workspace';
 
 /**
  * Shared PR table used by all three GitHub pages. The `variant` picks the
@@ -507,10 +508,29 @@ const PRTableRow = React.memo(function PRTableRow({
   // Stopped for a person. Actionable like a failure — the badge must show —
   // but styled and worded as a question, not a breakage.
   const taskNeedsHuman = taskStatus === 'needs_human';
+  const taskReason = useWorkspaceStore((s) =>
+    s.tasks?.find((task) => task.id === row.taskId)?.result?.needsHuman?.reason
+  );
+  const shortTaskReason =
+    typeof taskReason === 'string' && taskReason.trim()
+      ? taskReason.replace(/\s+/g, ' ').trim().slice(0, 160)
+      : 'Needs a person to continue.';
+  const taskNeedsHumanTitle = `The agent stopped: ${shortTaskReason}`;
   // A failing check only a person can clear (PostHog Visual Review). Read off
   // the PR's own checks, so it shows on every open PR — not only on one the
   // queue, auto-keep or a linked task happens to be looking at.
   const humanGates = row.state === 'open' ? (summary.humanGates ?? []) : [];
+  const queueNeedsHuman =
+    row.mergeQueued &&
+    (variant === 'queue'
+      ? row.mergeQueue?.status === 'blocked'
+      : coarseQueueStatus(row.mergeQueue?.status ?? 'queued') === 'blocked') &&
+    queueBlockNeedsHuman(row.mergeQueue?.blockedCode) &&
+    !(humanGates.length > 0 && row.mergeQueue?.blockedCode === 'awaiting_human_check');
+  const prNeedsHuman =
+    humanGates.length > 0 ||
+    (row.autoKeepMergeable && !!row.autoMergeState?.needsHuman) ||
+    queueNeedsHuman;
   // The badge only shows while there's something actionable: a run in
   // flight or a failure to look at. A cleanly completed task (or one not
   // loaded in the store, which in practice means it's long done) renders
@@ -804,7 +824,7 @@ const PRTableRow = React.memo(function PRTableRow({
               {/* Linked-task indicator — "Working" (spinner) while running,
                   "Failed" if it errored/was cancelled. Hidden once the task
                   completes cleanly. Deep-links to the run. */}
-              {row.taskId && (taskRunning || taskFailed || taskNeedsHuman) && (
+              {row.taskId && (taskRunning || taskFailed || (taskNeedsHuman && !prNeedsHuman)) && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -832,7 +852,7 @@ const PRTableRow = React.memo(function PRTableRow({
                     taskRunning
                       ? 'A task is working this PR — click to open it'
                       : taskNeedsHuman
-                      ? 'The run stopped and needs a person — click to open it'
+                      ? `${taskNeedsHumanTitle} — click to open it`
                       : taskStopped
                       ? 'The linked task was stopped — click to open it'
                       : 'The linked task failed — click to open it'
@@ -864,10 +884,14 @@ const PRTableRow = React.memo(function PRTableRow({
                     else onSelect();
                   }}
                   className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
-                  title={humanGateTitle(humanGates)}
+                  title={
+                    taskNeedsHuman
+                      ? `${taskNeedsHumanTitle}\n${humanGateTitle(humanGates)}`
+                      : humanGateTitle(humanGates)
+                  }
                 >
                   <UserRoundCheck className="h-2.5 w-2.5" />
-                  Needs human
+                  {taskNeedsHuman ? 'Needs you' : 'Needs human'}
                 </button>
               )}
               {/* Auto-keep-mergeable watcher indicator. "Watching" while armed,
@@ -885,7 +909,10 @@ const PRTableRow = React.memo(function PRTableRow({
                   // moment the blockers change.
                   <span
                     className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                    title={`The run stopped and needs you: ${row.autoMergeState.needsHuman.reason}`}
+                    title={
+                      (taskNeedsHuman ? `${taskNeedsHumanTitle}\n` : '') +
+                      `The run stopped and needs you: ${row.autoMergeState.needsHuman.reason}`
+                    }
                   >
                     <UserRoundCheck className="h-2.5 w-2.5" />
                     Needs you
@@ -1012,9 +1039,10 @@ const PRTableRow = React.memo(function PRTableRow({
                           <span
                             className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
                             title={
-                              reason
+                              (taskNeedsHuman ? `${taskNeedsHumanTitle}\n` : '') +
+                              (reason
                                 ? `The merge queue is waiting on you — ${reason} It picks this PR back up on its own once that clears.`
-                                : 'The merge queue is waiting on you — it picks this PR back up on its own once that clears'
+                                : 'The merge queue is waiting on you — it picks this PR back up on its own once that clears')
                             }
                           >
                             <UserRoundCheck className="h-2.5 w-2.5" />
@@ -1121,7 +1149,11 @@ const PRTableRow = React.memo(function PRTableRow({
         </td>
       ) : variant === 'queue' ? (
         <>
-          <QueueCell row={row} parentStatus={parentStatus} />
+          <QueueCell
+            row={row}
+            parentStatus={parentStatus}
+            taskNeedsHumanTitle={taskNeedsHuman ? taskNeedsHumanTitle : undefined}
+          />
           <td className="px-2 py-2">
             <PRStatusPill
               blockingReason={summary.blockingReason}
@@ -1514,9 +1546,11 @@ const PRTableRow = React.memo(function PRTableRow({
 function QueueCell({
   row,
   parentStatus,
+  taskNeedsHumanTitle,
 }: {
   row: PRRow;
   parentStatus?: NonNullable<PRRow['mergeQueue']>['status'];
+  taskNeedsHumanTitle?: string;
 }) {
   const v2 = row.mergeQueue;
   const pos = v2?.position ?? 0;
@@ -1689,6 +1723,7 @@ function QueueCell({
               <span
                 className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
                 title={
+                  (taskNeedsHumanTitle ? `${taskNeedsHumanTitle}\n` : '') +
                   (v2.reason ?? 'The merge queue is waiting on you.') +
                   ' It picks this PR back up on its own once that clears.'
                 }

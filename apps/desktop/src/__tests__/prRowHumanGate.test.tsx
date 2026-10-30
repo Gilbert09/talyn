@@ -16,8 +16,13 @@ import { openExternal } from '../renderer/lib/openExternal';
 
 jest.mock('../renderer/lib/api', () => ({ api: {} }));
 jest.mock('../renderer/hooks/useSkills', () => ({ useSkills: jest.fn() }));
+let taskReason: string | undefined;
 jest.mock('../renderer/stores/workspace', () => ({
-  useWorkspaceStore: () => ({ currentWorkspaceId: 'ws1' }),
+  useWorkspaceStore: (selector: (state: { currentWorkspaceId: string; tasks: unknown[] }) => unknown) =>
+    selector({
+      currentWorkspaceId: 'ws1',
+      tasks: [{ id: 'task1', result: { needsHuman: { reason: taskReason } } }],
+    }),
 }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -76,7 +81,11 @@ function row(over: Partial<PRRow> = {}, humanGates?: PRHumanGate[]): PRRow {
   } as PRRow;
 }
 
-function renderRows(rows: PRRow[], variant: 'mine' | 'queue' = 'mine') {
+function renderRows(
+  rows: PRRow[],
+  variant: 'mine' | 'queue' = 'mine',
+  taskStatusById = new Map<string, 'needs_human'>(),
+) {
   render(
     <PRTable
       rows={rows}
@@ -89,7 +98,7 @@ function renderRows(rows: PRRow[], variant: 'mine' | 'queue' = 'mine') {
       onMerge={jest.fn()}
       onSetMergeQueue={jest.fn()}
       onCreatePostHogTask={jest.fn()}
-      taskStatusById={new Map()}
+      taskStatusById={taskStatusById}
     />,
   );
 }
@@ -97,6 +106,7 @@ function renderRows(rows: PRRow[], variant: 'mine' | 'queue' = 'mine') {
 afterEach(() => {
   cleanup();
   jest.clearAllMocks();
+  taskReason = undefined;
 });
 
 describe('PR row — Needs human chip', () => {
@@ -106,6 +116,64 @@ describe('PR row — Needs human chip', () => {
     const chip = screen.getByText('Needs human', { selector: 'button' });
     expect(chip).toBeInTheDocument();
     expect(chip.getAttribute('title')).toContain('PostHog Visual Review / storybook');
+  });
+
+  it('combines task and PR reasons in one person badge', () => {
+    taskReason = 'Please approve the deployment.';
+    renderRows([row({ taskId: 'task1' }, [VR])], 'mine', new Map([['task1', 'needs_human']]));
+
+    const chip = screen.getByText('Needs you', { selector: 'button' });
+    expect(screen.getAllByText('Needs you')).toHaveLength(1);
+    expect(chip.querySelector('svg.lucide-user-round-check')).toBeInTheDocument();
+    expect(chip.getAttribute('title')).toContain('The agent stopped: Please approve the deployment.');
+    expect(chip.getAttribute('title')).toContain('Needs a person: Visual review');
+    expect(chip.getAttribute('title')).toContain('\n');
+  });
+
+  it('shows the task badge and its reason when only the task needs a person', () => {
+    taskReason = 'Please approve the deployment.';
+    renderRows([row({ taskId: 'task1' })], 'mine', new Map([['task1', 'needs_human']]));
+
+    const chip = screen.getByText('Needs you', { selector: 'button' });
+    expect(screen.getAllByText('Needs you')).toHaveLength(1);
+    expect(chip.getAttribute('title')).toContain('The agent stopped: Please approve the deployment.');
+  });
+
+  it('combines a task stop with the watcher reason', () => {
+    taskReason = 'Please approve the deployment.';
+    renderRows(
+      [row({ taskId: 'task1', autoKeepMergeable: true, autoMergeState: { needsHuman: { reason: 'Review required.' } } } as Partial<PRRow>)],
+      'mine',
+      new Map([['task1', 'needs_human']]),
+    );
+
+    const chip = screen.getByText('Needs you');
+    expect(screen.getAllByText('Needs you')).toHaveLength(1);
+    expect(chip.closest('span')?.getAttribute('title')).toContain('The agent stopped: Please approve the deployment.\nThe run stopped and needs you: Review required.');
+  });
+
+  it.each(['mine', 'queue'] as const)('combines a task stop with the merge queue reason on %s', (variant) => {
+    taskReason = 'Please approve the deployment.';
+    renderRows(
+      [row({
+        taskId: 'task1',
+        mergeQueued: true,
+        mergeQueue: {
+          status: 'blocked',
+          position: 2,
+          blockedCode: 'agent_needs_human',
+          reason: 'Review required.',
+        } as PRRow['mergeQueue'],
+      })],
+      variant,
+      new Map([['task1', 'needs_human']]),
+    );
+
+    const chip = screen.getByText('Needs you');
+    expect(screen.getAllByText('Needs you')).toHaveLength(1);
+    expect(chip.closest('span')?.getAttribute('title')).toContain('The agent stopped: Please approve the deployment.\n');
+    expect(chip.closest('span')?.getAttribute('title')).toContain('Review required.');
+    if (variant === 'mine') expect(screen.getByText('Queued #2')).toBeInTheDocument();
   });
 
   it.each([
