@@ -364,13 +364,14 @@ describe('Trunk merge ETAs', () => {
       expect(callsTo('lookup')).toHaveLength(2);
     });
 
-    it('shares a cold repository lookup across concurrent PRs', async () => {
+    it('shares one repository lookup and one batched PR lookup across concurrent PRs', async () => {
       await saveToken();
       repositoryAnswer = () => new Promise((resolve) => setTimeout(() => resolve(json({ data: [{ id: 'trunk-repo' }] })), 100));
       const ids = await Promise.all([insertPr(), insertPr(), insertPr()]);
       await Promise.all(ids.map(getEta));
       expect(callsTo('repositories')).toHaveLength(1);
-      expect(callsTo('lookup')).toHaveLength(3);
+      // The three PRs share one batched lookup (Trunk allows 5 pull request reads per second per key).
+      expect(callsTo('lookup')).toHaveLength(1);
     });
 
     it('retries a failed repository lookup for another PR', async () => {

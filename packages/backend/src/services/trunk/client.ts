@@ -17,11 +17,14 @@ export const TRUNK_API_BASE = 'https://api.trunk.io';
  * ETA that is late is worth nothing, so a slow Trunk reads as "unavailable".
  */
 const TRUNK_TIMEOUT_MS = 8_000;
-const DEFAULT_RETRY_MS = 60_000;
+const DEFAULT_RETRY_MS = 10_000;
 const MAX_RETRY_MS = 15 * 60_000;
+const REQUEST_SPACING_MS = 251;
+const MAX_QUEUE_WAIT_MS = 10_000;
 
 // Each replica keeps its own pause. Only a hash of the API key enters this map.
 const pausedUntil = new Map<string, number>();
+const nextRequestAt = new Map<string, number>();
 
 export function trunkKeyHash(apiKey: string): string {
   return createHash('sha256').update(apiKey).digest('hex');
@@ -33,6 +36,21 @@ export function trunkPauseUntil(apiKey: string): number {
 
 export function clearTrunkPause(): void {
   pausedUntil.clear();
+  nextRequestAt.clear();
+}
+
+async function waitForRequestSlot(apiKey: string): Promise<void> {
+  const key = trunkKeyHash(apiKey);
+  const now = Date.now();
+  if ((pausedUntil.get(key) ?? 0) > now) throw new TrunkRequestError('Trunk reads are paused', 429);
+  // Trunk allows 5 PR GETs per second per key. 251 ms spacing keeps all reads at 4/s.
+  const at = Math.max(now, nextRequestAt.get(key) ?? now);
+  if (at - now > MAX_QUEUE_WAIT_MS) throw new TrunkRequestError('Trunk request queue is full');
+  nextRequestAt.set(key, at + REQUEST_SPACING_MS);
+  if (at > now) await new Promise<void>((resolve) => setTimeout(resolve, at - now));
+  if ((pausedUntil.get(key) ?? 0) > Date.now()) {
+    throw new TrunkRequestError('Trunk reads are paused', 429);
+  }
 }
 
 function retryAfterMs(raw: string | null): number {
@@ -82,13 +100,11 @@ function errorCode(bodyText: string): string | null {
 async function trunkGet(
   apiKey: string,
   path: string,
-  query: Record<string, string>,
+  query: URLSearchParams,
   opts: { workspaceId?: string }
 ): Promise<unknown> {
-  if (trunkPauseUntil(apiKey) > Date.now()) {
-    throw new TrunkRequestError('Trunk reads are paused', 429);
-  }
-  const qs = new URLSearchParams(query).toString();
+  await waitForRequestSlot(apiKey);
+  const qs = query.toString();
   const url = `${TRUNK_API_BASE}${path}${qs ? `?${qs}` : ''}`;
   const startedAt = Date.now();
   let res;
@@ -156,21 +172,23 @@ export function resolveRepository(
   return trunkGet(
     apiKey,
     '/v2/repositories',
-    { providerUrl: `https://github.com/${ref.owner}/${ref.repo}` },
+    new URLSearchParams({ providerUrl: `https://github.com/${ref.owner}/${ref.repo}` }),
     opts
   );
 }
 
-/** `GET /v2/pull-requests` for one PR number. Resolves to the raw page. */
-export function resolvePullRequest(
+/** `GET /v2/pull-requests` for up to 50 PR numbers. Resolves to the raw page. */
+export function resolvePullRequests(
   apiKey: string,
-  ref: { repositoryId: string; number: number },
+  ref: { repositoryId: string; numbers: number[] },
   opts: { workspaceId?: string } = {}
 ): Promise<unknown> {
+  const query = new URLSearchParams({ repositoryId: ref.repositoryId });
+  for (const number of ref.numbers) query.append('number', String(number));
   return trunkGet(
     apiKey,
     '/v2/pull-requests',
-    { repositoryId: ref.repositoryId, number: String(ref.number) },
+    query,
     opts
   );
 }
@@ -184,7 +202,7 @@ export function getQueueEntryEstimate(
   return trunkGet(
     apiKey,
     `/v2/pull-requests/${encodeURIComponent(pullRequestId)}/queue-entry-estimate`,
-    {},
+    new URLSearchParams(),
     opts
   );
 }

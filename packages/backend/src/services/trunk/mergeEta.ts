@@ -8,7 +8,7 @@ import { peekExternalQueueState } from '../externalQueueState.js';
 import {
   clearTrunkPause,
   getQueueEntryEstimate,
-  resolvePullRequest,
+  resolvePullRequests,
   resolveRepository,
   trunkKeyHash,
   trunkPauseUntil,
@@ -22,7 +22,12 @@ import {
   isTrunkApiKey,
   markTrunkReauthRequired,
 } from './credentials.js';
-import { parseTrunkEstimate, parseTrunkPullRequest, parseTrunkRepositoryId } from './parse.js';
+import {
+  parseTrunkEstimate,
+  parseTrunkPullRequest,
+  parseTrunkRepositoryId,
+  type ParsedTrunkPullRequest,
+} from './parse.js';
 
 /**
  * The answer behind `GET /pull-requests/:id/merge-eta`.
@@ -70,6 +75,19 @@ const answers = new Map<string, { answer: MergeEtaAnswer; expiresAt: number }>()
 const inflight = new Map<string, Promise<MergeEtaAnswer>>();
 const repositoryIds = new Map<string, { id: string; expiresAt: number }>();
 const repositoryInflight = new Map<string, Promise<string | null>>();
+const PR_BATCH_WINDOW_MS = 200;
+const MAX_PR_NUMBERS = 50;
+type PrWaiter = {
+  resolve: (found: ParsedTrunkPullRequest | null) => void;
+  reject: (error: unknown) => void;
+};
+type PrBatch = {
+  apiKey: string;
+  repositoryId: string;
+  workspaceId: string;
+  waiters: Map<number, PrWaiter[]>;
+};
+const prBatches = new Map<string, PrBatch>();
 
 // The key hash separates answers after a key change.
 function cacheKey(workspaceId: string, prId: string, keyHash: string): string {
@@ -167,16 +185,59 @@ async function repositoryIdFor(pr: MergeEtaPr, creds: Credentials): Promise<stri
 
 class TrunkRepositoryAccessError extends Error {}
 
+function pullRequestFor(
+  apiKey: string,
+  repositoryId: string,
+  number: number,
+  workspaceId: string
+): Promise<ParsedTrunkPullRequest | null> {
+  const key = `${trunkKeyHash(apiKey)}:${repositoryId}`;
+  let batch = prBatches.get(key);
+  if (!batch) {
+    batch = { apiKey, repositoryId, workspaceId, waiters: new Map() };
+    prBatches.set(key, batch);
+    // The 200 ms window joins list requests without adding a long delay to one ETA.
+    setTimeout(() => void flushPrBatch(key, batch!), PR_BATCH_WINDOW_MS);
+  }
+  return new Promise((resolve, reject) => {
+    const waiters = batch.waiters.get(number) ?? [];
+    waiters.push({ resolve, reject });
+    batch.waiters.set(number, waiters);
+  });
+}
+
+async function flushPrBatch(key: string, batch: PrBatch): Promise<void> {
+  prBatches.delete(key);
+  const numbers = [...batch.waiters.keys()];
+  await Promise.all(
+    Array.from({ length: Math.ceil(numbers.length / MAX_PR_NUMBERS) }, async (_, index) => {
+      const chunk = numbers.slice(index * MAX_PR_NUMBERS, (index + 1) * MAX_PR_NUMBERS);
+      try {
+        const page = await resolvePullRequests(
+          batch.apiKey,
+          { repositoryId: batch.repositoryId, numbers: chunk },
+          { workspaceId: batch.workspaceId }
+        );
+        for (const number of chunk) {
+          const found = parseTrunkPullRequest(page, number);
+          for (const waiter of batch.waiters.get(number) ?? []) waiter.resolve(found);
+        }
+      } catch (error) {
+        for (const number of chunk) {
+          for (const waiter of batch.waiters.get(number) ?? []) waiter.reject(error);
+        }
+      }
+    })
+  );
+}
+
 async function askTrunk(pr: MergeEtaPr, creds: Credentials): Promise<MergeEtaAnswer> {
   const opts = { workspaceId: pr.workspaceId };
   let extra: Partial<MergeEtaAnswer> = {};
   try {
     const repositoryId = await repositoryIdFor(pr, creds);
     if (!repositoryId) return none('not_queued');
-    const found = parseTrunkPullRequest(
-      await resolvePullRequest(creds.token, { repositoryId, number: pr.number }, opts),
-      pr.number
-    );
+    const found = await pullRequestFor(creds.token, repositoryId, pr.number, pr.workspaceId);
     await clearReauthIfMarked(pr, creds);
     if (!found?.id) return none('not_queued');
 
@@ -188,7 +249,7 @@ async function askTrunk(pr: MergeEtaPr, creds: Credentials): Promise<MergeEtaAns
       found.queueState === 'merged' ||
       found.queueState === 'failed' ||
       found.queueState === 'cancelled';
-    if (found.isCurrentlySubmitted === false || found.queueState === null || done) {
+    if (found.isCurrentlySubmitted !== true || found.queueState === null || done) {
       return none('not_queued', extra);
     }
 
