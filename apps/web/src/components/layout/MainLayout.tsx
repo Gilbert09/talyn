@@ -1,6 +1,7 @@
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense } from 'react';
 import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
+import { lazyWithReload } from '../../lib/lazyWithReload';
 
 /**
  * Code-split the panels that are not the landing screen. On the desktop the
@@ -12,32 +13,32 @@ import { Sidebar } from './Sidebar';
  * they share prTableShared, so splitting them would mostly move the same
  * bytes into a chunk fetched immediately anyway.
  */
-const QueuePanel = lazy(() =>
+const QueuePanel = lazyWithReload(() =>
   import('../panels/QueuePanel').then((m) => ({ default: m.QueuePanel }))
 );
-const SettingsPanel = lazy(() =>
+const SettingsPanel = lazyWithReload(() =>
   import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel }))
 );
 // Lazy for the same reason: it sits behind an allow-list flag, so for almost
 // every visitor it is bytes they will never render.
-const WorkflowsPanel = lazy(() =>
+const WorkflowsPanel = lazyWithReload(() =>
   import('../panels/workflows/WorkflowsPanel').then((m) => ({ default: m.WorkflowsPanel }))
 );
 // Lazy for the same reason, and more so: the loops flag fails closed, so almost
 // every visitor never renders a byte of this.
 // Lazy for the same reason as Loops: the code-review flag fails closed, so
 // most workspaces never draw this and should not pay for its bundle.
-const CodeReviewsPanel = lazy(() =>
+const CodeReviewsPanel = lazyWithReload(() =>
   import('../panels/codeReview/CodeReviewsPanel').then((m) => ({
     default: m.CodeReviewsPanel,
   }))
 );
 
-const LoopsPanel = lazy(() =>
+const LoopsPanel = lazyWithReload(() =>
   import('../panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel }))
 );
 // Lazy for the same reason again: the tool-servers flag also fails closed.
-const McpServersPanel = lazy(() =>
+const McpServersPanel = lazyWithReload(() =>
   import('../panels/mcpServers/McpServersPanel').then((m) => ({ default: m.McpServersPanel }))
 );
 import { SystemStatusBanner } from './SystemStatusBanner';

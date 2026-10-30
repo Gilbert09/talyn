@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, Suspense, lazy } from 'react';
+import React, { useEffect, useRef, Suspense } from 'react';
 import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { ScrollArea } from '../../ui/scroll-area';
 import { api, type PRRow } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
+import { lazyWithReload } from '../../../lib/lazyWithReload';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useGitHubActions } from './useGitHubActions';
@@ -17,7 +18,7 @@ import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
  * / wasm chunks in the build output). Keeping it out of the entry chunk keeps
  * all of that off the first load.
  */
-const PRDetailSheet = lazy(() =>
+const PRDetailSheet = lazyWithReload(() =>
   import('../../widgets/PRDetailSheet').then((m) => ({ default: m.PRDetailSheet }))
 );
 
