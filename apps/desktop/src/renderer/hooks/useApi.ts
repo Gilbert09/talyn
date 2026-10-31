@@ -292,6 +292,8 @@ export function useApiConnection() {
   // Connect to WebSocket on mount. `connect()` is async because it needs
   // to fetch the auth token before opening the socket.
   useEffect(() => {
+    // Declared before the first subscribe: the server sends thread rows only to a client that can show them.
+    wsClient.setCapabilities(['threads']);
     void wsClient.connect();
     return () => {
       wsClient.disconnect();

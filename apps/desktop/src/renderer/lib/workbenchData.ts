@@ -10,12 +10,12 @@ import { useWorkbenchStore } from '../stores/workbenches';
 /** A page this size keeps one request well under a second for a long chat. */
 export const EVENTS_PAGE_SIZE = 500;
 
-/** Archived ones too, so the sidebar's Archived section can offer a restore. */
+/** Sessions and threads, archived ones too, so the History page can offer a restore. */
 export async function loadWorkbenches(workspaceId: string): Promise<void> {
   const store = useWorkbenchStore.getState();
   store.setWorkspace(workspaceId);
   try {
-    const list = await api.workbenches.list(workspaceId, { includeArchived: true });
+    const list = await api.workbenches.list(workspaceId, { includeArchived: true, kinds: ['session', 'thread'] });
     useWorkbenchStore.getState().setWorkbenches(workspaceId, list);
     for (const wb of list) absorbEmbeddedChats(wb);
   } catch (err) {

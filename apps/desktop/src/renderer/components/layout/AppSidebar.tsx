@@ -25,6 +25,8 @@ import { useWorkspaceWorkbenches } from '../workbench/workbenchSelectors';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
+import { SidebarThreadList } from './SidebarThreadList';
+import { NewThreadDialog } from '../threads/NewThreadDialog';
 import { SidebarSlackPending } from './SidebarSlackPending';
 import { UpdateNotice } from './UpdateNotice';
 import { CloudProviderStatus } from './CloudProviderStatus';
@@ -32,7 +34,7 @@ import { UserChip } from './UserChip';
 
 /**
  * The app's left column, top to bottom: the macOS drag strip, the workspace,
- * Search and New workbench, the workbenches by repository, History and Add
+ * Search and New workbench, the threads, the workbenches by repository, History and Add
  * repository, then the PR area and Automations, then the footer. 240px, or
  * an icon rail when collapsed (⌘B, remembered).
  */
@@ -95,6 +97,7 @@ export function AppSidebar() {
 
         <nav className="min-h-0 flex-1 overflow-y-auto px-1.5" aria-label="Sessions">
           {offered && !collapsed && <SidebarSlackPending />}
+          {offered && !collapsed && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
           <div className="mt-2 space-y-0.5">
             {offered && (
@@ -186,6 +189,7 @@ export function AppSidebar() {
           </div>
         </div>
       </aside>
+      {offered && <NewThreadDialog />}
     </TooltipProvider>
   );
 }
