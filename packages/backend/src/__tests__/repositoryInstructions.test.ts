@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { execFileSync, spawnSync } from 'child_process';
+import { bashScriptFile } from './helpers/bashScript.js';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -22,7 +23,7 @@ vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => (
   repoDirFor: () => sandbox.repo,
   runCapture: async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
     sandbox.calls.push(script);
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', [bashScriptFile(script)], {
       cwd: '/',
       env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
       encoding: 'utf8',
