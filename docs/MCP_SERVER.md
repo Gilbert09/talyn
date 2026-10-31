@@ -183,6 +183,22 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_archive_session` | Archive a session. |
 | `talyn_restore_session` | Restore an archived session, or retry a failed start. |
 
+### Workspace memory
+
+Short notes that sessions and people save for later sessions (`workspace_memories`, migration `0096`).
+An entry applies to the workspace, one repository, or one thread. Writing the same name again in the same scope updates the entry.
+From a session, an entry applies to the session's repository unless `scope` is `workspace`, and the session sees only workspace entries and its own repository's entries.
+A write or forget from a session adds a `talyn_memory` card to its transcript.
+When `settings.sessionMemory` is `false`, every memory tool refuses.
+
+| Tool | What it does |
+| --- | --- |
+| `talyn_memory_write` | Create an entry, or update the entry with the same name in the same scope. Name 64 characters, description 200, body 8 KB. |
+| `talyn_memory_search` | Find entries by text in the name, description or body. No bodies. |
+| `talyn_memory_read` | Read one entry with its body. |
+| `talyn_memory_forget` | Forget an entry. A person can restore it in the app. |
+| `talyn_memory_list` | List the entries the caller can see. No bodies. |
+
 ### MCP connections
 
 | Tool | What it does |
@@ -251,7 +267,7 @@ https on a public host. Without one (local development), sessions have no
 server on every list and every call. The agent reads untrusted text, so these
 are refused: MCP server tools, account tools, repository add and remove, and
 every skill, workflow and loop change. Their reads are allowed. Sessions, the
-merge queue, pull requests, code review and tasks are allowed. A new tool is
+merge queue, pull requests, code review, tasks and workspace memory are allowed. A new tool is
 refused until somebody adds it.
 
 **Calls on its own session.**

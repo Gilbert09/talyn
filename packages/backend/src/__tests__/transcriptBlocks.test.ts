@@ -404,3 +404,29 @@ describe('system lines', () => {
     else expect(blocks).toEqual([{ key: String(seq), ...expected }]);
   });
 });
+
+describe('talyn_memory events', () => {
+  const memoryEvent = (fields: Record<string, unknown>) =>
+    ({ seq: ++seq, type: 'talyn_memory', ...fields }) as AgentEvent;
+  const change = { memoryId: 'm1', name: 'build command', memoryType: 'project', scope: 'repository' };
+
+  it.each([
+    ['created', 'Saved repository memory "build command"'],
+    ['updated', 'Updated repository memory "build command"'],
+    ['forgotten', 'Forgot repository memory "build command"'],
+  ])('draws %s as a memory card line', (action, text) => {
+    const blocks = buildBlocks([memoryEvent({ action, ...change })]);
+    expect(blocks).toEqual([
+      { kind: 'system', key: String(seq), subtype: 'talyn_memory', text, memory: { action, ...change } },
+    ]);
+  });
+
+  it.each([
+    ['an unknown action', { action: 'deleted', ...change }],
+    ['no memory id', { action: 'created', ...change, memoryId: 7 }],
+    ['an unknown type', { action: 'created', ...change, memoryType: 'note' }],
+    ['an unknown scope', { action: 'created', ...change, scope: 'org' }],
+  ])('drops an event with %s', (_label, fields) => {
+    expect(buildBlocks([memoryEvent(fields)])).toEqual([]);
+  });
+});

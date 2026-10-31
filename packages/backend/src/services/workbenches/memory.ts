@@ -376,12 +376,16 @@ export async function memoryIndexFor(opts: {
   return rows.map(toIndexItem);
 }
 
-/** `settings.sessionMemory`: on unless set to false. Reads one key, never the settings blob. */
-export async function sessionMemoryEnabled(workspaceId: string): Promise<boolean> {
+/**
+ * `settings.sessionMemory`: on unless set to false. Reads one key, never the
+ * settings blob. With `ownerId`, another owner's workspace reads as on, so the
+ * answer tells that caller nothing; the route then refuses the request.
+ */
+export async function sessionMemoryEnabled(workspaceId: string, ownerId?: string): Promise<boolean> {
   const [row] = await db()
     .select({ value: sql<string | null>`${workspaces.settings} ->> 'sessionMemory'` })
     .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
+    .where(and(eq(workspaces.id, workspaceId), ownerId ? eq(workspaces.ownerId, ownerId) : undefined))
     .limit(1);
   return row?.value !== 'false';
 }

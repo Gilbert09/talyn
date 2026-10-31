@@ -15,6 +15,7 @@ import { ACCOUNT } from './account.js';
 import { CODEREVIEW } from './codeReview.js';
 import { LOOPS } from './loops.js';
 import { MCPSERVERS } from './mcpServers.js';
+import { MEMORY } from './memory.js';
 import { MERGEQUEUE } from './mergeQueue.js';
 import { PULLREQUESTS } from './pullRequests.js';
 import { REPOSITORIES } from './repositories.js';
@@ -55,6 +56,7 @@ export const TOOLS: McpToolDefinition[] = [
   ...CODEREVIEW,
   ...TASKS,
   ...SESSIONS,
+  ...MEMORY,
   ...SKILLS,
   ...WORKFLOWS,
   ...LOOPS,
