@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'child_process';
+import { bashScriptFile } from './helpers/bashScript.js';
 import { readFileSync } from 'fs';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -35,7 +36,7 @@ vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => (
   ...(await importOriginal<typeof import('../services/workbenches/sandboxRuntime.js')>()),
   runCapture: async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
     sandbox.calls.push({ script, env: opts.env ?? {} });
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', [bashScriptFile(script)], {
       cwd: '/',
       env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
       encoding: 'utf8',
