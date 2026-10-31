@@ -8,7 +8,7 @@ export { PR_TABS, type PrTab } from '../lib/prTabs';
 export type AutomationTab = 'workflows' | 'loops';
 
 export type Route =
-  | { view: 'home' }
+  | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
   | { view: 'history' }
   | { view: 'mcp_servers' }

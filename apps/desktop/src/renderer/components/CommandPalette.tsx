@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { GitPullRequest, History, Home, Settings, Workflow } from 'lucide-react';
+import { GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
 import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -9,7 +9,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
-import { openNewWorkbench } from './workbench/new/openNewWorkbench';
+import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
@@ -166,6 +166,12 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             >
               <History className="h-3.5 w-3.5 text-muted-foreground" />
               Continue a Claude Code conversation
+            </CommandItem>
+          )}
+          {workbenchesOffered(features) && (
+            <CommandItem value="new thread" onSelect={() => pick(openNewThread)}>
+              <MessagesSquare className="h-3.5 w-3.5 text-muted-foreground" />
+              New thread
             </CommandItem>
           )}
           {navItems.map((item) => (

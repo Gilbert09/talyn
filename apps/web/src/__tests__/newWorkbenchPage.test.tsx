@@ -182,6 +182,50 @@ async function renderPage() {
 const textarea = () => screen.getByRole('textbox', { name: 'Task' });
 
 describe('NewWorkbenchPage', () => {
+  it('hides repository controls in thread mode and keeps the draft when switching', async () => {
+    await renderPage();
+    fireEvent.change(textarea(), { target: { value: 'Plan a release' } });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
+    expect(screen.queryByRole('button', { name: 'Repository' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument();
+    expect(textarea()).toHaveValue('Plan a release');
+    expect(textarea()).toHaveAttribute('placeholder', 'What do you want to get done? A thread can work across repositories.');
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Session' }), { button: 0 });
+    expect(textarea()).toHaveValue('Plan a release');
+    expect(screen.getByRole('button', { name: 'Repository' })).toBeInTheDocument();
+  });
+
+  it('creates a thread from the first message', async () => {
+    mockCreate.mockResolvedValue(wb('new-thread', { kind: 'thread', repositoryId: null, repoFullName: '' }));
+    await renderPage();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
+    fireEvent.change(textarea(), { target: { value: '  Plan a release  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'ws1', kind: 'thread', runtime: 'sandbox', prompt: 'Plan a release',
+    })));
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('repositoryId');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'new-thread' });
+  });
+
+  it('sends images with the first thread message', async () => {
+    vi.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
+    mockCreate.mockResolvedValue(wb('thread-with-image', { kind: 'thread', repositoryId: null, repoFullName: '', chats: [{ id: 'thread-chat' }] as Workbench['chats'] }));
+    mockSend.mockResolvedValue({ queued: true });
+    await renderPage();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
+    fireEvent.drop(textarea(), { dataTransfer: { files: [new File(['image'], 'shot.png', { type: 'image/png' })] } });
+    await screen.findByText('shot.png');
+    fireEvent.change(textarea(), { target: { value: 'Inspect this image' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    await waitFor(() => expect(mockSend).toHaveBeenCalledWith('thread-chat', expect.objectContaining({
+      text: 'Inspect this image',
+      attachments: [{ name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' }],
+    })));
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'thread', prompt: undefined }));
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
   it('adds a pasted image chip and removes it', async () => {
     vi.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
     await renderPage();

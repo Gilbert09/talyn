@@ -24,7 +24,7 @@ export type PrTab = 'my_prs' | 'reviews' | 'code_reviews' | 'merge_queue' | 'que
 export type AutomationTab = 'workflows' | 'loops';
 
 export type Route =
-  | { view: 'home' }
+  | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
   | { view: 'history' }
   | { view: 'prs'; tab: PrTab }
@@ -65,6 +65,7 @@ export function isRoute(value: unknown): value is Route {
   const r = value as Record<string, unknown>;
   switch (r.view) {
     case 'home':
+      return r.mode === undefined || r.mode === 'session' || r.mode === 'thread';
     case 'history':
       return true;
     case 'workbench':

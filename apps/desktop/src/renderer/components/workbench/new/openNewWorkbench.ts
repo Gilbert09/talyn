@@ -12,6 +12,11 @@ export function openNewWorkbench(prefill: NewWorkbenchPrefill | null = null): vo
   useWorkbenchStore.getState().requestNewWorkbench(prefill);
 }
 
+export function openNewThread(): void {
+  useNavigationStore.getState().navigate({ view: 'home', mode: 'thread' });
+  useWorkbenchStore.getState().requestNewWorkbench();
+}
+
 /** The prefill for "open this PR in a workbench": its repository, its branches, the link. */
 export function prefillFromPr(row: Pick<PRRow, 'id' | 'repositoryId' | 'summary'>): NewWorkbenchPrefill {
   return {

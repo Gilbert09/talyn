@@ -7,8 +7,9 @@ import { useWorkbenchStore } from '../../../stores/workbenches';
 
 export interface NewWorkbenchSpec {
   workspaceId: string;
-  repositoryId: string;
-  repoFullName: string;
+  kind?: 'session' | 'thread';
+  repositoryId?: string;
+  repoFullName?: string;
   agent: WorkbenchAgent;
   model: string;
   effort: WorkbenchEffort;
@@ -52,12 +53,12 @@ export function useCreateWorkbench(): CreateWorkbenchState {
             model: spec.model, effort: spec.effort, planMode: spec.planMode,
           });
         } catch (err) {
-          toast.error('The session is ready, but the first message did not start', err instanceof Error ? err.message : undefined);
+          toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
         }
       }
       return wb;
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not create the session.');
+      setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {
       setBusy(false);
@@ -70,6 +71,18 @@ export function useCreateWorkbench(): CreateWorkbenchState {
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
   const prompt = spec.prompt.trim();
+  if (spec.kind === 'thread') {
+    return api.workbenches.create({
+      workspaceId: spec.workspaceId,
+      kind: 'thread',
+      runtime: 'sandbox',
+      agent: spec.agent,
+      model: spec.model,
+      prompt: spec.attachments?.length ? undefined : prompt || undefined,
+      internetAccess: spec.internetAccess,
+    });
+  }
+  if (!spec.repositoryId || !spec.repoFullName) throw new Error('Choose a repository.');
   const baseBranch = spec.baseBranch?.trim() || undefined;
   const branch = spec.branch?.trim() || undefined;
 

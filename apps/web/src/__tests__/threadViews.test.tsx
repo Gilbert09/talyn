@@ -11,7 +11,6 @@ import { AgentBlocks } from '../components/workbench/AgentBlocks';
 import { WorkPanel } from '../components/workbench/WorkPanel';
 import { WorkbenchHeader } from '../components/workbench/WorkbenchHeader';
 import { ComposerPopover } from '../components/workbench/ComposerPopover';
-import { createThread } from '../lib/threadActions';
 import { useNavigationStore } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -20,16 +19,12 @@ import { toast } from '../stores/toast';
 
 const memoryList = vi.fn();
 const continueAsThread = vi.fn();
-const create = vi.fn();
-const update = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     pullRequests: { get: vi.fn(() => new Promise(() => {})) },
     workbenches: {
       memory: { list: (...a: unknown[]) => memoryList(...a) },
       continueAsThread: (...a: unknown[]) => continueAsThread(...a),
-      create: (...a: unknown[]) => create(...a),
-      update: (...a: unknown[]) => update(...a),
     },
   },
 }));
@@ -304,39 +299,6 @@ describe('WorkbenchHeader and threads', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Continue as thread' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not continue as a thread', 'No sandbox'));
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
-  });
-});
-
-describe('createThread', () => {
-  it.each<[string, string, boolean]>([
-    ['with a name', 'Fleet hardening', true],
-    ['without a name', '   ', false],
-  ])('%s', async (_name, name, renamed) => {
-    const thread = wb('t5', { kind: 'thread', repositoryId: null, repoFullName: '', name: 'harden-fleet' });
-    create.mockResolvedValue(thread);
-    update.mockImplementation(async (_id: string, patch: { title: string }) => ({ ...thread, title: patch.title }));
-    await createThread({ workspaceId: 'ws1', name, prompt: '  Harden the fleet  ', agent: 'codex', model: 'gpt-x' });
-    expect(create).toHaveBeenCalledWith({
-      workspaceId: 'ws1',
-      kind: 'thread',
-      runtime: 'sandbox',
-      agent: 'codex',
-      model: 'gpt-x',
-      prompt: 'Harden the fleet',
-    });
-    expect(create.mock.calls[0][0]).not.toHaveProperty('repositoryId');
-    if (renamed) expect(update).toHaveBeenCalledWith('t5', { title: 'Fleet hardening' });
-    else expect(update).not.toHaveBeenCalled();
-    expect(useWorkbenchStore.getState().workbenches.t5.title).toBe(renamed ? 'Fleet hardening' : undefined);
-    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 't5' });
-  });
-
-  it('keeps the thread when the rename fails', async () => {
-    const thread = wb('t6', { kind: 'thread', repositoryId: null, repoFullName: '' });
-    create.mockResolvedValue(thread);
-    update.mockRejectedValue(new Error('nope'));
-    await expect(createThread({ workspaceId: 'ws1', name: 'X', prompt: 'go', agent: 'claude' })).resolves.toEqual(thread);
-    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 't6' });
   });
 });
 

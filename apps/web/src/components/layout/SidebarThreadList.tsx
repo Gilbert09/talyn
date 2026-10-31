@@ -10,7 +10,7 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { PrPill, SessionStateIcon } from '../workbench/WorkbenchBadges';
-import { useNewThreadDialog } from '../threads/NewThreadDialog';
+import { openNewThread } from '../workbench/new/openNewWorkbench';
 
 /**
  * The sidebar's Threads section, above the sessions: each live thread with
@@ -21,7 +21,6 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
   const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
   const chats = useWorkbenchStore((s) => s.chats);
-  const openNewThread = useNewThreadDialog((s) => s.setOpen);
   const threads = useMemo(() => liveThreads(workbenches), [workbenches]);
   const [collapsed, setCollapsed] = useState<Record<string, true>>({});
   const openId = route.view === 'workbench' ? route.id : null;
@@ -34,7 +33,7 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
         <span className="flex-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Threads</span>
         <button
           type="button"
-          onClick={() => openNewThread(true)}
+          onClick={openNewThread}
           className="app-region-no-drag rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           aria-label="New thread"
           title="New thread"

@@ -11,7 +11,6 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
-import { useNewThreadDialog } from '../renderer/components/threads/NewThreadDialog';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/components/auth/AuthProvider', () => ({ useAuth: () => ({ user: null }) }));
@@ -70,7 +69,6 @@ beforeEach(() => {
   useWorkbenchStore.setState({ chats: {}, unread: {} });
   usePullRequestStore.setState({ rows: [] });
   useNavigationStore.getState().navigate({ view: 'home' });
-  useNewThreadDialog.setState({ open: false });
   setWorkbenches([
     thread('fleet', { title: 'Talyn fleet hardening', createdAt: '2026-10-10T00:00:00Z' }),
     thread('slack', { title: 'Slack integration', createdAt: '2026-10-11T00:00:00Z' }),
@@ -146,10 +144,9 @@ describe('Sidebar threads', () => {
     expect(screen.getByRole('group', { name: 'acme/app' })).toBeInTheDocument();
   });
 
-  it('opens the New thread dialog from the Threads header', () => {
+  it('opens the new page in thread mode from the Threads header', () => {
     render(<AppSidebar />);
     fireEvent.click(screen.getByRole('button', { name: 'New thread' }));
-    expect(useNewThreadDialog.getState().open).toBe(true);
-    expect(screen.getByText('First message')).toBeInTheDocument();
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home', mode: 'thread' });
   });
 });

@@ -26,7 +26,6 @@ import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { SidebarThreadList } from './SidebarThreadList';
-import { NewThreadDialog } from '../threads/NewThreadDialog';
 import { SidebarSlackPending } from './SidebarSlackPending';
 import { UpdateNotice } from './UpdateNotice';
 import { CloudProviderStatus } from './CloudProviderStatus';
@@ -189,7 +188,6 @@ export function AppSidebar() {
           </div>
         </div>
       </aside>
-      {offered && <NewThreadDialog />}
     </TooltipProvider>
   );
 }

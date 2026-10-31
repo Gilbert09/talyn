@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Globe2, Loader2, MessagesSquare } from 'lucide-react';
+import { ArrowUp, Globe2, Loader2 } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
   storedFleetModelForAgent,
@@ -10,9 +10,11 @@ import { cn } from '../lib/utils';
 import { readSessionDefaults } from '../lib/sessionDefaults';
 import { FOCUS_COMPOSER_EVENT, formatKeys } from '../lib/shortcuts';
 import { agentChoice, isUnreachable, sandboxChoice, useReadiness } from '../lib/readiness';
+import { useNavigationStore } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from '../components/workbench/useComposerImages';
@@ -27,12 +29,12 @@ import {
   SourceChip,
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
-import { useNewThreadDialog } from '../components/threads/NewThreadDialog';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 
 const PLACEHOLDER = 'Describe a task. Enter creates the session and starts it. ⇧Enter for a new line.';
+const THREAD_PLACEHOLDER = 'What do you want to get done? A thread can work across repositories.';
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
 
 /**
@@ -41,6 +43,9 @@ const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
  * and opens it — the provisioning progress shows there.
  */
 export function NewWorkbenchPage() {
+  const route = useNavigationStore((s) => s.route);
+  const navigate = useNavigationStore((s) => s.navigate);
+  const mode = route.view === 'home' && route.mode === 'thread' ? 'thread' : 'session';
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId) ?? null);
   const repositories = useWorkspaceStore((s) => s.repositories);
@@ -146,14 +151,14 @@ export function NewWorkbenchPage() {
   // ⌘I opens "Create from…" from anywhere on the page.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'i') {
+      if (mode === 'session' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'i') {
         e.preventDefault();
         setFromOpen((v) => !v);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [mode]);
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -162,36 +167,34 @@ export function NewWorkbenchPage() {
     el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [prompt]);
 
-  const blockedReason = !repo
+  const blockedReason = mode === 'session' && !repo
     ? 'Choose a repository.'
     : !sandbox.available
       ? sandbox.reason
       : !agentOk.available
         ? agentOk.reason
         : null;
-  const canCreate = Boolean(workspaceId && repo) && !blockedReason && !busy && images.pendingUploads === 0;
+  const canCreate = Boolean(workspaceId && (mode === 'thread' || repo)) && !blockedReason && !busy && images.pendingUploads === 0;
 
   const submit = async (text: string) => {
-    if (!canCreate || !workspaceId || !repo) return;
+    if (!canCreate || !workspaceId || (mode === 'session' && !repo)) return;
     const wb = await create({
       workspaceId,
-      repositoryId: repo.id,
-      repoFullName: repo.fullName,
+      ...(mode === 'thread' ? { kind: 'thread' as const } : { repositoryId: repo!.id, repoFullName: repo!.fullName }),
       agent,
       model,
       effort,
       planMode,
       internetAccess,
-      autoCreatePr,
+      autoCreatePr: mode === 'session' ? autoCreatePr : undefined,
       prompt: text,
       attachments: images.attachments.length ? images.attachments : undefined,
-      baseBranch: baseBranch.trim() || (source.kind === 'pr' ? source.baseBranch : undefined),
-      branch:
-        source.kind === 'branch' ? source.branch : source.kind === 'pr' ? source.headBranch || undefined : undefined,
-      fromPullRequestId: source.kind === 'pr' ? source.pullRequestId : undefined,
+      baseBranch: mode === 'session' ? baseBranch.trim() || (source.kind === 'pr' ? source.baseBranch : undefined) : undefined,
+      branch: mode === 'session' ? (source.kind === 'branch' ? source.branch : source.kind === 'pr' ? source.headBranch || undefined : undefined) : undefined,
+      fromPullRequestId: mode === 'session' && source.kind === 'pr' ? source.pullRequestId : undefined,
     });
     if (wb) {
-      writeLastRepository(workspaceId, repo.id);
+      if (mode === 'session' && repo) writeLastRepository(workspaceId, repo.id);
       setPrompt('');
       images.clear();
       setSource(NEW_BRANCH);
@@ -204,7 +207,7 @@ export function NewWorkbenchPage() {
       setPlanMode((v) => !v);
       return;
     }
-    if (e.key === 'Escape' && (source.kind !== 'new' || baseBranch)) {
+    if (mode === 'session' && e.key === 'Escape' && (source.kind !== 'new' || baseBranch)) {
       e.preventDefault();
       setSource(NEW_BRANCH);
       setBaseBranch('');
@@ -223,7 +226,18 @@ export function NewWorkbenchPage() {
     <TooltipProvider delayDuration={300}>
       <div className="h-full overflow-y-auto" data-attr="home-new-workbench">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[14vh]">
-          <h1 className="text-center font-display text-2xl font-semibold tracking-tight">What do you want to build?</h1>
+          <div className="flex items-center justify-center gap-4">
+            <h1 className="font-display text-2xl font-semibold tracking-tight">New</h1>
+            <Tabs
+              value={mode}
+              onValueChange={(next) => navigate({ view: 'home', mode: next as 'session' | 'thread' }, { replace: true })}
+            >
+              <TabsList aria-label="New work type">
+                <TabsTrigger value="session">Session</TabsTrigger>
+                <TabsTrigger value="thread">Thread</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
 
           <div className="space-y-2">
             <div
@@ -243,7 +257,7 @@ export function NewWorkbenchPage() {
                 }}
                 onKeyDown={onKeyDown}
                 onPaste={images.onPaste}
-                placeholder={PLACEHOLDER}
+                placeholder={mode === 'thread' ? THREAD_PLACEHOLDER : PLACEHOLDER}
                 aria-label="Task"
                 rows={3}
                 disabled={busy}
@@ -252,34 +266,38 @@ export function NewWorkbenchPage() {
               <ImageAttachmentChips attachments={images.attachments} pendingUploads={images.pendingUploads} imageNotReady={images.imageNotReady} onRemove={(index) => images.setAttachments((current) => current.filter((_, i) => i !== index))} />
               <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
                 <ImageAttachButton inputRef={images.fileInputRef} onFiles={(files) => void images.attachFiles(files)} />
-                <RepoPicker
-                  repositories={repositories}
-                  value={repositoryId}
-                  onChange={(id) => {
-                    setRepositoryId(id);
-                    setSource(NEW_BRANCH);
-                    setBaseBranch('');
-                  }}
-                />
-                <BaseBranchField
-                  value={baseBranch}
-                  onChange={setBaseBranch}
-                  placeholder={(source.kind === 'pr' && source.baseBranch) || defaultBranch || 'main'}
-                  suggestions={branchSuggestions}
-                />
-                <SourceChip source={source} onClear={() => setSource(NEW_BRANCH)} />
-                <CreateFromPopover
-                  key={`${repositoryId}:${source.kind}`}
-                  open={fromOpen}
-                  onOpenChange={setFromOpen}
-                  source={source}
-                  onChange={(next) => {
-                    setSource(next);
-                    if (next.kind === 'pr' && !baseBranch) setBaseBranch(next.baseBranch);
-                    focus();
-                  }}
-                  pullRequests={repoPrs}
-                />
+                {mode === 'session' && (
+                  <>
+                    <RepoPicker
+                      repositories={repositories}
+                      value={repositoryId}
+                      onChange={(id) => {
+                        setRepositoryId(id);
+                        setSource(NEW_BRANCH);
+                        setBaseBranch('');
+                      }}
+                    />
+                    <BaseBranchField
+                      value={baseBranch}
+                      onChange={setBaseBranch}
+                      placeholder={(source.kind === 'pr' && source.baseBranch) || defaultBranch || 'main'}
+                      suggestions={branchSuggestions}
+                    />
+                    <SourceChip source={source} onClear={() => setSource(NEW_BRANCH)} />
+                    <CreateFromPopover
+                      key={`${repositoryId}:${source.kind}`}
+                      open={fromOpen}
+                      onOpenChange={setFromOpen}
+                      source={source}
+                      onChange={(next) => {
+                        setSource(next);
+                        if (next.kind === 'pr' && !baseBranch) setBaseBranch(next.baseBranch);
+                        focus();
+                      }}
+                      pullRequests={repoPrs}
+                    />
+                  </>
+                )}
                 <div className="ml-auto flex items-center gap-2">
                   <PlanToggle on={planMode} onToggle={() => setPlanMode((v) => !v)} />
                   <button
@@ -311,15 +329,6 @@ export function NewWorkbenchPage() {
               <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
               <ModelPicker agent={agent} value={model} onChange={setModel} />
               <EffortPicker value={effort} onChange={setEffort} />
-              <ControlChip
-                onClick={() => useNewThreadDialog.getState().setOpen(true)}
-                title="A thread plans work and starts sessions on repositories."
-                data-attr="new-workbench-new-thread"
-                className="ml-auto"
-              >
-                <MessagesSquare className="h-3.5 w-3.5" />
-                <span>New thread</span>
-              </ControlChip>
             </div>
 
             {(error || unavailable || agentOk.warning) && (

@@ -147,6 +147,12 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Settings: Billing')).toBeInTheDocument();
   });
 
+  it('opens the new page in thread mode', () => {
+    render(<CommandPalette />);
+    fireEvent.click(screen.getByText('New thread'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home', mode: 'thread' });
+  });
+
   it('a Navigate pick goes there', () => {
     render(<CommandPalette />);
     fireEvent.click(screen.getByText('Settings: Billing'));

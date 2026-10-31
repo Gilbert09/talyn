@@ -17,9 +17,10 @@ import { NewWorkbenchPage } from './NewWorkbenchPage';
  */
 export function HomePage() {
   const repositories = useWorkspaceStore((s) => s.repositories);
+  const threadMode = useNavigationStore((s) => s.route.view === 'home' && s.route.mode === 'thread');
   const features = useWorkspaceStore((s) => s.features);
 
-  if (repositories.length === 0) return <Welcome />;
+  if (repositories.length === 0 && !threadMode) return <Welcome />;
   if (features !== null && !workbenchesOffered(features)) return <NotOffered />;
   return <NewWorkbenchPage />;
 }
