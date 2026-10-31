@@ -9,6 +9,7 @@ import {
   GitMerge,
   GitPullRequest,
   Loader2,
+  MessagesSquare,
   PanelBottom,
   PanelRight,
   Wrench,
@@ -50,6 +51,9 @@ import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { timeAgo } from './new/RecentWorkbenches';
+import { ThreadChip } from '../threads/ThreadChip';
+import { isThread } from '../../lib/threads';
+import { continueAsThread } from '../../lib/threadActions';
 
 const NO_CHECKS: PRChecks = {
   total: 0,
@@ -146,6 +150,18 @@ export function WorkbenchHeader({
   const [linkBusy, setLinkBusy] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
+  const [continuing, setContinuing] = useState(false);
+  const thread = isThread(workbench);
+  const continueInThread = async () => {
+    setContinuing(true);
+    try {
+      await continueAsThread(workbench);
+    } catch (err) {
+      toast.error('Could not continue as a thread', err instanceof Error ? err.message : undefined);
+    } finally {
+      setContinuing(false);
+    }
+  };
   const unlink = async () => {
     setLinkBusy(true);
     try {
@@ -245,6 +261,13 @@ export function WorkbenchHeader({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold">{workbenchDisplayName(workbench)}</h1>
+          {thread && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" data-attr="workbench-thread-badge">
+              <MessagesSquare className="h-3 w-3" />
+              Thread
+            </span>
+          )}
+          {!thread && workbench.threadId && <ThreadChip threadId={workbench.threadId} />}
           {slackSourceOf(workbench) && <SlackThreadChip source={slackSourceOf(workbench)!} />}
           {workbench.settings?.internetAccess === false && (
             <span
@@ -254,7 +277,7 @@ export function WorkbenchHeader({
               No internet
             </span>
           )}
-          {pr?.state === 'open' && (
+          {!thread && pr?.state === 'open' && (
             <PRStatusPill
               compact
               blockingReason={pr.summary.blockingReason}
@@ -269,7 +292,7 @@ export function WorkbenchHeader({
               className="shrink-0"
             />
           )}
-          {pr && pr.state !== 'open' && (
+          {!thread && pr && pr.state !== 'open' && (
             <button
               type="button"
               onClick={openPrTab}
@@ -280,7 +303,7 @@ export function WorkbenchHeader({
             </button>
           )}
         </div>
-        {pr?.state === 'merged' && (
+        {!thread && pr?.state === 'merged' && (
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span className="shrink-0 rounded bg-merged/15 px-1.5 py-0.5 font-medium text-merged">Merged</span>
             <span className="truncate">
@@ -289,10 +312,11 @@ export function WorkbenchHeader({
             {mergedAgo && <span className="shrink-0">· {mergedAgo === 'now' ? 'just now' : `${mergedAgo} ago`}</span>}
           </div>
         )}
-        {pr?.state === 'closed' && (
+        {!thread && pr?.state === 'closed' && (
           <div className="text-xs text-muted-foreground">PR #{pr.number} was closed without merging</div>
         )}
-        <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
+        {!thread && (
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
           <GitBranch className="h-3 w-3 shrink-0" />
           <span className="truncate">{workbench.branch}</span>
           <ArrowLeft className="h-3 w-3 shrink-0 opacity-60" />
@@ -306,17 +330,20 @@ export function WorkbenchHeader({
           >
             {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
           </button>
-        </div>
+          </div>
+        )}
       </div>
-      <Button
-        variant="ghost"
-        className="h-7 w-7 p-0"
-        onClick={toggleTerminal}
-        title={`Toggle the terminal (${formatKeys('mod+j')})`}
-        aria-label="Toggle the terminal"
-      >
-        <PanelBottom className="h-4 w-4" />
-      </Button>
+      {!thread && (
+        <Button
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          onClick={toggleTerminal}
+          title={`Toggle the terminal (${formatKeys('mod+j')})`}
+          aria-label="Toggle the terminal"
+        >
+          <PanelBottom className="h-4 w-4" />
+        </Button>
+      )}
       <Button
         variant="ghost"
         className={cn('h-7 w-7 p-0', !rightPanelOpen && 'text-muted-foreground')}
@@ -327,7 +354,7 @@ export function WorkbenchHeader({
       >
         <PanelRight className="h-4 w-4" />
       </Button>
-      {pr?.state === 'open' && pr.summary.url && (
+      {!thread && pr?.state === 'open' && pr.summary.url && (
         <Button
           variant="outline"
           className="h-7 gap-1.5 px-2.5 text-xs"
@@ -394,6 +421,7 @@ export function WorkbenchHeader({
                   </DropdownMenuItem>
                 );
               })}
+              {!thread && <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={linkBusy}
@@ -406,6 +434,17 @@ export function WorkbenchHeader({
                 <Copy className="mr-2 h-3.5 w-3.5" />
                 Copy branch name
               </DropdownMenuItem>
+              {!workbench.threadId && (
+                <DropdownMenuItem
+                  disabled={continuing}
+                  onSelect={() => void continueInThread()}
+                  data-attr="workbench-continue-as-thread"
+                >
+                  <MessagesSquare className="mr-2 h-3.5 w-3.5" />
+                  Continue as thread
+                </DropdownMenuItem>
+              )}
+              </>}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

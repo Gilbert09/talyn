@@ -18,7 +18,10 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createChatTab } from './ChatTabs';
-import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from './ComposerPopover';
+import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
+import { isThread, threadMentions } from '../../lib/threads';
+import { useWorkspaceStore } from '../../stores/workspace';
+import { useThreadChildren } from './workbenchSelectors';
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 
@@ -49,6 +52,10 @@ export function Composer({
   const [active, setActive] = useState(0);
   const [paths, setPaths] = useState<string[] | null>(null);
   const [pathsLoading, setPathsLoading] = useState(false);
+  // A thread has no files: its `@` offers repositories and its live sessions.
+  const thread = isThread(workbench);
+  const repositories = useWorkspaceStore((s) => s.repositories);
+  const threadSessions = useThreadChildren(workbench.id);
 
   const model = chat?.model ?? defaultModelFor(workbench.agent);
   const effort = chat?.effort ?? DEFAULT_WORKBENCH_EFFORT;
@@ -84,7 +91,7 @@ export function Composer({
   }, []);
 
   const loadPaths = () => {
-    if (paths || pathsLoading || ops.unavailable) return;
+    if (thread || paths || pathsLoading || ops.unavailable) return;
     setPathsLoading(true);
     ops
       .listFiles()
@@ -93,8 +100,22 @@ export function Composer({
       .finally(() => setPathsLoading(false));
   };
 
+  const mentionOptions = useMemo(
+    () => (thread && trigger?.kind === 'mention' ? threadMentions(trigger.query, repositories, threadSessions) : null),
+    [thread, trigger, repositories, threadSessions],
+  );
+  const mentionSource = useMemo<ComposerMentionSource | undefined>(
+    () => mentionOptions ? {
+      heading: 'Sessions and repositories',
+      empty: 'No matching session or repository.',
+      labels: Object.fromEntries(mentionOptions.map((m) => [m.value, m.label])),
+    } : undefined,
+    [mentionOptions],
+  );
+
   const items = useMemo(() => {
     if (!trigger) return [];
+    if (mentionOptions) return mentionOptions.map((m) => m.value);
     if (trigger.kind === 'mention') return fuzzyMatchPaths(trigger.query, paths ?? []);
     const fileCommands = slashCommandsFrom(paths ?? []);
     const commands =
@@ -106,7 +127,7 @@ export function Composer({
       .filter((c) => c.toLowerCase().includes(q))
       .sort((a, b) => Number(b.toLowerCase().startsWith(q)) - Number(a.toLowerCase().startsWith(q)))
       .slice(0, 20);
-  }, [trigger, paths, slashCommands, workbench.agent]);
+  }, [trigger, paths, slashCommands, workbench.agent, mentionOptions]);
 
   const updateTrigger = (text: string, caret: number) => {
     const next = findTrigger(text, caret);
@@ -240,7 +261,7 @@ export function Composer({
               key={m.id}
               className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground"
             >
-              <span className="shrink-0 text-[10px] uppercase tracking-wide">Queued</span>
+              <span className="shrink-0 text-[10px] uppercase tracking-wide">{m.origin === 'talyn' ? 'From Talyn' : 'Queued'}</span>
               <span className="min-w-0 flex-1 truncate">{m.text}</span>
               {ops.canRemoveQueued && chat && (
                 <button
@@ -271,6 +292,7 @@ export function Composer({
             loading={pathsLoading}
             onPick={pick}
             onHover={setActive}
+            mentions={mentionSource}
           />
         )}
         <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
@@ -292,7 +314,7 @@ export function Composer({
             ops.unavailable ??
             (running
               ? 'The agent is working. A message now is queued for when it finishes.'
-              : 'Ask the agent… (@ for files, / for commands)')
+              : thread ? 'Ask the thread… (@ for sessions and repositories)' : 'Ask the agent… (@ for files, / for commands)')
           }
           className="block max-h-[33vh] w-full resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           aria-label="Message the agent"

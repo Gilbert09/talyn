@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { FileText, Slash } from 'lucide-react';
+import { AtSign, FileText, Slash } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /**
@@ -34,6 +34,16 @@ export function applyTrigger(text: string, trigger: ComposerTrigger, value: stri
   return { text: next, caret: trigger.start + insert.length };
 }
 
+/**
+ * What a thread's `@` offers instead of files: repositories and sessions.
+ * `labels` maps an item to the text shown; the item itself is what is inserted.
+ */
+export interface ComposerMentionSource {
+  heading: string;
+  empty: string;
+  labels: Record<string, string>;
+}
+
 export function ComposerPopover({
   kind,
   items,
@@ -41,6 +51,7 @@ export function ComposerPopover({
   loading,
   onPick,
   onHover,
+  mentions,
 }: {
   kind: ComposerTrigger['kind'];
   items: string[];
@@ -48,6 +59,7 @@ export function ComposerPopover({
   loading: boolean;
   onPick: (item: string) => void;
   onHover: (index: number) => void;
+  mentions?: ComposerMentionSource;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
   useEffect(() => {
@@ -55,15 +67,15 @@ export function ComposerPopover({
     el?.scrollIntoView({ block: 'nearest' });
   }, [active]);
 
-  const Icon = kind === 'mention' ? FileText : Slash;
+  const Icon = kind === 'mention' ? (mentions ? AtSign : FileText) : Slash;
   return (
     <div className="absolute bottom-full left-0 right-0 z-20 mb-1 max-h-60 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg">
       <div className="border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {kind === 'mention' ? 'Files' : 'Commands and skills'}
+        {kind === 'mention' ? (mentions?.heading ?? 'Files') : 'Commands and skills'}
       </div>
       {items.length === 0 ? (
         <p className="px-2 py-2 text-xs text-muted-foreground">
-          {loading ? 'Loading…' : kind === 'mention' ? 'No matching file.' : 'No matching command.'}
+          {loading ? 'Loading…' : kind === 'mention' ? (mentions?.empty ?? 'No matching file.') : 'No matching command.'}
         </p>
       ) : (
         <ul ref={listRef} className="max-h-52 overflow-y-auto py-1" role="listbox">
@@ -83,9 +95,13 @@ export function ComposerPopover({
                 )}
               >
                 <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span dir="rtl" className="min-w-0 truncate text-left">
-                  <bdi>{item}</bdi>
-                </span>
+                {mentions ? (
+                  <span className="min-w-0 truncate">{mentions.labels[item] ?? item}</span>
+                ) : (
+                  <span dir="rtl" className="min-w-0 truncate text-left">
+                    <bdi>{item}</bdi>
+                  </span>
+                )}
               </button>
             </li>
           ))}

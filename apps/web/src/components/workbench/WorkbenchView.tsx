@@ -12,6 +12,8 @@ import { Button } from '../ui/button';
 import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
 import { GitPanel } from './GitPanel';
+import { WorkPanel } from './WorkPanel';
+import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
 import { isStarting, StartingHint } from './WorkbenchStarting';
@@ -20,7 +22,8 @@ import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSel
 /**
  * One workbench. Centre: the header, the chat tab strip, the transcript and
  * the composer. Right: the GitPanel (files, changes, pull request) with the
- * terminal dock under it; ⌘⌥B hides it.
+ * terminal dock under it; ⌘⌥B hides it. A thread has no repository: its
+ * right column is the WorkPanel (its sessions, memory and repositories).
  */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const ops = useWorkbenchOps(workbench);
@@ -42,7 +45,12 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
         <ChatTabs workbench={workbench} selected={chat} />
         <ChatView workbench={workbench} chat={chat} ops={ops} />
       </div>
-      {rightPanelOpen && <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />}
+      {rightPanelOpen &&
+        (isThread(workbench) ? (
+          <WorkPanel thread={workbench} />
+        ) : (
+          <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
+        ))}
     </div>
   );
 }
@@ -163,7 +171,7 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
         text={
           (workbench.sandboxState === 'lost'
             ? 'The sandbox was lost. Talyn is starting a new one.'
-            : workbench.statusMessage) || 'Starting the sandbox and cloning the repository…'
+            : workbench.statusMessage) || (isThread(workbench) ? 'Starting the sandbox…' : 'Starting the sandbox and cloning the repository…')
         }
         action={
           hasSetupOutput ? (

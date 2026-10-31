@@ -48,10 +48,12 @@ export function isArchivedWorkbench(workbench: Pick<Workbench, 'status' | 'archi
 
 /** The primary button's action, or null when the right move is to wait. */
 export function primaryWorkbenchAction(
-  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'>,
+  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'> & Partial<Pick<Workbench, 'kind'>>,
   pr: WorkbenchPrLike | null
 ): WorkbenchAction | null {
   if (isArchivedWorkbench(workbench)) return null;
+  // A thread has no repository, so no pull request to create or merge.
+  if (workbench.kind === 'thread') return null;
   return workbenchNextAction(workbench, pr);
 }
 
@@ -62,10 +64,11 @@ export function primaryWorkbenchAction(
  * always.
  */
 export function availableWorkbenchActions(
-  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'>,
+  workbench: Pick<Workbench, 'diffStat' | 'committedStats' | 'status' | 'archivedAt'> & Partial<Pick<Workbench, 'kind'>>,
   pr: WorkbenchPrLike | null
 ): WorkbenchAction[] {
   if (isArchivedWorkbench(workbench)) return [];
+  if (workbench.kind === 'thread') return ['archive'];
   const out = new Set<WorkbenchAction>();
   const primary = primaryWorkbenchAction(workbench, pr);
   if (primary) out.add(primary);

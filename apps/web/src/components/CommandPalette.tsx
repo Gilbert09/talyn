@@ -8,11 +8,12 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
-import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
+import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
 import { slackSourceOf } from '../lib/slackSession';
+import { workbenchPlaceLabel } from '../lib/threads';
 import {
   CommandDialog,
   CommandEmpty,
@@ -71,9 +72,8 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   useSyncExternalStore(subscribeVersion, readVersion);
 
   const workbenches = useMemo(
-    () => groupByRepository(all.filter((w) => !isArchived(w)))
-      .flatMap((g) => g.items)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    // Threads too: they are not in the repository groups, but a person searches for them the same way.
+    () => all.filter((w) => !isArchived(w)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [all]
   );
 
@@ -179,7 +179,7 @@ function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onS
       </span>
       <SlackSessionMark source={slackSourceOf(workbench)} />
       <span className="truncate">{workbenchDisplayName(workbench)}</span>
-      <span className="truncate font-mono text-[11px] text-muted-foreground">{workbench.repoFullName}</span>
+      <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(workbench)}</span>
     </CommandItem>
   );
 }

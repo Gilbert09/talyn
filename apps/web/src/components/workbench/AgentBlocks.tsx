@@ -5,6 +5,7 @@ import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
+import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
   buildBlocks,
@@ -114,6 +115,8 @@ function BlockViewImpl({
       if (block.subtype === 'talyn_pr')
         return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
       if (block.subtype === 'talyn_memory' && block.memory) return <MemoryChangeCard change={block.memory} />;
+      if (block.subtype === 'talyn_thread' && block.thread) return <ThreadSessionCard event={block.thread} />;
+      if (block.subtype === 'talyn_message') return <TalynMessageCard text={block.text} />;
       return <SystemBlock text={block.text} subtype={block.subtype} />;
     case 'result':
       return (
