@@ -51,7 +51,7 @@ import { confirmLocalBranchName, reserveLocalBranchName } from '../services/work
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
-import { fleetClientFor, loadWorkbenchConfigWithDetection, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
+import { fleetClientFor, loadWorkbenchConfigWithDetection, resumeOnce, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
@@ -530,6 +530,41 @@ export function workbenchRoutes(): Router {
         if (refusal) throw refusal;
       }
       ok(res, await publicWorkbench(await retryWorkbench(row.id)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // The UI calls this on mount and on the first keystroke; 30 s collapses those into one fleet read.
+  const WAKE_DEDUPE_MS = 30_000;
+  const lastWake = new Map<string, { at: number; status: string }>();
+
+  router.post('/:id/wake', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    if (row.runtime !== 'sandbox' || row.status !== 'ready' || !row.sandboxId || row.archivedAt) {
+      ok(res, { status: 'skipped' });
+      return;
+    }
+    const recent = lastWake.get(row.id);
+    if (recent && Date.now() - recent.at < WAKE_DEDUPE_MS) {
+      res.status(recent.status === 'awake' ? 200 : 202).json({ success: true, data: { status: recent.status } });
+      return;
+    }
+    try {
+      let status: 'moving' | 'resuming' | 'awake' = 'awake';
+      if (await startStaleGoldenMove(row)) {
+        status = 'moving';
+      } else {
+        const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+        const { sandbox } = await client.getSandbox(row.sandboxId);
+        if (sandbox.status === 'suspended') {
+          status = 'resuming';
+          resumeOnce(client, row.sandboxId).catch(() => undefined);
+        }
+      }
+      lastWake.set(row.id, { at: Date.now(), status });
+      res.status(status === 'awake' ? 200 : 202).json({ success: true, data: { status } });
     } catch (err) {
       fail(res, err);
     }

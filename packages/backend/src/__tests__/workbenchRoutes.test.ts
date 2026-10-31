@@ -24,6 +24,11 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
   },
 }));
 
+vi.mock('../services/workbenches/move.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/workbenches/move.js')>();
+  return { ...actual, startStaleGoldenMove: vi.fn(actual.startStaleGoldenMove) };
+});
+
 let creds: { claudeToken?: string; openaiKey?: string } | null = { claudeToken: 'sk-ant-oat-claude', openaiKey: 'oa-codex' };
 let reauth: string[] = [];
 let fleetRegistered = true;
@@ -57,6 +62,7 @@ const { refreshDiffStat } = await import('../services/workbenches/changes.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -794,6 +800,68 @@ describe('workbench routes', () => {
       expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
       expect(await getWorkbench(wb.id)).toBeNull();
       expect(emitted.at(-1)).toMatchObject({ type: 'workbench:deleted', payload: { id: wb.id } });
+    });
+  });
+
+  describe('waking a session\'s box', () => {
+    const wake = (id: string, user?: string) => call('POST', `/workbenches/${id}/wake`, undefined, user);
+
+    it('skips a local workbench', async () => {
+      const wb = await createLocalWorkbench();
+      const res = await wake(wb.id);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ status: 'skipped' });
+    });
+
+    it('skips a session that is not ready', async () => {
+      const wb = await createSandboxWorkbench();
+      await call('POST', `/workbenches/${wb.id}/archive`);
+      expect((await wake(wb.id)).body.data).toEqual({ status: 'skipped' });
+    });
+
+    it('answers awake for a running box and does not resume it', async () => {
+      const wb = await createSandboxWorkbench();
+      const res = await wake(wb.id);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ status: 'awake' });
+      expect(fleet.resumes).toBe(0);
+    });
+
+    it('resumes a suspended box once for two quick calls', async () => {
+      const wb = await createSandboxWorkbench();
+      fleet.sandboxStatus = 'suspended';
+      const first = await wake(wb.id);
+      const second = await wake(wb.id);
+      expect(first.status).toBe(202);
+      expect(first.body.data).toEqual({ status: 'resuming' });
+      expect(second.status).toBe(202);
+      expect(fleet.resumes).toBe(1);
+    });
+
+    it('does not fail the call when the resume fails', async () => {
+      const wb = await createSandboxWorkbench();
+      fleet.sandboxStatus = 'suspended';
+      vi.spyOn(fleet, 'resumeSandbox').mockRejectedValue(new Error('boom'));
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      expect((await wake(wb.id)).status).toBe(202);
+    });
+
+    it('starts the move for a stale golden and does not resume', async () => {
+      const wb = await createSandboxWorkbench();
+      fleet.sandboxStatus = 'suspended';
+      fleet.goldenStale = true;
+      vi.mocked(startStaleGoldenMove).mockResolvedValueOnce(true);
+      const res = await wake(wb.id);
+      expect(res.status).toBe(202);
+      expect(res.body.data).toEqual({ status: 'moving' });
+      expect(vi.mocked(startStaleGoldenMove).mock.calls.at(-1)?.[0]).toMatchObject({ id: wb.id });
+      expect(fleet.resumes).toBe(0);
+    });
+
+    it("answers 404 for another owner's workbench and 404 for an unknown one", async () => {
+      const wb = await createSandboxWorkbench();
+      expect((await wake(wb.id, 'owner-b')).status).toBe(404);
+      expect((await wake('nope')).status).toBe(404);
     });
   });
 

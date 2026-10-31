@@ -68,6 +68,9 @@ export class FakeFleet {
   hibernated = false;
   resumeGate: Promise<void> = Promise.resolve();
   resumes = 0;
+  /** What `getSandbox` reports. */
+  sandboxStatus = 'idle';
+  goldenStale = false;
 
   asClient(): FleetClient {
     return this as unknown as FleetClient;
@@ -230,7 +233,7 @@ export class FakeFleet {
   }
 
   async getSandbox(id: string) {
-    return { sandbox: { id, status: 'idle' }, terminal: false };
+    return { sandbox: { id, status: this.sandboxStatus, goldenStale: this.goldenStale }, terminal: false };
   }
 
   async getDiff() {
