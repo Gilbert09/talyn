@@ -184,7 +184,7 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Unlink pull request', 'Copy branch name']);
+    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
   });
 
   it('the menu lists every action that applies, in cycle order', () => {
@@ -203,6 +203,7 @@ describe('WorkbenchHeader action cycle', () => {
       'ArchiveCtrl+Shift+A',
       'Unlink pull request',
       'Copy branch name',
+      'Continue as thread',
     ]);
   });
 

@@ -228,7 +228,9 @@ export class LocalTurnController {
       autoCreatePr: workbench.settings?.autoCreatePr,
       hasPullRequest: Boolean(workbench.pullRequestId),
     });
-    const repositoryInstructions = await this.deps.repositoryInstructions?.(workbench.repositoryId, chat.agent);
+    const repositoryInstructions = workbench.repositoryId
+      ? await this.deps.repositoryInstructions?.(workbench.repositoryId, chat.agent)
+      : undefined;
     try {
       await this.deps.bridge.startTurn({
         workbenchId: workbench.id,

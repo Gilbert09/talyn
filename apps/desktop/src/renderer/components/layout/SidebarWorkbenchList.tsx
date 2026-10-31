@@ -18,13 +18,15 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
+import { ThreadTag } from '../threads/ThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
 /**
- * The sidebar's workbench list: live workbenches grouped by repository, in
- * the order ⌘1–9 counts. Archived ones live on the History page.
+ * The sidebar's workbench list: live sessions grouped by repository, in the
+ * order ⌘1–9 counts. Archived ones live on the History page. Threads have
+ * their own section; a session in a thread carries a small thread tag.
  */
 export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
@@ -130,6 +132,7 @@ function WorkbenchRow({
                 <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
               </span>
             )}
+            <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
             <RuntimeIcon
               className={cn('h-3 w-3 shrink-0 text-muted-foreground', (suspended || done) && !selected && 'opacity-60')}

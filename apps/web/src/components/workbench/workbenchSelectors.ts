@@ -4,6 +4,7 @@ import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
+import { isThread, liveThreads, threadChildren } from '../../lib/threads';
 
 export interface RepoGroup {
   repo: string;
@@ -11,13 +12,15 @@ export interface RepoGroup {
 }
 
 /**
- * Live workbenches grouped by repository, repositories alphabetical and
- * workbenches oldest first. Creation order rather than recency, so the ⌘1–9
- * numbers do not move every time an agent writes something.
+ * Live sessions grouped by repository, repositories alphabetical and sessions
+ * oldest first. Creation order rather than recency, so the ⌘1–9 numbers do
+ * not move every time an agent writes something. Threads have no repository
+ * and have their own section; a thread's sessions stay under their repository.
  */
 export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
   const map = new Map<string, Workbench[]>();
   for (const wb of workbenches) {
+    if (isThread(wb)) continue;
     const list = map.get(wb.repoFullName);
     if (list) list.push(wb);
     else map.set(wb.repoFullName, [wb]);
@@ -44,6 +47,19 @@ export function useWorkspaceWorkbenches(): Workbench[] {
 export function useOrderedLiveWorkbenches(): Workbench[] {
   const all = useWorkspaceWorkbenches();
   return useMemo(() => groupByRepository(all.filter((w) => !isArchived(w))).flatMap((g) => g.items), [all]);
+}
+
+/** Live threads of the current workspace, oldest first. */
+export function useLiveThreads(): Workbench[] {
+  const all = useWorkspaceWorkbenches();
+  return useMemo(() => liveThreads(all), [all]);
+}
+
+/** The sessions of a thread, archived ones too when asked. */
+export function useThreadChildren(threadId: string, opts: { includeArchived?: boolean } = {}): Workbench[] {
+  const all = useWorkspaceWorkbenches();
+  const includeArchived = Boolean(opts.includeArchived);
+  return useMemo(() => threadChildren(all, threadId, { includeArchived }), [all, threadId, includeArchived]);
 }
 
 export function useSelectedWorkbench(): Workbench | null {

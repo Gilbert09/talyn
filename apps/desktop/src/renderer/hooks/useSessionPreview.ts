@@ -23,17 +23,18 @@ export function useSessionPreview(workbench: Workbench) {
   useEffect(() => {
     let cancelled = false;
     setLoaded(null);
-    if (enabled && workbench.repositoryId) {
-      void api.repositories.preview.get(workbench.repositoryId).then((config) => {
-        if (!cancelled) setLoaded({ repositoryId: workbench.repositoryId, config });
+    const repositoryId = workbench.repositoryId;
+    if (enabled && repositoryId) {
+      void api.repositories.preview.get(repositoryId).then((config) => {
+        if (!cancelled) setLoaded({ repositoryId, config });
       }).catch(() => {
         if (!cancelled) toast.error('Could not load the preview config');
       });
     }
     const refresh = () => {
-      if (enabled && workbench.repositoryId) {
-        void api.repositories.preview.get(workbench.repositoryId).then((config) => {
-          if (!cancelled) setLoaded({ repositoryId: workbench.repositoryId, config });
+      if (enabled && repositoryId) {
+        void api.repositories.preview.get(repositoryId).then((config) => {
+          if (!cancelled) setLoaded({ repositoryId, config });
         }).catch(() => undefined);
       }
     };

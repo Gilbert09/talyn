@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Globe2, Loader2 } from 'lucide-react';
+import { ArrowUp, Globe2, Loader2, MessagesSquare } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
   storedFleetModelForAgent,
@@ -27,6 +27,7 @@ import {
   SourceChip,
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
+import { useNewThreadDialog } from '../components/threads/NewThreadDialog';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
@@ -310,6 +311,15 @@ export function NewWorkbenchPage() {
               <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
               <ModelPicker agent={agent} value={model} onChange={setModel} />
               <EffortPicker value={effort} onChange={setEffort} />
+              <ControlChip
+                onClick={() => useNewThreadDialog.getState().setOpen(true)}
+                title="A thread plans work and starts sessions on repositories."
+                data-attr="new-workbench-new-thread"
+                className="ml-auto"
+              >
+                <MessagesSquare className="h-3.5 w-3.5" />
+                <span>New thread</span>
+              </ControlChip>
             </div>
 
             {(error || unavailable || agentOk.warning) && (

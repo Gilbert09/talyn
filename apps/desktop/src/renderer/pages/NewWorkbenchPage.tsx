@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, FolderOpen, Globe2, History, Loader2 } from 'lucide-react';
+import { ArrowUp, FolderOpen, Globe2, History, Loader2, MessagesSquare } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
   storedFleetModelForAgent,
@@ -37,6 +37,7 @@ import {
 } from '../components/workbench/new/ContinueClaudeConversation';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
 import { useRepoPaths } from '../components/workbench/new/useRepoPaths';
+import { useNewThreadDialog } from '../components/threads/NewThreadDialog';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 
 const PLACEHOLDER = 'Describe a task. Enter creates the session and starts it. ⇧Enter for a new line.';
@@ -396,11 +397,22 @@ export function NewWorkbenchPage() {
               <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
               <ModelPicker agent={agent} value={model} onChange={setModel} />
               <EffortPicker value={effort} onChange={setEffort} />
+              {sessionsOffered && (
+                <ControlChip
+                  onClick={() => useNewThreadDialog.getState().setOpen(true)}
+                  title="A thread has no repository. It plans the work and starts sessions on your repositories."
+                  data-attr="new-workbench-new-thread"
+                  className="ml-auto"
+                >
+                  <MessagesSquare className="h-3.5 w-3.5" />
+                  <span>New thread</span>
+                </ControlChip>
+              )}
               {showImport && (
                 <ControlChip
                   onClick={() => useClaudeImportDialog.getState().setOpen(true)}
                   data-attr="new-workbench-claude-import"
-                  className="ml-auto"
+                  className={cn(!sessionsOffered && 'ml-auto')}
                 >
                   <History className="h-3.5 w-3.5" />
                   <span>Continue a Claude Code conversation</span>

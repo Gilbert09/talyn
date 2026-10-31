@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Archive, ArrowRight, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { api } from '../lib/api';
+import { workbenchPlaceLabel } from '../lib/threads';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
@@ -40,9 +41,10 @@ export function filterAndGroupArchived(all: Workbench[], query: string): Array<{
     .sort((a, b) => archivedAtOf(b).localeCompare(archivedAtOf(a)));
   const map = new Map<string, Workbench[]>();
   for (const wb of rows) {
-    const list = map.get(wb.repoFullName);
+    const key = workbenchPlaceLabel(wb);
+    const list = map.get(key);
     if (list) list.push(wb);
-    else map.set(wb.repoFullName, [wb]);
+    else map.set(key, [wb]);
   }
   return [...map.entries()].map(([repo, items]) => ({ repo, items }));
 }

@@ -7,6 +7,7 @@ import { useWorkbenchStore } from '../../../stores/workbenches';
 import { SessionStateIcon } from '../WorkbenchBadges';
 import { sessionPr, sessionState } from '../../../lib/sessionState';
 import { isArchived } from '../workbenchSelectors';
+import { workbenchPlaceLabel } from '../../../lib/threads';
 
 export const RECENT_LIMIT = 8;
 
@@ -75,14 +76,14 @@ function RecentRow({ workbench, onOpen }: { workbench: Workbench; onOpen: () => 
       type="button"
       onClick={onOpen}
       data-attr="home-recent-row"
-      title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbench.repoFullName} · ${workbench.branch} · ${new Date(workbench.updatedAt).toLocaleString()}`}
+      title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbenchPlaceLabel(workbench)}${workbench.branch ? ` · ${workbench.branch}` : ''} · ${new Date(workbench.updatedAt).toLocaleString()}`}
       className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-accent/60"
     >
       <span className="flex h-3 w-3 shrink-0 items-center justify-center">
         <SessionStateIcon state={state} />
       </span>
       <span className="min-w-0 flex-[1_1_30%] truncate font-medium">{workbenchDisplayName(workbench)}</span>
-      <span className="min-w-0 flex-[1_1_35%] truncate text-xs text-muted-foreground">{workbench.repoFullName}</span>
+      <span className="min-w-0 flex-[1_1_35%] truncate text-xs text-muted-foreground">{workbenchPlaceLabel(workbench)}</span>
       <span className="hidden min-w-0 flex-[1_1_25%] truncate font-mono text-[11px] text-muted-foreground sm:block">
         {workbench.branch}
       </span>

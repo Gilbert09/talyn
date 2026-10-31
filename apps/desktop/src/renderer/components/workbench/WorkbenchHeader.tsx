@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   Laptop,
   Loader2,
+  MessagesSquare,
   PanelBottom,
   PanelRight,
   Wrench,
@@ -52,6 +53,9 @@ import { SessionPreviewChips } from './SessionPreviewChips';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { ThreadChip } from '../threads/ThreadChip';
+import { isThread } from '../../lib/threads';
+import { continueAsThread } from '../../lib/threadActions';
 import { timeAgo } from './new/RecentWorkbenches';
 
 const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
@@ -143,6 +147,18 @@ export function WorkbenchHeader({
   const [linkBusy, setLinkBusy] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
+  const [continuing, setContinuing] = useState(false);
+  const thread = isThread(workbench);
+  const continueInThread = async () => {
+    setContinuing(true);
+    try {
+      await continueAsThread(workbench);
+    } catch (err) {
+      toast.error('Could not continue as a thread', err instanceof Error ? err.message : undefined);
+    } finally {
+      setContinuing(false);
+    }
+  };
   const unlink = async () => {
     setLinkBusy(true);
     try {
@@ -238,6 +254,16 @@ export function WorkbenchHeader({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold">{workbenchDisplayName(workbench)}</h1>
+          {thread && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+              title="A thread has no repository. It starts sessions on your repositories."
+              data-attr="workbench-thread-badge"
+            >
+              <MessagesSquare className="h-3 w-3" />
+              Thread
+            </span>
+          )}
           <span
             className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
             title={workbench.runtime === 'local' ? `Local worktree: ${workbench.localPath ?? ''}` : 'Talyn Fleet sandbox'}
@@ -251,7 +277,8 @@ export function WorkbenchHeader({
             </span>
           )}
           {slackSourceOf(workbench) && <SlackThreadChip source={slackSourceOf(workbench)!} />}
-          <SessionPreviewChips workbench={workbench} ops={ops} />
+          {!thread && workbench.threadId && <ThreadChip threadId={workbench.threadId} />}
+          {!thread && <SessionPreviewChips workbench={workbench} ops={ops} />}
           {pr?.state === 'open' && (
             <PRStatusPill
               compact
@@ -290,31 +317,35 @@ export function WorkbenchHeader({
         {pr?.state === 'closed' && (
           <div className="text-xs text-muted-foreground">PR #{pr.number} was closed without merging</div>
         )}
-        <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
-          <GitBranch className="h-3 w-3 shrink-0" />
-          <span className="truncate">{workbench.branch}</span>
-          <ArrowLeft className="h-3 w-3 shrink-0 opacity-60" />
-          <span className="truncate">{workbench.baseBranch}</span>
-          <button
-            type="button"
-            onClick={copyBranch}
-            className="app-region-no-drag rounded p-0.5 hover:bg-accent hover:text-foreground"
-            title="Copy the branch name"
-            aria-label="Copy the branch name"
-          >
-            {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
-          </button>
-        </div>
+        {!thread && (
+          <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
+            <GitBranch className="h-3 w-3 shrink-0" />
+            <span className="truncate">{workbench.branch}</span>
+            <ArrowLeft className="h-3 w-3 shrink-0 opacity-60" />
+            <span className="truncate">{workbench.baseBranch}</span>
+            <button
+              type="button"
+              onClick={copyBranch}
+              className="app-region-no-drag rounded p-0.5 hover:bg-accent hover:text-foreground"
+              title="Copy the branch name"
+              aria-label="Copy the branch name"
+            >
+              {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+            </button>
+          </div>
+        )}
       </div>
-      <Button
-        variant="ghost"
-        className="h-7 w-7 p-0"
-        onClick={toggleTerminal}
-        title={`Toggle the terminal (${formatKeys('mod+j')})`}
-        aria-label="Toggle the terminal"
-      >
-        <PanelBottom className="h-4 w-4" />
-      </Button>
+      {!thread && (
+        <Button
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          onClick={toggleTerminal}
+          title={`Toggle the terminal (${formatKeys('mod+j')})`}
+          aria-label="Toggle the terminal"
+        >
+          <PanelBottom className="h-4 w-4" />
+        </Button>
+      )}
       <Button
         variant="ghost"
         className={cn('h-7 w-7 p-0', !rightPanelOpen && 'text-muted-foreground')}
@@ -388,18 +419,33 @@ export function WorkbenchHeader({
                   </DropdownMenuItem>
                 );
               })}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={linkBusy}
-                onSelect={() => workbench.pullRequestId ? void unlink() : setLinkOpen(true)}
-              >
-                <GitPullRequest className="mr-2 h-3.5 w-3.5" />
-                {workbench.pullRequestId ? 'Unlink pull request' : 'Link pull request…'}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={copyBranch}>
-                <Copy className="mr-2 h-3.5 w-3.5" />
-                Copy branch name
-              </DropdownMenuItem>
+              {!thread && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={linkBusy}
+                    onSelect={() => workbench.pullRequestId ? void unlink() : setLinkOpen(true)}
+                  >
+                    <GitPullRequest className="mr-2 h-3.5 w-3.5" />
+                    {workbench.pullRequestId ? 'Unlink pull request' : 'Link pull request…'}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={copyBranch}>
+                    <Copy className="mr-2 h-3.5 w-3.5" />
+                    Copy branch name
+                  </DropdownMenuItem>
+                  {!workbench.threadId && (
+                    <DropdownMenuItem
+                      disabled={continuing}
+                      onSelect={() => void continueInThread()}
+                      title="Start a thread that carries on from this session. The session joins the thread."
+                      data-attr="workbench-continue-as-thread"
+                    >
+                      <MessagesSquare className="mr-2 h-3.5 w-3.5" />
+                      Continue as thread
+                    </DropdownMenuItem>
+                  )}
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
