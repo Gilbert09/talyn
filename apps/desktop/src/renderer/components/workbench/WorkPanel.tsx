@@ -177,7 +177,7 @@ function MemorySection({ thread }: { thread: Workbench }) {
       action={
         <button
           type="button"
-          onClick={() => openSettings('instructions')}
+          onClick={() => openSettings('memory')}
           className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           data-attr="work-panel-memory-open-all"
         >

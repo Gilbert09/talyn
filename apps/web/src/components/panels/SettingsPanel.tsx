@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FileText,
+  Brain,
   Users,
   Settings,
   FolderKanban,
@@ -44,6 +45,7 @@ import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
+import { SettingsPage } from '../ui/settings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
@@ -145,6 +147,9 @@ export function SettingsPanel() {
       : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
+    ...(features?.workbenches === true
+      ? [{ id: 'memory' as const, icon: Brain, label: 'Memory' }]
+      : []),
     { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
 
     { id: 'account' as const, icon: User, label: 'Account' },
@@ -199,9 +204,16 @@ export function SettingsPanel() {
             {activeSection === 'instructions' && (
               <div className="space-y-6">
                 {features?.workbenches === true && <RepositoryInstructionsSection />}
-                {features?.workbenches === true && <MemorySection />}
                 <InstructionsSettings />
               </div>
+            )}
+            {activeSection === 'memory' && features?.workbenches === true && (
+              <SettingsPage
+                title="Memory"
+                description="Notes that sessions save as they learn, and notes you add. Every session, task and review reads them."
+              >
+                <MemorySection />
+              </SettingsPage>
             )}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'billing' && <BillingSettings />}

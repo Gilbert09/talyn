@@ -93,6 +93,7 @@ export type SettingsSection =
   | 'slack'
   | 'skills'
   | 'instructions'
+  | 'memory'
   | 'codeReview'
   | 'account'
   | 'billing'

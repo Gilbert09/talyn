@@ -161,7 +161,7 @@ describe('WorkPanel', () => {
     await screen.findByText('Nothing saved yet.');
   });
 
-  it('shows the first memory entries, hides forgotten ones, and Open all goes to Instructions', async () => {
+  it('shows the first memory entries, hides forgotten ones, and Open all goes to Memory', async () => {
     memoryList.mockResolvedValue([
       memory('m1', 'thread'),
       memory('m2', 'workspace'),
@@ -180,7 +180,7 @@ describe('WorkPanel', () => {
     expect(within(list).queryByText('Note m6')).not.toBeInTheDocument();
     expect(within(list).getByText('2 more')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open all' }));
-    expect(openSettings).toHaveBeenCalledWith('instructions');
+    expect(openSettings).toHaveBeenCalledWith('memory');
   });
 
   it('says so when memory cannot load', async () => {

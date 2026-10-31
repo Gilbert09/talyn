@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import {
   Bot,
+  Brain,
   Bug,
   CreditCard,
   FileText,
@@ -30,6 +31,7 @@ import { SkillsSettings } from '../panels/SkillsSettings';
 import { SlackSettings } from '../panels/SlackSettings';
 import { TeamSettings } from '../panels/TeamBilling';
 import { InstructionsPage } from './InstructionsPage';
+import { MemoryPage } from './MemoryPage';
 import { PageHeader } from '../ui/page-header';
 import { ScrollArea } from '../ui/scroll-area';
 import { SettingsPage } from '../ui/settings';
@@ -103,6 +105,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   repositories: RepositoriesSettings,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
+  memory: MemoryPage,
   skills: SkillsPage,
   pullRequests: PullRequestsSettings,
   codeReview: CodeReviewPage,
@@ -136,6 +139,9 @@ export function SettingsShell() {
         { id: 'repositories', icon: FolderGit2, label: 'Repositories' },
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
+        ...(workbenchesOffered(features)
+          ? [{ id: 'memory' as const, icon: Brain, label: 'Memory' }]
+          : []),
         { id: 'skills', icon: Wand2, label: 'Skills' },
         // Gated in the NAV, not only in the body: the page renders null when the
         // feature is not offered, so an unconditional entry would open onto nothing.

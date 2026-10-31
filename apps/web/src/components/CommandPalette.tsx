@@ -32,6 +32,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   slack: 'Slack',
   skills: 'Skills',
   instructions: 'Instructions',
+  memory: 'Memory',
   codeReview: 'Code review',
   account: 'Account',
   billing: 'Billing',
@@ -102,7 +103,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       items.push({ key: 'mcp_servers', label: 'MCP servers', icon: Settings, route: { view: 'mcp_servers' } });
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
-      if ((section === 'sessions' || section === 'slack') && !workbenchesOffered(features)) continue;
+      if ((section === 'sessions' || section === 'slack' || section === 'memory') && !workbenchesOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,
