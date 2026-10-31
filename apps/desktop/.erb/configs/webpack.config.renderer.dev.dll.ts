@@ -8,6 +8,8 @@ import { merge } from 'webpack-merge';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import { dependencies } from '../../package.json';
+
+const DLL_EXCLUDED = new Set(['monaco-editor', 'emojibase-data']);
 import checkNodeEnv from '../scripts/check-node-env';
 
 checkNodeEnv('development');
@@ -33,7 +35,9 @@ const configuration: webpack.Configuration = {
   entry: {
     // Monaco stays out: it loads lazily, and its worker cannot read the DLL's
     // global, so it must be bundled from node_modules like any other module.
-    renderer: Object.keys(dependencies || {}).filter((name) => name !== 'monaco-editor'),
+    // emojibase-data has no main entry (it is JSON files only), so webpack
+    // cannot resolve its bare name.
+    renderer: Object.keys(dependencies || {}).filter((name) => !DLL_EXCLUDED.has(name)),
   },
 
   output: {
