@@ -11,6 +11,7 @@ import {
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
+import { wakeWorkbench } from '../../lib/wakeWorkbench';
 import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -259,6 +260,7 @@ export function Composer({
           disabled={sendBlocked}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
+            wakeWorkbench(workbench.id);
             updateTrigger(e.target.value, e.target.selectionStart);
           }}
           onClick={(e) => updateTrigger(draft, e.currentTarget.selectionStart)}
