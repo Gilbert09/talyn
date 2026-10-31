@@ -134,7 +134,7 @@ describe('threadCardTitle', () => {
     [{ action: 'session_finished', status: 'error' }, 'Session stopped with an error'],
     [{ action: 'pr_opened', status: 'idle' }, 'Pull request opened'],
     [{ action: 'needs_input', status: 'awaiting_input' }, 'Session needs an answer'],
-    [{ action: 'paused' as never, status: '' }, 'Session update'],
+    [{ action: 'paused', status: '' }, 'Paused'],
   ])('%j', (event, title) => {
     expect(threadCardTitle(event)).toBe(title);
   });

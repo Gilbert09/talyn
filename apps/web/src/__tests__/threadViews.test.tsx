@@ -224,6 +224,15 @@ describe('thread transcript cards', () => {
     }
   });
 
+  it('shows why the thread paused and how to continue', () => {
+    render(<AgentBlocks events={[threadEvent(1, 'paused')]} />);
+    const card = screen.getByTestId('thread-session-card');
+    expect(card).toHaveTextContent('Paused');
+    expect(card).toHaveTextContent('The thread stopped waking itself because its sessions made no progress since its last turn. It waits for the person.');
+    expect(card).toHaveTextContent('Send a message to continue.');
+    expect(within(card).queryByRole('button', { name: /Open/ })).not.toBeInTheDocument();
+  });
+
   it('draws a Talyn message as a compact note, not a user bubble', () => {
     const event = {
       seq: 2,

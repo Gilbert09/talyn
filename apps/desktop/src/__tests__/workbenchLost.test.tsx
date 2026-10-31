@@ -8,6 +8,7 @@ import { FilesTab } from '../renderer/components/workbench/FilesTab';
 import { sandboxOps } from '../renderer/lib/workbenchOps';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+jest.mock('../renderer/lib/fileIconUrl', () => ({ loadFileIconUrl: async () => null }));
 
 it('shows the recovery message in Changes and Files without polling the lost box', () => {
   const workbench = {

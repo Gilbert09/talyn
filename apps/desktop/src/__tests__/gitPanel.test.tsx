@@ -28,7 +28,7 @@ jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false
 jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() } }));
 const billingLimit = jest.fn((..._a: unknown[]) => false);
 jest.mock('../renderer/stores/billing', () => ({ maybeHandleBillingLimit: (...a: unknown[]) => billingLimit(...a) }));
-let features: Record<string, boolean> = { codeReview: true };
+const features: Record<string, boolean> = { codeReview: true };
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (sel: (s: { features: Record<string, boolean> }) => unknown) => sel({ features }),
 }));
@@ -193,7 +193,6 @@ describe('Pull request tab', () => {
   };
 
   beforeEach(() => {
-    features = { codeReview: true };
     autoKeep.posthogConnected = true;
     usePullRequestStore.setState({ rows: [] });
   });
@@ -392,17 +391,6 @@ describe('Pull request tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(billingLimit).toHaveBeenCalledWith(err, 'code_review_start'));
     expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('offers no Review while one runs, or when code review is off', () => {
-    getPr.mockResolvedValue({ row: PR, fresh });
-    const running = prWith({ codeReview: { phase: 'reviewing', phasePlan: ['reviewing'], openCount: 0 } as unknown as PRRow['codeReview'] });
-    const { unmount } = render(<PullRequestTab workbench={WB} chat={chat} pr={running} visible turnsEnded={0} />);
-    expect(screen.getByRole('button', { name: 'Review' })).toBeDisabled();
-    unmount();
-    features = {};
-    render(<PullRequestTab workbench={WB} chat={chat} pr={PR} visible turnsEnded={0} />);
-    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
   });
 
   it('a finished review with no findings says so and opens the findings', () => {

@@ -1,4 +1,4 @@
-import { AlertCircle, CircleCheck, GitPullRequest, MessageCircleQuestion, MessagesSquare, Play } from 'lucide-react';
+import { AlertCircle, CircleCheck, GitPullRequest, MessageCircleQuestion, MessagesSquare, Pause, Play } from 'lucide-react';
 import type { ThreadSessionEvent } from '@talyn/shared';
 import { threadSessionEventText } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -15,21 +15,20 @@ function iconFor(event: ThreadSessionEvent) {
       return GitPullRequest;
     case 'needs_input':
       return MessageCircleQuestion;
+    case 'paused':
+      return Pause;
     case 'session_finished':
     default:
       return event.status === 'error' ? AlertCircle : CircleCheck;
   }
 }
 
-/**
- * A `talyn_thread` transcript event: one of the thread's sessions started,
- * finished its turn, opened a pull request or needs an answer. Open goes to
- * the session.
- */
+/** Show a thread update. Session updates link to the session. */
 export function ThreadSessionCard({ event }: { event: ThreadSessionEvent }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const Icon = iconFor(event);
   const error = event.action === 'session_finished' && event.status === 'error';
+  const paused = event.action === 'paused';
   return (
     <div
       className={cn('rounded-md border bg-card text-xs', error ? 'border-destructive/40' : 'border-border')}
@@ -43,27 +42,37 @@ export function ThreadSessionCard({ event }: { event: ThreadSessionEvent }) {
           )}
         />
         <span className="font-medium">{threadCardTitle(event)}</span>
-        <span className="min-w-0 truncate text-muted-foreground" title={threadSessionEventText(event)}>
-          {event.name || event.sessionId}
-          {event.repo && ` · ${event.repo}`}
-        </span>
-        <div className="ml-auto flex items-center gap-1.5">
-          {event.prUrl && (
-            <Button variant="outline" size="sm" onClick={() => void openExternal(event.prUrl!)}>
-              <GitPullRequest className="mr-1 h-3 w-3" />
-              Pull request
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate({ view: 'workbench', id: event.sessionId })}
-            aria-label={`Open the session ${event.name || event.sessionId}`}
-          >
-            Open
-          </Button>
-        </div>
+        {!paused && (
+          <>
+            <span className="min-w-0 truncate text-muted-foreground" title={threadSessionEventText(event)}>
+              {event.name || event.sessionId}
+              {event.repo && ` · ${event.repo}`}
+            </span>
+            <div className="ml-auto flex items-center gap-1.5">
+              {event.prUrl && (
+                <Button variant="outline" size="sm" onClick={() => void openExternal(event.prUrl!)}>
+                  <GitPullRequest className="mr-1 h-3 w-3" />
+                  Pull request
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate({ view: 'workbench', id: event.sessionId })}
+                aria-label={`Open the session ${event.name || event.sessionId}`}
+              >
+                Open
+              </Button>
+            </div>
+          </>
+        )}
       </div>
+      {paused && (
+        <div className="px-3 pb-2 text-muted-foreground">
+          <p>{threadSessionEventText(event)}</p>
+          <p className="mt-1">Send a message to continue.</p>
+        </div>
+      )}
     </div>
   );
 }
