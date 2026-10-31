@@ -20,8 +20,8 @@ const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
-const { insertWorkbench } = await import('../services/workbenches/store.js');
-const { listMemories, listMemoriesQuery, memoryIndexFor, sessionMemoryEnabled } = await import(
+const { insertChat, insertWorkbench, listEvents } = await import('../services/workbenches/store.js');
+const { announceMemoryChange, listMemories, listMemoriesQuery, memoryIndexFor, sessionMemoryEnabled } = await import(
   '../services/workbenches/memory.js'
 );
 
@@ -423,6 +423,40 @@ describe('workspace memory', () => {
     });
   });
 
+  describe('announceMemoryChange', () => {
+    const change = { action: 'created', memoryId: 'm1', name: 'build command', memoryType: 'project', scope: 'repository' } as const;
+    const chat = (id: string, status: string, updatedAt: string, closedAt: string | null = null) =>
+      insertChat({
+        id, workbenchId: 'wb-a', workspaceId: 'ws-a', title: id, agent: 'claude', status,
+        turnCount: 2, updatedAt: new Date(updatedAt), closedAt: closedAt ? new Date(closedAt) : null,
+      });
+    const memoryEvents = async (chatId: string) =>
+      (await listEvents(chatId, -1, 100)).events.filter((e: Loose) => e.event.type === 'talyn_memory');
+
+    it.each([
+      ['the running chat', [['c-run', 'running', '2026-10-01'], ['c-new', 'idle', '2026-10-05']], 'c-run'],
+      ['the latest open chat when none runs', [['c-old', 'idle', '2026-10-01'], ['c-new', 'idle', '2026-10-05']], 'c-new'],
+      ['an open chat over a newer closed one', [['c-old', 'idle', '2026-10-01'], ['c-closed', 'running', '2026-10-05', '2026-10-06']], 'c-old'],
+    ])('appends the event to %s', async (_label, chats, target) => {
+      for (const [id, status, updatedAt, closedAt] of chats) await chat(id, status, updatedAt, closedAt ?? null);
+      await announceMemoryChange('wb-a', change);
+      for (const [id] of chats) {
+        const events = await memoryEvents(id);
+        if (id === target) {
+          expect(events).toHaveLength(1);
+          expect(events[0]).toMatchObject({ turn: 2, event: { type: 'talyn_memory', ...change } });
+        } else {
+          expect(events).toEqual([]);
+        }
+      }
+    });
+
+    it('does nothing for a session without chats, or one that does not exist', async () => {
+      await expect(announceMemoryChange('wb-a', change)).resolves.toBeUndefined();
+      await expect(announceMemoryChange('nope', change)).resolves.toBeUndefined();
+    });
+  });
+
   describe('settings.sessionMemory', () => {
     it.each([
       [undefined, true],
@@ -438,6 +472,12 @@ describe('workspace memory', () => {
 
     it('reads a missing workspace as on', async () => {
       expect(await sessionMemoryEnabled('ws-missing')).toBe(true);
+    });
+
+    it('reads another owner’s workspace as on, so the answer says nothing', async () => {
+      await testDb.db.update(workspaces).set({ settings: { sessionMemory: false } });
+      expect(await sessionMemoryEnabled('ws-a', 'owner-a')).toBe(false);
+      expect(await sessionMemoryEnabled('ws-a', 'owner-b')).toBe(true);
     });
   });
 });
