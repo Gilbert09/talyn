@@ -13,6 +13,9 @@ jest.mock('../renderer/components/settings/InstructionFilesSection', () => ({
 jest.mock('../renderer/components/settings/RepositoryInstructionsSection', () => ({
   RepositoryInstructionsSection: () => <div>Repository instructions section</div>,
 }));
+jest.mock('../renderer/components/settings/MemorySection', () => ({
+  MemorySection: () => <div>Memory section</div>,
+}));
 jest.mock('../renderer/components/panels/InstructionsSettings', () => ({
   InstructionsSettings: () => <div>Prompt templates</div>,
 }));
@@ -20,11 +23,11 @@ jest.mock('../renderer/components/panels/InstructionsSettings', () => ({
 afterEach(cleanup);
 
 describe('Instructions settings page', () => {
-  it('draws your instructions and repository instructions above the prompt templates', () => {
+  it('draws your instructions, repository instructions and memory above the prompt templates', () => {
     mockFeatures = { workbenches: true };
     render(<InstructionsPage />);
     const text = document.body.textContent ?? '';
-    const order = ['Your instructions section', 'Repository instructions section', 'Prompt templates'].map((t) => text.indexOf(t));
+    const order = ['Your instructions section', 'Repository instructions section', 'Memory section', 'Prompt templates'].map((t) => text.indexOf(t));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
@@ -34,6 +37,7 @@ describe('Instructions settings page', () => {
     render(<InstructionsPage />);
     expect(screen.queryByText('Your instructions section')).toBeNull();
     expect(screen.queryByText('Repository instructions section')).toBeNull();
+    expect(screen.queryByText('Memory section')).toBeNull();
     expect(screen.getByText('Prompt templates')).toBeInTheDocument();
   });
 });

@@ -43,6 +43,7 @@ import { SkillsSettings } from './SkillsSettings';
 import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
+import { MemorySection } from '../settings/MemorySection';
 import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
@@ -198,6 +199,7 @@ export function SettingsPanel() {
             {activeSection === 'instructions' && (
               <div className="space-y-6">
                 {features?.workbenches === true && <RepositoryInstructionsSection />}
+                {features?.workbenches === true && <MemorySection />}
                 <InstructionsSettings />
               </div>
             )}
