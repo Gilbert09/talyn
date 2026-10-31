@@ -37,6 +37,7 @@ import {
   recordWorkbenchEvent,
   runCapture,
   sandboxIdFor,
+  SANDBOX_WORK_ROOT,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
@@ -54,6 +55,7 @@ import {
   deleteWorkbenchRow,
   failQueued,
   getWorkbench,
+  isThread,
   listChats,
   liveWorkbenchNames,
   provisioningWorkbenchIds,
@@ -130,6 +132,13 @@ export const SESSION_SANDBOX_MEM_MIB = SANDBOX_SIZES.standard.memMib;
  */
 export const SESSION_SANDBOX_MILLI_VCPU = SANDBOX_SIZES.standard.milliVcpu;
 
+/** A thread's box: the smallest size. It holds no clone and runs no build, only the agent. */
+export const THREAD_SANDBOX_SIZE: SandboxSize = (Object.keys(SANDBOX_SIZES) as SandboxSize[]).reduce((smallest, size) =>
+  SANDBOX_SIZES[size].memMib < SANDBOX_SIZES[smallest].memMib ? size : smallest);
+
+/** What a thread's box runs instead of the clone: the agent's working directory. */
+export const THREAD_WORKDIR_SCRIPT = `mkdir -p ${SANDBOX_WORK_ROOT}`;
+
 export type CreatedWorkbenchSandbox =
   | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
   | { ok: false; error: string };
@@ -145,11 +154,14 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const provider = providerForAgent(row.agent);
   // Best effort: without it the box boots the base image and the clone script
-  // clones as it always did.
-  const repository = await resolveRepository(row.repositoryId, row.workspaceId).catch((err) => {
-    console.warn(`[workbench] resolving the default branch for ${row.id} failed:`, err);
-    return null;
-  });
+  // clones as it always did. A thread has no repository.
+  const repositoryId = row.repositoryId;
+  const repository = repositoryId && !isThread(row)
+    ? await resolveRepository(repositoryId, row.workspaceId).catch((err) => {
+      console.warn(`[workbench] resolving the default branch for ${row.id} failed:`, err);
+      return null;
+    })
+    : null;
   const talynServer = await talynMcpServerFor(row);
   const built = await buildSandboxCreateBody({
     id: sandboxId,
@@ -165,11 +177,12 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     // No `task` and no `ephemeral`: a bare box that outlives every turn.
     // So the scope goes at the top level: the fleet proxy's commit, checks
     // and review-thread endpoints refuse a box that names no repository.
-    repo: row.repoFullName,
+    // A thread names none: it reads repositories and never pushes.
+    ...(isThread(row) ? {} : { repo: row.repoFullName }),
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
-  const bake = repository ? await getRepositoryBake(row.repositoryId) : null;
+  const bake = repository && repositoryId ? await getRepositoryBake(repositoryId) : null;
   const target = await fleetCreateTarget(row.workspaceId);
   const withSize = (size: SandboxSize) => withGithubReadAllRepos({
     ...built.body,
@@ -177,7 +190,7 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
   });
-  const wanted = await sizeForSession(row);
+  const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : await sizeForSession(row);
   let created;
   try {
     created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
@@ -218,11 +231,13 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       sandboxState: replacingLostSandbox ? 'lost' : 'running',
       fleetHost: created.fleetHost ?? row.fleetHost ?? null,
       settings,
-      statusMessage: 'Cloning the repository',
+      statusMessage: isThread(row) ? 'Preparing the thread' : 'Cloning the repository',
     });
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
 
     if (isWorkbenchDraining()) return;
+    // A thread has no repository: no clone, setup, PR, diff or saved work.
+    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail);
     // 2. The repository and the branch.
     const cloned = await runCapture(row, cloneScript(row), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
     if (cloned.exitCode !== 0) {
@@ -285,6 +300,27 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
   }
 }
 
+/** A thread's box after its create: the work directory, the recap, then the queued messages. */
+async function finishThreadProvision(
+  row: WorkbenchRow,
+  replacingLostSandbox: boolean,
+  fail: (message: string) => Promise<void>,
+): Promise<void> {
+  const prepared = await runCapture(row, THREAD_WORKDIR_SCRIPT, { cwd: '/', timeoutMs: 60_000 });
+  if (prepared.exitCode !== 0) {
+    return fail(`Could not prepare the thread's sandbox: ${prepared.stderr.trim().split('\n').slice(-3).join(' ') || `exit ${prepared.exitCode}`}`);
+  }
+  if (isWorkbenchDraining()) return;
+  if (row.memoryRestorePending || replacingLostSandbox) {
+    await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
+  }
+  row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
+  recordWorkbenchEvent(row, 'ready', 'provisioned');
+  for (const chat of await listChats(row.id)) {
+    if (chat.queuedMessages.length > 0 && !chat.closedAt) await startQueuedIfIdle(chat.id);
+  }
+}
+
 /** Archive answers after the durable marker is written. */
 export function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow>;
 export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true }): Promise<WorkbenchRow | null>;
@@ -331,7 +367,14 @@ export async function processArchive(workbenchId: string): Promise<void> {
   };
   try {
     await checkLease();
-    if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
+    if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && isThread(row)) {
+      // A thread's box holds no work of its own: its conversation is in the transcript and the agent backups.
+      const chats = await listChats(row.id);
+      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await checkLease();
+      await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await stopSandboxScripts(row.id, row.sandboxId);
+    } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
       const chats = await listChats(row.id);
       await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
       await stopAllScripts(row);

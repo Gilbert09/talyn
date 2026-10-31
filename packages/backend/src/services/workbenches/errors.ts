@@ -49,6 +49,19 @@ const NOT_READY_COPY: Record<string, string> = {
 export const notReadyError = (status: string): WorkbenchError =>
   new WorkbenchError(NOT_READY_COPY[status] ?? 'This session is not ready.', 409, 'not_ready');
 
+/** Refused for a thread: the action needs a repository, and a thread has none. */
+export const threadRepositoryError = (): WorkbenchError =>
+  new WorkbenchError(
+    'A thread has no repository. Start a session on a repository to do this.',
+    409,
+    'thread_no_repository',
+  );
+
+/** Throw {@link threadRepositoryError} for a thread. */
+export function refuseThread(row: { kind?: string | null }): void {
+  if (row.kind === 'thread') throw threadRepositoryError();
+}
+
 /** Refused while the session moves to a new box. A client can retry once the move ends. */
 export const movingError = (): WorkbenchError => notReadyError('moving');
 

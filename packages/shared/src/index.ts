@@ -128,6 +128,7 @@ export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
 export * from './workbenchMemory.js';
+export * from './workbenchThread.js';
 export * from './claudeSessionImport.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';

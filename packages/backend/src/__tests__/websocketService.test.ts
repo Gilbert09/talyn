@@ -236,6 +236,34 @@ describe('websocket service', () => {
     await closeClient(b);
   });
 
+  it('sends a thread row only to a client that subscribed with the threads capability', async () => {
+    const old = await authed(serverUrl, 'token-mine');
+    const current = await authed(serverUrl, 'token-mine');
+    await old.waitFor('connection:status');
+    await current.waitFor('connection:status');
+    old.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'ws-mine' }));
+    current.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'ws-mine', capabilities: ['threads', 'unknown'] }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    for (const kind of ['thread', 'session']) {
+      broadcastToWorkspace('ws-mine', {
+        type: 'workbench:updated',
+        payload: { workbench: { id: `wb-${kind}`, kind } },
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    const ids = (c: AuthedClient) =>
+      c.messages
+        .filter((m) => (m as { type?: string }).type === 'workbench:updated')
+        .map((m) => (m as { payload: { workbench: { id: string } } }).payload.workbench.id);
+    expect(ids(old)).toEqual(['wb-session']);
+    expect(ids(current)).toEqual(['wb-thread', 'wb-session']);
+
+    await closeClient(old);
+    await closeClient(current);
+  });
+
   it('refuses to subscribe to a workspace the connected user does not own', async () => {
     const client = await authed(serverUrl, 'token-mine');
     await client.waitFor('connection:status');

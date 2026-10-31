@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
   pickWorkbenchName,
+  WORKBENCH_KINDS,
   workbenchBranchFromTask,
   workbenchNameFromTask,
   type CreateWorkbenchInput,
@@ -20,7 +21,17 @@ import { scheduleProvision } from './lifecycle.js';
 import { publicWorkbench } from './prLink.js';
 import { sandboxRefusal, workbenchReadiness, type ReadinessUser } from './readiness.js';
 import { sandboxIdFor } from './sandboxRuntime.js';
-import { insertChat, insertWorkbench, liveWorkbenchNames, type WorkbenchRow } from './store.js';
+import { conversationRecap } from './agentRecap.js';
+import {
+  getWorkbench,
+  insertChat,
+  insertWorkbench,
+  isThread,
+  latestChat,
+  liveWorkbenchNames,
+  updateWorkbench,
+  type WorkbenchRow,
+} from './store.js';
 import { normaliseMessage } from './turns.js';
 
 /**
@@ -42,6 +53,11 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const refuse = (status: number, message: string, code = ''): WorkbenchError => new WorkbenchError(message, status, code);
 
 export interface CreateWorkbenchServiceInput extends CreateWorkbenchInput {
+  /**
+   * Continue this session as the new thread: the session joins the thread, and
+   * the thread's first message is a recap of the session's chat. Thread only.
+   */
+  fromSessionId?: string;
   /** Where the session came from, when not the app. Stored once on the row. */
   source?: WorkbenchSource | null;
   /**
@@ -62,6 +78,12 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   if (body.autoCreatePr !== undefined && typeof body.autoCreatePr !== 'boolean') {
     throw refuse(400, 'autoCreatePr must be a boolean');
   }
+  if (body.kind !== undefined && !WORKBENCH_KINDS.includes(body.kind)) {
+    throw refuse(400, `kind must be one of: ${WORKBENCH_KINDS.join(', ')}`);
+  }
+  if (body.kind === 'thread') return createThread(body, workspaceId, actor);
+  if (body.fromSessionId !== undefined) throw refuse(400, 'fromSessionId is only for a thread.');
+  const threadId = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
 
   const db = getPoolDbClient();
   const repo = (
@@ -170,6 +192,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
         localPath: body.runtime === 'local' ? body.localPath : null,
         sandboxId: body.runtime === 'sandbox' ? sandboxIdFor(id) : null,
         sandboxState: body.runtime === 'sandbox' ? 'creating' : 'none',
+        threadId,
         // A local worktree exists by the time the desktop asks for the row.
         status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
         statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
@@ -208,4 +231,122 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   await emitWorkbenchUpdated(data);
   if (row.runtime === 'sandbox') scheduleProvision(row.id);
   return data;
+}
+
+/** The id of a live thread in this workspace, or a 400. */
+async function requireThread(threadId: unknown, workspaceId: string): Promise<string> {
+  const thread = typeof threadId === 'string' && threadId ? await getWorkbench(threadId) : null;
+  if (!thread || thread.workspaceId !== workspaceId || !isThread(thread) || thread.archivedAt) {
+    throw refuse(400, 'That thread is not a live thread in this workspace.');
+  }
+  return thread.id;
+}
+
+/**
+ * A thread: a sandbox with no repository, no branch and no pull request. It
+ * plans work and starts sessions on repositories. With `fromSessionId`, the
+ * session joins the thread and the first message recaps the session's chat.
+ */
+async function createThread(body: CreateWorkbenchServiceInput, workspaceId: string, actor: ReadinessUser): Promise<Workbench> {
+  if (body.repositoryId !== undefined) throw refuse(400, 'A thread takes no repository.');
+  if (body.branch !== undefined || body.baseBranch !== undefined || body.fromPullRequestId !== undefined) {
+    throw refuse(400, 'A thread takes no branch or pull request.');
+  }
+  if (body.threadId !== undefined) throw refuse(400, 'A thread cannot be in another thread.');
+  if (body.runtime !== 'sandbox') throw refuse(400, 'A thread runs in a sandbox.');
+  const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, actor), body.agent);
+  if (refusal) throw refusal;
+
+  const requestedName = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
+  if (requestedName && !NAME_PATTERN.test(requestedName)) {
+    throw refuse(400, 'name must be lowercase letters, digits and hyphens.');
+  }
+  const prompt = typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt : null;
+  let naming = typeof body.namingText === 'string' && body.namingText.trim() ? body.namingText : prompt;
+  let firstMessage: WorkbenchQueuedMessage | null = prompt ? normaliseMessage({ text: prompt }) : null;
+  let fromSession: WorkbenchRow | null = null;
+  if (body.fromSessionId !== undefined) {
+    fromSession = typeof body.fromSessionId === 'string' && body.fromSessionId ? await getWorkbench(body.fromSessionId) : null;
+    if (!fromSession || fromSession.workspaceId !== workspaceId || isThread(fromSession)) {
+      throw refuse(400, 'That session is not in this workspace.');
+    }
+    const recap = await sessionRecap(fromSession);
+    firstMessage = {
+      ...normaliseMessage({ text: continueAsThreadMessage(fromSession, recap, prompt) }),
+      origin: 'talyn',
+    };
+    naming = fromSession.title || fromSession.name;
+  }
+
+  const id = uuid();
+  let row: WorkbenchRow | null = null;
+  for (let attempt = 0; attempt < 4 && !row; attempt++) {
+    const taken = await liveWorkbenchNames(workspaceId);
+    if (requestedName && taken.includes(requestedName)) {
+      throw refuse(409, `A session named "${requestedName}" already exists.`, 'name_taken');
+    }
+    const name = requestedName || (naming ? workbenchNameFromTask(naming, taken) : pickWorkbenchName(taken));
+    try {
+      row = await insertWorkbench({
+        id,
+        workspaceId,
+        kind: 'thread',
+        repositoryId: null,
+        repoFullName: '',
+        name,
+        branch: '',
+        allocatedBranch: false,
+        baseBranch: '',
+        runtime: 'sandbox',
+        agent: body.agent,
+        model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null,
+        sandboxId: sandboxIdFor(id),
+        sandboxState: 'creating',
+        status: 'provisioning',
+        statusMessage: 'Creating the sandbox',
+        settings: body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess },
+        source: body.source ?? null,
+      });
+    } catch (err) {
+      if (uniqueViolationConstraint(err) !== 'uq_workbenches_workspace_name_live' || requestedName) throw err;
+    }
+  }
+  if (!row) throw refuse(409, 'Could not find a free name for the thread; try again.', 'name_taken');
+
+  await insertChat({
+    id: uuid(),
+    workbenchId: row.id,
+    workspaceId,
+    title: (naming ?? '').trim() ? (naming as string).trim().split('\n')[0].slice(0, 60) : 'Thread',
+    agent: row.agent,
+    model: row.model,
+    queuedMessages: firstMessage ? [firstMessage] : [],
+  });
+  if (fromSession) {
+    const linked = await updateWorkbench(fromSession.id, { threadId: row.id });
+    if (linked) await emitWorkbenchUpdated(await publicWorkbench(linked));
+  }
+  const data = await publicWorkbench(row);
+  await emitWorkbenchUpdated(data);
+  scheduleProvision(row.id);
+  return data;
+}
+
+/** The session's newest open chat as text, for a thread that continues it. Empty when it has none. */
+async function sessionRecap(session: WorkbenchRow): Promise<string> {
+  const chat = await latestChat(session.id);
+  if (!chat) return '';
+  return (await conversationRecap(chat.id, chat.turnCount + 1)) ?? '';
+}
+
+/** The first message of a thread that continues a session. */
+export function continueAsThreadMessage(session: Pick<WorkbenchRow, 'id' | 'name' | 'title' | 'repoFullName' | 'branch'>, recap: string, prompt: string | null): string {
+  return [
+    `This thread continues the session "${session.title || session.name}" (session id ${session.id}) ` +
+      `on ${session.repoFullName}, branch ${session.branch}. The session is now part of this thread.`,
+    recap ? `The conversation in that session so far:\n\n${recap}` : 'That session has no conversation yet.',
+    prompt
+      ? `The person asks:\n\n${prompt}`
+      : 'Read the conversation. Say in a few lines what the work is and what is left, then wait for the person.',
+  ].join('\n\n');
 }

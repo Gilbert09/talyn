@@ -4,6 +4,7 @@ import { prSummaryToNextActionPr, type Workbench, type WorkbenchPullRequestSumma
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches } from '../../db/schema.js';
 import { openChatsByWorkbench, rowToChat, rowToWorkbench, getWorkbench, type WorkbenchRow } from './store.js';
+import { notifyThreadOfLinkedPr } from './threads.js';
 
 /**
  * The pull request opened from a workbench's branch, and the summary the
@@ -75,15 +76,18 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
  * this workspace. Returns the row (updated or not). Never unlinks: a PR that
  * stopped matching (the branch was renamed) is still the PR this work opened.
  */
-export async function linkPullRequest(row: WorkbenchRow): Promise<WorkbenchRow> {
-  if (row.pullRequestId) return row;
+export async function linkPullRequest(row: WorkbenchRow, opts: { notifyThread?: boolean } = {}): Promise<WorkbenchRow> {
+  if (row.pullRequestId || !row.repositoryId) return row;
   const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch, row.settings?.prUnlinked, row.createdAt, row.pushedHeadShas))[0];
   if (!found) return row;
   const [linked] = await getPoolDbClient().update(workbenches).set({ pullRequestId: found.id, updatedAt: new Date() })
     .where(and(eq(workbenches.id, row.id), eq(workbenches.branch, row.branch), sql`${workbenches.pullRequestId} IS NULL`,
       sql`EXISTS (SELECT 1 FROM ${prTable} WHERE ${prTable.id} = ${found.id} AND ${eligiblePr()})`,
     )).returning({ id: workbenches.id });
-  return linked ? (await getWorkbench(row.id)) ?? row : row;
+  if (!linked) return row;
+  const updated = (await getWorkbench(row.id)) ?? row;
+  if (opts.notifyThread !== false && updated.threadId) await notifyThreadOfLinkedPr(updated);
+  return updated;
 }
 
 export async function prSummaries(ids: string[]): Promise<Map<string, WorkbenchPullRequestSummary>> {

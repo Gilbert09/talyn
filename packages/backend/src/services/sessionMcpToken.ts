@@ -56,6 +56,14 @@ export const MAX_SESSION_SPAWN_DEPTH = 2;
  */
 export const SESSION_CREATES_PER_HOUR = 3;
 
+/**
+ * create_session calls a THREAD's token may make per hour. A thread exists to
+ * split work across repositories, so it starts more sessions than a session
+ * does: ten covers a change across a handful of repositories plus a retry of
+ * each. The depth cap still applies to what those sessions start.
+ */
+export const THREAD_CREATES_PER_HOUR = 10;
+
 /** What a validated session token is bound to. */
 export interface SessionMcpBinding {
   tokenId: string;
@@ -207,8 +215,11 @@ export async function validateSessionMcpToken(
  *
  * The window check and the count are one UPDATE, so two concurrent calls cannot
  * both take the last slot.
+ *
+ * Answers the caller's id as `threadId` when the caller is a thread: the new
+ * session belongs to it.
  */
-export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<void> {
+export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<{ threadId: string | null }> {
   if (binding.depth + 1 > MAX_SESSION_SPAWN_DEPTH) {
     throw new SessionSpawnRefusedError(
       `This session was itself started by another session ${binding.depth} level(s) down, and ` +
@@ -217,6 +228,13 @@ export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<
       'depth'
     );
   }
+  const [caller] = await getPoolDbClient()
+    .select({ kind: workbenches.kind })
+    .from(workbenches)
+    .where(eq(workbenches.id, binding.workbenchId))
+    .limit(1);
+  const thread = caller?.kind === 'thread';
+  const perHour = thread ? THREAD_CREATES_PER_HOUR : SESSION_CREATES_PER_HOUR;
   const expired = or(
     isNull(sessionMcpTokens.createsWindowStartedAt),
     sql`${sessionMcpTokens.createsWindowStartedAt} <= now() - interval '1 hour'`
@@ -230,17 +248,19 @@ export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<
     .where(
       and(
         eq(sessionMcpTokens.id, binding.tokenId),
-        or(expired, lt(sessionMcpTokens.createsInWindow, SESSION_CREATES_PER_HOUR))
+        or(expired, lt(sessionMcpTokens.createsInWindow, perHour))
       )
     )
     .returning({ id: sessionMcpTokens.id });
   if (taken.length === 0) {
+    const who = thread ? 'thread' : 'session';
     throw new SessionSpawnRefusedError(
-      `This session has already started ${SESSION_CREATES_PER_HOUR} sessions in the last hour, ` +
-        'which is the limit for a session. Wait, or ask the person to start more from the Talyn app.',
+      `This ${who} has already started ${perHour} sessions in the last hour, ` +
+        `which is the limit for a ${who}. Wait, or ask the person to start more from the Talyn app.`,
       'rate'
     );
   }
+  return { threadId: thread ? binding.workbenchId : null };
 }
 
 /**

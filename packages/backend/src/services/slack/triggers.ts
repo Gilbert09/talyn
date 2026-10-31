@@ -536,7 +536,9 @@ export async function startPendingRequest(id: string, actor: ReadinessUser, repo
     throw err;
   }
   await markThreadStarted(row.id, { workbenchId: wb.id, repoReason: 'picked', repoReasonDetail: 'Picked in Talyn.' });
-  await recordRepoUse({ teamId: row.teamId, channelId: row.channelId, repositoryId: wb.repositoryId, corrected: true }).catch(() => undefined);
+  if (wb.repositoryId) {
+    await recordRepoUse({ teamId: row.teamId, channelId: row.channelId, repositoryId: wb.repositoryId, corrected: true }).catch(() => undefined);
+  }
   scheduleSlackStatus(wb.id);
   return wb;
 }

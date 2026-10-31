@@ -12,14 +12,18 @@ vi.mock('../services/workbenches/memory.js', async (original) => ({
 }));
 vi.mock('../services/workbenches/store.js', async (original) => ({
   ...(await original<typeof import('../services/workbenches/store.js')>()),
-  getWorkbench: vi.fn(async (id: string) =>
-    id === 's1' ? { id: 's1', workspaceId: 'ws1', repositoryId: 'r1' } : null,
-  ),
+  getWorkbench: vi.fn(async (id: string) => ({
+    s1: { id: 's1', workspaceId: 'ws1', repositoryId: 'r1', kind: 'session', threadId: null },
+    t1: { id: 't1', workspaceId: 'ws1', repositoryId: null, kind: 'thread', threadId: null },
+    k1: { id: 'k1', workspaceId: 'ws1', repositoryId: 'r1', kind: 'session', threadId: 't1' },
+  })[id] ?? null),
 }));
 
 const OWNER = 'user-test';
 const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1', depth: 0 } };
 const USER: McpCallContext = {};
+const THREAD: McpCallContext = { session: { tokenId: 'token-2', workbenchId: 't1', depth: 0 } };
+const CHILD: McpCallContext = { session: { tokenId: 'token-3', workbenchId: 'k1', depth: 1 } };
 
 const features: Features = {
   workflows: true,
@@ -121,6 +125,10 @@ describe('memory_write', () => {
     ['a user token, by default', USER, { workspace_id: 'ws1' }, { scope: 'workspace', repositoryId: null }],
     ['a user token with a repository', USER, { workspace_id: 'ws1', repository_id: 'r9' }, { scope: 'repository', repositoryId: 'r9' }],
     ['a user token with a repository, for the workspace', USER, { workspace_id: 'ws1', repository_id: 'r9', scope: 'workspace' }, { scope: 'workspace', repositoryId: null }],
+    ['a thread, by default', THREAD, {}, { scope: 'thread', repositoryId: null, threadId: 't1', source: { kind: 'session', workbenchId: 't1' } }],
+    ['a thread, for the workspace', THREAD, { scope: 'workspace' }, { scope: 'workspace', repositoryId: null, threadId: null }],
+    ['a session in a thread, by default', CHILD, {}, { scope: 'repository', repositoryId: 'r1', threadId: null }],
+    ['a session in a thread, for its thread', CHILD, { scope: 'thread' }, { scope: 'thread', repositoryId: null, threadId: 't1' }],
   ])('writes from %s', async (_label, ctx, args, expected) => {
     const { calls } = mockApi({
       'POST /api/v1/workbenches/memory': (_url, body) => ({ entry: memory(body as object), outcome: 'created' }),
@@ -150,7 +158,9 @@ describe('memory_write', () => {
   it.each<[string, McpCallContext, Record<string, unknown>, RegExp]>([
     ['another repository from a session', SELF, { repository_id: 'r2' }, /own repository/],
     ['another workspace from a session', SELF, { workspace_id: 'ws2' }, /own workspace/],
-    ['a thread scope', SELF, { scope: 'thread' }, /scope must be/],
+    ['a thread scope outside a thread', SELF, { scope: 'thread' }, /thread entry can only be written/],
+    ['a repository scope from a thread', THREAD, { scope: 'repository' }, /thread has no repository/],
+    ['an unknown scope', SELF, { scope: 'org' }, /scope must be/],
     ['a repository scope with no repository', USER, { workspace_id: 'ws1', scope: 'repository' }, /needs repository_id/],
     ['an unknown type', SELF, { type: 'note' }, /type must be one of/],
   ])('refuses %s without a write', async (_label, ctx, args, message) => {
@@ -187,7 +197,9 @@ describe('when memory is off', () => {
 
 describe('memory_search and memory_list', () => {
   it.each<[string, McpCallContext, Record<string, unknown>, Record<string, string>]>([
-    ['a session', SELF, {}, { workspaceId: 'ws1', repositoryId: 'r1', threadId: 's1', q: 'build' }],
+    ['a session', SELF, {}, { workspaceId: 'ws1', repositoryId: 'r1', q: 'build' }],
+    ['a thread', THREAD, {}, { workspaceId: 'ws1', threadId: 't1', q: 'build' }],
+    ['a session in a thread', CHILD, {}, { workspaceId: 'ws1', repositoryId: 'r1', threadId: 't1', q: 'build' }],
     ['a user token', USER, { workspace_id: 'ws1' }, { workspaceId: 'ws1', q: 'build' }],
     ['a user token with a repository', USER, { workspace_id: 'ws1', repository_id: 'r9' }, { workspaceId: 'ws1', repositoryId: 'r9', q: 'build' }],
   ])('search from %s asks for what it can see', async (_label, ctx, args, expected) => {
@@ -223,7 +235,10 @@ describe('memory_read and memory_forget', () => {
   it.each<[string, Record<string, unknown>, McpCallContext, boolean]>([
     ['its own repository entry', {}, SELF, true],
     ['a workspace entry', { scope: 'workspace', repositoryId: null }, SELF, true],
-    ['its own thread entry', { scope: 'thread', repositoryId: null, threadId: 's1' }, SELF, true],
+    ['a thread entry with its own id, outside a thread', { scope: 'thread', repositoryId: null, threadId: 's1' }, SELF, false],
+    ['its own thread entry, as a thread', { scope: 'thread', repositoryId: null, threadId: 't1' }, THREAD, true],
+    ['its thread entry, as a session in the thread', { scope: 'thread', repositoryId: null, threadId: 't1' }, CHILD, true],
+    ['a repository entry, as a thread', {}, THREAD, false],
     ['another repository entry', { repositoryId: 'r2' }, SELF, false],
     ['another thread entry', { scope: 'thread', repositoryId: null, threadId: 's9' }, SELF, false],
     ['another workspace entry', { workspaceId: 'ws2', scope: 'workspace', repositoryId: null }, SELF, false],

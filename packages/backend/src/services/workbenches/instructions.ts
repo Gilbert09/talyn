@@ -287,9 +287,6 @@ function shellQuoteRaw(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Threads do not exist yet. When a workbench row gets `threadId`, its turns see that thread's memory. */
-type MaybeThreadRow = WorkbenchRow & { threadId?: string | null };
-
 /**
  * Copy the workspace's switched-on files for `agent` into the sandbox, and
  * take away the ones switched off since. Skipped entirely when the workspace
@@ -297,7 +294,11 @@ type MaybeThreadRow = WorkbenchRow & { threadId?: string | null };
  * never used the features pays no exec for them.
  */
 export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAgent = row.agent as WorkbenchAgent): Promise<void> {
-  const repo = await repositoryInstructionsForTurn(row.repositoryId, agent);
+  // A thread has no repository: only the user-wide files and the memory index apply.
+  const thread = row.kind === 'thread';
+  const repo = thread || !row.repositoryId
+    ? { hasRow: false, body: null }
+    : await repositoryInstructionsForTurn(row.repositoryId, agent);
   const [any] = await db()
     .select({ key: filesTable.key })
     .from(filesTable)
@@ -306,7 +307,8 @@ export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAg
   const memory = await memoryIndexForTurn({
     workspaceId: row.workspaceId,
     repositoryId: row.repositoryId,
-    threadId: (row as MaybeThreadRow).threadId ?? null,
+    // A thread sees its own entries; a session in a thread sees its thread's.
+    threadId: thread ? row.id : row.threadId,
   });
   if (!any && !repo.hasRow && !memory.used) return;
 
@@ -319,10 +321,12 @@ export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAg
             eq(filesTable.workspaceId, row.workspaceId),
             eq(filesTable.agent, agent),
             eq(filesTable.enabled, true),
-            or(
-              eq(filesTable.target, 'user'),
-              and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
-            ),
+            thread
+              ? eq(filesTable.target, 'user')
+              : or(
+                eq(filesTable.target, 'user'),
+                and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
+              ),
           ),
         )
         .orderBy(asc(filesTable.key))
