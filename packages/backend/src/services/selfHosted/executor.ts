@@ -15,6 +15,7 @@ import { agentLabel, failoverSummary } from './exhaustedQuota.js';
 import { dispatchSandboxRun, type SandboxRunHandle } from './sandboxRun.js';
 import { accountIdsFromHops } from './accountSelection.js';
 import { TASK_SYSTEM_PROMPT } from './systemPrompts.js';
+import { withMemoryIndex } from '../workbenches/memory.js';
 
 // Re-exported, not redeclared. A second definition of this contract is how the
 // two drift: the shared one grew a `capacity` discriminator and this copy
@@ -77,7 +78,11 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     repositoryId: task.repositoryId,
     taskType: task.type === 'pr_response' ? 'pr_response' : 'code_writing',
     prompt: task.prompt?.trim() || task.description?.trim() || task.title,
-    systemPrompt: TASK_SYSTEM_PROMPT,
+    // Loops dispatch through here too. The index is read-only: a task run has no memory tools.
+    systemPrompt: await withMemoryIndex(TASK_SYSTEM_PROMPT, {
+      workspaceId: task.workspaceId,
+      repositoryId: task.repositoryId,
+    }),
     // The task's own pin wins; the environment's is the rung below the
     // workspace's setting. Kept as two separate fields rather than collapsed
     // into one, because collapsing them would let an environment's model

@@ -3,6 +3,7 @@ import { and, asc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from 'drizz
 import {
   MAX_LIVE_MEMORIES_PER_WORKSPACE,
   memoryLimitMessage,
+  MAX_MEMORY_INDEX_BYTES,
   renderMemoryIndex,
   validateMemoryInput,
   validateMemoryUpdate,
@@ -406,6 +407,37 @@ export async function memoryIndexForTurn(opts: {
   if (!any) return { used: false, index: null };
   if (!(await sessionMemoryEnabled(opts.workspaceId))) return { used: true, index: null };
   return { used: true, index: renderMemoryIndex(await memoryIndexFor(opts)) || null };
+}
+
+/**
+ * The read-only index for a task or a review run, to append to its system
+ * prompt: the workspace's entries and the repository's. Empty when memory is
+ * off, when no entry is visible, or when the read fails: memory must never
+ * stop a dispatch.
+ */
+export async function memoryIndexForRun(opts: { workspaceId: string; repositoryId: string | null }): Promise<string> {
+  try {
+    if (!(await sessionMemoryEnabled(opts.workspaceId))) return '';
+    const entries = await memoryIndexFor({ workspaceId: opts.workspaceId, repositoryId: opts.repositoryId });
+    return renderMemoryIndex(entries, MAX_MEMORY_INDEX_BYTES, { readOnly: true });
+  } catch (err) {
+    console.warn(`[memory] reading the index for a run in workspace ${opts.workspaceId} failed:`, err);
+    return '';
+  }
+}
+
+/**
+ * `systemPrompt` with the run's memory index, when there is one. After it by
+ * default; `before` keeps a prompt whose last part must stay last, such as a
+ * review's output contract.
+ */
+export async function withMemoryIndex(
+  systemPrompt: string,
+  opts: { workspaceId: string; repositoryId: string | null; placement?: 'after' | 'before' },
+): Promise<string> {
+  const index = (await memoryIndexForRun(opts)).replace(/\n+$/, '');
+  if (!index) return systemPrompt;
+  return opts.placement === 'before' ? `${index}\n\n${systemPrompt}` : `${systemPrompt}\n\n${index}`;
 }
 
 /**

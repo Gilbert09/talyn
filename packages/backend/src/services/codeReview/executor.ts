@@ -23,6 +23,7 @@ import { githubService } from '../github.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { dispatchSandboxRun } from '../selfHosted/sandboxRun.js';
 import { reviewSystemPrompt } from '../selfHosted/systemPrompts.js';
+import { withMemoryIndex } from '../workbenches/memory.js';
 import { startCodeRun } from '../posthogCode/codeRun.js';
 import { listFleetHosts, hostIsDispatchable } from '../fleetHosts.js';
 import {
@@ -506,7 +507,14 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
         repositoryId: review.repositoryId,
         taskType: 'code_writing',
         prompt,
-        systemPrompt: reviewSystemPrompt(CODE_REVIEW_FINDINGS_SENTINEL),
+        // The memory index goes first, so the output contract stays the last
+        // thing the reviewer reads. The system prompt is its own argv entry, not
+        // part of the prompt, so MAX_INLINE_DIFF_BYTES does not pay for it.
+        systemPrompt: await withMemoryIndex(reviewSystemPrompt(CODE_REVIEW_FINDINGS_SENTINEL), {
+          workspaceId: review.workspaceId,
+          repositoryId: review.repositoryId,
+          placement: 'before',
+        }),
         // Read the pull request's own head, not trunk. Nothing else in Talyn
         // sends this, and it is the whole reason the seam grew the field.
         ...(loaded.headBranch ? { targetRef: loaded.headBranch } : {}),
