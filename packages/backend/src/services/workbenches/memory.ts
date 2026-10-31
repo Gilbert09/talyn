@@ -3,6 +3,7 @@ import { and, asc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from 'drizz
 import {
   MAX_LIVE_MEMORIES_PER_WORKSPACE,
   memoryLimitMessage,
+  renderMemoryIndex,
   validateMemoryInput,
   validateMemoryUpdate,
   type MemoryChangeEvent,
@@ -388,6 +389,23 @@ export async function sessionMemoryEnabled(workspaceId: string, ownerId?: string
     .where(and(eq(workspaces.id, workspaceId), ownerId ? eq(workspaces.ownerId, ownerId) : undefined))
     .limit(1);
   return row?.value !== 'false';
+}
+
+/**
+ * The index a session turn gets, as Markdown. `used` is false when the
+ * workspace never stored an entry (forgotten entries count), so the turn can
+ * skip the instruction sync. `index` is null when memory is off or no entry is
+ * visible, which tells the sync to remove the index from the box.
+ */
+export async function memoryIndexForTurn(opts: {
+  workspaceId: string;
+  repositoryId?: string | null;
+  threadId?: string | null;
+}): Promise<{ used: boolean; index: string | null }> {
+  const [any] = await db().select({ id: table.id }).from(table).where(eq(table.workspaceId, opts.workspaceId)).limit(1);
+  if (!any) return { used: false, index: null };
+  if (!(await sessionMemoryEnabled(opts.workspaceId))) return { used: true, index: null };
+  return { used: true, index: renderMemoryIndex(await memoryIndexFor(opts)) || null };
 }
 
 /**

@@ -7,7 +7,8 @@ import path from 'path';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { workspaces } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { repositories, workspaceMemories, workspaces } from '../db/schema.js';
 
 /**
  * The user's instruction files: the routes, and the in-box sync. The sync's
@@ -42,9 +43,8 @@ const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
-const { putInstructionFile, ruleFileName, syncInstructionFiles, CODEX_BLOCK_END, CODEX_BLOCK_START } = await import(
-  '../services/workbenches/instructions.js'
-);
+const { putInstructionFile, ruleFileName, syncInstructionFiles, CODEX_BLOCK_END, CODEX_BLOCK_START, MEMORY_RULE_FILE } =
+  await import('../services/workbenches/instructions.js');
 const { writeSandboxFiles } = await import('../services/workbenches/sandboxFiles.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -345,6 +345,140 @@ describe('workbench instruction files', () => {
     it('creates an empty file', async () => {
       await writeSandboxFiles(row(), [{ path: '~/empty.txt', base64: '' }]);
       expect(await read(home('empty.txt'))).toBe('');
+    });
+
+    describe('the memory index', () => {
+      const memRow = (agent = 'claude') =>
+        ({ id: 'wb-1', workspaceId: 'ws-a', repositoryId: 'repo-1', repoFullName: 'acme/app', agent }) as Loose;
+      let seq = 0;
+      const remember = (over: Partial<typeof workspaceMemories.$inferInsert> = {}) =>
+        testDb.db.insert(workspaceMemories).values({
+          id: `mem-${++seq}`,
+          workspaceId: 'ws-a',
+          ownerId: 'owner-a',
+          scope: 'workspace',
+          type: 'project',
+          name: `entry ${seq}`,
+          description: `about ${seq}`,
+          body: 'the secret body',
+          ...over,
+        });
+      const setMemory = (on: boolean) =>
+        testDb.db.update(workspaces).set({ settings: { sessionMemory: on } }).where(eq(workspaces.id, 'ws-a'));
+      const forgetAll = () => testDb.db.update(workspaceMemories).set({ forgottenAt: new Date() });
+      const rule = () => home('.claude', 'rules', MEMORY_RULE_FILE);
+
+      beforeEach(async () => {
+        await testDb.db.insert(repositories).values([
+          { id: 'repo-1', workspaceId: 'ws-a', name: 'acme/app', url: 'https://github.com/acme/app' },
+          { id: 'repo-2', workspaceId: 'ws-a', name: 'acme/other', url: 'https://github.com/acme/other' },
+        ]);
+      });
+
+      it('runs no exec when the workspace never stored an entry or a file', async () => {
+        await syncInstructionFiles(memRow(), 'claude');
+        await syncInstructionFiles(memRow('codex'), 'codex');
+        expect(sandbox.calls).toEqual([]);
+      });
+
+      it('writes the index as a Claude rule: workspace and own-repository entries, no bodies', async () => {
+        await remember({ name: 'pnpm only', description: 'Use pnpm, never npm', type: 'feedback' });
+        await remember({ scope: 'repository', repositoryId: 'repo-1', name: 'flaky e2e', description: 'e2e retries once' });
+        await remember({ scope: 'repository', repositoryId: 'repo-2', name: 'other repo', description: 'not this one' });
+
+        await syncInstructionFiles(memRow(), 'claude');
+
+        const text = await read(rule());
+        expect(text).toContain('# Talyn memory');
+        expect(text).toContain('- pnpm only (feedback, workspace): Use pnpm, never npm');
+        expect(text).toContain('- flaky e2e (project, repository): e2e retries once');
+        expect(text).not.toContain('other repo');
+        expect(text).not.toContain('the secret body');
+        expect(text.indexOf('pnpm only')).toBeLessThan(text.indexOf('flaky e2e'));
+      });
+
+      it('keeps the index through the stale-rule cleanup, next to the user files', async () => {
+        await fs.mkdir(home('.claude', 'rules'), { recursive: true });
+        await fs.writeFile(home('.claude', 'rules', 'talyn-old.md'), 'stale');
+        await remember();
+        await put(claudeUser('be terse'));
+
+        await syncInstructionFiles(memRow(), 'claude');
+        await syncInstructionFiles(memRow(), 'claude');
+
+        expect((await fs.readdir(home('.claude', 'rules'))).sort()).toEqual([MEMORY_RULE_FILE, 'talyn-user.md']);
+      });
+
+      it.each([
+        ['memory is switched off', async () => setMemory(false)],
+        ['every entry is forgotten', forgetAll],
+      ])('removes the Claude rule when %s, and leaves the user rules', async (_label, change) => {
+        await remember();
+        await put(claudeUser('be terse'));
+        await syncInstructionFiles(memRow(), 'claude');
+        expect(await exists(rule())).toBe(true);
+
+        await change();
+        await syncInstructionFiles(memRow(), 'claude');
+
+        expect(await exists(rule())).toBe(false);
+        expect(await read(home('.claude', 'rules', 'talyn-user.md'))).toBe('be terse');
+      });
+
+      it('removes the rule with no instruction file left to trigger the sync', async () => {
+        await remember();
+        await syncInstructionFiles(memRow(), 'claude');
+        expect(await exists(rule())).toBe(true);
+        await forgetAll();
+        await syncInstructionFiles(memRow(), 'claude');
+        expect(await exists(rule())).toBe(false);
+      });
+
+      it('writes nothing when memory is off from the start', async () => {
+        await setMemory(false);
+        await remember();
+        await syncInstructionFiles(memRow(), 'claude');
+        expect(await exists(rule())).toBe(false);
+      });
+
+      it('puts the index in the Codex block after the user file, and takes it out when off', async () => {
+        const briefing = '# Sandbox\n';
+        await fs.mkdir(home('.codex'), { recursive: true });
+        await fs.writeFile(home('.codex', 'AGENTS.md'), briefing);
+        await put({ key: 'codex-user', agent: 'codex', target: 'user', sourcePath: '~/.codex/AGENTS.md', content: 'use pnpm\n', enabled: true });
+        await remember({ name: 'deploys', description: 'Deploys go out on push to main' });
+
+        await syncInstructionFiles(memRow('codex'), 'codex');
+        await syncInstructionFiles(memRow('codex'), 'codex');
+
+        let text = await read(home('.codex', 'AGENTS.md'));
+        expect(text.split(CODEX_BLOCK_START)).toHaveLength(2);
+        const block = text.slice(text.indexOf(CODEX_BLOCK_START), text.indexOf(CODEX_BLOCK_END));
+        expect(block).toContain('use pnpm');
+        expect(block).toContain('- deploys (project, workspace): Deploys go out on push to main');
+        expect(block.indexOf('use pnpm')).toBeLessThan(block.indexOf('# Talyn memory'));
+        expect(await exists(home('.claude', 'rules'))).toBe(false);
+
+        await setMemory(false);
+        await syncInstructionFiles(memRow('codex'), 'codex');
+        text = await read(home('.codex', 'AGENTS.md'));
+        expect(text).toContain('use pnpm');
+        expect(text).not.toContain('# Talyn memory');
+      });
+
+      it('gives Codex a block with the index alone, and strips it when the entries are forgotten', async () => {
+        const briefing = '# Sandbox\n';
+        await fs.mkdir(home('.codex'), { recursive: true });
+        await fs.writeFile(home('.codex', 'AGENTS.md'), briefing);
+        await remember();
+
+        await syncInstructionFiles(memRow('codex'), 'codex');
+        expect(await read(home('.codex', 'AGENTS.md'))).toContain(`${CODEX_BLOCK_START}\n# Talyn memory`);
+
+        await forgetAll();
+        await syncInstructionFiles(memRow('codex'), 'codex');
+        expect(await read(home('.codex', 'AGENTS.md'))).toBe(briefing);
+      });
     });
 
     it('throws when the box refuses, so the turn can report it', async () => {

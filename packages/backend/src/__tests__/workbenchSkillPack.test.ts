@@ -5,7 +5,14 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { eq } from 'drizzle-orm';
-import { TALYN_SKILL_PACK, TALYN_SKILLS_NOTE, TALYN_TOOLS_NOTE, workbenchTurnPrompt } from '@talyn/shared';
+import {
+  renderMemoryIndex,
+  TALYN_MEMORY_NOTE,
+  TALYN_SKILL_PACK,
+  TALYN_SKILLS_NOTE,
+  TALYN_TOOLS_NOTE,
+  workbenchTurnPrompt,
+} from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { workspaces } from '../db/schema.js';
 import { SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
@@ -58,7 +65,7 @@ const toolsByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 describe('session skill pack', () => {
   describe('the files', () => {
-    it('ships the six skills, in the order the prompt names them', () => {
+    it('ships the seven skills, in the order the prompt names them', () => {
       expect([...TALYN_SKILL_PACK]).toEqual([
         'talyn-multi-repo',
         'talyn-delegate',
@@ -66,6 +73,7 @@ describe('session skill pack', () => {
         'talyn-ship-pr',
         'talyn-review-loop',
         'talyn-wrap-up',
+        'talyn-memory',
       ]);
       expect(readSkillPack().map((s) => s.name)).toEqual([...TALYN_SKILL_PACK]);
     });
@@ -133,6 +141,13 @@ describe('session skill pack', () => {
         expect(skillText(name)).toContain('3 sessions per hour');
         expect(skillText(name)).toContain('2 levels');
       }
+      // Memory: the skill, the turn note and the delivered index name the same tools and the same rule.
+      const memory = skillText('talyn-memory');
+      const index = renderMemoryIndex([{ name: 'n', type: 'project', scope: 'repository', description: 'd' }]);
+      for (const text of [memory, TALYN_MEMORY_NOTE, index]) expect(text).toContain('talyn_memory_write');
+      expect(memory).toContain('Read an entry before you rely on it');
+      expect(index).toContain('before you rely on it');
+      expect(memory).toContain('talyn-memory.md');
     });
   });
 
@@ -317,7 +332,7 @@ describe('session skill pack', () => {
   });
 
   describe('the turn prompt', () => {
-    const prompt = (talynTools: boolean, talynSkills: boolean) =>
+    const prompt = (talynTools: boolean, talynSkills: boolean, memory = false) =>
       workbenchTurnPrompt({
         agent: 'claude',
         text: 'hi',
@@ -325,6 +340,7 @@ describe('session skill pack', () => {
         createPr: { branch: 'b', baseBranch: 'main' },
         talynTools,
         talynSkills,
+        memory,
       }).appendSystemPrompt ?? '';
 
     it.each([
@@ -336,6 +352,34 @@ describe('session skill pack', () => {
       const text = prompt(tools, skills);
       expect(text.includes(TALYN_SKILLS_NOTE)).toBe(named);
       expect(text.includes(TALYN_TOOLS_NOTE)).toBe(tools);
+    });
+
+    it.each([
+      [true, true, true],
+      [true, false, false],
+      [false, true, false],
+      [false, false, false],
+    ])('tools %j, memory %j: asks to save memory = %j', (tools, memory, asked) => {
+      expect(prompt(tools, true, memory).includes(TALYN_MEMORY_NOTE)).toBe(asked);
+    });
+
+    it('gives Codex the memory note in front of the prompt', () => {
+      const { prompt: text, appendSystemPrompt } = workbenchTurnPrompt({
+        agent: 'codex',
+        text: 'hi',
+        planMode: false,
+        createPr: { branch: 'b', baseBranch: 'main' },
+        talynTools: true,
+        memory: true,
+      });
+      expect(appendSystemPrompt).toBeUndefined();
+      expect(text).toContain(TALYN_MEMORY_NOTE);
+      expect(text.endsWith('---\n\nhi')).toBe(true);
+    });
+
+    it('keeps the memory note to two sentences that name the write tool', () => {
+      expect(TALYN_MEMORY_NOTE).toContain('`talyn_memory_write`');
+      expect(TALYN_MEMORY_NOTE.trim().split(/[.!?](\s|$)/).filter((s) => s.trim()).length).toBeLessThanOrEqual(2);
     });
 
     it('names every skill in the pack, in one sentence', () => {
