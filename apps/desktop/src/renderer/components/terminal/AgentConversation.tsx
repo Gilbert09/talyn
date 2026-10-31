@@ -9,6 +9,7 @@ import { ChevronDown, ChevronRight, GitPullRequest, Shield } from 'lucide-react'
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
+import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
   buildBlocks,
@@ -229,6 +230,7 @@ function BlockViewImpl({
       );
     case 'system':
       if (block.subtype === 'talyn_pr') return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
+      if (block.subtype === 'talyn_memory' && block.memory) return <MemoryChangeCard change={block.memory} />;
       return <SystemBlock text={block.text} subtype={block.subtype} />;
     case 'result':
       return (
