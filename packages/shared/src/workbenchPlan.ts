@@ -51,6 +51,7 @@ export const TALYN_SKILL_PACK = [
   'talyn-review-loop',
   'talyn-wrap-up',
   'talyn-memory',
+  'talyn-thread',
 ] as const;
 
 export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
@@ -58,8 +59,14 @@ export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 /** Added to {@link TALYN_TOOLS_NOTE} when the box has the skill pack. */
 export const TALYN_SKILLS_NOTE =
   'Talyn installed the skills `talyn-multi-repo`, `talyn-delegate`, `talyn-ci-triage`, `talyn-ship-pr`, ' +
-  '`talyn-review-loop`, `talyn-wrap-up` and `talyn-memory`: use them for other repositories, child sessions, ' +
-  'failing CI, the pull request, review feedback, ending the session and saving what you learn.';
+  '`talyn-review-loop`, `talyn-wrap-up`, `talyn-memory` and `talyn-thread`: use them for other repositories, child sessions, ' +
+  'failing CI, the pull request, review feedback, ending the session, saving what you learn and running a thread.';
+
+/** Told to every turn of a thread: a conversation with no repository that starts sessions. */
+export const TALYN_THREAD_NOTE =
+  'This is a Talyn thread. It has no repository: plan the work, start sessions on repositories with ' +
+  '`talyn_create_session`, then end your turn. Talyn wakes you when a session finishes, opens a pull request ' +
+  'or needs an answer. Use the `talyn-thread` skill.';
 
 /** Told to every turn of a session whose workspace has memory on and whose box has Talyn's MCP server. */
 export const TALYN_MEMORY_NOTE =
@@ -91,6 +98,8 @@ export function workbenchTurnPrompt(input: {
   talynSkills?: boolean;
   /** The workspace has memory on. Named only together with `talynTools`. */
   memory?: boolean;
+  /** The turn runs in a thread: no repository, no branch and no pull request. */
+  thread?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -101,9 +110,10 @@ export function workbenchTurnPrompt(input: {
   const networkNote = input.internetAccess === false
     ? 'This sandbox reaches only its repository, the package registries (npm, PyPI, apt), and the agent API.'
     : null;
-  const autoPrNote = input.autoCreatePr !== false && !input.hasPullRequest && input.intent !== 'create_pr'
+  const autoPrNote = !input.thread && input.autoCreatePr !== false && !input.hasPullRequest && input.intent !== 'create_pr'
     ? buildAutoCreatePrInstructions()
     : null;
+  const threadNote = input.thread ? TALYN_THREAD_NOTE : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
   const talynNote = input.talynTools
     ? input.talynSkills
@@ -111,7 +121,10 @@ export function workbenchTurnPrompt(input: {
       : TALYN_TOOLS_NOTE
     : null;
   const memoryNote = input.talynTools && input.memory ? TALYN_MEMORY_NOTE : null;
-  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, memoryNote, SANDBOX_SERVICES_NOTE, input.recap]
+  const instructions = [
+    actionInstructions, networkNote, autoPrNote, importNote, threadNote, talynNote, memoryNote,
+    input.thread ? null : SANDBOX_SERVICES_NOTE, input.recap,
+  ]
     .filter(Boolean)
     .join('\n\n');
   if (!instructions) return { prompt: input.text };

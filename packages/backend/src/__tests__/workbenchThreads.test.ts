@@ -5,7 +5,7 @@ import type { AddressInfo } from 'net';
 import { SANDBOX_SIZES } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
-import { repositories, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workspaces } from '../db/schema.js';
 
 /**
  * Threads, end to end against a fake fleet: a workbench with no repository
@@ -49,6 +49,7 @@ const { setWorkbenchFleetClientForTests } = await import('../services/workbenche
 const { getChat, getWorkbench, listChats, listEvents } = await import('../services/workbenches/store.js');
 const { capabilityFor } = await import('../services/websocket.js');
 const { continueAsThreadMessage } = await import('../services/workbenches/create.js');
+const { announceThreadSession, threadWakeText } = await import('../services/workbenches/threads.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -369,6 +370,129 @@ describe('threads', () => {
       );
       expect(text).toContain('"login" (session id wb-1) on acme/app, branch fix-login');
       for (const part of parts) expect(text).toContain(part);
+    });
+  });
+
+  describe('sessions report to their thread', () => {
+    const threadChat = async (threadId: string) => (await listChats(threadId))[0].id;
+    const eventsOf = async (chatId: string) => (await listEvents(chatId, 0, 500)).events.map((e) => e.event as Loose);
+    const cards = async (chatId: string) => (await eventsOf(chatId)).filter((e) => e.type === 'talyn_thread');
+    const talynMessages = async (chatId: string) =>
+      (await eventsOf(chatId)).filter((e) => e.talyn?.kind === 'user_message' && e.talyn?.origin === 'talyn');
+
+    it('writes a card and wakes the thread when a session finishes a turn, and the woken turn wakes nothing', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ threadId: thread.id, prompt: 'fix the login bug' });
+
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+      const [card] = await cards(chatId);
+      expect(card).toMatchObject({ action: 'session_finished', sessionId: session.id, repo: 'acme/app', status: 'idle' });
+      const [wake] = await talynMessages(chatId);
+      expect(wake.message.content[0].text).toContain(`[Talyn] Session "${session.name}" (session id ${session.id}) on acme/app finished its turn.`);
+      expect(wake.message.content[0].text).toContain('talyn_list_thread_sessions');
+
+      // The woken thread turn runs and ends with no new card or message: a thread never notifies.
+      await vi.waitFor(async () => expect((await getChat(chatId))?.turnCount).toBe(1), { timeout: 5000 });
+      await idle(chatId);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(await cards(chatId)).toHaveLength(1);
+      expect(await talynMessages(chatId)).toHaveLength(1);
+      expect((await getChat(chatId))?.turnCount).toBe(1);
+      // The thread's agent was told it runs in a thread.
+      expect(fleet.scripts.filter((s) => isAgentTurn(s)).some((s) => s.includes('This is a Talyn thread'))).toBe(true);
+    });
+
+    it('writes a card and wakes the thread when a session links a pull request', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ threadId: thread.id });
+      await testDb.db.insert(pullRequests).values({
+        id: 'pr-1', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 7, state: 'open',
+        lastSummary: { headBranch: session.branch, createdAt: new Date().toISOString() },
+      });
+      const got = await call('GET', `/workbenches/${session.id}`);
+      expect(got.body.data.pullRequestId).toBe('pr-1');
+
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+      expect(await cards(chatId)).toEqual([
+        expect.objectContaining({ action: 'pr_opened', sessionId: session.id, prUrl: 'https://github.com/acme/app/pull/7' }),
+      ]);
+      expect((await talynMessages(chatId))[0].message.content[0].text).toContain('opened a pull request: https://github.com/acme/app/pull/7');
+    });
+
+    it('writes a start card with no wake when a thread starts a session', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ threadId: thread.id });
+      await announceThreadSession(session.id);
+      expect(await cards(chatId)).toEqual([expect.objectContaining({ action: 'session_started', sessionId: session.id })]);
+      expect(await talynMessages(chatId)).toHaveLength(0);
+      expect((await getChat(chatId))?.turnCount).toBe(0);
+      expect(emitted.some((e) => e.type === 'workbench:event' && (e.payload as Loose).chatId === chatId)).toBe(true);
+    });
+
+    it('keeps one waiting wake when several sessions change during a thread turn', async () => {
+      let release!: () => void;
+      const hold = new Promise<void>((resolve) => { release = resolve; });
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      scriptedFleet((script) => (isAgentTurn(script) && script.includes('hold the thread')
+        ? { stdout: claudeTurnLines('sess-t', 'ok'), hold } : null));
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hold the thread' });
+      await vi.waitFor(async () => expect((await getChat(chatId))?.status).toBe('running'));
+
+      const first = await createSession({ threadId: thread.id, prompt: 'one' });
+      const second = await createSession({ threadId: thread.id, prompt: 'two' });
+      await vi.waitFor(async () => expect(await cards(chatId)).toHaveLength(2), { timeout: 5000 });
+      expect((await cards(chatId)).map((c) => c.sessionId).sort()).toEqual([first.id, second.id].sort());
+      const queued = (await getChat(chatId))!.queuedMessages;
+      expect(queued).toHaveLength(1);
+      expect(queued[0].origin).toBe('talyn');
+      release();
+      await vi.waitFor(async () => expect((await getChat(chatId))?.turnCount).toBe(2), { timeout: 5000 });
+    });
+
+    it('tells the thread when a local session in it waits for an answer, then when it finishes', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'claude', deviceId: 'dev-1', localPath: '/tmp/wt', threadId: thread.id,
+      });
+      expect(res.status).toBe(200);
+      const localChat = (await listChats(res.body.data.id))[0].id;
+      await call('PATCH', `/workbenches/chats/${localChat}/local`, { status: 'running' });
+      expect(await cards(chatId)).toHaveLength(0);
+      await call('PATCH', `/workbenches/chats/${localChat}/local`, { status: 'awaiting_input' });
+      await vi.waitFor(async () => expect(await cards(chatId)).toHaveLength(1));
+      expect((await cards(chatId))[0]).toMatchObject({ action: 'needs_input', status: 'awaiting_input' });
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1));
+      await idle(chatId);
+
+      await call('PATCH', `/workbenches/chats/${localChat}/local`, { status: 'running' });
+      await call('PATCH', `/workbenches/chats/${localChat}/local`, { status: 'idle' });
+      await vi.waitFor(async () => expect(await cards(chatId)).toHaveLength(2));
+      expect((await cards(chatId))[1]).toMatchObject({ action: 'session_finished', status: 'idle' });
+    });
+
+    it('does nothing for a session outside a thread', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ prompt: 'alone' });
+      await idle((await listChats(session.id))[0].id);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await cards(chatId)).toHaveLength(0);
+    });
+
+    it.each([
+      ['session_finished', 'idle', undefined, 'finished its turn.'],
+      ['session_finished', 'idle', 'https://x/pull/1', 'finished its turn. Its pull request is https://x/pull/1.'],
+      ['session_finished', 'error', undefined, 'stopped with an error.'],
+      ['pr_opened', 'idle', 'https://x/pull/1', 'opened a pull request: https://x/pull/1.'],
+      ['needs_input', 'awaiting_input', undefined, 'is waiting for an answer.'],
+    ] as const)('words the wake for %s (%s, %s)', (action, status, prUrl, expected) => {
+      const text = threadWakeText({ action, status, sessionId: 's1', name: 'api', repo: 'acme/api', ...(prUrl ? { prUrl } : {}) });
+      expect(text.split('\n')[0]).toBe(`[Talyn] Session "api" (session id s1) on acme/api ${expected}`);
     });
   });
 

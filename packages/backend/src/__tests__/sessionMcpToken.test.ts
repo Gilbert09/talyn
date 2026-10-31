@@ -15,6 +15,7 @@ import {
   revokeSessionMcpToken,
   SESSION_CREATES_PER_HOUR,
   SessionSpawnRefusedError,
+  THREAD_CREATES_PER_HOUR,
   validateSessionMcpToken,
   type SessionMcpBinding,
 } from '../services/sessionMcpToken.js';
@@ -161,7 +162,7 @@ describe('session MCP tokens', () => {
     };
 
     it.each([0, 1])('lets a session at depth %i start one', async (depth) => {
-      await expect(reserveSessionCreate(await binding(depth))).resolves.toBeUndefined();
+      await expect(reserveSessionCreate(await binding(depth))).resolves.toEqual({ threadId: null });
     });
 
     it.each([MAX_SESSION_SPAWN_DEPTH, MAX_SESSION_SPAWN_DEPTH + 1])('refuses a session at depth %i', async (depth) => {
@@ -189,6 +190,19 @@ describe('session MCP tokens', () => {
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(SESSION_CREATES_PER_HOUR);
     });
 
+    it(`allows a thread ${THREAD_CREATES_PER_HOUR} creates an hour, then refuses, and names it as the thread`, async () => {
+      await testDb.db.update(workbenches).set({ kind: 'thread' }).where(eq(workbenches.id, 'wb'));
+      const b = await binding();
+      for (let i = 0; i < THREAD_CREATES_PER_HOUR; i++) {
+        await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: 'wb' });
+      }
+      const refused = await reserveSessionCreate(b).catch((err) => err);
+      expect(refused).toBeInstanceOf(SessionSpawnRefusedError);
+      expect(refused.reason).toBe('rate');
+      expect(refused.message).toContain(`This thread has already started ${THREAD_CREATES_PER_HOUR} sessions`);
+      expect((await rowFor('wb')).createsInWindow).toBe(THREAD_CREATES_PER_HOUR);
+    });
+
     it('opens a new window once the hour has passed', async () => {
       const b = await binding();
       await testDb.db.update(sessionMcpTokens)
@@ -206,7 +220,7 @@ describe('session MCP tokens', () => {
       for (let i = 0; i < SESSION_CREATES_PER_HOUR; i++) await reserveSessionCreate(first);
       await ensureSessionMcpToken({ id: 'wb2', workspaceId: 'ws' });
       const second = (await validateSessionMcpToken((await readSessionMcpToken('wb2'))!))!.session;
-      await expect(reserveSessionCreate(second)).resolves.toBeUndefined();
+      await expect(reserveSessionCreate(second)).resolves.toEqual({ threadId: null });
     });
 
     it.each([0, 1])('records the parent and depth %i + 1 on the child', async (depth) => {

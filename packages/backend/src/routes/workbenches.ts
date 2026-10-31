@@ -63,7 +63,7 @@ import {
   resumeOnce,
   saveDetectedConfig,
 } from '../services/workbenches/sandboxRuntime.js';
-import { continueAsThread } from '../services/workbenches/threads.js';
+import { continueAsThread, notifyThread } from '../services/workbenches/threads.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
@@ -80,6 +80,7 @@ import {
   rowToChat,
   setGeneratedTitle,
   storeNumberedEvents,
+  threadSessions,
   updateChat,
   updateWorkbench,
   type ChatRow,
@@ -378,6 +379,10 @@ export function workbenchRoutes(): Router {
         ...(body.agentSessionId !== undefined ? { agentSessionId: body.agentSessionId } : {}),
       })) ?? found.chat;
     emitWorkbenchChat(row.workspaceId, rowToChat(row));
+    // A local session in a thread: its turns run on the desktop, so the change of status is the turn's end.
+    if (found.workbench.threadId && found.chat.status === 'running' && body.status !== 'running') {
+      await notifyThread(found.workbench, body.status === 'awaiting_input' ? 'needs_input' : 'session_finished', { status: body.status });
+    }
     ok(res, rowToChat(row));
   });
 
@@ -533,6 +538,14 @@ export function workbenchRoutes(): Router {
     } catch (err) {
       fail(res, err);
     }
+  });
+
+  /** A thread's sessions, newest first, archived ones too. */
+  router.get('/:id/sessions', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    if (!isThread(row)) return bad(res, 409, 'This is a session, not a thread.', 'not_thread');
+    ok(res, await publicWorkbenches(await threadSessions(row.id)));
   });
 
   /** Continue a session as a thread: the session joins the new thread, which starts with a recap of its chat. */

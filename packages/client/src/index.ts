@@ -2811,6 +2811,8 @@ export const workbenches = {
     if (opts.kinds?.length) qs.set('kinds', opts.kinds.join(','));
     return request<Workbench[]>('GET', `/workbenches?${qs.toString()}`);
   },
+  /** The sessions of a thread, newest first, archived ones too. */
+  threadSessions: (threadId: string) => request<Workbench[]>('GET', `/workbenches/${enc(threadId)}/sessions`),
   /** Continue a session as a thread. Answers the new thread. */
   continueAsThread: (id: string, input: ContinueWorkbenchAsThreadInput = {}) =>
     request<Workbench>('POST', `/workbenches/${enc(id)}/thread`, input),

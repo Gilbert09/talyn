@@ -119,7 +119,7 @@ describe('session tools', () => {
 
   it('marks every session tool with the workbenches feature', () => {
     const sessions = TOOLS.filter((t) => /^talyn_\w*session/.test(t.name));
-    expect(sessions).toHaveLength(13);
+    expect(sessions).toHaveLength(14);
     for (const t of sessions) expect(t.feature).toBe('workbenches');
   });
 
@@ -269,6 +269,54 @@ describe('session tools', () => {
     expect(calls[1].url.searchParams.get('limit')).toBe('2');
     expect(text).toContain('user: Fix the bug\nassistant: On it.');
     expect(text).toContain('pass cursor=2');
+  });
+
+  it('get_session_transcript labels a Talyn message and shows a thread card once', async () => {
+    const talyn = userEvent(1, '[Talyn] Session "api" finished its turn.');
+    (talyn.event.talyn as Record<string, unknown>).origin = 'talyn';
+    mockApi({
+      'GET /api/v1/workbenches/chats/c1/events': () => ({
+        events: [
+          talyn,
+          {
+            chatId: 'c1', seq: 2, turn: 1,
+            event: { seq: 2, type: 'talyn_thread', action: 'pr_opened', sessionId: 's9', name: 'api', repo: 'acme/api', status: 'idle' },
+          },
+        ],
+        cursor: 2,
+      }),
+    });
+    const text = await tool('get_session_transcript').handler(OWNER, { chat_id: 'c1' });
+    expect(text).toContain('talyn: [Talyn] Session "api" finished its turn.');
+    expect(text).not.toContain('user: [Talyn]');
+    expect(text.match(/\[Talyn\]/g)).toHaveLength(1);
+    expect(text).toContain('[system] Session api on acme/api opened a pull request');
+  });
+
+  it.each([
+    [{ thread_id: 't1' }, undefined],
+    [{}, { session: { tokenId: 'tok', workbenchId: 't1', depth: 0 } }],
+  ])('list_thread_sessions %j lists the sessions of thread t1', async (args, ctx) => {
+    const { calls } = mockApi({
+      'GET /api/v1/workbenches/t1/sessions': () => [
+        session({
+          threadId: 't1',
+          title: 'Fix login',
+          chats: [chat({ status: 'running' })],
+          pr: { number: 7, url: 'https://github.com/acme/web/pull/7', state: 'open', mergeable: 'mergeable', ciStatus: 'pending' },
+        }),
+        session({ id: 's2', name: 'lima', branch: 'tom/lima', chats: [] }),
+      ],
+    });
+    const text = await tool('list_thread_sessions').handler(OWNER, args, ctx);
+    expect(calls).toHaveLength(1);
+    expect(text).toContain('s1  Fix login  [ready]  acme/web@tom/oslo  chat: running  pr: https://github.com/acme/web/pull/7 (open, checks pending)');
+    expect(text).toContain('s2  lima  [ready]  acme/web@tom/lima  chat: none  pr: none');
+  });
+
+  it('list_thread_sessions needs a thread from a user token', async () => {
+    mockApi({});
+    await expect(tool('list_thread_sessions').handler(OWNER, {})).rejects.toThrow('thread_id is required');
   });
 
   it('get_session_transcript says when the transcript ends', async () => {
