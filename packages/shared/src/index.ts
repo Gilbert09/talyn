@@ -127,6 +127,7 @@ export * from './bake.js';
 export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
+export * from './workbenchMemory.js';
 export * from './claudeSessionImport.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
@@ -610,6 +611,12 @@ export interface WorkspaceSettings {
    * `true`: on. `false` removes them from the box on the next turn.
    */
   sessionSkillPack?: boolean;
+  /**
+   * Whether sessions use workspace memory (`workbenchMemory.ts`): the index in
+   * the box and the `talyn_memory_*` tools. Unset or `true`: on. `false`: the
+   * tools refuse. People can still edit entries in the app.
+   */
+  sessionMemory?: boolean;
   /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and

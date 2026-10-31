@@ -13,6 +13,8 @@ import {
   type CreateWorkbenchChatInput,
   type ConfirmWorkbenchBranchNameInput,
   type CreateWorkbenchInput,
+  type MemoryScope,
+  MEMORY_SCOPES,
   type NameWorkbenchBranchInput,
   type PutWorkbenchInstructionFileInput,
   type UpdateLocalWorkbenchChatInput,
@@ -73,6 +75,15 @@ import {
   type WorkbenchRow,
 } from '../services/workbenches/store.js';
 import { cancelTurn, restoreCheckpoint, sendMessage } from '../services/workbenches/turns.js';
+import {
+  forgetMemory,
+  getMemory,
+  listMemories,
+  memoryWorkspaceId,
+  putMemory,
+  restoreMemory,
+  updateMemory,
+} from '../services/workbenches/memory.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -393,6 +404,80 @@ export function workbenchRoutes(): Router {
     if (!(await gate(req, res, workspaceId))) return;
     if (!(await removeInstructionFile(workspaceId, req.params.key))) return bad(res, 404, 'Instruction file not found');
     ok(res, null);
+  });
+
+  // ---- Workspace memory: notes sessions and people save for later sessions ----
+  // Declared before `/:id` so `/memory` is not read as a workbench id.
+
+  /** Null means the request is answered: no entry, or the caller may not see its workspace. */
+  async function gatedMemory(req: Request, res: Response, id: string): Promise<string | null> {
+    const workspaceId = await memoryWorkspaceId(id);
+    if (!workspaceId) {
+      bad(res, 404, 'Memory entry not found', 'memory_not_found');
+      return null;
+    }
+    return (await gate(req, res, workspaceId)) ? workspaceId : null;
+  }
+
+  router.get('/memory', async (req, res) => {
+    const query = (key: string) => (typeof req.query[key] === 'string' ? (req.query[key] as string) : undefined);
+    const workspaceId = query('workspaceId') ?? '';
+    const scope = query('scope');
+    if (scope !== undefined && !MEMORY_SCOPES.includes(scope as MemoryScope)) {
+      return bad(res, 400, `scope must be one of: ${MEMORY_SCOPES.join(', ')}`, 'bad_memory');
+    }
+    if (!(await gate(req, res, workspaceId))) return;
+    ok(res, await listMemories(workspaceId, {
+      scope: scope as MemoryScope | undefined,
+      repositoryId: query('repositoryId'),
+      threadId: query('threadId'),
+      q: query('q'),
+      includeForgotten: query('includeForgotten') === 'true',
+      includeBody: query('includeBody') === 'true',
+    }));
+  });
+
+  /** Create, or update the live entry with the same scope target and name. */
+  router.post('/memory', async (req, res) => {
+    const body = (req.body ?? {}) as { workspaceId?: unknown };
+    const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    try {
+      ok(res, await putMemory(assertUser(req).id, body));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.get('/memory/:memoryId', async (req, res) => {
+    if (!(await gatedMemory(req, res, req.params.memoryId))) return;
+    ok(res, await getMemory(req.params.memoryId));
+  });
+
+  router.put('/memory/:memoryId', async (req, res) => {
+    if (!(await gatedMemory(req, res, req.params.memoryId))) return;
+    try {
+      ok(res, await updateMemory(req.params.memoryId, req.body));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /** Forget: a soft delete that `restore` undoes. */
+  router.delete('/memory/:memoryId', async (req, res) => {
+    if (!(await gatedMemory(req, res, req.params.memoryId))) return;
+    const forgotten = await forgetMemory(req.params.memoryId);
+    if (!forgotten) return bad(res, 404, 'Memory entry not found, or already forgotten', 'memory_not_found');
+    ok(res, forgotten);
+  });
+
+  router.post('/memory/:memoryId/restore', async (req, res) => {
+    if (!(await gatedMemory(req, res, req.params.memoryId))) return;
+    try {
+      ok(res, await restoreMemory(req.params.memoryId));
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   router.get('/', async (req, res) => {
