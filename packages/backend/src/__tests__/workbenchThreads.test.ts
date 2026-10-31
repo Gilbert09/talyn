@@ -3,9 +3,10 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { SANDBOX_SIZES } from '@talyn/shared';
+import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
-import { pullRequests, repositories, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
 
 /**
  * Threads, end to end against a fake fleet: a workbench with no repository
@@ -49,7 +50,7 @@ const { setWorkbenchFleetClientForTests } = await import('../services/workbenche
 const { getChat, getWorkbench, listChats, listEvents } = await import('../services/workbenches/store.js');
 const { capabilityFor } = await import('../services/websocket.js');
 const { continueAsThreadMessage } = await import('../services/workbenches/create.js');
-const { announceThreadSession, threadWakeText } = await import('../services/workbenches/threads.js');
+const { announceThreadSession, notifyThread, threadWakeText } = await import('../services/workbenches/threads.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -451,6 +452,68 @@ describe('threads', () => {
       expect(queued[0].origin).toBe('talyn');
       release();
       await vi.waitFor(async () => expect((await getChat(chatId))?.turnCount).toBe(2), { timeout: 5000 });
+    });
+
+    it('pauses on the second unchanged event and writes one pause card', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ threadId: thread.id });
+      const child = (await getWorkbench(session.id))!;
+
+      await notifyThread(child, 'session_finished');
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+      await idle(chatId);
+      await notifyThread(child, 'session_finished');
+      expect((await cards(chatId)).at(-1)?.action).toBe('paused');
+      await notifyThread(child, 'session_finished');
+      expect((await cards(chatId)).filter((card) => card.action === 'paused')).toHaveLength(1);
+      expect(await talynMessages(chatId)).toHaveLength(1);
+    });
+
+    it('wakes for progress without a count limit, then pauses until a person writes', async () => {
+      const thread = await createThread();
+      const chatId = await threadChat(thread.id);
+      const session = await createSession({ threadId: thread.id });
+
+      for (let count = 1; count <= 15; count++) {
+        await testDb.db.update(workbenches).set({ pushedHeadShas: [`sha-${count}`] }).where(eq(workbenches.id, session.id));
+        await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+        await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(count), { timeout: 5000 });
+        await idle(chatId);
+      }
+
+      await testDb.db.insert(pullRequests).values({
+        id: 'progress-pr', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 8,
+        state: 'open', lastSummary: { headSha: 'sha-15', ciStatus: 'pending' },
+      });
+      await testDb.db.update(workbenches).set({ pullRequestId: 'progress-pr' }).where(eq(workbenches.id, session.id));
+      await notifyThread((await getWorkbench(session.id))!, 'pr_opened');
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(16), { timeout: 5000 });
+      await idle(chatId);
+
+      await testDb.db.update(pullRequests).set({ lastSummary: { headSha: 'sha-15', ciStatus: 'failed' } }).where(eq(pullRequests.id, 'progress-pr'));
+      await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(17), { timeout: 5000 });
+      await idle(chatId);
+
+      const childChatId = (await listChats(session.id))[0].id;
+      await testDb.db.update(workbenchChats).set({ status: 'error' }).where(eq(workbenchChats.id, childChatId));
+      await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(18), { timeout: 5000 });
+      await idle(chatId);
+
+      await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+      expect((await cards(chatId)).at(-1)?.action).toBe('paused');
+      expect(await talynMessages(chatId)).toHaveLength(18);
+
+      await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+      expect((await cards(chatId)).filter((card) => card.action === 'paused')).toHaveLength(1);
+      expect(await talynMessages(chatId)).toHaveLength(18);
+
+      expect((await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Please continue.' })).status).toBe(200);
+      await idle(chatId);
+      await notifyThread((await getWorkbench(session.id))!, 'session_finished');
+      await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(19), { timeout: 5000 });
     });
 
     it('tells the thread when a local session in it waits for an answer, then when it finishes', async () => {

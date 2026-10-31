@@ -314,7 +314,7 @@ export const SESSIONS = [
       }
       if (args.internet_access !== undefined) body.internetAccess = bool(args, 'internet_access');
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
-      // A session starting sessions: capped in depth and per hour, and the
+      // A session starting sessions: limited in depth, and the
       // child records its parent so its own token knows its depth. A session
       // a thread starts belongs to that thread.
       const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;

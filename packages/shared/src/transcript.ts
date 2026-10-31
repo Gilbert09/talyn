@@ -308,7 +308,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
       continue;
     }
 
-    // A session in this thread started, finished, opened a PR or needs an answer.
+    // A session changed, or the thread paused its automatic turns.
     if (event.type === 'talyn_thread') {
       const thread = parseThreadSessionEvent(event as Record<string, unknown>);
       if (thread) {

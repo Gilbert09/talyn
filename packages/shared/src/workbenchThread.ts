@@ -5,12 +5,13 @@
  * for most changes a short Talyn message that gives the thread's agent a turn.
  */
 
-export type ThreadSessionAction = 'session_started' | 'session_finished' | 'pr_opened' | 'needs_input';
+export type ThreadSessionAction = 'session_started' | 'session_finished' | 'pr_opened' | 'needs_input' | 'paused';
 export const THREAD_SESSION_ACTIONS: readonly ThreadSessionAction[] = [
   'session_started',
   'session_finished',
   'pr_opened',
   'needs_input',
+  'paused',
 ];
 
 /** The `talyn_thread` transcript event, without its `type`. */
@@ -54,6 +55,8 @@ export function threadSessionEventText(event: ThreadSessionEvent): string {
       return `${who} needs an answer`;
     case 'session_finished':
       return event.status === 'error' ? `${who} stopped with an error` : `${who} finished its turn`;
+    case 'paused':
+      return 'The thread stopped waking itself because its sessions made no progress since its last turn. It waits for the person.';
   }
 }
 

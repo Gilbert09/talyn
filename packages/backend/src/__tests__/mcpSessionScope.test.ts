@@ -235,7 +235,8 @@ describe('sessions started by a session', () => {
     expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
   });
 
-  it.each(['depth', 'rate'] as const)('creates nothing when the %s cap refuses', async (reason) => {
+  it('creates nothing when the depth limit refuses', async () => {
+    const reason = 'depth';
     vi.mocked(reserveSessionCreate).mockRejectedValue(new SessionSpawnRefusedError(`refused: ${reason}`, reason));
     const { calls } = mockApi({});
     const result = await callTool(SELF, 'talyn_create_session', args);

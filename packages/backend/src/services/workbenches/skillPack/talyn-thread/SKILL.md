@@ -59,9 +59,8 @@ Talyn links each session to this thread. Write down each session id: it is
 the first token of the output.
 
 Limits:
-- A thread can start at most 10 sessions per hour.
-- Sessions that a session starts are limited too. Keep the tree flat: start the sessions from the thread.
-- When `talyn_create_session` refuses for a limit, tell the person. Do not retry in a loop.
+- Sessions nest at most 2 levels below the one a person started.
+- When `talyn_create_session` refuses for depth, tell the person.
 
 Start only the sessions that can run now. When a change must wait for
 another, start it after the first one finishes.

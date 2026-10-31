@@ -44,9 +44,8 @@ import { cleanJsonbString, stringifyJsonbSafe } from './jsonSafe.js';
  *
  * # Egress
  *
- * Explicit projections throughout. `workbench_events.event` is selected by
- * exactly one query, the transcript page; nothing that lists workbenches or
- * chats touches that table at all.
+ * Explicit projections throughout. Transcript pages and the thread wake guard
+ * read `workbench_events.event`; workbench and chat lists do not.
  */
 
 const db = (): Database => getPoolDbClient();
@@ -1070,6 +1069,68 @@ export async function resetFailedChats(workbenchId: string): Promise<ChatRow[]> 
 // Events
 // ============================================================================
 
+/** Read the last automatic wake and later person or pause events. */
+export async function threadAutoWakeState(threadId: string): Promise<{
+  fingerprint: string | null;
+  userSinceWake: boolean;
+  paused: boolean;
+}> {
+  const result = await db().execute(sql`
+    WITH thread_events AS (
+      SELECT e.created_at, e.chat_id, e.seq, e.event
+      FROM workbench_events e JOIN workbench_chats c ON c.id = e.chat_id
+      WHERE c.workbench_id = ${threadId}
+        AND (e.event ->> 'wakeFingerprint' IS NOT NULL
+          OR (e.event ->> 'type' = 'user' AND e.event -> 'talyn' ->> 'kind' = 'user_message'
+            AND e.event -> 'talyn' ->> 'origin' IS DISTINCT FROM 'talyn')
+          OR (e.event ->> 'type' = 'talyn_thread' AND e.event ->> 'action' = 'paused'))
+    ), last_wake AS (
+      SELECT * FROM thread_events WHERE event ->> 'wakeFingerprint' IS NOT NULL
+      ORDER BY created_at DESC, chat_id DESC, seq DESC LIMIT 1
+    ), last_user AS (
+      SELECT * FROM thread_events WHERE event ->> 'type' = 'user'
+      ORDER BY created_at DESC, chat_id DESC, seq DESC LIMIT 1
+    ), last_paused AS (
+      SELECT * FROM thread_events WHERE event ->> 'action' = 'paused'
+      ORDER BY created_at DESC, chat_id DESC, seq DESC LIMIT 1
+    )
+    SELECT
+      (SELECT event ->> 'wakeFingerprint' FROM last_wake) AS fingerprint,
+      (SELECT created_at FROM last_wake) AS wake_at,
+      (SELECT chat_id FROM last_wake) AS wake_chat,
+      (SELECT seq FROM last_wake) AS wake_seq,
+      (SELECT created_at FROM last_user) AS user_at,
+      (SELECT chat_id FROM last_user) AS user_chat,
+      (SELECT seq FROM last_user) AS user_seq,
+      (SELECT created_at FROM last_paused) AS paused_at,
+      (SELECT chat_id FROM last_paused) AS paused_chat,
+      (SELECT seq FROM last_paused) AS paused_seq
+  `);
+  type Position = { at: Date | string | null; chat: string | null; seq: number | string | null };
+  const [row] = rowsOf<{
+    fingerprint: string | null;
+    wake_at: Date | string | null; wake_chat: string | null; wake_seq: number | string | null;
+    user_at: Date | string | null; user_chat: string | null; user_seq: number | string | null;
+    paused_at: Date | string | null; paused_chat: string | null; paused_seq: number | string | null;
+  }>(result);
+  const wake: Position = { at: row?.wake_at ?? null, chat: row?.wake_chat ?? null, seq: row?.wake_seq ?? null };
+  const user: Position = { at: row?.user_at ?? null, chat: row?.user_chat ?? null, seq: row?.user_seq ?? null };
+  const paused: Position = { at: row?.paused_at ?? null, chat: row?.paused_chat ?? null, seq: row?.paused_seq ?? null };
+  const later = (left: Position, right: Position): boolean => {
+    if (!left.at) return false;
+    if (!right.at) return true;
+    const times = new Date(left.at).getTime() - new Date(right.at).getTime();
+    if (times) return times > 0;
+    if (left.chat !== right.chat) return (left.chat ?? '') > (right.chat ?? '');
+    return Number(left.seq) > Number(right.seq);
+  };
+  return {
+    fingerprint: row?.fingerprint ?? null,
+    userSinceWake: later(user, wake),
+    paused: later(paused, wake) && later(paused, user),
+  };
+}
+
 export interface EventDraftInput {
   turn: number;
   event: Record<string, unknown>;
@@ -1137,7 +1198,7 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
   return inserted.length;
 }
 
-/** The forward transcript page. With `listEventRangeQuery`, the only queries that select `event`. */
+/** The forward transcript page. */
 export function listEventsQuery(chatId: string, after: number, limit: number) {
   return db()
     .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })

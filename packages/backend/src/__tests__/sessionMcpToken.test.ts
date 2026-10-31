@@ -13,9 +13,7 @@ import {
   recordSessionSpawn,
   reserveSessionCreate,
   revokeSessionMcpToken,
-  SESSION_CREATES_PER_HOUR,
   SessionSpawnRefusedError,
-  THREAD_CREATES_PER_HOUR,
   validateSessionMcpToken,
   type SessionMcpBinding,
 } from '../services/sessionMcpToken.js';
@@ -24,8 +22,6 @@ import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 
 const OTHER = 'user-other';
 const SESSION = { id: 'wb', workspaceId: 'ws' };
-/** A window start long past: the next create opens a new window. */
-const OLD_WINDOW = new Date('2000-01-01T00:00:00Z');
 
 async function seedSession(id: string, workspaceId = 'ws', patch: Record<string, unknown> = {}) {
   await insertWorkbench({
@@ -169,55 +165,37 @@ describe('session MCP tokens', () => {
       const refused = await reserveSessionCreate(await binding(depth)).catch((err) => err);
       expect(refused).toBeInstanceOf(SessionSpawnRefusedError);
       expect(refused.reason).toBe('depth');
-      // A depth refusal spends no slot.
+      // The old count columns stay unused.
       expect((await rowFor('wb')).createsInWindow).toBe(0);
     });
 
-    it(`allows ${SESSION_CREATES_PER_HOUR} creates an hour, then refuses`, async () => {
+    it('allows many creates without writing the old count columns', async () => {
       const b = await binding();
-      for (let i = 0; i < SESSION_CREATES_PER_HOUR; i++) await reserveSessionCreate(b);
-      const refused = await reserveSessionCreate(b).catch((err) => err);
-      expect(refused).toBeInstanceOf(SessionSpawnRefusedError);
-      expect(refused.reason).toBe('rate');
-      expect((await rowFor('wb')).createsInWindow).toBe(SESSION_CREATES_PER_HOUR);
+      for (let i = 0; i < 20; i++) await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: null });
+      expect((await rowFor('wb')).createsInWindow).toBe(0);
+      expect((await rowFor('wb')).createsWindowStartedAt).toBeNull();
     });
 
-    it('allows concurrent creates only up to the cap', async () => {
+    it('allows concurrent creates', async () => {
       const b = await binding();
       const results = await Promise.allSettled(
-        Array.from({ length: SESSION_CREATES_PER_HOUR + 3 }, () => reserveSessionCreate(b))
+        Array.from({ length: 20 }, () => reserveSessionCreate(b))
       );
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(SESSION_CREATES_PER_HOUR);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(20);
     });
 
-    it(`allows a thread ${THREAD_CREATES_PER_HOUR} creates an hour, then refuses, and names it as the thread`, async () => {
+    it('allows many thread creates and names the thread', async () => {
       await testDb.db.update(workbenches).set({ kind: 'thread' }).where(eq(workbenches.id, 'wb'));
       const b = await binding();
-      for (let i = 0; i < THREAD_CREATES_PER_HOUR; i++) {
+      for (let i = 0; i < 20; i++) {
         await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: 'wb' });
       }
-      const refused = await reserveSessionCreate(b).catch((err) => err);
-      expect(refused).toBeInstanceOf(SessionSpawnRefusedError);
-      expect(refused.reason).toBe('rate');
-      expect(refused.message).toContain(`This thread has already started ${THREAD_CREATES_PER_HOUR} sessions`);
-      expect((await rowFor('wb')).createsInWindow).toBe(THREAD_CREATES_PER_HOUR);
     });
 
-    it('opens a new window once the hour has passed', async () => {
-      const b = await binding();
-      await testDb.db.update(sessionMcpTokens)
-        .set({ createsWindowStartedAt: OLD_WINDOW, createsInWindow: SESSION_CREATES_PER_HOUR })
-        .where(eq(sessionMcpTokens.id, b.tokenId));
-      await reserveSessionCreate(b);
-      const row = await rowFor('wb');
-      expect(row.createsInWindow).toBe(1);
-      expect(row.createsWindowStartedAt!.getTime()).toBeGreaterThan(OLD_WINDOW.getTime());
-    });
-
-    it('counts per token: another session has its own slots', async () => {
+    it('allows another session to create children', async () => {
       await seedSession('wb2');
       const first = await binding();
-      for (let i = 0; i < SESSION_CREATES_PER_HOUR; i++) await reserveSessionCreate(first);
+      for (let i = 0; i < 20; i++) await reserveSessionCreate(first);
       await ensureSessionMcpToken({ id: 'wb2', workspaceId: 'ws' });
       const second = (await validateSessionMcpToken((await readSessionMcpToken('wb2'))!))!.session;
       await expect(reserveSessionCreate(second)).resolves.toEqual({ threadId: null });

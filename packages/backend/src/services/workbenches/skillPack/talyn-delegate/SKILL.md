@@ -23,10 +23,8 @@ Do not delegate when:
 
 ## Limits
 
-- A session can start at most 3 sessions per hour.
 - Sessions nest at most 2 levels below the one a person started.
-- When `talyn_create_session` refuses for a limit, do that part yourself, or tell the person. Do not retry in a loop.
-- Use at most 3 children for one task.
+- When `talyn_create_session` refuses for depth, do that part yourself, or tell the person.
 
 ## 1. Plan the split
 

@@ -73,9 +73,8 @@ The first token of the output is the new session id. Write it down.
 With `auto_create_pr: true`, Talyn opens the pull request when the work is done.
 
 Limits:
-- A session can start at most 3 sessions per hour.
 - Sessions nest at most 2 levels below the one a person started.
-- If `talyn_create_session` refuses because of a limit, stop. Tell the person. Do not retry in a loop.
+- If `talyn_create_session` refuses because of depth, stop. Tell the person.
 
 ## 4. Follow the session
 

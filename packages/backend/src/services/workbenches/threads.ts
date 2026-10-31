@@ -12,7 +12,7 @@ import { createWorkbench } from './create.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
 import type { ReadinessUser } from './readiness.js';
-import { appendEvents, getWorkbench, isThread, listChats, type ChatRow, type WorkbenchRow } from './store.js';
+import { appendEvents, getWorkbench, isThread, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
 import { sendMessage } from './turns.js';
 
 /**
@@ -44,6 +44,28 @@ async function prUrlOf(pullRequestId: string | null): Promise<string | undefined
     .where(eq(prTable.id, pullRequestId))
     .limit(1);
   return pr ? `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}` : undefined;
+}
+
+async function childFingerprint(threadId: string): Promise<string> {
+  const children = await threadSessions(threadId);
+  const state = await Promise.all(children.map(async (child) => {
+    // Read stored state only: an exec would wake every sleeping child box.
+    const [pr] = child.pullRequestId ? await getPoolDbClient()
+      .select({ state: prTable.state, lastSummary: prTable.lastSummary })
+      .from(prTable)
+      .where(eq(prTable.id, child.pullRequestId))
+      .limit(1) : [];
+    const summary = (pr?.lastSummary ?? {}) as Record<string, unknown>;
+    const chat = activeChat(await listChats(child.id));
+    return [
+      child.id, child.branch, child.pushedHeadShas.at(-1) ?? null,
+      child.pullRequestId, summary.headSha ?? null, pr?.state ?? null,
+      summary.ciStatus ?? null, summary.checksTotal ?? null, summary.checksPassed ?? null,
+      summary.checksFailed ?? null, summary.checksInProgress ?? null, summary.checksSkipped ?? null,
+      chat?.status ?? child.status,
+    ];
+  }));
+  return JSON.stringify(state.sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
 /** The message that wakes the thread. The agent cannot see transcript cards, so the facts go in the text. */
@@ -89,11 +111,26 @@ export async function notifyThread(
       status: opts.status ?? activeChat(await listChats(child.id))?.status ?? 'idle',
       ...(prUrl ? { prUrl } : {}),
     };
-    const stored = await appendEvents(chat.id, [{ turn: chat.turnCount, event: { type: 'talyn_thread', ...event } }]);
+    const candidate = opts.wake !== false && WAKES.has(action);
+    const coalesced = chat.queuedMessages.some((m) => m.origin === 'talyn');
+    const wakeState = candidate && !coalesced ? await threadAutoWakeState(thread.id) : null;
+    const fingerprint = wakeState ? await childFingerprint(thread.id) : null;
+    const noProgress = wakeState?.fingerprint === fingerprint && !wakeState?.userSinceWake;
+    const willWake = candidate && !coalesced && !noProgress;
+    const stored = await appendEvents(chat.id, [{
+      turn: chat.turnCount,
+      event: { type: 'talyn_thread', ...event, ...(willWake ? { wakeFingerprint: fingerprint } : {}) },
+    }]);
     emitWorkbenchEvents(thread.workspaceId, chat.id, stored);
-    if (opts.wake === false || !WAKES.has(action)) return;
+    if (noProgress) {
+      if (!wakeState?.paused) {
+        const paused = await appendEvents(chat.id, [{ turn: chat.turnCount, event: { type: 'talyn_thread', ...event, action: 'paused' } }]);
+        emitWorkbenchEvents(thread.workspaceId, chat.id, paused);
+      }
+      return;
+    }
     // One waiting wake is enough: the agent lists every session when it runs.
-    if (chat.queuedMessages.some((m) => m.origin === 'talyn')) return;
+    if (!willWake) return;
     await sendMessage(chat.id, { text: threadWakeText(event) }, { origin: 'talyn' });
   } catch (err) {
     console.warn(`[thread] telling the thread of session ${child.id} about ${action} failed:`, err);

@@ -63,3 +63,23 @@ describe('Claude Code interruption markers', () => {
     },
   );
 });
+
+describe('thread transcript cards', () => {
+  it('shows why automatic thread turns paused', () => {
+    const blocks = buildBlocks([{
+      seq: 1,
+      type: 'talyn_thread',
+      action: 'paused',
+      sessionId: 'session-1',
+      name: 'api',
+      repo: 'acme/api',
+      status: 'idle',
+    } as AgentEvent]);
+    expect(blocks).toEqual([expect.objectContaining({
+      kind: 'system',
+      subtype: 'talyn_thread',
+      text: 'The thread stopped waking itself because its sessions made no progress since its last turn. It waits for the person.',
+      thread: expect.objectContaining({ action: 'paused' }),
+    })]);
+  });
+});
