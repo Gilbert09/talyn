@@ -122,8 +122,9 @@ export function nextSandboxId(row: Pick<WorkbenchRow, 'id' | 'sandboxId' | 'sett
   return sandboxIdFor(row.id, highest + 1);
 }
 
-/** `owner/name` → the clone directory, `/work/name`. */
-export function repoDirFor(row: Pick<WorkbenchRow, 'repoFullName'>): string {
+/** `owner/name` → the clone directory, `/work/name`. A thread has no clone: `/work`. */
+export function repoDirFor(row: Pick<WorkbenchRow, 'repoFullName'> & { kind?: string | null }): string {
+  if (row.kind === 'thread' || !row.repoFullName) return SANDBOX_WORK_ROOT;
   const name = row.repoFullName.split('/').pop() || 'repo';
   return `${SANDBOX_WORK_ROOT}/${name.replace(/[^A-Za-z0-9._-]/g, '_')}`;
 }
@@ -767,6 +768,10 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
  * overrides on top.
  */
 export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchConfig> {
+  // A thread has no repository, so no config file and no scripts.
+  if (row.kind === 'thread') {
+    return applyWorkbenchScriptOverrides(resolveWorkbenchConfig({ talynToml: null, conductorJson: null, conductorToml: null }), {});
+  }
   const r = await runCapture(
     row,
     sectionsScript([
@@ -824,7 +829,7 @@ async function detectScripts(row: WorkbenchRow, requireAbsent = false) {
 
 export async function loadWorkbenchConfigWithDetection(row: WorkbenchRow): Promise<WorkbenchConfig> {
   const config = await loadWorkbenchConfig(row);
-  if (config.source === 'none') config.detected = await detectScripts(row);
+  if (config.source === 'none' && row.kind !== 'thread') config.detected = await detectScripts(row);
   return config;
 }
 
@@ -944,7 +949,8 @@ export async function refreshSandboxCredentials(
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, {
     githubToken: resolved.githubToken,
     ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),
-    repo: row.repoFullName,
+    // A thread names no repository.
+    ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   }));
 
@@ -988,7 +994,8 @@ export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string): Pr
   await withLostRecovery(row, () => client.setSandboxCredentials(row.sandboxId!, {
     githubToken,
     ...(agent === 'codex' ? { openaiKey: decision.token } : { anthropicKey: decision.token }),
-    repo: row.repoFullName,
+    // A thread names no repository.
+    ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   }));
   await setWorkbenchFleetAccount(row, decision.to.id);

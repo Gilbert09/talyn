@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import { getPoolDbClient } from '../db/client.js';
 import {
@@ -47,15 +47,6 @@ const TOKEN_BYTES = 32;
  */
 export const MAX_SESSION_SPAWN_DEPTH = 2;
 
-/**
- * create_session calls one session token may make per hour. Three because a
- * session asked to "split this up" rarely needs more parallel sessions than
- * that, and because the cap multiplies down the tree: one root can cause at
- * most 3 + 3 x 3 = 12 sandboxes an hour, each a 4 GiB microVM on our own
- * hardware. A person can always start more from the app.
- */
-export const SESSION_CREATES_PER_HOUR = 3;
-
 /** What a validated session token is bound to. */
 export interface SessionMcpBinding {
   tokenId: string;
@@ -66,7 +57,7 @@ export interface SessionMcpBinding {
 export class SessionSpawnRefusedError extends Error {
   constructor(
     message: string,
-    readonly reason: 'depth' | 'rate'
+    readonly reason: 'depth'
   ) {
     super(message);
     this.name = 'SessionSpawnRefusedError';
@@ -201,14 +192,9 @@ export async function validateSessionMcpToken(
 }
 
 /**
- * Take one create_session slot for a session token, or throw. Checked BEFORE
- * the session is created, so a create that then fails still spends its slot:
- * the cap is on attempts, which is what bounds a runaway agent.
- *
- * The window check and the count are one UPDATE, so two concurrent calls cannot
- * both take the last slot.
+ * Check spawn depth and return the thread link for a thread caller.
  */
-export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<void> {
+export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<{ threadId: string | null }> {
   if (binding.depth + 1 > MAX_SESSION_SPAWN_DEPTH) {
     throw new SessionSpawnRefusedError(
       `This session was itself started by another session ${binding.depth} level(s) down, and ` +
@@ -217,30 +203,12 @@ export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<
       'depth'
     );
   }
-  const expired = or(
-    isNull(sessionMcpTokens.createsWindowStartedAt),
-    sql`${sessionMcpTokens.createsWindowStartedAt} <= now() - interval '1 hour'`
-  );
-  const taken = await getPoolDbClient()
-    .update(sessionMcpTokens)
-    .set({
-      createsInWindow: sql`CASE WHEN ${expired} THEN 1 ELSE ${sessionMcpTokens.createsInWindow} + 1 END`,
-      createsWindowStartedAt: sql`CASE WHEN ${expired} THEN now() ELSE ${sessionMcpTokens.createsWindowStartedAt} END`,
-    })
-    .where(
-      and(
-        eq(sessionMcpTokens.id, binding.tokenId),
-        or(expired, lt(sessionMcpTokens.createsInWindow, SESSION_CREATES_PER_HOUR))
-      )
-    )
-    .returning({ id: sessionMcpTokens.id });
-  if (taken.length === 0) {
-    throw new SessionSpawnRefusedError(
-      `This session has already started ${SESSION_CREATES_PER_HOUR} sessions in the last hour, ` +
-        'which is the limit for a session. Wait, or ask the person to start more from the Talyn app.',
-      'rate'
-    );
-  }
+  const [caller] = await getPoolDbClient()
+    .select({ kind: workbenches.kind })
+    .from(workbenches)
+    .where(eq(workbenches.id, binding.workbenchId))
+    .limit(1);
+  return { threadId: caller?.kind === 'thread' ? binding.workbenchId : null };
 }
 
 /**

@@ -17,6 +17,9 @@ vi.mock('../services/sessionMcpToken.js', async (original) => ({
   chatWorkbenchId: vi.fn(async (chatId: string) => (chatId.startsWith('self') ? 's1' : 's2')),
 }));
 
+vi.mock('../services/workbenches/threads.js', () => ({ announceThreadSession: vi.fn(async () => undefined) }));
+const { announceThreadSession } = await import('../services/workbenches/threads.js');
+
 const OWNER = 'user-test';
 const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1', depth: 0 } };
 
@@ -232,7 +235,8 @@ describe('sessions started by a session', () => {
     expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
   });
 
-  it.each(['depth', 'rate'] as const)('creates nothing when the %s cap refuses', async (reason) => {
+  it('creates nothing when the depth limit refuses', async () => {
+    const reason = 'depth';
     vi.mocked(reserveSessionCreate).mockRejectedValue(new SessionSpawnRefusedError(`refused: ${reason}`, reason));
     const { calls } = mockApi({});
     const result = await callTool(SELF, 'talyn_create_session', args);
@@ -240,6 +244,23 @@ describe('sessions started by a session', () => {
     expect(result.content[0].text).toBe(`refused: ${reason}`);
     expect(calls).toHaveLength(0);
     expect(recordSessionSpawn).not.toHaveBeenCalled();
+  });
+
+  it('puts a session a thread starts into that thread, and announces it there', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: 's1' });
+    const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child', threadId: 's1' }) });
+    await tool('create_session').handler(OWNER, args, SELF);
+    expect(calls[0].body).toMatchObject({ threadId: 's1', repositoryId: 'r1' });
+    expect(announceThreadSession).toHaveBeenCalledWith('child');
+  });
+
+  it('leaves the thread out for a session that is not a thread', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null });
+    vi.mocked(announceThreadSession).mockClear();
+    const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child' }) });
+    await tool('create_session').handler(OWNER, args, SELF);
+    expect(calls[0].body).not.toHaveProperty('threadId');
+    expect(announceThreadSession).not.toHaveBeenCalled();
   });
 
   it('leaves a user token uncapped', async () => {

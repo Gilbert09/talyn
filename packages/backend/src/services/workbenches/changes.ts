@@ -64,7 +64,14 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
   ].join(' ');
 }
 
+/** A thread's changes: none. It has no repository. */
+export function emptyChanges(): Required<WorkbenchChanges> {
+  const zero = { added: 0, removed: 0, files: 0 };
+  return { files: [], uncommitted: [], committed: [], uncommittedStats: zero, committedStats: { ...zero }, base: '', headSha: '' };
+}
+
 export async function getChanges(row: WorkbenchRow): Promise<Required<WorkbenchChanges>> {
+  if (row.kind === 'thread') return emptyChanges();
   const script = [
     'set -e -o pipefail',
     mergeBaseLine(row),
@@ -126,6 +133,7 @@ export async function getChanges(row: WorkbenchRow): Promise<Required<WorkbenchC
 
 /** The patch for one scope. An absent scope keeps the combined diff. */
 export async function getPatch(row: WorkbenchRow, path?: string, scope: WorkbenchDiffScope = 'combined'): Promise<{ patch: string }> {
+  if (row.kind === 'thread') return { patch: '' };
   const safePath = path ? assertRepoPath(path) : undefined;
   if (scope === 'combined') {
     const client = await fleetClientFor(row.workspaceId, row.fleetHost);
@@ -202,6 +210,7 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
 
 /** Tracked and untracked files, gitignored ones excluded. */
 export async function listRepoFiles(row: WorkbenchRow): Promise<{ paths: string[] }> {
+  if (row.kind === 'thread') return { paths: [] };
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const fleet = await withLostRecovery(row, () => client.listFiles(row.sandboxId!, { cwd: repoDirFor(row) }));
   if (fleet.supported && fleet.data) return { paths: fleet.data.paths };
@@ -243,7 +252,7 @@ export async function storeDiffStat(
  * Best effort: a sandbox that cannot answer leaves the old number in place.
  */
 export async function refreshDiffStat(row: WorkbenchRow): Promise<WorkbenchRow> {
-  if (row.runtime !== 'sandbox' || !row.sandboxId) return row;
+  if (row.runtime !== 'sandbox' || !row.sandboxId || row.kind === 'thread') return row;
   try {
     return await storeDiffStat(row, await getChanges(row));
   } catch (err) {

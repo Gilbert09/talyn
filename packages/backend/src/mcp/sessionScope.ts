@@ -60,6 +60,7 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_list_sessions',
   'talyn_get_session',
   'talyn_create_session',
+  'talyn_list_thread_sessions',
   'talyn_send_session_message',
   'talyn_get_session_transcript',
   'talyn_cancel_session_turn',

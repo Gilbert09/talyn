@@ -51,7 +51,8 @@ export async function resolveWorkbenchRunCredentials(host: string, sandboxId: st
     credentials: {
       githubToken,
       ...(openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
-      repo: row.repoFullName,
+      // A thread names no repository.
+      ...(row.repoFullName ? { repo: row.repoFullName } : {}),
       ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
     },
   };

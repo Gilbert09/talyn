@@ -48,6 +48,7 @@ import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { syncSkillPack } from './skillPack.js';
+import { notifyThread } from './threads.js';
 import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
@@ -80,6 +81,7 @@ import {
   getChat,
   getCheckpoint,
   getWorkbench,
+  isThread,
   requeueTurn,
   rowToChat,
   getTurnLease,
@@ -253,7 +255,11 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
  * Send a message to a chat. Starts a turn when the chat is idle and the
  * workbench is ready; otherwise the message waits in the queue (`queued`).
  */
-export async function sendMessage(chatId: string, input: SendWorkbenchMessageInput): Promise<{ queued: boolean }> {
+export async function sendMessage(
+  chatId: string,
+  input: SendWorkbenchMessageInput,
+  opts: { origin?: 'talyn' } = {},
+): Promise<{ queued: boolean }> {
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
@@ -264,6 +270,8 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
   if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
   if (wb.status !== 'ready' && !workbenchQueuesMessages(wb.status as WorkbenchStatus)) throw notReadyError(wb.status);
   const message = normaliseMessage(input);
+  // Never from a request body: only Talyn's own callers write a Talyn message.
+  if (opts.origin === 'talyn') message.origin = 'talyn';
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
@@ -397,11 +405,19 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     let wb = await getWorkbench(chat.workbenchId);
     if (!wb) return;
     settleTurnActivity(wb.id);
+    // A thread has no diff, checkpoint, pull request or branch.
+    if (isThread(wb)) return;
     wb = await refreshDiffStat(wb);
     // After the stat, not beside it: two git reads at once on a box near its memory ceiling is worse than a second's wait.
     void checkpointWork(wb, 'turn_end');
-    const linked = await linkPullRequest(wb);
+    // The thread hears about a new pull request in the `session_finished` wake below, not in a second one.
+    const linked = await linkPullRequest(wb, { notifyThread: false });
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
+    if (linked.threadId) {
+      if (linked.pullRequestId && linked.pullRequestId !== wb.pullRequestId) await notifyThread(linked, 'pr_opened', { wake: false });
+      // A queued message already started the next turn: the thread hears when that one ends.
+      if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status });
+    }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
     // After the link: a PR this turn opened keeps the branch its name.
@@ -512,6 +528,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
     talyn: {
       kind: 'user_message',
       messageId: message.id,
+      ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
       ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
@@ -630,12 +647,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       intent: message.intent,
       createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
       internetAccess: wb.settings?.internetAccess,
-      autoCreatePr: wb.settings?.autoCreatePr,
+      // A thread has no branch to open a pull request from.
+      autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
       hasPullRequest: Boolean(wb.pullRequestId),
       imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
       talynTools,
       talynSkills,
       memory,
+      thread: isThread(wb),
     });
     const argv =
       agent === 'codex'
@@ -835,6 +854,11 @@ export async function createCheckpoint(
   chatId: string,
   turn: number,
 ): Promise<{ sha: string | null; disk: DiskProbe | null; error: string | null }> {
+  // A thread has no repository to snapshot. The disk probe still runs: it is also the exec that wakes the box.
+  if (isThread(wb)) {
+    const probe = await runCapture(wb, DISK_PROBE_SCRIPT, { quiet: true, timeoutMs: 60_000, env: { TMPDIR: '/dev/shm' }, diskRecovery: false });
+    return { sha: null, disk: parseDiskProbe(probe.stderr), error: null };
+  }
   const steps = checkpointCreateSteps({ chatId, turn, tmpIndexPath: tmpIndexPath(chatId, turn) });
   const r = await runCapture(wb, `${DISK_PROBE_SCRIPT}\n${toShellScript(steps)}`, {
     quiet: true,
@@ -999,7 +1023,7 @@ async function finishSuccessfulAgent(
   wb: WorkbenchRow, chatId: string, message: WorkbenchQueuedMessage,
   text: string, events: EventBatcher, live: LiveTurn,
 ): Promise<void> {
-  if (live.cancelRequested || isWorkbenchDetached()) return;
+  if (live.cancelRequested || isWorkbenchDetached() || isThread(wb)) return;
   if (!(await renewTurnLease(chatId, live.turn)) || await hasTurnEvent(chatId, live.turn, 'talyn_pr')) return;
   let fresh = (await getWorkbench(wb.id)) ?? wb;
   if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;

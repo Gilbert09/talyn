@@ -41,6 +41,7 @@ import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
+import { notifyThreadOfLinkedPr } from './threads.js';
 import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps } from './sandboxRuntime.js';
 import { appendEvents, listChats, updateWorkbench, type WorkbenchRow } from './store.js';
 
@@ -260,11 +261,13 @@ export async function createWorkbenchPullRequest(
  */
 async function trackAndLink(row: WorkbenchRow, number: number, strict = false): Promise<WorkbenchRow> {
   const [owner, repo] = row.repoFullName.split('/');
+  const repositoryId = row.repositoryId;
+  if (!repositoryId) return row;
   try {
     const watched = await prMonitorService.watchPullRequest({
       workspaceId: row.workspaceId,
       repo: {
-        id: row.repositoryId,
+        id: repositoryId,
         workspaceId: row.workspaceId,
         owner,
         repo,
@@ -281,7 +284,9 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
           .where(sql`${pullRequests.id} = ${watched.rowId} AND ${eligiblePr()}`);
         if (!eligible) return row;
       }
-      return (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
+      const linked = (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
+      if (linked.threadId && row.pullRequestId !== watched.rowId) await notifyThreadOfLinkedPr(linked);
+      return linked;
     }
     if (strict) throw new WorkbenchError('Pull request not found in this repository.', 404, 'pr_not_found');
   } catch (err) {

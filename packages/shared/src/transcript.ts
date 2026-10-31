@@ -19,6 +19,7 @@
 import type { AgentEvent } from './index.js';
 import { adoptedPullRequestMessage } from './workbenchPullRequest.js';
 import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
+import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
 
 const INTERRUPTED_MESSAGES = new Set([
   '[Request interrupted by user]',
@@ -88,6 +89,8 @@ export type Block =
       isError?: boolean;
       /** Set for `subtype: 'talyn_memory'`, so a card can link to the entry. */
       memory?: MemoryChangeEvent;
+      /** Set for `subtype: 'talyn_thread'`, so a card can link to the session. */
+      thread?: ThreadSessionEvent;
     }
   | {
       kind: 'result';
@@ -232,6 +235,17 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         interruptionOpen = false;
         continue;
       }
+      // A message Talyn wrote to wake a thread: a card, not the person's bubble.
+      if (isTalynOriginMessage((event as { talyn?: unknown }).talyn)) {
+        const text = content
+          .map((part) => (part as { type?: unknown; text?: unknown }))
+          .filter((part) => part.type === 'text' && typeof part.text === 'string')
+          .map((part) => part.text as string)
+          .join('\n');
+        blocks.push({ kind: 'system', key: seqKey, subtype: 'talyn_message', text });
+        interruptionOpen = false;
+        continue;
+      }
       for (let i = 0; i < content.length; i++) {
         const b = content[i] as {
           type?: string;
@@ -291,6 +305,23 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     if (event.type === 'talyn_memory') {
       const memory = parseMemoryChangeEvent(event as Record<string, unknown>);
       if (memory) blocks.push({ kind: 'system', key: seqKey, subtype: 'talyn_memory', text: memoryChangeText(memory), memory });
+      continue;
+    }
+
+    // A session changed, or the thread paused its automatic turns.
+    if (event.type === 'talyn_thread') {
+      const thread = parseThreadSessionEvent(event as Record<string, unknown>);
+      if (thread) {
+        blocks.push({
+          kind: 'system',
+          key: seqKey,
+          subtype: 'talyn_thread',
+          text: threadSessionEventText(thread),
+          thread,
+          ...(thread.prUrl ? { url: thread.prUrl } : {}),
+          ...(thread.action === 'session_finished' && thread.status === 'error' ? { isError: true } : {}),
+        });
+      }
       continue;
     }
 

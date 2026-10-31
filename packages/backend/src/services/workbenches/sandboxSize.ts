@@ -87,6 +87,7 @@ export function validateSandboxSizeChoice(value: unknown): SandboxSizeSetting {
 
 /** The size a new session box gets: the setting, else detection, else standard. Never throws. */
 export async function sizeForSession(row: Pick<WorkbenchRow, 'repositoryId' | 'workspaceId'>): Promise<SandboxSize> {
+  if (!row.repositoryId) return 'standard';
   try {
     const repo = await getSizeRepository(row.repositoryId);
     if (!repo) return 'standard';

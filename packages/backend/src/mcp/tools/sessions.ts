@@ -2,6 +2,7 @@ import {
   buildBlocks,
   describeTool,
   extractToolText,
+  isTalynOriginMessage,
   type AgentEvent,
   type CreateWorkbenchPullRequestResult,
   type Workbench,
@@ -14,6 +15,7 @@ import {
   recordSessionSpawn,
   reserveSessionCreate,
 } from '../../services/sessionMcpToken.js';
+import { announceThreadSession } from '../../services/workbenches/threads.js';
 import { callApi, McpApiError } from '../api.js';
 import {
   bool,
@@ -58,6 +60,17 @@ const sessionLine = (wb: Workbench) =>
   ]
     .filter(Boolean)
     .join('  ');
+
+/** One session of a thread: what the thread's agent needs to decide what to read next. */
+const threadSessionLine = (wb: Workbench) =>
+  [
+    wb.id,
+    wb.title || wb.name,
+    `[${wb.status}${wb.archivedAt ? ', archived' : ''}]`,
+    `${wb.repoFullName}@${wb.branch}`,
+    `chat: ${wb.chats?.[0]?.status ?? 'none'}`,
+    wb.pr ? `pr: ${wb.pr.url} (${wb.pr.state}, checks ${wb.pr.ciStatus})` : 'pr: none',
+  ].join('  ');
 
 const chatLine = (chat: WorkbenchChat) =>
   `  ${chat.id}  "${chat.title}"  [${chat.status}]  ${chat.agent}/${chat.model ?? 'default'}${chat.queuedMessages.length ? `  queued: ${chat.queuedMessages.length}` : ''}`;
@@ -148,6 +161,7 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
   for (const { event, seq } of events) {
     const talyn = (event as { talyn?: { kind?: string } }).talyn;
     if (event.type === 'user' && talyn?.kind === 'user_message') {
+      const label = isTalynOriginMessage(talyn) ? 'talyn' : 'user';
       const content = event.message?.content;
       const text = Array.isArray(content)
         ? content
@@ -155,7 +169,7 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
             .filter((t): t is string => typeof t === 'string')
             .join('\n')
         : '';
-      if (text) items.push({ seq, text: `user: ${text}` });
+      if (text) items.push({ seq, text: `${label}: ${text}` });
     }
   }
   for (const block of buildBlocks(events.map((e) => e.event as AgentEvent))) {
@@ -178,7 +192,8 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
         break;
       }
       case 'system':
-        if (block.text) items.push({ seq, text: `[system] ${block.text}` });
+        // A Talyn message is listed above with the user messages.
+        if (block.text && block.subtype !== 'talyn_message') items.push({ seq, text: `[system] ${block.text}` });
         break;
       case 'result':
         items.push({
@@ -299,12 +314,29 @@ export const SESSIONS = [
       }
       if (args.internet_access !== undefined) body.internetAccess = bool(args, 'internet_access');
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
-      // A session starting sessions: capped in depth and per hour, and the
-      // child records its parent so its own token knows its depth.
-      if (ctx?.session) await reserveSessionCreate(ctx.session);
+      // A session starting sessions: limited in depth, and the
+      // child records its parent so its own token knows its depth. A session
+      // a thread starts belongs to that thread.
+      const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;
+      if (reserved?.threadId) body.threadId = reserved.threadId;
       const created = await callApi<Workbench>(ownerId, 'POST', '/workbenches', body);
       if (ctx?.session) await recordSessionSpawn(created.id, ctx.session);
+      if (reserved?.threadId) await announceThreadSession(created.id);
       return sessionDetail(created);
+    },
+    FEATURE
+  ),
+  defineTool(
+    'list_thread_sessions',
+    "List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, thread_id defaults to the thread itself.",
+    { thread_id: { type: 'string', description: 'The thread id. Default: the calling thread.' } },
+    [],
+    { readOnlyHint: true },
+    async (ownerId, args, ctx) => {
+      const threadId = str(args.thread_id) ?? ctx?.session?.workbenchId;
+      if (!threadId) throw new Error('thread_id is required');
+      const rows = await callApi<Workbench[]>(ownerId, 'GET', `/workbenches/${encodeURIComponent(threadId)}/sessions`);
+      return linesOrNone(rows, threadSessionLine);
     },
     FEATURE
   ),

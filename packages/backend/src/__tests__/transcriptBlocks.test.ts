@@ -430,3 +430,49 @@ describe('talyn_memory events', () => {
     expect(buildBlocks([memoryEvent(fields)])).toEqual([]);
   });
 });
+
+describe('talyn_thread events', () => {
+  const threadEvent = (fields: Record<string, unknown>) =>
+    ({ seq: ++seq, type: 'talyn_thread', ...fields }) as AgentEvent;
+  const child = { sessionId: 's1', name: 'fix-login', repo: 'acme/app' };
+
+  it.each([
+    ['session_started', 'idle', undefined, 'Session fix-login on acme/app started', {}],
+    ['session_finished', 'idle', undefined, 'Session fix-login on acme/app finished its turn', {}],
+    ['session_finished', 'error', undefined, 'Session fix-login on acme/app stopped with an error', { isError: true }],
+    ['needs_input', 'awaiting_input', undefined, 'Session fix-login on acme/app needs an answer', {}],
+    [
+      'pr_opened', 'idle', 'https://github.com/acme/app/pull/7', 'Session fix-login on acme/app opened a pull request',
+      { url: 'https://github.com/acme/app/pull/7' },
+    ],
+  ])('draws %s (%s) as a thread card line', (action, status, prUrl, text, extra) => {
+    const fields = { action, status, ...child, ...(prUrl ? { prUrl } : {}) };
+    expect(buildBlocks([threadEvent(fields)])).toEqual([
+      { kind: 'system', key: String(seq), subtype: 'talyn_thread', text, thread: fields, ...extra },
+    ]);
+  });
+
+  it.each([
+    ['an unknown action', { action: 'deleted', status: 'idle', ...child }],
+    ['no session id', { action: 'session_started', status: 'idle', ...child, sessionId: '' }],
+  ])('drops an event with %s', (_label, fields) => {
+    expect(buildBlocks([threadEvent(fields)])).toEqual([]);
+  });
+});
+
+describe('Talyn messages', () => {
+  const userMessage = (text: string, talyn: Record<string, unknown>) =>
+    ({ seq: ++seq, type: 'user', message: { role: 'user', content: [{ type: 'text', text }] }, talyn }) as AgentEvent;
+
+  it('draws a Talyn-origin message as a card, not a bubble', () => {
+    const blocks = buildBlocks([userMessage('[Talyn] Session x finished its turn.', { kind: 'user_message', origin: 'talyn' })]);
+    expect(blocks).toEqual([{ kind: 'system', key: String(seq), subtype: 'talyn_message', text: '[Talyn] Session x finished its turn.' }]);
+  });
+
+  it.each([
+    ['a person', { kind: 'user_message' }],
+    ['an explicit user origin', { kind: 'user_message', origin: 'user' }],
+  ])('leaves a message from %s to the bubble', (_label, talyn) => {
+    expect(buildBlocks([userMessage('hello', talyn)])).toEqual([]);
+  });
+});

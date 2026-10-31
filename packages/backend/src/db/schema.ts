@@ -1924,10 +1924,15 @@ export const workbenches = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** Null for a thread (migration 0097): a thread has no repository. */
     repositoryId: text('repository_id')
-      .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
+    /** `owner/name`. '' for a thread. */
     repoFullName: text('repo_full_name').notNull(),
+    /** `WorkbenchKind`: 'session' or 'thread' (migration 0097). */
+    kind: text('kind').notNull().default('session'),
+    /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
+    threadId: text('thread_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
     name: text('name').notNull(),
     /** The display title (model-written or a person's). Null: show `name`. Never renames the branch. */
     title: text('title'),
@@ -1991,6 +1996,9 @@ export const workbenches = pgTable(
     pullRequestIdx: index('idx_workbenches_pull_request')
       .on(t.pullRequestId)
       .where(sql`${t.archivedAt} IS NULL`),
+    threadIdx: index('idx_workbenches_thread')
+      .on(t.threadId)
+      .where(sql`${t.threadId} IS NOT NULL`),
   })
 );
 

@@ -281,8 +281,7 @@ refused until somebody adds it.
 
 **Sessions that start sessions.** A session started through a session token
 records its parent and its depth. A session at depth 2 cannot start another.
-One session token can start 3 sessions an hour, so one root session causes at
-most 3 + 9 = 12 sandboxes an hour. Personal tokens have neither limit.
+There is no hourly create limit. Personal tokens have no depth limit.
 
 ## Deliberately not exposed
 

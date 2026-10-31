@@ -10,6 +10,7 @@ import {
   TALYN_MEMORY_NOTE,
   TALYN_SKILL_PACK,
   TALYN_SKILLS_NOTE,
+  TALYN_THREAD_NOTE,
   TALYN_TOOLS_NOTE,
   workbenchTurnPrompt,
 } from '@talyn/shared';
@@ -65,7 +66,7 @@ const toolsByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 describe('session skill pack', () => {
   describe('the files', () => {
-    it('ships the seven skills, in the order the prompt names them', () => {
+    it('ships the eight skills, in the order the prompt names them', () => {
       expect([...TALYN_SKILL_PACK]).toEqual([
         'talyn-multi-repo',
         'talyn-delegate',
@@ -74,6 +75,7 @@ describe('session skill pack', () => {
         'talyn-review-loop',
         'talyn-wrap-up',
         'talyn-memory',
+        'talyn-thread',
       ]);
       expect(readSkillPack().map((s) => s.name)).toEqual([...TALYN_SKILL_PACK]);
     });
@@ -136,9 +138,8 @@ describe('session skill pack', () => {
         if (content.includes('curl')) expect(content).toContain('http://github.$YAS_INTEGRATIONS_DOMAIN');
         expect(content).not.toMatch(/\bgh (api|pr|run|auth)\b/);
       }
-      // The two limits on starting sessions.
+      // The depth limit on starting sessions.
       for (const name of ['talyn-multi-repo', 'talyn-delegate']) {
-        expect(skillText(name)).toContain('3 sessions per hour');
         expect(skillText(name)).toContain('2 levels');
       }
       // Memory: the skill, the turn note and the delivered index name the same tools and the same rule.
@@ -148,6 +149,13 @@ describe('session skill pack', () => {
       expect(memory).toContain('Read an entry before you rely on it');
       expect(index).toContain('before you rely on it');
       expect(memory).toContain('talyn-memory.md');
+      // A thread uses depth, no polling, and thread-scoped memory.
+      const thread = skillText('talyn-thread');
+      expect(thread).toContain('2 levels');
+      expect(thread).toContain('Do not poll');
+      expect(thread).toContain('talyn_list_thread_sessions');
+      expect(thread).toContain('`thread`');
+      expect(TALYN_THREAD_NOTE).toContain('`talyn-thread`');
     });
   });
 
@@ -380,6 +388,23 @@ describe('session skill pack', () => {
     it('keeps the memory note to two sentences that name the write tool', () => {
       expect(TALYN_MEMORY_NOTE).toContain('`talyn_memory_write`');
       expect(TALYN_MEMORY_NOTE.trim().split(/[.!?](\s|$)/).filter((s) => s.trim()).length).toBeLessThanOrEqual(2);
+    });
+
+    it.each([
+      [true, true],
+      [false, false],
+      [undefined, false],
+    ])('thread %j: adds the thread note = %j, and drops the auto PR and services notes', (thread, noted) => {
+      const text = workbenchTurnPrompt({
+        agent: 'claude',
+        text: 'hi',
+        planMode: false,
+        createPr: { branch: '', baseBranch: '' },
+        ...(thread === undefined ? {} : { thread }),
+      }).appendSystemPrompt ?? '';
+      expect(text.includes(TALYN_THREAD_NOTE)).toBe(noted);
+      expect(text.includes('talyn-pr')).toBe(!noted);
+      expect(text.includes('Docker')).toBe(!noted);
     });
 
     it('names every skill in the pack, in one sentence', () => {

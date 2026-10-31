@@ -14,8 +14,9 @@ import type { McpCallContext } from './index.js';
 
 /**
  * Workspace memory. From a session, entries default to the session's own
- * repository, and every write or forget shows as a card in its transcript, so
- * a person sees what the agent saved for later sessions.
+ * repository; from a thread, to the thread. Every write or forget shows as a
+ * card in the caller's transcript, so a person sees what the agent saved for
+ * later sessions.
  */
 
 const FEATURE = 'workbenches' as const;
@@ -30,6 +31,10 @@ interface MemoryContext {
   repositoryId: string | null;
   /** Set when a session's own token calls. */
   workbenchId: string | null;
+  /** The thread whose entries the caller sees: a thread itself, or the thread a session belongs to. */
+  threadId: string | null;
+  /** The caller is a thread: its writes default to thread scope. */
+  isThread: boolean;
 }
 
 async function resolveContext(
@@ -47,12 +52,21 @@ async function resolveContext(
     }
     const repositoryId = str(args.repository_id);
     if (repositoryId && repositoryId !== wb.repositoryId) throw new Error(SESSION_REPOSITORY_ONLY);
-    context = { workspaceId: wb.workspaceId, repositoryId: wb.repositoryId, workbenchId: wb.id };
+    const isThread = wb.kind === 'thread';
+    context = {
+      workspaceId: wb.workspaceId,
+      repositoryId: wb.repositoryId,
+      workbenchId: wb.id,
+      threadId: isThread ? wb.id : wb.threadId,
+      isThread,
+    };
   } else {
     context = {
       workspaceId: await resolveWorkspace(ownerId, args),
       repositoryId: str(args.repository_id) ?? null,
       workbenchId: null,
+      threadId: null,
+      isThread: false,
     };
   }
   if (!(await sessionMemoryEnabled(context.workspaceId, ownerId))) throw new Error(OFF_MESSAGE);
@@ -65,7 +79,7 @@ function visibleTo(context: MemoryContext, entry: MemoryEntrySummary): boolean {
   if (!context.workbenchId) return true;
   if (entry.scope === 'workspace') return true;
   if (entry.scope === 'repository') return entry.repositoryId === context.repositoryId;
-  return entry.threadId === context.workbenchId;
+  return Boolean(context.threadId) && entry.threadId === context.threadId;
 }
 
 function scopeLabel(entry: MemoryEntrySummary): string {
@@ -81,7 +95,7 @@ const entryLine = (entry: MemoryEntrySummary) =>
 function listQuery(context: MemoryContext, extra: Record<string, string>): string {
   const params = new URLSearchParams({ workspaceId: context.workspaceId, ...extra });
   if (context.repositoryId) params.set('repositoryId', context.repositoryId);
-  if (context.workbenchId) params.set('threadId', context.workbenchId);
+  if (context.threadId) params.set('threadId', context.threadId);
   return params.toString();
 }
 
@@ -93,9 +107,14 @@ async function loadVisible(ownerId: string, context: MemoryContext, id: string):
 
 function readScope(args: Record<string, unknown>, context: MemoryContext): MemoryScope {
   const scope = str(args.scope);
-  if (scope === undefined) return context.repositoryId ? 'repository' : 'workspace';
-  if (scope !== 'workspace' && scope !== 'repository') throw new Error('scope must be "workspace" or "repository"');
-  if (scope === 'repository' && !context.repositoryId) throw new Error('A repository entry needs repository_id');
+  if (scope === undefined) return context.isThread ? 'thread' : context.repositoryId ? 'repository' : 'workspace';
+  if (scope !== 'workspace' && scope !== 'repository' && scope !== 'thread') {
+    throw new Error('scope must be "workspace", "repository" or "thread"');
+  }
+  if (scope === 'repository' && !context.repositoryId) {
+    throw new Error(context.isThread ? 'A thread has no repository. Use scope "thread" or "workspace".' : 'A repository entry needs repository_id');
+  }
+  if (scope === 'thread' && !context.threadId) throw new Error('A thread entry can only be written from a thread or one of its sessions.');
   return scope;
 }
 
@@ -110,7 +129,7 @@ const repositorySchema = {
 export const MEMORY = [
   defineTool(
     'memory_write',
-    "Save a short note that later sessions in this workspace can read. Writing the same name again in the same scope updates that entry. From a session, the entry applies to the session's repository unless scope is \"workspace\".",
+    "Save a short note that later sessions in this workspace can read. Writing the same name again in the same scope updates that entry. From a session, the entry applies to the session's repository unless scope is \"workspace\". From a thread, it applies to the thread unless scope is \"workspace\".",
     {
       ...workspaceSchema,
       ...repositorySchema,
@@ -128,8 +147,10 @@ export const MEMORY = [
       },
       scope: {
         type: 'string',
-        enum: ['workspace', 'repository'],
-        description: 'Default: the repository (from a session, or with repository_id), else the workspace.',
+        enum: ['workspace', 'repository', 'thread'],
+        description:
+          'Default: the thread (from a thread), the repository (from a session, or with repository_id), else the workspace. ' +
+          'thread: from a thread or one of its sessions only.',
       },
     },
     ['name', 'description', 'body', 'type'],
@@ -143,6 +164,7 @@ export const MEMORY = [
         workspaceId: context.workspaceId,
         scope,
         repositoryId: scope === 'repository' ? context.repositoryId : null,
+        threadId: scope === 'thread' ? context.threadId : null,
         type,
         name: args.name,
         description: args.description,
@@ -224,19 +246,19 @@ export const MEMORY = [
   ),
   defineTool(
     'memory_list',
-    'List the memory entries you can see: the workspace entries and, from a session, its repository entries. No bodies; read one with talyn_memory_read.',
+    'List the memory entries you can see: the workspace entries and, from a session, its repository and thread entries. No bodies; read one with talyn_memory_read.',
     {
       ...workspaceSchema,
       ...repositorySchema,
-      scope: { type: 'string', enum: ['workspace', 'repository'], description: 'Only this scope. Default: both.' },
+      scope: { type: 'string', enum: ['workspace', 'repository', 'thread'], description: 'Only this scope. Default: all you can see.' },
     },
     [],
     { readOnlyHint: true },
     async (ownerId, args, ctx) => {
       const context = await resolveContext(ownerId, args, ctx);
       const scope = str(args.scope);
-      if (scope !== undefined && scope !== 'workspace' && scope !== 'repository') {
-        throw new Error('scope must be "workspace" or "repository"');
+      if (scope !== undefined && scope !== 'workspace' && scope !== 'repository' && scope !== 'thread') {
+        throw new Error('scope must be "workspace", "repository" or "thread"');
       }
       const rows = await callApi<MemoryEntrySummary[]>(ownerId, 'GET', `/workbenches/memory?${listQuery(context, {})}`);
       return linesOrNone(scope ? rows.filter((row) => row.scope === scope) : rows, entryLine);
