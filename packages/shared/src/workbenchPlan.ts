@@ -50,6 +50,7 @@ export const TALYN_SKILL_PACK = [
   'talyn-ship-pr',
   'talyn-review-loop',
   'talyn-wrap-up',
+  'talyn-memory',
 ] as const;
 
 export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
@@ -57,8 +58,13 @@ export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 /** Added to {@link TALYN_TOOLS_NOTE} when the box has the skill pack. */
 export const TALYN_SKILLS_NOTE =
   'Talyn installed the skills `talyn-multi-repo`, `talyn-delegate`, `talyn-ci-triage`, `talyn-ship-pr`, ' +
-  '`talyn-review-loop` and `talyn-wrap-up`: use them for other repositories, child sessions, failing CI, ' +
-  'the pull request, review feedback and ending the session.';
+  '`talyn-review-loop`, `talyn-wrap-up` and `talyn-memory`: use them for other repositories, child sessions, ' +
+  'failing CI, the pull request, review feedback, ending the session and saving what you learn.';
+
+/** Told to every turn of a session whose workspace has memory on and whose box has Talyn's MCP server. */
+export const TALYN_MEMORY_NOTE =
+  'Before you end a turn in which you learned a durable fact or got feedback or a correction from the person, ' +
+  'save it with `talyn_memory_write`. Do not save what the repository or its git history already records.';
 
 /**
  * The prompt for one turn, with the hidden instructions it needs. Claude takes
@@ -83,6 +89,8 @@ export function workbenchTurnPrompt(input: {
   talynTools?: boolean;
   /** The box has Talyn's skill pack. Named only together with `talynTools`. */
   talynSkills?: boolean;
+  /** The workspace has memory on. Named only together with `talynTools`. */
+  memory?: boolean;
 }): { prompt: string; appendSystemPrompt?: string } {
   const actionInstructions =
     input.intent === 'create_pr'
@@ -102,7 +110,8 @@ export function workbenchTurnPrompt(input: {
       ? `${TALYN_TOOLS_NOTE} ${TALYN_SKILLS_NOTE}`
       : TALYN_TOOLS_NOTE
     : null;
-  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, SANDBOX_SERVICES_NOTE, input.recap]
+  const memoryNote = input.talynTools && input.memory ? TALYN_MEMORY_NOTE : null;
+  const instructions = [actionInstructions, networkNote, autoPrNote, importNote, talynNote, memoryNote, SANDBOX_SERVICES_NOTE, input.recap]
     .filter(Boolean)
     .join('\n\n');
   if (!instructions) return { prompt: input.text };

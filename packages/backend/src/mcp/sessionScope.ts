@@ -14,7 +14,9 @@
  * (MCP token, credential and sign-in tools are not exposed to any token.)
  *
  * In: sessions, the merge queue, pull requests, code review and tasks — the
- * work a session does on its owner's behalf.
+ * work a session does on its owner's behalf. Also workspace memory: the
+ * session's own notes. A session writes to its own repository unless it asks
+ * for the workspace, and each write shows as a card in its transcript.
  */
 export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   // Workspaces and repositories (read)
@@ -68,6 +70,12 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_stop_session_script',
   'talyn_archive_session',
   'talyn_restore_session',
+  // Workspace memory
+  'talyn_memory_write',
+  'talyn_memory_search',
+  'talyn_memory_read',
+  'talyn_memory_forget',
+  'talyn_memory_list',
   // Skills, workflows and loops (read)
   'talyn_list_skills',
   'talyn_get_skill',

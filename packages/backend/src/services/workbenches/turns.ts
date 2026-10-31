@@ -48,6 +48,7 @@ import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { syncSkillPack } from './skillPack.js';
+import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
@@ -609,6 +610,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       recordWorkbenchEvent(wb, 'skill_pack_sync', err instanceof Error ? err.message : String(err), false);
       return false;
     });
+    // The memory tools come from the same MCP server. A failed read only drops the note.
+    const memory = talynTools && (await sessionMemoryEnabled(wb.workspaceId).catch(() => false));
     if (live.cancelRequested) return cancelledOutcome(events);
 
     const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
@@ -632,6 +635,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
       talynTools,
       talynSkills,
+      memory,
     });
     const argv =
       agent === 'codex'

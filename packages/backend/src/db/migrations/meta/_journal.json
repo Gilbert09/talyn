@@ -673,6 +673,13 @@
       "when": 1790900000014,
       "tag": "0095_repository_instructions",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1790900000015,
+      "tag": "0096_workspace_memories",
+      "breakpoints": true
     }
   ]
 }

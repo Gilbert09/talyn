@@ -324,16 +324,16 @@ describe('routes/workspaces', () => {
       });
     });
 
-    describe('settings.sessionSkillPack', () => {
+    describe.each(['sessionSkillPack', 'sessionMemory'])('settings.%s', (key) => {
       it.each([[true], [false]])('stores %j', async (sent) => {
         await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
         const res = await fetch(`${serverUrl}/workspaces/p`, {
           method: 'PATCH',
           headers: authHeaders,
-          body: JSON.stringify({ settings: { sessionSkillPack: sent } }),
+          body: JSON.stringify({ settings: { [key]: sent } }),
         });
         expect(res.status).toBe(200);
-        expect((await res.json()).data.settings.sessionSkillPack).toBe(sent);
+        expect((await res.json()).data.settings[key]).toBe(sent);
       });
 
       it.each([['true'], [0], [1], [null], [{}]])('rejects %j with a 400', async (sent) => {
@@ -341,10 +341,10 @@ describe('routes/workspaces', () => {
         const res = await fetch(`${serverUrl}/workspaces/p`, {
           method: 'PATCH',
           headers: authHeaders,
-          body: JSON.stringify({ settings: { sessionSkillPack: sent } }),
+          body: JSON.stringify({ settings: { [key]: sent } }),
         });
         expect(res.status).toBe(400);
-        expect((await res.json()).error).toMatch(/sessionSkillPack/);
+        expect((await res.json()).error).toMatch(new RegExp(key));
       });
     });
 

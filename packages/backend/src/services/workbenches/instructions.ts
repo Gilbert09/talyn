@@ -15,6 +15,7 @@ import {
 import { getPoolDbClient, type Database } from '../../db/client.js';
 import { workbenchInstructionFiles as filesTable } from '../../db/schema.js';
 import { WorkbenchError } from './errors.js';
+import { memoryIndexForTurn } from './memory.js';
 import { repositoryInstructionsForTurn } from './repositoryInstructions.js';
 import { repoDirFor } from './sandboxRuntime.js';
 import { shellPath, writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
@@ -39,6 +40,9 @@ import type { WorkbenchRow } from './store.js';
  * `<repo>/AGENTS.override.md`. Codex reads at most one of `AGENTS.override.md`
  * and `AGENTS.md` per directory, so the override starts with the repository's
  * own `AGENTS.md`. Both files are listed in `.git/info/exclude`.
+ *
+ * The workspace memory index (`memory.ts`) goes the user-wide route: Claude's
+ * `$HOME/.claude/rules/talyn-memory.md`, and the end of the Codex block.
  */
 
 const db = (): Database => getPoolDbClient();
@@ -47,6 +51,8 @@ export const INSTRUCTION_RULES_DIR = '~/.claude/rules';
 export const CODEX_AGENTS_FILE = '~/.codex/AGENTS.md';
 export const CODEX_BLOCK_START = '<!-- talyn:instructions:start -->';
 export const CODEX_BLOCK_END = '<!-- talyn:instructions:end -->';
+/** The Claude rule that holds the memory index. User rules are `talyn-user.md` and `talyn-rule-*.md`, so no key gives this name. */
+export const MEMORY_RULE_FILE = 'talyn-memory.md';
 /** Marks a `CLAUDE.local.md` this sync wrote, so switching it off removes only ours. */
 const CLAUDE_LOCAL_STAMP = 'talyn-claude-local';
 const CODEX_BLOCK_TMP = '~/.talyn/codex-instructions.md';
@@ -281,11 +287,14 @@ function shellQuoteRaw(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Threads do not exist yet. When a workbench row gets `threadId`, its turns see that thread's memory. */
+type MaybeThreadRow = WorkbenchRow & { threadId?: string | null };
+
 /**
  * Copy the workspace's switched-on files for `agent` into the sandbox, and
  * take away the ones switched off since. Skipped entirely when the workspace
- * has never stored a file for this agent, so a session that never used the
- * feature pays no exec for it.
+ * has never stored a file for this agent or a memory entry, so a session that
+ * never used the features pays no exec for them.
  */
 export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAgent = row.agent as WorkbenchAgent): Promise<void> {
   const repo = await repositoryInstructionsForTurn(row.repositoryId, agent);
@@ -294,7 +303,12 @@ export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAg
     .from(filesTable)
     .where(and(eq(filesTable.workspaceId, row.workspaceId), eq(filesTable.agent, agent)))
     .limit(1);
-  if (!any && !repo.hasRow) return;
+  const memory = await memoryIndexForTurn({
+    workspaceId: row.workspaceId,
+    repositoryId: row.repositoryId,
+    threadId: (row as MaybeThreadRow).threadId ?? null,
+  });
+  if (!any && !repo.hasRow && !memory.used) return;
 
   const rows: SyncRow[] = any
     ? await db()
@@ -314,7 +328,7 @@ export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAg
         .orderBy(asc(filesTable.key))
     : [];
 
-  await writeSandboxFiles(row, ...instructionSyncPlan(row, agent, rows, repo.body));
+  await writeSandboxFiles(row, ...instructionSyncPlan(row, agent, rows, repo.body, memory.index));
 }
 
 /** The files to write and the scripts around them. Split out so a test can read it. */
@@ -323,13 +337,16 @@ export function instructionSyncPlan(
   agent: WorkbenchAgent,
   rows: SyncRow[],
   repoBody: string | null = null,
+  memoryIndex: string | null = null,
 ): [SandboxFile[], { before?: string; after: string }] {
   const repoDir = repoDirFor(row);
   if (agent === 'codex') {
-    const body = rows
-      .filter((r) => r.target === 'user')
-      .map((r) => `<!-- from ${r.sourcePath} -->\n${r.content.replace(/\n+$/, '')}`)
-      .join('\n\n');
+    const body = [
+      ...rows
+        .filter((r) => r.target === 'user')
+        .map((r) => `<!-- from ${r.sourcePath} -->\n${r.content.replace(/\n+$/, '')}`),
+      ...(memoryIndex ? [memoryIndex.replace(/\n+$/, '')] : []),
+    ].join('\n\n');
     const files = body ? [{ path: CODEX_BLOCK_TMP, base64: b64(body) }] : [];
     if (repoBody) files.push({ path: CODEX_REPO_TMP, base64: b64(repoBody) });
     return [
@@ -343,6 +360,10 @@ export function instructionSyncPlan(
 
   const files: SandboxFile[] = [];
   const keep: string[] = [];
+  if (memoryIndex) {
+    keep.push(MEMORY_RULE_FILE);
+    files.push({ path: `${INSTRUCTION_RULES_DIR}/${MEMORY_RULE_FILE}`, base64: b64(memoryIndex) });
+  }
   for (const r of rows.filter((x) => x.target === 'user')) {
     let name = ruleFileName(r.key);
     if (keep.includes(name)) name = name.replace(/\.md$/, `-${contentHash(r.key).slice(0, 8)}.md`);

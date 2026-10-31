@@ -12,6 +12,7 @@ import {
   prCodeReviews,
   pullRequests,
   repositories,
+  workspaceMemories,
   workspaces,
 } from '../db/schema.js';
 
@@ -843,5 +844,38 @@ describe('moving a unit to another account of the same agent', () => {
     const body = createSandbox.mock.calls[0]![0] as { anthropicKey?: string };
     expect(body.anthropicKey).toBe('key-A2');
     expect((await getRun(run.id))!.fleetAccountId).toBe(a2!.id);
+  });
+});
+
+describe('the workspace memory index in a review unit', () => {
+  const READ_ONLY = 'Memory from earlier sessions. You cannot change it in this run.';
+  const sentSystemPrompt = () =>
+    (createSandbox.mock.calls[0]![0] as { task: { systemPrompt: string } }).task.systemPrompt;
+
+  beforeEach(async () => {
+    await db.insert(workspaceMemories).values([
+      { id: 'm1', workspaceId: 'ws1', ownerId: TEST_USER_ID, scope: 'workspace', type: 'feedback', name: 'tabs', description: 'The team uses tabs', body: 'b' },
+      { id: 'm2', workspaceId: 'ws1', ownerId: TEST_USER_ID, scope: 'repository', repositoryId: 'repo1', type: 'project', name: 'legacy api', description: 'Old API stays until mobile moves', body: 'b' },
+    ]);
+  });
+
+  it('puts the read-only index before the review instructions, so the output contract stays last', async () => {
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    const sent = sentSystemPrompt();
+    expect(sent.startsWith('# Talyn memory')).toBe(true);
+    expect(sent).toContain(READ_ONLY);
+    expect(sent).toContain('- tabs (feedback, workspace): The team uses tabs');
+    expect(sent).toContain('- legacy api (project, repository): Old API stays until mobile moves');
+    expect(sent.indexOf('# Talyn memory')).toBeLessThan(sent.indexOf('You are a code reviewer'));
+    expect(sent.lastIndexOf(CODE_REVIEW_FINDINGS_SENTINEL)).toBeGreaterThan(sent.indexOf('legacy api'));
+    expect(sent).not.toContain('talyn_memory_');
+  });
+
+  it('sends the review instructions alone when memory is off', async () => {
+    await db.update(workspaces).set({ settings: { sessionMemory: false } }).where(eq(workspaces.id, 'ws1'));
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    const sent = sentSystemPrompt();
+    expect(sent.startsWith('You are a code reviewer')).toBe(true);
+    expect(sent).not.toContain('# Talyn memory');
   });
 });

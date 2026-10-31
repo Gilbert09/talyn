@@ -26,6 +26,7 @@ import type {
   WorkbenchQueuedMessage,
   WorkbenchSettings,
   WorkbenchSource,
+  MemorySource,
   SlackRepoCandidate,
   SlackSessionSource,
 } from '@talyn/shared';
@@ -2357,5 +2358,53 @@ export const repositoryInstructions = pgTable(
   (t) => ({
     repositoryUq: uniqueIndex('uq_repository_instructions_repository').on(t.repositoryId),
     workspaceIdx: index('idx_repository_instructions_workspace').on(t.workspaceId),
+  })
+);
+
+/**
+ * Workspace memory (migration 0096). Pool-only. A forget sets `forgottenAt`
+ * and keeps the row. The live-name unique index and the scope CHECK are in the
+ * migration: `uq_workspace_memories_live_name` is on expressions
+ * (`coalesce`, `lower`) with a `WHERE`, so the upsert in
+ * `services/workbenches/memory.ts` is raw SQL.
+ */
+export const workspaceMemories = pgTable(
+  'workspace_memories',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** `MemoryScope`. */
+    scope: text('scope').notNull(),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    threadId: text('thread_id').references(() => workbenches.id, { onDelete: 'cascade' }),
+    /** `MemoryType`. */
+    type: text('type').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    body: text('body').notNull(),
+    bytes: integer('bytes').notNull().default(0),
+    source: jsonb('source').$type<MemorySource>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    forgottenAt: timestamp('forgotten_at', { withTimezone: true }),
+  },
+  (t) => ({
+    liveNameUq: uniqueIndex('uq_workspace_memories_live_name')
+      .on(
+        t.workspaceId,
+        t.scope,
+        sql`coalesce(${t.repositoryId}, '')`,
+        sql`coalesce(${t.threadId}, '')`,
+        sql`lower(${t.name})`,
+      )
+      .where(sql`${t.forgottenAt} IS NULL`),
+    workspaceLiveIdx: index('idx_workspace_memories_workspace_live')
+      .on(t.workspaceId)
+      .where(sql`${t.forgottenAt} IS NULL`),
   })
 );
