@@ -249,34 +249,49 @@ const INDEX_HEADER = [
   '',
 ].join('\n');
 
+/** For a task or a review run: it has no memory tools, so it reads the index and cannot change it. */
+const READ_ONLY_INDEX_HEADER = [
+  '# Talyn memory',
+  '',
+  'Memory from earlier sessions. You cannot change it in this run.',
+  'This is an index of notes that people and earlier sessions in this workspace saved. ' +
+    'If an entry does not agree with the repository, the repository is correct.',
+  '',
+].join('\n');
+
 function indexLine(entry: MemoryIndexEntry): string {
   return `- ${entry.name} (${entry.type}, ${entry.scope}): ${entry.description}\n`;
 }
 
-function omittedLine(count: number): string {
-  return `\n${count} more ${count === 1 ? 'entry is' : 'entries are'} not shown. Use \`talyn_memory_search\` to find them.\n`;
+function omittedLine(count: number, readOnly: boolean): string {
+  const shown = `\n${count} more ${count === 1 ? 'entry is' : 'entries are'} not shown.`;
+  return readOnly ? `${shown}\n` : `${shown} Use \`talyn_memory_search\` to find them.\n`;
 }
 
 /**
  * The Markdown index a session gets. Name, type, scope and description only,
  * never a body. Cut at `MAX_MEMORY_INDEX_BYTES`, with a last line that says
  * how many entries were left out. Empty when there are no entries.
+ * `readOnly` is for a run without the memory tools: it names no tool.
  */
 export function renderMemoryIndex(
   entries: readonly MemoryIndexEntry[],
   maxBytes: number = MAX_MEMORY_INDEX_BYTES,
+  opts: { readOnly?: boolean } = {},
 ): string {
   if (entries.length === 0) return '';
+  const readOnly = opts.readOnly === true;
+  const omitted = (count: number) => omittedLine(count, readOnly);
   const lines = entries.map(indexLine);
   const sizes = lines.map(utf8Bytes);
   const total = sizes.reduce((sum, size) => sum + size, 0);
-  let out = INDEX_HEADER;
+  let out = readOnly ? READ_ONLY_INDEX_HEADER : INDEX_HEADER;
   let used = utf8Bytes(out);
   if (used + total <= maxBytes) return out + lines.join('');
   for (let i = 0; i < lines.length; i++) {
     // Not every entry fits, so keep room for the line that says how many were left out.
-    if (used + sizes[i] + utf8Bytes(omittedLine(lines.length - i - 1)) > maxBytes) {
-      return out + omittedLine(lines.length - i);
+    if (used + sizes[i] + utf8Bytes(omitted(lines.length - i - 1)) > maxBytes) {
+      return out + omitted(lines.length - i);
     }
     out += lines[i];
     used += sizes[i];
