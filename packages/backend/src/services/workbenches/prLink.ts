@@ -76,7 +76,7 @@ export function findBranchPrQuery(workspaceId: string, repositoryId: string, bra
  * stopped matching (the branch was renamed) is still the PR this work opened.
  */
 export async function linkPullRequest(row: WorkbenchRow): Promise<WorkbenchRow> {
-  if (row.pullRequestId) return row;
+  if (row.pullRequestId || !row.repositoryId) return row;
   const found = (await findBranchPrQuery(row.workspaceId, row.repositoryId, row.branch, row.settings?.prUnlinked, row.createdAt, row.pushedHeadShas))[0];
   if (!found) return row;
   const [linked] = await getPoolDbClient().update(workbenches).set({ pullRequestId: found.id, updatedAt: new Date() })

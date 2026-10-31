@@ -376,7 +376,7 @@ export async function resolveRepository(ctx: ResolveRepoContext): Promise<Resolv
     request: ctx.request,
     thread: ctx.thread,
     channelMemory,
-    recentSessions: recent.map((r) => r.repositoryId),
+    recentSessions: recent.flatMap((r) => (r.repositoryId ? [r.repositoryId] : [])),
   });
   if (offline.kind !== 'undecided') return { resolution: offline, repos };
   if (offline.searchQueries.length === 0 || offline.contenders.length < 2) {

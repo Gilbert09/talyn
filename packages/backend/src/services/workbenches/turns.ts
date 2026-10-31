@@ -80,6 +80,7 @@ import {
   getChat,
   getCheckpoint,
   getWorkbench,
+  isThread,
   requeueTurn,
   rowToChat,
   getTurnLease,
@@ -397,6 +398,8 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     let wb = await getWorkbench(chat.workbenchId);
     if (!wb) return;
     settleTurnActivity(wb.id);
+    // A thread has no diff, checkpoint, pull request or branch.
+    if (isThread(wb)) return;
     wb = await refreshDiffStat(wb);
     // After the stat, not beside it: two git reads at once on a box near its memory ceiling is worse than a second's wait.
     void checkpointWork(wb, 'turn_end');
@@ -512,6 +515,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
     talyn: {
       kind: 'user_message',
       messageId: message.id,
+      ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
       ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
@@ -630,7 +634,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       intent: message.intent,
       createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
       internetAccess: wb.settings?.internetAccess,
-      autoCreatePr: wb.settings?.autoCreatePr,
+      // A thread has no branch to open a pull request from.
+      autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
       hasPullRequest: Boolean(wb.pullRequestId),
       imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
       talynTools,
@@ -835,6 +840,11 @@ export async function createCheckpoint(
   chatId: string,
   turn: number,
 ): Promise<{ sha: string | null; disk: DiskProbe | null; error: string | null }> {
+  // A thread has no repository to snapshot. The disk probe still runs: it is also the exec that wakes the box.
+  if (isThread(wb)) {
+    const probe = await runCapture(wb, DISK_PROBE_SCRIPT, { quiet: true, timeoutMs: 60_000, env: { TMPDIR: '/dev/shm' }, diskRecovery: false });
+    return { sha: null, disk: parseDiskProbe(probe.stderr), error: null };
+  }
   const steps = checkpointCreateSteps({ chatId, turn, tmpIndexPath: tmpIndexPath(chatId, turn) });
   const r = await runCapture(wb, `${DISK_PROBE_SCRIPT}\n${toShellScript(steps)}`, {
     quiet: true,
@@ -999,7 +1009,7 @@ async function finishSuccessfulAgent(
   wb: WorkbenchRow, chatId: string, message: WorkbenchQueuedMessage,
   text: string, events: EventBatcher, live: LiveTurn,
 ): Promise<void> {
-  if (live.cancelRequested || isWorkbenchDetached()) return;
+  if (live.cancelRequested || isWorkbenchDetached() || isThread(wb)) return;
   if (!(await renewTurnLease(chatId, live.turn)) || await hasTurnEvent(chatId, live.turn, 'talyn_pr')) return;
   let fresh = (await getWorkbench(wb.id)) ?? wb;
   if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;

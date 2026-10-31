@@ -399,7 +399,8 @@ async function noteTooLarge(row: WorkbenchRow, size: number): Promise<void> {
  * session has no live box. Never throws; one at a time per session.
  */
 export function checkpointWork(row: WorkbenchRow, reason: 'turn_end' | 'during_turn' | 'restored'): Promise<SaveOutcome | null> {
-  if (!liveSandbox(row)) return Promise.resolve(null);
+  // A thread has no repository, so no work to save.
+  if (!liveSandbox(row) || row.kind === 'thread') return Promise.resolve(null);
   const running = inFlight.get(row.id);
   if (running) return running;
   const job = takeCheckpoint(row, reason).finally(() => inFlight.delete(row.id));

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import type { ApiResponse } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
-import { fleetErrorAsRefusal, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import {
   adoptPullRequestForWorkbench,
   linkWorkbenchPullRequest,
@@ -54,6 +54,7 @@ export function workbenchPullRequestRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       ok(res, await adoptPullRequestForWorkbench(row, req.body ?? {}));
     } catch (err) {
       const refusal = fleetErrorAsRefusal(err);
@@ -78,6 +79,7 @@ export function workbenchPullRequestRoutes(): Router {
       const row = await gatedWorkbench(req, res, req.params.id);
       if (!row) return;
       try {
+        refuseThread(row);
         ok(res, await handler(row, req));
       } catch (err) {
         const refusal = fleetErrorAsRefusal(err);

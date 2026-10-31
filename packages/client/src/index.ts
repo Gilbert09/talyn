@@ -116,7 +116,9 @@ import type {
   DeveloperAgents,
   DeveloperRateLimits,
   CreateWorkbenchChatInput,
+  ContinueWorkbenchAsThreadInput,
   CreateWorkbenchInput,
+  WorkbenchKind,
   PutWorkbenchInstructionFileInput,
   WorkbenchInstructionFile,
   ListMemoryQuery,
@@ -1734,6 +1736,8 @@ class WebSocketClient {
   private lastTickAt = 0;
   private lifecycleBound = false;
   private subscribedWorkspaces: Set<string> = new Set();
+  /** Sent with every subscribe. The server holds back events a client did not opt in to. */
+  private capabilities: string[] = [];
   // Admin Debug-panel owner filter, re-sent on (re)connect so the server keeps
   // streaming only the selected account's events. undefined = all.
   private debugFilter: string | undefined;
@@ -1839,7 +1843,7 @@ class WebSocketClient {
             // it is the point the backoff may start over.
             this.reconnectAttempts = 0;
             for (const workspaceId of this.subscribedWorkspaces) {
-              this.send({ type: 'subscribe', workspaceId });
+              this.send(this.subscribeMessage(workspaceId));
             }
             if (this.debugFilter !== undefined) {
               this.send({ type: 'debug:filter', owner: this.debugFilter });
@@ -1924,8 +1928,21 @@ class WebSocketClient {
   subscribe(workspaceId: string): void {
     this.subscribedWorkspaces.add(workspaceId);
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.send({ type: 'subscribe', workspaceId });
+      this.send(this.subscribeMessage(workspaceId));
     }
+  }
+
+  /**
+   * What this client can show, for example `threads`. Without `threads` the
+   * server sends no thread rows. Call before `subscribe`; a later call takes
+   * effect on the next subscribe or reconnect.
+   */
+  setCapabilities(capabilities: string[]): void {
+    this.capabilities = [...capabilities];
+  }
+
+  private subscribeMessage(workspaceId: string): Record<string, unknown> {
+    return { type: 'subscribe', workspaceId, ...(this.capabilities.length > 0 ? { capabilities: this.capabilities } : {}) };
   }
 
   unsubscribe(workspaceId: string): void {
@@ -2787,11 +2804,16 @@ const enc = encodeURIComponent;
 
 export const workbenches = {
   patch: (id: string) => request<{ base: string; patch: string }>('GET', `/workbenches/${enc(id)}/patch`),
-  list: (workspaceId: string, opts: { includeArchived?: boolean } = {}) => {
+  /** Sessions only unless `kinds` names `thread`. */
+  list: (workspaceId: string, opts: { includeArchived?: boolean; kinds?: WorkbenchKind[] } = {}) => {
     const qs = new URLSearchParams({ workspaceId });
     if (opts.includeArchived) qs.set('includeArchived', 'true');
+    if (opts.kinds?.length) qs.set('kinds', opts.kinds.join(','));
     return request<Workbench[]>('GET', `/workbenches?${qs.toString()}`);
   },
+  /** Continue a session as a thread. Answers the new thread. */
+  continueAsThread: (id: string, input: ContinueWorkbenchAsThreadInput = {}) =>
+    request<Workbench>('POST', `/workbenches/${enc(id)}/thread`, input),
   get: (id: string) => request<Workbench>('GET', `/workbenches/${enc(id)}`),
   create: (input: CreateWorkbenchInput) => request<Workbench>('POST', '/workbenches', input),
   update: (id: string, patch: UpdateWorkbenchInput) =>

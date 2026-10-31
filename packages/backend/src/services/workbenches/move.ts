@@ -746,7 +746,8 @@ interface Created {
 }
 
 async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions): Promise<MoveResult> {
-  if (row.archivedAt || row.runtime !== 'sandbox' || !row.sandboxId || held.has(row.id)) {
+  // A thread has no clone to carry: a move's export and import are git.
+  if (row.archivedAt || row.runtime !== 'sandbox' || !row.sandboxId || held.has(row.id) || row.kind === 'thread') {
     return { moved: false, reason: 'not_applicable' };
   }
   const from = row.sandboxId;
@@ -1143,7 +1144,7 @@ const staleChecks = new Map<string, { sandboxId: string; at: number }>();
  */
 export async function needsFreshGolden(row: WorkbenchRow): Promise<boolean> {
   if (row.archivedAt || row.runtime !== 'sandbox' || row.status !== 'ready' || !row.sandboxId) return false;
-  if (held.has(row.id) || backingOff(row)) return false;
+  if (held.has(row.id) || backingOff(row) || row.kind === 'thread') return false;
   const last = staleChecks.get(row.id);
   if (last && last.sandboxId === row.sandboxId && Date.now() - last.at < STALE_CHECK_INTERVAL_MS) return false;
   staleChecks.set(row.id, { sandboxId: row.sandboxId, at: Date.now() });

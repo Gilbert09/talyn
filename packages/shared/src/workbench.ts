@@ -26,6 +26,13 @@ export type WorkbenchRuntimeKind = 'sandbox' | 'local';
 export type WorkbenchAgent = 'claude' | 'codex';
 
 /**
+ * A session works on one repository. A thread is a long conversation with no
+ * repository: it plans work and starts sessions on repositories.
+ */
+export type WorkbenchKind = 'session' | 'thread';
+export const WORKBENCH_KINDS: readonly WorkbenchKind[] = ['session', 'thread'];
+
+/**
  * `moving`: Talyn is moving the session to a fresh sandbox (a newer image, or
  * more disk). Messages sent meanwhile queue, as they do while provisioning.
  */
@@ -133,8 +140,13 @@ export interface WorkbenchNamedRunScript {
 export interface Workbench {
   id: string;
   workspaceId: string;
-  repositoryId: string;
-  /** `owner/name`, denormalised so a list renders without a repository lookup. */
+  /** Absent on older servers: read absent as `session`. */
+  kind?: WorkbenchKind;
+  /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
+  threadId?: string | null;
+  /** Null for a thread. */
+  repositoryId: string | null;
+  /** `owner/name`, denormalised so a list renders without a repository lookup. '' for a thread. */
   repoFullName: string;
   /**
    * A slug, unique per workspace among live workbenches: words from the first
@@ -239,6 +251,11 @@ export interface WorkbenchQueuedMessage {
   model?: string;
   effort?: WorkbenchEffort;
   intent?: WorkbenchMessageIntent;
+  /**
+   * Who wrote the message. `talyn`: Talyn wrote it to wake a thread when one
+   * of its sessions changed. Absent means `user`.
+   */
+  origin?: 'user' | 'talyn';
   queuedAt: string;
 }
 
@@ -331,7 +348,12 @@ export interface WorkbenchContextUsage {
 
 export interface CreateWorkbenchInput {
   workspaceId: string;
-  repositoryId: string;
+  /** Absent means `session`. A thread takes no repository, branch or pull request. */
+  kind?: WorkbenchKind;
+  /** Required for a session. Refused for a thread. */
+  repositoryId?: string;
+  /** Put the new session in this thread (a thread of the same workspace). */
+  threadId?: string;
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
   internetAccess?: boolean;
@@ -362,6 +384,19 @@ export interface CreateWorkbenchInput {
  * again". `title` is the agent's PR title; `suggestion` is a model's one-line
  * answer. Talyn turns either into a slug, adds the prefix and makes it unique.
  */
+/**
+ * `POST /workbenches/:id/thread`: continue a session as a thread. The session
+ * becomes the thread's first session, and the thread's first message is a
+ * recap of the session's chat.
+ */
+export interface ContinueWorkbenchAsThreadInput {
+  /** Added after the recap, as what the person wants next. */
+  prompt?: string;
+  /** Default: the session's agent. */
+  agent?: WorkbenchAgent;
+  model?: string;
+}
+
 export interface NameWorkbenchBranchInput {
   /** The chat whose turn just ended: its own `running` status does not count as busy. */
   chatId?: string;

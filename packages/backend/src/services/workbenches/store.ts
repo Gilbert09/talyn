@@ -11,6 +11,7 @@ import type {
   WorkbenchEffort,
   WorkbenchEvent,
   WorkbenchImportedFrom,
+  WorkbenchKind,
   WorkbenchQueuedMessage,
   WorkbenchRuntimeKind,
   WorkbenchSandboxState,
@@ -56,6 +57,8 @@ export const WORKBENCH_COLUMNS = {
   workspaceId: workbenchesTable.workspaceId,
   repositoryId: workbenchesTable.repositoryId,
   repoFullName: workbenchesTable.repoFullName,
+  kind: workbenchesTable.kind,
+  threadId: workbenchesTable.threadId,
   name: workbenchesTable.name,
   title: workbenchesTable.title,
   branch: workbenchesTable.branch,
@@ -121,6 +124,8 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    kind: row.kind === 'thread' ? 'thread' : 'session',
+    threadId: row.threadId ?? null,
     repositoryId: row.repositoryId,
     repoFullName: row.repoFullName,
     name: row.name,
@@ -177,11 +182,26 @@ export async function insertWorkbench(values: NewWorkbench): Promise<WorkbenchRo
   return row;
 }
 
-/** The list query, exposed so a test can prove it never reads a transcript. */
-export function listWorkbenchesQuery(workspaceId: string, includeArchived: boolean) {
-  const where = includeArchived
-    ? eq(workbenchesTable.workspaceId, workspaceId)
-    : and(eq(workbenchesTable.workspaceId, workspaceId), isNull(workbenchesTable.archivedAt));
+/** A thread: a workbench with no repository that starts sessions. */
+export function isThread(row: Pick<WorkbenchRow, 'kind'>): boolean {
+  return row.kind === 'thread';
+}
+
+/**
+ * The list query, exposed so a test can prove it never reads a transcript.
+ * `kinds` defaults to sessions only: a client that does not ask for threads
+ * does not know what one is.
+ */
+export function listWorkbenchesQuery(
+  workspaceId: string,
+  includeArchived: boolean,
+  kinds: readonly WorkbenchKind[] = ['session'],
+) {
+  const where = and(
+    eq(workbenchesTable.workspaceId, workspaceId),
+    includeArchived ? undefined : isNull(workbenchesTable.archivedAt),
+    inArray(workbenchesTable.kind, [...kinds]),
+  );
   return db()
     .select(WORKBENCH_COLUMNS)
     .from(workbenchesTable)
@@ -189,8 +209,21 @@ export function listWorkbenchesQuery(workspaceId: string, includeArchived: boole
     .orderBy(desc(workbenchesTable.createdAt));
 }
 
-export async function listWorkbenches(workspaceId: string, includeArchived = false): Promise<WorkbenchRow[]> {
-  return listWorkbenchesQuery(workspaceId, includeArchived);
+export async function listWorkbenches(
+  workspaceId: string,
+  includeArchived = false,
+  kinds: readonly WorkbenchKind[] = ['session'],
+): Promise<WorkbenchRow[]> {
+  return listWorkbenchesQuery(workspaceId, includeArchived, kinds);
+}
+
+/** The sessions in a thread, newest first. Archived ones too: the thread reports on them. */
+export async function threadSessions(threadId: string): Promise<WorkbenchRow[]> {
+  return db()
+    .select(WORKBENCH_COLUMNS)
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.threadId, threadId))
+    .orderBy(desc(workbenchesTable.createdAt));
 }
 
 export function getWorkbenchQuery(id: string) {

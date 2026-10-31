@@ -31,6 +31,28 @@ const connectionUsers = new Map<WebSocket, AuthUser>();
 const connectionDeadlines = new Map<WebSocket, number>();
 // Per-client owner filter for the admin Debug stream. Absent = all owners.
 const debugFilters = new Map<WebSocket, DebugOwnerFilter>();
+// What a client says it can show, sent with `subscribe`. Absent = an older client.
+const clientCapabilities = new Map<WebSocket, Set<WsClientCapability>>();
+
+/** Things a client opts in to. An older client never sends one, so it never gets an event it cannot show. */
+export type WsClientCapability = 'threads';
+const WS_CLIENT_CAPABILITIES: readonly WsClientCapability[] = ['threads'];
+
+/**
+ * The capability a client needs for this event, or null. A thread row would
+ * show in an older client's session list as a session with no repository and
+ * no branch, so only a client that asked for threads gets one.
+ */
+export function capabilityFor(event: WSEvent): WsClientCapability | null {
+  if (event.type !== 'workbench:updated') return null;
+  const workbench = (event.payload as { workbench?: { kind?: unknown } } | null)?.workbench;
+  return workbench?.kind === 'thread' ? 'threads' : null;
+}
+
+function clientMayReceive(client: WebSocket, event: WSEvent): boolean {
+  const needed = capabilityFor(event);
+  return !needed || Boolean(clientCapabilities.get(client)?.has(needed));
+}
 
 export const WS_MAX_PAYLOAD = 16 * 1024;
 const AUTHORIZATION_REFRESH_MS = 15_000;
@@ -158,6 +180,7 @@ export function setupWebSocket(
       connectionUsers.delete(ws);
       connectionDeadlines.delete(ws);
       debugFilters.delete(ws);
+      clientCapabilities.delete(ws);
       if (wasConnected) {
         debugBus.recordWs({
           action: 'disconnect',
@@ -334,6 +357,13 @@ async function handleMessage(
   }
   switch (message.type) {
     case 'subscribe': {
+      // Capabilities are per connection; every subscribe carries the full list.
+      if (Array.isArray(message.capabilities)) {
+        clientCapabilities.set(
+          ws,
+          new Set(WS_CLIENT_CAPABILITIES.filter((c) => (message.capabilities as unknown[]).includes(c))),
+        );
+      }
       // Only allow subscribing to a workspace the connected user owns.
       const workspaceId = message.workspaceId as string;
       const current = subscriptions.get(ws);
@@ -426,7 +456,7 @@ function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const [client, workspaces] of subscriptions) {
-    if (workspaces.has(workspaceId) && canDeliver(client)) {
+    if (workspaces.has(workspaceId) && canDeliver(client) && clientMayReceive(client, event)) {
       client.send(message);
       sent++;
     }

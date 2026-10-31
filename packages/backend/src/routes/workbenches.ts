@@ -8,10 +8,12 @@ import {
   sanitizeWorkbenchTitle,
   WORKBENCH_EFFORTS,
   WORKBENCH_IMPORT_MAX_BYTES,
+  WORKBENCH_KINDS,
   WORKBENCH_MANUAL_TITLE_MAX,
   type ApiResponse,
   type CreateWorkbenchChatInput,
   type ConfirmWorkbenchBranchNameInput,
+  type ContinueWorkbenchAsThreadInput,
   type CreateWorkbenchInput,
   type MemoryScope,
   MEMORY_SCOPES,
@@ -24,17 +26,18 @@ import {
   type WorkbenchChatStatus,
   type WorkbenchEffort,
   type WorkbenchEvent,
+  type WorkbenchKind,
   type WorkbenchSettings,
 } from '@talyn/shared';
 import { runWithoutScope } from '../db/client.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from '../services/workbenches/changes.js';
+import { emptyChanges, getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from '../services/workbenches/changes.js';
 import { noteDiffStatFresh } from '../services/workbenches/workCheckpoint.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
-import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, localRuntimeError, notReadyError, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
@@ -53,12 +56,20 @@ import { confirmLocalBranchName, reserveLocalBranchName } from '../services/work
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
-import { fleetClientFor, loadWorkbenchConfigWithDetection, resumeOnce, saveDetectedConfig } from '../services/workbenches/sandboxRuntime.js';
+import {
+  fleetClientFor,
+  loadWorkbenchConfig,
+  loadWorkbenchConfigWithDetection,
+  resumeOnce,
+  saveDetectedConfig,
+} from '../services/workbenches/sandboxRuntime.js';
+import { continueAsThread } from '../services/workbenches/threads.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
   getWorkbench,
   insertChat,
+  isThread,
   listChats,
   listCheckpoints,
   listEvents,
@@ -109,6 +120,18 @@ const MAX_PROXY_BODY_BYTES = 10 * 1024 * 1024;
 
 const CHAT_STATUSES: readonly WorkbenchChatStatus[] = ['idle', 'running', 'awaiting_input', 'error'];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * `?kinds=session,thread`. Absent: sessions only, because a client that does
+ * not ask for threads does not know how to show one. Null when a kind is unknown.
+ */
+function parseKinds(raw: unknown): WorkbenchKind[] | null {
+  if (raw === undefined) return ['session'];
+  if (typeof raw !== 'string') return null;
+  const kinds = [...new Set(raw.split(',').map((k) => k.trim()).filter(Boolean))];
+  if (kinds.length === 0 || kinds.some((k) => !WORKBENCH_KINDS.includes(k as WorkbenchKind))) return null;
+  return kinds as WorkbenchKind[];
+}
 
 const ok = <T>(res: Response, data: T) => res.json({ success: true, data } as ApiResponse<T>);
 const bad = (res: Response, status: number, error: string, code?: string) =>
@@ -482,8 +505,10 @@ export function workbenchRoutes(): Router {
 
   router.get('/', async (req, res) => {
     const workspaceId = (req.query.workspaceId as string) ?? '';
+    const kinds = parseKinds(req.query.kinds);
+    if (!kinds) return bad(res, 400, `kinds must be a comma-separated list of: ${WORKBENCH_KINDS.join(', ')}`, 'bad_kinds');
     if (!(await gate(req, res, workspaceId))) return;
-    const rows = await listWorkbenches(workspaceId, req.query.includeArchived === 'true');
+    const rows = await listWorkbenches(workspaceId, req.query.includeArchived === 'true', kinds);
     ok(res, await publicWorkbenches(rows));
   });
 
@@ -505,6 +530,18 @@ export function workbenchRoutes(): Router {
       delete input.source;
       delete input.namingText;
       ok(res, await createWorkbench(input, { id: user.id, email: user.email }));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /** Continue a session as a thread: the session joins the new thread, which starts with a recap of its chat. */
+  router.post('/:id/thread', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const user = assertUser(req);
+    try {
+      ok(res, await continueAsThread(row, (req.body ?? {}) as ContinueWorkbenchAsThreadInput, { id: user.id, email: user.email }));
     } catch (err) {
       fail(res, err);
     }
@@ -702,6 +739,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       await requireReadySandbox(row);
       if (row.agent !== 'claude') {
         throw new WorkbenchError('Only a Claude session can continue a Claude Code conversation.', 409, 'wrong_agent');
@@ -723,6 +761,8 @@ export function workbenchRoutes(): Router {
   router.get('/:id/changes', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
+    // A thread has no repository: nothing changed, and no box needs to wake to say so.
+    if (isThread(row)) return ok(res, emptyChanges());
     try {
       await requireReadySandbox(row, true);
       const changes = await getChanges(row);
@@ -739,6 +779,7 @@ export function workbenchRoutes(): Router {
   router.get('/:id/diff', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
+    if (isThread(row)) return ok(res, { patch: '' });
     try {
       await requireReadySandbox(row);
       const scope = req.query.scope;
@@ -766,6 +807,7 @@ export function workbenchRoutes(): Router {
   router.get('/:id/files', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
+    if (isThread(row)) return ok(res, { paths: [] });
     try {
       await requireReadySandbox(row, true);
       ok(res, await listRepoFiles(row));
@@ -779,6 +821,7 @@ export function workbenchRoutes(): Router {
   router.get('/:id/config', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
+    if (isThread(row)) return ok(res, await loadWorkbenchConfig(row));
     try {
       await requireReadySandbox(row, true);
       ok(res, await loadWorkbenchConfigWithDetection(row));
@@ -791,6 +834,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       await requireReadySandbox(row);
       await saveDetectedConfig(row);
       ok(res, null);
@@ -809,6 +853,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       await requireReadySandbox(row);
       // Detached from the request: the script outlives it, and its follower
       // must not inherit anything request-scoped.
@@ -837,6 +882,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       ok(res, await createWorkbenchPullRequest(row, req.body ?? {}));
     } catch (err) {
       fail(res, err);
@@ -847,6 +893,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       const chatId = (req.body as { chatId?: unknown } | undefined)?.chatId;
       ok(res, await runWorkbenchAction(row, req.params.action, typeof chatId === 'string' ? chatId : undefined));
     } catch (err) {
@@ -860,6 +907,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       ok(res, await reserveLocalBranchName(row, (req.body ?? {}) as NameWorkbenchBranchInput));
     } catch (err) {
       fail(res, err);
@@ -880,6 +928,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      refuseThread(row);
       await requireReadySandbox(row);
       ok(res, await getPreviewPatch(row));
     } catch (err) { fail(res, err); }

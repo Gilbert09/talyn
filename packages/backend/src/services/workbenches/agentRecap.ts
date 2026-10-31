@@ -19,8 +19,18 @@ export async function recoveryRecap(chatId: string, beforeTurn: number): Promise
   const db = getPoolDbClient();
   const [chat] = await db.select({ pending: chats.recapPending }).from(chats).where(eq(chats.id, chatId));
   if (!chat?.pending) return undefined;
+  return HEADER + ((await conversationRecap(chatId, beforeTurn, Buffer.byteLength(HEADER))) ?? '');
+}
+
+/**
+ * The newest user and assistant text of a chat before `beforeTurn`, oldest
+ * first, in at most {@link MAX_RECAP_BYTES} with `reservedBytes` of it kept
+ * free. Undefined when the chat has no such text.
+ */
+export async function conversationRecap(chatId: string, beforeTurn: number, reservedBytes = 0): Promise<string | undefined> {
+  const db = getPoolDbClient();
   const messages: string[] = [];
-  let used = Buffer.byteLength(HEADER);
+  let used = reservedBytes;
   let beforeSeq: number | undefined;
   for (;;) {
     const rows = await db.select({
@@ -38,13 +48,13 @@ export async function recoveryRecap(chatId: string, beforeTurn: number): Promise
     for (const row of rows) {
       const label = row.role === 'user' ? 'User: ' : 'Assistant: ';
       const length = Buffer.byteLength(label) + row.bytes + 2;
-      if (used + length > MAX_RECAP_BYTES) return HEADER + messages.reverse().join('\n\n');
+      if (used + length > MAX_RECAP_BYTES) return messages.length ? messages.reverse().join('\n\n') : undefined;
       messages.push(label + row.text);
       used += length;
     }
     beforeSeq = rows[rows.length - 1].seq;
   }
-  return HEADER + messages.reverse().join('\n\n');
+  return messages.length ? messages.reverse().join('\n\n') : undefined;
 }
 
 export async function clearRecoveryRecap(chatId: string): Promise<void> {

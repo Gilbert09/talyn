@@ -260,11 +260,13 @@ export async function createWorkbenchPullRequest(
  */
 async function trackAndLink(row: WorkbenchRow, number: number, strict = false): Promise<WorkbenchRow> {
   const [owner, repo] = row.repoFullName.split('/');
+  const repositoryId = row.repositoryId;
+  if (!repositoryId) return row;
   try {
     const watched = await prMonitorService.watchPullRequest({
       workspaceId: row.workspaceId,
       repo: {
-        id: row.repositoryId,
+        id: repositoryId,
         workspaceId: row.workspaceId,
         owner,
         repo,
