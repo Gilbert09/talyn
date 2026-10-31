@@ -2,6 +2,13 @@ name: Test
 
 on: [push, pull_request]
 
+# A newer push to the same branch cancels the older run. Each run holds a
+# macOS runner for 30-40 minutes, and old runs kept the release builds waiting
+# for a runner for up to an hour. The newer run still tests all of the code.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
