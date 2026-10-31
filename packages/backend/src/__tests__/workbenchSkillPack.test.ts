@@ -184,7 +184,9 @@ describe('session skill pack', () => {
     });
   });
 
-  describe('syncSkillPack', () => {
+  // Each test runs the real sync script in bash up to three times. Git Bash on
+  // the Windows CI runner takes several seconds per run, so 10 s is too short.
+  describe('syncSkillPack', { timeout: 60_000 }, () => {
     let testDb: Awaited<ReturnType<typeof createTestDb>>;
     let tmp: string;
     const row = { id: 'wb-1', workspaceId: 'ws-a', repositoryId: 'repo-x', repoFullName: 'acme/app', agent: 'claude' } as Loose;

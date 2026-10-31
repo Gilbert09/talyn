@@ -209,11 +209,27 @@ export function isRemoteResumeRequired(err: unknown): boolean {
 /** Resumes in flight, per sandbox, so a burst of calls waits on one resume. */
 const resuming = new Map<string, Promise<void>>();
 
-function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
+export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
   let pending = resuming.get(sandboxId);
   if (!pending) {
     console.log(`[workbench] resuming hibernated sandbox ${sandboxId}`);
-    pending = client.resumeSandbox(sandboxId).finally(() => resuming.delete(sandboxId));
+    const startedAt = Date.now();
+    pending = client
+      .resumeSandbox(sandboxId)
+      .then(
+        () => {
+          const ms = Date.now() - startedAt;
+          console.log(`[workbench] resumed sandbox ${sandboxId} in ${ms} ms`);
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms } });
+        },
+        (error: unknown) => {
+          const ms = Date.now() - startedAt;
+          console.warn(`[workbench] resuming sandbox ${sandboxId} failed after ${ms} ms:`, error);
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms } });
+          throw error;
+        },
+      )
+      .finally(() => resuming.delete(sandboxId));
     resuming.set(sandboxId, pending);
   }
   return pending;

@@ -8,9 +8,18 @@ import { workbenchAgentBackups as backups, workbenchChats as chats, workbenches 
 import { debugBus } from '../debugBus.js';
 import { boxSessionPath, MAX_IMPORTED_SESSION_BYTES } from './claudeImport.js';
 import { shellPath, writeSandboxFiles } from './sandboxFiles.js';
-import { repoDirFor, runCapture } from './sandboxRuntime.js';
+import { fleetClientFor, repoDirFor, runCapture } from './sandboxRuntime.js';
 import { isWorkbenchDraining } from './ownership.js';
 import { getChat, getWorkbench, type ChatRow, type WorkbenchRow } from './store.js';
+
+/** The locate script exits with this code when the conversation file does not exist. */
+export const BACKUP_FILE_MISSING_EXIT = 44;
+/** The longest retry delay. A sleeping box waits this long before the next look. */
+const MAX_RETRY_MS = 3_600_000;
+
+class BackupFileMissingError extends Error {
+  constructor() { super('The agent conversation file does not exist.'); }
+}
 
 const gunzipAsync = promisify(gunzip);
 export const BACKUP_CHUNK_BYTES = 2 * 1024 * 1024;
@@ -83,7 +92,7 @@ export function backupLocateScript(wb: WorkbenchRow, chat: ChatRow): string {
   const locate = chat.agent === 'codex'
     ? `f=$(find "\${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name ${shellQuote(`*${id}*.jsonl`)} -print -quit)`
     : `f=${shellPath(boxSessionPath(repoDirFor(wb), id))}`;
-  return ['set -e', locate, 'test -f "$f"', 'printf "%s\\n" "$f"', 'stat -c %s -- "$f"'].join('\n');
+  return ['set -e', locate, `[ -f "$f" ] || exit ${BACKUP_FILE_MISSING_EXIT}`, 'printf "%s\\n" "$f"', 'stat -c %s -- "$f"'].join('\n');
 }
 
 export function backupReadScript(path: string, offset: number, length: number): string {
@@ -117,6 +126,7 @@ async function backupSession(chatId: string): Promise<boolean> {
   const currentBox = sql`exists (select 1 from ${workbenches} where ${workbenches.id} = ${wb.id}
     and ${workbenches.sandboxId} = ${wb.sandboxId} and ${workbenches.status} = 'ready')`;
   const located = await runCapture(wb, backupLocateScript(wb, chat), execOptions);
+  if (located.exitCode === BACKUP_FILE_MISSING_EXIT) throw new BackupFileMissingError();
   if (located.exitCode !== 0 || located.truncated) throw new Error('Cannot locate the agent conversation.');
   const [path, sizeText] = located.stdout.trim().split('\n');
   const size = Number(sizeText);
@@ -236,11 +246,30 @@ export async function claimPendingBackup(chatId?: string): Promise<BackupClaim |
   return (Array.isArray(result) ? result : (result as { rows: BackupClaim[] }).rows)[0] as BackupClaim ?? null;
 }
 
+/** Ask the fleet without waking the box. Any doubt returns false, so the backup runs as before. */
+async function boxIsAsleep(chatId: string): Promise<boolean> {
+  try {
+    const chat = await getChat(chatId);
+    const wb = chat ? await getWorkbench(chat.workbenchId) : null;
+    if (!wb?.sandboxId || wb.runtime !== 'sandbox') return false;
+    const { sandbox, terminal, retired } = await (await fleetClientFor(wb.workspaceId, wb.fleetHost)).getSandbox(wb.sandboxId);
+    return !terminal && !retired && sandbox?.status === 'suspended';
+  } catch {
+    return false;
+  }
+}
+
 async function runPendingBackup(chatId?: string): Promise<boolean> {
   const claim = await claimPendingBackup(chatId);
   if (!claim) return false;
   const db = getPoolDbClient();
   const owned = and(eq(chats.id, claim.id), eq(chats.backupToken, claim.backup_token));
+  if (await boxIsAsleep(claim.id)) {
+    // An exec wakes the box and costs a memory snapshot. The next turn or sweep after wake runs the backup.
+    await db.update(chats).set({ backupToken: null, backupLeaseUntil: null,
+      backupRetryAt: new Date(Date.now() + MAX_RETRY_MS) }).where(owned);
+    return true;
+  }
   try {
     if (!(await backupAgentSession(claim.id))) throw new Error('The agent backup is not complete.');
     await db.update(chats).set({
@@ -250,9 +279,21 @@ async function runPendingBackup(chatId?: string): Promise<boolean> {
       backupToken: null, backupLeaseUntil: null, backupRetryAt: null, backupFailures: 0,
     }).where(owned);
   } catch (error) {
+    if (error instanceof BackupFileMissingError) {
+      // The file cannot return without a new turn, and a new turn sets the flag again.
+      await db.update(chats).set({
+        agentBackupPending: sql`CASE WHEN ${chats.turnCount} = ${claim.turn_count}
+          AND ${chats.agentSessionId} = ${claim.session_id} THEN false ELSE ${chats.agentBackupPending} END`,
+        backupToken: null, backupLeaseUntil: null, backupRetryAt: null, backupFailures: 0,
+      }).where(owned);
+      debugBus.recordEvent({ service: 'workbench', action: 'agent_backup_missing',
+        summary: 'The agent conversation file is missing. Backup stopped.', ok: false, error,
+        meta: { chatId: claim.id } });
+      return true;
+    }
     await db.update(chats).set({ backupToken: null, backupLeaseUntil: null,
       backupFailures: claim.backup_failures + 1,
-      backupRetryAt: new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(claim.backup_failures, 6), 3_600_000)),
+      backupRetryAt: new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(claim.backup_failures, 6), MAX_RETRY_MS)),
     }).where(owned);
     debugBus.recordEvent({ service: 'workbench', action: 'agent_backup_retry',
       summary: 'The agent backup will retry.', ok: false, error });
