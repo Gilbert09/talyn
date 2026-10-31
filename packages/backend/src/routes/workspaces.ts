@@ -399,6 +399,9 @@ export function workspaceRoutes(): Router {
       if (body.settings.sessionSkillPack !== undefined && typeof body.settings.sessionSkillPack !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionSkillPack must be true or false' });
       }
+      if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
+      }
       if (body.settings.fleetSwitchAtPercent !== undefined) {
         const switchAt = normaliseFleetSwitchAtPercent(body.settings.fleetSwitchAtPercent);
         if (!switchAt.ok) return res.status(400).json({ success: false, error: switchAt.error });

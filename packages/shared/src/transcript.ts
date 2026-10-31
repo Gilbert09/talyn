@@ -18,6 +18,7 @@
  */
 import type { AgentEvent } from './index.js';
 import { adoptedPullRequestMessage } from './workbenchPullRequest.js';
+import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
 
 const INTERRUPTED_MESSAGES = new Set([
   '[Request interrupted by user]',
@@ -78,7 +79,16 @@ export type Block =
       status: 'pending' | 'allowed' | 'denied' | 'auto_allowed';
       persist?: boolean;
     }
-  | { kind: 'system'; key: string; text: string; subtype?: string; url?: string; isError?: boolean }
+  | {
+      kind: 'system';
+      key: string;
+      text: string;
+      subtype?: string;
+      url?: string;
+      isError?: boolean;
+      /** Set for `subtype: 'talyn_memory'`, so a card can link to the entry. */
+      memory?: MemoryChangeEvent;
+    }
   | {
       kind: 'result';
       key: string;
@@ -274,6 +284,13 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         subtype: 'talyn_pr_link',
         text: `${event.linked === true ? 'Linked' : 'Unlinked'} PR #${event.number}`,
       });
+      continue;
+    }
+
+    // A session saved or forgot a memory entry.
+    if (event.type === 'talyn_memory') {
+      const memory = parseMemoryChangeEvent(event as Record<string, unknown>);
+      if (memory) blocks.push({ kind: 'system', key: seqKey, subtype: 'talyn_memory', text: memoryChangeText(memory), memory });
       continue;
     }
 

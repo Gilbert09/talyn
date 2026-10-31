@@ -119,6 +119,12 @@ import type {
   CreateWorkbenchInput,
   PutWorkbenchInstructionFileInput,
   WorkbenchInstructionFile,
+  ListMemoryQuery,
+  MemoryEntry,
+  MemoryEntrySummary,
+  PutMemoryInput,
+  PutMemoryResult,
+  UpdateMemoryInput,
   AdoptWorkbenchPullRequestResult,
   CreateWorkbenchPullRequestInput,
   CreateWorkbenchPullRequestResult,
@@ -2818,6 +2824,29 @@ export const workbenches = {
       request<WorkbenchInstructionFile>('PUT', '/workbenches/instructions', input),
     remove: (workspaceId: string, key: string) =>
       request<void>('DELETE', `/workbenches/instructions/${enc(key)}?workspaceId=${enc(workspaceId)}`),
+  },
+
+  // ---- Workspace memory: notes sessions and people save for later sessions ----
+  memory: {
+    /** No bodies unless `includeBody`. Without `scope`, a repository or thread id means "visible from there". */
+    list: (query: ListMemoryQuery) => {
+      const params = new URLSearchParams({ workspaceId: query.workspaceId });
+      if (query.scope) params.set('scope', query.scope);
+      if (query.repositoryId) params.set('repositoryId', query.repositoryId);
+      if (query.threadId) params.set('threadId', query.threadId);
+      if (query.q) params.set('q', query.q);
+      if (query.includeForgotten) params.set('includeForgotten', 'true');
+      if (query.includeBody) params.set('includeBody', 'true');
+      return request<Array<MemoryEntrySummary | MemoryEntry>>('GET', `/workbenches/memory?${params}`);
+    },
+    get: (id: string) => request<MemoryEntry>('GET', `/workbenches/memory/${enc(id)}`),
+    /** Create, or update the live entry with the same scope target and name. */
+    put: (input: PutMemoryInput) => request<PutMemoryResult>('POST', '/workbenches/memory', input),
+    update: (id: string, patch: UpdateMemoryInput) =>
+      request<MemoryEntry>('PUT', `/workbenches/memory/${enc(id)}`, patch),
+    /** A soft delete. `restore` brings the entry back. */
+    forget: (id: string) => request<MemoryEntrySummary>('DELETE', `/workbenches/memory/${enc(id)}`),
+    restore: (id: string) => request<MemoryEntry>('POST', `/workbenches/memory/${enc(id)}/restore`),
   },
 
   // ---- Chats ----
