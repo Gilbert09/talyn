@@ -436,6 +436,64 @@ describe('agent memory backups', () => {
     expect(await claimPendingBackup()).toBeNull();
   });
 
+  describe('sweep outcomes', () => {
+    const row = async () => (await testDb.db.select({ pending: chats.agentBackupPending, retry: chats.backupRetryAt,
+      failures: chats.backupFailures, lease: chats.backupLeaseUntil, token: chats.backupToken }).from(chats))[0];
+    const seedFailures = (failures: number) => testDb.db.update(chats).set({ agentBackupPending: true, backupFailures: failures });
+
+    it('does not wake a suspended box and keeps the failure count', async () => {
+      vi.spyOn(runtime, 'fleetClientFor').mockResolvedValue(
+        { getSandbox: async () => ({ sandbox: { id: 'box', status: 'suspended' }, terminal: false }) } as never);
+      await seedFailures(3);
+      const before = Date.now();
+      await sweepAgentBackups();
+      expect(scripts).toHaveLength(0);
+      const after = await row();
+      expect(after).toMatchObject({ pending: true, failures: 3, lease: null, token: null });
+      expect(after.retry!.getTime()).toBeGreaterThanOrEqual(before + 3_500_000);
+      expect(await claimPendingBackup()).toBeNull();
+    });
+
+    it.each(['idle', 'busy'])('backs up a %s box', async (status) => {
+      vi.spyOn(runtime, 'fleetClientFor').mockResolvedValue(
+        { getSandbox: async () => ({ sandbox: { id: 'box', status }, terminal: false }) } as never);
+      await seedFailures(0);
+      await sweepAgentBackups();
+      expect(scripts.length).toBeGreaterThan(0);
+      expect(await row()).toMatchObject({ pending: false, failures: 0 });
+    });
+
+    it('treats a missing conversation file as final', async () => {
+      vi.mocked(runtime.runCapture).mockResolvedValue({ exitCode: 44, stdout: '', stderr: '', stdoutBytes: Buffer.alloc(0) } as never);
+      await seedFailures(5);
+      await sweepAgentBackups();
+      expect(await row()).toMatchObject({ pending: false, retry: null, failures: 0, lease: null, token: null });
+      expect(debugBus.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'agent_backup_missing', ok: false }));
+      expect(await claimPendingBackup()).toBeNull();
+    });
+
+    it('keeps the flag when a new turn arrives while the file is missing', async () => {
+      vi.mocked(runtime.runCapture).mockImplementationOnce(async () => {
+        await testDb.db.update(chats).set({ turnCount: 99 });
+        return { exitCode: 44, stdout: '', stderr: '', stdoutBytes: Buffer.alloc(0) } as never;
+      });
+      await seedFailures(0);
+      scheduleAgentBackup('chat');
+      await settleAgentBackupsForTests();
+      expect((await row()).pending).toBe(true);
+    });
+
+    it.each([[1, 'generic exec failure'], [127, 'missing tool']])('keeps the backoff for exit %i (%s)', async (exitCode) => {
+      vi.mocked(runtime.runCapture).mockResolvedValue({ exitCode, stdout: '', stderr: '', stdoutBytes: Buffer.alloc(0) } as never);
+      await seedFailures(2);
+      await sweepAgentBackups();
+      const after = await row();
+      expect(after).toMatchObject({ pending: true, failures: 3 });
+      expect(after.retry!.getTime()).toBeGreaterThan(Date.now() + 200_000);
+      expect(debugBus.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'agent_backup_retry' }));
+    });
+  });
+
   it('leaves a draining provision for the next instance to resume', async () => {
     await updateWorkbench('wb', { status: 'provisioning' });
     const fleet = new FakeFleet();
