@@ -168,14 +168,28 @@ export class LocalTurnController {
     await Promise.all([...batch].map(([id, events]) => this.uploadOne(id, events)));
   }
 
+  /**
+   * The backend takes at most 1000 events and 2 MB per request. A busy turn
+   * streams many partial events, and a short time offline can queue more
+   * than that, so one upload is cut into chunks under both limits.
+   */
   private async uploadOne(chatId: string, events: WorkbenchEvent[]): Promise<void> {
-    if (events.length === 0) return;
-    try {
-      await this.deps.api.uploadLocalEvents(chatId, events);
-    } catch {
-      const later = this.pending.get(chatId) ?? [];
-      this.pending.set(chatId, [...events, ...later]);
-      this.scheduleUpload();
+    const chunks = chunkEvents(events);
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        await this.deps.api.uploadLocalEvents(chatId, chunks[i]);
+      } catch (err) {
+        const status = (err as { status?: unknown } | null)?.status;
+        // One event the backend refuses for good must not block every later one.
+        if (chunks[i].length === 1 && (status === 400 || status === 413)) {
+          console.warn('[workbench] the backend refused a local event; it stays on this device only:', err);
+          continue;
+        }
+        const later = this.pending.get(chatId) ?? [];
+        this.pending.set(chatId, [...chunks.slice(i).flat(), ...later]);
+        this.scheduleUpload();
+        return;
+      }
     }
   }
 
@@ -551,6 +565,29 @@ export class LocalTurnController {
       // The events are what matter; the status is re-reported at the end of the turn.
     }
   }
+}
+
+/** Below the backend's 1000 events and 2 MB body per local-events request. */
+export const LOCAL_UPLOAD_MAX_EVENTS = 500;
+export const LOCAL_UPLOAD_MAX_BYTES = 1024 * 1024;
+
+export function chunkEvents(events: WorkbenchEvent[]): WorkbenchEvent[][] {
+  const chunks: WorkbenchEvent[][] = [];
+  let current: WorkbenchEvent[] = [];
+  let bytes = 0;
+  for (const event of events) {
+    // JSON length counts UTF-16 units; three bytes each bounds the UTF-8 size.
+    const size = JSON.stringify(event).length * 3;
+    if (current.length && (current.length >= LOCAL_UPLOAD_MAX_EVENTS || bytes + size > LOCAL_UPLOAD_MAX_BYTES)) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(event);
+    bytes += size;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 function findChat(chatId: string): WorkbenchChat | undefined {
