@@ -621,16 +621,21 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
     ? workbenchNameFromTask(input.prompt, input.takenNames)
     : pickWorkbenchName(input.takenNames);
   const branchBase = (input.prompt?.trim() ? workbenchBranchFromTask(input.prompt) : null) ?? name;
-  const branch = input.branch ?? `${input.branchPrefix ?? ''}${branchBase}`;
+  const branchGenerated = input.branch === undefined && !input.fromPullRequestId;
+  const wantedBranch = input.branch ?? `${input.branchPrefix ?? ''}${branchBase}`;
   const baseBranch = input.baseBranch || (await detectDefaultBranch(bridge, input.repoPath)) || 'main';
-  const { path } = await bridge.createWorktree({
+  const created = await bridge.createWorktree({
     repoPath: input.repoPath,
     cloneUrl: input.repoPath ? undefined : `https://github.com/${input.repoFullName}.git`,
     workbenchId: newClientId(),
     name,
-    branch,
+    branch: wantedBranch,
     baseBranch,
+    // Main adds a suffix when a branch of this name already exists.
+    newBranch: branchGenerated,
   });
+  const { path } = created;
+  const branch = created.branch ?? wantedBranch;
   return api.workbenches.create({
     workspaceId: input.workspaceId,
     repositoryId: input.repositoryId,
@@ -642,7 +647,7 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
     name,
     fromPullRequestId: input.fromPullRequestId,
     // Named here from the prompt, so Talyn may rename it after the first turn.
-    branchGenerated: input.branch === undefined && !input.fromPullRequestId,
+    branchGenerated,
     // No `prompt`: the backend cannot run a local turn. The caller sends the
     // first message through the controller once the chat exists.
     deviceId: getDeviceId(),

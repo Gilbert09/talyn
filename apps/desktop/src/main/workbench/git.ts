@@ -199,6 +199,110 @@ export async function listFiles(worktree: string): Promise<string[]> {
   return [...new Set(result.stdout.split('\0').filter(Boolean))];
 }
 
+async function hasRef(repository: string, ref: string): Promise<boolean> {
+  const result = await exec(repository, [
+    { argv: ['git', 'show-ref', '--verify', '--quiet', ref] },
+  ]);
+  return result.exitCode === 0;
+}
+
+async function isIgnored(repository: string, relative: string): Promise<boolean> {
+  const result = await exec(repository, [
+    { argv: ['git', 'check-ignore', '--quiet', '--', relative] },
+  ]);
+  return result.exitCode === 0;
+}
+
+/** `name`, else `name-2`, `name-3`, …: the first that is not a directory yet. */
+async function freeWorktreeDir(
+  paths: WorkbenchPaths,
+  repoDir: string,
+  name: string,
+): Promise<string> {
+  for (let suffix = 1; suffix < 1000; suffix++) {
+    const candidate =
+      suffix === 1 ? name : `${name.slice(0, 95)}-${suffix}`;
+    const target = paths.worktree(repoDir, candidate);
+    try {
+      await fs.lstat(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return target;
+      throw error;
+    }
+  }
+  throw new Error('No free directory for this session');
+}
+
+/** `wish`, else `wish-2`, `wish-3`, …: the first with no local or remote branch. */
+export async function freeBranchName(
+  repository: string,
+  wish: string,
+): Promise<string> {
+  const match = /^(.*)-(\d+)$/.exec(wish);
+  const stem = match ? match[1] : wish;
+  const start = match ? Number(match[2]) : 1;
+  for (let suffix = start; suffix < start + 1000; suffix++) {
+    const candidate = suffix === start ? wish : `${stem}-${suffix}`;
+    if (!isValidBranchName(candidate)) break;
+    if (
+      !(await hasRef(repository, `refs/heads/${candidate}`)) &&
+      !(await hasRef(repository, `refs/remotes/origin/${candidate}`))
+    )
+      return candidate;
+  }
+  throw new Error(`No free branch name near ${wish}`);
+}
+
+/** The worktree that has `branch` checked out, or null. */
+async function checkedOutAt(
+  repository: string,
+  branch: string,
+): Promise<string | null> {
+  // An entry whose directory was deleted is stale; prune drops it first.
+  await exec(repository, [
+    { argv: ['git', 'worktree', 'prune'], allowFailure: true },
+  ]);
+  const list = await exec(repository, [
+    { argv: ['git', 'worktree', 'list', '--porcelain', '-z'] },
+  ]);
+  if (list.exitCode !== 0) return null;
+  let current: string | null = null;
+  for (const line of list.stdout.split('\0')) {
+    if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
+    else if (line === `branch refs/heads/${branch}`) return current;
+  }
+  return null;
+}
+
+/**
+ * Move a local branch up to `origin/<branch>` when that is a fast-forward. A
+ * person's old copy of a PR branch must not start the session behind the PR.
+ * A branch with commits of its own is left alone.
+ */
+async function fastForwardBranch(
+  repository: string,
+  branch: string,
+): Promise<void> {
+  const local = await exec(repository, [
+    { argv: ['git', 'rev-parse', '--verify', `refs/heads/${branch}`] },
+  ]);
+  const remote = await exec(repository, [
+    { argv: ['git', 'rev-parse', '--verify', `refs/remotes/origin/${branch}`] },
+  ]);
+  if (local.exitCode !== 0 || remote.exitCode !== 0) return;
+  const from = local.stdout.trim();
+  const to = remote.stdout.trim();
+  if (from === to) return;
+  const ancestor = await exec(repository, [
+    { argv: ['git', 'merge-base', '--is-ancestor', from, to] },
+  ]);
+  if (ancestor.exitCode !== 0) return;
+  // The old value makes this a compare-and-swap.
+  await exec(repository, [
+    { argv: ['git', 'update-ref', `refs/heads/${branch}`, to, from] },
+  ]);
+}
+
 export class WorktreeManager {
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -206,7 +310,7 @@ export class WorktreeManager {
 
   createWorktree(
     input: Parameters<WorkbenchLocalBridge['createWorktree']>[0],
-  ): Promise<{ path: string }> {
+  ): Promise<{ path: string; branch: string }> {
     const pending = this.queue.then(() => this.create(input));
     this.queue = pending.catch(() => undefined);
     return pending;
@@ -214,7 +318,7 @@ export class WorktreeManager {
 
   private async create(
     input: Parameters<WorkbenchLocalBridge['createWorktree']>[0],
-  ): Promise<{ path: string }> {
+  ): Promise<{ path: string; branch: string }> {
     if (!input.repoPath && !input.cloneUrl)
       throw new Error('Select a repository or supply a clone URL');
     if (
@@ -229,7 +333,9 @@ export class WorktreeManager {
       : undefined;
     const identity = source ?? input.cloneUrl!;
     const repoDir = this.paths.repoDir(identity);
-    const target = this.paths.worktree(repoDir, input.name);
+    // An archived session keeps its worktree, and a failed create can leave one:
+    // a new session with the same name gets the next free directory.
+    const target = await freeWorktreeDir(this.paths, repoDir, input.name);
     await fs.mkdir(repoDir, { recursive: true });
     let repository = source;
     if (!repository) {
@@ -255,40 +361,33 @@ export class WorktreeManager {
       }
     }
     await git(repository, 'fetch', 'origin');
-    const existing = await exec(repository, [
-      {
-        argv: [
-          'git',
-          'show-ref',
-          '--verify',
-          '--quiet',
-          `refs/heads/${input.branch}`,
-        ],
-      },
-    ]);
-    const remote = await exec(repository, [
-      {
-        argv: [
-          'git',
-          'show-ref',
-          '--verify',
-          '--quiet',
-          `refs/remotes/origin/${input.branch}`,
-        ],
-      },
-    ]);
-    if (existing.exitCode === 0)
-      await git(repository, 'worktree', 'add', '--', target, input.branch);
-    else
+    // A name Talyn made up must never pick up a branch that already exists:
+    // that branch holds other commits, maybe someone else's.
+    const branch = input.newBranch
+      ? await freeBranchName(repository, input.branch)
+      : input.branch;
+    const existing = await hasRef(repository, `refs/heads/${branch}`);
+    const remote =
+      !input.newBranch &&
+      (await hasRef(repository, `refs/remotes/origin/${branch}`));
+    if (existing) {
+      const holder = await checkedOutAt(repository, branch);
+      if (holder)
+        throw new Error(
+          `The branch ${branch} is checked out in ${holder}. Switch that checkout to another branch, then try again.`,
+        );
+      if (remote) await fastForwardBranch(repository, branch);
+      await git(repository, 'worktree', 'add', '--', target, branch);
+    } else
       await git(
         repository,
         'worktree',
         'add',
         '-b',
-        input.branch,
+        branch,
         '--',
         target,
-        `origin/${remote.exitCode === 0 ? input.branch : input.baseBranch}`,
+        `origin/${remote ? branch : input.baseBranch}`,
       );
     try {
       const common = await git(target, 'rev-parse', '--git-common-dir');
@@ -305,13 +404,25 @@ export class WorktreeManager {
         await fs.appendFile(exclude, '\n.context/\n');
       if (source) {
         const config = await readConfig(source);
-        const envFiles = (await fs.readdir(source)).filter((name) =>
-          name.startsWith('.env'),
-        );
+        // Only an env file git ignores: one it does not ignore shows up as a
+        // new file in the session, and Create PR (`git add -A`) would push it.
+        const envFiles: string[] = [];
+        for (const name of await fs.readdir(source)) {
+          if (name.startsWith('.env') && (await isIgnored(source, name)))
+            envFiles.push(name);
+        }
         for (const relative of new Set([...envFiles, ...config.filesToCopy])) {
           if (relative.split('/').includes('.git'))
             throw new Error('Cannot copy Git metadata');
-          const from = await safeFilePath(source, relative);
+          let from: string;
+          try {
+            from = await safeFilePath(source, relative);
+          } catch (error) {
+            // A missing file, or a link out of the checkout, is not copied. It
+            // must not stop the session from being made.
+            console.warn(`[workbench] not copying ${relative}:`, error);
+            continue;
+          }
           const destination = relativePath(target, relative);
           if (!(await fs.stat(from)).isFile()) continue;
           const realTarget = await fs.realpath(target);
@@ -344,10 +455,15 @@ export class WorktreeManager {
         name: input.name,
         baseBranch: input.baseBranch,
       });
-      return { path: target };
+      return { path: target, branch };
     } catch (error) {
       await git(repository, 'worktree', 'remove', '--force', '--', target);
       await git(repository, 'worktree', 'prune');
+      // The branch this attempt made has no commits of its own.
+      if (!existing)
+        await exec(repository, [
+          { argv: ['git', 'branch', '-D', '--', branch], allowFailure: true },
+        ]);
       throw error;
     }
   }

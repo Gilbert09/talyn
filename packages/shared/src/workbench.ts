@@ -640,7 +640,12 @@ export interface WorkbenchRuntime {
  * serialisable: no functions except the subscription callbacks, no classes.
  */
 export interface WorkbenchLocalBridge {
-  /** `git worktree add` from a local clone, or clone first when only a URL is given. */
+  /**
+   * `git worktree add` from a local clone, or clone first when only a URL is given.
+   * With `newBranch`, `branch` is only a wish: main adds a suffix when a local or
+   * remote branch already has that name, and returns the name it used. An older
+   * main process ignores `newBranch` and returns no `branch`.
+   */
   createWorktree(input: {
     repoPath?: string;
     cloneUrl?: string;
@@ -648,7 +653,8 @@ export interface WorkbenchLocalBridge {
     name: string;
     branch: string;
     baseBranch: string;
-  }): Promise<{ path: string }>;
+    newBranch?: boolean;
+  }): Promise<{ path: string; branch?: string }>;
   removeWorktree(input: { path: string; force?: boolean }): Promise<void>;
   startTurn(input: {
     workbenchId: string;

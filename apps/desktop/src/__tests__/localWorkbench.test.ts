@@ -860,7 +860,18 @@ describe('createLocalWorkbench', () => {
       workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app', agent: 'claude', baseBranch: 'main',
       takenNames: [], branchPrefix: 'tom/', prompt: 'fix the login redirect', ...over,
     });
-    expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ branch }));
+    expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ branch, newBranch: generated }));
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ branch, branchGenerated: generated }));
+  });
+
+  it('records the branch main used when the wished name was taken', async () => {
+    const createWorktree = jest.fn(async () => ({ path: '/work/x', branch: 'tom/fix-login-redirect-2' }));
+    (window as unknown as { electron: unknown }).electron = { workbench: { createWorktree, exec: jest.fn() } };
+    const create = jest.spyOn(realApi.workbenches, 'create').mockResolvedValue(WB);
+    await createLocalWorkbench({
+      workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app', agent: 'claude', baseBranch: 'main',
+      takenNames: [], branchPrefix: 'tom/', prompt: 'fix the login redirect',
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ branch: 'tom/fix-login-redirect-2', branchGenerated: true }));
   });
 });
