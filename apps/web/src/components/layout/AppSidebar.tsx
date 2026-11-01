@@ -101,26 +101,28 @@ export function AppSidebar() {
           {offered && !collapsed && <SidebarSlackPending />}
           {offered && !collapsed && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
-          <div className="mt-2 space-y-0.5">
-            {offered && (
-              <SidebarItem
-                icon={History}
-                label="History"
-                collapsed={collapsed}
-                active={route.view === 'history'}
-                onClick={() => navigate({ view: 'history' })}
-                dataAttr="sidebar-history"
-              />
-            )}
-            <SidebarItem
-              icon={FolderPlus}
-              label="Add repository"
-              collapsed={collapsed}
-              onClick={() => setAddRepositoryOpen(true)}
-              dataAttr="sidebar-add-repository"
-            />
-          </div>
         </nav>
+
+        {/* Pinned under the list, so a long list of sessions never hides them. */}
+        <div className="space-y-0.5 border-t px-1.5 py-1.5" data-attr="sidebar-pinned">
+          {offered && (
+            <SidebarItem
+              icon={History}
+              label="History"
+              collapsed={collapsed}
+              active={route.view === 'history'}
+              onClick={() => navigate({ view: 'history' })}
+              dataAttr="sidebar-history"
+            />
+          )}
+          <SidebarItem
+            icon={FolderPlus}
+            label="Add repository"
+            collapsed={collapsed}
+            onClick={() => setAddRepositoryOpen(true)}
+            dataAttr="sidebar-add-repository"
+          />
+        </div>
 
         <div className="space-y-0.5 border-t px-1.5 py-1.5">
           <SidebarItem

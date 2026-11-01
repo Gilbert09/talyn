@@ -37,12 +37,13 @@ export function ThreadTag({ threadId }: { threadId: string | null | undefined })
   if (!threadId || !name) return null;
   return (
     <span
-      className="inline-flex max-w-[6rem] shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+      className="inline-flex shrink-0 items-center text-muted-foreground"
       title={`Part of the thread ${name}`}
+      aria-label={`Part of the thread ${name}`}
+      role="img"
       data-attr="session-thread-tag"
     >
       <MessagesSquare className="h-3 w-3 shrink-0" aria-hidden />
-      <span className="truncate">{name}</span>
     </span>
   );
 }

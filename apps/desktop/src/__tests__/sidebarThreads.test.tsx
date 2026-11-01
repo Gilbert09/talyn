@@ -131,7 +131,7 @@ describe('Sidebar threads', () => {
     render(<AppSidebar />);
     const repo = screen.getByRole('group', { name: 'posthog/posthog' });
     const rows = within(repo).getAllByRole('button');
-    expect(rows.map((r) => r.textContent)).toEqual(['fix flaky insight testSlack integration', 'solo']);
+    expect(rows.map((r) => r.textContent)).toEqual(['fix flaky insight test', 'solo']);
     expect(within(rows[0]).getByTitle('Part of the thread Slack integration')).toBeInTheDocument();
     // A thread is never a repository group of its own.
     expect(screen.queryByRole('group', { name: '' })).not.toBeInTheDocument();
