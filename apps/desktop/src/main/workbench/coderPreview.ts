@@ -4,7 +4,7 @@ import type {
 } from '../../workbenchBridgeTypes';
 import { CODER_SEARCH_TEXT, CoderCli, classifyCoderFailure, coderOrigin, remotePath, shellQuote, workspaceName } from './coder';
 
-type Cli = Pick<CoderCli, 'status' | 'workspaces' | 'start' | 'waitUntilRunning' | 'exec' | 'appUrls' | 'portForward' | 'stopForwards'>;
+type Cli = Pick<CoderCli, 'status' | 'login' | 'workspaces' | 'start' | 'waitUntilRunning' | 'exec' | 'appUrls' | 'portForward' | 'stopForwards'>;
 interface Preview { input: CoderPreviewInput; state: CoderPreviewState; checkout: string; tree: string }
 
 // A workspace build waits for the template's startup scripts. PostHog's waits up to 16 minutes.
@@ -283,6 +283,18 @@ export class CoderPreviews {
       }
       return { ...preview.state };
     });
+  }
+
+  async openSignIn(id: string): Promise<void> {
+    const preview = this.previews.get(sessionId(id));
+    if (!preview) throw new Error('Select Check again before you sign in.');
+    await this.openExternal(`${preview.state.url}/cli-auth`);
+  }
+
+  async signIn(id: string, token: string): Promise<void> {
+    const preview = this.previews.get(sessionId(id));
+    if (!preview) throw new Error('Select Check again before you sign in.');
+    await this.cli.login(preview.state.url, token);
   }
 
   startWorkspace(id: string): Promise<CoderPreviewState> {

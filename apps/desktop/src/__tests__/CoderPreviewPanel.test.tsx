@@ -13,7 +13,7 @@ import type { CoderPreviewState, CoderProblem } from '../workbenchBridgeTypes';
 const patch = jest.fn();
 const previewGet = jest.fn();
 const bridge = {
-  check: jest.fn(), startWorkspace: jest.fn(),
+  check: jest.fn(), openSignIn: jest.fn(), signIn: jest.fn(), startWorkspace: jest.fn(),
   prepare: jest.fn(), sync: jest.fn(), run: jest.fn(), open: jest.fn(), stop: jest.fn(), remove: jest.fn(), state: jest.fn(),
 };
 jest.mock('../renderer/lib/api', () => ({ api: {
@@ -153,6 +153,38 @@ it.each<[string, CoderProblem, string]>([
   expect(screen.getByText('Signed in')).toHaveAttribute('data-state', 'failed');
   expect(screen.getByText('CLI installed')).toHaveAttribute('data-state', 'done');
   for (const { command } of problem.commands ?? []) expect(screen.getByRole('button', { name: `Copy ${command}` })).toBeInTheDocument();
+});
+it('opens Coder sign-in and runs the checks after a token succeeds', async () => {
+  const item = session();
+  const problem: CoderProblem = { step: 'login', code: 'not_logged_in', message: 'Sign in.', commands: [
+    { command: 'coder login https://coder.example' }, { command: 'hogli devbox:setup' },
+  ] };
+  bridge.state.mockResolvedValue(withProblem(problem, { cliReady: true }));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Sign in to Coder' }));
+  await waitFor(() => expect(bridge.openSignIn).toHaveBeenCalledWith(item.id));
+  const input = screen.getByLabelText('Paste the token from the page');
+  expect(input).toHaveAttribute('type', 'password');
+  fireEvent.change(input, { target: { value: 'sensitive-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+  await waitFor(() => expect(bridge.signIn).toHaveBeenCalledWith(item.id, 'sensitive-token'));
+  await waitFor(() => expect(bridge.check).toHaveBeenCalledWith({ sessionId: item.id, repoName: item.repoFullName, config }));
+  await waitFor(() => expect(screen.getByLabelText('Paste the token from the page')).toHaveValue(''));
+  expect(screen.getByRole('button', { name: 'Copy coder login https://coder.example' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Copy hogli devbox:setup' })).toBeInTheDocument();
+});
+it('keeps the token and shows a redacted sign-in error', async () => {
+  const item = session();
+  const problem: CoderProblem = { step: 'login', code: 'not_logged_in', message: 'Sign in.' };
+  bridge.state.mockResolvedValue(withProblem(problem, { cliReady: true }));
+  bridge.signIn.mockRejectedValue(new Error("Error invoking remote method 'workbench:coder-preview:sign-in': Error: bad [redacted]"));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  const input = await screen.findByLabelText('Paste the token from the page');
+  fireEvent.change(input, { target: { value: 'sensitive-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('bad [redacted]'));
+  expect(input).toHaveValue('sensitive-token');
+  expect(bridge.check).not.toHaveBeenCalled();
 });
 it('offers to start a stopped workspace', async () => {
   const item = session();

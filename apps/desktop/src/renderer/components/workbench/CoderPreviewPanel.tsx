@@ -43,10 +43,23 @@ function CopyCommand({ command, label }: { command: string; label?: string }) {
   );
 }
 
-function ProblemView({ problem, busy, onStart }: { problem: CoderProblem; busy: boolean; onStart: () => void }) {
+function ProblemView({ problem, busy, onStart, token, onToken, onOpenSignIn, onFinishSignIn, signInError }: {
+  problem: CoderProblem; busy: boolean; onStart: () => void; token: string; onToken: (value: string) => void;
+  onOpenSignIn: () => void; onFinishSignIn: () => void; signInError: string | null;
+}) {
+  const canSignIn = problem.code === 'not_logged_in' || problem.code === 'wrong_deployment';
   return (
     <div role="alert" className="space-y-1.5 rounded border border-destructive/40 bg-destructive/5 p-2">
       <p className="whitespace-pre-wrap text-destructive">{problem.message}</p>
+      {canSignIn && (
+        <div className="space-y-1.5">
+          <button type="button" className={buttonClass} disabled={busy} onClick={onOpenSignIn}>Sign in to Coder</button>
+          <label className="block" htmlFor="coder-session-token">Paste the token from the page</label>
+          <input id="coder-session-token" type="password" autoComplete="off" className="w-full rounded border bg-background p-1 text-foreground" value={token} onChange={(event) => onToken(event.target.value)} />
+          <button type="button" className={buttonClass} disabled={busy || !token.trim()} onClick={onFinishSignIn}>Finish sign-in</button>
+          {signInError && <p className="whitespace-pre-wrap text-destructive">{signInError}</p>}
+        </div>
+      )}
       {problem.commands?.map((item) => <CopyCommand key={item.command} {...item} />)}
       {problem.note && <p className="whitespace-pre-wrap text-muted-foreground">{problem.note}</p>}
       {problem.action === 'start_workspace' && (
@@ -68,11 +81,15 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
   const [state, setState] = useState<CoderPreviewState | null>(null);
   const [local, setLocal] = useState(() => coderProgress(workbench.id));
   const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState('');
+  const [signInError, setSignInError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setState(null);
     setError(null);
+    setToken('');
+    setSignInError(null);
     if (!eligible) return;
     const refresh = () => {
       setLocal(coderProgress(workbench.id));
@@ -98,8 +115,13 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
   const act = (action: () => Promise<unknown>) => {
     autoChecked.add(workbench.id);
     setError(null);
+    setSignInError(null);
     // The lib keeps the error for the panel, and the panel reads it on the next refresh.
     void action().catch(() => undefined);
+  };
+  const signInAction = (action: () => Promise<unknown>) => {
+    setSignInError(null);
+    void coderAction(workbench.id, action).catch((failure) => setSignInError(errorText(failure)));
   };
   const problem = state?.problem;
   const current = local.step ?? state?.step ?? null;
@@ -135,7 +157,16 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
         })}
       </ol>
       {busy && <p aria-live="polite" className="text-muted-foreground">{detail || 'Working…'}</p>}
-      {problem && !busy && <ProblemView problem={problem} busy={busy} onStart={() => act(() => startCoderWorkspace(workbench.id))} />}
+      {problem && !busy && <ProblemView
+        problem={problem} busy={busy} onStart={() => act(() => startCoderWorkspace(workbench.id))}
+        token={token} onToken={setToken} signInError={signInError}
+        onOpenSignIn={() => signInAction(() => coderPreviewBridge().openSignIn(workbench.id))}
+        onFinishSignIn={() => signInAction(async () => {
+          await coderPreviewBridge().signIn(workbench.id, token);
+          setToken('');
+          await coderPreviewBridge().check({ sessionId: workbench.id, repoName: workbench.repoFullName, config });
+        })}
+      />}
       {plainError && !busy && <p role="alert" className="whitespace-pre-wrap text-destructive">{plainError}</p>}
       <div className="flex flex-wrap gap-2">
         <button className={buttonClass} disabled={busy} onClick={() => act(() => startCoderPreview(workbench, config))}>Preview in Coder</button>

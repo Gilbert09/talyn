@@ -90,6 +90,26 @@ it('names the command that timed out', async () => {
 it('does not hide a CLI that cannot answer behind the port-forward fallback', async () => {
   await expect(fakeCli([{ killed: true }]).cli.appUrls('dev')).rejects.toThrow('did not finish');
 });
+it('passes a login token only through the environment', async () => {
+  const token = 'sensitive-token';
+  const { cli, execute, writes } = fakeCli([{ stdout: token }]);
+  await expect(cli.login('https://coder.example/path', token)).resolves.toBeUndefined();
+  expect(execute).toHaveBeenCalledWith(BINARY, ['login', 'https://coder.example'], expect.objectContaining({
+    timeout: 30_000, env: expect.objectContaining({ CODER_SESSION_TOKEN: token }),
+  }), expect.any(Function));
+  expect(execute.mock.calls[0][1]).not.toContain(token);
+  expect(writes).toEqual([]);
+});
+it.each([
+  [{ code: 1, stderr: 'bad sensitive-token' }, 'coder login failed (1): bad [redacted]'],
+  [{ killed: true, stderr: 'timeout sensitive-token' }, 'coder login https://coder.example did not finish in 30 seconds.\ntimeout [redacted]'],
+])('redacts a login token from CLI failures', async (response, expected) => {
+  const { cli } = fakeCli([response]);
+  const failure = await cli.login('https://coder.example', 'sensitive-token').catch((error: Error) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toContain(expected);
+  expect((failure as Error).message).not.toContain('sensitive-token');
+});
 
 const posix = process.platform === 'win32' ? it.skip : it;
 describe('finding the CLI outside the GUI PATH', () => {

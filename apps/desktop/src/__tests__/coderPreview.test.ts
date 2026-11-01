@@ -10,6 +10,7 @@ const input: CoderPreviewInput = {
 function setup() {
   const cli = {
     status: jest.fn().mockResolvedValue({ installed: true, loggedIn: true, user: 'tom' }),
+    login: jest.fn().mockResolvedValue(undefined),
     workspaces: jest.fn().mockResolvedValue([{ name: 'dev', owner: 'tom', status: 'stopped', template: 'linux' }]),
     start: jest.fn().mockResolvedValue(undefined),
     waitUntilRunning: jest.fn().mockResolvedValue(undefined),
@@ -21,6 +22,15 @@ function setup() {
   const open = jest.fn().mockResolvedValue(undefined);
   return { cli, open, previews: new CoderPreviews(cli, open) };
 }
+it('opens the deployment CLI sign-in page and passes the token to the CLI', async () => {
+  const { cli, open, previews } = setup();
+  await previews.check(input);
+  await previews.openSignIn('s1');
+  await previews.signIn('s1', 'sensitive-token');
+  expect(open).toHaveBeenCalledWith('https://coder.example/cli-auth');
+  expect(cli.login).toHaveBeenCalledWith('https://coder.example', 'sensitive-token');
+  expect(previews.state('s1')).not.toHaveProperty('token');
+});
 async function ready(previews: CoderPreviews, id = 's1') {
   await previews.prepare({ ...input, sessionId: id });
   await previews.sync({ sessionId: id, base, patch: 'patch\n', turn: 4 });

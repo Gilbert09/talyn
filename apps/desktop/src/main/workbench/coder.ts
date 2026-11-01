@@ -123,9 +123,9 @@ export class CoderCli {
     return found;
   }
 
-  private async call(args: string[], input?: string, timeout = 60_000): Promise<CoderResult> {
+  private async call(args: string[], input?: string, timeout = 60_000, sessionToken?: string): Promise<CoderResult> {
     const [file, PATH] = await Promise.all([this.binary(), this.getPath()]);
-    const env = { ...process.env, PATH, NO_COLOR: '1' };
+    const env = { ...process.env, PATH, NO_COLOR: '1', ...(sessionToken === undefined ? {} : { CODER_SESSION_TOKEN: sessionToken }) };
     const command = `coder ${args.slice(0, 2).join(' ')}`;
     return new Promise((resolve, reject) => {
       const child = this.execute(file, args, { env, timeout, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -146,6 +146,20 @@ export class CoderCli {
       child.stdin?.on('error', () => { /* The command result reports a closed input pipe. */ });
       child.stdin?.end(input);
     });
+  }
+
+  async login(url: string, token: string): Promise<void> {
+    const origin = coderOrigin(url);
+    if (typeof token !== 'string' || !token.trim() || /[\r\n\0]/.test(token.trim())) throw new Error('Paste a valid Coder session token.');
+    const sessionToken = token.trim();
+    const redact = (output: string) => output.split(sessionToken).join('[redacted]');
+    try {
+      // Coder reads CODER_SESSION_TOKEN for login. The token stays out of argv and CLI output returned to the renderer.
+      const result = await this.call(['login', origin], undefined, 30_000, sessionToken);
+      if (result.code) throw new Error(`coder login failed (${result.code}): ${redact((result.stderr || result.stdout).trim())}`);
+    } catch (error) {
+      throw new Error(redact(error instanceof Error ? error.message : String(error)));
+    }
   }
 
   async status(expectedUrl?: string): Promise<CoderStatus> {
