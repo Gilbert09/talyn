@@ -175,6 +175,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
 | `talyn_cancel_session_turn` | Stop the running turn of a chat. |
+| `talyn_resize_session` | Move a session to a sandbox of another `size` after its running turn. `continue_with` sends a message that starts the next turn on the new sandbox. `remember_for_repository` also sets the repository's size. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_changes` | List changed files with line counts. |
 | `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. |
 | `talyn_open_session_pull_request` | Commit, push, and open a pull request. |

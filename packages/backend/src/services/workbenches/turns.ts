@@ -51,6 +51,7 @@ import { syncSkillPack } from './skillPack.js';
 import { notifyThread } from './threads.js';
 import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
+import { applyPendingResize, pendingResize } from './resize.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
@@ -425,6 +426,13 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
     // After the link: a PR this turn opened keeps the branch its name.
     if (succeeded && linked.runtime === 'sandbox') startBranchNaming(linked.id, succeeded);
+    // A resize asked for during this turn. When a queued message already started the next turn, its start applies it.
+    if (chat.status !== 'running') {
+      const latest = await getWorkbench(chat.workbenchId);
+      if (latest && pendingResize(latest)) {
+        void applyPendingResize(latest).catch((err) => console.warn(`[workbench] resizing ${latest.id} after a turn failed:`, err));
+      }
+    }
   } catch (err) {
     console.warn(`[workbench] after-turn refresh for chat ${chat.id} failed:`, err);
   }
@@ -586,6 +594,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       const moved = await moveWorkbenchToFreshSandbox(wb, 'stale_golden', { ownerChatId: chatId });
       if (moved.moved) wb = moved.row;
     }
+    // A resize asked for during an earlier turn, not yet applied: move before the agent starts.
+    if (pendingResize(wb)) wb = await applyPendingResize(wb, { ownerChatId: chatId });
     if (live.cancelRequested) return cancelledOutcome(events);
 
     // The checkpoint first: it is also the exec that wakes a suspended box,

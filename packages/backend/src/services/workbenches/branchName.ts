@@ -85,8 +85,16 @@ export type BranchNamingResult =
   | { outcome: 'kept'; reason: string }
   | { outcome: 'not_now'; reason: string };
 
-/** Workbenches this process is naming now. */
-const inFlight = new Set<string>();
+/** Workbenches this process is naming now, and the work. */
+const inFlight = new Map<string, Promise<BranchNamingResult>>();
+
+/**
+ * Wait for a naming this process runs on the workbench. A move calls it
+ * first: a rename on the old box after the export would not reach the new one.
+ */
+export async function settleBranchNaming(workbenchId: string): Promise<void> {
+  await inFlight.get(workbenchId)?.catch(() => undefined);
+}
 
 /** Run in the background after a successful turn. Never throws, never blocks the turn loop. */
 export function startBranchNaming(workbenchId: string, input: BranchNamingInput): void {
@@ -132,12 +140,9 @@ export async function nameSessionBranch(
   opts: BranchNamingOptions = {},
 ): Promise<BranchNamingResult> {
   if (inFlight.has(workbenchId)) return { outcome: 'not_now', reason: 'in_flight' };
-  inFlight.add(workbenchId);
-  try {
-    return await nameOnce(workbenchId, input, opts);
-  } finally {
-    inFlight.delete(workbenchId);
-  }
+  const work = nameOnce(workbenchId, input, opts).finally(() => inFlight.delete(workbenchId));
+  inFlight.set(workbenchId, work);
+  return work;
 }
 
 async function nameOnce(workbenchId: string, input: BranchNamingInput, opts: BranchNamingOptions): Promise<BranchNamingResult> {

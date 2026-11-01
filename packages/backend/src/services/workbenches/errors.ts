@@ -1,3 +1,4 @@
+import type { SandboxSize } from '@talyn/shared';
 import {
   FleetCapacityError,
   FleetDispatchUncertainError,
@@ -27,6 +28,14 @@ export class WorkbenchError extends Error {
   ) {
     super(message);
     this.name = 'WorkbenchError';
+  }
+}
+
+/** A resize the fleet refused for its size. The move fails and the session keeps its box. */
+export class SandboxSizeRefusedError extends WorkbenchError {
+  constructor(readonly size: SandboxSize, reason: string) {
+    super(reason, 409, 'sandbox_size_refused');
+    this.name = 'SandboxSizeRefusedError';
   }
 }
 

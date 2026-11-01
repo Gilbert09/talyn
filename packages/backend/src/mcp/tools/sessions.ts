@@ -7,6 +7,8 @@ import {
   type CreateWorkbenchPullRequestResult,
   type FleetAccountView,
   type FleetAccountsResponse,
+  SANDBOX_SIZES,
+  type SandboxSize,
   type Workbench,
   type WorkbenchChanges,
   type WorkbenchChat,
@@ -17,6 +19,7 @@ import {
   recordSessionSpawn,
   reserveSessionCreate,
 } from '../../services/sessionMcpToken.js';
+import type { SessionResizeResult } from '../../services/workbenches/resize.js';
 import { announceThreadSession } from '../../services/workbenches/threads.js';
 import { callApi, McpApiError } from '../api.js';
 import {
@@ -152,6 +155,28 @@ const SELF_ARCHIVE_DEFERRED =
   'This session will be archived when this reply ends. Finish the reply now, and do not start more work.';
 
 const ACCOUNT_AGENT_LABEL = { claude: 'Claude', codex: 'Codex' } as const;
+
+const RESIZE_SIZES = Object.keys(SANDBOX_SIZES) as SandboxSize[];
+const RESIZE_SIZES_TEXT = RESIZE_SIZES.map((size) => `${size}: ${SANDBOX_SIZES[size].memMib / 1024} GB`).join(', ') + '.';
+
+function resizeText(sessionId: string, result: SessionResizeResult, self: boolean): string {
+  const label = SANDBOX_SIZES[result.size].label;
+  const lines: string[] = [];
+  if (result.outcome === 'unchanged') {
+    lines.push(`Session ${sessionId} already runs on a ${label} sandbox. Nothing moves.`);
+  } else {
+    lines.push(
+      result.outcome === 'moving'
+        ? `Talyn is moving session ${sessionId} to a ${label} sandbox now.`
+        : `Talyn moves session ${sessionId} to a ${label} sandbox when its current turn ends, or at its next turn start.`
+    );
+    if (result.continued) lines.push('Talyn sends the continue_with message after the move, so that turn starts on the new sandbox.');
+    if (self) lines.push('End your turn now. Do not start more long work on this sandbox.');
+    lines.push('If the fleet refuses the size, the session keeps its sandbox and its transcript says why.');
+  }
+  if (result.rememberedForRepository) lines.push('New sessions of this repository also get this size.');
+  return lines.join(' ');
+}
 
 function accountUsageText(account: FleetAccountView): string {
   const parts: string[] = [];
@@ -460,6 +485,45 @@ export const SESSIONS = [
         }
         const wb = await callApi<Workbench>(ownerId, 'PUT', `/workbenches/${encodeURIComponent(sessionId)}/account`, { accountId });
         return `Session ${wb.id} will use account ${accountId} from its next turn.`;
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'resize_session',
+    "Move a session to a sandbox of another size, for example when a build or test runs out of memory or is slow. It never stops a running turn: Talyn moves the session when the current turn ends, or at its next turn start. Files, branches, uncommitted changes and the conversation carry over. Running processes and terminals stop. The fleet can refuse a size over the account's limit: then the session keeps its sandbox and its transcript says why.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session.' },
+      size: { type: 'string', enum: RESIZE_SIZES, description: RESIZE_SIZES_TEXT },
+      reason: { type: 'string', description: 'Why, in one sentence. The person sees it in the transcript.' },
+      remember_for_repository: { type: 'boolean', description: "Also make this size the repository's default for new sessions." },
+      continue_with: {
+        type: 'string',
+        description: 'A message Talyn sends to the session after this turn, so the work goes on in the new sandbox. The move happens before that turn starts.',
+      },
+    },
+    ['size'],
+    { idempotentHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        const size = requireId(args, 'size');
+        const self = ctx?.session?.workbenchId;
+        const sessionId = str(args.session_id) ?? self;
+        if (!sessionId) throw new Error('session_id is required');
+        if (self && sessionId !== self) {
+          const target = await loadSession(ownerId, sessionId);
+          if (target.threadId !== self) throw new Error('A session can resize itself, or a session in its thread.');
+        }
+        const body: Record<string, unknown> = { size };
+        if (str(args.reason)) body.reason = str(args.reason);
+        if (args.remember_for_repository !== undefined) body.rememberForRepository = bool(args, 'remember_for_repository');
+        if (str(args.continue_with)) body.continueWith = str(args.continue_with);
+        const result = await callApi<SessionResizeResult>(
+          ownerId,
+          'PUT',
+          `/workbenches/${encodeURIComponent(sessionId)}/sandbox-size`,
+          body
+        );
+        return resizeText(sessionId, result, sessionId === self);
       }),
     FEATURE
   ),

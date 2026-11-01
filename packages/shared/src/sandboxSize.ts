@@ -12,6 +12,10 @@ export type SandboxSizeSetting = 'auto' | SandboxSize;
 
 export const SANDBOX_SIZE_SETTINGS: readonly SandboxSizeSetting[] = ['auto', ...(Object.keys(SANDBOX_SIZES) as SandboxSize[])];
 
+export function isSandboxSize(value: unknown): value is SandboxSize {
+  return typeof value === 'string' && Object.hasOwn(SANDBOX_SIZES, value);
+}
+
 export function isSandboxSizeSetting(value: unknown): value is SandboxSizeSetting {
   return typeof value === 'string' && (SANDBOX_SIZE_SETTINGS as readonly string[]).includes(value);
 }
