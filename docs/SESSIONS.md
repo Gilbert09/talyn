@@ -14,6 +14,20 @@ Two things came up. First, the transcript dropped every `system` note except two
 
 The tenant's limit is not known before a create, because YAS has no read for it. So the tool cannot refuse an over-limit size at call time. The refusal arrives at the move, and the transcript note reports it.
 
+## Turn time report and the setup learner (2026-11-01)
+
+A real posthog/posthog session spent 48 of 110 minutes in `sleep` loops, 25 minutes in whole test suites and about 10 minutes compiling `sqlx-cli` because it was missing. It also started Docker by hand. Two features come from that measurement.
+
+**The time report.** When a sandbox turn ends, `turnInsights.ts` reads the turn's tool calls once and stores a small report in `workbench_turn_timings` (migration 0099). The read returns only the fields of `tool_use` and `tool_result` blocks, never whole events. It returns output only for failed calls. A call runs from its `tool_use` event to its `tool_result` event. The rule table in `packages/shared/src/turnTiming.ts` puts each call in a category: tests, installs, builds, Docker and services, waiting, git, reading or other. Model time is the wall time that no tool call covers. `GET /workbenches/:id/timing` and `talyn_session_timing` add up the stored rows. The event times are storage times, batched about every 250 ms.
+
+**The setup learner.** The same job takes setup steps from the turn's shell calls that succeeded: package installs, the rustup, uv and pnpm installers, GitHub-release downloads, `docker compose up`, the Docker daemon, services, `createdb`, and commands that only set environment variables. A failed call that printed "command not found" is linked to the install that fixed it, and the replay is guarded with `command -v`. Each step is rewritten into a fixed, quoted form. The steps go in `repository_setup_steps`, one row per distinct command.
+
+Steps apply automatically, and there are two places. A new box runs every live step after the repository's own setup, at once (`withLearnedSetup` in `loadWorkbenchConfig`). The repository's own setup runs first in a subshell, keeps its exit code, and a failed learned step does not stop the others. Install steps also go into the bake, after the repository's own bake steps, but only when the recipe has had no new step for 15 minutes. The promotion happens when a box is created, because that is when the bake is sent. A changed bake is how the fleet is asked to bake again: a burst of sessions gives one bake change, not one per session. The fleet's operator rebake endpoint is not used.
+
+The safeguards: no step holds a secret (token shapes, secret-looking names, URL passwords, long random strings); a downloaded script piped into a shell is applied only for rustup, uv and pnpm; nothing that sends data out, pushes code or reads a credential file; at most 20 live steps; every added and every applied step goes to the debug bus with its session. A step that failed in a bake (read from the sandbox record's `bakeSteps`, at most every 10 minutes per repository) leaves the bake with the reason and stays in the box setup. A person can revert one step (sticky: it is not learned again) or turn learning off for a repository, which also stops applying the recipe. `talyn_record_setup_step` lets an agent add a step through the same refusals.
+
+Not done: no UI yet; no cheap-model summary (the rules were enough for the cases measured); environment exports are written to `~/.bashrc`, which a non-interactive shell does not always read.
+
 ## Hosted preview links (2026-11-01)
 
 A session's port now has a URL that works in a plain browser: `https://<id>-<port>.preview.talyn.dev`. It is for the web app, which has no local forward, and for share links from the desktop. `PREVIEW_BASE_DOMAIN` turns it on. Unset, nothing changes.
