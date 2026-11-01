@@ -718,6 +718,11 @@ export interface WorkbenchLocalBridge {
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
   /**
+   * The chat ids whose agent turn process runs in main now. Optional: an
+   * older main process does not have it.
+   */
+  runningTurns?(): Promise<string[]>;
+  /**
    * Stop every agent turn, script and terminal of one session on this machine,
    * for an archive. Optional: an older main process does not have it.
    */

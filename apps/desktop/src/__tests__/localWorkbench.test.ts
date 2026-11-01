@@ -415,6 +415,57 @@ describe('LocalTurnController backend queue', () => {
   });
 });
 
+describe('LocalTurnController startup reset', () => {
+  const owned = { deviceId: () => 'dev1' };
+  const history = [{ chatId: 'c1', seq: 1, turn: 3, event: { seq: 1, type: 'assistant' } }];
+
+  function stale(live: string[] | Error = [], extra: Parameters<typeof setup>[1] = owned) {
+    const made = setup(history, extra);
+    (made.bridge as unknown as { runningTurns: jest.Mock }).runningTurns = jest.fn(async () => {
+      if (live instanceof Error) throw live;
+      return live;
+    });
+    useWorkbenchStore.getState().upsertChat(chat({ status: 'running' }));
+    return made;
+  }
+
+  it('sets a chat left running by a quit app to idle, with a note in the transcript', async () => {
+    const { controller, api } = stale();
+    await controller.resetInterruptedTurns();
+
+    const events = useWorkbenchStore.getState().chatEvents.c1.events;
+    expect(events[events.length - 1]).toMatchObject({
+      seq: 2,
+      turn: 3,
+      event: { type: 'system', subtype: 'local_turn_interrupted', text: 'The app quit during this turn.' },
+    });
+    expect(api.uploadLocalEvents).toHaveBeenCalledWith('c1', [expect.objectContaining({ seq: 2 })]);
+    expect(api.updateLocalChat).toHaveBeenCalledWith('c1', { status: 'idle' });
+    expect(useWorkbenchStore.getState().chats.wb1.find((c) => c.id === 'c1')?.status).toBe('idle');
+  });
+
+  it.each([
+    ['its turn process still runs in main', ['c1'], owned],
+    ['main cannot say which turns run', new Error('no answer'), owned],
+    ['the session is on another computer', [], { deviceId: () => 'dev2' }],
+  ])('leaves a running chat alone when %s', async (_name, live, extra) => {
+    const { controller, api } = stale(live, extra);
+    await controller.resetInterruptedTurns();
+    expect(api.updateLocalChat).not.toHaveBeenCalled();
+    expect(useWorkbenchStore.getState().chatEvents.c1.events).toHaveLength(1);
+    expect(useWorkbenchStore.getState().chats.wb1.find((c) => c.id === 'c1')?.status).toBe('running');
+  });
+
+  it('leaves a turn this app started alone', async () => {
+    const { controller, api, bridge } = stale();
+    await controller.send(WB, chat(), { text: 'go' });
+    api.updateLocalChat.mockClear();
+    await controller.resetInterruptedTurns();
+    expect(api.updateLocalChat).not.toHaveBeenCalledWith('c1', { status: 'idle' });
+    expect((bridge as unknown as { runningTurns: jest.Mock }).runningTurns).not.toHaveBeenCalled();
+  });
+});
+
 async function waitForCall(fn: jest.Mock): Promise<void> {
   for (let i = 0; i < 50 && fn.mock.calls.length === 0; i++) await settle();
 }

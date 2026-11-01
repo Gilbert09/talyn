@@ -236,6 +236,11 @@ export class AgentProcesses {
     await turn.done;
   }
 
+  /** Chats with a turn in flight: from its start until its process and children are gone. */
+  runningChats(): string[] {
+    return [...this.running.keys()];
+  }
+
   async stopWorkbench(workbenchId: string): Promise<void> {
     await Promise.all(
       [...this.running]

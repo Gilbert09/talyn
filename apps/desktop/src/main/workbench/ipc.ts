@@ -117,6 +117,7 @@ export function registerWorkbenchIpc(
       agents.startTurn(input),
   );
   handle('cancel-turn', (chatId: string) => agents.cancelTurn(chatId));
+  handle('running-turns', () => agents.runningChats());
   handle('stop-workbench', stopSession);
   handle(
     'generate-title',
