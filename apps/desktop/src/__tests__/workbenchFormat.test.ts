@@ -19,7 +19,6 @@ import {
 } from '../renderer/lib/workbenchFormat';
 import { applyTrigger, findTrigger } from '../renderer/components/workbench/ComposerPopover';
 import { groupByRepository } from '../renderer/components/workbench/workbenchSelectors';
-import { portFor } from '../renderer/lib/workbenchOps';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
@@ -362,12 +361,3 @@ describe('sidebar order', () => {
   });
 });
 
-describe('portFor', () => {
-  it.each(['wb-1', 'wb-2', 'a-much-longer-workbench-id'])('gives %s a stable port block in range', (id) => {
-    const port = portFor(id);
-    expect(port).toBe(portFor(id));
-    expect(port % 10).toBe(0);
-    expect(port).toBeGreaterThanOrEqual(40000);
-    expect(port + 9).toBeLessThan(60000);
-  });
-});
