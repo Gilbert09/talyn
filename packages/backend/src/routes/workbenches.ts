@@ -56,6 +56,7 @@ import {
   removeInstructionFile,
 } from '../services/workbenches/instructions.js';
 import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
+import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -561,6 +562,21 @@ export function workbenchRoutes(): Router {
     }
   });
 
+  router.put('/:id/account', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const accountId = (req.body as { accountId?: unknown } | undefined)?.accountId;
+    if (typeof accountId !== 'string' || !accountId) return bad(res, 400, 'accountId is required.');
+    try {
+      await setSessionAccount(row, accountId);
+    } catch (err) {
+      return fail(res, err);
+    }
+    const data = await publicWorkbench((await getWorkbench(row.id)) ?? row);
+    await emitWorkbenchUpdated(data);
+    ok(res, data);
+  });
+
   router.patch('/:id', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
@@ -601,9 +617,7 @@ export function workbenchRoutes(): Router {
         ...settings,
         ...(row.settings?.prUnlinked !== undefined ? { prUnlinked: row.settings.prUnlinked } : {}),
         // Written by the server only (the box's current fleet account); a client never sends it.
-        ...(typeof (row.settings as Record<string, unknown> | null)?.fleetAccountId === 'string'
-          ? { fleetAccountId: (row.settings as Record<string, unknown>).fleetAccountId }
-          : {}),
+        ...(row.settings?.fleetAccountId ? { fleetAccountId: row.settings.fleetAccountId } : {}),
         // Also server-only: the id the fleet gave the box, which its credential pull carries.
         ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
         ...((row.settings as Record<string, unknown> | null)?.archiveCredentialsRearmed ? { archiveCredentialsRearmed: true } : {}),

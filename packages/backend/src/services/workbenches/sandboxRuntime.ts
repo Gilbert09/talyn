@@ -37,6 +37,7 @@ import {
   resolveFleetTarget,
 } from '../selfHosted/credentials.js';
 import { resolveSandboxCredentials } from '../selfHosted/sandboxRun.js';
+import { getFleetAccount } from '../selfHosted/accounts.js';
 import { resolveRunCredential } from '../selfHosted/accountSelection.js';
 import {
   describeAccountSwitch,
@@ -901,6 +902,30 @@ export async function setWorkbenchFleetAccount(
     .where(eq(workbenchesTable.id, row.id));
   // The caller's copy too: a turn keeps using its row while it runs.
   row.settings = { ...(row.settings ?? {}), fleetAccountId: accountId } as WorkbenchRow['settings'];
+}
+
+/**
+ * Choose the account a session's NEXT turn tries first. It is recorded as the
+ * session's account and nothing else changes: a running turn keeps the account
+ * it has, and the turn start still leaves it when it is limited or over.
+ */
+export async function setSessionAccount(row: WorkbenchRow, accountId: string): Promise<void> {
+  if (row.runtime !== 'sandbox') throw new WorkbenchError('Only a sandbox session runs on a fleet account.', 409, 'local_runtime');
+  const account = await getFleetAccount(accountId);
+  if (!account || account.workspaceId !== row.workspaceId) {
+    throw new WorkbenchError('That account is not in this workspace.', 404, 'account_not_found');
+  }
+  if (account.agent !== agentOf(row)) {
+    throw new WorkbenchError(
+      `This session runs ${agentOf(row) === 'codex' ? 'Codex' : 'Claude'}; "${account.label}" is a ${account.agent === 'codex' ? 'Codex' : 'Claude'} account.`,
+      400,
+      'account_wrong_agent',
+    );
+  }
+  if (account.reauthRequiredAt) {
+    throw new WorkbenchError(`"${account.label}" needs to be signed in again before a session can use it.`, 409, 'account_needs_reauth');
+  }
+  await setWorkbenchFleetAccount(row, accountId);
 }
 
 function agentOf(row: Pick<WorkbenchRow, 'agent'>): FleetAgent {
