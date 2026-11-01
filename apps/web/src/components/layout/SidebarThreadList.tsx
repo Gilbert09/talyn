@@ -136,9 +136,11 @@ function ThreadRow({
                 <SessionStateIcon state={state} />
               </span>
               <span className={cn('min-w-0 flex-1 truncate', state.kind === 'needs_reply' && 'font-semibold')}>{name}</span>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-attr="sidebar-thread-summary">
-                {summary}
-              </span>
+              {summary && (
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-attr="sidebar-thread-summary">
+                  {summary}
+                </span>
+              )}
             </button>
             <button
               type="button"

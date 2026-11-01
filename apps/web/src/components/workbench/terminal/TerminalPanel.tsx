@@ -29,6 +29,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const storedTab = useWorkbenchStore((s) => s.terminalTab);
   const setTab = useWorkbenchStore((s) => s.setTerminalTab);
   const setOpen = useWorkbenchStore((s) => s.setTerminalOpen);
+  const runRunning = useWorkbenchStore((s) => s.scriptOutput[workbench.id]?.run?.running ?? false);
   const rootRef = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState<number | undefined>(undefined);
   const [loaded, setLoaded] = useState<{
@@ -128,7 +129,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           aria-label="Resize the terminal"
         />
       )}
-      <div className="flex h-7 shrink-0 items-center gap-0.5 px-1.5 text-xs" role="tablist" aria-label="Terminal">
+      <div className="flex h-7 min-w-0 shrink-0 items-center gap-0.5 overflow-hidden px-1.5 text-xs" role="tablist" aria-label="Terminal">
         {TABS.filter((t) => !hideScripts || t.id === 'terminal').map((t) => (
           <button
             key={t.id}
@@ -137,11 +138,14 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
             aria-selected={open && tab === t.id}
             onClick={() => (open && tab === t.id ? setOpen(false) : setTab(t.id))}
             className={cn(
-              'rounded px-2 py-0.5',
+              'inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5',
               open && tab === t.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {t.label}
+            {t.id === 'run' && runRunning && (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-label="running" />
+            )}
           </button>
         ))}
         <div className="flex-1" />
@@ -180,18 +184,21 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           ) : (
             <div className="flex h-full flex-col">
               {tab === 'run' && detected?.run && (
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted px-3 py-1.5 text-xs">
-                  <span className="min-w-0 flex-1">
-                    Run uses the detected command <code className="break-all">{detected.run.command}</code>{' '}
-                    <span className="text-muted-foreground">({detected.run.reason})</span>
+                <div
+                  className="flex min-w-0 items-center gap-2 border-b bg-muted px-3 py-1 text-xs"
+                  title={`Talyn runs ${detected.run.command} (${detected.run.reason}). Save it to .talyn/settings.toml to change it.`}
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    Runs <code className="whitespace-nowrap text-foreground">{detected.run.command}</code> ({detected.run.reason})
                   </span>
                   <button
                     type="button"
-                    className="rounded border bg-background px-2 py-0.5 hover:bg-accent disabled:opacity-50"
+                    aria-label="Save to .talyn/settings.toml"
+                    className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
                     disabled={saving || Boolean(ops.unavailable)}
                     onClick={() => void saveDetected()}
                   >
-                    Save to .talyn/settings.toml
+                    Save
                   </button>
                 </div>
               )}
@@ -249,7 +256,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
       type="button"
       onClick={() => void act()}
       disabled={busy || Boolean(ops.unavailable)}
-      className="mr-1 inline-flex items-center gap-1 rounded px-2 py-0.5 text-foreground/80 hover:bg-accent disabled:opacity-50"
+      className="mr-1 inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-foreground/80 hover:bg-accent disabled:opacity-50"
       title={running ? `Stop the ${name} script` : `Run the ${name} script`}
     >
       {busy ? (

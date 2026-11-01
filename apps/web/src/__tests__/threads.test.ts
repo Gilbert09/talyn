@@ -106,11 +106,11 @@ describe('threadRepositories', () => {
 
 describe('runningSessionCount and threadSummary', () => {
   it.each<[Record<string, Array<{ status: 'running' | 'idle' | 'error' | 'awaiting_input' }>>, number, string]>([
-    [{}, 0, 'idle'],
-    [{ a: [{ status: 'idle' }] }, 0, 'idle'],
+    [{}, 0, ''],
+    [{ a: [{ status: 'idle' }] }, 0, ''],
     [{ a: [{ status: 'running' }], b: [{ status: 'idle' }, { status: 'running' }] }, 2, '2 running'],
     [{ a: [{ status: 'running' }, { status: 'running' }] }, 1, '1 running'],
-    [{ a: [{ status: 'awaiting_input' }], b: [{ status: 'error' }] }, 0, 'idle'],
+    [{ a: [{ status: 'awaiting_input' }], b: [{ status: 'error' }] }, 0, ''],
   ])('%j', (chats, count, summary) => {
     const n = runningSessionCount([{ id: 'a' }, { id: 'b' }], chats);
     expect(n).toBe(count);

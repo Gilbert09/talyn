@@ -131,13 +131,13 @@ describe('terminal dock', () => {
     await renderDock();
     expect(screen.getAllByRole('tab')).toHaveLength(3);
     expect(screen.getByText(detection[tab].command)).toBeInTheDocument();
-    expect(screen.getByText(`(${detection[tab].reason})`)).toBeInTheDocument();
+    expect(screen.getByText(tab === 'setup' ? `(${detection[tab].reason})` : /\(from the dev script in package\.json\)/)).toBeInTheDocument();
     if (tab === 'setup') {
       expect(screen.getByText('Talyn runs it once, before the first run of the app. Save it to change it.')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
     } else {
       // A repository with no config runs its detected command.
-      expect(screen.getByText(/Run uses the detected command/)).toBeInTheDocument();
+      expect(screen.getByText(/^Runs/)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
     }
     fireEvent.click(screen.getByRole('button', { name: 'Save to .talyn/settings.toml' }));

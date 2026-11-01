@@ -92,7 +92,7 @@ describe('Sidebar threads', () => {
     render(<AppSidebar />);
     const section = screen.getByRole('group', { name: 'Threads' });
     const rows = within(section).getAllByRole('button').filter((b) => b.getAttribute('data-attr') === 'sidebar-thread-row');
-    expect(rows.map((r) => r.textContent)).toEqual(['Talyn fleet hardening2 running', 'Slack integrationidle']);
+    expect(rows.map((r) => r.textContent)).toEqual(['Talyn fleet hardening2 running', 'Slack integration']);
     expect(within(section).queryByText('Old thread')).not.toBeInTheDocument();
     // Above the repository groups in document order.
     const sessions = screen.getByRole('group', { name: 'posthog/posthog' });

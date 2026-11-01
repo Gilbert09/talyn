@@ -6,6 +6,7 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { toast } from '../renderer/stores/toast';
 import { archiveWorkbench } from '../renderer/components/workbench/archiveWorkbench';
+import { usePreviewStatusStore } from '../renderer/stores/previewStatus';
 
 const get = jest.fn();
 const getToken = jest.fn();
@@ -21,6 +22,8 @@ jest.mock('../renderer/lib/api', () => ({
 jest.mock('../renderer/lib/workbenchBridge', () => ({
   getWorkbenchBridge: () => ({ preview: { start: (...args: unknown[]) => start(...args), stop: (...args: unknown[]) => stop(...args) } }),
 }));
+const answers = jest.fn();
+jest.mock('../renderer/lib/previewProbe', () => ({ previewPortAnswers: (...args: unknown[]) => answers(...args) }));
 jest.mock('../renderer/lib/openExternal', () => ({ openExternal: (...args: unknown[]) => open(...args) }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { error: jest.fn() } }));
 
@@ -37,6 +40,8 @@ beforeEach(() => {
   (ops.runScript as jest.Mock).mockReset().mockResolvedValue(undefined);
   useWorkspaceStore.setState({ features: { workbenches: true } as Features });
   useWorkbenchStore.setState({ scriptOutput: {}, workbenches: {} });
+  answers.mockReset().mockResolvedValue(true);
+  usePreviewStatusStore.setState({ ports: {} });
 });
 
 it.each([undefined, null, {}, { workbenches: false }])('hides previews without an enabled flag: %j', (features) => {
@@ -164,4 +169,28 @@ it('does not open a forward if the session is archived while the script starts',
   await act(() => result.current.openPreview(5173, ops));
   expect(start).not.toHaveBeenCalled();
   expect(open).not.toHaveBeenCalled();
+});
+
+it('waits until the app answers before it opens the browser, and then says it is live', async () => {
+  (ops.runScript as jest.Mock).mockImplementation(async () => useWorkbenchStore.getState().markScriptStarted('wb1', 'run'));
+  answers.mockResolvedValueOnce(false).mockResolvedValue(true);
+  const { result } = renderHook(() => useSessionPreview(wb));
+  await waitFor(() => expect(result.current.ports).toHaveLength(1));
+  let opened!: Promise<void>;
+  act(() => { opened = result.current.openPreview(5173, ops); });
+  await waitFor(() => expect(result.current.status(5173)).toBe('starting'));
+  expect(open).not.toHaveBeenCalled();
+  await act(() => opened);
+  expect(answers).toHaveBeenCalledTimes(2);
+  expect(open).toHaveBeenCalledWith('http://localhost:5174');
+  expect(result.current.status(5173)).toBe('live');
+}, 10_000);
+
+it('shows a running app as live without opening anything, and clears it when the run script stops', async () => {
+  useWorkbenchStore.getState().markScriptStarted('wb1', 'run');
+  const { result } = renderHook(() => useSessionPreview(wb));
+  await waitFor(() => expect(result.current.status(5173)).toBe('live'));
+  expect(open).not.toHaveBeenCalled();
+  act(() => useWorkbenchStore.setState({ scriptOutput: { wb1: { run: { chunks: [], total: 0, running: false, exitCode: 0 } } } }));
+  await waitFor(() => expect(result.current.status(5173)).toBeNull());
 });

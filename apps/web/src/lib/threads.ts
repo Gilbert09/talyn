@@ -45,8 +45,9 @@ export function runningSessionCount(
 }
 
 /** The short summary on a thread's sidebar row: "2 running", or "idle". */
+/** How many of a thread's sessions run. Empty when none: the dot shows the thread's own state. */
 export function threadSummary(running: number): string {
-  return running > 0 ? `${running} running` : 'idle';
+  return running > 0 ? `${running} running` : '';
 }
 
 /** Where a workbench works, for lists: its repository, or "Thread". */
