@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Bot, Check, ChevronDown, FolderGit2, GitBranch, GitPullRequest, Split, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, FolderGit2, GitBranch, GitPullRequest, Layers, Split, X } from 'lucide-react';
 import type { WorkbenchAgent } from '@talyn/shared';
 import type { PRRow } from '../../../lib/api';
 import type { Choice } from '../../../lib/readiness';
@@ -43,25 +43,34 @@ export const ControlChip = React.forwardRef<HTMLButtonElement, React.ButtonHTMLA
 );
 ControlChip.displayName = 'ControlChip';
 
+/** The repository picker's value for a thread: no one repository, so the work can cross several. */
+export const ANY_REPOSITORY = 'any-repository';
+
 export function RepoPicker({
   repositories,
   value,
   onChange,
   disabled,
+  allowAnyRepository = false,
 }: {
   repositories: WatchedRepo[];
   value: string;
   onChange: (repositoryId: string) => void;
   disabled?: boolean;
+  /** Offer "Any repository", which starts a thread. */
+  allowAnyRepository?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const current = repositories.find((r) => r.id === value);
+  const anyRepository = allowAnyRepository && value === ANY_REPOSITORY;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <ControlChip aria-label="Repository" data-attr="new-workbench-repo" disabled={disabled}>
-          <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-medium text-foreground">{current?.fullName ?? 'Choose a repository'}</span>
+          {anyRepository ? <Layers className="h-3.5 w-3.5 shrink-0" /> : <FolderGit2 className="h-3.5 w-3.5 shrink-0" />}
+          <span className="truncate font-medium text-foreground">
+            {anyRepository ? 'Any repository' : current?.fullName ?? 'Choose a repository'}
+          </span>
           <ChevronDown className="h-3 w-3 shrink-0" />
         </ControlChip>
       </PopoverTrigger>
@@ -70,7 +79,28 @@ export function RepoPicker({
           <CommandInput placeholder="Find a repository…" />
           <CommandList>
             <CommandEmpty>No watched repository matches.</CommandEmpty>
-            <CommandGroup>
+            {allowAnyRepository && (
+              <CommandGroup>
+                <CommandItem
+                  value="Any repository thread"
+                  data-attr="new-workbench-any-repository"
+                  onSelect={() => {
+                    onChange(ANY_REPOSITORY);
+                    setOpen(false);
+                  }}
+                >
+                  <Layers className="h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">Any repository</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      Starts a thread. It can work across repositories.
+                    </span>
+                  </span>
+                  {anyRepository && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                </CommandItem>
+              </CommandGroup>
+            )}
+            <CommandGroup heading={allowAnyRepository ? 'Repositories' : undefined}>
               {repositories.map((r) => (
                 <CommandItem
                   key={r.id}

@@ -110,6 +110,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // jsdom has no layout, so no scrollIntoView. The repository list (cmdk) calls it.
+  Element.prototype.scrollIntoView = jest.fn();
   jest.clearAllMocks();
   localStorage.clear();
   mockReadiness.mockResolvedValue(READY);
@@ -149,24 +151,37 @@ async function renderPage() {
 const textarea = () => screen.getByRole('textbox', { name: 'Task' });
 const radio = (name: string) => screen.getByRole('radio', { name });
 
+const chooseRepo = async (name: string) => {
+  fireEvent.click(screen.getByRole('button', { name: 'Repository' }));
+  fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+};
+
 describe('NewWorkbenchPage', () => {
-  it('hides repository controls in thread mode and keeps the draft when switching', async () => {
+  it('starts a thread when "Any repository" is chosen, and keeps the draft', async () => {
     await renderPage();
+    expect(screen.getByRole('heading', { name: 'What do you want to build?' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     fireEvent.change(textarea(), { target: { value: 'Plan a release' } });
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
-    expect(screen.queryByRole('button', { name: 'Repository' })).not.toBeInTheDocument();
+    await chooseRepo('Any repository');
+    expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('Any repository');
     expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument();
     expect(textarea()).toHaveValue('Plan a release');
     expect(textarea()).toHaveAttribute('placeholder', 'What do you want to get done? A thread can work across repositories.');
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Session' }), { button: 0 });
+    await chooseRepo('acme/api');
     expect(textarea()).toHaveValue('Plan a release');
-    expect(screen.getByRole('button', { name: 'Repository' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Base branch' })).toBeInTheDocument();
+  });
+
+  it('opens with "Any repository" chosen from New thread', async () => {
+    useNavigationStore.setState({ route: { view: 'home', mode: 'thread' } });
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('Any repository');
   });
 
   it('creates a thread from the first message', async () => {
     mockCreate.mockResolvedValue(wb('new-thread', { kind: 'thread', repositoryId: null, repoFullName: '' }));
     await renderPage();
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
+    await chooseRepo('Any repository');
     fireEvent.change(textarea(), { target: { value: '  Plan a release  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
     await waitFor(() => expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
@@ -181,7 +196,7 @@ describe('NewWorkbenchPage', () => {
     mockCreate.mockResolvedValue(wb('thread-with-image', { kind: 'thread', repositoryId: null, repoFullName: '', chats: [{ id: 'thread-chat' }] as Workbench['chats'] }));
     mockSend.mockResolvedValue({ queued: true });
     await renderPage();
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Thread' }), { button: 0 });
+    await chooseRepo('Any repository');
     fireEvent.drop(textarea(), { dataTransfer: { files: [new File(['image'], 'shot.png', { type: 'image/png' })] } });
     await screen.findByText('shot.png');
     fireEvent.change(textarea(), { target: { value: 'Inspect this image' } });

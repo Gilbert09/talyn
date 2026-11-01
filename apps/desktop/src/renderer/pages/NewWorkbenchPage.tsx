@@ -15,13 +15,13 @@ import { useNavigationStore } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
-import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from '../components/workbench/useComposerImages';
 import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 import {
   AgentPicker,
+  ANY_REPOSITORY,
   BaseBranchField,
   ControlChip,
   CreateFromPopover,
@@ -61,8 +61,6 @@ export function localPathFor(paths: Record<string, string>, repoFullName: string
  */
 export function NewWorkbenchPage() {
   const route = useNavigationStore((s) => s.route);
-  const navigate = useNavigationStore((s) => s.navigate);
-  const mode = route.view === 'home' && route.mode === 'thread' ? 'thread' : 'session';
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId) ?? null);
   const repositories = useWorkspaceStore((s) => s.repositories);
@@ -76,7 +74,13 @@ export function NewWorkbenchPage() {
   const { create, busy, error: createError, clearError } = useCreateWorkbench();
 
   const [prompt, setPrompt] = useState('');
-  const [repositoryId, setRepositoryId] = useState(() => defaultRepositoryId(workspaceId, repositories));
+  const [repositoryId, setRepositoryId] = useState(() =>
+    sessionsOffered && route.view === 'home' && route.mode === 'thread'
+      ? ANY_REPOSITORY
+      : defaultRepositoryId(workspaceId, repositories)
+  );
+  // "Any repository" starts a thread; a repository starts a session.
+  const mode = sessionsOffered && repositoryId === ANY_REPOSITORY ? 'thread' : 'session';
   const [baseBranch, setBaseBranch] = useState('');
   const [source, setSource] = useState<NewWorkbenchSource>(NEW_BRANCH);
   const [fromOpen, setFromOpen] = useState(false);
@@ -123,8 +127,8 @@ export function NewWorkbenchPage() {
 
   // A repository that stops being watched (or a workspace switch) falls back to the default.
   useEffect(() => {
-    if (!repositories.some((r) => r.id === repositoryId)) setRepositoryId(defaultRepositoryId(workspaceId, repositories));
-  }, [repositories, repositoryId, workspaceId]);
+    if (mode !== 'thread' && !repositories.some((r) => r.id === repositoryId)) setRepositoryId(defaultRepositoryId(workspaceId, repositories));
+  }, [repositories, repositoryId, workspaceId, mode]);
 
   // The default runtime comes from Settings; when readiness refuses it and the other works, move there until the person chooses.
   useEffect(() => {
@@ -181,6 +185,14 @@ export function NewWorkbenchPage() {
     }
     focus();
   }, [request.seq, applyPrefill]);
+
+  // "New thread" (the sidebar, the command palette) opens this page with "Any repository" chosen.
+  useEffect(() => {
+    if (!sessionsOffered) return;
+    if (route.view === 'home' && route.mode === 'thread') setRepositoryId(ANY_REPOSITORY);
+    else setRepositoryId((id) => (id === ANY_REPOSITORY ? defaultRepositoryId(workspaceId, repositories) : id));
+    // Only a new navigation moves the choice. A change to the repository list must not.
+  }, [route, sessionsOffered]);
 
   useEffect(() => {
     window.addEventListener(FOCUS_COMPOSER_EVENT, focus);
@@ -292,18 +304,7 @@ export function NewWorkbenchPage() {
     <TooltipProvider delayDuration={300}>
       <div className="h-full overflow-y-auto" data-attr="home-new-workbench">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[14vh]">
-          <div className="flex items-center justify-center gap-4">
-            <h1 className="font-display text-2xl font-semibold tracking-tight">New</h1>
-            <Tabs
-              value={mode}
-              onValueChange={(next) => navigate({ view: 'home', mode: next as 'session' | 'thread' }, { replace: true })}
-            >
-              <TabsList aria-label="New work type">
-                <TabsTrigger value="session">Session</TabsTrigger>
-                <TabsTrigger value="thread">Thread</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
+          <h1 className="text-center font-display text-2xl font-semibold tracking-tight">What do you want to build?</h1>
 
           <div className="space-y-2">
             <div
@@ -332,18 +333,19 @@ export function NewWorkbenchPage() {
               <ImageAttachmentChips attachments={images.attachments} pendingUploads={images.pendingUploads} imageNotReady={images.imageNotReady} onRemove={(index) => images.setAttachments((current) => current.filter((_, i) => i !== index))} />
               <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
                 <ImageAttachButton inputRef={images.fileInputRef} onFiles={(files) => void images.attachFiles(files)} />
+                <RepoPicker
+                  repositories={repositories}
+                  value={repositoryId}
+                  allowAnyRepository={sessionsOffered}
+                  onChange={(id) => {
+                    setRepositoryId(id);
+                    setSource(NEW_BRANCH);
+                    setBaseBranch('');
+                    setPathError(null);
+                  }}
+                />
                 {mode === 'session' && (
                   <>
-                    <RepoPicker
-                      repositories={repositories}
-                      value={repositoryId}
-                      onChange={(id) => {
-                        setRepositoryId(id);
-                        setSource(NEW_BRANCH);
-                        setBaseBranch('');
-                        setPathError(null);
-                      }}
-                    />
                     <BaseBranchField
                       value={baseBranch}
                       onChange={setBaseBranch}
