@@ -59,6 +59,7 @@ import {
   listChats,
   liveWorkbenchNames,
   provisioningWorkbenchIds,
+  requeueDroppedMessages,
   resetFailedChats,
   updateWorkbench,
   type WorkbenchRow,
@@ -97,8 +98,8 @@ function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['setting
 /**
  * The ONE way a provision fails: the workbench and a box that never came up
  * go to `error`, the reason lands in `statusMessage` (which the payload's
- * `error` carries), and every waiting message is dropped with the reason in
- * its chat. A workbench archived while this ran is left alone.
+ * `error` carries), and each chat says why. Waiting messages stay queued for a
+ * retry. A workbench archived while this ran is left alone.
  */
 async function failProvision(workbenchId: string, message: string): Promise<void> {
   const row = await getWorkbench(workbenchId);
@@ -454,6 +455,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
     settings: settingsWithoutFleetSandboxId(row),
   });
   recordWorkbenchEvent(row, 'provision_retry', `retrying on ${row.sandboxId}`);
+  await requeueDroppedMessages(row.id);
   await resetFailedChats(row.id);
   scheduleProvision(row.id);
   return row;

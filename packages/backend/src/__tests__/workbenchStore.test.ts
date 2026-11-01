@@ -19,6 +19,7 @@ import {
   openChatsQuery,
   failQueued,
   removeQueuedMessage,
+  requeueDroppedMessages,
   resetFailedChats,
   storeNumberedEvents,
   updateChat,
@@ -315,18 +316,18 @@ describe('workbench store', () => {
 
     it.each([
       [[], 'This session failed to start: no fleet'],
-      [['m1'], 'This session failed to start: no fleet Your queued message was not sent.'],
-      [['m1', 'm2'], 'This session failed to start: no fleet 2 queued messages were not sent.'],
-    ])('drops queue %j, marks the chat error, and says why in the transcript', async (queue, text) => {
+      [['m1'], 'This session failed to start: no fleet Your message is still queued. Retry sends it.'],
+      [['m1', 'm2'], 'This session failed to start: no fleet 2 messages are still queued. Retry sends them.'],
+    ])('keeps queue %j for a retry, marks the chat error, and says why in the transcript', async (queue, text) => {
       await updateChat('chat-1', { queuedMessages: queue.map((id) => msg(id)) });
       const failed = await failQueued('wb-1', 'no fleet');
       expect(failed.map((c) => c.id)).toEqual(['chat-1']);
-      expect(await getChat('chat-1')).toMatchObject({ status: 'error', statusMessage: 'no fleet', queuedMessages: [] });
+      expect(await getChat('chat-1')).toMatchObject({ status: 'error', statusMessage: 'no fleet', queuedMessages: queue.map((id) => msg(id)) });
       const { events } = await listEvents('chat-1', 0, 10);
       expect(events).toHaveLength(1);
       expect(events[0].event).toMatchObject({
         type: 'system', subtype: 'workbench_failed', text,
-        droppedMessages: queue.map((id) => ({ id, text: id })),
+        queuedMessages: queue.map((id) => ({ id, text: id })),
       });
     });
 
@@ -336,11 +337,33 @@ describe('workbench store', () => {
       expect(await getChat('chat-closed')).toMatchObject({ status: 'idle', queuedMessages: [msg('c1')] });
     });
 
-    it('puts failed chats back to idle on a retry, and only those', async () => {
+    it('puts the text of messages an older failed start dropped back in the queue', async () => {
+      await updateChat('chat-1', { status: 'error' });
+      await appendEvents('chat-1', [{ turn: 0, event: {
+        type: 'system', subtype: 'workbench_failed', text: 'old',
+        droppedMessages: [{ id: 'd1', text: 'add a readme' }, { id: 'd2', text: '  ' }],
+      } }]);
+      await requeueDroppedMessages('wb-1');
+      expect((await getChat('chat-1'))?.queuedMessages).toEqual([
+        { id: 'd1', text: 'add a readme', queuedAt: expect.any(String) },
+      ]);
+      // A queue that is not empty is never replaced.
+      await requeueDroppedMessages('wb-1');
+      expect((await getChat('chat-1'))?.queuedMessages).toHaveLength(1);
+    });
+
+    it('leaves a chat alone when its last failure dropped nothing', async () => {
+      await failQueued('wb-1', 'no fleet');
+      await requeueDroppedMessages('wb-1');
+      expect((await getChat('chat-1'))?.queuedMessages).toEqual([]);
+    });
+
+    it('puts failed chats back to idle on a retry, and only those, with their queue', async () => {
+      await updateChat('chat-1', { queuedMessages: [msg('m1')] });
       await failQueued('wb-1', 'no fleet');
       const reset = await resetFailedChats('wb-1');
       expect(reset.map((c) => c.id)).toEqual(['chat-1']);
-      expect(await getChat('chat-1')).toMatchObject({ status: 'idle', statusMessage: null });
+      expect(await getChat('chat-1')).toMatchObject({ status: 'idle', statusMessage: null, queuedMessages: [msg('m1')] });
       expect((await getChat('chat-run'))?.status).toBe('running');
     });
   });
