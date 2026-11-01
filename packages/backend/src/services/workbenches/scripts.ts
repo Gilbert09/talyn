@@ -1,4 +1,4 @@
-import { shellQuote } from '@talyn/shared';
+import { detectedRunScript, shellQuote } from '@talyn/shared';
 import { startDurableExec, followDurableBatches, retryBatchWrite, pruneDurableSegments } from './durableExec.js';
 import { claimScript, renewScript, appendScriptOutput, finishScript, staleScripts, adoptScript, storedScriptNames, stopStoredScript, existingScript, releaseScript, releaseOwnedScripts, stopSandboxScripts, type ScriptLease } from './scriptStore.js';
 import { isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
@@ -8,6 +8,7 @@ import { emitWorkbenchScript } from './emit.js';
 import { WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import {
+  detectWorkbenchScriptsInBox,
   killMarker,
   loadWorkbenchConfig,
   recordWorkbenchEvent,
@@ -49,6 +50,23 @@ export function commandFor(config: WorkbenchConfig, name: string): { command: st
 }
 
 /**
+ * A repository with no config file still has an app to run: use the detected
+ * run command, so "Open localhost" works before anyone writes
+ * .talyn/settings.toml. A config file that names no run script is a choice,
+ * so it gets no fallback.
+ */
+async function detectedRun(
+  row: WorkbenchRow,
+  config: WorkbenchConfig,
+  name: string,
+): Promise<{ command: string; isRun: boolean } | null> {
+  if (name !== 'run' || config.source !== 'none' || row.kind === 'thread') return null;
+  const detected = config.detected ?? (await detectWorkbenchScriptsInBox(row));
+  const command = detectedRunScript(detected);
+  return command ? { command, isRun: true } : null;
+}
+
+/**
  * Start a script and return once it has started; `done` settles with its exit
  * code. A script already running under this name is refused rather than
  * started twice — two dev servers on one port is the failure Conductor's
@@ -72,9 +90,15 @@ export async function startScript(
     return { done };
   }
   const config = opts.config ?? (await loadWorkbenchConfig(row));
-  const resolved = commandFor(config, name);
+  const resolved = commandFor(config, name) ?? (await detectedRun(row, config, name));
   if (!resolved) {
-    throw new WorkbenchError(`This session has no "${name}" script.`, 404, 'script_not_found');
+    throw new WorkbenchError(
+      name === 'run'
+        ? 'This session has no "run" script, and Talyn found no dev or start script in package.json. Add one in .talyn/settings.toml.'
+        : `This session has no "${name}" script.`,
+      404,
+      'script_not_found',
+    );
   }
   const scripts = running.get(row.id) ?? new Map<string, RunningScript>();
   running.set(row.id, scripts);

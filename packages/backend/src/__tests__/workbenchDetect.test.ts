@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { detectWorkbenchScripts, detectedScriptsToToml, resolveWorkbenchConfig } from '@talyn/shared';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { detectWorkbenchScripts, detectedRunScript, detectedScriptsToToml, resolveWorkbenchConfig } from '@talyn/shared';
 
 describe('detectWorkbenchScripts', () => {
   it.each([
@@ -108,5 +112,63 @@ describe('detectedScriptsToToml', () => {
     expect(config.errors).toEqual([]);
     expect(config.setup?.command).toBe(command);
     expect(config.run[0]?.command).toBe(command);
+  });
+});
+
+describe('detectedRunScript', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const workDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'talyn-detected-'));
+    dirs.push(dir);
+    return dir;
+  };
+  const run = (script: string, cwd: string) => {
+    try {
+      return { code: 0, out: execFileSync('bash', ['-c', script], { cwd, encoding: 'utf8' }) };
+    } catch (err) {
+      const e = err as { status: number; stdout: string };
+      return { code: e.status, out: e.stdout };
+    }
+  };
+
+  it('is null when no run command was detected', () => {
+    expect(detectedRunScript({ setup: { command: 'npm install', reason: 'x' } })).toBeNull();
+  });
+
+  it('runs the detected command and says which one', () => {
+    const dir = workDir();
+    const script = detectedRunScript({ run: { command: 'echo serving', reason: "from the dev script in package.json" } })!;
+    const { code, out } = run(script, dir);
+    expect(code).toBe(0);
+    expect(out).toContain('Talyn: this repository has no run script, so Talyn runs "echo serving" (from the dev script in package.json).');
+    expect(out).toContain('serving');
+  });
+
+  it('runs the detected setup once per box, before the run command', () => {
+    const dir = workDir();
+    const marker = join(dir, 'setup-done');
+    const script = detectedRunScript(
+      { setup: { command: 'echo x >> installs', reason: 'from package.json' }, run: { command: 'echo serving', reason: 'r' } },
+      marker,
+    )!;
+    expect(run(script, dir).code).toBe(0);
+    expect(run(script, dir).code).toBe(0);
+    expect(readFileSync(join(dir, 'installs'), 'utf8')).toBe('x\n');
+  });
+
+  it('stops before the run command when the setup fails, and tries the setup again next time', () => {
+    const dir = workDir();
+    const marker = join(dir, 'setup-done');
+    const script = detectedRunScript(
+      { setup: { command: 'exit 7', reason: 'r' }, run: { command: 'echo serving', reason: 'r' } },
+      marker,
+    )!;
+    const first = run(script, dir);
+    expect(first.code).toBe(7);
+    expect(first.out.split('\n')).not.toContain('serving');
+    expect(run(script, dir).code).toBe(7);
   });
 });
