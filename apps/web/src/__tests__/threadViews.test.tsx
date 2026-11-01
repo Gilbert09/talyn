@@ -3,7 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { notifyMemoryChanged } from '../lib/memoryEvents';
 import type { AgentEvent, MemoryEntrySummary, Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
 import type { WorkbenchOps } from '../lib/workbenchOps';
@@ -18,12 +19,13 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { toast } from '../stores/toast';
 
 const memoryList = vi.fn();
+const memoryGet = vi.fn();
 const continueAsThread = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     pullRequests: { get: vi.fn(() => new Promise(() => {})) },
     workbenches: {
-      memory: { list: (...a: unknown[]) => memoryList(...a) },
+      memory: { list: (...a: unknown[]) => memoryList(...a), get: (...a: unknown[]) => memoryGet(...a) },
       continueAsThread: (...a: unknown[]) => continueAsThread(...a),
     },
   },
@@ -176,6 +178,28 @@ describe('WorkPanel', () => {
     expect(within(list).getByText('2 more')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open all' }));
     expect(openSettings).toHaveBeenCalledWith('memory');
+  });
+
+  it('shows a memory entry when it is clicked', async () => {
+    memoryList.mockResolvedValue([memory('m1', 'thread')]);
+    memoryGet.mockResolvedValue({ ...memory('m1', 'thread'), body: 'The full text of m1.' });
+    render(<WorkPanel thread={THREAD} />);
+    const list = await screen.findByRole('list', { name: 'Memory of this thread' });
+    fireEvent.click(within(list).getByText('Note m1'));
+    expect(await within(list).findByText('The full text of m1.')).toBeInTheDocument();
+    expect(memoryGet).toHaveBeenCalledWith('m1');
+    fireEvent.click(within(list).getByText('Note m1'));
+    expect(within(list).queryByText('The full text of m1.')).not.toBeInTheDocument();
+  });
+
+  it('reloads memory when a session saves one in the middle of a turn', async () => {
+    memoryList.mockResolvedValue([]);
+    render(<WorkPanel thread={THREAD} />);
+    await waitFor(() => expect(memoryList).toHaveBeenCalledTimes(1));
+    memoryList.mockResolvedValue([memory('m1', 'thread')]);
+    act(() => notifyMemoryChanged());
+    expect(await screen.findByText('Note m1')).toBeInTheDocument();
+    expect(memoryList).toHaveBeenCalledTimes(2);
   });
 
   it('says so when memory cannot load', async () => {

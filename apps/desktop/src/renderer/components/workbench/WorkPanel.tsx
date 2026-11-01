@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Brain, FolderGit2 } from 'lucide-react';
-import { workbenchDisplayName, type MemoryEntrySummary, type Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type MemoryEntry, type MemoryEntrySummary, type Workbench } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { clampPanelWidth } from '../../lib/workbenchLayout';
@@ -12,6 +12,8 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
 import { memoryScopeLabel } from '../memory/MemoryEditor';
+import { MemoryBody } from '../memory/MemoryChangeCard';
+import { useMemoryChanged } from '../../lib/memoryEvents';
 import { useTurnsEnded } from './useTurnsEnded';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
 import { isArchived, useThreadChildren } from './workbenchSelectors';
@@ -153,6 +155,21 @@ function MemorySection({ thread }: { thread: Workbench }) {
   // A turn can save memory, so the list reloads when a turn ends.
   const turnsEnded = useTurnsEnded(chats);
   const [state, setState] = useState<MemoryState>({ status: 'loading' });
+  // A session can save memory in the middle of a turn.
+  const [changes, setChanges] = useState(0);
+  useMemoryChanged(() => setChanges((n) => n + 1));
+  const [open, setOpen] = useState<{ id: string; entry: MemoryEntry | null; failed?: boolean } | null>(null);
+  const toggle = (id: string) => {
+    if (open?.id === id) {
+      setOpen(null);
+      return;
+    }
+    setOpen({ id, entry: null });
+    api.workbenches.memory
+      .get(id)
+      .then((entry) => setOpen((cur) => (cur?.id === id ? { id, entry } : cur)))
+      .catch(() => setOpen((cur) => (cur?.id === id ? { id, entry: null, failed: true } : cur)));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -167,7 +184,7 @@ function MemorySection({ thread }: { thread: Workbench }) {
     return () => {
       cancelled = true;
     };
-  }, [thread.id, thread.workspaceId, turnsEnded]);
+  }, [thread.id, thread.workspaceId, turnsEnded, changes]);
 
   const entries = state.status === 'loaded' ? state.entries : [];
   return (
@@ -193,13 +210,33 @@ function MemorySection({ thread }: { thread: Workbench }) {
       {entries.length > 0 && (
         <ul className="space-y-1 px-3" aria-label="Memory of this thread">
           {entries.slice(0, WORK_PANEL_MEMORY_LIMIT).map((entry) => (
-            <li key={entry.id} className="min-w-0 text-xs" title={entry.description}>
-              <div className="flex min-w-0 items-center gap-1.5">
-                <Brain className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span className="truncate font-medium">{entry.name}</span>
-                <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{memoryScopeLabel(entry, repositories)}</span>
-              </div>
-              {entry.description && <p className="truncate pl-[18px] text-muted-foreground">{entry.description}</p>}
+            <li key={entry.id} className="min-w-0 text-xs">
+              <button
+                type="button"
+                onClick={() => toggle(entry.id)}
+                aria-expanded={open?.id === entry.id}
+                title={open?.id === entry.id ? 'Hide this memory' : 'Show this memory'}
+                className="block w-full min-w-0 rounded text-left hover:bg-accent/60"
+                data-attr="work-panel-memory-entry"
+              >
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Brain className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate font-medium">{entry.name}</span>
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{memoryScopeLabel(entry, repositories)}</span>
+                </div>
+                {entry.description && open?.id !== entry.id && (
+                  <p className="truncate pl-[18px] text-muted-foreground">{entry.description}</p>
+                )}
+              </button>
+              {open?.id === entry.id && (
+                <div className="mt-1 rounded border border-border bg-card">
+                  {open.entry ? (
+                    <MemoryBody entry={open.entry} />
+                  ) : (
+                    <p className="px-3 py-2 text-muted-foreground">{open.failed ? 'Could not load this memory.' : 'Loading…'}</p>
+                  )}
+                </div>
+              )}
             </li>
           ))}
           {entries.length > WORK_PANEL_MEMORY_LIMIT && (

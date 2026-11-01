@@ -84,6 +84,28 @@ describe('talyn_memory card', () => {
     expect(mockGet).toHaveBeenCalledWith('m1');
   });
 
+  it('shows the memory text on View, and hides it again', async () => {
+    mockGet.mockResolvedValue(live);
+    render(<AgentBlocks events={[memoryEvent('created')]} />);
+    await waitFor(() => expect(button('View').disabled).toBe(false));
+    expect(screen.queryByTestId('memory-body')).toBeNull();
+    fireEvent.click(button('View'));
+    const body = screen.getByTestId('memory-body');
+    expect(within(body).getByText('Run make build.')).toBeTruthy();
+    expect(within(body).getByText('How to build the app.')).toBeTruthy();
+    fireEvent.click(button('Hide'));
+    expect(screen.queryByTestId('memory-body')).toBeNull();
+  });
+
+  it('tells the memory panel that memory changed when the card appears', async () => {
+    mockGet.mockResolvedValue(live);
+    const heard = vi.fn();
+    window.addEventListener('talyn-memory-changed', heard);
+    render(<AgentBlocks events={[memoryEvent('created')]} />);
+    expect(heard).toHaveBeenCalled();
+    window.removeEventListener('talyn-memory-changed', heard);
+  });
+
   it('edits the entry in the same editor', async () => {
     mockGet.mockResolvedValue(live);
     mockUpdate.mockImplementation(async (_id: string, patch: Partial<MemoryEntry>) => ({ ...live, ...patch }));

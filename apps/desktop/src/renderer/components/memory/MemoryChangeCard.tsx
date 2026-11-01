@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Brain } from 'lucide-react';
 import type { MemoryChangeEvent, MemoryEntry } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { notifyMemoryChanged } from '../../lib/memoryEvents';
 import { toast } from '../../stores/toast';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
@@ -28,6 +29,7 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editing, setEditing] = useState(false);
+  const [viewing, setViewing] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -46,6 +48,11 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
     };
   }, [change.memoryId]);
 
+  // A card that appears is a memory a session just saved, changed or forgot.
+  useEffect(() => {
+    notifyMemoryChanged();
+  }, [change.memoryId, change.action]);
+
   const entry = state.status === 'found' ? state.entry : null;
   const forgotten = Boolean(entry?.forgottenAt);
   const name = entry?.name ?? change.name;
@@ -60,6 +67,7 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
       const summary = await api.workbenches.memory.forget(entry.id);
       setState({ status: 'found', entry: { ...entry, ...summary } });
       setEditing(false);
+      notifyMemoryChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not forget this memory');
     } finally {
@@ -72,6 +80,7 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
     setBusy(true);
     try {
       setState({ status: 'found', entry: await api.workbenches.memory.restore(entry.id) });
+      notifyMemoryChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not restore this memory');
     } finally {
@@ -105,7 +114,24 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
             </Button>
           ) : (
             <>
-              <Button variant="outline" size="sm" disabled={!actionable || editing} onClick={() => setEditing(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!entry || editing}
+                aria-expanded={viewing}
+                onClick={() => setViewing((v) => !v)}
+              >
+                {viewing ? 'Hide' : 'View'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!actionable || editing}
+                onClick={() => {
+                  setViewing(false);
+                  setEditing(true);
+                }}
+              >
                 Edit
               </Button>
               <Button variant="outline" size="sm" disabled={!actionable} onClick={() => void forget()}>
@@ -116,6 +142,7 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
         </div>
       </div>
       {note ? <p className="px-3 pb-2 text-muted-foreground">{note}</p> : null}
+      {viewing && entry && !editing ? <MemoryBody entry={entry} /> : null}
       {editing && entry ? (
         <div className="border-t border-border/60">
           <MemoryEditor
@@ -123,10 +150,23 @@ export function MemoryChangeCard({ change }: { change: MemoryChangeEvent }) {
             entry={entry}
             repositories={repositories}
             onClose={() => setEditing(false)}
-            onSaved={(saved) => setState({ status: 'found', entry: saved })}
+            onSaved={(saved) => {
+              setState({ status: 'found', entry: saved });
+              notifyMemoryChanged();
+            }}
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** A memory entry's description and text, read-only. */
+export function MemoryBody({ entry }: { entry: Pick<MemoryEntry, 'description' | 'body'> }) {
+  return (
+    <div className="space-y-1.5 border-t border-border/60 px-3 py-2" data-testid="memory-body">
+      {entry.description ? <p className="text-muted-foreground">{entry.description}</p> : null}
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-xs text-foreground">{entry.body}</pre>
     </div>
   );
 }
