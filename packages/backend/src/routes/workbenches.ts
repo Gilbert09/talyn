@@ -56,6 +56,7 @@ import {
   removeInstructionFile,
 } from '../services/workbenches/instructions.js';
 import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
+import { claimLocalWorkbench } from '../services/workbenches/localTakeover.js';
 import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from '../services/workbenches/resize.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
@@ -617,6 +618,14 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     const body = (req.body ?? {}) as UpdateWorkbenchInput;
     const patch: Parameters<typeof updateWorkbench>[1] = {};
+    const takeover = body.deviceId !== undefined || body.localPath !== undefined;
+    if (takeover) {
+      if (row.runtime !== 'local') return bad(res, 409, 'Only a local session can move computers.');
+      if (typeof body.deviceId !== 'string' || !body.deviceId.trim()
+        || typeof body.localPath !== 'string' || !body.localPath.startsWith('/')) {
+        return bad(res, 400, 'A device id and an absolute local path are required.');
+      }
+    }
     if (body.branch !== undefined) {
       if (row.runtime !== 'local') return bad(res, 409, 'Only a local session can report its branch.');
       if (typeof body.branch !== 'string' || !isValidBranchName(body.branch)) {
@@ -673,6 +682,7 @@ export function workbenchRoutes(): Router {
     }
     const onlyGenerated = body.generatedTitle !== undefined && Object.keys(patch).length === 0;
     let updated = onlyGenerated ? row : ((await updateWorkbench(row.id, patch)) ?? row);
+    if (takeover) updated = await claimLocalWorkbench(updated, body.deviceId!, body.localPath!);
     if (body.generatedTitle !== undefined) {
       // The local runtime's model-written title. Applied only while there is no
       // title; junk is ignored, not refused, since the caller cannot do better.
