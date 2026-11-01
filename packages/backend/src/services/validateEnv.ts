@@ -59,15 +59,20 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
     );
   }
 
-  // Polar billing is optional as a whole (absent → task limits are simply
-  // not enforced), but a PARTIAL config is always a mistake: checkout or
-  // webhook verification would throw at request time on the missing half.
+  // Polar billing is optional as a whole (absent → limits are simply not
+  // enforced), but a PARTIAL config is always a mistake: checkout, a credit
+  // purchase or webhook verification would throw at request time on the
+  // missing half. The Pro products and the three credit packs are part of the
+  // core group: usage billing cannot be enforced without a way to buy more.
   const polarVars = [
     'POLAR_ACCESS_TOKEN',
     'POLAR_WEBHOOK_SECRET',
     'POLAR_ENVIRONMENT',
-    'POLAR_PRODUCT_ID_MONTHLY',
-    'POLAR_PRODUCT_ID_ANNUAL',
+    'POLAR_PRODUCT_ID_PRO_MONTHLY',
+    'POLAR_PRODUCT_ID_PRO_ANNUAL',
+    'POLAR_PRODUCT_ID_CREDITS_25',
+    'POLAR_PRODUCT_ID_CREDITS_100',
+    'POLAR_PRODUCT_ID_CREDITS_500',
   ];
   const setPolarVars = polarVars.filter((name) => Boolean(env[name]));
   if (setPolarVars.length > 0 && setPolarVars.length < polarVars.length) {
@@ -76,22 +81,43 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
       `Polar billing is partially configured (${setPolarVars.join(', ')} set) — also set ${missing.join(', ')}`
     );
   }
-  // The team plan is its own optional group on top of billing: a deployment
-  // may bill personally without selling teams, but one team product id alone
-  // offers a checkout period that 500s. And a team product with no billing
-  // behind it could never be sold at all.
-  const teamVars = ['POLAR_PRODUCT_ID_TEAM_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'];
-  const setTeamVars = teamVars.filter((name) => Boolean(env[name]));
-  if (setTeamVars.length > 0 && setTeamVars.length < teamVars.length) {
-    const missing = teamVars.filter((name) => !env[name]);
-    errors.push(
-      `The Polar team plan is partially configured (${setTeamVars.join(', ')} set) — also set ${missing.join(', ')}`
-    );
+  // Optional pairs on top of billing. Each is both-or-neither (one id alone
+  // offers a period that 500s), and none means anything without billing.
+  //  - The old Unlimited products: no longer sold, but their subscribers
+  //    resolve to Legacy Pro through these ids, so keep them while any exist.
+  //  - The team products: the Pro team product ($40 a seat) is what new teams
+  //    buy; the old team product stays recognised, its teams on Legacy Pro.
+  const optionalPairs: Array<{ label: string; vars: [string, string] }> = [
+    { label: 'The old Unlimited products (Legacy Pro)', vars: ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] },
+    { label: 'The Polar team plan', vars: ['POLAR_PRODUCT_ID_TEAM_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'] },
+    {
+      label: 'The Polar Pro team plan',
+      vars: ['POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL'],
+    },
+  ];
+  for (const { label, vars } of optionalPairs) {
+    const set = vars.filter((name) => Boolean(env[name]));
+    if (set.length === 1) {
+      const missing = vars.filter((name) => !env[name]);
+      errors.push(`${label} is partially configured (${set.join(', ')} set) — also set ${missing.join(', ')}`);
+    }
+    if (set.length > 0 && setPolarVars.length === 0) {
+      errors.push(`${label} is configured (${set.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`);
+    }
   }
-  if (setTeamVars.length > 0 && setPolarVars.length === 0) {
-    errors.push(
-      `The Polar team plan is configured (${setTeamVars.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`
-    );
+  // Every product id routes a webhook: an id configured twice would grant a
+  // credit pack for a subscription, or the wrong tier.
+  const productVars = [
+    ...polarVars.filter((name) => name.startsWith('POLAR_PRODUCT_ID_')),
+    ...optionalPairs.flatMap((pair) => pair.vars),
+  ];
+  const byId = new Map<string, string[]>();
+  for (const name of productVars) {
+    const id = env[name]?.trim();
+    if (id) byId.set(id, [...(byId.get(id) ?? []), name]);
+  }
+  for (const names of byId.values()) {
+    if (names.length > 1) errors.push(`Polar product ids must be distinct — ${names.join(', ')} have the same value`);
   }
   // The cross-product inbox is optional as a whole (absent → notifyTodiex is
   // a no-op), but half of it is always a mistake: a URL without a token posts

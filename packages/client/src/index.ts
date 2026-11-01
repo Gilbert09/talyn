@@ -66,10 +66,16 @@ import type {
   CreateMcpTokenResponse,
   McpToken,
   ApiResponse,
+  AutoTopupSettings,
   BillingOrder,
   BillingStatus,
+  BillingUsageResponse,
+  ChangePlanRequest,
   CheckoutSessionResponse,
   CreateCheckoutRequest,
+  CreditCheckoutRequest,
+  CreditSummary,
+  UpdateAutoTopupRequest,
   AssignTeamSeatsRequest,
   AssignTeamSeatsResponse,
   CreateTeamRequest,
@@ -2157,11 +2163,37 @@ class WebSocketClient {
   }
 }
 
-// Billing — plan status, hosted checkout, hosted customer portal.
+// Billing — plan status, hosted checkout, hosted customer portal, usage and
+// credits. The usage-billing routes (usage, credits, changePlan, autoTopup)
+// 404 on a backend that predates usage billing; callers treat that as "draw
+// the old view", never as an error to show.
 export const billing = {
   status: () => request<BillingStatus>('GET', '/billing/status'),
+  /** Pro checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. */
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
+  /** Legacy Pro → Pro on the live subscription. 409 `no_subscription` when there is none. */
+  changePlan: (data: ChangePlanRequest) =>
+    request<{ ok: true }>('POST', '/billing/change-plan', data),
+  /** Box-hours per UTC day and the recent intervals. `from`/`to` are ISO; default the last 30 days. */
+  usage: (range: { from?: string; to?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (range.from) params.set('from', range.from);
+    if (range.to) params.set('to', range.to);
+    const query = params.toString();
+    return request<BillingUsageResponse>('GET', `/billing/usage${query ? `?${query}` : ''}`);
+  },
+  /** Live credit lots, balance and what expires within 30 days. */
+  credits: () => request<CreditSummary>('GET', '/billing/credits'),
+  /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. */
+  creditCheckout: (data: CreditCheckoutRequest) =>
+    request<CheckoutSessionResponse>('POST', '/billing/credits/checkout', data),
+  autoTopup: {
+    get: () => request<AutoTopupSettings>('GET', '/billing/auto-topup'),
+    /** Saving also clears a recorded charge failure (the "try again"). */
+    update: (data: UpdateAutoTopupRequest) =>
+      request<AutoTopupSettings>('PUT', '/billing/auto-topup', data),
+  },
   portal: () => request<CheckoutSessionResponse>('POST', '/billing/portal'),
   orders: () => request<BillingOrder[]>('GET', '/billing/orders'),
   invoice: (orderId: string) =>
