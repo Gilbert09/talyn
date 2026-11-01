@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { eq } from 'drizzle-orm';
-import { FREE_PLAN_LOOP_LIMIT, LOOP_LIMIT_ERROR_CODE, validateLoop } from '@talyn/shared';
+import { LOOP_LIMIT_ERROR_CODE, validateLoop } from '@talyn/shared';
 import { loopRoutes } from '../../routes/loops.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -21,18 +21,9 @@ import * as loopsAccess from '../../services/loopsAccess.js';
 import * as registry from '../../services/cloudProviders/registry.js';
 
 /**
- * Free-plan loop cap at the route surface: POST /loops must 402 with
- * LOOP_LIMIT_ERROR_CODE once the owner keeps FREE_PLAN_LOOP_LIMIT loops —
- * counted across EVERY workspace they own, because the limit is per user and a
- * second workspace is free to make.
- *
- * The workflow cap's twin, and pinned separately rather than trusted to be the
- * same code: the two gates share `withFreePlanGate` but have their own counts,
- * their own error types and their own advisory-lock keys, and a copy-paste that
- * left one of those pointing at workflows would pass every workflow test.
- *
- * Uses the REAL apiErrorHandler, so the status/code contract pinned here is the
- * one production serves.
+ * POST /loops has no plan cap any more: usage billing removed the free plan's
+ * three-loop limit. These tests pin that a loop is never refused for a count,
+ * on any tier, with billing on or off. Uses the REAL apiErrorHandler.
  */
 
 const OTHER_USER_ID = 'user-other';
@@ -60,7 +51,7 @@ async function makeServer(): Promise<{ url: string; close: () => Promise<void> }
   };
 }
 
-describe('free-plan loop limit at the route surface', () => {
+describe('POST /loops has no plan cap', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let url: string;
@@ -90,14 +81,6 @@ describe('free-plan loop limit at the route surface', () => {
   async function countIn(workspaceId: string): Promise<number> {
     const res = await fetch(`${url}/loops?workspaceId=${workspaceId}`, { headers });
     return ((await res.json()) as { data: unknown[] }).data.length;
-  }
-
-  /** Fill the owner's allowance, spread across both of their workspaces. */
-  async function fillAllowance(): Promise<void> {
-    for (let i = 0; i < FREE_PLAN_LOOP_LIMIT; i++) {
-      const res = await post({ workspaceId: i % 2 === 0 ? 'ws-mine' : 'ws-second' });
-      expect(res.status).toBe(200);
-    }
   }
 
   beforeEach(async () => {
@@ -156,130 +139,47 @@ describe('free-plan loop limit at the route surface', () => {
     await cleanup();
   });
 
-  it('402s with the loop code once a free owner is at the limit', async () => {
-    await fillAllowance();
-    const res = await post();
-    expect(res.status).toBe(402);
-    const json = (await res.json()) as { code: string; error: string };
-    // Its OWN code, not the workflow one — the client branches on this to pick
-    // which upgrade pitch to show.
-    expect(json.code).toBe(LOOP_LIMIT_ERROR_CODE);
-    expect(json.error).toMatch(new RegExp(`${FREE_PLAN_LOOP_LIMIT} loops`));
-    // Refused, not silently created.
-    expect((await countIn('ws-mine')) + (await countIn('ws-second'))).toBe(FREE_PLAN_LOOP_LIMIT);
-  });
+  // Usage billing removed the loop cap (it was 3 on the free plan). A loop
+  // keeps a schedule and spends nothing until it fires; each firing is a box,
+  // gated by withBoxGate where the task is created.
+  const MANY = 8;
 
-  it('creates normally below the limit', async () => {
-    for (let i = 0; i < FREE_PLAN_LOOP_LIMIT; i++) {
-      expect((await post()).status).toBe(200);
+  it.each([
+    { label: 'free', set: {} },
+    { label: 'old Unlimited subscriber', set: { plan: 'unlimited' } },
+    { label: 'comp', set: { planOverride: 'unlimited' } },
+    { label: 'pro override', set: { planOverride: 'pro' } },
+  ])('a $label owner keeps any number of loops across workspaces', async ({ set }) => {
+    if (Object.keys(set).length) await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
+    for (let i = 0; i < MANY; i++) {
+      expect((await post({ workspaceId: i % 2 === 0 ? 'ws-mine' : 'ws-second' })).status).toBe(200);
     }
+    expect((await countIn('ws-mine')) + (await countIn('ws-second'))).toBe(MANY);
   });
 
-  it('counts every workspace the owner has — a second one is not a second allowance', async () => {
-    await fillAllowance();
-    expect((await post({ workspaceId: 'ws-second' })).status).toBe(402);
+  it('disabled loops are never refused either', async () => {
+    for (let i = 0; i < MANY; i++) expect((await post({ enabled: false })).status).toBe(200);
   });
 
-  it('another owner’s loops never eat a slot', async () => {
-    // Seeded through the store rather than the route: these belong to a
-    // workspace this caller cannot post to, which is exactly the point.
-    for (let i = 0; i < FREE_PLAN_LOOP_LIMIT; i++) {
+  it('another owner’s loops change nothing', async () => {
+    for (let i = 0; i < MANY; i++) {
       await createLoop(
         'ws-theirs',
-        validateLoop(
-          body({
-            workspaceId: 'ws-theirs',
-            repositoryId: 'repo-theirs',
-            repoFullName: 'acme/other',
-          })
-        )
+        validateLoop(body({ workspaceId: 'ws-theirs', repositoryId: 'repo-theirs', repoFullName: 'acme/other' }))
       );
     }
-    await fillAllowance();
-    const res = await post();
-    expect(res.status).toBe(402);
-    expect(((await res.json()) as { error: string }).error).toMatch(
-      new RegExp(`\\(${FREE_PLAN_LOOP_LIMIT} in use\\)`)
-    );
+    expect((await post()).status).toBe(200);
   });
 
-  it('a disabled loop still occupies its slot', async () => {
-    // The cap is on how many schedules you KEEP. Counting only the enabled ones
-    // would make it a toggle — keep twelve, run three, swap whenever.
-    for (let i = 0; i < FREE_PLAN_LOOP_LIMIT; i++) {
-      expect((await post({ enabled: false })).status).toBe(200);
+  it('is never refused with the old loop code, billing on or off', async () => {
+    for (const billing of [true, false]) {
+      if (billing) process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
+      else delete process.env.POLAR_ACCESS_TOKEN;
+      for (let i = 0; i < 4; i++) {
+        const res = await post();
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { code?: string }).code).not.toBe(LOOP_LIMIT_ERROR_CODE);
+      }
     }
-    expect((await post()).status).toBe(402);
-  });
-
-  it('editing an existing loop at the limit is never gated', async () => {
-    await fillAllowance();
-    const listed = await fetch(`${url}/loops?workspaceId=ws-mine`, { headers });
-    const [first] = ((await listed.json()) as { data: { id: string }[] }).data;
-    const res = await fetch(`${url}/loops/${first.id}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ name: 'Renamed at the limit', enabled: false }),
-    });
-    expect(res.status).toBe(200);
-    // Switching it back ON is an edit too, not a new loop — otherwise a free
-    // user at the cap could not re-enable the schedule they just paused.
-    const back = await fetch(`${url}/loops/${first.id}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(back.status).toBe(200);
-  });
-
-  it('running a loop by hand at the limit is never gated', async () => {
-    // "Run now" starts work, it does not keep a schedule. Its own refusal — if
-    // any — is the active-task limit, recorded on the run.
-    await fillAllowance();
-    const listed = await fetch(`${url}/loops?workspaceId=ws-mine`, { headers });
-    const [first] = ((await listed.json()) as { data: { id: string }[] }).data;
-    const res = await fetch(`${url}/loops/${first.id}/run`, { method: 'POST', headers });
-    expect(res.status).toBe(200);
-  });
-
-  it('deleting a loop frees its slot', async () => {
-    await fillAllowance();
-    expect((await post()).status).toBe(402);
-    const listed = await fetch(`${url}/loops?workspaceId=ws-mine`, { headers });
-    const [first] = ((await listed.json()) as { data: { id: string }[] }).data;
-    expect((await fetch(`${url}/loops/${first.id}`, { method: 'DELETE', headers })).status).toBe(
-      200
-    );
-    expect((await post()).status).toBe(200);
-  });
-
-  it('the workflow allowance is not the loop allowance', async () => {
-    // The two caps are independent: filling one must not refuse the other. A
-    // gate that counted the wrong table would pass every other test here.
-    await fillAllowance();
-    const res = await post();
-    expect(res.status).toBe(402);
-    expect(((await res.json()) as { error: string }).error).not.toMatch(/workflows/);
-  });
-
-  it('comped (plan_override) owners are unlimited', async () => {
-    await db
-      .update(usersTable)
-      .set({ planOverride: 'unlimited' })
-      .where(eq(usersTable.id, TEST_USER_ID));
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
-  });
-
-  it('subscribed owners are unlimited', async () => {
-    await db.update(usersTable).set({ plan: 'unlimited' }).where(eq(usersTable.id, TEST_USER_ID));
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
-  });
-
-  it('is off entirely when billing is not configured', async () => {
-    delete process.env.POLAR_ACCESS_TOKEN;
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
   });
 });

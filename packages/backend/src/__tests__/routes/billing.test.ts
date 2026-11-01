@@ -111,10 +111,13 @@ describe('GET /billing/status', () => {
     const status = await getStatus();
     expect(status).toMatchObject({
       billingEnabled: false,
-      plan: 'unlimited',
+      plan: 'pro',
       planSource: 'billing_disabled',
       activeTaskLimit: null,
     });
+    // No usage data: the clients keep drawing the old view.
+    expect(status.tier).toBeUndefined();
+    expect(status.usage).toBeUndefined();
   });
 
   it('reports the free plan with live usage when configured', async () => {
@@ -132,12 +135,20 @@ describe('GET /billing/status', () => {
       billingEnabled: true,
       plan: 'free',
       planSource: 'default',
+      tier: 'free',
+      // The concurrent-box cap replaced the active-task cap.
       activeTasks: 1,
-      activeTaskLimit: 3,
+      activeTaskLimit: 2,
+      concurrentBoxes: { used: 1, limit: 2 },
+      mergeQueueLimit: null,
+      workflowLimit: null,
+      loopLimit: null,
+      activeReviewLimit: null,
+      usage: expect.objectContaining({ usedWsec: 0, includedWsec: 36_000, exhausted: false }),
     });
   });
 
-  it('reports a comped user as override/unlimited', async () => {
+  it('reports an old Unlimited comp as override/pro', async () => {
     setPolarEnv();
     await db
       .update(usersTable)
@@ -145,9 +156,10 @@ describe('GET /billing/status', () => {
       .where(eq(usersTable.id, TEST_USER_ID));
     const status = await getStatus();
     expect(status).toMatchObject({
-      plan: 'unlimited',
+      plan: 'pro',
+      tier: 'pro',
       planSource: 'override',
-      activeTaskLimit: null,
+      activeTaskLimit: 100,
     });
   });
 
@@ -164,7 +176,9 @@ describe('GET /billing/status', () => {
       .where(eq(usersTable.id, TEST_USER_ID));
     const status = await getStatus();
     expect(status).toMatchObject({
-      plan: 'unlimited',
+      // An old Unlimited subscription (no Pro product id) is Legacy Pro.
+      plan: 'legacy_pro',
+      tier: 'legacy_pro',
       planSource: 'subscription',
       subscriptionStatus: 'active',
       cancelAtPeriodEnd: true,

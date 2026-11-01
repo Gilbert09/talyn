@@ -19,11 +19,11 @@ import {
   buildBillingStatus,
   deriveEntitlement,
   entitlementQuery,
-  FREE_ACTIVE_TASK_LIMIT,
   resolveEntitlement,
   teamGrantsSeats,
   withTaskLimitGate,
 } from '../services/billing/entitlements.js';
+import { PLAN_LIMITS } from '@talyn/shared';
 import {
   addTeamAdmin,
   assertTeamAdmin,
@@ -168,62 +168,73 @@ describe('entitlement derivation', () => {
     expect(teamGrantsSeats(team)).toBe(expected);
   });
 
+  // A team bought before usage billing (no tier) gives Legacy Pro seats; a
+  // team on the Pro product gives Pro seats.
   const PAID_TEAM = { plan: 'team', planOverride: null };
+  const PRO_TEAM = { plan: 'team', planOverride: null, tier: 'pro' };
   const LAPSED_TEAM = { plan: 'none', planOverride: null };
 
   it.each([
     // user override wins over everything, in both directions
     ['user override free beats a paid seat', { plan: 'free', planOverride: 'free' }, PAID_TEAM, 'free', 'override'],
-    ['user override unlimited', { plan: 'free', planOverride: 'unlimited' }, LAPSED_TEAM, 'unlimited', 'override'],
+    ['user override unlimited (a comp) is Pro', { plan: 'free', planOverride: 'unlimited' }, LAPSED_TEAM, 'pro', 'override'],
     // a personal subscription reads as the subscription, seat or not
-    ['personal subscription and a seat', { plan: 'unlimited', planOverride: null }, PAID_TEAM, 'unlimited', 'subscription'],
-    ['personal subscription, no team', { plan: 'unlimited', planOverride: null }, null, 'unlimited', 'subscription'],
+    ['personal subscription and a seat', { plan: 'unlimited', planOverride: null }, PRO_TEAM, 'legacy_pro', 'subscription'],
+    ['personal subscription, no team', { plan: 'unlimited', planOverride: null }, null, 'legacy_pro', 'subscription'],
     // the team
-    ['paid seat', { plan: 'free', planOverride: null }, PAID_TEAM, 'unlimited', 'team'],
-    ['comped team', { plan: 'free', planOverride: null }, { plan: 'none', planOverride: 'team' }, 'unlimited', 'team'],
+    ['paid seat on an existing team', { plan: 'free', planOverride: null }, PAID_TEAM, 'legacy_pro', 'team'],
+    ['paid seat on a Pro team', { plan: 'free', planOverride: null }, PRO_TEAM, 'pro', 'team'],
+    ['comped team', { plan: 'free', planOverride: null }, { plan: 'none', planOverride: 'team' }, 'legacy_pro', 'team'],
     ['lapsed team', { plan: 'free', planOverride: null }, LAPSED_TEAM, 'free', 'default'],
     ['team blocked by override', { plan: 'free', planOverride: null }, { plan: 'team', planOverride: 'none' }, 'free', 'default'],
     ['no team', { plan: 'free', planOverride: null }, null, 'free', 'default'],
-  ] as const)('%s', (_name, user, team, plan, source) => {
-    expect(deriveEntitlement(user, team)).toEqual({ plan, source });
+  ] as const)('%s', (_name, user, team, tier, source) => {
+    expect(deriveEntitlement(user, team)).toEqual({ tier, source });
   });
 
   it('a missing user row is free whatever the team says', () => {
-    expect(deriveEntitlement(undefined, PAID_TEAM)).toEqual({ plan: 'free', source: 'default' });
+    expect(deriveEntitlement(undefined, PAID_TEAM)).toEqual({ tier: 'free', source: 'default' });
   });
 });
 
 describe('resolveEntitlement with seats', () => {
-  it('a seated member of a paid team is unlimited through the team', async () => {
+  it('a seated member of an existing paid team is Legacy Pro through the team', async () => {
     const teamId = await makeTeam();
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
-    expect(await resolveEntitlement(MEMBER)).toEqual({ plan: 'unlimited', source: 'team' });
+    expect(await resolveEntitlement(MEMBER)).toEqual({ tier: 'legacy_pro', source: 'team' });
   });
 
   it('a seat on a lapsed team gives nothing', async () => {
     const teamId = await makeTeam();
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
     await db.update(teamsTable).set({ plan: 'none' }).where(eq(teamsTable.id, teamId));
-    expect(await resolveEntitlement(MEMBER)).toEqual({ plan: 'free', source: 'default' });
+    expect(await resolveEntitlement(MEMBER)).toEqual({ tier: 'free', source: 'default' });
   });
 
   it('an account with no GitHub id yet matches no seat', async () => {
     const teamId = await makeTeam();
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
     await db.update(usersTable).set({ githubUserId: null }).where(eq(usersTable.id, MEMBER));
-    expect(await resolveEntitlement(MEMBER)).toEqual({ plan: 'free', source: 'default' });
+    expect(await resolveEntitlement(MEMBER)).toEqual({ tier: 'free', source: 'default' });
   });
 
   it('a stranger is untouched by somebody else’s team', async () => {
     await makeTeam();
-    expect(await resolveEntitlement(STRANGER)).toEqual({ plan: 'free', source: 'default' });
+    expect(await resolveEntitlement(STRANGER)).toEqual({ tier: 'free', source: 'default' });
   });
 
-  it('lets a seated member past the free task limit', async () => {
+  it('a Pro team gives its seats Pro', async () => {
+    const teamId = await makeTeam();
+    await db.update(teamsTable).set({ tier: 'pro' }).where(eq(teamsTable.id, teamId));
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    expect(await resolveEntitlement(MEMBER)).toEqual({ tier: 'pro', source: 'team' });
+  });
+
+  it('lets a seated member past the free box cap', async () => {
     const teamId = await makeTeam();
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
     await db.insert(workspacesTable).values({ id: 'ws-m', ownerId: MEMBER, name: 'M' });
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) {
+    for (let i = 0; i < PLAN_LIMITS.free.concurrentBoxes; i++) {
       await db.insert(tasksTable).values({
         id: `t-${i}`,
         workspaceId: 'ws-m',
@@ -234,13 +245,13 @@ describe('resolveEntitlement with seats', () => {
       });
     }
     await expect(withTaskLimitGate(MEMBER, {}, async () => 'ran')).resolves.toBe('ran');
-    // …and the moment the seat goes, the limit is back.
+    // …and the moment the seat goes, the free cap is back.
     const [seat] = await db.select().from(teamSeatsTable).where(eq(teamSeatsTable.githubUserId, MEMBER_GH));
     await removeSeat(teamId, seat!.id);
     await expect(withTaskLimitGate(MEMBER, {}, async () => 'ran')).rejects.toThrow();
   });
 
-  it('entitlementQuery selects only the four plan columns', () => {
+  it('entitlementQuery selects only the plan columns', () => {
     const { sql } = entitlementQuery('owner-1').toSQL();
     expect(sql).toContain('"team_seats"');
     for (const blob of ['"email"', '"seats_purchased"', '"github_login"', '"polar_customer_id"']) {
@@ -479,7 +490,7 @@ describe('an admin taking their own seat', () => {
     const teamId = await makeTeam({ seats: 2 });
     const result = await assignSelfSeat(teamId, BUYER);
     expect(result.assigned.map((s) => [s.githubUserId, s.githubLogin])).toEqual([[BUYER_GH, 'buyer']]);
-    expect(await resolveEntitlement(BUYER)).toEqual({ plan: 'unlimited', source: 'team' });
+    expect(await resolveEntitlement(BUYER)).toEqual({ tier: 'legacy_pro', source: 'team' });
     // A second press is reported, not doubled.
     expect((await assignSelfSeat(teamId, BUYER)).failed).toEqual([
       { login: 'buyer', reason: 'Already has a seat on this team.' },
@@ -710,7 +721,7 @@ describe('team subscription webhook', () => {
       expect(event).toMatchObject({ applied: true, teamId, userId: null });
       const seats = await db.select().from(teamSeatsTable).where(eq(teamSeatsTable.teamId, teamId));
       expect(seats.map((s) => s.githubUserId)).toEqual([BUYER_GH]);
-      expect(await resolveEntitlement(BUYER)).toEqual({ plan: 'unlimited', source: 'team' });
+      expect(await resolveEntitlement(BUYER)).toEqual({ tier: 'legacy_pro', source: 'team' });
       expect(emit).toHaveBeenCalledWith(BUYER, expect.objectContaining({ planSource: 'team' }));
     });
 

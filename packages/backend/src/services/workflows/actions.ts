@@ -14,7 +14,7 @@ import {
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { startReviewCycle } from '../codeReview/cycle.js';
-import { ReviewCycleLimitError } from '../billing/entitlements.js';
+import { isBoxGateError } from '../billing/entitlements.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
@@ -24,7 +24,6 @@ import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
 import { createCloudTask } from '../taskCreate.js';
 import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 import { TaskLimitError } from '../billing/entitlements.js';
-import { MergeQueueLimitError } from '../billing/entitlements.js';
 import { setQueueMembership } from '../mergeQueue/membership.js';
 import { getRepoSkillContent } from '../skills.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
@@ -241,10 +240,11 @@ async function runCodeReview(
   } catch (err) {
     // The plan gate THROWS rather than returning a refusal code, because on the
     // route it becomes a 402 that opens the upgrade modal. There is no modal
-    // here, so it becomes an ordinary recorded outcome — and specifically not a
-    // retryable one: `rate_gated` is the only code the retry sweep re-runs, and
-    // a cycle limit does not clear on a timer.
-    if (err instanceof ReviewCycleLimitError) {
+    // here, so it becomes an ordinary recorded outcome, and not a retryable one:
+    // `rate_gated` is the only code the retry sweep re-runs.
+    // WP5 gives box refusals their own failure codes; until then they record
+    // under the old plan-refusal code.
+    if (isBoxGateError(err)) {
       return { outcome: no('run_code_review', 'review_limit_reached', err.message) };
     }
     throw err;
@@ -566,17 +566,6 @@ async function enqueue(
       pullRequestId: row.id,
     };
   } catch (err) {
-    if (err instanceof MergeQueueLimitError) {
-      recordDeferral(ctx, 'merge_queue_limit_reached');
-      return {
-        outcome: no(
-          'enqueue_merge_queue',
-          'merge_queue_limit_reached',
-          'the free plan allows 3 PRs in the merge queue at once'
-        ),
-        pullRequestId: row.id,
-      };
-    }
     return { outcome: githubFailure('enqueue_merge_queue', err), pullRequestId: row.id };
   }
 }

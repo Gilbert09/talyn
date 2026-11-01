@@ -1,34 +1,55 @@
-import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, notExists, notInArray, sql } from 'drizzle-orm';
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   AUTO_KEEP_DEFAULT_ERROR_CODE,
   AUTO_REVIEW_ERROR_CODE,
+  AUTO_TOPUP_DEFAULTS,
   CODE_REVIEW_ACTIVE_PHASES,
-  FREE_PLAN_REVIEW_CYCLE_LIMIT,
-  REVIEW_CYCLE_LIMIT_ERROR_CODE,
-  FREE_PLAN_ACTIVE_TASK_LIMIT,
-  FREE_PLAN_MERGE_QUEUE_LIMIT,
-  FREE_PLAN_LOOP_LIMIT,
-  FREE_PLAN_WORKFLOW_LIMIT,
-  MERGE_QUEUE_LIMIT_ERROR_CODE,
-  TASK_LIMIT_ERROR_CODE,
-  LOOP_LIMIT_ERROR_CODE,
-  WORKFLOW_LIMIT_ERROR_CODE,
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  PLAN_LIMITS,
+  PLAN_PRICES,
+  PLAN_TIER_LABELS,
+  BOX_HOUR_PRICE_MICROS,
+  SANDBOX_SIZES,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  UNATTENDED_SANDBOX_SIZE,
+  USAGE_EXHAUSTED_ERROR_CODE,
+  autoTopupMonthKey,
+  boxHoursToWeightedSeconds,
+  creditBalanceMicros,
+  expiringSoonMicros,
+  formatBoxHoursLabel,
+  isCreditPackId,
+  planTierFromOverride,
+  sizeAllowedOnTier,
+  sizePriceTable,
+  teamSeatTier,
+  usagePercent,
+  type AutoTopupSettings,
+  type BillingPricing,
   type BillingStatus,
   type BillingTeamMembership,
+  type CreditSummary,
+  type PlanTier,
+  type SandboxSize,
+  type UsageBillingErrorCode,
+  type UsageSummary,
 } from '@talyn/shared';
 import {
   getDbClient,
   getPoolDbClient,
   getScopedDb,
   isRealPostgres,
+  runWithoutScope,
 } from '../../db/client.js';
 import {
+  autoTopupSettings as autoTopupSettingsTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
   teamAdmins as teamAdminsTable,
   teamSeats as teamSeatsTable,
   teams as teamsTable,
+  usageIntervals as usageIntervalsTable,
   users as usersTable,
   loops as loopsTable,
   prCodeReviews as prCodeReviewsTable,
@@ -36,181 +57,110 @@ import {
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
+import { readBudget, type UsageBudget } from './usage/charge.js';
+import { liveLots } from './usage/credits.js';
+import { getBudget } from './usage/index.js';
 
 /**
- * Plan entitlements — the provider-agnostic seam every limit check goes
- * through. Nothing in here knows about Polar beyond "webhooks maintain
- * `users.plan`"; the Polar client/webhook adapter lives alongside in
- * services/billing/ and can be swapped without touching enforcement.
+ * Plan entitlements: the provider-agnostic seam every plan check goes through.
+ * Nothing in here knows about Polar beyond "webhooks maintain `users.plan` and
+ * `users.polar_product_id`"; the Polar client and webhook live alongside in
+ * services/billing/ and can change without touching enforcement.
  *
- * Free plan: at most FREE_ACTIVE_TASK_LIMIT tasks in an active status at
- * once, counted across every workspace the user owns. Paid/comped: no limit.
+ * Usage billing replaced the old free/unlimited model and its count caps
+ * (active tasks, merge-queue PRs, workflows, loops, review cycles). What is
+ * left is one gate, {@link withBoxGate}, that every new box goes through, and
+ * two feature gates (auto-keep default, auto-review). Enforcement applies only
+ * when the POLAR_* env group is set ({@link billingEnabled}).
  */
 
-export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
-export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
-export const FREE_WORKFLOW_LIMIT = FREE_PLAN_WORKFLOW_LIMIT;
-export const FREE_LOOP_LIMIT = FREE_PLAN_LOOP_LIMIT;
-
 /**
- * Statuses that occupy a free-plan slot.
+ * Statuses of a task that occupies a box, or is about to boot one.
  *
  * Re-exported from the shared partition rather than restated: a new task
- * status now lands on the right side of this gate by construction. Kept as a
+ * status lands on the right side of this gate by construction. Kept as a
  * named export because callers across routes and admin import it from here.
  */
 export const ACTIVE_TASK_STATUSES = SHARED_ACTIVE_TASK_STATUSES;
 
-export type EffectivePlan = 'free' | 'unlimited';
-
-export interface Entitlement {
-  plan: EffectivePlan;
-  source: 'default' | 'subscription' | 'override' | 'team' | 'billing_disabled';
-}
-
-/** Thrown by the gate when a free owner is at their active-task limit. */
-export class TaskLimitError extends Error {
-  readonly code = TASK_LIMIT_ERROR_CODE;
-  constructor(
-    readonly limit: number,
-    readonly active: number
-  ) {
-    super(
-      `Free plan is limited to ${limit} active tasks (${active} in use). ` +
-        `Upgrade for unlimited tasks, or wait for a task to finish.`
-    );
-    this.name = 'TaskLimitError';
-  }
-}
-
-/** Thrown by the gate when a free owner's merge queue is full. */
-export class MergeQueueLimitError extends Error {
-  readonly code = MERGE_QUEUE_LIMIT_ERROR_CODE;
-  constructor(
-    readonly limit: number,
-    readonly queued: number,
-    /** How many PRs the refused call was trying to add. >1 for a stack. */
-    readonly adding = 1
-  ) {
-    super(
-      adding > 1
-        ? `This stack needs ${adding} merge-queue slots. Free plan is limited to ` +
-          `${limit} PRs in the merge queue (${queued} queued). Upgrade for an ` +
-          `unlimited queue, or wait for a queued PR to land.`
-        : `Free plan is limited to ${limit} PRs in the merge queue (${queued} queued). ` +
-          `Upgrade for an unlimited queue, or wait for a queued PR to land.`
-    );
-    this.name = 'MergeQueueLimitError';
-  }
-}
-
-/** Thrown by the gate when a free owner already has their allowance of workflows. */
-export class WorkflowLimitError extends Error {
-  readonly code = WORKFLOW_LIMIT_ERROR_CODE;
-  constructor(
-    readonly limit: number,
-    readonly count: number
-  ) {
-    super(
-      `Free plan is limited to ${limit} workflows (${count} in use). ` +
-        `Upgrade for unlimited workflows, or delete one you no longer need.`
-    );
-    this.name = 'WorkflowLimitError';
-  }
-}
-
-/** Thrown by the gate when a free owner already has their allowance of loops. */
-export class LoopLimitError extends Error {
-  readonly code = LOOP_LIMIT_ERROR_CODE;
-  constructor(
-    readonly limit: number,
-    readonly count: number
-  ) {
-    super(
-      `Free plan is limited to ${limit} loops (${count} in use). ` +
-        `Upgrade for unlimited loops, or delete one you no longer need.`
-    );
-    this.name = 'LoopLimitError';
-  }
-}
-
-/**
- * Thrown when a free owner tries to turn ON the workspace default "auto-keep
- * new PRs mergeable".
- *
- * A FEATURE gate rather than a usage cap: the other two errors mean "wait for a
- * slot", this one means "there is no free version of this". Kept a distinct
- * class so the 402 carries its own code and the client can pitch accordingly
- * instead of quoting a limit the user is not at.
- */
-export class AutoKeepDefaultPlanError extends Error {
-  readonly code = AUTO_KEEP_DEFAULT_ERROR_CODE;
-  constructor() {
-    super(
-      'Auto-keeping every new PR mergeable is an Unlimited feature. ' +
-        'Upgrade to turn it on, or arm individual PRs by hand.'
-    );
-    this.name = 'AutoKeepDefaultPlanError';
-  }
-}
-
-/**
- * Thrown when a free owner starts a second code review while one is in flight.
- *
- * A usage cap, so the message names the two ways out and one of them costs
- * nothing — the slot frees itself. Deliberately NOT a queue: a parked review is
- * indistinguishable from a working one on a PR row, and this feature's whole
- * credibility is that its progress is telling the truth.
- */
-export class ReviewCycleLimitError extends Error {
-  readonly code = REVIEW_CYCLE_LIMIT_ERROR_CODE;
-  constructor(
-    readonly limit: number,
-    readonly count: number
-  ) {
-    super(
-      `Free plan runs ${limit} code review at a time and does not queue them ` +
-        `(${count} in flight). Upgrade to review as many pull requests at once as ` +
-        'you like, or wait for this one to finish.'
-    );
-    this.name = 'ReviewCycleLimitError';
-  }
-}
-
-/**
- * Thrown when a free owner tries to turn ON "review my new pull requests
- * automatically".
- *
- * A FEATURE gate like AutoKeepDefaultPlanError, and the same reasoning: there is
- * no count to wait out, so the client must pitch the upgrade rather than quote a
- * limit the user is nowhere near.
- */
-export class AutoReviewPlanError extends Error {
-  readonly code = AUTO_REVIEW_ERROR_CODE;
-  constructor() {
-    super(
-      'Reviewing every new pull request automatically is an Unlimited feature. ' +
-        'Upgrade to turn it on, or review pull requests one at a time.'
-    );
-    this.name = 'AutoReviewPlanError';
-  }
-}
-
 /**
  * Whether billing is configured at all. When the Polar env group is absent
- * (local dev, CI, self-hosted) task limits are NOT enforced — a paywall with
- * no way to pay would brick task creation at 3 with zero recourse. Partial
- * config is a boot error (validateEnv), so checking one var here is enough;
- * this also doubles as a production kill switch.
+ * (local dev, CI, self-hosted) no plan limit is enforced: a paywall with no
+ * way to pay would brick every box with zero recourse. Partial config is a
+ * boot error (validateEnv), so checking one var here is enough; this also
+ * doubles as a production kill switch.
  */
 export function billingEnabled(): boolean {
   return Boolean(process.env.POLAR_ACCESS_TOKEN);
+}
+
+// ---------------------------------------------------------------------------
+// Tier derivation
+// ---------------------------------------------------------------------------
+
+export type EntitlementSource = 'default' | 'subscription' | 'override' | 'team' | 'billing_disabled';
+
+export interface Entitlement {
+  tier: PlanTier;
+  source: EntitlementSource;
+}
+
+/** An entitlement plus the anchor of the owner's usage period. */
+export interface TierResolution extends Entitlement {
+  /** `current_period_end` of a subscription the owner pays personally, else null (calendar month, UTC). */
+  periodAnchor: Date | null;
+}
+
+/**
+ * The Polar product ids that decide a personal subscription's tier.
+ *
+ * `pro` comes from the env vars WP6 adds for the new Pro product. `legacy`
+ * is the old Unlimited product (the vars that sold it). A product in neither
+ * list reads as Legacy Pro too: somebody pays us, and before the Pro product
+ * exists every paying subscriber holds the old one.
+ */
+export interface TierProductIds {
+  pro: readonly string[];
+  legacy: readonly string[];
+}
+
+export const PRO_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_PRO_ANNUAL'] as const;
+export const LEGACY_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] as const;
+
+function productIdsFromEnv(names: readonly string[]): string[] {
+  return names.map((name) => process.env[name]?.trim()).filter((id): id is string => Boolean(id));
+}
+
+/** Read at call time, so a test or a redeploy with new env takes effect at once. */
+export function tierProductIds(): TierProductIds {
+  return { pro: productIdsFromEnv(PRO_PRODUCT_ENV_VARS), legacy: productIdsFromEnv(LEGACY_PRODUCT_ENV_VARS) };
+}
+
+/**
+ * `users.plan` values that mean "a personal subscription grants a paid tier".
+ * The webhook writes `unlimited` today; the usage-billing webhook may write the
+ * tier itself. `free` and anything unknown grant nothing.
+ */
+const GRANTING_PLANS: ReadonlySet<string> = new Set(['unlimited', 'pro', 'legacy_pro']);
+
+export function hasGrantingSubscription(plan: string | null | undefined): boolean {
+  return typeof plan === 'string' && GRANTING_PLANS.has(plan);
+}
+
+/** The tier a granting personal subscription gives: Pro for a Pro product, else Legacy Pro. */
+export function subscriptionTier(
+  polarProductId: string | null | undefined,
+  ids: TierProductIds = tierProductIds()
+): Exclude<PlanTier, 'free'> {
+  return polarProductId && ids.pro.includes(polarProductId) ? 'pro' : 'legacy_pro';
 }
 
 /** The billing columns of the team whose seat a user holds. */
 export interface TeamBillingRow {
   plan: string;
   planOverride: string | null;
+  /** `teams.tier`. Absent or unknown reads as Legacy Pro (see `teamSeatTier`). */
+  tier?: string | null;
 }
 
 /**
@@ -224,31 +174,61 @@ export function teamGrantsSeats(team: TeamBillingRow | null | undefined): boolea
   return team.plan === 'team';
 }
 
-/**
- * Pure entitlement derivation from a users-row billing projection and, when
- * the user holds a seat, that seat's team.
- *
- * Order: the user's own override, the user's own subscription, a paid team
- * seat, then free. A personal override of 'free' beats a team seat on purpose
- * — it is how an operator blocks one account, and a team must not undo that.
- */
-export function deriveEntitlement(
-  row: { plan: string; planOverride: string | null } | undefined,
-  team?: TeamBillingRow | null
-): Entitlement {
-  if (!row) return { plan: 'free', source: 'default' };
-  if (row.planOverride === 'unlimited' || row.planOverride === 'free') {
-    return { plan: row.planOverride, source: 'override' };
-  }
-  if (row.plan === 'unlimited') return { plan: 'unlimited', source: 'subscription' };
-  if (teamGrantsSeats(team)) return { plan: 'unlimited', source: 'team' };
-  return { plan: 'free', source: 'default' };
+export interface UserBillingRow {
+  plan: string;
+  planOverride: string | null;
+  polarProductId?: string | null;
+  currentPeriodEnd?: Date | null;
 }
 
 /**
- * The query behind {@link resolveEntitlement}: the user's billing columns and,
- * through the seat bound to their GitHub id, that seat's team. Exported
- * unexecuted for the egress test.
+ * Pure tier derivation from a users-row billing projection and, when the user
+ * holds a seat, that seat's team.
+ *
+ * Order:
+ * 1. `plan_override` (`unlimited` and `pro` → pro, `legacy_pro` → legacy_pro,
+ *    `free` → free). A personal `free` beats everything below on purpose: it
+ *    is how an operator blocks one account, and a team must not undo that.
+ * 2. The user's own granting subscription: a Pro product → pro; an old
+ *    Unlimited product, no stored product, or an unknown one → legacy_pro.
+ * 3. A paid team seat → the team's tier.
+ * 4. Free.
+ */
+export function deriveTierResolution(
+  row: UserBillingRow | undefined,
+  team?: TeamBillingRow | null,
+  ids: TierProductIds = tierProductIds()
+): TierResolution {
+  if (!row) return { tier: 'free', source: 'default', periodAnchor: null };
+  const paysPersonally = hasGrantingSubscription(row.plan);
+  const anchor = paysPersonally ? (row.currentPeriodEnd ?? null) : null;
+  const override = planTierFromOverride(row.planOverride);
+  if (override) {
+    return { tier: override, source: 'override', periodAnchor: override === 'free' ? null : anchor };
+  }
+  if (paysPersonally) {
+    return { tier: subscriptionTier(row.polarProductId, ids), source: 'subscription', periodAnchor: anchor };
+  }
+  if (teamGrantsSeats(team)) {
+    return { tier: teamSeatTier(team?.tier), source: 'team', periodAnchor: null };
+  }
+  return { tier: 'free', source: 'default', periodAnchor: null };
+}
+
+/** {@link deriveTierResolution} without the period anchor. */
+export function deriveEntitlement(
+  row: UserBillingRow | undefined,
+  team?: TeamBillingRow | null,
+  ids?: TierProductIds
+): Entitlement {
+  const { tier, source } = deriveTierResolution(row, team, ids);
+  return { tier, source };
+}
+
+/**
+ * The query behind {@link deriveTier}: the user's billing columns and, through
+ * the seat bound to their GitHub id, that seat's team. Exported unexecuted for
+ * the egress test.
  *
  * Read on the POOL even from an owner-scoped request: the team tables are
  * backend-only (RLS on, no policy), and "does this owner hold a seat" is a
@@ -259,8 +239,11 @@ export function entitlementQuery(ownerId: string) {
     .select({
       plan: usersTable.plan,
       planOverride: usersTable.planOverride,
+      polarProductId: usersTable.polarProductId,
+      currentPeriodEnd: usersTable.currentPeriodEnd,
       teamPlan: teamsTable.plan,
       teamPlanOverride: teamsTable.planOverride,
+      teamTier: teamsTable.tier,
     })
     .from(usersTable)
     .leftJoin(teamSeatsTable, eq(teamSeatsTable.githubUserId, usersTable.githubUserId))
@@ -269,25 +252,503 @@ export function entitlementQuery(ownerId: string) {
     .limit(1);
 }
 
-function teamFromRow(row: {
-  teamPlan: string | null;
-  teamPlanOverride: string | null;
-}): TeamBillingRow | null {
-  return row.teamPlan === null ? null : { plan: row.teamPlan, planOverride: row.teamPlanOverride };
+export type EntitlementRow = Awaited<ReturnType<typeof entitlementQuery>>[number];
+
+/** Pure: the resolution for one row of {@link entitlementQuery}. */
+export function tierFromEntitlementRow(row: EntitlementRow | undefined, ids?: TierProductIds): TierResolution {
+  if (!row) return deriveTierResolution(undefined);
+  const team = row.teamPlan === null ? null : { plan: row.teamPlan, planOverride: row.teamPlanOverride, tier: row.teamTier };
+  return deriveTierResolution(row, team, ids);
 }
 
 /**
- * Resolve the effective plan for an owner: manual override first (the comp
- * flag — set via SQL, never by webhooks), then the webhook-driven plan, then
- * a paid team seat.
+ * The owner's usage tier, its source and their usage-period anchor. Does NOT
+ * look at {@link billingEnabled}: the ledger meters every owner against their
+ * real tier, and each gate decides whether to enforce.
+ */
+export async function deriveTier(ownerId: string): Promise<TierResolution> {
+  const [row] = await entitlementQuery(ownerId);
+  return tierFromEntitlementRow(row);
+}
+
+/**
+ * The tier a gate enforces. With billing unconfigured nothing is limited, so
+ * this answers Pro (every feature, every size) with source `billing_disabled`.
  */
 export async function resolveEntitlement(ownerId: string): Promise<Entitlement> {
-  if (!billingEnabled()) return { plan: 'unlimited', source: 'billing_disabled' };
-
-  const rows = await entitlementQuery(ownerId);
-  const row = rows[0];
-  return deriveEntitlement(row, row ? teamFromRow(row) : null);
+  if (!billingEnabled()) return { tier: 'pro', source: 'billing_disabled' };
+  const { tier, source } = await deriveTier(ownerId);
+  return { tier, source };
 }
+
+/** Whether the owner may use the auto-keep default and auto-review. */
+export async function ownerHasAutoFeatures(ownerId: string): Promise<boolean> {
+  const { tier } = await resolveEntitlement(ownerId);
+  return PLAN_LIMITS[tier].autoFeatures;
+}
+
+// ---------------------------------------------------------------------------
+// The box gate
+// ---------------------------------------------------------------------------
+
+/**
+ * What a refused box start tells its caller. Routes send `message` with the
+ * 402; unattended callers (loops, merge-queue fixes, auto-keep, workflows,
+ * reviews) record it as a visible deferral notice.
+ */
+export interface BoxGateNotice {
+  code: UsageBillingErrorCode;
+  /** User-facing. */
+  message: string;
+  tier: PlanTier;
+  workspaceId?: string;
+  /** concurrent_box_limit_reached: the cap and the boxes in use. */
+  limit?: number;
+  active?: number;
+  /** size_requires_pro: the refused size and the sizes the tier may start. */
+  size?: SandboxSize;
+  allowedSizes?: SandboxSize[];
+  /** usage_exhausted: when the included hours reset (ISO). */
+  periodEnd?: string;
+  /** usage_exhausted: whether the tier may buy credits (else the way out is Pro). */
+  creditsAllowed?: boolean;
+  /**
+   * When the refusal clears with no action (ISO): the period reset for
+   * usage_exhausted. Absent when it clears on an event instead (a box stops)
+   * or never (a size the tier cannot start).
+   */
+  retryAt?: string;
+}
+
+/** A refusal from {@link withBoxGate}. Routes map every subclass to a 402 with its code. */
+export abstract class BoxGateError extends Error {
+  abstract readonly code: UsageBillingErrorCode;
+  constructor(readonly notice: BoxGateNotice) {
+    super(notice.message);
+  }
+}
+
+export function isBoxGateError(err: unknown): err is BoxGateError {
+  return err instanceof BoxGateError;
+}
+
+function sizeName(size: SandboxSize): string {
+  return SANDBOX_SIZES[size].label.split(' · ')[0] ?? size;
+}
+
+/** The period's included box-hours and the credits are both spent, and auto top-up cannot cover it. */
+export class UsageExhaustedError extends BoxGateError {
+  readonly code = USAGE_EXHAUSTED_ERROR_CODE;
+  constructor(input: { tier: PlanTier; periodEnd: Date; workspaceId?: string }) {
+    const limits = PLAN_LIMITS[input.tier];
+    const reset = input.periodEnd.toISOString().slice(0, 10);
+    const message = limits.creditsAllowed
+      ? `You have used your included box-hours and your credits for this period. ` +
+        `Add credits or turn on auto top-up to start new boxes. Included hours reset on ${reset}.`
+      : `You have used all ${formatBoxHoursLabel(boxHoursToWeightedSeconds(limits.includedBoxHours))} of this period. ` +
+        `New boxes can start again on ${reset}. Upgrade to Pro for ` +
+        `${formatBoxHoursLabel(boxHoursToWeightedSeconds(PLAN_LIMITS.pro.includedBoxHours))} a month.`;
+    super({
+      code: USAGE_EXHAUSTED_ERROR_CODE,
+      message,
+      tier: input.tier,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      periodEnd: input.periodEnd.toISOString(),
+      creditsAllowed: limits.creditsAllowed,
+      retryAt: input.periodEnd.toISOString(),
+    });
+    this.name = 'UsageExhaustedError';
+  }
+}
+
+/** The tier may not start this size (Free: small and standard). */
+export class SizeRequiresProError extends BoxGateError {
+  readonly code = SIZE_REQUIRES_PRO_ERROR_CODE;
+  constructor(input: { tier: PlanTier; size: SandboxSize; workspaceId?: string }) {
+    const allowed = [...PLAN_LIMITS[input.tier].sizes];
+    super({
+      code: SIZE_REQUIRES_PRO_ERROR_CODE,
+      message:
+        `${sizeName(input.size)} boxes need the Pro plan. The ${PLAN_TIER_LABELS[input.tier]} plan can start ` +
+        `${allowed.map(sizeName).join(' and ')} boxes.`,
+      tier: input.tier,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      size: input.size,
+      allowedSizes: allowed,
+    });
+    this.name = 'SizeRequiresProError';
+  }
+}
+
+/** The owner already runs as many boxes as the tier allows at once. */
+export class ConcurrentBoxLimitError extends BoxGateError {
+  readonly code = CONCURRENT_BOX_LIMIT_ERROR_CODE;
+  readonly limit: number;
+  readonly active: number;
+  constructor(limit: number, active: number, tier: PlanTier = 'free', workspaceId?: string) {
+    const upgrade =
+      PLAN_LIMITS.pro.concurrentBoxes > limit ? ` Upgrade to Pro to run ${PLAN_LIMITS.pro.concurrentBoxes}.` : '';
+    super({
+      code: CONCURRENT_BOX_LIMIT_ERROR_CODE,
+      message:
+        `The ${PLAN_TIER_LABELS[tier]} plan runs ${limit} boxes at the same time (${active} in use). ` +
+        `A new box can start when one stops.${upgrade}`,
+      tier,
+      ...(workspaceId ? { workspaceId } : {}),
+      limit,
+      active,
+    });
+    this.limit = limit;
+    this.active = active;
+    this.name = 'ConcurrentBoxLimitError';
+  }
+}
+
+/**
+ * @deprecated The active-task cap is gone; the concurrent-box cap replaced it.
+ * Kept as an alias of {@link ConcurrentBoxLimitError} only so the unattended
+ * call sites that still catch `TaskLimitError` (loops, merge queue, auto-keep,
+ * workflows, review fix) keep deferring until WP5 rewires them to
+ * {@link isBoxGateError}. Delete it with the last of those catches.
+ */
+export const TaskLimitError = ConcurrentBoxLimitError;
+/** @deprecated See the value of the same name. */
+export type TaskLimitError = ConcurrentBoxLimitError;
+
+export interface BoxGateOptions {
+  /** The size the caller wants to start. */
+  size: SandboxSize;
+  /**
+   * No person waits on this start (loops, merge-queue fixes, auto-keep,
+   * workflows, reviews). A size the tier may not start runs at `small`
+   * instead of being refused, so a free user's loop still runs.
+   */
+  unattended?: boolean;
+  /** Carried onto a refusal's notice. */
+  workspaceId?: string;
+  /** A task being re-activated rather than created: not counted against itself. */
+  excludeTaskId?: string;
+  /**
+   * The box replaces one the owner already runs (resize, move): only the size
+   * is checked. A replacement is not an extra box and needs no new budget.
+   */
+  replacesBox?: boolean;
+}
+
+export interface BoxGateDecision {
+  /** False when billing is not configured: nothing was checked. */
+  enforced: boolean;
+  /** The tier checked against; null when not enforced. */
+  tier: PlanTier | null;
+  /** The size to start: the requested one, or `small` for a downgraded unattended run. */
+  size: SandboxSize;
+  downgraded: boolean;
+}
+
+/**
+ * Pure: the size a tier starts for a request, or the refusal.
+ */
+export function decideBoxSize(
+  tier: PlanTier,
+  size: SandboxSize,
+  unattended: boolean
+): { size: SandboxSize; downgraded: boolean } | 'refuse' {
+  if (sizeAllowedOnTier(tier, size)) return { size, downgraded: false };
+  if (unattended && sizeAllowedOnTier(tier, UNATTENDED_SANDBOX_SIZE)) {
+    return { size: UNATTENDED_SANDBOX_SIZE, downgraded: true };
+  }
+  return 'refuse';
+}
+
+/** Pure: out of budget. `getBudget().exhausted` already folds auto top-up in. */
+export function budgetAllowsNewBox(budget: Pick<UsageBudget, 'includedLeftWsec' | 'creditMicros' | 'autoTopupPossible'>): boolean {
+  return budget.includedLeftWsec > 0 || budget.creditMicros > 0 || budget.autoTopupPossible;
+}
+
+/**
+ * Active tasks with no open usage interval: queued or booting tasks that will
+ * take a box. A task whose box already runs is counted once, by its interval.
+ *
+ * On the POOL: `usage_intervals` is backend-only (RLS on, no policy), so the
+ * NOT EXISTS would see nothing through an owner-scoped client and count every
+ * running task twice. Exported unexecuted for the egress test.
+ */
+export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: string) {
+  const conditions = [
+    eq(workspacesTable.ownerId, ownerId),
+    inArray(tasksTable.status, [...ACTIVE_TASK_STATUSES]),
+    notExists(
+      getPoolDbClient()
+        .select({ one: sql`1` })
+        .from(usageIntervalsTable)
+        .where(
+          and(
+            isNull(usageIntervalsTable.endedAt),
+            eq(usageIntervalsTable.subjectKind, 'task'),
+            eq(usageIntervalsTable.subjectId, tasksTable.id)
+          )
+        )
+    ),
+  ];
+  if (excludeTaskId) conditions.push(ne(tasksTable.id, excludeTaskId));
+  return getPoolDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(tasksTable)
+    .innerJoin(workspacesTable, eq(tasksTable.workspaceId, workspacesTable.id))
+    .where(and(...conditions));
+}
+
+/** Boxes with an open usage interval. Exported unexecuted for the egress test. */
+export function countOpenBoxesForGateQuery(ownerId: string) {
+  return getPoolDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(usageIntervalsTable)
+    .where(and(eq(usageIntervalsTable.ownerId, ownerId), isNull(usageIntervalsTable.endedAt)));
+}
+
+/**
+ * Boxes the owner uses now, against the concurrent-box cap: every open usage
+ * interval (task, review unit, workbench) plus active tasks that have not
+ * opened one yet. Without the second half a free user could queue any number
+ * of tasks at once and every one would boot.
+ *
+ * A task on a provider that runs no box (PostHog Code) has no interval and
+ * counts while active, like the old active-task cap counted it.
+ */
+export async function countBoxesInUse(ownerId: string, excludeTaskId?: string): Promise<number> {
+  const [[open], [pending]] = await Promise.all([
+    countOpenBoxesForGateQuery(ownerId),
+    countPendingTaskBoxesQuery(ownerId, excludeTaskId),
+  ]);
+  return Number(open?.count ?? 0) + Number(pending?.count ?? 0);
+}
+
+/**
+ * Check a box start without running anything. Throws a {@link BoxGateError}
+ * on refusal. Takes no lock, so two concurrent starts can both pass the
+ * concurrency check; use {@link withBoxGate} around the insert that creates
+ * the box's row.
+ */
+export async function checkBoxGate(ownerId: string, options: BoxGateOptions): Promise<BoxGateDecision> {
+  const pre = await precheckBoxGate(ownerId, options);
+  if (!pre.enforced || options.replacesBox) return pre;
+  await assertConcurrency(ownerId, pre.tier!, options);
+  return pre;
+}
+
+/**
+ * Run `fn` (which creates or re-activates one box's worth of work) unless the
+ * owner's plan refuses it. When billing is enabled, refuses in this order:
+ *
+ * 1. {@link SizeRequiresProError}: the tier may not start `size` (unattended
+ *    callers get `small` instead, reported on the decision).
+ * 2. {@link UsageExhaustedError}: no included hours, no credits, and auto
+ *    top-up cannot buy more.
+ * 3. {@link ConcurrentBoxLimitError}: boxes in use ≥ the tier's cap.
+ *
+ * `fn` receives the decision, whose `size` is the one to start.
+ *
+ * Race safety: only the concurrency check needs it, and only on Free (a cap of
+ * 2, where losing a race doubles the allowance). That check runs under a
+ * per-owner transaction-scoped advisory lock, held until `fn`'s insert
+ * commits (route path) or inside a pool mutex (watcher path); pglite skips
+ * it. Paid tiers (a cap of 100) skip the lock: a lost race costs one box.
+ * Size and budget are read before the lock, so the lock is never held across
+ * the budget's charge step.
+ */
+export async function withBoxGate<T>(
+  ownerId: string,
+  options: BoxGateOptions,
+  fn: (decision: BoxGateDecision) => Promise<T>
+): Promise<T> {
+  const pre = await precheckBoxGate(ownerId, options);
+  if (!pre.enforced || options.replacesBox) return fn(pre);
+  const tier = pre.tier!;
+  const assertWithinCap = () => assertConcurrency(ownerId, tier, options);
+  if (PLAN_LIMITS[tier].concurrentBoxes > SERIALIZE_AT_OR_BELOW) {
+    await assertWithinCap();
+    return fn(pre);
+  }
+  return withOwnerSerialized(`boxGate:${ownerId}`, assertWithinCap, () => fn(pre));
+}
+
+/** Caps at or below this serialize per owner; see {@link withBoxGate}. */
+const SERIALIZE_AT_OR_BELOW = 2;
+
+async function precheckBoxGate(ownerId: string, options: BoxGateOptions): Promise<BoxGateDecision> {
+  if (!billingEnabled()) {
+    return { enforced: false, tier: null, size: options.size, downgraded: false };
+  }
+  const { tier } = await deriveTier(ownerId);
+  const sized = decideBoxSize(tier, options.size, options.unattended ?? false);
+  if (sized === 'refuse') {
+    throw new SizeRequiresProError({ tier, size: options.size, workspaceId: options.workspaceId });
+  }
+  const decision: BoxGateDecision = { enforced: true, tier, ...sized };
+  if (options.replacesBox) return decision;
+
+  const budget = await getBudget(ownerId);
+  if (!budgetAllowsNewBox(budget) || budget.exhausted) {
+    throw new UsageExhaustedError({ tier: budget.tier, periodEnd: budget.period.end, workspaceId: options.workspaceId });
+  }
+  return decision;
+}
+
+async function assertConcurrency(ownerId: string, tier: PlanTier, options: BoxGateOptions): Promise<void> {
+  const limit = PLAN_LIMITS[tier].concurrentBoxes;
+  const active = await countBoxesInUse(ownerId, options.excludeTaskId);
+  if (active >= limit) throw new ConcurrentBoxLimitError(limit, active, tier, options.workspaceId);
+}
+
+/** The count-then-act choreography for a small cap. */
+async function withOwnerSerialized<T>(
+  lockName: string,
+  assertWithinLimit: () => Promise<void>,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!isRealPostgres()) {
+    await assertWithinLimit();
+    return fn();
+  }
+
+  const scoped = getScopedDb();
+  if (scoped) {
+    // Route path: piggyback on the request's ownerScope transaction so the
+    // lock outlives the check AND the insert, releasing only at commit.
+    const key = advisoryLockKey(lockName).toString();
+    await scoped.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
+    await assertWithinLimit();
+    return fn();
+  }
+
+  // Watcher path: dedicated mutex transaction on the pool.
+  return withBlockingAdvisoryLock(getPoolDbClient(), lockName, async () => {
+    await assertWithinLimit();
+    return fn();
+  });
+}
+
+/**
+ * Gate for re-activating an existing task (retry / start / PATCH to an active
+ * status). Counts every box except the task itself.
+ */
+export async function assertCanActivateTask(ownerId: string, taskId: string): Promise<void> {
+  await withBoxGate(ownerId, { size: 'standard', excludeTaskId: taskId }, async () => undefined);
+}
+
+// ---------------------------------------------------------------------------
+// Old gate names, kept so their call sites compile until WP5 rewires them
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated The active-task cap is gone. Delegates to {@link withBoxGate}
+ * at `standard`, attended. WP5 replaces the call in `createCloudTask` with a
+ * direct `withBoxGate` that knows the run's size and whether it is unattended.
+ */
+export async function withTaskLimitGate<T>(
+  ownerId: string,
+  options: { excludeTaskId?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  return withBoxGate(ownerId, { size: 'standard', excludeTaskId: options.excludeTaskId }, () => fn());
+}
+
+/**
+ * @deprecated The review-cycle cap is gone. Delegates to {@link withBoxGate}
+ * at `small`. WP5 replaces the call in `codeReview/cycle.ts`.
+ */
+export async function withReviewCycleGate<T>(
+  ownerId: string,
+  _options: { excludeReviewId?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  return withBoxGate(ownerId, { size: UNATTENDED_SANDBOX_SIZE, unattended: true }, () => fn());
+}
+
+/**
+ * @deprecated The merge-queue PR cap is gone; this runs `fn`. Queueing a PR
+ * starts no box (a fix run is gated where it is created). Unwrap the call
+ * sites and delete this.
+ */
+export async function withMergeQueueLimitGate<T>(
+  _ownerId: string,
+  _options: { excludePrId?: string | string[]; adding?: number },
+  fn: () => Promise<T>
+): Promise<T> {
+  return fn();
+}
+
+/** @deprecated The workflow cap is gone; this runs `fn`. Unwrap the call site and delete this. */
+export async function withWorkflowLimitGate<T>(_ownerId: string, fn: () => Promise<T>): Promise<T> {
+  return fn();
+}
+
+/** @deprecated The loop cap is gone; this runs `fn`. Unwrap the call site and delete this. */
+export async function withLoopLimitGate<T>(_ownerId: string, fn: () => Promise<T>): Promise<T> {
+  return fn();
+}
+
+// ---------------------------------------------------------------------------
+// Feature gates
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a tier without auto features tries to turn ON the workspace
+ * default "auto-keep new PRs mergeable".
+ *
+ * A FEATURE gate rather than a usage cap: there is no free version of this,
+ * so the 402 carries its own code and the client pitches Pro instead of
+ * quoting a limit the user is not at.
+ */
+export class AutoKeepDefaultPlanError extends Error {
+  readonly code = AUTO_KEEP_DEFAULT_ERROR_CODE;
+  constructor() {
+    super(
+      'Auto-keeping every new PR mergeable is a Pro feature. ' +
+        'Upgrade to turn it on, or arm individual PRs by hand.'
+    );
+    this.name = 'AutoKeepDefaultPlanError';
+  }
+}
+
+/**
+ * Thrown when a tier without auto features tries to turn ON "review my new
+ * pull requests automatically". A FEATURE gate, like AutoKeepDefaultPlanError.
+ */
+export class AutoReviewPlanError extends Error {
+  readonly code = AUTO_REVIEW_ERROR_CODE;
+  constructor() {
+    super(
+      'Reviewing every new pull request automatically is a Pro feature. ' +
+        'Upgrade to turn it on, or review pull requests one at a time.'
+    );
+    this.name = 'AutoReviewPlanError';
+  }
+}
+
+/**
+ * Gate for turning ON the workspace default "auto-keep new PRs mergeable".
+ * Pro and Legacy Pro may; Free may not.
+ *
+ * Callers MUST only invoke this on an OFF→ON transition. A workspace that
+ * already has the setting on predates the gate and keeps it. Turning it off
+ * is always allowed, and gives that grandfathered state up.
+ */
+export async function assertCanEnableAutoKeepDefault(ownerId: string): Promise<void> {
+  if (!(await ownerHasAutoFeatures(ownerId))) throw new AutoKeepDefaultPlanError();
+}
+
+/**
+ * Gate for turning ON automatic review of every new pull request. Pro and
+ * Legacy Pro may; Free may not. Asserted on the OFF→ON transition only.
+ */
+export async function assertCanEnableAutoReview(ownerId: string): Promise<void> {
+  if (!(await ownerHasAutoFeatures(ownerId))) throw new AutoReviewPlanError();
+}
+
+// ---------------------------------------------------------------------------
+// Billing status
+// ---------------------------------------------------------------------------
 
 /**
  * The team a user holds a seat on, or else the one they administer. At most
@@ -306,6 +767,7 @@ async function loadBillingTeam(ownerId: string): Promise<{
       name: teamsTable.name,
       plan: teamsTable.plan,
       planOverride: teamsTable.planOverride,
+      tier: teamsTable.tier,
       source: teamSeatsTable.source,
     })
     .from(usersTable)
@@ -364,32 +826,104 @@ async function loadBillingTeam(ownerId: string): Promise<{
   };
 }
 
+/** List prices the clients draw. */
+export const BILLING_PRICING: BillingPricing = {
+  proMonthlyMicros: PLAN_PRICES.pro.monthlyMicros,
+  proAnnualMicros: PLAN_PRICES.pro.annualMicros ?? 0,
+  legacyProMonthlyMicros: PLAN_PRICES.legacy_pro.monthlyMicros,
+  boxHourMicros: BOX_HOUR_PRICE_MICROS,
+};
+
+/** Pure: the period's usage as `BillingStatus.usage` shows it. */
+export function usageSummaryFromBudget(budget: UsageBudget): UsageSummary {
+  return {
+    periodStart: budget.period.start.toISOString(),
+    periodEnd: budget.period.end.toISOString(),
+    includedWsec: budget.includedWsec,
+    usedWsec: budget.usedWsec,
+    percent: usagePercent(budget.usedWsec, budget.includedWsec),
+    exhausted: budget.exhausted,
+  };
+}
+
+/** The owner's auto top-up settings and this month's state. Defaults when they never saved any. */
+export async function readAutoTopupSettings(ownerId: string, now = new Date()): Promise<AutoTopupSettings> {
+  const [row] = await getPoolDbClient()
+    .select({
+      enabled: autoTopupSettingsTable.enabled,
+      triggerMicros: autoTopupSettingsTable.triggerMicros,
+      pack: autoTopupSettingsTable.pack,
+      monthlyLimitMicros: autoTopupSettingsTable.monthlyLimitMicros,
+      monthKey: autoTopupSettingsTable.monthKey,
+      monthSpentMicros: autoTopupSettingsTable.monthSpentMicros,
+      lastFailure: autoTopupSettingsTable.lastFailure,
+      lastFailureAt: autoTopupSettingsTable.lastFailureAt,
+    })
+    .from(autoTopupSettingsTable)
+    .where(eq(autoTopupSettingsTable.ownerId, ownerId))
+    .limit(1);
+  if (!row) return { ...AUTO_TOPUP_DEFAULTS, monthSpentMicros: 0, lastFailure: null, lastFailureAt: null };
+  return {
+    enabled: row.enabled,
+    triggerMicros: Number(row.triggerMicros),
+    pack: isCreditPackId(row.pack) ? row.pack : AUTO_TOPUP_DEFAULTS.pack,
+    monthlyLimitMicros: Number(row.monthlyLimitMicros),
+    monthSpentMicros: row.monthKey === autoTopupMonthKey(now) ? Number(row.monthSpentMicros) : 0,
+    lastFailure: row.lastFailure,
+    lastFailureAt: row.lastFailureAt?.toISOString() ?? null,
+  };
+}
+
+async function readCreditSummary(ownerId: string, now: Date): Promise<CreditSummary> {
+  const lots = await liveLots(ownerId, now);
+  return {
+    balanceMicros: creditBalanceMicros(lots, now),
+    expiringSoonMicros: expiringSoonMicros(lots, now),
+    lots,
+  };
+}
+
 /**
  * The full billing snapshot served by `GET /billing/status` and pushed on
  * the `subscription:updated` WS event.
+ *
+ * The old fields stay so released clients keep working: `plan` is the tier
+ * (old Unlimited subscribers read `legacy_pro`, old comps `pro`),
+ * `activeTasks`/`activeTaskLimit` are the boxes in use against the concurrent
+ * cap, and the removed count caps report `null` (unlimited). The usage fields
+ * are sent only when billing is configured; a client reads their absence as
+ * "draw the old view".
+ *
+ * Reads the budget WITHOUT charging: the charge step itself calls this to
+ * push a fresh snapshot, and the meter charges every minute.
  */
 export async function buildBillingStatus(ownerId: string): Promise<BillingStatus> {
-  const activeTasks = await countActiveTasks(ownerId);
-  const queuedPrs = await countQueuedPrs(ownerId);
-  const workflows = await countOwnerWorkflows(ownerId);
-  const loops = await countOwnerLoops(ownerId);
-  const activeReviews = await countActiveReviewCycles(ownerId);
+  const [boxesInUse, queuedPrs, workflows, loops, activeReviews] = await Promise.all([
+    countBoxesInUse(ownerId),
+    countQueuedPrs(ownerId),
+    countOwnerWorkflows(ownerId),
+    countOwnerLoops(ownerId),
+    countActiveReviewCycles(ownerId),
+  ]);
+  const uncapped = {
+    queuedPrs,
+    mergeQueueLimit: null,
+    workflows,
+    workflowLimit: null,
+    loops,
+    loopLimit: null,
+    activeReviews,
+    activeReviewLimit: null,
+  };
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
-      plan: 'unlimited',
+      plan: 'pro',
       planSource: 'billing_disabled',
       cancelAtPeriodEnd: false,
-      activeTasks,
+      activeTasks: boxesInUse,
       activeTaskLimit: null,
-      queuedPrs,
-      mergeQueueLimit: null,
-      workflows,
-      workflowLimit: null,
-      loops,
-      loopLimit: null,
-      activeReviews,
-      activeReviewLimit: null,
+      ...uncapped,
     };
   }
 
@@ -397,6 +931,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     .select({
       plan: usersTable.plan,
       planOverride: usersTable.planOverride,
+      polarProductId: usersTable.polarProductId,
       subscriptionStatus: usersTable.subscriptionStatus,
       currentPeriodEnd: usersTable.currentPeriodEnd,
       cancelAtPeriodEnd: usersTable.cancelAtPeriodEnd,
@@ -406,39 +941,54 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     .limit(1);
   const row = rows[0];
   const teamContext = await loadBillingTeam(ownerId);
-  const entitlement = deriveEntitlement(row, teamContext?.seatTeam ?? null);
+  const resolution = deriveTierResolution(row, teamContext?.seatTeam ?? null);
+  const { tier } = resolution;
+  const limits = PLAN_LIMITS[tier];
   const team = teamContext
     ? {
         ...teamContext.membership,
-        paidPersonallyToo: teamContext.membership.hasSeat && row?.plan === 'unlimited',
+        paidPersonallyToo: teamContext.membership.hasSeat && hasGrantingSubscription(row?.plan),
       }
     : undefined;
 
+  const now = new Date();
+  const [budget, credits, autoTopup] = await runWithoutScope(() =>
+    Promise.all([
+      readBudget(ownerId, now, { tier, periodAnchor: resolution.periodAnchor }),
+      limits.creditsAllowed ? readCreditSummary(ownerId, now) : Promise.resolve(undefined),
+      limits.creditsAllowed ? readAutoTopupSettings(ownerId, now) : Promise.resolve(undefined),
+    ])
+  );
+
   return {
     billingEnabled: true,
-    plan: entitlement.plan,
-    planSource: entitlement.source,
+    plan: tier,
+    planSource: resolution.source,
     ...(team ? { team } : {}),
     ...(row?.subscriptionStatus ? { subscriptionStatus: row.subscriptionStatus } : {}),
     cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
     ...(row?.currentPeriodEnd ? { currentPeriodEnd: row.currentPeriodEnd.toISOString() } : {}),
-    activeTasks,
-    activeTaskLimit: entitlement.plan === 'free' ? FREE_ACTIVE_TASK_LIMIT : null,
-    queuedPrs,
-    mergeQueueLimit: entitlement.plan === 'free' ? FREE_MERGE_QUEUE_LIMIT : null,
-    workflows,
-    workflowLimit: entitlement.plan === 'free' ? FREE_WORKFLOW_LIMIT : null,
-    loops,
-    loopLimit: entitlement.plan === 'free' ? FREE_LOOP_LIMIT : null,
-    activeReviews,
-    activeReviewLimit: entitlement.plan === 'free' ? FREE_PLAN_REVIEW_CYCLE_LIMIT : null,
+    activeTasks: boxesInUse,
+    activeTaskLimit: limits.concurrentBoxes,
+    ...uncapped,
+    tier,
+    usage: usageSummaryFromBudget(budget),
+    ...(credits ? { credits } : {}),
+    ...(autoTopup ? { autoTopup } : {}),
+    sizePrices: sizePriceTable(tier),
+    concurrentBoxes: { used: boxesInUse, limit: limits.concurrentBoxes },
+    pricing: BILLING_PRICING,
   };
 }
 
+// ---------------------------------------------------------------------------
+// Counts (still reported on the billing status; none of them is capped)
+// ---------------------------------------------------------------------------
+
 /**
- * The count query, exported unexecuted so the egress test can `.toSQL()` it:
- * a pure count over tasks joined to the owner's workspaces — must never ship
- * task columns (transcript!) to the backend.
+ * Active tasks across the owner's workspaces. Exported unexecuted so the
+ * egress test can `.toSQL()` it: a pure count that must never ship task
+ * columns (transcript!) to the backend.
  */
 export function countActiveTasksQuery(ownerId: string, excludeTaskId?: string) {
   const conditions = [
@@ -454,20 +1004,15 @@ export function countActiveTasksQuery(ownerId: string, excludeTaskId?: string) {
 }
 
 /** How many active tasks the owner has right now, across all their workspaces. */
-export async function countActiveTasks(
-  ownerId: string,
-  excludeTaskId?: string
-): Promise<number> {
+export async function countActiveTasks(ownerId: string, excludeTaskId?: string): Promise<number> {
   const rows = await countActiveTasksQuery(ownerId, excludeTaskId);
   return rows[0]?.count ?? 0;
 }
 
 /**
- * Same contract as countActiveTasksQuery, for the merge queue: a pure count
- * of the owner's queued PRs, exported unexecuted for the egress test — must
- * never ship pull_requests columns (lastSummary!) to the backend. The
- * `state = 'open'` guard is belt-and-braces: merge/close clears mergeQueued,
- * but a stale row must never eat a free slot.
+ * The owner's queued PRs, exported unexecuted for the egress test: must
+ * never ship pull_requests columns (lastSummary!). The `state = 'open'`
+ * guard is belt-and-braces: merge/close clears mergeQueued.
  */
 export function countQueuedPrsQuery(ownerId: string, excludePrIds?: string | string[]) {
   const exclude =
@@ -487,19 +1032,14 @@ export function countQueuedPrsQuery(ownerId: string, excludePrIds?: string | str
 }
 
 /** How many PRs the owner has in the merge queue, across all their workspaces. */
-export async function countQueuedPrs(
-  ownerId: string,
-  excludePrIds?: string | string[]
-): Promise<number> {
+export async function countQueuedPrs(ownerId: string, excludePrIds?: string | string[]): Promise<number> {
   const rows = await countQueuedPrsQuery(ownerId, excludePrIds);
   return rows[0]?.count ?? 0;
 }
 
 /**
- * Same contract as the two counts above, for workflows: how many workflow
- * definitions the owner keeps across every workspace they own. Exported
- * unexecuted for the egress test — the `workflows` row carries three jsonb
- * columns (events, conditions, actions) and none of them may ship to count.
+ * Workflow definitions across the owner's workspaces. Exported unexecuted for
+ * the egress test: the row's three jsonb columns must not ship to count.
  */
 export function countOwnerWorkflowsQuery(ownerId: string) {
   return getDbClient()
@@ -509,17 +1049,14 @@ export function countOwnerWorkflowsQuery(ownerId: string) {
     .where(eq(workspacesTable.ownerId, ownerId));
 }
 
-/** How many workflows the owner has, across all their workspaces. */
 export async function countOwnerWorkflows(ownerId: string): Promise<number> {
   const rows = await countOwnerWorkflowsQuery(ownerId);
   return rows[0]?.count ?? 0;
 }
 
 /**
- * Same contract as the counts above, for loops: how many loop definitions the
- * owner keeps across every workspace they own. Exported unexecuted for the
- * egress test — the `loops` row carries a prompt that can be thousands of
- * characters, and none of it may ship to count.
+ * Loop definitions across the owner's workspaces. Exported unexecuted for the
+ * egress test: a loop's prompt can be thousands of characters.
  */
 export function countOwnerLoopsQuery(ownerId: string) {
   return getDbClient()
@@ -529,22 +1066,14 @@ export function countOwnerLoopsQuery(ownerId: string) {
     .where(eq(workspacesTable.ownerId, ownerId));
 }
 
-/** How many loops the owner has, across all their workspaces. */
 export async function countOwnerLoops(ownerId: string): Promise<number> {
   const rows = await countOwnerLoopsQuery(ownerId);
   return rows[0]?.count ?? 0;
 }
 
 /**
- * Code-review cycles in flight for this owner, across their workspaces.
- *
- * Counts reviews whose phase is NOT at rest, which is the whole subtlety: a
- * review sitting at `ready` with findings on screen holds no slot, because the
- * user is reading rather than the machine working. Only a cycle that is actually
- * spending something counts — which is what lets one number cover both halves of
- * "review and fix".
- *
- * Unexecuted builder exported for the egress test, like its three siblings.
+ * Code-review cycles in flight (phase not at rest) across the owner's
+ * workspaces. Exported unexecuted for the egress test.
  */
 export function countActiveReviewCyclesQuery(ownerId: string, excludeReviewId?: string) {
   const conditions = [
@@ -559,246 +1088,7 @@ export function countActiveReviewCyclesQuery(ownerId: string, excludeReviewId?: 
     .where(and(...conditions));
 }
 
-export async function countActiveReviewCycles(
-  ownerId: string,
-  excludeReviewId?: string
-): Promise<number> {
+export async function countActiveReviewCycles(ownerId: string, excludeReviewId?: string): Promise<number> {
   const rows = await countActiveReviewCyclesQuery(ownerId, excludeReviewId);
   return rows[0]?.count ?? 0;
-}
-
-interface GateOptions {
-  /**
-   * A task being re-activated (retry/start/PATCH) rather than created —
-   * excluded from the count so an idempotent re-queue of a still-active task
-   * can never self-block.
-   */
-  excludeTaskId?: string;
-}
-
-/**
- * Run `fn` (which creates or re-activates one task) unless the owner is a
- * free user already at the limit, in which case throw TaskLimitError.
- *
- * Race safety: two concurrent creations at 2/3 must not both pass, so the
- * free-plan path serializes per owner on a transaction-scoped advisory lock
- * (the only advisory flavour safe through Supabase's transaction-mode
- * pooler — see services/advisoryLock.ts):
- *
- * - Inside an ownerScope request transaction (routes), the lock is taken on
- *   that transaction and held until the task insert COMMITS — a concurrent
- *   request blocks on the lock and then counts the committed row.
- * - On the unscoped pool (watchers), withBlockingAdvisoryLock holds a pure
- *   mutex transaction open while `fn`'s pool statements auto-commit, so the
- *   insert is durable before the mutex releases.
- * - On pglite (tests) the lock is skipped — the single-connection harness
- *   would self-deadlock, and cross-connection races don't exist there.
- *
- * Unlimited/comped owners skip both the lock and the count entirely.
- */
-export async function withTaskLimitGate<T>(
-  ownerId: string,
-  options: GateOptions,
-  fn: () => Promise<T>
-): Promise<T> {
-  return withFreePlanGate(
-    ownerId,
-    `taskLimit:${ownerId}`,
-    async () => {
-      const active = await countActiveTasks(ownerId, options.excludeTaskId);
-      if (active >= FREE_ACTIVE_TASK_LIMIT) {
-        throw new TaskLimitError(FREE_ACTIVE_TASK_LIMIT, active);
-      }
-    },
-    fn
-  );
-}
-
-/**
- * Run `fn` (which puts one PR into the merge queue) unless the owner is a
- * free user whose queue is already full, in which case throw
- * MergeQueueLimitError. `excludePrId` keeps re-arming an already-queued PR
- * (method change, fast off/on toggle) from self-blocking at the limit.
- */
-export async function withMergeQueueLimitGate<T>(
-  ownerId: string,
-  options: {
-    /**
-     * PRs excluded from the count — the ones this call is (re-)queuing, so an
-     * idempotent re-arm of an already-queued PR can never self-block. A stack
-     * passes every member.
-     */
-    excludePrId?: string | string[];
-    /**
-     * How many PRs this call adds. A stack is ALL-OR-NOTHING: enqueuing only
-     * the bottom of it produces a stack that silently stops halfway, because
-     * the retarget of rung 4 only happens if rung 4 is in the queue.
-     */
-    adding?: number;
-  },
-  fn: () => Promise<T>
-): Promise<T> {
-  const adding = options.adding ?? 1;
-  return withFreePlanGate(
-    ownerId,
-    `mergeQueueLimit:${ownerId}`,
-    async () => {
-      const queued = await countQueuedPrs(ownerId, options.excludePrId);
-      if (queued + adding > FREE_MERGE_QUEUE_LIMIT) {
-        throw new MergeQueueLimitError(FREE_MERGE_QUEUE_LIMIT, queued, adding);
-      }
-    },
-    fn
-  );
-}
-
-/**
- * Run `fn` (which creates one workflow) unless the owner is a free user who
- * already keeps their allowance, in which case throw WorkflowLimitError.
- *
- * Only CREATION goes through here. Editing an existing workflow — including
- * enabling one — adds nothing, so gating a PATCH would strand a free user at
- * the limit with a rule they cannot correct.
- */
-export async function withWorkflowLimitGate<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
-  return withFreePlanGate(
-    ownerId,
-    `workflowLimit:${ownerId}`,
-    async () => {
-      const count = await countOwnerWorkflows(ownerId);
-      if (count >= FREE_WORKFLOW_LIMIT) {
-        throw new WorkflowLimitError(FREE_WORKFLOW_LIMIT, count);
-      }
-    },
-    fn
-  );
-}
-
-/**
- * Run `fn` (which creates one loop) unless the owner is a free user who already
- * keeps their allowance, in which case throw LoopLimitError.
- *
- * Creation only, exactly as the workflow gate is: a PATCH replaces a schedule
- * rather than adding one, and gating it would strand a free user at the limit
- * with a loop they are not allowed to fix — including switching off the one
- * that is misbehaving.
- *
- * Note what this does NOT gate: a firing. Those go through the active-task
- * limit like every other cloud task, so the two caps compose rather than
- * overlap — this one bounds how many schedules exist, that one bounds how much
- * they can have running at once.
- */
-export async function withLoopLimitGate<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
-  return withFreePlanGate(
-    ownerId,
-    `loopLimit:${ownerId}`,
-    async () => {
-      const count = await countOwnerLoops(ownerId);
-      if (count >= FREE_LOOP_LIMIT) {
-        throw new LoopLimitError(FREE_LOOP_LIMIT, count);
-      }
-    },
-    fn
-  );
-}
-
-/**
- * Run `fn` (which starts one code-review cycle) unless the owner already has as
- * many in flight as their plan allows.
- *
- * THE ADVISORY LOCK IS WARRANTED HERE, and it is worth saying why when the
- * per-workspace unit ceiling deliberately has none. Losing this race means a
- * free user running two cycles — the paywall-bypass shape this whole file exists
- * to prevent. Losing the unit-ceiling race means one extra microVM, which the
- * fleet itself refuses with a 503 the spill path already handles. Do not "fix"
- * one by copying the other.
- *
- * `excludeReviewId` for the same reason the merge-queue gate has it: re-running
- * a review on a PR that already has one must not be blocked by itself.
- */
-export async function withReviewCycleGate<T>(
-  ownerId: string,
-  options: { excludeReviewId?: string },
-  fn: () => Promise<T>
-): Promise<T> {
-  return withFreePlanGate(
-    ownerId,
-    `reviewCycle:${ownerId}`,
-    async () => {
-      const count = await countActiveReviewCycles(ownerId, options.excludeReviewId);
-      if (count >= FREE_PLAN_REVIEW_CYCLE_LIMIT) {
-        throw new ReviewCycleLimitError(FREE_PLAN_REVIEW_CYCLE_LIMIT, count);
-      }
-    },
-    fn
-  );
-}
-
-/** The shared count-then-act choreography behind the free-plan gates. */
-async function withFreePlanGate<T>(
-  ownerId: string,
-  lockName: string,
-  assertWithinLimit: () => Promise<void>,
-  fn: () => Promise<T>
-): Promise<T> {
-  const entitlement = await resolveEntitlement(ownerId);
-  if (entitlement.plan !== 'free') return fn();
-
-  if (!isRealPostgres()) {
-    await assertWithinLimit();
-    return fn();
-  }
-
-  const scoped = getScopedDb();
-  if (scoped) {
-    // Route path: piggyback on the request's ownerScope transaction so the
-    // lock outlives the check AND the insert, releasing only at commit.
-    const key = advisoryLockKey(lockName).toString();
-    await scoped.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
-    await assertWithinLimit();
-    return fn();
-  }
-
-  // Watcher path: dedicated mutex transaction on the pool.
-  return withBlockingAdvisoryLock(getPoolDbClient(), lockName, async () => {
-    await assertWithinLimit();
-    return fn();
-  });
-}
-
-/**
- * Gate for re-activating an existing task (retry / start / PATCH to an
- * active status). Counts everything except the task itself.
- */
-export async function assertCanActivateTask(ownerId: string, taskId: string): Promise<void> {
-  await withTaskLimitGate(ownerId, { excludeTaskId: taskId }, async () => undefined);
-}
-
-/**
- * Gate for turning ON the workspace default "auto-keep new PRs mergeable".
- *
- * Callers MUST only invoke this on an OFF→ON transition. A workspace that
- * already has the setting on predates the gate and keeps it — the product
- * promise is that nobody loses a feature they were already using. Turning it
- * off is always allowed, and gives that grandfathered state up.
- *
- * Deliberately not a `withFreePlanGate` wrapper: there is nothing to count and
- * nothing to serialize, so it needs neither the advisory lock nor the race
- * safety those gates buy.
- */
-export async function assertCanEnableAutoKeepDefault(ownerId: string): Promise<void> {
-  const entitlement = await resolveEntitlement(ownerId);
-  if (entitlement.plan === 'free') throw new AutoKeepDefaultPlanError();
-}
-
-/**
- * Whether this owner may turn ON automatic review of every new pull request.
- *
- * Not a `withFreePlanGate` wrapper, for the reason its neighbour is not: there is
- * nothing to count and nothing to serialize. Asserted on the OFF->ON transition
- * only, which grandfathers a workspace that already has it on.
- */
-export async function assertCanEnableAutoReview(ownerId: string): Promise<void> {
-  const entitlement = await resolveEntitlement(ownerId);
-  if (entitlement.plan === 'free') throw new AutoReviewPlanError();
 }
