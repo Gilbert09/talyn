@@ -1454,6 +1454,19 @@ describe('workbench routes', () => {
       expect(state.body.data).toMatchObject({ status: 'running', agentSessionId: 'local-sess' });
     });
 
+    it.each([
+      ['U+0000', 'binary\u0000output'],
+      ['a lone surrogate', 'half \uD83D emoji'],
+    ])('stores an uploaded event that carries %s', async (_name, text) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const events = [{ chatId, seq: 1, turn: 1, event: { seq: 1, type: 'user', text } }];
+      const res = await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+      expect([res.status, res.body.data]).toEqual([200, { stored: 1 }]);
+      const stored = (await call('GET', `/workbenches/chats/${chatId}/events?after=0`)).body.data.events;
+      expect(stored[0].event.text).toContain('�');
+    });
+
     it('pages a local chat backwards from the newest event, by whole turns', async () => {
       const wb = await createLocalWorkbench();
       const chatId = await chatIdOf(wb.id);
