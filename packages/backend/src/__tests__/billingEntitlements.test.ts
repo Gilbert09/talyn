@@ -1,28 +1,49 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import {
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  PLAN_LIMITS,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  USAGE_EXHAUSTED_ERROR_CODE,
+  includedWeightedSeconds,
+  sizePriceTable,
+  usagePeriodFor,
+  type PlanTier,
+} from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import {
+  autoTopupSettings,
   tasks as tasksTable,
+  usageIntervals,
+  usagePeriods,
   users as usersTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import {
   ACTIVE_TASK_STATUSES,
-  FREE_ACTIVE_TASK_LIMIT,
-  TaskLimitError,
+  BILLING_PRICING,
+  ConcurrentBoxLimitError,
+  UsageExhaustedError,
   assertCanActivateTask,
+  buildBillingStatus,
   countActiveTasks,
   resolveEntitlement,
+  withBoxGate,
   withTaskLimitGate,
 } from '../services/billing/entitlements.js';
-import { eq } from 'drizzle-orm';
+import { ensurePeriod } from '../services/billing/usage/periods.js';
+import { grantCreditLot } from '../services/billing/usage/credits.js';
+import * as websocketModule from '../services/websocket.js';
 import type { Database } from '../db/client.js';
 
 let db: Database;
 let cleanup: () => Promise<void>;
 let taskSeq = 0;
 const savedPolarToken = process.env.POLAR_ACCESS_TOKEN;
+const savedPro = process.env.POLAR_PRODUCT_ID_PRO_MONTHLY;
 
 const OTHER_USER_ID = 'user-other';
+const FREE_CAP = PLAN_LIMITS.free.concurrentBoxes;
 
 async function insertTask(workspaceId: string, status: string): Promise<string> {
   const id = `task-${++taskSeq}`;
@@ -37,14 +58,26 @@ async function insertTask(workspaceId: string, status: string): Promise<string> 
   return id;
 }
 
+/** Spend the owner's included hours for the current calendar-month period. */
+async function exhaustIncluded(tier: PlanTier): Promise<void> {
+  const period = usagePeriodFor({ now: new Date() });
+  await ensurePeriod(TEST_USER_ID, tier, period);
+  await db
+    .update(usagePeriods)
+    .set({ usedWsec: includedWeightedSeconds(tier) })
+    .where(eq(usagePeriods.ownerId, TEST_USER_ID));
+}
+
 beforeEach(async () => {
   ({ db, cleanup } = await createTestDb());
-  // Billing "configured" for these tests — enforcement on.
+  // Billing "configured" for these tests: enforcement on.
   process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
+  process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = 'prod-pro-monthly';
+  vi.spyOn(websocketModule, 'emitUsageAlert').mockImplementation(() => {});
+  vi.spyOn(websocketModule, 'emitUsageExhausted').mockImplementation(() => {});
+  vi.spyOn(websocketModule, 'emitSubscriptionUpdated').mockImplementation(() => {});
   await seedUser(db);
   await seedUser(db, { id: OTHER_USER_ID });
-  // The free limit spans ALL workspaces an owner has, so seed two for the
-  // subject user plus one for a bystander.
   for (const [id, ownerId] of [
     ['ws1', TEST_USER_ID],
     ['ws2', TEST_USER_ID],
@@ -55,61 +88,46 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (savedPolarToken === undefined) delete process.env.POLAR_ACCESS_TOKEN;
   else process.env.POLAR_ACCESS_TOKEN = savedPolarToken;
+  if (savedPro === undefined) delete process.env.POLAR_PRODUCT_ID_PRO_MONTHLY;
+  else process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = savedPro;
   await cleanup();
 });
 
 describe('resolveEntitlement', () => {
   it.each([
-    { plan: 'free', planOverride: null, expected: { plan: 'free', source: 'default' } },
-    {
-      plan: 'unlimited',
-      planOverride: null,
-      expected: { plan: 'unlimited', source: 'subscription' },
-    },
-    {
-      plan: 'free',
-      planOverride: 'unlimited',
-      expected: { plan: 'unlimited', source: 'override' },
-    },
-    // Override wins in BOTH directions — it's a manual pin, not a floor.
-    { plan: 'unlimited', planOverride: 'free', expected: { plan: 'free', source: 'override' } },
+    { plan: 'free', planOverride: null, polarProductId: null, expected: { tier: 'free', source: 'default' } },
+    { plan: 'unlimited', planOverride: null, polarProductId: null, expected: { tier: 'legacy_pro', source: 'subscription' } },
+    { plan: 'unlimited', planOverride: null, polarProductId: 'prod-pro-monthly', expected: { tier: 'pro', source: 'subscription' } },
+    { plan: 'free', planOverride: 'unlimited', polarProductId: null, expected: { tier: 'pro', source: 'override' } },
+    { plan: 'free', planOverride: 'legacy_pro', polarProductId: null, expected: { tier: 'legacy_pro', source: 'override' } },
+    // Override wins in BOTH directions: it's a manual pin, not a floor.
+    { plan: 'unlimited', planOverride: 'free', polarProductId: 'prod-pro-monthly', expected: { tier: 'free', source: 'override' } },
   ])(
-    'plan=$plan override=$planOverride → $expected.plan ($expected.source)',
-    async ({ plan, planOverride, expected }) => {
-      await db
-        .update(usersTable)
-        .set({ plan, planOverride })
-        .where(eq(usersTable.id, TEST_USER_ID));
+    'plan=$plan override=$planOverride product=$polarProductId → $expected.tier ($expected.source)',
+    async ({ plan, planOverride, polarProductId, expected }) => {
+      await db.update(usersTable).set({ plan, planOverride, polarProductId }).where(eq(usersTable.id, TEST_USER_ID));
       expect(await resolveEntitlement(TEST_USER_ID)).toEqual(expected);
     }
   );
 
   it('unknown user resolves to free/default', async () => {
-    expect(await resolveEntitlement('user-nonexistent')).toEqual({
-      plan: 'free',
-      source: 'default',
-    });
+    expect(await resolveEntitlement('user-nonexistent')).toEqual({ tier: 'free', source: 'default' });
   });
 
-  it('billing env absent → unlimited (enforcement disabled)', async () => {
+  it('billing env absent → pro (enforcement disabled)', async () => {
     delete process.env.POLAR_ACCESS_TOKEN;
-    expect(await resolveEntitlement(TEST_USER_ID)).toEqual({
-      plan: 'unlimited',
-      source: 'billing_disabled',
-    });
+    expect(await resolveEntitlement(TEST_USER_ID)).toEqual({ tier: 'pro', source: 'billing_disabled' });
   });
 });
 
 describe('countActiveTasks', () => {
-  it.each(ACTIVE_TASK_STATUSES.map((status) => ({ status })))(
-    'counts $status tasks',
-    async ({ status }) => {
-      await insertTask('ws1', status);
-      expect(await countActiveTasks(TEST_USER_ID)).toBe(1);
-    }
-  );
+  it.each(ACTIVE_TASK_STATUSES.map((status) => ({ status })))('counts $status tasks', async ({ status }) => {
+    await insertTask('ws1', status);
+    expect(await countActiveTasks(TEST_USER_ID)).toBe(1);
+  });
 
   it.each([{ status: 'completed' }, { status: 'failed' }, { status: 'cancelled' }])(
     'ignores terminal $status tasks',
@@ -134,96 +152,238 @@ describe('countActiveTasks', () => {
   });
 });
 
-describe('withTaskLimitGate', () => {
-  it.each([{ active: 0 }, { active: 1 }, { active: 2 }])(
+describe('withBoxGate against the real ledger', () => {
+  it('a free owner with hours left and a free slot runs', async () => {
+    await expect(withBoxGate(TEST_USER_ID, { size: 'standard' }, async (d) => d)).resolves.toEqual({
+      enforced: true,
+      tier: 'free',
+      size: 'standard',
+      downgraded: false,
+    });
+  });
+
+  it('a free owner whose included hours are spent is refused, and fn never runs', async () => {
+    await exhaustIncluded('free');
+    const fn = vi.fn(async () => 'ran');
+    await expect(withBoxGate(TEST_USER_ID, { size: 'small' }, fn)).rejects.toMatchObject({
+      code: USAGE_EXHAUSTED_ERROR_CODE,
+    });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('credits keep a Pro owner going after the included hours', async () => {
+    await db.update(usersTable).set({ planOverride: 'pro' }).where(eq(usersTable.id, TEST_USER_ID));
+    await exhaustIncluded('pro');
+    await expect(withBoxGate(TEST_USER_ID, { size: 'large' }, async () => 'x')).rejects.toBeInstanceOf(UsageExhaustedError);
+    await grantCreditLot({ ownerId: TEST_USER_ID, micros: 1_000_000, source: 'grant' });
+    await expect(withBoxGate(TEST_USER_ID, { size: 'large' }, async () => 'ran')).resolves.toBe('ran');
+  });
+
+  it('auto top-up that can still buy a pack keeps a Pro owner going', async () => {
+    await db.update(usersTable).set({ planOverride: 'pro' }).where(eq(usersTable.id, TEST_USER_ID));
+    await exhaustIncluded('pro');
+    await db.insert(autoTopupSettings).values({ ownerId: TEST_USER_ID, enabled: true });
+    await expect(withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => 'ran')).resolves.toBe('ran');
+  });
+
+  it('billing env absent → no enforcement even out of hours and over the cap', async () => {
+    delete process.env.POLAR_ACCESS_TOKEN;
+    await exhaustIncluded('free');
+    for (let i = 0; i < FREE_CAP + 2; i++) await insertTask('ws1', 'queued');
+    await expect(withBoxGate(TEST_USER_ID, { size: 'xlarge' }, async () => 'ran')).resolves.toBe('ran');
+  });
+
+  it('a free owner may not start large, but an unattended run gets small', async () => {
+    await expect(withBoxGate(TEST_USER_ID, { size: 'large' }, async () => 'x')).rejects.toMatchObject({
+      code: SIZE_REQUIRES_PRO_ERROR_CODE,
+    });
+    await expect(withBoxGate(TEST_USER_ID, { size: 'large', unattended: true }, async (d) => d.size)).resolves.toBe('small');
+  });
+});
+
+describe('the concurrent-box cap replaces the active-task cap', () => {
+  it.each(Array.from({ length: FREE_CAP }, (_, active) => ({ active })))(
     'free user with $active active tasks passes',
     async ({ active }) => {
       for (let i = 0; i < active; i++) await insertTask('ws1', 'queued');
-      const result = await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created');
-      expect(result).toBe('created');
+      expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
     }
   );
 
-  it(`free user at the limit (${FREE_ACTIVE_TASK_LIMIT}) throws TaskLimitError and fn never runs`, async () => {
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) await insertTask('ws1', 'queued');
+  it(`free user at the cap (${FREE_CAP}) is refused and fn never runs`, async () => {
+    for (let i = 0; i < FREE_CAP; i++) await insertTask('ws1', 'queued');
     let ran = false;
-    const attempt = withTaskLimitGate(TEST_USER_ID, {}, async () => {
-      ran = true;
-    });
-    await expect(attempt).rejects.toThrowError(TaskLimitError);
     await expect(
-      withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)
-    ).rejects.toMatchObject({
-      code: 'task_limit_reached',
-      limit: FREE_ACTIVE_TASK_LIMIT,
-      active: FREE_ACTIVE_TASK_LIMIT,
-    });
+      withTaskLimitGate(TEST_USER_ID, {}, async () => {
+        ran = true;
+      })
+    ).rejects.toMatchObject({ code: CONCURRENT_BOX_LIMIT_ERROR_CODE, limit: FREE_CAP, active: FREE_CAP });
     expect(ran).toBe(false);
   });
 
-  it('limit spans workspaces (2 in ws1 + 1 in ws2 blocks)', async () => {
-    await insertTask('ws1', 'queued');
-    await insertTask('ws1', 'in_progress');
+  it('the cap spans workspaces and counts open boxes too', async () => {
     await insertTask('ws2', 'pending');
-    await expect(
-      withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)
-    ).rejects.toThrowError(TaskLimitError);
+    await db.insert(usageIntervals).values({
+      id: 'iv-1',
+      ownerId: TEST_USER_ID,
+      subjectKind: 'workbench',
+      subjectId: 'wb-1',
+      sandboxId: 'sb-1',
+      size: 'standard',
+      weight: '1.00',
+      startedAt: new Date(),
+      billedThrough: new Date(),
+    });
+    await expect(withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
   });
 
   it.each([
-    { label: 'subscription', plan: 'unlimited', planOverride: null },
-    { label: 'override (comped)', plan: 'free', planOverride: 'unlimited' },
-  ])('$label user passes far beyond the limit', async ({ plan, planOverride }) => {
-    await db
-      .update(usersTable)
-      .set({ plan, planOverride })
-      .where(eq(usersTable.id, TEST_USER_ID));
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT + 2; i++) await insertTask('ws1', 'queued');
-    const result = await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created');
-    expect(result).toBe('created');
-  });
-
-  it('billing env absent → no enforcement even at the limit', async () => {
-    delete process.env.POLAR_ACCESS_TOKEN;
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) await insertTask('ws1', 'queued');
-    const result = await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created');
-    expect(result).toBe('created');
+    { label: 'old Unlimited subscriber (Legacy Pro)', set: { plan: 'unlimited' } },
+    { label: 'comp (Pro)', set: { planOverride: 'unlimited' } },
+    { label: 'Pro subscriber', set: { plan: 'unlimited', polarProductId: 'prod-pro-monthly' } },
+  ])('$label passes far beyond the free cap', async ({ set }) => {
+    await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
+    for (let i = 0; i < FREE_CAP + 5; i++) await insertTask('ws1', 'queued');
+    expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
   });
 
   it('terminal tasks free their slot', async () => {
     const ids: string[] = [];
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) ids.push(await insertTask('ws1', 'queued'));
-    await expect(
-      withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)
-    ).rejects.toThrowError(TaskLimitError);
-    await db
-      .update(tasksTable)
-      .set({ status: 'completed' })
-      .where(eq(tasksTable.id, ids[0]));
-    const result = await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created');
-    expect(result).toBe('created');
+    for (let i = 0; i < FREE_CAP; i++) ids.push(await insertTask('ws1', 'queued'));
+    await expect(withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+    await db.update(tasksTable).set({ status: 'completed' }).where(eq(tasksTable.id, ids[0]));
+    expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
   });
 });
 
 describe('assertCanActivateTask', () => {
-  it('re-activating an inactive task while 3 others are active throws', async () => {
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) await insertTask('ws1', 'queued');
+  it('re-activating an inactive task while the cap is full throws', async () => {
+    for (let i = 0; i < FREE_CAP; i++) await insertTask('ws1', 'queued');
     const failedId = await insertTask('ws1', 'failed');
-    await expect(assertCanActivateTask(TEST_USER_ID, failedId)).rejects.toThrowError(
-      TaskLimitError
-    );
+    await expect(assertCanActivateTask(TEST_USER_ID, failedId)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
   });
 
   it('idempotent re-queue of a still-active task never self-blocks', async () => {
     const ids: string[] = [];
-    for (let i = 0; i < FREE_ACTIVE_TASK_LIMIT; i++) ids.push(await insertTask('ws1', 'queued'));
-    // 3/3 active, but the task being (re)activated is one of them.
+    for (let i = 0; i < FREE_CAP; i++) ids.push(await insertTask('ws1', 'queued'));
     await expect(assertCanActivateTask(TEST_USER_ID, ids[0])).resolves.toBeUndefined();
   });
 
-  it('passes when a slot is free', async () => {
-    await insertTask('ws1', 'queued');
+  it('refuses an owner out of hours', async () => {
+    await exhaustIncluded('free');
     const failedId = await insertTask('ws1', 'failed');
-    await expect(assertCanActivateTask(TEST_USER_ID, failedId)).resolves.toBeUndefined();
+    await expect(assertCanActivateTask(TEST_USER_ID, failedId)).rejects.toBeInstanceOf(UsageExhaustedError);
+  });
+});
+
+describe('buildBillingStatus', () => {
+  it('billing disabled: the old shape, no caps, no usage fields', async () => {
+    delete process.env.POLAR_ACCESS_TOKEN;
+    await insertTask('ws1', 'queued');
+    const status = await buildBillingStatus(TEST_USER_ID);
+    expect(status).toEqual({
+      billingEnabled: false,
+      plan: 'pro',
+      planSource: 'billing_disabled',
+      cancelAtPeriodEnd: false,
+      activeTasks: 1,
+      activeTaskLimit: null,
+      queuedPrs: 0,
+      mergeQueueLimit: null,
+      workflows: 0,
+      workflowLimit: null,
+      loops: 0,
+      loopLimit: null,
+      activeReviews: 0,
+      activeReviewLimit: null,
+    });
+  });
+
+  it('a free owner: tier, usage, sizes, the box cap; no credits or auto top-up; no count caps', async () => {
+    await insertTask('ws1', 'queued');
+    const status = await buildBillingStatus(TEST_USER_ID);
+    const period = usagePeriodFor({ now: new Date() });
+    expect(status).toMatchObject({
+      billingEnabled: true,
+      plan: 'free',
+      planSource: 'default',
+      tier: 'free',
+      activeTasks: 1,
+      activeTaskLimit: FREE_CAP,
+      mergeQueueLimit: null,
+      workflowLimit: null,
+      loopLimit: null,
+      activeReviewLimit: null,
+      concurrentBoxes: { used: 1, limit: FREE_CAP },
+      sizePrices: sizePriceTable('free'),
+      pricing: BILLING_PRICING,
+      usage: {
+        periodStart: period.start.toISOString(),
+        periodEnd: period.end.toISOString(),
+        includedWsec: includedWeightedSeconds('free'),
+        usedWsec: 0,
+        percent: 0,
+        exhausted: false,
+      },
+    });
+    expect(status.credits).toBeUndefined();
+    expect(status.autoTopup).toBeUndefined();
+  });
+
+  it('reports usage and exhaustion from the ledger', async () => {
+    await exhaustIncluded('free');
+    const status = await buildBillingStatus(TEST_USER_ID);
+    expect(status.usage).toMatchObject({ percent: 100, exhausted: true, usedWsec: includedWeightedSeconds('free') });
+  });
+
+  it.each<[string, Partial<typeof usersTable.$inferInsert>, PlanTier, string]>([
+    ['old Unlimited subscriber', { plan: 'unlimited' }, 'legacy_pro', 'subscription'],
+    ['Pro subscriber', { plan: 'unlimited', polarProductId: 'prod-pro-monthly' }, 'pro', 'subscription'],
+    ['comp', { planOverride: 'unlimited' }, 'pro', 'override'],
+  ])('%s: plan is the tier, with credits and auto top-up', async (_label, set, tier, source) => {
+    await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
+    await grantCreditLot({ ownerId: TEST_USER_ID, micros: 25_000_000, source: 'purchase' });
+    const status = await buildBillingStatus(TEST_USER_ID);
+    expect(status.plan).toBe(tier);
+    expect(status.tier).toBe(tier);
+    expect(status.planSource).toBe(source);
+    expect(status.activeTaskLimit).toBe(PLAN_LIMITS[tier].concurrentBoxes);
+    expect(status.usage?.includedWsec).toBe(includedWeightedSeconds(tier));
+    expect(status.credits).toMatchObject({ balanceMicros: 25_000_000, expiringSoonMicros: 0 });
+    expect(status.credits?.lots).toHaveLength(1);
+    expect(status.autoTopup).toEqual({
+      enabled: false,
+      triggerMicros: 5_000_000,
+      pack: '25',
+      monthlyLimitMicros: 100_000_000,
+      monthSpentMicros: 0,
+      lastFailure: null,
+      lastFailureAt: null,
+    });
+  });
+
+  it('auto top-up reads the saved settings and the current month only', async () => {
+    await db.update(usersTable).set({ planOverride: 'pro' }).where(eq(usersTable.id, TEST_USER_ID));
+    const failedAt = new Date('2026-10-01T00:00:00.000Z');
+    await db.insert(autoTopupSettings).values({
+      ownerId: TEST_USER_ID,
+      enabled: true,
+      triggerMicros: 10_000_000,
+      pack: '100',
+      monthlyLimitMicros: 300_000_000,
+      monthKey: '1999-01',
+      monthSpentMicros: 100_000_000,
+      lastFailure: 'card_declined',
+      lastFailureAt: failedAt,
+    });
+    expect((await buildBillingStatus(TEST_USER_ID)).autoTopup).toEqual({
+      enabled: true,
+      triggerMicros: 10_000_000,
+      pack: '100',
+      monthlyLimitMicros: 300_000_000,
+      monthSpentMicros: 0,
+      lastFailure: 'card_declined',
+      lastFailureAt: failedAt.toISOString(),
+    });
   });
 });

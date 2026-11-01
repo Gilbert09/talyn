@@ -205,7 +205,22 @@ describe('POST /admin/users/:id/plan-override', () => {
     expect(await auditRows()).toHaveLength(0);
   });
 
-  it.each([['gold'], ['UNLIMITED'], [true], [0]])(
+  it.each([['free'], ['unlimited'], ['pro'], ['legacy_pro']])(
+    'accepts the plan value %j and writes it',
+    async (planOverride) => {
+      const res = await post(`/api/v1/admin/users/${ALICE}/plan-override`, {
+        planOverride,
+        reason: REASON,
+        confirm: 'alice@example.test',
+      });
+      expect(res.status).toBe(200);
+      expect((await alicePlan()).planOverride).toBe(planOverride);
+      const [row] = await auditRows();
+      expect(row!.after).toEqual({ plan: 'free', planOverride });
+    }
+  );
+
+  it.each([['gold'], ['UNLIMITED'], ['Pro'], ['legacy-pro'], ['team'], [''], [true], [0], [{}]])(
     'refuses an invalid plan value %j',
     async (planOverride) => {
       const res = await post(`/api/v1/admin/users/${ALICE}/plan-override`, {
@@ -214,6 +229,10 @@ describe('POST /admin/users/:id/plan-override', () => {
         confirm: 'alice@example.test',
       });
       expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_plan');
+      expect(res.body.error).toBe(
+        "planOverride must be one of 'free', 'unlimited', 'pro', 'legacy_pro', or null."
+      );
       expect((await alicePlan()).planOverride).toBeNull();
     }
   );

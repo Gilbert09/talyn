@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
-import { FREE_PLAN_ACTIVE_TASK_LIMIT, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
+import { CONCURRENT_BOX_LIMIT_ERROR_CODE, PLAN_LIMITS } from '@talyn/shared';
+
+// The free plan's concurrent-box cap replaced the old active-task cap (3).
+const FREE_BOX_CAP = PLAN_LIMITS.free.concurrentBoxes;
 import { taskRoutes } from '../../routes/tasks.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -19,9 +22,9 @@ import { eq } from 'drizzle-orm';
 
 /**
  * Free-plan concurrency enforcement at the route surface: creation and every
- * re-activation path must 402 with TASK_LIMIT_ERROR_CODE once the owner has
- * FREE_PLAN_ACTIVE_TASK_LIMIT active tasks — and pass for comped/unlimited
- * users. Uses the REAL apiErrorHandler so the status/code contract is the
+ * re-activation path must 402 with CONCURRENT_BOX_LIMIT_ERROR_CODE once the
+ * owner uses FREE_BOX_CAP boxes (queued tasks count as boxes about to boot),
+ * and pass for paid tiers (Legacy Pro, Pro). Uses the REAL apiErrorHandler so the status/code contract is the
  * one production serves.
  */
 
@@ -70,7 +73,7 @@ async function makeServer(): Promise<{ url: string; close: () => Promise<void> }
   };
 }
 
-describe('free-plan task limit at the route surface', () => {
+describe('free-plan concurrent-box cap at the task routes', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let url: string;
@@ -93,7 +96,7 @@ describe('free-plan task limit at the route surface', () => {
 
   async function fillToLimit(): Promise<string[]> {
     const ids: string[] = [];
-    for (let i = 0; i < FREE_PLAN_ACTIVE_TASK_LIMIT; i++) ids.push(await insertTask('queued'));
+    for (let i = 0; i < FREE_BOX_CAP; i++) ids.push(await insertTask('queued'));
     return ids;
   }
 
@@ -137,22 +140,22 @@ describe('free-plan task limit at the route surface', () => {
       expect(res.status).toBe(201);
     });
 
-    it(`402s with ${TASK_LIMIT_ERROR_CODE} at the limit`, async () => {
+    it(`402s with ${CONCURRENT_BOX_LIMIT_ERROR_CODE} at the limit`, async () => {
       await fillToLimit();
       const res = await fetch(`${url}/tasks`, { method: 'POST', headers, body: createBody() });
       expect(res.status).toBe(402);
       const body = (await res.json()) as { success: boolean; error: string; code: string };
       expect(body.success).toBe(false);
-      expect(body.code).toBe(TASK_LIMIT_ERROR_CODE);
-      expect(body.error).toMatch(/free plan/i);
+      expect(body.code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
+      expect(body.error).toMatch(/Free plan runs 2 boxes/);
       // And the task was NOT created.
       const rows = await db.select({ id: tasksTable.id }).from(tasksTable);
-      expect(rows).toHaveLength(FREE_PLAN_ACTIVE_TASK_LIMIT);
+      expect(rows).toHaveLength(FREE_BOX_CAP);
     });
 
     it.each([
-      { label: 'unlimited (subscription)', set: { plan: 'unlimited' } },
-      { label: 'comped (plan_override)', set: { planOverride: 'unlimited' } },
+      { label: 'old Unlimited subscriber (Legacy Pro)', set: { plan: 'unlimited' } },
+      { label: 'comp (Pro)', set: { planOverride: 'unlimited' } },
     ])('$label user creates past the limit', async ({ set }) => {
       await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
       await fillToLimit();
@@ -172,7 +175,7 @@ describe('free-plan task limit at the route surface', () => {
   // silent, unmetered paywall hole, which is exactly what the old exemption
   // turned out to be.
   describe('headerless callers (CLI / MCP / curl) are enforced', () => {
-    it(`POST /tasks 402s with ${TASK_LIMIT_ERROR_CODE} at the limit`, async () => {
+    it(`POST /tasks 402s with ${CONCURRENT_BOX_LIMIT_ERROR_CODE} at the limit`, async () => {
       await fillToLimit();
       const res = await fetch(`${url}/tasks`, {
         method: 'POST',
@@ -180,10 +183,10 @@ describe('free-plan task limit at the route surface', () => {
         body: createBody(),
       });
       expect(res.status).toBe(402);
-      expect(((await res.json()) as { code: string }).code).toBe(TASK_LIMIT_ERROR_CODE);
+      expect(((await res.json()) as { code: string }).code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
       // And the task was NOT created.
       const rows = await db.select({ id: tasksTable.id }).from(tasksTable);
-      expect(rows).toHaveLength(FREE_PLAN_ACTIVE_TASK_LIMIT);
+      expect(rows).toHaveLength(FREE_BOX_CAP);
     });
 
     it.each([
@@ -228,9 +231,9 @@ describe('free-plan task limit at the route surface', () => {
         body: createBody(),
       });
       expect(res.status).toBe(402);
-      expect(((await res.json()) as { code: string }).code).toBe(TASK_LIMIT_ERROR_CODE);
+      expect(((await res.json()) as { code: string }).code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
       const rows = await db.select({ id: tasksTable.id }).from(tasksTable);
-      expect(rows).toHaveLength(FREE_PLAN_ACTIVE_TASK_LIMIT);
+      expect(rows).toHaveLength(FREE_BOX_CAP);
     });
 
     it.each([
@@ -273,7 +276,7 @@ describe('free-plan task limit at the route surface', () => {
       const res = await fetch(`${url}${path(failedId)}`, { method: 'POST', headers });
       expect(res.status).toBe(402);
       const body = (await res.json()) as { code: string };
-      expect(body.code).toBe(TASK_LIMIT_ERROR_CODE);
+      expect(body.code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
       // Task stays failed.
       const rows = await db
         .select({ status: tasksTable.status })
@@ -292,7 +295,7 @@ describe('free-plan task limit at the route surface', () => {
       });
       expect(res.status).toBe(402);
       const body = (await res.json()) as { code: string };
-      expect(body.code).toBe(TASK_LIMIT_ERROR_CODE);
+      expect(body.code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
     });
 
     it('PATCH to a terminal status is never gated', async () => {

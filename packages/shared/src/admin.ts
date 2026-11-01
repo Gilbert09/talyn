@@ -442,7 +442,12 @@ export interface AdminGoldenRebakeRequest extends AdminMutationRequest {
 // Product
 // ============================================================================
 
-export type AdminPlan = 'free' | 'unlimited';
+/**
+ * A plan value the console reads or writes. Matches `PLAN_OVERRIDE_VALUES` in
+ * pricing.ts: the usage tiers plus `unlimited`, the old comp value (which
+ * grants Pro). `effectivePlan` is always a tier, never `unlimited`.
+ */
+export type AdminPlan = 'free' | 'unlimited' | 'pro' | 'legacy_pro';
 
 export interface AdminUserSummary {
   id: string;
@@ -453,7 +458,7 @@ export interface AdminUserSummary {
   plan: AdminPlan;
   /** The manual comp flag. Wins over `plan` when set. */
   planOverride: AdminPlan | null;
-  /** plan_override ?? plan — what entitlement checks actually use. */
+  /** The usage tier the gates enforce, from the override, the subscription and its product. */
   effectivePlan: AdminPlan;
   subscriptionStatus: string | null;
   currentPeriodEnd: string | null;

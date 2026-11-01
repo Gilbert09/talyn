@@ -624,11 +624,11 @@ describe('prAutoMergeWatcher', () => {
     expect(tasks[0].prompt).not.toContain('Every reviewer comment');
   });
 
-  describe('free-plan task limit', () => {
+  describe('free-plan concurrent-box cap', () => {
     const savedPolarToken = process.env.POLAR_ACCESS_TOKEN;
 
     beforeEach(() => {
-      // Billing configured → the 3-active-task limit is enforced.
+      // Billing configured → the free plan's 2-box cap is enforced.
       process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
     });
 
@@ -638,11 +638,10 @@ describe('prAutoMergeWatcher', () => {
     });
 
     async function fillOwnerSlots() {
-      // Three active tasks NOT linked to any watched PR — they only occupy
-      // the owner's free-plan slots.
+      // Two active tasks NOT linked to any watched PR: they only occupy the
+      // owner's two free-plan box slots.
       await insertTask(db, 'filler-1', 'queued', null);
       await insertTask(db, 'filler-2', 'in_progress', null);
-      await insertTask(db, 'filler-3', 'pending', null);
     }
 
     it('defers the fix run at the limit without burning an attempt', async () => {
@@ -651,7 +650,7 @@ describe('prAutoMergeWatcher', () => {
 
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(3); // no new task
+      expect(await countTasks(db)).toBe(2); // no new task
       const pr = await getPr(db, prId);
       const state = pr.autoMergeState as { attempts?: number; lastAutoTaskId?: string } | null;
       expect(state?.lastAutoTaskId).toBeUndefined();
@@ -662,7 +661,7 @@ describe('prAutoMergeWatcher', () => {
       await fillOwnerSlots();
       const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
       await prAutoMergeWatcher.runOnce();
-      expect(await countTasks(db)).toBe(3);
+      expect(await countTasks(db)).toBe(2);
 
       await db
         .update(tasksTable)
@@ -670,13 +669,13 @@ describe('prAutoMergeWatcher', () => {
         .where(eq(tasksTable.id, 'filler-1'));
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(4);
+      expect(await countTasks(db)).toBe(3);
       const pr = await getPr(db, prId);
       const state = pr.autoMergeState as { lastAutoTaskId?: string };
       expect(state.lastAutoTaskId).toBeTruthy();
     });
 
-    it('unlimited owner is never deferred', async () => {
+    it('a comped (Pro) owner is never deferred', async () => {
       const { users } = await import('../db/schema.js');
       await db.update(users).set({ planOverride: 'unlimited' }).where(eq(users.id, OWNER));
       await fillOwnerSlots();
@@ -684,7 +683,7 @@ describe('prAutoMergeWatcher', () => {
 
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(4);
+      expect(await countTasks(db)).toBe(3);
     });
   });
 

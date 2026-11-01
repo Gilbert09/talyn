@@ -1627,66 +1627,33 @@ export interface PaginatedResponse<T> {
  */
 export type Plan = PlanTier | 'unlimited';
 
-/** Max simultaneously-active tasks (pending/queued/in_progress) on the free plan. */
+/*
+ * The old free-plan count caps. Usage billing removed them: the backend no
+ * longer enforces any of these, and the concurrent-box cap in
+ * `PLAN_LIMITS[tier].concurrentBoxes` replaced the active-task cap. The
+ * merge-queue (3) and review-cycle (1) constants are deleted. The three below
+ * stay ONLY because branch builds of the desktop and web apps talk to the
+ * production backend, which still enforces them until usage billing ships
+ * (their UpgradeModal and PR-row copy quote them). Delete them, and the
+ * matching *_LIMIT_ERROR_CODE constants, once the apps stop reading them.
+ */
+
+/** @deprecated Old free-plan active-task cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
 
-/** Max PRs sitting in the merge queue at once on the free plan. */
-export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
-
-/**
- * Max workflows an owner may have on the free plan, across every workspace
- * they own.
- *
- * Counts DEFINITIONS, not enabled ones: the cap is on how many rules you keep,
- * so disabling one does not free a slot. Counting only the enabled ones would
- * make the limit a toggle — keep twelve, run three, swap whenever — which is
- * not a limit.
- */
+/** @deprecated Old free-plan workflow cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_WORKFLOW_LIMIT = 3;
 
-/**
- * Max loops an owner may have on the free plan, across every workspace they own.
- *
- * Counts DEFINITIONS, like the workflow cap above and for the same reason:
- * counting only the enabled ones would make the limit a toggle — keep twelve,
- * run three, swap whenever.
- *
- * Note this caps how many SCHEDULES you keep, not how much they run. Each
- * firing still goes through the active-task limit, so a free user with three
- * loops on a one-minute cron does not get unlimited agent time; they get three
- * tasks in flight and a history full of "waiting for a task slot".
- */
+/** @deprecated Old free-plan loop cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_LOOP_LIMIT = 3;
-
-/**
- * How many code-review-and-fix CYCLES a free owner may have in flight. One, and
- * there is no queue behind it.
- *
- * It counts cycles, not runs: one review may spend six sandboxes, and metering
- * those individually would make the cap incomprehensible. A review resting with
- * findings on screen does NOT hold the slot — only a cycle that is actually
- * working does (reviewing, or fixing) — which is what lets one number cover both
- * halves of "review and fix" instead of needing two.
- *
- * Deliberately no queueing. A queued review is indistinguishable from a working
- * one on a PR row, and this feature's whole credibility is that its progress bar
- * is telling the truth, so the second request is refused rather than parked.
- *
- * It COMPOSES with the task cap rather than replacing it. A review's own units
- * are not tasks and never touch that cap; the fix run IS an ordinary task and
- * does. When the two collide the fix waits visibly for a task slot instead of
- * being refused — a person who was invited to press Fix should not be told no
- * for a reason they cannot see.
- */
-export const FREE_PLAN_REVIEW_CYCLE_LIMIT = 1;
 
 /* MCP servers are deliberately UNCAPPED, on every plan.
  *
- * They were capped at 3 like the four above, and that turned out to be the
+ * They were capped at 3 like the old count caps, and that turned out to be the
  * wrong shape for what they are. A task, a queued PR, a workflow and a loop all
  * SPEND something when they exist — agent time, a merge, a firing. A connected
  * MCP server spends nothing until a run uses it, and what a run costs is
- * already bounded by the task cap. Charging for the connection was charging
+ * already bounded by the box it runs in. Charging for the connection was charging
  * twice for one thing.
  *
  * It is also the third time a round number here took away a capability somebody
@@ -1716,43 +1683,32 @@ export interface TaskScheduleError {
   maxAttempts?: number;
 }
 
+/** @deprecated The old active-task cap's 402 code. The production backend still sends it until usage billing ships. */
 export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
 
-/** ApiResponse.code when queueing a PR is rejected by the free merge-queue limit. */
+/** @deprecated The old merge-queue cap's 402 code. The production backend still sends it until usage billing ships. */
 export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
 
-/**
- * ApiResponse.code when creating a workflow is rejected by the free-plan cap.
- * A usage cap like the two above — deleting a workflow frees the slot.
- */
+/** @deprecated The old workflow cap's 402 code. The production backend still sends it until usage billing ships. */
 export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 
-/**
- * ApiResponse.code when creating a loop is rejected by the free-plan cap.
- * A usage cap like the others — deleting a loop frees the slot.
- */
+/** @deprecated The old loop cap's 402 code. The production backend still sends it until usage billing ships. */
 export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
 
 /**
- * ApiResponse.code when a free plan tries to turn ON the workspace default
- * "auto-keep new PRs mergeable". Unlike the two limit codes this is a FEATURE
- * gate, not a usage cap — there is no count to wait out, so the client must
- * pitch the upgrade rather than "wait for a slot".
+ * ApiResponse.code when a tier without auto features (Free) tries to turn ON
+ * the workspace default "auto-keep new PRs mergeable". A FEATURE gate, not a
+ * usage cap: there is no count to wait out, so the client pitches Pro.
  */
 export const AUTO_KEEP_DEFAULT_ERROR_CODE = 'auto_keep_default_requires_unlimited';
 
-/**
- * ApiResponse.code when starting a code review is rejected by the free plan's
- * one-cycle-at-a-time rule. A usage cap: the slot frees itself when the review
- * in flight finishes, so the client may say "or wait for this one".
- */
+/** @deprecated The old review-cycle cap's 402 code. The production backend still sends it until usage billing ships. */
 export const REVIEW_CYCLE_LIMIT_ERROR_CODE = 'code_review_limit_reached';
 
 /**
- * ApiResponse.code when a free plan tries to turn ON "review my new pull
- * requests automatically". A FEATURE gate like AUTO_KEEP_DEFAULT_ERROR_CODE and
- * not a usage cap — the user is nowhere near a count, so quoting one would
- * answer a question they did not ask.
+ * ApiResponse.code when a tier without auto features (Free) tries to turn ON
+ * "review my new pull requests automatically". A FEATURE gate like
+ * AUTO_KEEP_DEFAULT_ERROR_CODE.
  */
 export const AUTO_REVIEW_ERROR_CODE = 'auto_review_requires_unlimited';
 
