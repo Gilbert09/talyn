@@ -83,6 +83,20 @@ export interface FleetSandbox {
    */
   memMib?: number;
   /**
+   * The CPU-time allowance the box was created with, in thousandths of a
+   * vCPU. With `memMib` it names the size: `small` and `standard` share 4 GiB
+   * and differ only here. Absent on a host that predates the field.
+   */
+  milliVcpu?: number;
+  /**
+   * When the box was suspended. Cleared on resume. The meter closes the box's
+   * interval at this instant, not at the moment Talyn noticed. Go writes a zero
+   * time for "never", so read it through {@link fleetInstant}.
+   */
+  suspendedAt?: string;
+  /** The idle timeout this box runs with, in seconds. */
+  idleTtlSec?: number;
+  /**
    * What the run is spending right now — the VMM's resident size, so guest
    * pages actually touched plus the VMM's own overhead.
    *
@@ -381,6 +395,41 @@ export interface CreateSandboxInput {
   memMib?: number;
   /** The guest's CPU-time allowance in thousandths of a vCPU. Absent takes the tenant's default. */
   milliVcpu?: number;
+  /**
+   * How long the box may go with no request before the fleet suspends it.
+   * Every Talyn box sends {@link TALYN_SANDBOX_IDLE_TTL_SEC}: awake time is
+   * billed, suspended time is not.
+   */
+  idleTtlSec?: number;
+}
+
+/**
+ * The idle timeout of every Talyn box: 10 minutes. The fleet's own default is
+ * 30. It is also every YAS plan's leased ceiling, so a create that asks for it
+ * stays inside the lease; an account whose ceiling an operator lowered is
+ * handled by {@link isIdleTtlCeilingRefusal}.
+ */
+export const TALYN_SANDBOX_IDLE_TTL_SEC = 600;
+
+/**
+ * The fleet refused the idle timeout because the tenant's leased ceiling is
+ * lower. The fleet refuses rather than clamps, so the caller sends the request
+ * again without the field, and the fleet fits its default to the ceiling.
+ */
+export function isIdleTtlCeilingRefusal(err: unknown): boolean {
+  return err instanceof FleetThrottleError && /tenant_idle_ttl|idle ?timeout|idleTtlSec/i.test(err.message);
+}
+
+/**
+ * A fleet timestamp as a Date, or null. Go serialises an unset `time.Time` as
+ * `0001-01-01T00:00:00Z` even with `omitempty`, so anything before 2000 reads
+ * as absent.
+ */
+export function fleetInstant(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms) || ms < Date.UTC(2000, 0, 1)) return null;
+  return new Date(ms);
 }
 
 /** One MCP server, as the fleet takes it on a create. */
@@ -1340,7 +1389,16 @@ export class FleetClient {
   async resumeSandbox(id: string): Promise<void> {
     // A hibernated box pulls its image back from object storage first, which
     // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
-    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body: '{}' }, { timeoutMs: RESUME_TIMEOUT_MS });
+    // The idle timeout goes on the resume too, so a box created before Talyn
+    // asked for 10 minutes moves to it the next time it wakes.
+    const resume = (body: Record<string, unknown>) =>
+      this.request(sandboxPath(id, '/resume'), { method: 'POST', body: JSON.stringify(body) }, { timeoutMs: RESUME_TIMEOUT_MS });
+    try {
+      await resume({ idleTtlSec: TALYN_SANDBOX_IDLE_TTL_SEC });
+    } catch (err) {
+      if (!isIdleTtlCeilingRefusal(err)) throw err;
+      await resume({});
+    }
   }
 
   /** Delete a sandbox. Already gone counts as done: the caller wanted it gone. */

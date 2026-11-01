@@ -75,6 +75,7 @@ import {
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { checkpointWork, noteTurnActivity, settleTurnActivity } from './workCheckpoint.js';
 import { startTitleGeneration } from './title.js';
+import { meterWorkbenchAwake } from './usageMeter.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
   appendEvents,
@@ -617,6 +618,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         },
       });
     }
+    // The box is awake now (an exec wakes a box the fleet suspended), so it is billed.
+    await meterWorkbenchAwake(wb);
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.

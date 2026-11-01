@@ -38,6 +38,8 @@ import {
   type WorkbenchRow,
 } from './store.js';
 import { closeWorkbenchTerminals } from './terminalBridge.js';
+import { meterBoxOpened } from '../billing/usageHooks.js';
+import { meterWorkbenchBoxGone } from './usageMeter.js';
 
 /**
  * Moving a session to a fresh box: the newest golden for its repository, with
@@ -791,6 +793,14 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize' });
     if (!made.ok) throw new Error(made.error);
     created = made;
+    // Both boxes run until the commit: the new one is billed from now, at its own size.
+    await meterBoxOpened({
+      workspaceId: claimed.workspaceId,
+      subjectKind: 'workbench',
+      subjectId: row.id,
+      sandboxId: made.sandboxId,
+      size: made.size,
+    });
     await setMoveTargetHost(row.id, from, targetId, made.fleetHost, made.fleetSandboxId);
     const fresh: WorkbenchRow = { ...claimed, sandboxGeneration: made.sandboxId, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
@@ -828,6 +838,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
       statusMessage: setupNote,
       size: made.size,
       settings: {
+        boxSize: made.size,
         ...(reason === 'low_disk' || reason === 'disk_full' ? { movedForDiskTo: made.sandboxId } : {}),
         ...(claimed.settings?.resizeTo === made.size ? { sandboxSize: made.size } : {}),
       },
@@ -1031,6 +1042,8 @@ async function afterCommit(
   await bestEffort(committed, `deleting the old sandbox ${old.sandboxId}`, async () =>
     (await fleetClientFor(old.workspaceId, old.fleetHost)).deleteSandbox(old.sandboxId!),
   );
+  // The old box's interval closes here; a resize's new weight began at the create.
+  await meterWorkbenchBoxGone(old, old.sandboxId);
   const missing = new Set(manifest?.missingSessions ?? []);
   for (const chat of chats) {
     if (chat.closedAt) continue;
@@ -1110,6 +1123,7 @@ async function handleFailure(f: {
       console.warn(`[workbench] deleting the half-made sandbox ${created.sandboxId} failed:`, deleteErr);
       recordWorkbenchEvent(claimed, 'move_cleanup', `new sandbox ${created.sandboxId} not deleted`, false, deleteErr);
     }
+    await meterWorkbenchBoxGone(claimed, created.sandboxId);
   }
   // The old box went away under the move. Its work is not in the half-made
   // new box, so the recovery starts from the branch and the last checkpoint.
@@ -1304,6 +1318,7 @@ export async function sweepAbandonedMoves(): Promise<number> {
       await fleetClientFor(row.workspaceId, host)
         .then((client) => client.deleteSandbox(target))
         .catch((err) => console.warn(`[workbench] deleting the abandoned sandbox ${target} failed:`, err));
+      await meterWorkbenchBoxGone(row, target);
     }
     if (!released.archivedAt) {
       await dropStaging(released);

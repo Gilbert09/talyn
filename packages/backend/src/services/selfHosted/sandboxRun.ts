@@ -4,7 +4,9 @@ import {
   resolveFleetModel,
   topFleetModelForModel,
   fleetAgentForModel,
+  SANDBOX_SIZES,
   type FleetAgent,
+  type SandboxSize,
 } from '@talyn/shared';
 import { workspaceAgentModel, workspaceFleetModel } from './fleetModel.js';
 import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
@@ -15,6 +17,8 @@ import {
   FleetCapacityError,
   FleetClient,
   FleetDispatchUncertainError,
+  isIdleTtlCeilingRefusal,
+  TALYN_SANDBOX_IDLE_TTL_SEC,
   type CreateSandboxInput,
   type CreateSandboxTaskInput,
   type FleetMcpServerInline,
@@ -35,6 +39,7 @@ import {
   type FleetAccountSelection,
 } from './accountSelection.js';
 import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
+import { isSizeRefusal } from '../workbenches/sandboxSize.js';
 
 /**
  * Booting one fleet microVM, for callers that are not a `tasks` row.
@@ -148,6 +153,12 @@ export interface SandboxRunSpec {
    * low truncates good work and saves nothing on the bad.
    */
   budget?: { maxTurns?: number; maxBudgetUsd?: number; timeoutSec?: number };
+  /**
+   * The box's size, sent as `memMib`/`milliVcpu` so the meter knows its
+   * weight. Absent means `standard`. A size above standard that the tenant
+   * cannot hold falls back to standard once, as a session's box does.
+   */
+  size?: SandboxSize;
 }
 
 export interface SandboxRunHandle {
@@ -178,6 +189,8 @@ export interface SandboxRunHandle {
    * account. Absent only when no account id could be resolved.
    */
   accountId?: string;
+  /** The size the box was created at, after any fallback. The meter's weight. */
+  size: SandboxSize;
 }
 
 export type SandboxRunResult =
@@ -379,6 +392,8 @@ export async function buildSandboxCreateBody(
     ...(spec.gitAuthor
       ? { gitAuthorName: spec.gitAuthor.name, gitAuthorEmail: spec.gitAuthor.email }
       : {}),
+    // Every Talyn box, task and session alike: awake time is billed.
+    idleTtlSec: TALYN_SANDBOX_IDLE_TTL_SEC,
   };
   return { ok: true, body };
 }
@@ -598,7 +613,23 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
     });
     if (!built.ok) return { ok: false, error: built.error };
 
-    const { sandbox, host } = await createSandboxRetryingUncertain(client, built.body);
+    const wantedSize = spec.size ?? 'standard';
+    const sized = (size: SandboxSize): CreateSandboxInput => ({
+      ...built.body,
+      memMib: SANDBOX_SIZES[size].memMib,
+      milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+    });
+    let size = wantedSize;
+    let created: { sandbox: FleetSandbox; host?: string };
+    try {
+      created = await createSandboxRetryingUncertain(client, sized(wantedSize));
+    } catch (err) {
+      if (!isSizeRefusal(err) || SANDBOX_SIZES[wantedSize].memMib <= SANDBOX_SIZES.standard.memMib) throw err;
+      console.warn(`[fleet] run ${spec.runId}: the tenant refused ${wantedSize}, using standard: ${err.message}`);
+      size = 'standard';
+      created = await createSandboxRetryingUncertain(client, sized(size));
+    }
+    const { sandbox, host } = created;
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
     //
@@ -630,6 +661,7 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
         baseBranch: repo.defaultBranch,
         quotaSwap,
         ...(accountId ? { accountId } : {}),
+        size,
       },
     };
   } catch (err) {
@@ -720,10 +752,21 @@ export async function createSandboxRetryingUncertain(
   client: FleetClient,
   input: CreateSandboxInput,
 ): Promise<{ sandbox: FleetSandbox; host?: string }> {
+  let body = input;
   for (let attempt = 0; ; attempt++) {
     try {
-      return await client.createSandbox(input);
+      return await client.createSandbox(body);
     } catch (err) {
+      // The tenant's leased idle ceiling is below what Talyn asked for. The
+      // fleet refuses rather than clamps; without the field it fits its
+      // default to the ceiling, which is shorter still.
+      if (body.idleTtlSec !== undefined && isIdleTtlCeilingRefusal(err)) {
+        console.warn(`[fleet] create of ${input.id}: idle timeout over the tenant's ceiling, sending none`);
+        body = { ...body };
+        delete body.idleTtlSec;
+        attempt--;
+        continue;
+      }
       if (!(err instanceof FleetDispatchUncertainError) || attempt >= DISPATCH_UNCERTAIN_RETRIES) {
         throw err;
       }

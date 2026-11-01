@@ -43,6 +43,7 @@ import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor } from './talynMcp.js';
+import { meterWorkbenchAwake, meterWorkbenchBoxGone } from './usageMeter.js';
 import {
   claimArchive,
   backfillCredentialArchives,
@@ -237,6 +238,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     if (!created.ok) return await fail(created.error);
     const settings = settingsWithoutFleetSandboxId(row);
     if (created.fleetSandboxId) settings.fleetSandboxId = created.fleetSandboxId;
+    settings.boxSize = created.size;
     // A resize that waited is done: this box has the size.
     if (settings.resizeTo === created.size) {
       settings.sandboxSize = created.size;
@@ -252,6 +254,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       statusMessage: isThread(row) ? 'Preparing the thread' : 'Cloning the repository',
     });
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
+    await meterWorkbenchAwake(row, { size: created.size });
 
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
@@ -391,6 +394,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
       await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
       await checkLease();
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await meterWorkbenchBoxGone(row, row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
       const chats = await listChats(row.id);
@@ -415,6 +419,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
       );
       await clearWorkCheckpoint(row.id);
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await meterWorkbenchBoxGone(row, row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     }
     const done = await finishArchive(row);
@@ -424,6 +429,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
     if (isWorkbenchDraining()) return;
     if (!lost) {
       const gone = err instanceof FleetRunNotFoundError;
+      if (gone) await meterWorkbenchBoxGone(row, row.sandboxId, 'vanished');
       const updated = await finishArchive(row, gone ? undefined : userFacingError(err));
       if (updated) await emitWorkbenchUpdated(await publicWorkbench(updated));
       if (!gone) {
@@ -461,6 +467,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
     } catch (err) {
       if (!fleetHoldsNoBox(err)) throw err;
     }
+    await meterWorkbenchBoxGone(row, row.sandboxId);
   }
   row = await setRow(row, {
     status: 'provisioning',
@@ -526,6 +533,8 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
       return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
     } catch (error) { if (!fleetHoldsNoBox(error)) throw error; }
   }
+  // The old box is gone; its interval normally closed with the archive.
+  await meterWorkbenchBoxGone(row, row.sandboxId);
   row = await setRow(row, {
     archivedAt: null,
     restoreRequestedAt: null,
@@ -567,6 +576,8 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
     } catch (err) {
       console.warn(`[workbench] deleting sandbox ${row.sandboxId} failed; removing the workbench anyway:`, err);
     }
+    // Closed even when the delete failed: no row will name the box again.
+    await meterWorkbenchBoxGone(row, row.sandboxId);
   }
   // Before the row: a failure leaves objects behind, never a row that names nothing.
   await deleteSavedWork(row).catch((err) =>

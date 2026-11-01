@@ -15,6 +15,7 @@ import {
   findingsEligibleForAutoFix,
   filesWorthReviewing,
   selectLensesForFiles,
+  UNATTENDED_SANDBOX_SIZE,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
@@ -22,6 +23,7 @@ import { pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { dispatchSandboxRun } from '../selfHosted/sandboxRun.js';
+import { meterBoxOpened } from '../billing/usageHooks.js';
 import { reviewSystemPrompt } from '../selfHosted/systemPrompts.js';
 import { withMemoryIndex } from '../workbenches/memory.js';
 import { startCodeRun } from '../posthogCode/codeRun.js';
@@ -523,6 +525,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
           unit.kind
         ),
         budget: { timeoutSec: UNIT_TIMEOUT_SEC[unit.kind] ?? 900 },
+        size: UNATTENDED_SANDBOX_SIZE,
         avoidAgents,
         avoidAccountIds: [...limitedAccounts],
         // A move to another account keeps the vendor, so it keeps the model the
@@ -530,6 +533,13 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
         ...(movedToAccount && moved?.model ? { model: moved.model } : {}),
       });
       if (result.ok) {
+        await meterBoxOpened({
+          workspaceId: review.workspaceId,
+          subjectKind: 'review_unit',
+          subjectId: claim.id,
+          sandboxId: result.handle.sandbox.id,
+          size: result.handle.size,
+        });
         // A swap on a FIRST dispatch: the unit never tried the limited agent.
         // A moved unit already has its `failed_over_from`, and that first
         // answer is the one to keep.
