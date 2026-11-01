@@ -48,8 +48,8 @@ describe('RepoPaths', () => {
     await expect(new RepoPaths(userData).set({ repoFullName: 'owner/name', path: repo })).rejects.toThrow(/other\/thing/);
   });
 
-  it('rejects a repo without origin', async () => {
-    await expect(new RepoPaths(userData).set({ repoFullName: 'owner/name', path: repo })).rejects.toThrow(/origin/);
+  it('rejects a repo with no remote for the repository', async () => {
+    await expect(new RepoPaths(userData).set({ repoFullName: 'owner/name', path: repo })).rejects.toThrow(/no Git remote for owner\/name/);
   });
 
   it('rejects a non-repo and a relative path', async () => {

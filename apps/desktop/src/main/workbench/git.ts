@@ -16,6 +16,7 @@ import {
 import { processEnv } from './environment';
 import { readConfig } from './config';
 import { WorkbenchPaths } from './paths';
+import { chooseRemote, type GitRemote } from './remotes';
 
 const children = new Set<ChildProcess>();
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -276,6 +277,7 @@ async function freeWorktreeDir(
 export async function freeBranchName(
   repository: string,
   wish: string,
+  remote: string | null = 'origin',
 ): Promise<string> {
   const match = /^(.*)-(\d+)$/.exec(wish);
   const stem = match ? match[1] : wish;
@@ -285,7 +287,7 @@ export async function freeBranchName(
     if (!isValidBranchName(candidate)) break;
     if (
       !(await hasRef(repository, `refs/heads/${candidate}`)) &&
-      !(await hasRef(repository, `refs/remotes/origin/${candidate}`))
+      !(remote && (await hasRef(repository, `refs/remotes/${remote}/${candidate}`)))
     )
       return candidate;
   }
@@ -314,19 +316,20 @@ async function checkedOutAt(
 }
 
 /**
- * Move a local branch up to `origin/<branch>` when that is a fast-forward. A
+ * Move a local branch up to `<remote>/<branch>` when that is a fast-forward. A
  * person's old copy of a PR branch must not start the session behind the PR.
  * A branch with commits of its own is left alone.
  */
 async function fastForwardBranch(
   repository: string,
   branch: string,
+  remoteName: string,
 ): Promise<void> {
   const local = await exec(repository, [
     { argv: ['git', 'rev-parse', '--verify', `refs/heads/${branch}`] },
   ]);
   const remote = await exec(repository, [
-    { argv: ['git', 'rev-parse', '--verify', `refs/remotes/origin/${branch}`] },
+    { argv: ['git', 'rev-parse', '--verify', `refs/remotes/${remoteName}/${branch}`] },
   ]);
   if (local.exitCode !== 0 || remote.exitCode !== 0) return;
   const from = local.stdout.trim();
@@ -349,7 +352,7 @@ export class WorktreeManager {
 
   createWorktree(
     input: Parameters<WorkbenchLocalBridge['createWorktree']>[0],
-  ): Promise<{ path: string; branch: string }> {
+  ): Promise<{ path: string; branch: string; notice?: string }> {
     const pending = this.queue.then(() => this.create(input));
     this.queue = pending.catch(() => undefined);
     return pending;
@@ -357,7 +360,7 @@ export class WorktreeManager {
 
   private async create(
     input: Parameters<WorkbenchLocalBridge['createWorktree']>[0],
-  ): Promise<{ path: string; branch: string }> {
+  ): Promise<{ path: string; branch: string; notice?: string }> {
     if (!input.repoPath && !input.cloneUrl)
       throw new Error('Select a repository or supply a clone URL');
     if (
@@ -399,23 +402,37 @@ export class WorktreeManager {
         );
       }
     }
-    await git(repository, 'fetch', 'origin');
+    // Talyn's own clone has `origin`. A person's checkout can name its
+    // remote anything, or have none.
+    const remoteName = source
+      ? chooseRemote(await listRemotes(repository), input.repoFullName)
+      : 'origin';
+    let notice: string | undefined;
+    if (remoteName) await git(repository, 'fetch', remoteName);
+    else {
+      if (!(await hasRef(repository, `refs/heads/${input.baseBranch}`)))
+        throw new Error(
+          `This repository has no remote, and it has no local branch ${input.baseBranch} to start the session from.`,
+        );
+      notice = `This repository has no remote, so Talyn made the session from your local ${input.baseBranch} branch without fetching.`;
+    }
     // A name Talyn made up must never pick up a branch that already exists:
     // that branch holds other commits, maybe someone else's.
     const branch = input.newBranch
-      ? await freeBranchName(repository, input.branch)
+      ? await freeBranchName(repository, input.branch, remoteName)
       : input.branch;
     const existing = await hasRef(repository, `refs/heads/${branch}`);
     const remote =
       !input.newBranch &&
-      (await hasRef(repository, `refs/remotes/origin/${branch}`));
+      Boolean(remoteName) &&
+      (await hasRef(repository, `refs/remotes/${remoteName}/${branch}`));
     if (existing) {
       const holder = await checkedOutAt(repository, branch);
       if (holder)
         throw new Error(
           `The branch ${branch} is checked out in ${holder}. Switch that checkout to another branch, then try again.`,
         );
-      if (remote) await fastForwardBranch(repository, branch);
+      if (remote) await fastForwardBranch(repository, branch, remoteName!);
       await git(repository, 'worktree', 'add', '--', target, branch);
     } else
       await git(
@@ -426,7 +443,9 @@ export class WorktreeManager {
         branch,
         '--',
         target,
-        `origin/${remote ? branch : input.baseBranch}`,
+        remoteName
+          ? `${remoteName}/${remote ? branch : input.baseBranch}`
+          : `refs/heads/${input.baseBranch}`,
       );
     try {
       const common = await git(target, 'rev-parse', '--git-common-dir');
@@ -449,7 +468,7 @@ export class WorktreeManager {
         name: input.name,
         baseBranch: input.baseBranch,
       });
-      return { path: target, branch };
+      return { path: target, branch, ...(notice ? { notice } : {}) };
     } catch (error) {
       await git(repository, 'worktree', 'remove', '--force', '--', target);
       await git(repository, 'worktree', 'prune');
@@ -696,7 +715,7 @@ export function parsePorcelainPaths(stdout: string): string[] {
 
 export async function listRemotes(
   repository: string,
-): Promise<Array<{ name: string; url: string }>> {
+): Promise<GitRemote[]> {
   const result = await exec(repository, [
     {
       argv: ['git', 'config', '--get-regexp', '^remote\\..*\\.url$'],
@@ -704,7 +723,7 @@ export async function listRemotes(
     },
   ]);
   if (result.exitCode !== 0) return [];
-  const remotes: Array<{ name: string; url: string }> = [];
+  const remotes: GitRemote[] = [];
   for (const line of result.stdout.split('\n')) {
     const match = /^remote\.(.+)\.url (.+)$/.exec(line.trim());
     if (match) remotes.push({ name: match[1], url: match[2] });

@@ -11,7 +11,6 @@ import { detectCheckouts, uniqueMainCheckouts } from './detectCheckouts';
 import { detectAgents, localReadiness, loginPath } from './environment';
 import {
   exec,
-  git,
   listFiles,
   readFile,
   readFileBase64,
@@ -22,32 +21,24 @@ import {
 import { discoverInstructionFiles } from './instructionFiles';
 import { WorkbenchPaths } from './paths';
 import { PreviewForwarder } from './previewForward';
-import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
+import { RepoPaths } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
 import { generateWorkbenchTitle, suggestWorkbenchBranchName } from './title';
 import { renameWorktreeBranch } from './branchRename';
 
-export async function pickRepoFolder(repoPaths?: RepoPaths): Promise<{
-  path: string;
-  remoteUrl: string | null;
-} | null> {
+/**
+ * The native folder picker. With `expectRepo`, a folder that is not a Git
+ * checkout of that repository is refused with a clear message; otherwise
+ * the folder is recorded for the GitHub repository its remote names.
+ */
+export async function pickRepoFolder(repoPaths: RepoPaths, expectRepo?: string): Promise<string | null> {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory'],
-    title: 'Select a Git repository',
+    title: expectRepo ? `Select your ${expectRepo} checkout` : 'Select a Git repository',
   });
   if (result.canceled || !result.filePaths[0]) return null;
-  const root = await git(result.filePaths[0], 'rev-parse', '--show-toplevel');
-  let remoteUrl: string | null = null;
-  try {
-    remoteUrl = await git(root, 'remote', 'get-url', 'origin');
-  } catch {
-    /* A local repository can have no remote. */
-  }
-  const repoFullName = remoteUrl ? repoFullNameFromRemote(remoteUrl) : null;
-  if (repoPaths && repoFullName)
-    await repoPaths.set({ repoFullName, path: root }).catch(() => undefined);
-  return { path: root, remoteUrl };
+  return repoPaths.record(result.filePaths[0], expectRepo);
 }
 
 export function registerWorkbenchIpc(
@@ -212,7 +203,8 @@ export function registerWorkbenchIpc(
   handle('detect-agents', detectAgents);
   handle(
     'pick-repo-folder',
-    async () => (await pickRepoFolder(repoPaths))?.path ?? null,
+    (expectRepo?: unknown) =>
+      pickRepoFolder(repoPaths, typeof expectRepo === 'string' && expectRepo ? expectRepo : undefined),
   );
   handle('readiness', (force?: boolean) => localReadiness(force === true));
   handle('coder:status', (url?: string) => coder.status(url));
