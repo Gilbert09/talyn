@@ -97,7 +97,7 @@ export function AppSidebar() {
           />
         </div>
 
-        <nav className="min-h-0 flex-1 overflow-y-auto px-1.5" aria-label="Sessions">
+        <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5" aria-label="Sessions">
           {offered && !collapsed && <SidebarSlackPending />}
           {offered && !collapsed && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}

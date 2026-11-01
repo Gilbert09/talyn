@@ -116,7 +116,7 @@ function WorkbenchRow({
             </span>
             <span
               className={cn(
-                'min-w-0 flex-1 truncate',
+                'min-w-[5rem] flex-1 truncate',
                 isUnread ? 'font-semibold' : 'font-normal',
                 (suspended || done) && !selected && 'opacity-60'
               )}
@@ -124,9 +124,12 @@ function WorkbenchRow({
               {workbenchDisplayName(workbench)}
             </span>
             {diff && !done && (
-              <span className="shrink-0 font-mono text-[11px] tabular-nums">
-                <span className="text-success">+{diff.added}</span>{' '}
-                <span className="text-destructive">−{diff.removed}</span>
+              <span
+                className="min-w-0 shrink overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums"
+                title={`+${diff.added} −${diff.removed}`}
+              >
+                <span className="text-success">+{compactCount(diff.added)}</span>{' '}
+                <span className="text-destructive">−{compactCount(diff.removed)}</span>
               </span>
             )}
             <ThreadTag threadId={workbench.threadId} />
@@ -163,4 +166,12 @@ function WorkbenchRow({
       />
     </>
   );
+}
+
+/** 1150 → "1.1k" (rounded down): a sidebar row has no room for long numbers. */
+export function compactCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(Math.floor(n / 100) / 10).toFixed(1).replace(/\.0$/, '')}k`;
+  if (n < 1_000_000) return `${Math.floor(n / 1000)}k`;
+  return `${(Math.floor(n / 100_000) / 10).toFixed(1).replace(/\.0$/, '')}m`;
 }
