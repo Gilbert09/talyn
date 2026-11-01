@@ -124,6 +124,7 @@ export * from './workbenchDetect.js';
 export * from './talynBriefing.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
+export * from './pricing.js';
 export * from './bake.js';
 export * from './turnTiming.js';
 export * from './setupRecipe.js';
@@ -138,6 +139,17 @@ import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './ski
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
 import type { GithubHealth } from './githubHealth.js';
+import type {
+  AutoTopupConfig,
+  AutoTopupSettings,
+  BillingPricing,
+  ConcurrentBoxUsage,
+  CreditPackId,
+  CreditSummary,
+  PlanTier,
+  SizePrice,
+  UsageSummary,
+} from './pricing.js';
 
 // ============================================================================
 // Workspace
@@ -1598,7 +1610,16 @@ export interface PaginatedResponse<T> {
 // Billing
 // ============================================================================
 
-export type Plan = 'free' | 'unlimited';
+/**
+ * The plan a billing status reports: a usage-billing tier, or `'unlimited'`.
+ *
+ * `'unlimited'` stays in the union on purpose. Branch builds of the apps talk
+ * to the production backend, which still sends the old `'free' | 'unlimited'`
+ * model until usage billing ships, and a client must read that without a type
+ * error. A backend on usage billing never sends it; it maps old Unlimited
+ * subscribers to `legacy_pro` and old comps to `pro`.
+ */
+export type Plan = PlanTier | 'unlimited';
 
 /** Max simultaneously-active tasks (pending/queued/in_progress) on the free plan. */
 export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
@@ -1729,6 +1750,34 @@ export const REVIEW_CYCLE_LIMIT_ERROR_CODE = 'code_review_limit_reached';
  */
 export const AUTO_REVIEW_ERROR_CODE = 'auto_review_requires_unlimited';
 
+/**
+ * ApiResponse.code (402) when a box cannot start because the period's
+ * included box-hours and the credit balance are both spent. A running turn
+ * finishes; only NEW boxes are refused. Unattended runs defer instead.
+ */
+export const USAGE_EXHAUSTED_ERROR_CODE = 'usage_exhausted';
+
+/**
+ * ApiResponse.code (402) when the plan may not start the requested sandbox
+ * size (Free: small and standard only). A feature gate: the client pitches Pro.
+ * Unattended callers get `small` instead of this error.
+ */
+export const SIZE_REQUIRES_PRO_ERROR_CODE = 'size_requires_pro';
+
+/**
+ * ApiResponse.code (402) when the owner already runs as many boxes as the
+ * plan allows at once. A usage cap: a slot frees when a box stops.
+ */
+export const CONCURRENT_BOX_LIMIT_ERROR_CODE = 'concurrent_box_limit_reached';
+
+/** The usage-billing 402 codes, for clients that route them to the upgrade or credits flow. */
+export const USAGE_BILLING_ERROR_CODES = [
+  USAGE_EXHAUSTED_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+] as const;
+export type UsageBillingErrorCode = (typeof USAGE_BILLING_ERROR_CODES)[number];
+
 /** ApiResponse.code when a team admin assigns more seats than the team pays for. */
 export const TEAM_SEATS_FULL_ERROR_CODE = 'team_seats_full';
 
@@ -1785,11 +1834,46 @@ export interface BillingStatus {
   activeReviews: number;
   /** null = unlimited. */
   activeReviewLimit: number | null;
+
+  // Usage billing. Every field below is OPTIONAL and stays so: the production
+  // backend does not send them before usage billing ships, and a client reads
+  // their ABSENCE as "draw the old view". Money is micro-dollars (see pricing.ts).
+
+  /** The usage-billing tier. Absent on a backend without usage billing. */
+  tier?: PlanTier;
+  /** The current period's box-hours. */
+  usage?: UsageSummary;
+  /** Credit balance and live lots. Absent when the tier cannot hold credits. */
+  credits?: CreditSummary;
+  /** Absent when the tier cannot use auto top-up. */
+  autoTopup?: AutoTopupSettings;
+  /** Every size with its weight, hourly price and whether this tier may start it. */
+  sizePrices?: SizePrice[];
+  /** Boxes running now against the tier's concurrency cap. */
+  concurrentBoxes?: ConcurrentBoxUsage;
+  /** List prices, so no client hard-codes a dollar amount. */
+  pricing?: BillingPricing;
 }
 
 export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
+  /** The product to buy. Absent means the backend's default (Pro on usage billing). */
+  plan?: 'pro';
 }
+
+/** `POST /billing/credits/checkout`. */
+export interface CreditCheckoutRequest {
+  pack: CreditPackId;
+}
+
+/** `POST /billing/change-plan`: move a Legacy Pro subscription to Pro. */
+export interface ChangePlanRequest {
+  to: 'pro';
+  period: 'monthly' | 'annual';
+}
+
+/** `PUT /billing/auto-topup`. Validate with `validateAutoTopupConfig`. */
+export type UpdateAutoTopupRequest = AutoTopupConfig;
 
 // ---------- Team plan ----------
 //
