@@ -178,6 +178,8 @@ describe('Data API database boundary', () => {
       'repository_instructions', 'workspace_memories',
       // Preview links (0098): the host router reads them before any auth.
       'workbench_preview_hosts', 'workbench_preview_tickets', 'workbench_preview_sessions',
+      // Turn time reports and setup recipes (0099): written by the turn-end job.
+      'workbench_turn_timings', 'repository_setup_steps',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

@@ -6,7 +6,15 @@ import {
   detectRepoSandboxSize, getSizeRepository, mergeSandboxSize, sandboxSizeResponse, validateSandboxSizeChoice,
 } from '../services/workbenches/sandboxSize.js';
 import { Router, type Request, type Response } from 'express';
-import type { PutRepositoryInstructionsInput } from '@talyn/shared';
+import { prepareRecordedStep, type PutRepositoryInstructionsInput, type RecordSetupStepInput } from '@talyn/shared';
+import {
+  getSetupRecipe,
+  learningDisabled,
+  recordSetupSteps,
+  revertSetupStep,
+  setSetupLearning,
+} from '../services/workbenches/setupRecipe.js';
+import { getWorkbench } from '../services/workbenches/store.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
 import {
   getRepositoryInstructions,
@@ -202,6 +210,67 @@ export function repositoryRoutes(): Router {
     } catch (err) {
       res.status(400).json({ success: false, error: (err as Error).message });
     }
+  });
+
+  // ---- The setup recipe: steps that sessions learned, applied to new boxes and the bake ----
+
+  router.get('/:id/setup-recipe', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    res.json({ success: true, data: await getSetupRecipe(req.params.id) });
+  });
+
+  /** Revert one step. It stays listed as reverted, so it is not learned again. */
+  router.delete('/:id/setup-recipe/steps/:stepId', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const step = await revertSetupStep(req.params.id, req.params.stepId);
+    if (!step) return res.status(404).json({ success: false, error: 'This repository has no such setup step.' });
+    res.json({ success: true, data: await getSetupRecipe(req.params.id) });
+  });
+
+  router.post('/:id/setup-recipe/disable', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    await setSetupLearning(req.params.id, true);
+    res.json({ success: true, data: await getSetupRecipe(req.params.id) });
+  });
+
+  router.post('/:id/setup-recipe/enable', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    await setSetupLearning(req.params.id, false);
+    res.json({ success: true, data: await getSetupRecipe(req.params.id) });
+  });
+
+  /** An agent's own step (`talyn_record_setup_step`). The same refusals as a learned step. */
+  router.post('/:id/setup-recipe/steps', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const body = (req.body ?? {}) as Partial<RecordSetupStepInput>;
+    if (typeof body.command !== 'string' || typeof (body.why ?? '') !== 'string') {
+      return res.status(400).json({ success: false, error: 'command must be a string.' });
+    }
+    let workbenchId: string | null = null;
+    if (body.sessionId !== undefined) {
+      const session = typeof body.sessionId === 'string' ? await getWorkbench(body.sessionId) : null;
+      if (!session || session.repositoryId !== req.params.id) {
+        return res.status(400).json({ success: false, error: 'The session is not a session on this repository.', code: 'session_not_on_repository' });
+      }
+      workbenchId = session.id;
+    }
+    if (await learningDisabled(req.params.id)) {
+      return res.status(409).json({ success: false, error: 'Setup learning is off for this repository.', code: 'setup_learning_disabled' });
+    }
+    const prepared = prepareRecordedStep(body.command, body.why ?? '');
+    if (prepared.refused.length > 0) {
+      return res.status(400).json({ success: false, error: prepared.refused[0].reason, code: 'setup_step_refused' });
+    }
+    const recorded = await recordSetupSteps({
+      repositoryId: req.params.id,
+      workbenchId,
+      source: 'agent',
+      candidates: prepared.steps,
+    });
+    if (recorded.added.length === 0 && recorded.seen.length === 0) {
+      return res.status(409).json({ success: false, error: 'The setup recipe is full. A person can revert steps to make room.', code: 'setup_recipe_full' });
+    }
+    res.json({ success: true, data: { steps: [...recorded.added, ...recorded.seen] } });
   });
 
   router.delete('/:id', async (req, res) => {

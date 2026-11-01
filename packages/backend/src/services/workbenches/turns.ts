@@ -31,6 +31,7 @@ import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWr
 import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownership.js';
 import { runWithoutScope } from '../../db/client.js';
 import { scheduleAgentBackup } from './agentBackups.js';
+import { scheduleTurnInsights } from './turnInsights.js';
 import { clearRecoveryRecap, recoveryRecap } from './agentRecap.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import {
@@ -390,6 +391,8 @@ async function runTurnLoopBody(
     }
     if (fin) {
       scheduleAgentBackup(chatId);
+      // The time report and setup learning: in the background, never in the turn's way.
+      scheduleTurnInsights(chatId, heldTurn);
       const wb = await getWorkbench(fin.chat.workbenchId);
       if (wb?.sandboxId) await removeTurnLogs(wb, chatId, heldTurn);
     }

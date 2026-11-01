@@ -76,6 +76,11 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_stop_session_script',
   'talyn_archive_session',
   'talyn_restore_session',
+  'talyn_session_timing',
+  // Repository setup that outlives the session, allowed on purpose: the
+  // backend refuses secrets, downloaded scripts piped into a shell and data
+  // egress, logs each step with its session, and a person can revert it.
+  'talyn_record_setup_step',
   // Workspace memory
   'talyn_memory_write',
   'talyn_memory_search',

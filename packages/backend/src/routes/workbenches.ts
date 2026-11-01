@@ -58,6 +58,7 @@ import {
 import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
 import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from '../services/workbenches/resize.js';
+import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -720,6 +721,17 @@ export function workbenchRoutes(): Router {
   // The UI calls this on mount and on the first keystroke; 30 s collapses those into one fleet read.
   const WAKE_DEDUPE_MS = 30_000;
   const lastWake = new Map<string, { at: number; status: string }>();
+
+  /** Where the session's turns spent their time. Read from stored turn reports, never the transcript. */
+  router.get('/:id/timing', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await getWorkbenchTiming(row.id));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
 
   router.post('/:id/wake', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
