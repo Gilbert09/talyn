@@ -14,6 +14,7 @@ import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
 import type { SlackSessionSource } from './slack.js';
+import type { SandboxSize } from './sandboxSize.js';
 
 // ============================================================================
 // Vocabulary
@@ -117,6 +118,12 @@ export interface WorkbenchSettings {
   internetAccess?: boolean;
   /** Absent uses the device default. */
   autoCreatePr?: boolean;
+  /** The size this session chose with a resize. Absent: the repository's size. Server-written. */
+  sandboxSize?: SandboxSize;
+  /** A resize that waits for the running turn to end. Server-written. */
+  resizeTo?: SandboxSize;
+  /** Why the agent asked for the resize, for the note the person sees. Server-written. */
+  resizeReason?: string;
   scripts?: {
     setup?: string | null;
     /** One command, or named run scripts. */

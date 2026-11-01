@@ -1,4 +1,4 @@
-import { shellQuote, WORKBENCH_IMPORT_MAX_BYTES } from '@talyn/shared';
+import { isSandboxSize, SANDBOX_SIZES, shellQuote, WORKBENCH_IMPORT_MAX_BYTES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { FleetRunNotFoundError, type FleetSandbox } from '../selfHosted/client.js';
 import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
@@ -82,7 +82,7 @@ import { closeWorkbenchTerminals } from './terminalBridge.js';
  * GitHub, but a commit made after the export is not in the new box.
  */
 
-export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full';
+export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full' | 'resize';
 
 export type MoveResult =
   | { moved: true; row: WorkbenchRow }
@@ -105,6 +105,9 @@ export const MOVE_SETTINGS_KEYS = [
   'moveFailures',
   'movedForDiskTo',
   'lowDiskNotedFor',
+  'sandboxSize',
+  'resizeTo',
+  'resizeReason',
 ] as const;
 
 // ============================================================================
@@ -784,7 +787,8 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     step = 'create';
     await setMessage(claimed, 'Starting a fresh sandbox');
     const { createWorkbenchSandbox } = await import('./lifecycle.js');
-    const made = await createWorkbenchSandbox(claimed, targetId);
+    // A resize wants exactly its size: a refusal fails the move rather than make a standard box.
+    const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize' });
     if (!made.ok) throw new Error(made.error);
     created = made;
     await setMoveTargetHost(row.id, from, targetId, made.fleetHost, made.fleetSandboxId);
@@ -822,7 +826,11 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
       fleetHost: made.fleetHost ?? null,
       fleetSandboxId: made.fleetSandboxId,
       statusMessage: setupNote,
-      ...(reason === 'stale_golden' ? {} : { settings: { movedForDiskTo: made.sandboxId } }),
+      size: made.size,
+      settings: {
+        ...(reason === 'low_disk' || reason === 'disk_full' ? { movedForDiskTo: made.sandboxId } : {}),
+        ...(claimed.settings?.resizeTo === made.size ? { sandboxSize: made.size } : {}),
+      },
     });
     if (!committed) throw new Error('the session was archived, deleted or swept during the move');
   } catch (err) {
@@ -940,21 +948,32 @@ async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow): Promise<str
   }
 }
 
-/** Report only work that did not survive. */
+/** Report a resize, and otherwise only work that did not survive. */
 export function movedNote(input: {
   reason: MoveReason;
   conversation: 'carried' | 'missing' | 'none';
   stopped: boolean;
   manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>;
+  resized?: { size: SandboxSize; why?: string | null };
 }): string | null {
   const parts: string[] = [];
   const skipped = skippedNote(input.manifest);
   if (skipped) parts.push(skipped);
   if (input.conversation === 'missing') parts.push('the agent conversation could not be restored; the transcript is still available');
   if (input.stopped) parts.push('running scripts and terminals were stopped; start them again');
-  if (!parts.length) return null;
   const text = parts.join('; ');
-  return text.charAt(0).toUpperCase() + text.slice(1) + '.';
+  const lost = parts.length ? text.charAt(0).toUpperCase() + text.slice(1) + '.' : null;
+  if (!input.resized) return lost;
+  const why = input.resized.why?.trim().replace(/[.\s]+$/, '');
+  const head = `Talyn moved this session to a ${SANDBOX_SIZES[input.resized.size].label} sandbox${why ? `: ${why}` : ''}.`;
+  return lost ? `${head} ${lost}` : head;
+}
+
+/** The resize this move applied, read from the row before and after it. */
+function appliedResize(old: WorkbenchRow, committed: WorkbenchRow): { size: SandboxSize; why?: string | null } | undefined {
+  const asked = old.settings?.resizeTo;
+  if (!isSandboxSize(asked) || committed.settings?.sandboxSize !== asked) return undefined;
+  return { size: asked, why: old.settings?.resizeReason ?? null };
 }
 
 export function skippedNote(manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>): string | null {
@@ -1032,6 +1051,7 @@ async function afterCommit(
         conversation,
         stopped,
         manifest: manifest ?? { skipped: [], skippedCount: 0, skippedDirs: [] },
+        resized: appliedResize(old, committed),
       });
       if (text) await note(current, 'sandbox_moved', text, manifest?.skipped.length ? { skippedFiles: manifest.skipped } : {});
     });
@@ -1099,7 +1119,8 @@ async function handleFailure(f: {
     console.warn(`[workbench] releasing the move of ${row.id} failed:`, releaseErr);
     return null;
   });
-  await recordMoveFailure(row.id).catch(() => null);
+  // A resize is asked for once and never retried, so it needs no backoff.
+  if (f.reason !== 'resize') await recordMoveFailure(row.id).catch(() => null);
   if (!released) return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
 
   await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);

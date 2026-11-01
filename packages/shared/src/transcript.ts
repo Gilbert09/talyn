@@ -103,6 +103,22 @@ export type Block =
       denials: number;
     };
 
+/**
+ * Talyn's own notes to the person about the session: shown as plain lines,
+ * with no label. The sandbox and account notes were stored but not shown
+ * until the resize note needed them.
+ */
+export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
+  'talyn_imported',
+  'pr_merged_archive',
+  'sandbox_moved',
+  'sandbox_resize_failed',
+  'sandbox_size_fallback',
+  'sandbox_low_disk',
+  'sandbox_processes_stopped',
+  'fleet_account_switched',
+]);
+
 export function buildBlocks(events: AgentEvent[]): Block[] {
   const blocks: Block[] = [];
   let interruptionOpen = false;
@@ -360,7 +376,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         continue;
       }
       // Session notes have no label prefix.
-      if (event.subtype === 'talyn_imported' || event.subtype === 'pr_merged_archive') {
+      if (SESSION_NOTE_SUBTYPES.has(String(event.subtype ?? ''))) {
         blocks.push({ kind: 'system', key: seqKey, text: String((event as { text?: unknown }).text ?? '') });
         continue;
       }

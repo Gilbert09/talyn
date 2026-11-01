@@ -57,6 +57,7 @@ import {
 } from '../services/workbenches/instructions.js';
 import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
 import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
+import { requestSessionResize, type ResizeInput, type SessionResizeResult } from '../services/workbenches/resize.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -575,6 +576,37 @@ export function workbenchRoutes(): Router {
     const data = await publicWorkbench((await getWorkbench(row.id)) ?? row);
     await emitWorkbenchUpdated(data);
     ok(res, data);
+  });
+
+  /**
+   * Move the session to a sandbox of another size, after the running turn.
+   * `continueWith` goes to the session's chat as a Talyn message, so the next
+   * turn starts on the new box; the turn start applies the resize first.
+   */
+  router.put('/:id/sandbox-size', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const body = (req.body ?? {}) as ResizeInput & { continueWith?: unknown };
+    if (body.continueWith !== undefined && body.continueWith !== null && typeof body.continueWith !== 'string') {
+      return bad(res, 400, 'continueWith must be a string.');
+    }
+    const continueWith = typeof body.continueWith === 'string' ? body.continueWith.trim() : '';
+    try {
+      const result = await requestSessionResize(row, body, { startNow: !continueWith });
+      let continued = false;
+      if (continueWith && result.outcome !== 'unchanged') {
+        const chat = (await listChats(row.id)).find((c) => !c.closedAt);
+        if (chat) {
+          await sendMessage(chat.id, { text: continueWith }, { origin: 'talyn' });
+          continued = true;
+        }
+      }
+      await emitWorkbenchUpdated(await publicWorkbench((await getWorkbench(row.id)) ?? row));
+      const data: SessionResizeResult = { ...result, continued };
+      ok(res, data);
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   router.patch('/:id', async (req, res) => {
