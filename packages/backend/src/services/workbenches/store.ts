@@ -27,7 +27,7 @@ import {
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
-import { cleanJsonbString, stringifyJsonbSafe } from './jsonSafe.js';
+import { cleanJsonbString, stringifyJsonbSafe, toJsonbSafe } from './jsonSafe.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -1248,7 +1248,8 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
   if (events.length === 0) return 0;
   const inserted = await db()
     .insert(eventsTable)
-    .values(events.map((e) => ({ chatId, seq: e.seq, turn: e.turn, event: e.event as Record<string, unknown> })))
+    // A tool result can carry U+0000 or a lone surrogate, which jsonb refuses for the whole batch.
+    .values(events.map((e) => ({ chatId, seq: e.seq, turn: e.turn, event: toJsonbSafe(e.event) as Record<string, unknown> })))
     .onConflictDoNothing()
     .returning({ seq: eventsTable.seq });
   const maxSeq = Math.max(...events.map((e) => e.seq));
