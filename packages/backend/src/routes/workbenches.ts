@@ -31,6 +31,8 @@ import {
   type WorkbenchEvent,
   type WorkbenchKind,
   type WorkbenchSettings,
+  boxRefusalReason,
+  isSandboxSize,
 } from '@talyn/shared';
 import { runWithoutScope } from '../db/client.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
@@ -102,6 +104,9 @@ import {
   restoreMemory,
   updateMemory,
 } from '../services/workbenches/memory.js';
+import { billingEnabled, checkBoxGate } from '../services/billing/entitlements.js';
+import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
+import { ownerOfWorkspace } from '../services/workflows/owner.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -593,6 +598,12 @@ export function workbenchRoutes(): Router {
     }
     const continueWith = typeof body.continueWith === 'string' ? body.continueWith.trim() : '';
     try {
+      // The plan may not start this size (Free: small and standard). A resize
+      // replaces the box, so only the size is checked.
+      if (billingEnabled() && isSandboxSize(body.size)) {
+        const ownerId = await ownerOfWorkspace(row.workspaceId);
+        if (ownerId) await checkBoxGate(ownerId, { size: body.size, replacesBox: true, workspaceId: row.workspaceId });
+      }
       const result = await requestSessionResize(row, body, { startNow: !continueWith });
       let continued = false;
       if (continueWith && result.outcome !== 'unchanged') {
@@ -711,6 +722,8 @@ export function workbenchRoutes(): Router {
           row.agent as WorkbenchAgent,
         );
         if (refusal) throw refusal;
+        // A retry boots a fresh box: the plan's budget, box cap and size.
+        await assertWorkbenchBoxStart(row);
       }
       ok(res, await publicWorkbench(await retryWorkbench(row.id)));
     } catch (err) {
@@ -742,7 +755,8 @@ export function workbenchRoutes(): Router {
     }
     const recent = lastWake.get(row.id);
     if (recent && Date.now() - recent.at < WAKE_DEDUPE_MS) {
-      res.status(recent.status === 'awake' ? 200 : 202).json({ success: true, data: { status: recent.status } });
+      const settled = recent.status === 'awake' || recent.status === 'exhausted' || recent.status === 'box_limit';
+      res.status(settled ? 200 : 202).json({ success: true, data: { status: recent.status } });
       return;
     }
     try {
@@ -753,6 +767,17 @@ export function workbenchRoutes(): Router {
         const client = await fleetClientFor(row.workspaceId, row.fleetHost);
         const { sandbox } = await client.getSandbox(row.sandboxId);
         if (sandbox.status === 'suspended') {
+          // Waking adds a box and starts its meter. Out of budget, or at the
+          // box cap, the box stays asleep and the answer says why: 200, not a
+          // 402, because the client calls this on mount, not on a person's
+          // request to spend. The notice lets it show the prompt.
+          const refusal = await existingBoxRefusal(row);
+          if (refusal) {
+            const refused = boxRefusalReason(refusal.code) === 'usage_exhausted' ? 'exhausted' : 'box_limit';
+            lastWake.set(row.id, { at: Date.now(), status: refused });
+            ok(res, { status: refused, code: refusal.code, notice: refusal.notice });
+            return;
+          }
           status = 'resuming';
           resumeOnce(client, row.sandboxId).catch(() => undefined);
         }
@@ -768,6 +793,8 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
+      // A restore boots (or wakes) the session's box: the plan first.
+      if (row.archivedAt) await assertWorkbenchBoxStart(row);
       ok(res, await publicWorkbench(await restoreWorkbench(row.id)));
     } catch (err) {
       fail(res, err);

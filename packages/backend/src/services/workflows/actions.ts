@@ -8,13 +8,15 @@ import type {
   CodeReviewPreset,
 } from '@talyn/shared';
 import {
+  boxRefusalReason,
   buildSkillPrompt,
   renderWorkflowComment,
   SKILL_MAX_BYTES,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { startReviewCycle } from '../codeReview/cycle.js';
-import { isBoxGateError } from '../billing/entitlements.js';
+import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
+import { deferralRetryAt } from '../billing/boxDeferral.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
@@ -23,7 +25,6 @@ import { getOrFetchPRSummary } from '../prCache.js';
 import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
 import { createCloudTask } from '../taskCreate.js';
 import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
-import { TaskLimitError } from '../billing/entitlements.js';
 import { setQueueMembership } from '../mergeQueue/membership.js';
 import { getRepoSkillContent } from '../skills.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
@@ -70,6 +71,12 @@ export interface ActionResults {
   taskId: string | null;
   /** The PR row, if any action had cause to materialise one. */
   pullRequestId: string | null;
+  /**
+   * When the latest box refusal among the outcomes clears (epoch ms), 0 when
+   * none. The run's retry is scheduled from it, as a rate gate's is from the
+   * gate: a refusal names when to look again.
+   */
+  boxRetryAtMs: number;
 }
 
 function ok(type: WorkflowActionType, detail: string): WorkflowActionOutcome {
@@ -138,6 +145,7 @@ export async function runWorkflowActions(
   const outcomes: WorkflowActionOutcome[] = [];
   let taskId: string | null = null;
   let pullRequestId: string | null = null;
+  let boxRetryAtMs = 0;
 
   for (const action of actions) {
     let outcome: WorkflowActionOutcome;
@@ -146,6 +154,7 @@ export async function runWorkflowActions(
       outcome = result.outcome;
       if (result.taskId) taskId = result.taskId;
       if (result.pullRequestId) pullRequestId = result.pullRequestId;
+      if (result.retryAt) boxRetryAtMs = Math.max(boxRetryAtMs, result.retryAt.getTime());
     } catch (err) {
       // A handler that throws is a bug, not a refusal — record it as one rather
       // than letting it take the rest of the workflow down.
@@ -158,13 +167,15 @@ export async function runWorkflowActions(
     outcomes.push(outcome);
   }
 
-  return { outcomes, taskId, pullRequestId };
+  return { outcomes, taskId, pullRequestId, boxRetryAtMs };
 }
 
 interface OneResult {
   outcome: WorkflowActionOutcome;
   taskId?: string | null;
   pullRequestId?: string | null;
+  /** A box refusal's recheck time; see {@link ActionResults.boxRetryAtMs}. */
+  retryAt?: Date | null;
 }
 
 async function runOne(
@@ -200,16 +211,14 @@ async function runOne(
  *
  * Thin on purpose: `startReviewCycle` already does the feature gate (keyed on
  * the workspace OWNER, which is the only identity a webhook-driven run provably
- * has), the open-PR check, the plan's cycle gate, and the "a cycle is already
- * running" collapse. Re-deriving any of that here would be a second opinion that
- * can disagree with the route's.
+ * has), the open-PR check, the box gate, and the "a cycle is already running"
+ * collapse. Re-deriving any of that here would be a second opinion that can
+ * disagree with the route's.
  *
  * It does NOT return a taskId. A review's units are not `tasks` rows — they
- * cannot be, because `activePrTaskId` would refuse the second one and
- * `withTaskLimitGate` would spend the plan's allowance on them — so there is
- * nothing to link, and a workflow that reviews does not consume a task slot.
- * The fix run a review may later lead to is an ordinary task and is metered
- * there.
+ * cannot be, because `activePrTaskId` would refuse the second one — so there is
+ * nothing to link. The cycle is gated as one box; the fix run a review may
+ * later lead to is an ordinary task and is gated there.
  */
 async function runCodeReview(
   preset: CodeReviewPreset | undefined,
@@ -238,15 +247,9 @@ async function runCodeReview(
       trigger: 'workflow',
     });
   } catch (err) {
-    // The plan gate THROWS rather than returning a refusal code, because on the
-    // route it becomes a 402 that opens the upgrade modal. There is no modal
-    // here, so it becomes an ordinary recorded outcome, and not a retryable one:
-    // `rate_gated` is the only code the retry sweep re-runs.
-    // WP5 gives box refusals their own failure codes; until then they record
-    // under the old plan-refusal code.
-    if (isBoxGateError(err)) {
-      return { outcome: no('run_code_review', 'review_limit_reached', err.message) };
-    }
+    // An automatic start returns `deferred` rather than throwing; this catches
+    // a refusal that still escapes, for the same treatment.
+    if (isBoxGateError(err)) return boxRefused('run_code_review', err, resolved.id, ctx);
     throw err;
   }
 
@@ -267,7 +270,22 @@ async function runCodeReview(
     };
   }
 
+  // The plan refused the cycle's box. Parked like a rate-gated action: the
+  // retry sweep runs it again when the refusal clears.
+  if (outcome.code === 'deferred') return boxRefused('run_code_review', outcome.error, resolved.id, ctx);
+
   return { outcome: no('run_code_review', workflowCodeFor(outcome.code), outcome.message) };
+}
+
+/**
+ * A box the plan refused, as a parked outcome. `usage_exhausted` and
+ * `box_limit_reached` are retryable and carry their recheck time; a size the
+ * plan cannot start is not (unattended runs are downsized before it).
+ */
+function boxRefused(type: WorkflowActionType, err: BoxGateError, pullRequestId: string, ctx?: ActionContext): OneResult {
+  const code = boxRefusalReason(err.code);
+  if (ctx) recordDeferral(ctx, code);
+  return { outcome: no(type, code, err.message), pullRequestId, retryAt: deferralRetryAt(err) };
 }
 
 /**
@@ -559,7 +577,6 @@ async function enqueue(
       enabled: true,
       method: method ?? row.mergeMethod,
       trigger: 'workflow:enqueue',
-      ownerId: ctx.ownerId,
     });
     return {
       outcome: ok('enqueue_merge_queue', 'added to the merge queue'),
@@ -675,19 +692,12 @@ async function startTask(
       pullRequestId: resolved.id,
     };
   } catch (err) {
-    if (err instanceof TaskLimitError) {
+    if (isBoxGateError(err)) {
       // Same treatment the merge-queue and auto-keep watchers give it: there is
-      // no request to answer, so nothing can 402 and no modal can open. Capture
-      // it server-side or the deferral is invisible (Session 116).
-      recordDeferral(ctx, 'task_limit_reached');
-      return {
-        outcome: no(
-          action.type,
-          'task_limit_reached',
-          'the free plan allows 3 tasks in flight at once'
-        ),
-        pullRequestId: resolved.id,
-      };
+      // no request to answer, so nothing can 402 and no modal can open. The
+      // action parks (`pending_retry`) until the refusal's recheck time, and
+      // the deferral is captured server-side (Session 116).
+      return boxRefused(action.type, err, resolved.id, ctx);
     }
     return { outcome: githubFailure(action.type, err), pullRequestId: resolved.id };
   }

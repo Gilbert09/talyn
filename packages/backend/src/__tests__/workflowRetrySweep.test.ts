@@ -13,6 +13,11 @@ import { claimRun, MAX_RETRY_ATTEMPTS, settleRun } from '../services/workflows/r
 import { workflowRetrySweep } from '../services/workflows/retrySweep.js';
 import { githubService } from '../services/github.js';
 import { githubRateGate, GitHubRateLimitError } from '../services/githubRateGate.js';
+import * as taskCreate from '../services/taskCreate.js';
+import * as prCache from '../services/prCache.js';
+import * as prCloudFix from '../services/prCloudFix.js';
+import { ConcurrentBoxLimitError, UsageExhaustedError } from '../services/billing/entitlements.js';
+import { isRetryable } from '../services/workflows/runs.js';
 
 /**
  * The retry sweep.
@@ -250,6 +255,60 @@ describe('workflow retry sweep', () => {
       expect(row?.retryAfter).toBeNull();
       expect((row?.actions as Array<{ error?: string }>)[0]?.error).toMatch(/gave up/);
     })();
+  });
+
+  it.each([
+    ['rate_gated', true],
+    ['usage_exhausted', true],
+    ['box_limit_reached', true],
+    ['size_requires_pro', false],
+    ['task_limit_reached', false],
+    ['github_error', false],
+  ])('%s is retryable: %s', (code, retryable) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(isRetryable({ type: 'run_prompt', ok: false, code: code as any })).toBe(retryable);
+  });
+
+  describe('a run parked on a box refusal', () => {
+    async function promptWorkflowRun(code: 'usage_exhausted' | 'box_limit_reached') {
+      const wf = await addWorkflow([{ type: 'run_prompt', prompt: 'Review this' }]);
+      const runId = await parkedRun(wf.id, { actions: [{ type: 'run_prompt', ok: false, code }] });
+      vi.spyOn(prCache, 'getOrFetchPRSummary').mockResolvedValue({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        summary: { title: 'Add a widget', url: FACTS.url, headBranch: 'alice/widget', baseBranch: 'main', state: 'open' } as any,
+        row: { id: 'pr-row', state: 'open' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      vi.spyOn(prCloudFix, 'resolveCloudEnv').mockResolvedValue({ envId: 'env-1', provider: 'selfhosted' });
+      vi.spyOn(prCloudFix, 'activePrTaskId').mockResolvedValue(null);
+      return runId;
+    }
+
+    it('runs again once due, and starts the task when the plan allows it now', async () => {
+      const runId = await promptWorkflowRun('usage_exhausted');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.spyOn(taskCreate, 'createCloudTask').mockResolvedValue({ id: 'task-1' } as any);
+      await workflowRetrySweep.tick();
+      const [run] = await db.select().from(runsTable).where(eq(runsTable.id, runId));
+      expect(run?.status).toBe('succeeded');
+      expect(run?.attempts).toBe(2);
+    });
+
+    it.each([
+      ['still out of hours', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 7 * 86_400_000) }), 15 * 60_000],
+      ['still at the box cap', () => new ConcurrentBoxLimitError(2, 2), 30_000],
+    ])('parks again at the refusal recheck time when %s', async (_label, make, retryInMs) => {
+      const runId = await promptWorkflowRun('usage_exhausted');
+      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(make());
+      const before = Date.now();
+      await workflowRetrySweep.tick();
+      const [run] = await db.select().from(runsTable).where(eq(runsTable.id, runId));
+      expect(run?.status).toBe('pending_retry');
+      expect(run?.attempts).toBe(2);
+      const due = run!.retryAfter!.getTime() - before;
+      expect(due).toBeGreaterThanOrEqual(retryInMs);
+      expect(due).toBeLessThan(retryInMs + 60_000);
+    });
   });
 
   it('does nothing at all when workflows are switched off', async () => {

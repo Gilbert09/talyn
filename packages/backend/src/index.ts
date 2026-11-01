@@ -50,6 +50,7 @@ import {
 } from './services/codeReview/reconciler.js';
 import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
 import { initUsageMeter, usageMeter } from './services/billing/usage/meter.js';
+import { initBoxDeferrals } from './services/billing/boxDeferral.js';
 import {
   featureFlagsEvaluateLocally,
   isFeatureFlagServiceConfigured,
@@ -214,6 +215,7 @@ async function main() {
   // ledger with the fleet. Armed unconditionally: metering runs everywhere,
   // and enforcement inside it only acts when the POLAR_* env group is set.
   initUsageMeter();
+  initBoxDeferrals();
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
   // services read them (the plaintext read fallbacks are gone). Per-row

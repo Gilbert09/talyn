@@ -72,9 +72,11 @@ vi.mock('../services/workbenches/create.js', () => ({
 
 const sent: Array<{ chatId: string; text: string }> = [];
 let busy = false;
+let sendRefusal: Error | null = null;
 vi.mock('../services/workbenches/turns.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/workbenches/turns.js')>()),
   sendMessage: async (chatId: string, input: { text: string }) => {
+    if (sendRefusal) throw sendRefusal;
     sent.push({ chatId, text: input.text });
     return { queued: busy };
   },
@@ -97,6 +99,7 @@ const { resetSlackTokenStateForTests } = await import('../services/slack/tokens.
 const { resetSlackNameCacheForTests } = await import('../services/slack/context.js');
 const { resetSlackStatusForTests } = await import('../services/slack/statusReactions.js');
 const { WorkbenchError } = await import('../services/workbenches/errors.js');
+const { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } = await import('../services/billing/entitlements.js');
 const { slackRoutes } = await import('../routes/slack.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
@@ -123,6 +126,7 @@ describe('Slack triggers', () => {
     restored.length = 0;
     busy = false;
     createRefusal = null;
+    sendRefusal = null;
 
     testDb = await createTestDb();
     await seedUser(testDb.db, { id: 'u1' });
@@ -386,6 +390,54 @@ describe('Slack triggers', () => {
       expect(row).toMatchObject({ phase: 'failed', statusReaction: 'x' });
       expect(notices[0].notice).toMatchObject({ kind: 'start_failed' });
       expect(notices[0].notice.message).toContain('No Claude subscription is connected.');
+    });
+  });
+
+  describe('the plan refuses the box', () => {
+    const refusals = [
+      ['out of hours', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date('2026-12-01T00:00:00.000Z') })],
+      ['at the box cap', () => new ConcurrentBoxLimitError(2, 2)],
+      ['a size the plan cannot start', () => new SizeRequiresProError({ tier: 'free', size: 'large' })],
+    ] as const;
+
+    it.each(refusals)('%s: a reply in the thread instead of a session, and no retry', async (_label, make) => {
+      const err = make();
+      createRefusal = err;
+      expect((await deliver(reaction('US1', 'robot_face'))).outcome).toBe('handled');
+      expect(created).toHaveLength(0);
+      const [reply] = slack.of('chat.postMessage');
+      expect(reply?.form).toMatchObject({ channel: 'C1', thread_ts: '100.0' });
+      expect(reply?.form.text).toContain(`Talyn did not start a session: ${err.message}`);
+      expect(reply?.token).toBe(BOT_TOKEN);
+      const [row] = await threadRows();
+      expect(row).toMatchObject({ phase: 'failed', statusReaction: 'x' });
+      expect(notices[0].notice).toMatchObject({ kind: 'start_failed' });
+      expect(notices[0].notice.message).toContain(err.message);
+    });
+
+    it('a reply Slack refuses (no chat:write yet) still ends handled, with the reaction and the notice', async () => {
+      createRefusal = new ConcurrentBoxLimitError(2, 2);
+      slack.handlers['chat.postMessage'] = () => ({ ok: false, error: 'missing_scope' });
+      expect((await deliver(reaction('US1', 'robot_face'))).outcome).toBe('handled');
+      const [row] = await threadRows();
+      expect(row).toMatchObject({ phase: 'failed', statusReaction: 'x' });
+      expect(notices[0].notice).toMatchObject({ kind: 'start_failed' });
+    });
+
+    it.each(refusals)('a follow-up %s: a reply in the thread, the session untouched', async (_label, make) => {
+      await deliver(reaction('US1', 'robot_face'));
+      expect(created).toHaveLength(1);
+      const err = make();
+      sendRefusal = err;
+      threads['C1:100.0'].push({ ts: '106.0', user: 'US1', text: '<@UBOT> one more' });
+      expect((await deliver(mention('US1', '<@UBOT> one more', '106.0', '100.0'))).outcome).toBe('handled');
+      expect(sent).toHaveLength(0);
+      const replies = slack.of('chat.postMessage');
+      expect(replies.at(-1)?.form).toMatchObject({ channel: 'C1', thread_ts: '100.0' });
+      expect(replies.at(-1)?.form.text).toContain(err.message);
+      expect(notices.at(-1)?.notice).toMatchObject({ kind: 'start_failed', workbenchId: 'wb-1' });
+      const [wb] = await testDb.db.select({ archivedAt: workbenches.archivedAt }).from(workbenches);
+      expect(wb?.archivedAt).toBeNull();
     });
   });
 

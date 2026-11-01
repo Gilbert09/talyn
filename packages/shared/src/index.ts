@@ -1740,6 +1740,40 @@ export const USAGE_BILLING_ERROR_CODES = [
 ] as const;
 export type UsageBillingErrorCode = (typeof USAGE_BILLING_ERROR_CODES)[number];
 
+/**
+ * Why an unattended run (a loop firing, a merge-queue or auto-keep fix, a
+ * workflow action, an automatic review) did not start a box. Recorded on the
+ * run's own history as a visible deferral, never as a failure:
+ *
+ * - `usage_exhausted`: no included box-hours, no credits, no auto top-up. The
+ *   run waits for the period reset or for credits.
+ * - `box_limit_reached`: the plan's concurrent-box cap is full. The run waits
+ *   for a box to stop.
+ * - `size_requires_pro`: the plan cannot start the size. Unattended runs are
+ *   downsized instead, so this is not expected; it is not retried.
+ */
+export type BoxRefusalReason = 'usage_exhausted' | 'box_limit_reached' | 'size_requires_pro';
+
+export const BOX_REFUSAL_REASONS: readonly BoxRefusalReason[] = ['usage_exhausted', 'box_limit_reached', 'size_requires_pro'];
+
+/** The deferral reason for a box gate's 402 code. */
+export function boxRefusalReason(code: UsageBillingErrorCode): BoxRefusalReason {
+  switch (code) {
+    case USAGE_EXHAUSTED_ERROR_CODE:
+      return 'usage_exhausted';
+    case CONCURRENT_BOX_LIMIT_ERROR_CODE:
+      return 'box_limit_reached';
+    case SIZE_REQUIRES_PRO_ERROR_CODE:
+      return 'size_requires_pro';
+  }
+}
+
+export const BOX_REFUSAL_LABELS: Record<BoxRefusalReason, string> = {
+  usage_exhausted: 'Waiting for box-hours or credits',
+  box_limit_reached: 'Waiting for a free box',
+  size_requires_pro: 'The plan cannot start this box size',
+};
+
 /** ApiResponse.code when a team admin assigns more seats than the team pays for. */
 export const TEAM_SEATS_FULL_ERROR_CODE = 'team_seats_full';
 

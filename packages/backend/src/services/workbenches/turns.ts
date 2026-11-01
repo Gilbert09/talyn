@@ -1,8 +1,11 @@
 import { archiveIdleSession } from './autoArchive.js';
 import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
+import type { BoxGateError } from '../billing/entitlements.js';
+import { existingBoxRefusal } from './boxGate.js';
 import { sessionHasTalynMcp } from './talynMcp.js';
 import { v4 as uuid } from 'uuid';
 import {
+  boxRefusalReason,
   buildClaudeArgv,
   buildCodexArgv,
   checkpointCreateSteps,
@@ -276,6 +279,15 @@ export async function sendMessage(
   const message = normaliseMessage(input);
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
+  // A person's message that would start a turn now asks the plan first, so
+  // the route can answer 402 and the composer keeps the text. A message
+  // behind a running turn just queues: that turn's box is already paid for,
+  // and the next turn start asks then. Talyn's own messages never throw
+  // here; their turn start holds them in the queue instead.
+  if (wb.status === 'ready' && chat.status !== 'running' && opts.origin !== 'talyn') {
+    const refusal = await existingBoxRefusal(wb);
+    if (refusal) throw refusal;
+  }
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
@@ -374,6 +386,9 @@ async function runTurnLoopBody(
       next = { message: outcome.relaunch.message, turn: heldTurn };
       continue;
     }
+    // Back in the queue, held by the plan: nothing restarts it until a person
+    // sends again or the budget comes back. Restarting here would loop.
+    if (outcome.held) return;
     // Back in the queue: the move that is running starts it when it ends.
     if (outcome.requeued) { await startQueuedIfIdle(chatId); return; }
     // T3: a turn that failed on a full disk is not run again (its side effects
@@ -465,6 +480,8 @@ interface TurnOutcome {
   diskFull?: boolean;
   /** The workbench was moving: the message went back to the queue and nothing ran. */
   requeued?: boolean;
+  /** The plan refused the turn's box: the message went back to the queue and nothing ran. */
+  held?: boolean;
   handedOff?: boolean;
   /** Why the lease is being given up, for the log line. */
   handoffReason?: string;
@@ -588,6 +605,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       if ((await getWorkbench(chat.workbenchId))?.status === 'ready') void startQueuedIfIdle(chatId).catch(() => false);
       return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
     }
+  }
+  // The plan, before anything wakes the box: a turn needs budget, and waking a
+  // sleeping box needs a free box slot. A relaunch of a turn that already
+  // started is not asked again; a turn already running is never stopped.
+  if (early && firstAttempt === 0) {
+    const refusal = await existingBoxRefusal(early);
+    if (refusal) return holdTurn(chatId, message, refusal);
   }
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
@@ -837,6 +861,24 @@ async function failOverAccount(
     accountId: next.accountId,
     note: `${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`,
   };
+}
+
+export const TURN_HELD_NOTE = 'Talyn did not start this message. It stays in the queue: send a message to try again.';
+
+/** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
+async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
+  const requeued = await requeueTurn(chatId, message);
+  if (requeued) {
+    const stored = await appendEvents(chatId, [
+      {
+        turn: requeued.turnCount,
+        event: { type: 'system', subtype: boxRefusalReason(refusal.code), text: `${refusal.message} ${TURN_HELD_NOTE}` },
+      },
+    ]);
+    emitWorkbenchEvents(requeued.workspaceId, chatId, stored);
+    emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+  }
+  return { status: 'idle', statusMessage: null, cancelled: false, requeued: true, held: true };
 }
 
 async function cancelledOutcome(events: EventBatcher, sawResult = false): Promise<TurnOutcome> {

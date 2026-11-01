@@ -115,7 +115,9 @@ async function onSnapshot(
     // shouts on every ordinary refusal trains people to ignore the log.
     // `no_reviewers` is the workspace's own setup, and it is the answer on every
     // push to a repository none of its reviewers covers.
-    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy' && outcome.code !== 'no_reviewers') {
+    // `deferred` is the plan refusing a box: recorded on the review once, and
+    // handed back on every snapshot until the owner hold ends.
+    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy' && outcome.code !== 'no_reviewers' && outcome.code !== 'deferred') {
       console.log(`[code-review] auto review for ${prId} declined: ${outcome.code}`);
     }
   }

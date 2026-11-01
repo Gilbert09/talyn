@@ -659,8 +659,8 @@ export type Action =
   /**
    * Create the "get this PR mergeable" cloud task. Executor contract:
    * fired → status 'fixing' + fixTaskId + fixTaskAccounted=false (+
-   * resignAttempts+1 when resign); TaskLimitError or no cloud env →
-   * ensure 'queued' and burn NOTHING (a slot frees when a task ends).
+   * resignAttempts+1 when resign); a box-gate refusal (full box cap, used-up
+   * hours) or no cloud env → ensure 'queued' and burn NOTHING.
    */
   | {
       kind: 'fire_fix_run';

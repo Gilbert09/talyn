@@ -17,7 +17,9 @@ import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
 } from '../db/schema.js';
-import { withTaskLimitGate } from './billing/entitlements.js';
+import { billingEnabled, type BoxGateOptions } from './billing/entitlements.js';
+import { runBoxGate } from './billing/boxDeferral.js';
+import { isUnattendedTask, taskSandboxSize } from './selfHosted/taskSize.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
 import { bumpSkillUsage } from './skills.js';
 import { rowToTask } from './taskSerialize.js';
@@ -94,6 +96,14 @@ export interface CreateCloudTaskInput {
    * whatever the loop says today.
    */
   mcpServerIds?: string[] | null;
+  /**
+   * Whether nobody waits on this run, for the box gate. Defaults from
+   * `source` (loops, the merge queue, auto-keep, workflows and review fixes
+   * are unattended). A review fix a person pressed passes `false`: it is a
+   * `code_review` run, so its box is small, but its refusal is a 402 for that
+   * person rather than a deferral.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -137,10 +147,10 @@ export async function createCloudTask(
 ): Promise<typeof tasksTable.$inferSelect> {
   const db = getDbClient();
 
-  // Free-plan concurrency gate. Every creation path (routes AND the
-  // merge-queue / auto-keep watchers) funnels through here, so the limit has
-  // no back door and no exemption; throws TaskLimitError when a free owner is
-  // at the cap.
+  // The box gate. Every creation path (routes AND the merge-queue / auto-keep
+  // / loop / workflow / review watchers) funnels through here, so the plan has
+  // no back door and no exemption. A refusal is a BoxGateError: a 402 on a
+  // route, a visible deferral on an unattended path.
   const ownerRows = await db
     .select({ ownerId: workspacesTable.ownerId })
     .from(workspacesTable)
@@ -171,10 +181,54 @@ export async function createCloudTask(
     if (!pullRequest) throw new TaskReferenceError('Pull request not found in this workspace and repository');
   }
 
-  return withTaskLimitGate(ownerId, {}, async () => {
-    const reusable = await findReusableTask(input);
-    return reusable ? redispatchCloudTask(reusable, input) : insertCloudTask(input);
+  const gate = await taskBoxGateOptions({
+    workspaceId: input.workspaceId,
+    repositoryId: input.repositoryId,
+    assignedEnvironmentId: input.assignedEnvironmentId ?? null,
+    metadata: input.source ? { source: input.source } : {},
   });
+  return runBoxGate(
+    ownerId,
+    { ...gate, ...(input.unattended !== undefined ? { unattended: input.unattended } : {}) },
+    async () => {
+      const reusable = await findReusableTask(input);
+      return reusable ? redispatchCloudTask(reusable, input) : insertCloudTask(input);
+    }
+  );
+}
+
+/**
+ * How the box gate sees one task run: the size its box will have (the
+ * executor's own rule, so the gate checks what will boot), whether nobody
+ * waits on it, and whether it starts a metered box at all.
+ *
+ * A task pinned to a provider other than the fleet (PostHog Code) runs no
+ * Talyn box: it costs no box-hours and is not gated on them. It still counts
+ * against the concurrent-box cap while active. A task with no pinned provider
+ * is checked as a fleet run, which is where the default chain sends it.
+ */
+export async function taskBoxGateOptions(task: {
+  workspaceId: string;
+  repositoryId?: string | null;
+  assignedEnvironmentId?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<Pick<BoxGateOptions, 'size' | 'unattended' | 'unmetered' | 'workspaceId'>> {
+  const sized = {
+    metadata: task.metadata ?? {},
+    repositoryId: task.repositoryId ?? undefined,
+    workspaceId: task.workspaceId,
+  };
+  const unattended = isUnattendedTask(sized);
+  // Nothing is enforced without billing, and sizing a repository can read
+  // GitHub: skip both reads.
+  if (!billingEnabled()) return { size: 'standard', unattended, unmetered: false, workspaceId: task.workspaceId };
+  const providerType = await providerTypeFor(task.assignedEnvironmentId);
+  return {
+    size: await taskSandboxSize(sized),
+    unattended,
+    unmetered: providerType !== null && providerType !== 'selfhosted',
+    workspaceId: task.workspaceId,
+  };
 }
 
 /**

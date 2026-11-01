@@ -1,9 +1,11 @@
 import {
+  boxRefusalReason,
   fleetAgentForModel,
   resolveFleetModel,
   type LoopRunFailureCode,
 } from '@talyn/shared';
-import { TaskLimitError } from '../billing/entitlements.js';
+import { isBoxGateError } from '../billing/entitlements.js';
+import { deferralRetryAt } from '../billing/boxDeferral.js';
 import { getCloudProvider } from '../cloudProviders/registry.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../cloudProviders/fleetAccess.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
@@ -15,7 +17,6 @@ import {
   markDispatched,
   providerOf,
   settleRun,
-  WAITING_SLOT_RETRY_MS,
   type DueLoop,
 } from './runs.js';
 
@@ -177,25 +178,26 @@ export async function dispatchRun(
     await markDispatched(runId, task.id);
     return { ok: true, taskId: task.id };
   } catch (err) {
-    if (err instanceof TaskLimitError) {
-      // No request to answer with a 402 and no modal to open — this is the
-      // server-side deferral path the merge queue and the auto-keep watcher
-      // already take. The difference is that a loop's deferral is VISIBLE: the
-      // run row says "waiting for a task slot", which is the fix for a paywall
-      // that otherwise reads as never firing.
+    if (isBoxGateError(err)) {
+      // No request to answer with a 402 and no modal to open: this is the
+      // server-side deferral the merge queue and the auto-keep watcher take
+      // too. A loop's deferral is VISIBLE: the run row parks as
+      // `waiting_slot` with the gate's own sentence and the reason, and the
+      // scheduler's retry sweep looks again at `retry_after`. That is a few
+      // seconds for a full box cap, and the period reset (or a quarter hour,
+      // or the moment credits arrive) for used-up hours, so an exhausted
+      // owner's loop does not ask on every tick. A newer firing supersedes it.
+      const code = boxRefusalReason(err.code);
       captureWorkspaceEvent(loop.workspaceId, 'paywall_deferred', {
         source: 'loops',
-        gate: 'task_limit',
-        limit: err.limit,
-        active: err.active,
+        gate: code,
+        ...(err.notice.limit !== undefined ? { limit: err.notice.limit, active: err.notice.active } : {}),
       });
-      return refuse(
-        runId,
-        'waiting_slot',
-        'task_limit_reached',
-        `Waiting for a free task slot — the plan allows ${err.limit} at once.`,
-        new Date(Date.now() + WAITING_SLOT_RETRY_MS)
-      );
+      const retryAt = deferralRetryAt(err);
+      // A size the plan cannot start does not clear by waiting. Unattended
+      // runs are downsized before this can happen, so it is not expected.
+      if (!retryAt) return refuse(runId, 'failed', code, err.message);
+      return refuse(runId, 'waiting_slot', code, err.message, retryAt);
     }
     const message = err instanceof Error ? err.message : String(err);
     return refuse(runId, 'failed', 'dispatch_failed', message);

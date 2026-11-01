@@ -1105,11 +1105,21 @@ export interface PRRow {
     paused: boolean;
     /**
      * ISO timestamp of when auto-keep first wanted a fix run for this PR and
-     * could not get one, because the owner's free-plan task slots were full;
-     * null when nothing is waiting. The deferral has no request behind it, so
-     * this is the ONLY way a user learns their PRs stopped being kept green.
+     * could not get one, because the owner's plan refused the box; null when
+     * nothing is waiting. The deferral has no request behind it, so this is
+     * the ONLY way a user learns their PRs stopped being kept green.
      */
     deferredSince?: string | null;
+    /**
+     * Why it waits: `usage_exhausted` (no box-hours or credits),
+     * `box_limit_reached` (the plan's concurrent boxes are in use). Absent
+     * from a backend older than usage billing.
+     */
+    deferredReason?: 'usage_exhausted' | 'box_limit_reached' | 'size_requires_pro' | null;
+    /** The plan's own sentence for the wait, for a tooltip. */
+    deferredMessage?: string | null;
+    /** When the watcher looks again (ISO). */
+    deferredRetryAt?: string | null;
     /**
      * Set while the watcher is standing down because the run it fired reported
      * that only a person can carry the PR forward.
