@@ -17,6 +17,7 @@ import { PullRequestsView } from '../../pages/PullRequestsView';
 import { AutomationsView } from '../../pages/AutomationsView';
 import { WorkbenchPage } from '../../pages/WorkbenchPage';
 import { loadWorkbenches } from '../../lib/workbenchData';
+import { getLocalController } from '../../lib/localWorkbench';
 import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { usePullRequestSync } from '../../hooks/usePullRequestSync';
@@ -126,7 +127,8 @@ function useWorkbenchList(): void {
   const route = useNavigationStore((s) => s.route);
 
   useEffect(() => {
-    if (workspaceId && offered) void loadWorkbenches(workspaceId);
+    // A local chat left `running` by a quit app goes idle once the list is in.
+    if (workspaceId && offered) void loadWorkbenches(workspaceId).then(() => getLocalController()?.resetInterruptedTurns());
   }, [workspaceId, offered]);
 
   useEffect(() => {

@@ -322,7 +322,7 @@ export function useApiConnection() {
     // past the last seq held for chats whose history is open.
     const workbenchWorkspace = useWorkbenchStore.getState().workspaceId;
     if (workbenchWorkspace && workbenchWorkspace === useWorkspaceStore.getState().currentWorkspaceId) {
-      void reconcileWorkbenches(workbenchWorkspace);
+      void reconcileWorkbenches(workbenchWorkspace).then(() => getLocalController()?.resetInterruptedTurns());
     }
     if (workbenchesOffered(useWorkspaceStore.getState().features)) void loadSlackPending();
   });

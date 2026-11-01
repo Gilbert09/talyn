@@ -95,6 +95,8 @@ export class LocalTurnController {
   private unsubscribers: Array<() => void> = [];
   /** Chats whose backend queue this controller is moving to this computer. */
   private readonly draining = new Set<string>();
+  /** Chats this controller started a turn in. Their `running` is its own. */
+  private readonly started = new Set<string>();
 
   constructor(deps: LocalControllerDeps) {
     this.deps = deps;
@@ -130,6 +132,46 @@ export class LocalTurnController {
       for (const chat of chats[workbench.id] ?? []) owned.push({ workbench, chat });
     }
     return owned;
+  }
+
+  /**
+   * After the sessions load. If the app quit or crashed during a turn, the
+   * backend still shows the chat `running`, and nothing on this computer
+   * will end it. Such a chat goes idle, with a note in its transcript. A
+   * chat this controller started, or one with a turn process in main (a
+   * reloaded window), is left alone.
+   */
+  async resetInterruptedTurns(): Promise<void> {
+    const candidates = this.ownedChats().filter(
+      ({ chat }) => chat.status === 'running' && !this.running.has(chat.id) && !this.started.has(chat.id)
+    );
+    if (!candidates.length) return;
+    let live: Set<string>;
+    try {
+      live = new Set((await this.deps.bridge.runningTurns?.()) ?? []);
+    } catch {
+      // Main did not answer, so a live turn cannot be told from a dead one.
+      return;
+    }
+    for (const { chat } of candidates) {
+      if (live.has(chat.id) || this.running.has(chat.id) || this.started.has(chat.id)) continue;
+      try {
+        await this.deps.loadHistory(chat.id);
+      } catch {
+        continue;
+      }
+      if (this.running.has(chat.id) || this.started.has(chat.id)) continue;
+      const turn = lastTurn(useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? []);
+      this.record(chat.id, turn, {
+        type: 'system',
+        subtype: 'local_turn_interrupted',
+        text: 'The app quit during this turn.',
+      } as AgentEventDraft);
+      await this.flush(chat.id);
+      const current = findChat(chat.id) ?? chat;
+      if (current.status === 'running') this.setStatus(current, 'idle');
+      await this.report(chat.id, { status: 'idle' });
+    }
   }
 
   /**
@@ -287,6 +329,7 @@ export class LocalTurnController {
     if (!path) throw new Error('This session has no local path.');
     const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
     const turn = Math.max(lastTurn(events), this.running.get(chat.id)?.turn ?? 0) + 1;
+    this.started.add(chat.id);
     this.running.set(chat.id, { workbenchId: workbench.id, turn, text: input.text, intent: input.intent });
     this.setStatus(chat, 'running');
 
