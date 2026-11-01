@@ -22,6 +22,7 @@ function amount(price: string): number {
 export function OfferSchema() {
   const [free, paid] = pricing.tiers;
   const monthly = amount(paid.priceMonthly);
+  const annual = amount(paid.priceAnnualTotal);
   const annualPerMonth = amount(paid.priceAnnual);
 
   return (
@@ -62,7 +63,7 @@ export function OfferSchema() {
           {
             "@type": "Offer",
             name: `${paid.name}, billed annually`,
-            price: annualPerMonth * 12,
+            price: annual,
             priceCurrency: "USD",
             url: `${site.url}/pricing`,
             availability: "https://schema.org/InStock",

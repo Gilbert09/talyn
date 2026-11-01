@@ -5,14 +5,14 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: "You're on Unlimited",
+  title: "Payment complete",
   description: "Payment complete — head back to Talyn.",
   // Post-checkout landing only — never useful in search results.
   robots: { index: false, follow: false },
 };
 
 /**
- * Polar checkout `success_url` target. The desktop app flips to Unlimited on
+ * Polar checkout `success_url` target. The desktop app picks up the new plan or credits on
  * its own (webhook → live push), so this page is purely the landing after
  * payment: confirm, and hand the user back to the app. The button uses the
  * fastowl:// deep link, which focuses (or launches) the installed app —
@@ -27,11 +27,11 @@ export default function CheckoutSuccessPage() {
           ⚡
         </div>
         <h1 className="mt-6 font-display text-4xl font-semibold tracking-tight text-ink">
-          You&rsquo;re on Unlimited
+          Payment complete
         </h1>
         <p className="mt-4 text-[15px] leading-relaxed text-ink-600">
-          Payment complete — thanks for supporting Talyn. Your plan is active
-          and the app picks it up by itself within a few seconds, so there&rsquo;s
+          Thanks for supporting Talyn. Your plan or credits are active
+          and the app picks them up by itself within a few seconds, so there&rsquo;s
           nothing left to do here.
         </p>
         <a

@@ -141,5 +141,5 @@ Claude or ChatGPT subscription you already pay for, with credentials attached
 from outside the sandbox.
 
 Flagging individual pull requests is free. Turning it on as the default for
-every new PR in a workspace is an Unlimited feature — and a workspace that
+every new PR in a workspace is a Pro feature — and a workspace that
 already had it on keeps it.

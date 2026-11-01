@@ -74,8 +74,8 @@ It is not two comments.
 makes those changes and pushes a single commit to the branch. Not a suggestion
 per finding for you to click through individually.
 
-**It runs on your own subscription.** Talyn is $15/month flat, or free with
-three concurrent tasks and one review cycle. The inference runs on the Claude
+**It runs on your own subscription.** Talyn is free with 10 box-hours a month,
+or $40/month for 200 box-hours. The inference runs on the Claude
 Pro/Max or ChatGPT Plus/Pro plan you already pay for, in a microVM where your
 token is attached from outside the machine. There is no per-developer seat and
 no metered token bill from us.

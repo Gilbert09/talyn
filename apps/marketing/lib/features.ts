@@ -250,11 +250,11 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "What does a review cost on the free plan?",
-        a: "The free plan includes one review cycle. Reviewing a pull request on demand is available on any plan; having every new pull request reviewed automatically is part of Unlimited. Either way the run happens on the agent subscription you connect, so there is no separate token bill from us.",
+        a: "Reviews run on boxes, so they use box-hours: 10 a month on the free plan, 200 on Pro. Reviewing a pull request on demand is available on any plan; having every new pull request reviewed automatically is part of Pro. Either way the model runs on the agent subscription you connect, so there is no separate token bill from us.",
       },
     ],
     planNote:
-      "Free plan: one review cycle. Reviewing a pull request by hand is available on any plan; reviewing every new one automatically is part of Unlimited.",
+      "Reviews use box-hours. Reviewing a pull request by hand is available on any plan; reviewing every new one automatically is part of Pro.",
     related: ["fix-pull-requests", "merge-queue", "skills"],
     relatedCompare: ["coderabbit", "greptile", "graphite"],
     updated: UPDATED,
@@ -310,7 +310,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "Keep-mergeable: the part that runs overnight",
         paragraphs: [
           "Flagging a pull request keep-mergeable puts a watcher on it. It does not wait for you to notice that main moved — the moment the branch falls behind, hits a conflict, or a check goes red, the fix dispatches. When it is green again the queue lands it.",
-          "This is the feature behind 'wake up to green PRs', and it is the one to try first. Flagging pull requests one at a time is free. Having every new pull request you open flagged automatically is part of Unlimited.",
+          "This is the feature behind 'wake up to green PRs', and it is the one to try first. Flagging pull requests one at a time is free. Having every new pull request you open flagged automatically is part of Pro.",
         ],
       },
       {
@@ -328,7 +328,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "How does auto-keep-mergeable work?",
-        a: "Flag a pull request and Talyn watches it. The moment it goes out of date, clashes with someone else's work, or a test starts failing, Talyn sends an agent to fix it. Once it is green again, the merge queue lands it in order. Flagging pull requests one at a time is free; having every new one flagged automatically is an Unlimited feature.",
+        a: "Flag a pull request and Talyn watches it. The moment it goes out of date, clashes with someone else's work, or a test starts failing, Talyn sends an agent to fix it. Once it is green again, the merge queue lands it in order. Flagging pull requests one at a time is free; having every new one flagged automatically is a Pro feature.",
       },
       {
         q: "Can it merge something that has not been approved?",
@@ -340,7 +340,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free plan: three pull requests in the queue at once. The workspace default that keeps every new pull request green automatically is part of Unlimited.",
+      "Any plan can queue pull requests. Fix runs use box-hours. The workspace default that keeps every new pull request green automatically is part of Pro.",
     related: ["fix-pull-requests", "pr-dashboard", "workflows"],
     relatedGuides: ["keep-pr-up-to-date", "github-merge-queue-alternative"],
     relatedCompare: ["mergify", "graphite"],
@@ -415,14 +415,14 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "How many can I run at once?",
-        a: "Three on the free plan, counted across all your workspaces. Unlimited removes the cap. Automation that hits the cap — a merge-queue fix, say — is deferred server-side rather than dropped.",
+        a: "Two boxes at once on the free plan and up to 100 on Pro, counted across all your workspaces. Automation that hits the limit, a merge-queue fix for example, waits for a free box rather than being dropped.",
       },
       {
         q: "Can it push to someone else's branch?",
         a: "Only where GitHub lets it, which is the usual maintainer-edit permission on a fork or a branch in a repository it has access to. Talyn does not work around branch permissions.",
       },
     ],
-    planNote: "Free plan: three tasks running at once, across all your workspaces.",
+    planNote: "Two boxes running at once on the free plan, up to 100 on Pro, across all your workspaces.",
     related: ["merge-queue", "agents", "code-review"],
     relatedGuides: ["fix-failing-github-actions-with-ai"],
     relatedCompare: ["devin", "cursor-background-agents", "t3-code"],
@@ -502,12 +502,12 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "Yes, as long as the skill is one the backend can read — committed in the repository or saved to your workspace. Skills that only exist in ~/.claude/skills on your machine are refused when you save the rule, because the server cannot see your disk.",
       },
       {
-        q: "Does disabling a workflow free up a slot on the free plan?",
-        a: "No. The cap counts rules you have defined, not rules that are switched on, because counting only the enabled ones would make the cap a toggle — keep twelve, run three, swap whenever. Deleting a workflow frees the slot.",
+        q: "Is there a limit on how many workflows I can have?",
+        a: "No. You can define as many workflows as you want on any plan. What costs box-hours is a workflow that runs a skill or a prompt, because that starts an agent on a box. Labels, comments and reviewers cost nothing.",
       },
     ],
     planNote:
-      "Free plan: three workflows. The cap counts rules you have defined, not the ones that are enabled.",
+      "No limit on how many workflows you define. Workflows that start an agent use box-hours.",
     related: ["loops", "merge-queue", "skills"],
     relatedCompare: ["mergify"],
     updated: UPDATED,
@@ -553,7 +553,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "Missed occurrences fire once, not six times",
         paragraphs: [
-          "If Talyn is down or deploying when a loop is due, it catches up — once — and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and on a free plan it would be one run and five refusals.",
+          "If Talyn is down or deploying when a loop is due, it catches up — once — and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and if you were out of box-hours it would be one run and five refusals.",
           "Re-enabling a loop you switched off is a resume, not a backfill. It starts from the next occurrence.",
         ],
       },
@@ -586,12 +586,12 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "That is a per-loop setting, and skipping is the default — the skipped occurrence is recorded in the history rather than silently dropped. It is also what makes a tight schedule self-limiting, which is why there is no minimum interval.",
       },
       {
-        q: "Does the free plan's three-loop cap count runs?",
-        a: "No, it counts schedules. Each firing creates an ordinary cloud task, which is bounded by the three-active-tasks cap instead. The two caps compose rather than overlap.",
+        q: "Is there a limit on how many loops I can have?",
+        a: "No. You can have as many loops as you want on any plan. Each firing creates an ordinary cloud task that runs on a box, so what a loop costs is the box-hours its runs use.",
       },
     ],
     planNote:
-      "Free plan: three loops. The cap counts schedules, not runs — each firing is an ordinary task and counts against the task limit.",
+      "No limit on how many loops you have. Each firing runs on a box and uses box-hours.",
     related: ["workflows", "fix-pull-requests", "agents"],
     updated: UPDATED,
   },
@@ -656,7 +656,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free plan: skills themselves are uncapped. Running one is an ordinary cloud task, so the three-concurrent-task limit is the brake.",
+      "Skills themselves are free. Running one is an ordinary cloud task that runs on a box and uses box-hours.",
     related: ["code-review", "workflows", "fix-pull-requests"],
     relatedGuides: ["claude-code-pull-requests"],
     updated: UPDATED,
@@ -794,7 +794,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free plan: the Reviews list is uncapped. Running an agent against one of them is an ordinary task and counts toward the three-task limit.",
+      "The Reviews list is free. Running an agent against one of them is an ordinary task that uses box-hours.",
     related: ["pr-dashboard", "code-review", "skills"],
     updated: UPDATED,
   },
@@ -879,7 +879,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free plan: connect as many providers as you like — the cap is on tasks running at once, never on agents connected.",
+      "Connect as many providers as you like. The limit is on boxes running at once, never on agents connected.",
     related: ["fix-pull-requests", "mcp-servers", "loops"],
     relatedCompare: ["devin", "codex-cloud", "cursor-background-agents"],
     updated: UPDATED,
@@ -932,7 +932,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "Free on every plan, deliberately",
         paragraphs: [
-          "Tasks, queued pull requests, workflows and loops all have a free-plan cap. MCP servers do not, on any plan. A connected server costs nothing until a run uses one, and what a run costs is already bounded by the task cap — so charging for the connection would be charging twice for the same thing.",
+          "Box-hours and the number of boxes running at once are limited by your plan. MCP servers are not limited on any plan. A connected server costs nothing until a run uses one, and the run already uses box-hours, so charging for the connection would be charging twice for the same thing.",
         ],
       },
       {
@@ -957,7 +957,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Does this cost anything on the free plan?",
-        a: "No, and there is no cap. A connected server spends nothing until a run uses it, and the run is already bounded by the task limit.",
+        a: "No, and there is no cap. A connected server spends nothing until a run uses it, and the run uses box-hours like any other.",
       },
       {
         q: "Does it work with PostHog Code?",

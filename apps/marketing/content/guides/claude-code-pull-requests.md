@@ -116,7 +116,7 @@ For the rest:
   attached from outside it, so the machine running agent-generated code never
   holds your tokens.
 
-The free plan covers three tasks running at once and three PRs in the queue,
+The free plan covers 10 box-hours a month and two boxes running at once,
 which is roughly the point at which this stops being a manual problem.
 
 Worth being straight about the limits: Talyn cannot tell you whether a change

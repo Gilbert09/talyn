@@ -69,8 +69,8 @@ by hand.
 app at app.talyn.dev with the same account and the same queue. Conductor is Mac
 only.
 
-**Price.** Talyn is $15/month, or free with three concurrent tasks, three
-queued pull requests, three workflows and three loops. Conductor's free tier is
+**Price.** Talyn is free with 10 box-hours a month, or $40/month for 200
+box-hours. Conductor's free tier is
 real and generous if you are happy running everything locally.
 
 ## What Talyn does not do

@@ -98,8 +98,8 @@ sandbox.
 - **Finite hardware.** Talyn Fleet is our own machines — it paces itself and
   spills to a fall-back provider when full. OpenAI's capacity is not our
   capacity.
-- **Talyn costs money.** $15/month flat, or free with three concurrent tasks,
-  three queued pull requests, three workflows and three loops. Codex cloud is
+- **Talyn costs money.** Free with 10 box-hours a month, or $40/month for 200 box-hours
+  and every box size, with credits above that. Codex cloud is
   included in your ChatGPT plan.
 
 ## Which one

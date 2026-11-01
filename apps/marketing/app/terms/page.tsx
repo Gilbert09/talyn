@@ -56,9 +56,10 @@ export default function TermsPage() {
 
       <h2>5. Fees, subscriptions &amp; refunds</h2>
       <p>
-        Talyn offers a free plan (with usage limits shown in the app — currently
-        up to 3 tasks running at once) and a paid &ldquo;Unlimited&rdquo;
-        subscription, billed monthly or annually. Current prices and what each
+        Talyn offers a free plan (with a monthly allowance of box-hours shown in
+        the app) and a paid &ldquo;Pro&rdquo; subscription, billed monthly or
+        annually. You can also buy credits to pay for box-hours above your
+        plan. Current prices and what each
         plan includes are shown in the app and on our{" "}
         <a href="/pricing">pricing page</a>. We may change plan features,
         limits, or prices; price changes take effect from your next billing

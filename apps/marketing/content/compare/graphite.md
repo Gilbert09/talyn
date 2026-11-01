@@ -73,8 +73,8 @@ and loops run a prompt on a schedule. Neither has an equivalent in Graphite:
 they are about an agent doing work, not about moving a pull request through a
 process.
 
-**Flat price, your own subscription.** $15/month, or free with three tasks,
-three queued pull requests, three workflows and three loops. Agent runs go on
+**Your own subscription.** Free with 10 box-hours a month, or $40/month for
+200 box-hours. Agent runs go on
 your Claude Pro/Max or ChatGPT Plus/Pro plan, in a microVM where your token is
 attached from outside the machine.
 

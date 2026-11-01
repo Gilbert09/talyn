@@ -72,8 +72,7 @@ changes and pushes one commit to the branch. And a confirmed blocker parks the
 pull request in Talyn's merge queue rather than letting it land.
 
 **On the bill.** Greptile is per seat plus credits, and a deep review costs ten
-of them. Talyn is $15/month flat — or free, with three concurrent tasks and one
-review cycle — and the inference runs on the Claude or ChatGPT subscription you
+of them. Talyn is free with 10 box-hours a month, or $40/month for 200 box-hours, and the inference runs on the Claude or ChatGPT subscription you
 already pay for, so there is no metered cost per review from us.
 
 ## What Talyn does not do

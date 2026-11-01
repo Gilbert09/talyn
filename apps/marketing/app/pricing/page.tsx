@@ -18,9 +18,9 @@ import { OfferSchema } from "@/components/seo/OfferSchema";
 import { site, pricingFaq } from "@/lib/content";
 
 const title = "Pricing";
-const seoTitle = "Talyn pricing — free for 3 tasks, $15/month unlimited";
+const seoTitle = "Talyn pricing: free, or $40/month for 200 box-hours";
 const description =
-  "Talyn is $15 a month, or free with three concurrent tasks, three queued pull requests, three workflows and three loops. Agent runs go on the Claude or ChatGPT subscription you already pay for.";
+  "Talyn is free with 10 box-hours a month, or $40 a month for 200 box-hours and every box size. Add credits and pay as you go above your plan. You bring your own Claude or ChatGPT subscription, so you pay us for the machines, not the model.";
 
 /**
  * Pricing gets a real page.
@@ -69,7 +69,7 @@ export default function PricingPage() {
                 {title}
               </p>
               <h1 className="mt-3 font-display text-4xl font-semibold leading-[1.08] tracking-tight text-ink sm:text-5xl">
-                One flat price for the control tower.
+                Pay for the machines, not the model.
               </h1>
               <p className="mt-5 text-lg leading-relaxed text-ink-500">
                 {description}
@@ -103,7 +103,7 @@ export default function PricingPage() {
               placement="pricing-page-footer"
               className="mx-auto max-w-3xl"
               title="The free plan is the whole app."
-              body="Three tasks at a time, three pull requests in the queue, and every agent provider. Find out whether it works for you before anybody asks you for a card."
+              body="10 box-hours a month, two boxes at a time, and every agent provider. Find out whether it works for you before anybody asks you for a card."
             />
           </div>
         </section>

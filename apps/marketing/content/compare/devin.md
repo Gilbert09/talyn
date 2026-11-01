@@ -71,8 +71,8 @@ rates for the work.
 Talyn sells you the control surface and nothing else. Every run executes on the
 **Claude Pro/Max or ChatGPT Plus/Pro subscription you already pay for** — you
 sign in with Claude or with ChatGPT, and there is no API key and no metered
-token bill from us. Talyn itself is $15/month flat, or free with three
-concurrent tasks.
+token bill from us. Talyn itself is free with 10 box-hours a month, or $40/month
+for 200 box-hours. You pay us for the machines, not the model.
 
 The sandbox is ours: a fresh Firecracker microVM per task, with your
 subscription token attached by a proxy *outside* the machine, so no credential

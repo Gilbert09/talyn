@@ -74,7 +74,7 @@ to.
   terminal, home-screen quota widgets. Talyn has a browser app and nothing
   native.
 - **It is free and it is yours.** MIT, fork it, ship your own build. Talyn is
-  $15 a month and closed.
+  $40 a month for the full allowance, and closed.
 - **Quota pooling and multi-machine load balancing** across several provider
   accounts and several of your own machines. We have nothing like it.
 - **Velocity.** Hundreds of commits a week and nightly builds. We are one
@@ -142,7 +142,7 @@ is the whole point of the previous section.
 - **No stacked-PR tooling**, no mobile app, no terminal, no local execution,
   no multi-machine anything.
 - **It is not open source**, and you cannot fork it.
-- **It costs money** past three concurrent tasks, and the fleet is finite
+- **It costs money** past 10 box-hours a month, and the fleet is finite
   hardware rather than your own.
 - **You do not get a shell on the sandbox.** If you want to poke at the agent's
   working tree, Talyn is the wrong shape.
