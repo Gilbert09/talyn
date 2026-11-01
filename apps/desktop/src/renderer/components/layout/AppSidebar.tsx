@@ -81,9 +81,9 @@ export function AppSidebar() {
           />
         )}
         {/* macOS frameless window: the inset traffic lights sit over this strip, which is also the drag handle. */}
-        {isMacDesktop && <div aria-hidden className="app-region-drag h-6 shrink-0" />}
+        {isMacDesktop && <div aria-hidden className="app-region-drag h-7 shrink-0" />}
 
-        <div className="px-2 pb-1 pt-1">
+        <div className="px-2 pb-1 pt-1.5">
           <WorkspaceSwitcher collapsed={collapsed} />
         </div>
 
