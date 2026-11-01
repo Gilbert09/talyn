@@ -9,6 +9,7 @@ import { ROUTES, routeTo } from '../../lib/routes';
 import { useAdminMutation } from '../../hooks/useAdminMutation';
 import { ConfirmMutationDialog } from '../../components/admin/ConfirmMutationDialog';
 import { useAccess, useCapability } from '../../components/auth/AdminGate';
+import { BillingCard } from '../../components/admin/BillingCard';
 
 /**
  * One account.
@@ -161,6 +162,8 @@ export function UserDetailPage() {
           <Field label="Updated" value={absolute(data.updatedAt)} />
         </dl>
       </section>
+
+      <BillingCard userId={data.id} email={data.email} canMutate={canComp && !isSelf} />
 
       <section className="mt-6">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

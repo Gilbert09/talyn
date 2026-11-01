@@ -107,6 +107,11 @@ import type {
   AdminGoldenDeleteRequest,
   AdminGoldenDeleteResult,
   AdminGoldenRebakeRequest,
+  AdminBillingView,
+  AdminGrantCreditsRequest,
+  AdminGrantCreditsResult,
+  AdminReverseLotResult,
+  AdminUsageSummary,
   AdminGrantRequest,
   AdminMutationRequest,
   AdminPage,
@@ -2434,7 +2439,19 @@ export const admin = {
     /** Grant or revoke operator access. 403s unless the deploy opts in. */
     setAdmin: (id: string, body: AdminGrantRequest) =>
       request<{ isAdmin: boolean }>('POST', `/admin/users/${encodeURIComponent(id)}/admin`, body),
+    /** Tier, usage, boxes, credit lots and auto top-up for one account. */
+    billing: (id: string) => request<AdminBillingView>('GET', `/admin/users/${encodeURIComponent(id)}/billing`),
+    grantCredits: (id: string, body: AdminGrantCreditsRequest) =>
+      request<AdminGrantCreditsResult>('POST', `/admin/users/${encodeURIComponent(id)}/billing/grant`, body),
+    reverseCreditLot: (id: string, lotId: string, body: AdminMutationRequest) =>
+      request<AdminReverseLotResult>(
+        'POST',
+        `/admin/users/${encodeURIComponent(id)}/billing/lots/${encodeURIComponent(lotId)}/reverse`,
+        body
+      ),
   },
+  /** Box-hours and credits across every account, for the Ops page. */
+  usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
       request<AdminPage<AdminWorkspaceSummary>>(
