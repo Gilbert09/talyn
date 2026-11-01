@@ -219,6 +219,8 @@ test('shows summary pills and opens one detail panel', async () => {
   fireEvent.click(row);
   expect(row).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByText('Local checkout')).toBeInTheDocument();
+  expect(screen.getByText(/Bake steps run once, when Talyn builds/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add host' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit instructions' })).toBeInTheDocument();
 });
 

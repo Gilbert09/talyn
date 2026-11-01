@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { validateRepositoryBake, type BakeStep, type RepositoryBake } from '@talyn/shared';
 import { api } from '../../lib/api';
 
-const hint = "Run once when Talyn builds this repository's base image, after dependencies install. Use for big downloads such as test databases.";
+const hint = "Bake steps run once, when Talyn builds this repository's base image, so every new session starts with their result. Use them for slow, unchanging work: test databases, large downloads, pre-built dependencies. Setup runs in every session instead.";
 
 export function RepoBake({ repositoryId, onChange }: {
   repositoryId: string;
@@ -63,8 +63,8 @@ export function RepoBake({ repositoryId, onChange }: {
     finally { setSaving(false); }
   };
 
-  return <div className="min-w-0 space-y-2 text-xs" data-attr="repo-bake">
-    <p className="text-muted-foreground">{hint}</p>
+  return <div className="min-w-0 space-y-4 text-xs" data-attr="repo-bake">
+    <p className="max-w-prose leading-5 text-muted-foreground">{hint}</p>
     {steps.map((step, index) => <div key={index} className="space-y-1 rounded border p-2">
       <div className="flex gap-1">
         <input aria-label={`Step ${index + 1} name`} value={step.name} onChange={(event) => editStep(index, { name: event.target.value })} placeholder="Name" className="min-w-0 flex-1 rounded border bg-background px-2 py-1" />
@@ -78,12 +78,12 @@ export function RepoBake({ repositoryId, onChange }: {
       </label>
     </div>)}
     <button type="button" onClick={() => setSteps((previous) => [...previous, { name: '', run: '', timeoutSec: 300 }])} disabled={steps.length >= 10} className="text-primary">Add step</button>
-    <div className="space-y-1">
+    <div className="space-y-2">
       <label htmlFor={`bake-host-${repositoryId}`}>Allowed hosts</label>
       <div className="flex flex-wrap gap-1">{hosts.map((host, index) => <span key={`${host}-${index}`} className="rounded border px-1">{host} <button type="button" aria-label={`Remove host ${host}`} onClick={() => setHosts((previous) => previous.filter((_, i) => i !== index))}>×</button></span>)}</div>
-      <div className="flex gap-1"><input id={`bake-host-${repositoryId}`} value={hostInput} onChange={(event) => setHostInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addHost(); } }} placeholder="downloads.example.com" className="min-w-0 flex-1 rounded border bg-background px-2 py-1" /><button type="button" onClick={addHost}>Add host</button></div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2"><input id={`bake-host-${repositoryId}`} value={hostInput} onChange={(event) => setHostInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addHost(); } }} placeholder="downloads.example.com" className="min-w-32 flex-1 rounded border bg-background px-2 py-1" /><button type="button" onClick={addHost} className="shrink-0 rounded border bg-background px-2 py-1 hover:bg-accent">Add host</button></div>
     </div>
     {error && <p role="alert" className="text-destructive">{error}</p>}
-    <button type="button" onClick={() => void save()} disabled={saving} className="rounded border px-2 py-1">{saving ? 'Saving…' : 'Save bake steps'}</button>
+    <div className="pt-2"><button type="button" onClick={() => void save()} disabled={saving} className="rounded border px-2 py-1 hover:bg-accent">{saving ? 'Saving…' : 'Save bake steps'}</button></div>
   </div>;
 }

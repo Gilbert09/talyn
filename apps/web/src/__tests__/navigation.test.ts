@@ -193,11 +193,21 @@ describe('navigation store', () => {
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'teams' });
     });
 
-    it("Settings' own section change updates the route", async () => {
+    it('adds settings sections to history and returns to the previous page', async () => {
       const { nav, ws } = await load();
       ws.useWorkspaceStore.getState().openSettings('account');
+      const depth = nav.useNavigationStore.getState().backStack.length;
       ws.useWorkspaceStore.getState().setSettingsSection('billing');
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'billing' });
+      expect(nav.useNavigationStore.getState().backStack).toHaveLength(depth + 1);
+      ws.useWorkspaceStore.getState().setSettingsSection('billing');
+      expect(nav.useNavigationStore.getState().backStack).toHaveLength(depth + 1);
+      nav.useNavigationStore.getState().back();
+      expect(nav.useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'account' });
+      nav.useNavigationStore.getState().back();
+      expect(nav.useNavigationStore.getState().route).toEqual({ view: 'home' });
+      nav.useNavigationStore.getState().forward();
+      expect(nav.useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'account' });
     });
   });
 

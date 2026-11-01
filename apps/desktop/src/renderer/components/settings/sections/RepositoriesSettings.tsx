@@ -586,9 +586,9 @@ function RepoRow({
         </span>
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
-      {open && <div id={`repo-detail-${repo.id}`} data-attr="settings-repo-detail" className="space-y-3 border-t bg-muted/20 px-3 py-3">
+      {open && <div id={`repo-detail-${repo.id}`} data-attr="settings-repo-detail" className="space-y-5 border-t bg-muted/20 px-3 py-3">
       {local.available && (
-        <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3">
+        <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-start gap-3">
           <span className="pt-1 text-xs text-muted-foreground">Local checkout</span>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
           {path ? (
@@ -633,14 +633,14 @@ function RepoRow({
         </div>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3">
-        <span className="pt-1 text-xs text-muted-foreground">Sessions</span>
-        <div className="min-w-0 space-y-2"><RepoSandboxSize repositoryId={repo.id} hideLabel onInfoChange={setSize} />{path && <RepoScripts path={path} />}</div>
+      <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-start gap-3">
+        <span className="pt-1 text-xs text-muted-foreground">Sandbox size</span>
+        <div className="min-w-0 space-y-4"><RepoSandboxSize repositoryId={repo.id} hideLabel onInfoChange={setSize} />{path && <RepoScripts path={path} />}</div>
       </div>
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3"><span className="pt-1 text-xs text-muted-foreground">Bake steps</span><RepoBake repositoryId={repo.id} onChange={setBake} /></div>
-      {previewsEnabled && <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3"><span className="pt-1 text-xs text-muted-foreground">Preview</span><RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} onConfigChange={setPreview} /></div>}
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3"><span className="text-xs text-muted-foreground">Instructions</span><button type="button" data-attr="settings-repo-edit-instructions" className="w-fit text-xs text-primary hover:underline" onClick={onInstructions}>Edit instructions</button></div>
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 border-t pt-3"><span />{confirmRemove ? <div className="flex items-center gap-2 text-xs"><span>Remove {repo.fullName}?</span><Button data-attr="settings-repo-confirm-remove" variant="destructive" size="sm" disabled={disabled} onClick={onRemove}>Remove</Button><Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>Cancel</Button></div> : <Button data-attr="settings-repo-remove" variant="ghost" size="sm" className="w-fit text-destructive hover:text-destructive" disabled={disabled} onClick={() => setConfirmRemove(true)}>Remove repository</Button>}</div>
+      <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-start gap-3"><span className="pt-1 text-xs text-muted-foreground">Bake steps</span><RepoBake repositoryId={repo.id} onChange={setBake} /></div>
+      {previewsEnabled && <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-start gap-3"><span className="pt-1 text-xs text-muted-foreground">Preview</span><RepositoryPreviewSettings repositoryId={repo.id} repoName={repo.fullName} onConfigChange={setPreview} /></div>}
+      <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-center gap-3"><span className="text-xs text-muted-foreground">Instructions</span><button type="button" data-attr="settings-repo-edit-instructions" className="w-fit text-xs text-primary hover:underline" onClick={onInstructions}>Edit instructions</button></div>
+      <div className="grid grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)] items-center gap-3 border-t pt-3"><span />{confirmRemove ? <div className="flex items-center gap-2 text-xs"><span>Remove {repo.fullName}?</span><Button data-attr="settings-repo-confirm-remove" variant="destructive" size="sm" disabled={disabled} onClick={onRemove}>Remove</Button><Button variant="ghost" size="sm" onClick={() => setConfirmRemove(false)}>Cancel</Button></div> : <Button data-attr="settings-repo-remove" variant="ghost" size="sm" className="w-fit text-destructive hover:text-destructive" disabled={disabled} onClick={() => setConfirmRemove(true)}>Remove repository</Button>}</div>
       </div>}
     </div>
   );
@@ -677,7 +677,7 @@ function RepoScripts({ path }: { path: string }) {
   ];
 
   return (
-    <div className="space-y-0.5 text-[11px] text-muted-foreground">
+    <div className="space-y-2 text-[11px] leading-5 text-muted-foreground">
       {scripts.length === 0 ? (
         <p>No scripts. Add them in .talyn/settings.toml.</p>
       ) : (

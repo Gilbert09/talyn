@@ -328,14 +328,13 @@ export function installNavigation(): void {
     }
   });
 
-  // Settings' own section list writes settingsSection; keep the route's copy in step without a history entry.
+  // Settings section changes use the same history as other routes.
   useWorkspaceStore.subscribe((s, prev) => {
     if (s.settingsSection === prev.settingsSection) return;
     const { route } = useNavigationStore.getState();
     if (route.view === 'settings' && route.section !== s.settingsSection) {
       const next: Route = { view: 'settings', section: s.settingsSection };
-      useNavigationStore.setState({ route: next });
-      persistRoute(next);
+      useNavigationStore.getState().navigate(next);
     }
   });
 }

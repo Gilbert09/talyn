@@ -44,7 +44,9 @@ test('shows summary pills and opens the detail without a trash icon', async () =
   expect(row.querySelector('svg.lucide-trash-2')).toBeNull();
   fireEvent.click(row);
   expect(row).toHaveAttribute('aria-expanded', 'true');
-  expect(screen.getByText('Sessions')).toBeInTheDocument();
+  expect(screen.getByText('Sandbox size', { selector: 'span' })).toBeInTheDocument();
+  expect(screen.getByText(/Bake steps run once, when Talyn builds/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add host' })).toBeInTheDocument();
 });
 
 test('shows the selected size in the row', async () => {
