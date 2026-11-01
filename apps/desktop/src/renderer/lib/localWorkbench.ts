@@ -593,6 +593,24 @@ export function getLocalController(): LocalTurnController | null {
   return controller;
 }
 
+/**
+ * After an archive: drop the session's queued messages, so a cancelled turn
+ * does not start the next one, then stop its turns, scripts and terminals on
+ * this machine. The worktree and its files stay.
+ */
+export async function stopLocalWorkbench(
+  workbenchId: string,
+  bridge: Pick<WorkbenchLocalBridge, 'stopWorkbench'> | null = getWorkbenchBridge()
+): Promise<void> {
+  const chatIds = (useWorkbenchStore.getState().chats[workbenchId] ?? []).map((c) => c.id);
+  useWorkbenchStore.setState((s) => {
+    const localQueues = { ...s.localQueues };
+    for (const id of chatIds) delete localQueues[id];
+    return { localQueues };
+  });
+  await bridge?.stopWorkbench?.(workbenchId);
+}
+
 // ============================================================================
 // Creating a local workbench
 // ============================================================================

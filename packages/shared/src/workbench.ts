@@ -678,6 +678,11 @@ export interface WorkbenchLocalBridge {
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
   /**
+   * Stop every agent turn, script and terminal of one session on this machine,
+   * for an archive. Optional: an older main process does not have it.
+   */
+  stopWorkbench?(workbenchId: string): Promise<void>;
+  /**
    * A display title from the first message, by the local agent CLI with a
    * cheap model. Null on any failure. Optional: an older main process does
    * not have it.

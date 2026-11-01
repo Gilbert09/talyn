@@ -9,7 +9,7 @@ import type {
   WorkbenchLocalBridge,
   WorkbenchTurnOutcome,
 } from '@talyn/shared';
-import { createLocalWorkbench, LocalTurnController } from '../renderer/lib/localWorkbench';
+import { createLocalWorkbench, LocalTurnController, stopLocalWorkbench } from '../renderer/lib/localWorkbench';
 import { api as realApi } from '../renderer/lib/api';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { userMessageText } from '../renderer/lib/workbenchFormat';
@@ -856,6 +856,28 @@ describe('LocalTurnController branch naming', () => {
       await flushAll();
       expect(update).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('stopLocalWorkbench', () => {
+  it('drops the queued messages first, so a cancelled turn starts nothing, then stops the session', async () => {
+    const { controller, bridge, end } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    await controller.send(WB, chat(), { text: 'queued' });
+    useWorkbenchStore.getState().upsertChat(chat({ id: 'other', workbenchId: 'wb2' }));
+    useWorkbenchStore.getState().enqueueLocal('other', { id: 'q', text: 'keep', queuedAt: '2026-10-13T00:00:00Z' });
+    expect(useWorkbenchStore.getState().localQueues.c1).toHaveLength(1);
+
+    const stopWorkbench = jest.fn(async () => {
+      end('c1', 1, { cancelled: true, isError: true });
+    });
+    await stopLocalWorkbench('wb1', { stopWorkbench });
+    await settle();
+
+    expect(stopWorkbench).toHaveBeenCalledWith('wb1');
+    expect(useWorkbenchStore.getState().localQueues.c1).toBeUndefined();
+    expect(useWorkbenchStore.getState().localQueues.other).toHaveLength(1);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
   });
 });
 
