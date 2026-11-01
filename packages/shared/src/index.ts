@@ -121,6 +121,7 @@ export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';
 export * from './workbenchDetect.js';
+export * from './talynBriefing.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
 export * from './bake.js';
