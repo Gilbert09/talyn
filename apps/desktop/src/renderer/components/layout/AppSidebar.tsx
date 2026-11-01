@@ -36,8 +36,8 @@ import { UserChip } from './UserChip';
 
 /**
  * The app's left column, top to bottom: the macOS drag strip, the workspace,
- * Search and New workbench, the threads, the workbenches by repository, History and Add
- * repository, then the PR area and Automations, then the footer. 240px by
+ * Search and New workbench, the threads, the workbenches by repository,
+ * then the PR area and Automations, then the footer. 240px by
  * default and resizable on its right edge, or an icon rail when collapsed
  * (⌘B). Both are remembered.
  */
@@ -84,7 +84,7 @@ export function AppSidebar() {
         )}
         {/* macOS frameless window: the inset traffic lights sit over this strip, which is also the drag handle. */}
         <div className={cn('flex h-7 shrink-0 items-center justify-end gap-0.5 px-1.5', isMacDesktop && 'app-region-drag')}>
-          {!collapsed && <HistoryButtons />}
+          {!collapsed && <HistoryButtons showHistory={offered} />}
         </div>
 
         <div className="px-2 pb-1 pt-1.5">
@@ -120,26 +120,27 @@ export function AppSidebar() {
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
         </nav>
 
-        {/* Pinned under the list, so a long list of sessions never hides them. */}
-        <div className="space-y-0.5 border-t px-1.5 py-1.5" data-attr="sidebar-pinned">
-          {offered && (
+        {collapsed && (
+          <div className="space-y-0.5 border-t px-1.5 py-1.5">
+            {offered && (
+              <SidebarItem
+                icon={History}
+                label="History"
+                collapsed
+                active={route.view === 'history'}
+                onClick={() => navigate({ view: 'history' })}
+                dataAttr="sidebar-history"
+              />
+            )}
             <SidebarItem
-              icon={History}
-              label="History"
-              collapsed={collapsed}
-              active={route.view === 'history'}
-              onClick={() => navigate({ view: 'history' })}
-              dataAttr="sidebar-history"
+              icon={FolderPlus}
+              label="Add repository"
+              collapsed
+              onClick={() => setAddRepositoryOpen(true)}
+              dataAttr="sidebar-add-repository"
             />
-          )}
-          <SidebarItem
-            icon={FolderPlus}
-            label="Add repository"
-            collapsed={collapsed}
-            onClick={() => setAddRepositoryOpen(true)}
-            dataAttr="sidebar-add-repository"
-          />
-        </div>
+          </div>
+        )}
 
         <div className="space-y-0.5 border-t px-1.5 py-1.5">
           <SidebarItem
@@ -331,12 +332,26 @@ function WithTooltip({
 }
 
 /** Back and forward through the app's recent places, like a browser. ⌘← / ⌘→ and ⌘[ / ⌘] do the same. */
-export function HistoryButtons() {
+export function HistoryButtons({ showHistory = false }: { showHistory?: boolean }) {
+  const historyActive = useNavigationStore((s) => s.route.view === 'history');
   const canBack = useNavigationStore((s) => s.backStack.length > 0);
   const canForward = useNavigationStore((s) => s.forwardStack.length > 0);
   const button = 'app-region-no-drag rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent';
   return (
     <>
+      {showHistory && (
+        <button
+          type="button"
+          className={cn(button, historyActive && 'bg-secondary text-foreground')}
+          onClick={() => useNavigationStore.getState().navigate({ view: 'history' })}
+          aria-label="History"
+          aria-pressed={historyActive}
+          title="History"
+          data-attr="sidebar-history"
+        >
+          <History className="h-3.5 w-3.5" />
+        </button>
+      )}
       <button
         type="button"
         className={button}

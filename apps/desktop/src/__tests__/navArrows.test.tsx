@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { HistoryButtons } from '../renderer/components/layout/AppSidebar';
 import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
@@ -41,6 +42,16 @@ describe('⌘← and ⌘→', () => {
 });
 
 describe('the back and forward buttons', () => {
+  it('shows History before Back and marks the history route', () => {
+    render(<HistoryButtons showHistory />);
+    const history = screen.getByRole('button', { name: 'History' });
+    expect(history.nextElementSibling).toBe(screen.getByRole('button', { name: 'Back' }));
+    expect(history).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(history);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    expect(history).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('are off with no history, and move through it', () => {
     render(<HistoryButtons />);
     const back = () => screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement;

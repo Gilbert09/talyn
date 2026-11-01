@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronsUpDown, Plus, Settings } from 'lucide-react';
+import { Check, ChevronsUpDown, FolderPlus, Plus, Settings } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { useNavigationStore } from '../../stores/navigation';
 
 export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const { workspaces, currentWorkspaceId, setCurrentWorkspace, openSettings, setCreateWorkspaceOpen } =
@@ -85,6 +86,18 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
           >
             <Plus className="h-4 w-4 flex-shrink-0" />
             New workspace…
+          </button>
+          <button
+            type="button"
+            data-attr="sidebar-add-repository"
+            onClick={() => {
+              useNavigationStore.getState().setAddRepositoryOpen(true);
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+          >
+            <FolderPlus className="h-4 w-4 flex-shrink-0" />
+            Add repository
           </button>
           <button
             type="button"

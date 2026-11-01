@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { HistoryButtons } from '../components/layout/AppSidebar';
@@ -95,6 +96,16 @@ describe('navigation keys', () => {
 });
 
 describe('history buttons', () => {
+  it('shows History before Back and marks the history route', () => {
+    render(<HistoryButtons showHistory />);
+    const history = screen.getByRole('button', { name: 'History' });
+    expect(history.nextElementSibling).toBe(screen.getByRole('button', { name: 'Back' }));
+    expect(history).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(history);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    expect(history).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('disables empty directions and moves through history', () => {
     render(<HistoryButtons />);
     const back = () => screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement;

@@ -266,19 +266,33 @@ describe('AppSidebar', () => {
     setFeatures({ workbenches: false });
     render(<AppSidebar />);
     expect(screen.queryByText('lisbon')).not.toBeInTheDocument();
-    expect(screen.queryByText('History')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument();
     expect(screen.queryByText('New session')).not.toBeInTheDocument();
-    expect(screen.getByText('Add repository')).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Switch workspace'));
+    expect(screen.getByRole('button', { name: 'Add repository' })).toBeInTheDocument();
   });
 
-  it('Search opens the palette, Add repository opens the repo picker, History opens history', () => {
+  it('moves History to the top strip and Add repository to the switcher', () => {
     render(<AppSidebar />);
+    expect(document.querySelector('[data-attr="sidebar-pinned"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add repository' })).not.toBeInTheDocument();
+    const history = screen.getByRole('button', { name: 'History' });
+    expect(history).toHaveAttribute('title', 'History');
+    expect(history).toHaveAttribute('data-attr', 'sidebar-history');
+    expect(history).toHaveAttribute('aria-pressed', 'false');
+    expect(history.nextElementSibling).toHaveAttribute('data-attr', 'nav-back');
     fireEvent.click(screen.getByText('Search'));
     expect(useNavigationStore.getState().paletteOpen).toBe(true);
-    fireEvent.click(screen.getByText('Add repository'));
+    fireEvent.click(screen.getByTitle('Switch workspace'));
+    const addRepository = screen.getByRole('button', { name: 'Add repository' });
+    expect(addRepository).toHaveAttribute('data-attr', 'sidebar-add-repository');
+    expect(addRepository.nextElementSibling).toHaveTextContent('Workspace settings');
+    fireEvent.click(addRepository);
     expect(useNavigationStore.getState().addRepositoryOpen).toBe(true);
-    fireEvent.click(screen.getByText('History'));
+    expect(screen.queryByRole('button', { name: 'Add repository' })).not.toBeInTheDocument();
+    fireEvent.click(history);
     expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    expect(history).toHaveAttribute('aria-pressed', 'true');
     useNavigationStore.setState({ paletteOpen: false, addRepositoryOpen: false });
   });
 
@@ -296,9 +310,20 @@ describe('AppSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(true);
     expect(screen.queryByText('lisbon')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-attr="sidebar-pinned"]')).toBeNull();
+    const history = screen.getByRole('button', { name: 'History' });
+    const addRepository = screen.getByRole('button', { name: 'Add repository' });
+    expect(history).toHaveAttribute('data-attr', 'sidebar-history');
+    expect(addRepository).toHaveAttribute('data-attr', 'sidebar-add-repository');
+    fireEvent.click(history);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    expect(history).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(addRepository);
+    expect(useNavigationStore.getState().addRepositoryOpen).toBe(true);
     expect(screen.getByRole('button', { name: 'Pull requests' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(false);
+    useNavigationStore.setState({ addRepositoryOpen: false });
   });
 });
 
