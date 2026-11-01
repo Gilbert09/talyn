@@ -24,7 +24,7 @@ import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.j
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
-import { getRepositoryBake } from './bake.js';
+import { effectiveRepositoryBake } from './setupRecipe.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -187,7 +187,9 @@ export async function createWorkbenchSandbox(
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
-  const bake = repository && repositoryId ? await getRepositoryBake(repositoryId) : null;
+  // The repository's bake plus the learned install steps that have settled.
+  // A changed bake is what makes the fleet bake the repository again.
+  const bake = repository && repositoryId ? await effectiveRepositoryBake(repositoryId) : null;
   const target = await fleetCreateTarget(row.workspaceId);
   const withSize = (size: SandboxSize) => withGithubReadAllRepos({
     ...built.body,

@@ -281,6 +281,8 @@ export function detectPreview(input: { files: Record<string, string | null>; pat
 
 export interface RepositorySettings {
   bake?: import('./bake.js').RepositoryBake | null;
+  /** Setup learning (`setupRecipe.ts`). Absent means on. */
+  setupLearning?: { disabled?: boolean; changedAt?: string };
   /** Absent means auto. */
   sandboxSize?: SandboxSizeSetting;
   detectedSandboxSize?: CachedSandboxSize;

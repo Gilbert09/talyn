@@ -29,6 +29,9 @@ import type {
   MemorySource,
   SlackRepoCandidate,
   SlackSessionSource,
+  TurnSlowCall,
+  TurnTimeBucket,
+  TurnTimeCategory,
 } from '@talyn/shared';
 // The envelope every stored credential uses. From services/ rather than
 // shared/ because the key handling is the backend's alone — tokenCrypto
@@ -2088,6 +2091,65 @@ export const workbenchEvents = pgTable(
   },
   (t) => ({
     pk: primaryKey({ name: 'workbench_events_pkey', columns: [t.chatId, t.seq] }),
+  })
+);
+
+/** One turn's time report (migration 0099). Written once, when the turn ends. */
+export const workbenchTurnTimings = pgTable(
+  'workbench_turn_timings',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    turn: integer('turn').notNull(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    wallMs: bigint('wall_ms', { mode: 'number' }).notNull(),
+    toolMs: bigint('tool_ms', { mode: 'number' }).notNull(),
+    modelMs: bigint('model_ms', { mode: 'number' }).notNull(),
+    calls: integer('calls').notNull().default(0),
+    categories: jsonb('categories').$type<Partial<Record<TurnTimeCategory, TurnTimeBucket>>>().notNull().default({}),
+    slowest: jsonb('slowest').$type<TurnSlowCall[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_turn_timings_pkey', columns: [t.chatId, t.turn] }),
+    workbenchIdx: index('idx_workbench_turn_timings_workbench').on(t.workbenchId, t.createdAt),
+  })
+);
+
+/** A repository's setup recipe, one row per distinct step (migration 0099). */
+export const repositorySetupSteps = pgTable(
+  'repository_setup_steps',
+  {
+    id: text('id').primaryKey(),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    /** sha256 of kind and command. */
+    stepKey: text('step_key').notNull(),
+    ordinal: bigserial('ordinal', { mode: 'number' }).notNull(),
+    command: text('command').notNull(),
+    /** `SetupStepKind`. */
+    kind: text('kind').notNull(),
+    /** `SetupStepPhase`. */
+    phase: text('phase').notNull(),
+    why: text('why'),
+    /** `SetupStepSource`. */
+    source: text('source').notNull(),
+    sourceWorkbenchId: text('source_workbench_id'),
+    seenCount: integer('seen_count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+    disabledAt: timestamp('disabled_at', { withTimezone: true }),
+    disabledReason: text('disabled_reason'),
+    bakeDisabledAt: timestamp('bake_disabled_at', { withTimezone: true }),
+    bakeDisabledReason: text('bake_disabled_reason'),
+  },
+  (t) => ({
+    keyUq: uniqueIndex('uq_repository_setup_steps_key').on(t.repositoryId, t.stepKey),
   })
 );
 

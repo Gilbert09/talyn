@@ -62,6 +62,7 @@ import {
 } from './execFailures.js';
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
+import { withLearnedSetup } from './setupRecipe.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -789,7 +790,8 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
     conductorJson: files.CJSON || null,
     conductorToml: files.CTOML || null,
   });
-  return applyWorkbenchScriptOverrides(config, row.settings);
+  // The learned setup runs after the repository's own setup, never instead of it.
+  return withLearnedSetup(row, applyWorkbenchScriptOverrides(config, row.settings));
 }
 
 const configAbsentScript = [

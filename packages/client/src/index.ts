@@ -7,6 +7,10 @@ import type {
   RepositorySandboxSizeResponse,
   RepositoryBake,
   SandboxSizeSetting,
+  RecordSetupStepInput,
+  RecordSetupStepResult,
+  SetupRecipe,
+  WorkbenchTiming,
 } from '@talyn/shared';
 import {
   getApiRoot,
@@ -1602,6 +1606,21 @@ export const repositories = {
     get: (id: string) => request<RepositoryBake | null>('GET', `/repositories/${enc(id)}/bake`),
     put: (id: string, bake: RepositoryBake) => request<RepositoryBake>('PUT', `/repositories/${enc(id)}/bake`, bake),
   },
+  /**
+   * Setup steps that sessions learned on this repository. New boxes run them
+   * after the repository's own setup, and settled install steps go into the bake.
+   */
+  setupRecipe: {
+    get: (id: string) => request<SetupRecipe>('GET', `/repositories/${enc(id)}/setup-recipe`),
+    /** Revert one step. It stays listed as reverted and is not learned again. */
+    revertStep: (id: string, stepId: string) =>
+      request<SetupRecipe>('DELETE', `/repositories/${enc(id)}/setup-recipe/steps/${enc(stepId)}`),
+    /** Turn learning off: no new steps, and the recipe is no longer applied. */
+    disable: (id: string) => request<SetupRecipe>('POST', `/repositories/${enc(id)}/setup-recipe/disable`),
+    enable: (id: string) => request<SetupRecipe>('POST', `/repositories/${enc(id)}/setup-recipe/enable`),
+    recordStep: (id: string, input: RecordSetupStepInput) =>
+      request<RecordSetupStepResult>('POST', `/repositories/${enc(id)}/setup-recipe/steps`, input),
+  },
   /** Instructions written in Talyn for a repository, added to every session on it. */
   instructions: {
     /** Which repositories of the workspace have instructions. Never the text. */
@@ -2828,6 +2847,8 @@ export const workbenches = {
     request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' }>('POST', `/workbenches/${enc(id)}/wake`),
   /** Provision again after a failed start. */
   retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
+  /** Where the session's turns spent their time, by category, with the slowest calls. */
+  timing: (id: string) => request<WorkbenchTiming>('GET', `/workbenches/${enc(id)}/timing`),
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),

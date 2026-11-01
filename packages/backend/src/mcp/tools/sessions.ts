@@ -2,13 +2,18 @@ import {
   buildBlocks,
   describeTool,
   extractToolText,
+  formatDurationMs,
   isTalynOriginMessage,
+  TURN_TIME_CATEGORIES,
+  TURN_TIME_CATEGORY_LABELS,
   type AgentEvent,
   type CreateWorkbenchPullRequestResult,
   type FleetAccountView,
   type FleetAccountsResponse,
   SANDBOX_SIZES,
   type SandboxSize,
+  type RecordSetupStepResult,
+  type WorkbenchTiming,
   type Workbench,
   type WorkbenchChanges,
   type WorkbenchChat,
@@ -198,6 +203,50 @@ async function accountSessions(ownerId: string, args: Record<string, unknown>, c
   if (anchor.kind !== 'thread') return [anchor];
   const children = await callApi<Workbench[]>(ownerId, 'GET', `/workbenches/${encodeURIComponent(anchor.id)}/sessions`);
   return [anchor, ...children];
+}
+
+/**
+ * The session a call acts on: `session_id`, else the calling session. A
+ * session's own token may name itself or a session of its thread; a user's
+ * token may name any of the user's sessions.
+ */
+async function threadScopedSession(
+  ownerId: string,
+  args: Record<string, unknown>,
+  ctx: McpCallContext | undefined,
+  action: string
+): Promise<string> {
+  const self = ctx?.session?.workbenchId;
+  const sessionId = str(args.session_id) ?? self;
+  if (!sessionId) throw new Error('session_id is required');
+  if (self && sessionId !== self) {
+    const target = await loadSession(ownerId, sessionId);
+    if (target.threadId !== self) throw new Error(`A session can ${action} itself, or a session in its thread.`);
+  }
+  return sessionId;
+}
+
+function timingText(t: WorkbenchTiming): string {
+  if (t.turns === 0) return `Session ${t.workbenchId} has no time report yet. Talyn writes one when a turn ends.`;
+  const share = (ms: number) => (t.wallMs > 0 ? ` (${Math.round((ms / t.wallMs) * 100)}%)` : '');
+  const lines = [
+    `Session ${t.workbenchId}: ${t.turns} turn(s), ${formatDurationMs(t.wallMs)} in all, ${t.calls} tool call(s).`,
+    'Time by category (parallel calls can make the categories add up to more than the total):',
+  ];
+  const rows = TURN_TIME_CATEGORIES.map((c) => [c, t.categories[c]] as const)
+    .filter(([, b]) => b && b.ms > 0)
+    .sort((a, b) => b[1]!.ms - a[1]!.ms);
+  for (const [c, b] of rows) {
+    const calls = c === 'model' ? '' : ` in ${b!.count} call(s)`;
+    lines.push(`  ${TURN_TIME_CATEGORY_LABELS[c]}: ${formatDurationMs(b!.ms)}${share(b!.ms)}${calls}`);
+  }
+  if (t.slowest.length) {
+    lines.push('Slowest calls:');
+    for (const s of t.slowest) {
+      lines.push(`  ${formatDurationMs(s.ms)}  ${s.category}  ${s.command ?? s.name}${s.isError ? '  (failed)' : ''}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 const eventSeq = (key: string): number | null => {
@@ -524,6 +573,53 @@ export const SESSIONS = [
           body
         );
         return resizeText(sessionId, result, sessionId === self);
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'session_timing',
+    "Show where a session's turns spent their time: tests, installs, builds, Docker and services, waiting (sleep and polling loops), git, reading files, other tool calls, and model time. Also lists the slowest calls. Use it to find slow work to avoid in your next turns.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session. A session can read itself and the sessions of its thread.' },
+    },
+    [],
+    { readOnlyHint: true },
+    async (ownerId, args, ctx) => {
+      const sessionId = await threadScopedSession(ownerId, args, ctx, 'read the time report of');
+      const timing = await callApi<WorkbenchTiming>(ownerId, 'GET', `/workbenches/${encodeURIComponent(sessionId)}/timing`);
+      return timingText(timing);
+    },
+    FEATURE
+  ),
+  defineTool(
+    'record_setup_step',
+    "Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Use it after you install a tool or start a service that the work needed, for example `cargo install sqlx-cli`. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A person can revert any step.",
+    {
+      command: { type: 'string', description: 'One shell command, as you ran it. No secrets.' },
+      why: { type: 'string', description: 'Why later sessions need this step.' },
+      session_id: { type: 'string', description: 'The session whose repository gets the step. Default: the calling session.' },
+    },
+    ['command', 'why'],
+    { idempotentHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        const command = requireId(args, 'command');
+        const why = requireId(args, 'why');
+        const sessionId = await threadScopedSession(ownerId, args, ctx, 'record a setup step for');
+        const wb = await loadSandboxSession(ownerId, sessionId);
+        if (wb.kind === 'thread' || !wb.repositoryId) {
+          throw new Error('A thread has no repository, so it has no setup. Record the step from a session on the repository.');
+        }
+        const result = await callApi<RecordSetupStepResult>(
+          ownerId,
+          'POST',
+          `/repositories/${encodeURIComponent(wb.repositoryId)}/setup-recipe/steps`,
+          { command, why, sessionId: wb.id }
+        );
+        const lines = result.steps.map(
+          (s) => `  ${s.id}  [${s.kind}, ${s.phase === 'install' ? 'box setup and bake' : 'box setup'}]  ${s.command}`
+        );
+        return [`Added to the setup of ${wb.repoFullName}. New sessions run it after the repository's own setup:`, ...lines].join('\n');
       }),
     FEATURE
   ),
