@@ -64,6 +64,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_send_session_message',
   'talyn_list_accounts',
   'talyn_set_session_account',
+  // It can also set the repository's default size: a sandbox size moves no
+  // credential, and the person can change it back in the repository settings.
+  'talyn_resize_session',
   'talyn_get_session_transcript',
   'talyn_cancel_session_turn',
   'talyn_get_session_changes',

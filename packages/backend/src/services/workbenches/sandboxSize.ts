@@ -1,5 +1,5 @@
 import {
-  detectSandboxSize, isComposeFileName, isSandboxSizeSetting, MAX_COMPOSE_FILES, resolveSandboxSize, SANDBOX_SIZES,
+  detectSandboxSize, isComposeFileName, isSandboxSize, isSandboxSizeSetting, MAX_COMPOSE_FILES, resolveSandboxSize, SANDBOX_SIZES,
   type CachedSandboxSize, type RepositorySandboxSizeResponse, type SandboxSize, type SandboxSizeSetting,
 } from '@talyn/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -106,12 +106,22 @@ export function isSizeRefusal(err: unknown): err is FleetThrottleError {
   return err instanceof FleetThrottleError && /MiB|milli-vCPU|vCPU|tenant_memory|tenant_vcpu/i.test(err.message);
 }
 
-export function sizeFallbackNote(err: Error, size: SandboxSize): string {
+/** Why the fleet refused a size, in the words every size note uses. */
+export function sizeRefusalReason(err: Error): string {
   const limit = err.message.match(/exceeds the (\d+) MiB permitted/);
+  return limit ? `the fleet allows at most ${limit[1]} MiB` : 'the fleet refused that size';
+}
+
+export function sizeFallbackNote(err: Error, size: SandboxSize, asker: 'repository' | 'session' = 'repository'): string {
   const standard = SANDBOX_SIZES.standard.memMib;
-  return limit
-    ? `This repository asks for ${SANDBOX_SIZES[size].label}, but the fleet allows at most ${limit[1]} MiB; using ${standard / 1024} GB.`
-    : `This repository asks for ${SANDBOX_SIZES[size].label}, but the fleet refused that size; using ${standard / 1024} GB.`;
+  return `This ${asker} asks for ${SANDBOX_SIZES[size].label}, but ${sizeRefusalReason(err)}; using ${standard / 1024} GB.`;
+}
+
+/** The size this session chose, or is waiting to move to. Null: the repository decides. */
+export function sessionSandboxSize(row: Pick<WorkbenchRow, 'settings'>): SandboxSize | null {
+  const settings = row.settings ?? {};
+  if (isSandboxSize(settings.resizeTo)) return settings.resizeTo;
+  return isSandboxSize(settings.sandboxSize) ? settings.sandboxSize : null;
 }
 
 /** Tell the person, in each open chat of the session. */

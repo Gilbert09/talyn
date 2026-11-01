@@ -420,9 +420,15 @@ export async function commitMove(
     fleetSandboxId: string | null;
     statusMessage: string | null;
     settings?: Record<string, string>;
+    /** The size the new box got. A resize waiting for exactly this size is done. */
+    size?: string;
   },
 ): Promise<WorkbenchRow | null> {
   const added = { ...(to.fleetSandboxId ? { fleetSandboxId: to.fleetSandboxId } : {}), ...(to.settings ?? {}) };
+  const current = sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb)`;
+  // Read in the same statement, so a resize asked for during the move stays.
+  const base = sql`CASE WHEN ${current} ->> 'resizeTo' = ${to.size ?? null}::text
+    THEN ${current} - 'resizeTo' - 'resizeReason' ELSE ${current} END`;
   const [row] = await db()
     .update(workbenchesTable)
     .set({
@@ -432,7 +438,7 @@ export async function commitMove(
       sandboxGeneration: to.sandboxId,
       sandboxState: 'running',
       fleetHost: to.fleetHost,
-      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'fleetSandboxId' - ${LEASE_KEYS}
+      settings: sql`((${base}) - 'fleetSandboxId' - ${LEASE_KEYS}
         - 'moveFailedAt' - 'moveFailures') || ${JSON.stringify(added)}::jsonb`,
       updatedAt: new Date(),
     })
@@ -474,6 +480,29 @@ export async function mergeWorkbenchSettings(id: string, values: Record<string, 
     .update(workbenchesTable)
     .set({ settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || ${JSON.stringify(values)}::jsonb` })
     .where(eq(workbenchesTable.id, id));
+}
+
+/** Ask for a resize at the next move. `reason` null removes an old reason. */
+export async function setPendingResize(id: string, size: string, reason: string | null): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'resizeReason')
+        || ${JSON.stringify({ resizeTo: size, ...(reason ? { resizeReason: reason } : {}) })}::jsonb`,
+    })
+    .where(eq(workbenchesTable.id, id))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Forget a waiting resize, only while it still asks for `size`: a newer request stays. */
+export async function clearPendingResize(id: string, size: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`${workbenchesTable.settings} - 'resizeTo' - 'resizeReason'` })
+    .where(and(eq(workbenchesTable.id, id), sql`${workbenchesTable.settings} ->> 'resizeTo' = ${size}::text`))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
 }
 
 /** Stop an automatic loop when a second box is lost inside the retry window. */

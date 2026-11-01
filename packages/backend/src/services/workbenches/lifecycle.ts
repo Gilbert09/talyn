@@ -19,11 +19,11 @@ import {
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { localRuntimeError, notReadyError, SandboxSizeRefusedError, userFacingError, WorkbenchError } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { recordRecoveredTranscript } from './recovery.js';
-import { isSizeRefusal, noteSizeFallback, sizeFallbackNote, sizeForSession } from './sandboxSize.js';
+import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
 import { getRepositoryBake } from './bake.js';
 import {
   cloneScript,
@@ -141,7 +141,7 @@ export const THREAD_SANDBOX_SIZE: SandboxSize = (Object.keys(SANDBOX_SIZES) as S
 export const THREAD_WORKDIR_SCRIPT = `mkdir -p ${SANDBOX_WORK_ROOT}`;
 
 export type CreatedWorkbenchSandbox =
-  | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null }
+  | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null; size: SandboxSize }
   | { ok: false; error: string };
 
 /**
@@ -150,7 +150,11 @@ export type CreatedWorkbenchSandbox =
  * cannot differ between the two. The repository and its DEFAULT branch go on
  * the body, which is what picks the newest golden: goldens are keyed on them.
  */
-export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: string): Promise<CreatedWorkbenchSandbox> {
+export async function createWorkbenchSandbox(
+  row: WorkbenchRow,
+  sandboxId: string,
+  opts: { strictSize?: boolean } = {},
+): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const provider = providerForAgent(row.agent);
@@ -191,23 +195,28 @@ export async function createWorkbenchSandbox(row: WorkbenchRow, sandboxId: strin
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
   });
-  const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : await sizeForSession(row);
+  const chosen = isThread(row) ? null : sessionSandboxSize(row);
+  const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : chosen ?? await sizeForSession(row);
+  let size = wanted;
   let created;
   try {
     created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
   } catch (err) {
+    // A resize asked for exactly this size: refuse, and the session keeps its box.
+    if (opts.strictSize && isSizeRefusal(err)) throw new SandboxSizeRefusedError(wanted, sizeRefusalReason(err));
     // The tenant maximum refuses a size it cannot hold. Ask once for the standard box.
     if (SANDBOX_SIZES[wanted].memMib <= SANDBOX_SIZES.standard.memMib || !isSizeRefusal(err)) throw err;
-    const text = sizeFallbackNote(err, wanted);
+    const text = sizeFallbackNote(err, wanted, chosen ? 'session' : 'repository');
     recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
     await noteSizeFallback(row, text).catch(() => undefined);
-    created = await createSandboxRetryingUncertain(target.client, withSize('standard'));
+    size = 'standard';
+    created = await createSandboxRetryingUncertain(target.client, withSize(size));
   }
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
       : null;
-  return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId };
+  return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId, size };
 }
 
 export async function provisionWorkbench(workbenchId: string, opts: { restore?: boolean } = {}): Promise<void> {
@@ -226,6 +235,12 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     if (!created.ok) return await fail(created.error);
     const settings = settingsWithoutFleetSandboxId(row);
     if (created.fleetSandboxId) settings.fleetSandboxId = created.fleetSandboxId;
+    // A resize that waited is done: this box has the size.
+    if (settings.resizeTo === created.size) {
+      settings.sandboxSize = created.size;
+      delete settings.resizeTo;
+      delete settings.resizeReason;
+    }
     const sandboxId = created.sandboxId;
     row = await setRow(row, {
       sandboxId,
