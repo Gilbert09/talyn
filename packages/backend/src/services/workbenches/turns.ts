@@ -56,7 +56,7 @@ import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { selectFleetAccount } from '../selfHosted/accountSelection.js';
-import { exhaustedAgentFrom, noteExhaustedAgent, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
+import { exhaustedAgentFrom, noteExhaustedAgent, noteRateLimitedAccount, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
 import {
   killMarker,
   isMarkerAlive,
@@ -797,6 +797,8 @@ async function failOverAccount(
   const exhausted = exhaustedAgentFrom(detail) === agent;
   if (!exhausted && rateLimitedAgentFrom(detail) !== agent) return null;
   if (exhausted) await noteExhaustedAgent(wb.workspaceId, agent, detail, failedAccountId);
+  // Stored on the account, so the next turn start leaves it too, even when no hop was possible.
+  else await noteRateLimitedAccount(failedAccountId, detail);
   const selection = await selectFleetAccount(wb.workspaceId, agent, { model, avoidAccountIds: [failedAccountId] });
   if (!selection.account || selection.account.id === failedAccountId) return null;
   const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;

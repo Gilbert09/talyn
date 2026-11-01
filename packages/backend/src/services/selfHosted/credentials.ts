@@ -73,6 +73,8 @@ export interface ExhaustedQuotaRecord {
   resetsAt?: string;
   /** The vendor's own sentence, for the settings card and for debugging. */
   detail?: string;
+  /** A rate limit, not a spent quota: it clears by waiting, so the hold is short and ends at the vendor's reset. */
+  kind?: 'rate_limit';
 }
 
 /**

@@ -65,6 +65,8 @@ export type FleetAccountOverReason = 'usage' | 'held' | 'reauth';
 
 export interface FleetAccountVerdict {
   reason: FleetAccountOverReason | null;
+  /** For `held`: the hold is a rate limit, not a spent quota. */
+  rateLimited?: boolean;
   /** For `usage`: the window that put it over (the fullest one). */
   window?: FleetUsageWindow;
 }
@@ -98,7 +100,9 @@ export function accountOverVerdict(
   now: Date = new Date(),
 ): FleetAccountVerdict {
   if (account.reauthRequiredAt) return { reason: 'reauth' };
-  if (account.quotaExhausted && isHeldBack(account.quotaExhausted, now)) return { reason: 'held' };
+  if (account.quotaExhausted && isHeldBack(account.quotaExhausted, now)) {
+    return account.quotaExhausted.kind === 'rate_limit' ? { reason: 'held', rateLimited: true } : { reason: 'held' };
+  }
   const usage = account.usage;
   if (!usage || !('windows' in usage)) return { reason: null };
   const text = modelMatchText(model);
@@ -422,7 +426,7 @@ export function switchReasonText(
   if (verdict.reason === 'usage' && verdict.window) {
     return `${from.label} reached ${Math.round(verdict.window.usedPercent)}% of its ${windowPhrase(verdict.window)}`;
   }
-  if (verdict.reason === 'held') return `${from.label} is out of usage`;
+  if (verdict.reason === 'held') return verdict.rateLimited ? `${from.label} hit its rate limit` : `${from.label} is out of usage`;
   if (verdict.reason === 'reauth') return `${from.label} needs to be signed in again`;
   return `${from.label} is not available`;
 }

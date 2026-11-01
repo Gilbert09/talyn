@@ -292,6 +292,9 @@ export function resetInstantFrom(
  */
 const PROBE_AFTER_MS = 5 * 60 * 1000;
 
+/** The hold on an account after a rate limit that named no reset. See {@link probeAfter}. */
+export const RATE_LIMIT_HOLD_MS = 5 * 60 * 1000;
+
 /**
  * When a record stops holding its agent back: the EARLIER of our own probe and
  * whatever instant the vendor named.
@@ -302,7 +305,17 @@ const PROBE_AFTER_MS = 5 * 60 * 1000;
  * back before the window formally rolls. We would rather spend a boot finding
  * that out than sit out the difference.
  */
-export function probeAfter(record: { at: string; resetsAt?: string }): number {
+export function probeAfter(record: { at: string; resetsAt?: string; kind?: 'rate_limit' }): number {
+  if (record.kind === 'rate_limit') {
+    // A rate limit clears by waiting, and the vendor's own reset is the truth
+    // when it names one. With none, a fixed short hold: long enough that the
+    // next turn does not walk into the same 429, short enough that a wrong
+    // guess costs one turn on an account that was back.
+    const observedAt = new Date(record.at).getTime();
+    const vendorAt = record.resetsAt ? new Date(record.resetsAt).getTime() : NaN;
+    if (!Number.isNaN(vendorAt)) return vendorAt;
+    return (Number.isNaN(observedAt) ? 0 : observedAt) + RATE_LIMIT_HOLD_MS;
+  }
   const observed = new Date(record.at).getTime();
   const ours = Number.isNaN(observed) ? 0 : observed + PROBE_AFTER_MS;
   if (!record.resetsAt) return ours;
@@ -312,7 +325,7 @@ export function probeAfter(record: { at: string; resetsAt?: string }): number {
 
 /** Whether this record still holds its agent back at `now`. */
 export function isHeldBack(
-  record: { at: string; resetsAt?: string } | undefined,
+  record: { at: string; resetsAt?: string; kind?: 'rate_limit' } | undefined,
   now: Date = new Date(),
 ): boolean {
   return record ? now.getTime() < probeAfter(record) : false;
@@ -326,7 +339,7 @@ export function isHeldBack(
  * the agent was NOT waiting for — and a refusal that names the wrong moment is
  * worse than one that names none.
  */
-export function heldBackReason(agent: FleetAgent, record: { at: string; resetsAt?: string }): string {
+export function heldBackReason(agent: FleetAgent, record: { at: string; resetsAt?: string; kind?: 'rate_limit' }): string {
   const retry = new Date(probeAfter(record)).toISOString();
   return `${agentLabel(agent)} usage is exhausted; retrying it after ${retry}.`;
 }
@@ -430,6 +443,18 @@ export async function noteExhaustedAccount(accountId: string, detail: string | n
     await setFleetAccountExhausted({ accountId }, holdRecord(detail));
   } catch (err) {
     console.error(`[exhaustedQuota] could not record exhaustion on account ${accountId}:`, err);
+  }
+}
+
+/**
+ * Hold ONE account back after a rate limit, so the next turn starts on another.
+ * Stored on the account row, so a deploy does not forget it. Best-effort.
+ */
+export async function noteRateLimitedAccount(accountId: string, detail: string | null): Promise<void> {
+  try {
+    await setFleetAccountExhausted({ accountId }, { ...holdRecord(detail), kind: 'rate_limit' });
+  } catch (err) {
+    console.error(`[exhaustedQuota] could not record a rate limit on account ${accountId}:`, err);
   }
 }
 
