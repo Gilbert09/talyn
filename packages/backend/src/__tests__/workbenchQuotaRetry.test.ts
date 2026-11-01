@@ -18,7 +18,9 @@ const { addFleetAccount, getFleetAccount, setFleetAccountUsage } = await import(
 const { encryptString } = await import('../services/tokenCrypto.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { getChat, getWorkbench } = await import('../services/workbenches/store.js');
-const { sendMessage } = await import('../services/workbenches/turns.js');
+const store = await import('../services/workbenches/store.js');
+const { durablePaths } = await import('../services/workbenches/durableExec.js');
+const { sendMessage, sweepOrphanedTurns, turnLogKey } = await import('../services/workbenches/turns.js');
 
 describe('workbench quota retry', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
@@ -136,5 +138,44 @@ describe('workbench quota retry', () => {
     expect((await getFleetAccount(first.id))?.quotaExhausted).toEqual(
       failure.includes('out of extra usage') ? expect.any(Object) : null,
     );
+  });
+  it.each([
+    ['rate limit', "API Error: Request rejected (429) · This request would exceed your account's rate limit.", 'hit its rate limit', true],
+    ['unrelated error', 'Error: invalid API key', null, true],
+    ['rate limit, no second account', "API Error: Request rejected (429) · This request would exceed your account's rate limit.", null, false],
+  ] as const)('a turn adopted after a handoff: %s', async (_name, failure, note, second) => {
+    const first = await addAccount('claude', 'First');
+    const other = second ? await addAccount('claude', 'Second') : null;
+    await seedChat('claude');
+    await testDb.db.update(workbenches).set({ settings: { autoCreatePr: false, fleetAccountId: first.id } });
+    await testDb.db.update(workbenchChats).set({ turnCount: 0 });
+    await store.claimOrEnqueue('chat', { id: 'msg', text: 'work', queuedAt: new Date().toISOString() }, true);
+    await testDb.db.update(workbenchChats).set({ turnOwner: 'instance-a', turnHeartbeatAt: new Date(0) });
+    const failedLines = claudeTurnLines('sess', failure).map((line) =>
+      line.replace('"subtype":"success"', '"subtype":"error_during_execution"').replace('"is_error":false', '"is_error":true'));
+    // The old instance's agent already ran and ended on the limit.
+    fleet.durableLogs.set(durablePaths(turnLogKey('chat', 1, 0)).log, { stdout: failedLines, exitCode: 1 });
+    let runs = 0;
+    const handler = fleet.handler;
+    fleet.handler = (script, req) => {
+      if (!isAgentTurn(script, 'claude')) return handler(script, req);
+      runs++;
+      return { stdout: claudeTurnLines('sess', 'done'), exitCode: 0 };
+    };
+
+    expect(await sweepOrphanedTurns()).toBe(1);
+    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe(note ? 'idle' : 'error'), { timeout: 5000 });
+    expect(runs).toBe(note ? 1 : 0);
+    const events = (await testDb.db.select().from(workbenchEvents).where(eq(workbenchEvents.chatId, 'chat'))).map((row) => row.event);
+    const notes = events.filter((e) => e.subtype === 'fleet_account_switched');
+    expect(notes).toHaveLength(note ? 1 : 0);
+    if (note) {
+      expect(notes[0].text).toContain(note);
+      expect(notes[0].text).toContain('Second');
+      expect((await getWorkbench('wb'))?.settings?.fleetAccountId).toBe(other?.id);
+      expect(fleet.credentialPushes.at(-1)?.creds).toMatchObject({ anthropicKey: 'token-Second' });
+    } else {
+      expect((await getWorkbench('wb'))?.settings?.fleetAccountId).toBe(first.id);
+    }
   });
 });

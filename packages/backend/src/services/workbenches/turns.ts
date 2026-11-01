@@ -329,6 +329,7 @@ async function runTurnLoopBody(
 ): Promise<void> {
   let next: { message: WorkbenchQueuedMessage; turn: number } | null = first;
   let startAttempt = 0;
+  let startFailedOver = false;
   while (next) {
     let lost: string | null = null;
     let lostError: unknown;
@@ -350,9 +351,10 @@ async function runTurnLoopBody(
     heartbeat.unref();
     let outcome: TurnOutcome;
     try {
-      outcome = resume ? await resumeTurn(chatId, resume, legacyTurn) : await runOneTurn(chatId, next.message, next.turn, startAttempt);
+      outcome = resume ? await resumeTurn(chatId, resume, legacyTurn) : await runOneTurn(chatId, next.message, next.turn, startAttempt, startFailedOver);
       resume = undefined;
       startAttempt = 0;
+      startFailedOver = false;
     } catch (error) {
       await releaseLease(chatId, heldTurn, 'the turn follower failed', error);
       return;
@@ -364,6 +366,7 @@ async function runTurnLoopBody(
     // The adopted attempt never started: run the turn again here, as its next attempt.
     if (outcome.relaunch) {
       startAttempt = outcome.relaunch.attempt;
+      startFailedOver = outcome.relaunch.failedOver ?? false;
       next = { message: outcome.relaunch.message, turn: heldTurn };
       continue;
     }
@@ -444,7 +447,7 @@ interface TurnOutcome {
   handoffReason?: string;
   handoffError?: unknown;
   /** The adopted attempt never started: run the turn again, from this attempt. */
-  relaunch?: { message: WorkbenchQueuedMessage; attempt: number };
+  relaunch?: { message: WorkbenchQueuedMessage; attempt: number; failedOver?: boolean };
   /** The agent finished the turn: its message and final text, for the branch name. */
   succeeded?: BranchNamingInput;
 }
@@ -545,7 +548,7 @@ function errorResultEvent(subtype: string, text: string): Record<string, unknown
   return { type: 'result', subtype, is_error: true, result: text };
 }
 
-async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number, firstAttempt = 0): Promise<TurnOutcome> {
+async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn: number, firstAttempt = 0, alreadyFailedOver = false): Promise<TurnOutcome> {
   // Nothing has started: the next instance adopts the lease and launches the
   // agent. The chat stays `running` throughout, so no client sees it stop.
   if (isWorkbenchDraining()) return handoffOutcome('draining before the agent started');
@@ -684,7 +687,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       });
     };
     let attempt = firstAttempt;
-    let failedOver = false;
+    let failedOver = alreadyFailedOver;
     for (;;) {
       const parser = createAgentStreamParser(agent);
       attemptSawResult = false;
@@ -730,24 +733,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       if (!failedAccountId) break;
       const why = parserResult?.text?.trim() || outcome.stderrTail.trim();
       const detail = [parserResult?.text, outcome.stderrTail].filter(Boolean).join('\n');
-      const exhausted = exhaustedAgentFrom(detail) === agent;
-      if (!exhausted && rateLimitedAgentFrom(detail) !== agent) break;
-      if (exhausted) await noteExhaustedAgent(wb.workspaceId, agent, detail, failedAccountId);
-      const selection = await selectFleetAccount(wb.workspaceId, agent, {
-        model,
-        avoidAccountIds: [failedAccountId],
-      });
-      if (!selection.account || selection.account.id === failedAccountId) break;
+      const hop = await failOverAccount(wb, agent, model, failedAccountId, detail);
+      if (!hop) break;
       if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
       await events.flush();
       if (live.cancelRequested) break;
-      const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;
-      const next = await refreshSandboxCredentials(wb, { model, avoidAccountIds: [failedAccountId] });
-      if (!next.accountId || next.accountId === failedAccountId) break;
-      const nextLabel = selection.accounts.find((a) => a.id === next.accountId)?.label ?? next.accountId;
-      const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
-      events.add(accountSwitchEvent(`${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`));
-      accountId = next.accountId;
+      events.add(accountSwitchEvent(hop.note));
+      accountId = hop.accountId;
       failedOver = true;
       attempt++;
     }
@@ -788,6 +780,34 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     await recapWrite;
     liveTurns.delete(chatId);
   }
+}
+
+/**
+ * One hop to another account of the same agent after a rate limit or a spent
+ * quota. Null when the failure is anything else, or no other account has usage.
+ * Shared by the live attempt loop and a turn that a new instance adopted.
+ */
+async function failOverAccount(
+  wb: WorkbenchRow,
+  agent: 'claude' | 'codex',
+  model: string | undefined,
+  failedAccountId: string,
+  detail: string,
+): Promise<{ accountId: string; note: string } | null> {
+  const exhausted = exhaustedAgentFrom(detail) === agent;
+  if (!exhausted && rateLimitedAgentFrom(detail) !== agent) return null;
+  if (exhausted) await noteExhaustedAgent(wb.workspaceId, agent, detail, failedAccountId);
+  const selection = await selectFleetAccount(wb.workspaceId, agent, { model, avoidAccountIds: [failedAccountId] });
+  if (!selection.account || selection.account.id === failedAccountId) return null;
+  const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;
+  const next = await refreshSandboxCredentials(wb, { model, avoidAccountIds: [failedAccountId] });
+  if (!next.accountId || next.accountId === failedAccountId) return null;
+  const nextLabel = selection.accounts.find((a) => a.id === next.accountId)?.label ?? next.accountId;
+  const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
+  return {
+    accountId: next.accountId,
+    note: `${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`,
+  };
 }
 
 async function cancelledOutcome(events: EventBatcher, sawResult = false): Promise<TurnOutcome> {
@@ -1102,6 +1122,23 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
         status: 'idle', statusMessage: null, cancelled: false,
         succeeded: { message: lease.message?.text ?? '', finalMessage: parser.result?.text ?? '' },
       };
+    }
+    // A rate limit on an adopted turn moves to another account, as a live one does.
+    // Only the first attempt: a later one may already be the hop.
+    const hopFrom = workbenchFleetAccountId(wb);
+    if (lease.message && lease.attempt === 0 && hopFrom && outcome.exitCode !== 125) {
+      const agent = chat.agent === 'codex' ? 'codex' : 'claude';
+      const detail = [parser.result?.text, outcome.stderrTail].filter(Boolean).join('\n');
+      const model = lease.message.model ?? chat.model ?? wb.model ?? undefined;
+      const hop = await failOverAccount(wb, agent, model, hopFrom, detail);
+      if (hop) {
+        if (!parser.result?.isError && !(await hasTurnEvent(chatId, lease.turn, 'result', true))) {
+          events.add(errorResultEvent('error_during_execution', parser.result?.text?.trim() || outcome.stderrTail.trim() || 'The agent stopped.'));
+        }
+        events.add(accountSwitchEvent(hop.note));
+        await events.flush();
+        return { status: 'running', statusMessage: null, cancelled: false, relaunch: { message: lease.message, attempt: lease.attempt + 1, failedOver: true } };
+      }
     }
     const why = outcome.exitCode === 125 ? ORPHAN_MESSAGE :
       parser.result?.text?.trim() || outcome.stderrTail.trim() || `The agent exited with code ${outcome.exitCode}.`;
