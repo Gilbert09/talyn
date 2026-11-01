@@ -6,6 +6,7 @@ import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './
 import { publicWorkbench } from './prLink.js';
 import { fleetClientFor, nextSandboxId, recordWorkbenchEvent } from './sandboxRuntime.js';
 import { NO_CHECKPOINT_NOTE } from './workCheckpointScripts.js';
+import { meterWorkbenchAwake, meterWorkbenchBoxGone } from './usageMeter.js';
 import { appendEvents, claimLostWorkbench, failLostWorkbench, listChats, rowToChat, updateChat, type WorkbenchRow } from './store.js';
 
 export const SANDBOX_LOST_MESSAGE = 'The sandbox was lost. Talyn is starting a new one.';
@@ -53,12 +54,14 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
   const work = runWithoutScope(async () => {
     if (await resumeIfSuspended({ ...row, sandboxId })) {
       recordWorkbenchEvent(row, 'sandbox_resumed', `sandbox ${sandboxId} was suspended, not lost; resumed it`);
+      await meterWorkbenchAwake({ ...row, sandboxId });
       return;
     }
     await stopSandboxScripts(row.id, sandboxId);
     const now = Date.now();
     if (now - (attempts.get(row.id) ?? 0) < RETRY_WINDOW_MS) {
       const failed = await failLostWorkbench(row.id, sandboxId, 'The sandbox was lost again. Retry this session.');
+      if (failed) await meterWorkbenchBoxGone(row, sandboxId, 'vanished');
       if (failed) {
         recordWorkbenchEvent(failed, 'sandbox_lost', `sandbox ${sandboxId} was lost again`, false);
         await emitWorkbenchUpdated(await publicWorkbench(failed));
@@ -69,6 +72,8 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
     const claimed = await claimLostWorkbench(row.id, row.sandboxId!, replacementId, SANDBOX_LOST_MESSAGE);
     if (!claimed) return;
     attempts.set(row.id, now);
+    // The replacement opens its own interval when provisioning creates it.
+    await meterWorkbenchBoxGone(row, sandboxId, 'vanished');
     try {
       recordWorkbenchEvent(claimed, 'sandbox_lost', `sandbox ${row.sandboxId} was lost`, false);
       await emitWorkbenchUpdated(await publicWorkbench(claimed));

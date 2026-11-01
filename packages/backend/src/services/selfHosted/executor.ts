@@ -1,9 +1,13 @@
 import { eq } from 'drizzle-orm';
 import {
+  isSandboxSize,
   readCloudTaskMeta,
+  UNATTENDED_SANDBOX_SIZE,
   type CloudTaskMetadata,
   type Environment,
+  type SandboxSize,
   type Task,
+  type TaskSource,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
@@ -16,6 +20,8 @@ import { dispatchSandboxRun, type SandboxRunHandle } from './sandboxRun.js';
 import { accountIdsFromHops } from './accountSelection.js';
 import { TASK_SYSTEM_PROMPT } from './systemPrompts.js';
 import { withMemoryIndex } from '../workbenches/memory.js';
+import { sizeForSession } from '../workbenches/sandboxSize.js';
+import { meterBoxOpened } from '../billing/usageHooks.js';
 
 // Re-exported, not redeclared. A second definition of this contract is how the
 // two drift: the shared one grew a `capacity` discriminator and this copy
@@ -51,6 +57,30 @@ export function fleetRunAttempt(task: { metadata?: Record<string, unknown> | nul
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+/** Sources that start a run nobody is watching. Their boxes are `small`. */
+const UNATTENDED_SOURCES: ReadonlySet<TaskSource> = new Set(['auto_keep', 'merge_queue', 'code_review', 'loop', 'workflow']);
+
+/** True for a run started by a loop, the merge queue, auto-keep, a workflow or a review fix. */
+export function isUnattendedTask(task: Pick<Task, 'metadata'>): boolean {
+  const meta = (task.metadata ?? {}) as Record<string, unknown>;
+  if (meta.unattended === true) return true;
+  return typeof meta.source === 'string' && UNATTENDED_SOURCES.has(meta.source as TaskSource);
+}
+
+/**
+ * The size of a task's box. A size the person chose for this run wins
+ * (`metadata.sandboxSize`). Otherwise an unattended run gets
+ * {@link UNATTENDED_SANDBOX_SIZE}, and an attended one the repository's size,
+ * as a session on that repository would. A quota-failover re-dispatch reads
+ * the same metadata, so it keeps the size of the run it replaces.
+ */
+export async function taskSandboxSize(task: Pick<Task, 'metadata' | 'repositoryId' | 'workspaceId'>): Promise<SandboxSize> {
+  const chosen = ((task.metadata ?? {}) as Record<string, unknown>).sandboxSize;
+  if (isSandboxSize(chosen)) return chosen;
+  if (isUnattendedTask(task)) return UNATTENDED_SANDBOX_SIZE;
+  return sizeForSession({ repositoryId: task.repositoryId ?? null, workspaceId: task.workspaceId });
+}
+
 /**
  * Hand a task to the self-hosted fleet: POST an ephemeral sandbox whose
  * initial task is the prompt, and let the fleet own the agent loop. The
@@ -72,8 +102,10 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     return { ok: false, error: 'Talyn Fleet tasks require a repository.' };
   }
 
+  const size = await taskSandboxSize(task);
   const dispatched = await dispatchSandboxRun({
     runId: fleetRunIdForTask(task.id, fleetRunAttempt(task)),
+    size,
     workspaceId: task.workspaceId,
     repositoryId: task.repositoryId,
     taskType: task.type === 'pr_response' ? 'pr_response' : 'code_writing',
@@ -112,6 +144,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
   const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap, accountId } =
     dispatched.handle;
 
+
   // The bookkeeping is inside a boundary of its own, and it matters that it is.
   // The sandbox is already booted by this point, so a failure here is not a
   // failure to dispatch — but `dispatch` is a provider-contract function whose
@@ -122,6 +155,16 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
   // is idempotent on the run id, so the next attempt re-attaches to this same
   // sandbox rather than booting a second one.
   try {
+    // The box is booted: meter it before the bookkeeping, which can fail.
+    // Idempotent, so a retried dispatch that re-attaches to this box opens
+    // nothing new.
+    await meterBoxOpened({
+      workspaceId: task.workspaceId,
+      subjectKind: 'task',
+      subjectId: task.id,
+      sandboxId: sandbox.id,
+      size: dispatched.handle.size,
+    });
     await recordDispatch(task, env, {
       sandbox,
       provider,
@@ -131,6 +174,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       repoSlug,
       quotaSwap,
       accountId,
+      size: dispatched.handle.size,
     });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -152,10 +196,10 @@ async function recordDispatch(
   env: Environment,
   handle: Pick<
     SandboxRunHandle,
-    'sandbox' | 'provider' | 'model' | 'endpoint' | 'host' | 'repoSlug' | 'quotaSwap' | 'accountId'
+    'sandbox' | 'provider' | 'model' | 'endpoint' | 'host' | 'repoSlug' | 'quotaSwap' | 'accountId' | 'size'
   >,
 ): Promise<void> {
-  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap, accountId } = handle;
+  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap, accountId, size } = handle;
 
   const cloudTask: CloudTaskMetadata = {
     provider: 'selfhosted',
@@ -181,6 +225,9 @@ async function recordDispatch(
       // WHICH ACCOUNT of that vendor. The re-credential push, the host pull and
       // the hot-swap check all serve this one, and a hot-swap rewrites it.
       ...(accountId ? { accountId } : {}),
+      // The box's size: the meter's weight, and what the sweep reopens a
+      // resumed box at.
+      sandboxSize: size,
     },
   };
 

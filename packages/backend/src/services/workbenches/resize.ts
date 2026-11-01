@@ -1,4 +1,4 @@
-import { isSandboxSize, SANDBOX_SIZES, SANDBOX_SIZE_SETTINGS, type SandboxSize } from '@talyn/shared';
+import { isSandboxSize, SANDBOX_SIZES, SANDBOX_SIZE_SETTINGS, sandboxSizeForResources, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { settleBranchNaming } from './branchName.js';
 import { emitWorkbenchEvents } from './emit.js';
@@ -62,17 +62,16 @@ export function pendingResize(row: Pick<WorkbenchRow, 'settings'>): SandboxSize 
   return isSandboxSize(size) ? size : null;
 }
 
-function sizeForMemMib(memMib: number | undefined): SandboxSize | null {
-  if (!memMib) return null;
-  return (Object.keys(SANDBOX_SIZES) as SandboxSize[]).find((size) => SANDBOX_SIZES[size].memMib === memMib) ?? null;
-}
-
 /** The size the box booted at, from the fleet. One read that does not wake it. Null when unknown. */
 async function currentBoxSize(row: WorkbenchRow): Promise<SandboxSize | null> {
   if (!row.sandboxId) return null;
   try {
     const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-    return sizeForMemMib((await client.getSandbox(row.sandboxId)).sandbox.memMib);
+    const { sandbox } = await client.getSandbox(row.sandboxId);
+    // `small` and `standard` share 4 GiB: the CPU tells them apart. A host
+    // that predates `milliVcpu` reports the whole vCPU count instead.
+    const milli = sandbox.milliVcpu ?? (sandbox.vcpuCount ? sandbox.vcpuCount * 1000 : null);
+    return sandboxSizeForResources(sandbox.memMib, milli);
   } catch {
     return null;
   }

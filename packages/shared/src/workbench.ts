@@ -120,6 +120,8 @@ export interface WorkbenchSettings {
   autoCreatePr?: boolean;
   /** The size this session chose with a resize. Absent: the repository's size. Server-written. */
   sandboxSize?: SandboxSize;
+  /** The size the session's current box was created at: the usage meter's weight. Server-written. */
+  boxSize?: SandboxSize;
   /** A resize that waits for the running turn to end. Server-written. */
   resizeTo?: SandboxSize;
   /** Why the agent asked for the resize, for the note the person sees. Server-written. */
