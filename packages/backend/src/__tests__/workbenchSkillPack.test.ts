@@ -192,9 +192,9 @@ describe('session skill pack', () => {
       expect(section.trim().split('\n').length).toBeLessThanOrEqual(8);
       expect(section).toContain('memory');
       expect(section).toContain('`talyn-speed`');
-      // The setup-step tool may not exist yet: the line names no tool, so it is true either way.
-      expect(section).toMatch(/When Talyn gives you a tool that records setup steps/);
-      expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_resize_session']);
+      expect(section).toContain('talyn_record_setup_step');
+      expect(section).toContain('Never record secrets.');
+      expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_resize_session', 'talyn_record_setup_step']);
     });
   });
 
