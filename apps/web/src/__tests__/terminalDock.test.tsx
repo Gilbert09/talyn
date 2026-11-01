@@ -10,6 +10,7 @@ import type { WorkbenchOps } from '../lib/workbenchOps';
 import { DOCK_MIN_HEIGHT, readLayout } from '../lib/workbenchLayout';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { TerminalPanel } from '../components/workbench/terminal/TerminalPanel';
+import { CONSOLE_THEME, TALYN_COLOR } from '../components/workbench/terminal/consoleTheme';
 import { toast } from '../stores/toast';
 
 vi.mock('../stores/toast', () => ({
@@ -17,9 +18,6 @@ vi.mock('../stores/toast', () => ({
 }));
 vi.mock('../components/workbench/terminal/ShellTerminal', () => ({
   ShellTerminal: ({ active }: { active: boolean }) => <div data-testid="shell" data-active={String(active)} />,
-}));
-vi.mock('../components/workbench/terminal/useXterm', () => ({
-  useXterm: () => ({ ref: { current: null }, term: null }),
 }));
 
 const WB = { id: 'wb1', runtime: 'sandbox', status: 'ready' } as Workbench;
@@ -52,6 +50,7 @@ beforeEach(() => {
   readConfig.mockReset().mockResolvedValue(configured);
   saveDetectedConfig.mockReset().mockResolvedValue(undefined);
   window.localStorage.clear();
+  useWorkbenchStore.setState({ scriptOutput: {} });
   useWorkbenchStore.setState({
     terminalOpen: false,
     terminalTab: 'terminal',
@@ -209,4 +208,91 @@ describe('terminal dock', () => {
     expect(readConfig).toHaveBeenCalledTimes(1);
     expect(ops.runScript).not.toHaveBeenCalled();
   });
+});
+it.each(['setup', 'run'] as const)('renders %s logs as console text with ANSI colors', async (name) => {
+  useWorkbenchStore.setState({
+    terminalOpen: true,
+    terminalTab: name,
+    scriptOutput: {
+      [WB.id]: {
+        [name]: {
+          chunks: ['\x1b[31merror\x1b[0m\n', 'Talyn: <img src=x onerror=alert(1)>'],
+          total: 2,
+          running: true,
+          exitCode: null,
+        },
+      },
+    },
+  });
+  await renderDock();
+  const scroll = screen.getByTestId('script-output-scroll');
+  const pre = scroll.querySelector('pre');
+  expect(scroll.parentElement).toHaveStyle({
+    backgroundColor: CONSOLE_THEME.background,
+    color: CONSOLE_THEME.foreground,
+    fontSize: '12px',
+  });
+  expect(pre).toHaveStyle({ whiteSpace: 'pre', overflowWrap: 'normal' });
+  expect(pre?.textContent).toBe('error\nTalyn: <img src=x onerror=alert(1)>');
+  expect(scroll.querySelector('img')).toBeNull();
+  expect(screen.getByText('error')).toHaveStyle({ color: CONSOLE_THEME.red });
+  expect(screen.getByText(/Talyn: <img/)).toHaveStyle({ color: TALYN_COLOR });
+});
+
+it('remembers the Wrap lines setting across tabs', async () => {
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run', scriptOutput: {
+    [WB.id]: { run: { chunks: ['a long line'], total: 1, running: true, exitCode: null } },
+  } });
+  await renderDock();
+  const toggle = screen.getByRole('button', { name: 'Wrap lines' });
+  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByTestId('script-output-scroll').querySelector('pre')).toHaveStyle({
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+  });
+  expect(window.localStorage.getItem('talyn.web.scriptOutput.wrapLines')).toBe('true');
+  fireEvent.click(screen.getByRole('tab', { name: 'Setup' }));
+  expect(screen.getByRole('button', { name: 'Wrap lines' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('keeps the Wrap lines toggle usable when storage fails', async () => {
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run' });
+  await renderDock();
+  const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'Wrap lines' }));
+    expect(screen.getByRole('button', { name: 'Wrap lines' })).toHaveAttribute('aria-pressed', 'true');
+  } finally {
+    setItem.mockRestore();
+  }
+});
+
+it('follows new output only while scrolled to the bottom', async () => {
+  useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'run', scriptOutput: {
+    [WB.id]: { run: { chunks: ['first'], total: 1, running: true, exitCode: null } },
+  } });
+  await renderDock();
+  const scroll = screen.getByTestId('script-output-scroll');
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, value: 300 },
+    clientHeight: { configurable: true, value: 100 },
+  });
+  scroll.scrollTop = 0;
+  fireEvent.scroll(scroll);
+  act(() => useWorkbenchStore.getState().appendScriptFrame({
+    workbenchId: WB.id, name: 'run', stream: 'stdout', data: 'second',
+  }));
+  expect(scroll.scrollTop).toBe(0);
+  scroll.scrollTop = 200;
+  fireEvent.scroll(scroll);
+  act(() => useWorkbenchStore.getState().appendScriptFrame({
+    workbenchId: WB.id, name: 'run', stream: 'stdout', data: 'third',
+  }));
+  expect(scroll.scrollTop).toBe(300);
+  scroll.scrollTop = 0;
+  fireEvent.scroll(scroll);
+  act(() => useWorkbenchStore.getState().markScriptStarted(WB.id, 'run'));
+  expect(scroll.scrollTop).toBe(300);
 });

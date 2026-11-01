@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react';
 import type { Workbench, WorkbenchConfig } from '@talyn/shared';
 import { cn } from '../../../lib/utils';
@@ -11,7 +11,8 @@ import { useSessionPreview } from '../../../hooks/useSessionPreview';
 import { CoderPreviewPanel } from '../CoderPreviewPanel';
 import { SessionPreviewChips } from '../SessionPreviewChips';
 import { ShellTerminal } from './ShellTerminal';
-import { useXterm } from './useXterm';
+import { parseAnsi } from './ansi';
+import { CONSOLE_FONT_FAMILY, CONSOLE_FONT_SIZE, CONSOLE_THEME } from './consoleTheme';
 
 const TABS: Array<{ id: WorkbenchTerminalTab; label: string }> = [
   { id: 'setup', label: 'Setup' },
@@ -262,42 +263,74 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
   );
 }
 
-/** A read-only xterm fed from the store's script output. */
+const WRAP_LINES_KEY = 'talyn.desktop.scriptOutput.wrapLines';
+
 function ScriptOutput({ workbenchId, name, emptyText }: { workbenchId: string; name: string; emptyText: string }) {
-  const { ref, term } = useXterm({ readOnly: true });
   const output = useWorkbenchStore((s) => s.scriptOutput[workbenchId]?.[name]);
-  const written = useRef(0);
-  const revision = useRef<number | undefined>(undefined);
-  const lastExit = useRef<number | null | undefined>(undefined);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const previousOutput = useRef<{ revision?: number; total: number } | null>(null);
+  const [wrapLines, setWrapLines] = useState(() => {
+    try { return window.localStorage.getItem(WRAP_LINES_KEY) === 'true'; }
+    catch { return false; }
+  });
+  const text = output
+    ? output.chunks.join('') + (!output.running
+      ? `\x1b[90m\n[exited${output.exitCode === null ? '' : ` with code ${output.exitCode}`}]\n\x1b[0m`
+      : '')
+    : '';
+  const spans = useMemo(() => parseAnsi(text), [text]);
 
   useEffect(() => {
-    if (!term) return;
-    const chunks = output?.chunks ?? [];
-    const total = output?.total ?? 0;
-    // A restart clears the output: start the screen over too.
-    if (total < written.current || revision.current !== output?.revision) {
-      revision.current = output?.revision;
-      term.reset();
-      written.current = 0;
-      lastExit.current = undefined;
+    if (!output || (previousOutput.current &&
+      (output.revision !== previousOutput.current.revision || output.total < previousOutput.current.total))) {
+      following.current = true;
     }
-    const fresh = Math.min(total - written.current, chunks.length);
-    for (let i = chunks.length - fresh; i < chunks.length; i++) term.write(chunks[i]);
-    written.current = total;
-    if (output && !output.running && lastExit.current !== output.exitCode) {
-      lastExit.current = output.exitCode;
-      term.writeln(`\r\n\x1b[90m[exited${output.exitCode === null ? '' : ` with code ${output.exitCode}`}]\x1b[0m`);
-    }
-  }, [term, output]);
+    previousOutput.current = output ? { revision: output.revision, total: output.total } : null;
+    if (following.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [text, wrapLines, output]);
+
+  const toggleWrap = () => {
+    const next = !wrapLines;
+    setWrapLines(next);
+    try { window.localStorage.setItem(WRAP_LINES_KEY, String(next)); }
+    catch { /* Storage can be unavailable. */ }
+  };
 
   return (
-    <div className="absolute inset-0">
-      {!output && (
-        <p className="absolute left-3 top-2 z-10 text-xs text-muted-foreground">
-          {emptyText}
-        </p>
-      )}
-      <div ref={ref} className="h-full w-full px-2 py-1" />
+    <div
+      className="absolute inset-0 flex flex-col"
+      style={{ backgroundColor: CONSOLE_THEME.background, color: CONSOLE_THEME.foreground, fontFamily: CONSOLE_FONT_FAMILY, fontSize: CONSOLE_FONT_SIZE }}
+    >
+      <div className="flex shrink-0 justify-end px-3 py-1">
+        <button
+          type="button"
+          aria-pressed={wrapLines}
+          onClick={toggleWrap}
+          className="rounded px-1.5 py-0.5 opacity-70 hover:opacity-100"
+        >
+          Wrap lines
+        </button>
+      </div>
+      <div
+        ref={scrollRef}
+        data-testid="script-output-scroll"
+        className="min-h-0 min-w-0 flex-1 overflow-auto px-3 pb-2"
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          following.current = target.scrollHeight - target.scrollTop - target.clientHeight <= 16;
+        }}
+      >
+        {output ? (
+          <pre className="m-0" style={{ whiteSpace: wrapLines ? 'pre-wrap' : 'pre', overflowWrap: wrapLines ? 'anywhere' : 'normal', lineHeight: 1.3, fontFamily: 'inherit' }}>
+            {spans.map((span, index) => (
+              <span key={index} style={{ color: span.color, fontWeight: span.bold ? 'bold' : undefined, opacity: span.dim ? 0.7 : undefined }}>
+                {span.text}
+              </span>
+            ))}
+          </pre>
+        ) : <p className="opacity-70">{emptyText}</p>}
+      </div>
     </div>
   );
 }

@@ -1,33 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Terminal, type ITheme } from '@xterm/xterm';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-
-function cssColor(name: string): string {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return `hsl(${raw})`;
-}
-
-/** xterm theme built from the app's CSS variables, so it follows light/dark. */
-function buildTheme(): ITheme {
-  const background = cssColor('--background');
-  const foreground = cssColor('--foreground');
-  return {
-    background,
-    foreground,
-    cursor: foreground,
-    cursorAccent: background,
-    selectionBackground: cssColor('--accent'),
-    red: cssColor('--destructive'),
-    green: cssColor('--success'),
-    yellow: cssColor('--warning'),
-    blue: cssColor('--info'),
-    brightRed: cssColor('--destructive'),
-    brightGreen: cssColor('--success'),
-    brightYellow: cssColor('--warning'),
-    brightBlue: cssColor('--info'),
-  };
-}
+import { CONSOLE_FONT_FAMILY, CONSOLE_FONT_SIZE, CONSOLE_THEME } from './consoleTheme';
 
 /**
  * One xterm.js terminal mounted in `ref`, fitted to its box and refitted when
@@ -44,13 +19,13 @@ export function useXterm(opts: { readOnly?: boolean; onResize?: (cols: number, r
     const el = ref.current;
     if (!el) return undefined;
     const t = new Terminal({
-      fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 12,
+      fontFamily: CONSOLE_FONT_FAMILY,
+      fontSize: CONSOLE_FONT_SIZE,
       cursorBlink: !opts.readOnly,
       disableStdin: Boolean(opts.readOnly),
       convertEol: Boolean(opts.readOnly),
       scrollback: 5000,
-      theme: buildTheme(),
+      theme: CONSOLE_THEME,
     });
     const fit = new FitAddon();
     t.loadAddon(fit);
@@ -66,17 +41,9 @@ export function useXterm(opts: { readOnly?: boolean; onResize?: (cols: number, r
     doFit();
     const observer = new ResizeObserver(() => doFit());
     observer.observe(el);
-    const themeObserver = new MutationObserver(() => {
-      t.options.theme = buildTheme();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    });
     setTerm(t);
     return () => {
       observer.disconnect();
-      themeObserver.disconnect();
       t.dispose();
       setTerm(null);
     };
