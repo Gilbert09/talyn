@@ -21,7 +21,7 @@ import {
   entitlementQuery,
   resolveEntitlement,
   teamGrantsSeats,
-  withTaskLimitGate,
+  withBoxGate,
 } from '../services/billing/entitlements.js';
 import { PLAN_LIMITS } from '@talyn/shared';
 import {
@@ -244,11 +244,11 @@ describe('resolveEntitlement with seats', () => {
         description: 'd',
       });
     }
-    await expect(withTaskLimitGate(MEMBER, {}, async () => 'ran')).resolves.toBe('ran');
+    await expect(withBoxGate(MEMBER, { size: 'standard' }, async () => 'ran')).resolves.toBe('ran');
     // …and the moment the seat goes, the free cap is back.
     const [seat] = await db.select().from(teamSeatsTable).where(eq(teamSeatsTable.githubUserId, MEMBER_GH));
     await removeSeat(teamId, seat!.id);
-    await expect(withTaskLimitGate(MEMBER, {}, async () => 'ran')).rejects.toThrow();
+    await expect(withBoxGate(MEMBER, { size: 'standard' }, async () => 'ran')).rejects.toThrow();
   });
 
   it('entitlementQuery selects only the plan columns', () => {

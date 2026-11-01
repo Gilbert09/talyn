@@ -63,6 +63,9 @@ import { enabledWorkflowsFor } from './store.js';
 const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'rate_capped',
   'task_limit_reached',
+  'usage_exhausted',
+  'box_limit_reached',
+  'size_requires_pro',
   'rate_gated',
   'no_cloud_provider',
   'task_already_running',
@@ -402,9 +405,10 @@ async function runOne(
   // clears, so the retry is scheduled from the thing that knows rather than
   // guessed at, and the sweep re-runs only what has not already succeeded.
   const { status, retryAfter } = settlementFor(results.outcomes, {
-    blockedUntilMs: githubRateGate.blockedUntil(
-      githubService.accountKeyFor(target.workspaceId),
-      'rest'
+    // The later of the rate gate and any box refusal: both say when they clear.
+    blockedUntilMs: Math.max(
+      githubRateGate.blockedUntil(githubService.accountKeyFor(target.workspaceId), 'rest'),
+      results.boxRetryAtMs
     ),
     attempts: 1,
   });

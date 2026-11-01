@@ -2,6 +2,7 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { includedWeightedSeconds, type PlanTier, type UsageAlertThreshold, type UsagePeriod } from '@talyn/shared';
 import { getPoolDbClient } from '../../../db/client.js';
 import { usagePeriods } from '../../../db/schema.js';
+import { domainEvents } from '../../events.js';
 
 export const PERIOD_COLUMNS = {
   ownerId: usagePeriods.ownerId,
@@ -106,12 +107,16 @@ export async function stampExhausted(ownerId: string, periodStart: Date, at: Dat
   return rows.length > 0;
 }
 
-/** Clear exhaustion on every period of the owner (credits arrived, or the tier changed). */
+/**
+ * Clear exhaustion on every period of the owner (credits arrived, or the tier
+ * changed). A cleared row tells parked unattended runs to look again.
+ */
 export async function clearExhausted(ownerId: string): Promise<boolean> {
   const rows = await db()
     .update(usagePeriods)
     .set({ exhaustedAt: null })
     .where(and(eq(usagePeriods.ownerId, ownerId), isNotNull(usagePeriods.exhaustedAt)))
     .returning({ ownerId: usagePeriods.ownerId });
+  if (rows.length > 0) domainEvents.emit('billing:budget_restored', { ownerId });
   return rows.length > 0;
 }

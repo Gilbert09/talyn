@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import type { LoopRunFailureCode } from '@talyn/shared';
 import { getDbClient, runWithoutScope } from '../../db/client.js';
 import { loopRuns as runsTable, loops as loopsTable, tasks as tasksTable } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
@@ -373,10 +374,16 @@ class LoopScheduler {
         continue;
       }
       if (await isSuperseded(parked.loopId, parked.scheduledFor)) {
+        // Keeps the reason it waited for: "out of box-hours" and "no free
+        // box" read differently, and both ended the same way.
+        const waitedFor = (parked.failureCode as LoopRunFailureCode | null) ?? 'box_limit_reached';
         await settleRun(parked.runId, {
           status: 'skipped',
-          failureCode: 'task_limit_reached',
-          error: 'No task slot freed before the next run was due.',
+          failureCode: waitedFor,
+          error:
+            waitedFor === 'usage_exhausted'
+              ? 'No box-hours or credits came back before the next run was due.'
+              : 'No box freed before the next run was due.',
         });
         await this.broadcast(loop.workspaceId, parked.runId);
         continue;

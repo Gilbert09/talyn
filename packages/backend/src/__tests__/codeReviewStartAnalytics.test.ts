@@ -15,11 +15,10 @@ const { capture, getPrForReview } = vi.hoisted(() => ({
 
 vi.mock('../services/analytics.js', () => ({ captureWorkspaceEvent: capture }));
 vi.mock('../services/codeReview/evaluator.js', () => ({ scheduleReviewEvaluation: vi.fn() }));
-vi.mock('../services/billing/entitlements.js', () => ({
-  ReviewCycleLimitError: class extends Error {},
-  withReviewCycleGate: vi.fn(async (_owner: string, _opts: unknown, fn: () => Promise<unknown>) =>
-    fn()
-  ),
+vi.mock('../services/billing/boxDeferral.js', () => ({
+  boxDeferral: vi.fn(),
+  boxDeferralEventCode: vi.fn(),
+  runBoxGate: vi.fn(async (_owner: string, _opts: unknown, fn: () => Promise<unknown>) => fn()),
 }));
 vi.mock('../services/codeReview/store.js', () => ({
   getPrForReview,

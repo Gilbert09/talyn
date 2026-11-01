@@ -209,7 +209,7 @@ class WorkflowRetrySweep {
     });
 
     const { status, retryAfter } = settlementFor(merged, {
-      blockedUntilMs: githubRateGate.blockedUntil(accountKey, 'rest'),
+      blockedUntilMs: Math.max(githubRateGate.blockedUntil(accountKey, 'rest'), results.boxRetryAtMs),
       attempts,
     });
     const settled = await settleRun(run.id, {

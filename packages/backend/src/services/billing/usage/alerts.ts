@@ -16,7 +16,8 @@ import { webAppUrl } from '../../webApp.js';
 import { emitUsageAlert, emitUsageExhausted } from '../../websocket.js';
 
 /** Where the alert text sends people. */
-const BILLING_PATH = '/settings/billing';
+/** The web app's billing page; Slack messages link to it. */
+export const BILLING_PATH = '/settings/billing';
 
 /** The alert sentence. Legacy Pro at 80% and 100% gets the Pro pitch (spec). */
 export function usageAlertText(alert: UsageAlertEvent): string {

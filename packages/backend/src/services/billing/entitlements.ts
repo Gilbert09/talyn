@@ -404,17 +404,6 @@ export class ConcurrentBoxLimitError extends BoxGateError {
   }
 }
 
-/**
- * @deprecated The active-task cap is gone; the concurrent-box cap replaced it.
- * Kept as an alias of {@link ConcurrentBoxLimitError} only so the unattended
- * call sites that still catch `TaskLimitError` (loops, merge queue, auto-keep,
- * workflows, review fix) keep deferring until WP5 rewires them to
- * {@link isBoxGateError}. Delete it with the last of those catches.
- */
-export const TaskLimitError = ConcurrentBoxLimitError;
-/** @deprecated See the value of the same name. */
-export type TaskLimitError = ConcurrentBoxLimitError;
-
 export interface BoxGateOptions {
   /** The size the caller wants to start. */
   size: SandboxSize;
@@ -433,6 +422,19 @@ export interface BoxGateOptions {
    * is checked. A replacement is not an extra box and needs no new budget.
    */
   replacesBox?: boolean;
+  /**
+   * The box already exists at its size (a session's box): a new turn or a
+   * wake needs budget, but the size is not checked again. `awake` means the
+   * box has an open usage interval and is counted already, so the
+   * concurrency cap is not checked either. `asleep` means waking it adds a box.
+   */
+  existingBox?: 'awake' | 'asleep';
+  /**
+   * The run starts no metered box (a PostHog Code task): it costs no
+   * box-hours, so neither size nor budget is checked. It still counts
+   * against the concurrency cap, like the old active-task cap counted it.
+   */
+  unmetered?: boolean;
 }
 
 export interface BoxGateDecision {
@@ -531,7 +533,7 @@ export async function countBoxesInUse(ownerId: string, excludeTaskId?: string): 
  */
 export async function checkBoxGate(ownerId: string, options: BoxGateOptions): Promise<BoxGateDecision> {
   const pre = await precheckBoxGate(ownerId, options);
-  if (!pre.enforced || options.replacesBox) return pre;
+  if (!pre.enforced || skipsConcurrency(options)) return pre;
   await assertConcurrency(ownerId, pre.tier!, options);
   return pre;
 }
@@ -562,7 +564,7 @@ export async function withBoxGate<T>(
   fn: (decision: BoxGateDecision) => Promise<T>
 ): Promise<T> {
   const pre = await precheckBoxGate(ownerId, options);
-  if (!pre.enforced || options.replacesBox) return fn(pre);
+  if (!pre.enforced || skipsConcurrency(options)) return fn(pre);
   const tier = pre.tier!;
   const assertWithinCap = () => assertConcurrency(ownerId, tier, options);
   if (PLAN_LIMITS[tier].concurrentBoxes > SERIALIZE_AT_OR_BELOW) {
@@ -575,12 +577,20 @@ export async function withBoxGate<T>(
 /** Caps at or below this serialize per owner; see {@link withBoxGate}. */
 const SERIALIZE_AT_OR_BELOW = 2;
 
+/** A replacement, or a box already counted, adds nothing to the concurrency count. */
+function skipsConcurrency(options: BoxGateOptions): boolean {
+  return options.replacesBox === true || options.existingBox === 'awake';
+}
+
 async function precheckBoxGate(ownerId: string, options: BoxGateOptions): Promise<BoxGateDecision> {
   if (!billingEnabled()) {
     return { enforced: false, tier: null, size: options.size, downgraded: false };
   }
   const { tier } = await deriveTier(ownerId);
-  const sized = decideBoxSize(tier, options.size, options.unattended ?? false);
+  if (options.unmetered) return { enforced: true, tier, size: options.size, downgraded: false };
+  const sized = options.existingBox
+    ? { size: options.size, downgraded: false }
+    : decideBoxSize(tier, options.size, options.unattended ?? false);
   if (sized === 'refuse') {
     throw new SizeRequiresProError({ tier, size: options.size, workspaceId: options.workspaceId });
   }
@@ -630,62 +640,16 @@ async function withOwnerSerialized<T>(
 
 /**
  * Gate for re-activating an existing task (retry / start / PATCH to an active
- * status). Counts every box except the task itself.
+ * status). Counts every box except the task itself. `options` carries the
+ * run's real size and whether it is metered (see `taskBoxGateOptions` in
+ * `taskCreate.ts`); without it the task is checked as a standard box.
  */
-export async function assertCanActivateTask(ownerId: string, taskId: string): Promise<void> {
-  await withBoxGate(ownerId, { size: 'standard', excludeTaskId: taskId }, async () => undefined);
-}
-
-// ---------------------------------------------------------------------------
-// Old gate names, kept so their call sites compile until WP5 rewires them
-// ---------------------------------------------------------------------------
-
-/**
- * @deprecated The active-task cap is gone. Delegates to {@link withBoxGate}
- * at `standard`, attended. WP5 replaces the call in `createCloudTask` with a
- * direct `withBoxGate` that knows the run's size and whether it is unattended.
- */
-export async function withTaskLimitGate<T>(
+export async function assertCanActivateTask(
   ownerId: string,
-  options: { excludeTaskId?: string },
-  fn: () => Promise<T>
-): Promise<T> {
-  return withBoxGate(ownerId, { size: 'standard', excludeTaskId: options.excludeTaskId }, () => fn());
-}
-
-/**
- * @deprecated The review-cycle cap is gone. Delegates to {@link withBoxGate}
- * at `small`. WP5 replaces the call in `codeReview/cycle.ts`.
- */
-export async function withReviewCycleGate<T>(
-  ownerId: string,
-  _options: { excludeReviewId?: string },
-  fn: () => Promise<T>
-): Promise<T> {
-  return withBoxGate(ownerId, { size: UNATTENDED_SANDBOX_SIZE, unattended: true }, () => fn());
-}
-
-/**
- * @deprecated The merge-queue PR cap is gone; this runs `fn`. Queueing a PR
- * starts no box (a fix run is gated where it is created). Unwrap the call
- * sites and delete this.
- */
-export async function withMergeQueueLimitGate<T>(
-  _ownerId: string,
-  _options: { excludePrId?: string | string[]; adding?: number },
-  fn: () => Promise<T>
-): Promise<T> {
-  return fn();
-}
-
-/** @deprecated The workflow cap is gone; this runs `fn`. Unwrap the call site and delete this. */
-export async function withWorkflowLimitGate<T>(_ownerId: string, fn: () => Promise<T>): Promise<T> {
-  return fn();
-}
-
-/** @deprecated The loop cap is gone; this runs `fn`. Unwrap the call site and delete this. */
-export async function withLoopLimitGate<T>(_ownerId: string, fn: () => Promise<T>): Promise<T> {
-  return fn();
+  taskId: string,
+  options: Omit<BoxGateOptions, 'excludeTaskId'> = { size: 'standard' }
+): Promise<void> {
+  await withBoxGate(ownerId, { ...options, excludeTaskId: taskId }, async () => undefined);
 }
 
 // ---------------------------------------------------------------------------

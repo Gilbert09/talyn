@@ -26,7 +26,6 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
-import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import {
   liveWorkbenchForPr,
@@ -1048,16 +1047,14 @@ export function pullRequestRoutes(): Router {
     // keep the existing method when omitted
     const method = resolveMergeMethod(req.body, row.mergeMethod);
 
-    // The plan gate, the bookkeeping, the badge, the rebroadcast and the
-    // evaluation kick all live in the service — shared with the workflow
-    // engine's `enqueue_merge_queue` action, so the two cannot drift.
-    // MergeQueueLimitError → 402 via the error middleware.
+    // The bookkeeping, the badge, the rebroadcast and the evaluation kick all
+    // live in the service — shared with the workflow engine's
+    // `enqueue_merge_queue` action, so the two cannot drift. Queueing is free.
     await setQueueMembership({
       row,
       enabled,
       method,
       trigger: enabled ? 'user:enqueue' : 'user:dequeue',
-      ownerId: assertUser(req).id,
     });
 
     res.json({ success: true, data: null } as ApiResponse<null>);
@@ -1186,18 +1183,9 @@ export function pullRequestRoutes(): Router {
       }
     };
 
-    if (enabled) {
-      // One advisory lock spanning the count AND every insert, so a stack that
-      // does not fit is refused whole. Every member is excluded from the count
-      // — an already-queued member must not make its own stack unaffordable.
-      await withMergeQueueLimitGate(
-        assertUser(req).id,
-        { excludePrId: orderedIds, adding: members.length },
-        applyAll
-      );
-    } else {
-      await applyAll();
-    }
+    // Queueing is free: no plan caps how many PRs wait. A fix run the queue
+    // starts later is gated where it is created.
+    await applyAll();
 
     // Per-call work, once for the batch rather than once per member. The
     // rebroadcast, the draft publish and the kick run off this request's
@@ -1377,8 +1365,9 @@ export function pullRequestRoutes(): Router {
     }
 
     const user = assertUser(req);
-    // The plan gate throws ReviewCycleLimitError, which the central handler maps
-    // to a 402 with its own code — the client opens the upgrade modal from that.
+    // The box gate throws a BoxGateError, which the central handler maps to a
+    // 402 with its code and notice — the client opens the upgrade modal or the
+    // buy-credits prompt from that.
     const outcome = await startReviewCycle({
       pullRequestId: req.params.id,
       ...(input.preset ? { preset: input.preset } : {}),
@@ -1424,8 +1413,11 @@ export function pullRequestRoutes(): Router {
 
     const user = assertUser(req);
     const outcome = await startFixRun(review, findingIds, user.id);
+    // The plan refused the box: a 402 with its notice, so the client opens
+    // the upgrade or buy-credits prompt. The review is back at `ready`.
+    if (!outcome.ok && outcome.code === 'deferred') throw outcome.error;
     if (!outcome.ok) {
-      const status = outcome.code === 'deferred' ? 202 : 409;
+      const status = 409;
       return res.status(status).json({
         success: false,
         error: outcome.message,

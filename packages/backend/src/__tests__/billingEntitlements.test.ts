@@ -29,7 +29,6 @@ import {
   countActiveTasks,
   resolveEntitlement,
   withBoxGate,
-  withTaskLimitGate,
 } from '../services/billing/entitlements.js';
 import { ensurePeriod } from '../services/billing/usage/periods.js';
 import { grantCreditLot } from '../services/billing/usage/credits.js';
@@ -206,7 +205,7 @@ describe('the concurrent-box cap replaces the active-task cap', () => {
     'free user with $active active tasks passes',
     async ({ active }) => {
       for (let i = 0; i < active; i++) await insertTask('ws1', 'queued');
-      expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
+      expect(await withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => 'created')).toBe('created');
     }
   );
 
@@ -214,7 +213,7 @@ describe('the concurrent-box cap replaces the active-task cap', () => {
     for (let i = 0; i < FREE_CAP; i++) await insertTask('ws1', 'queued');
     let ran = false;
     await expect(
-      withTaskLimitGate(TEST_USER_ID, {}, async () => {
+      withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => {
         ran = true;
       })
     ).rejects.toMatchObject({ code: CONCURRENT_BOX_LIMIT_ERROR_CODE, limit: FREE_CAP, active: FREE_CAP });
@@ -234,7 +233,7 @@ describe('the concurrent-box cap replaces the active-task cap', () => {
       startedAt: new Date(),
       billedThrough: new Date(),
     });
-    await expect(withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+    await expect(withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
   });
 
   it.each([
@@ -244,15 +243,15 @@ describe('the concurrent-box cap replaces the active-task cap', () => {
   ])('$label passes far beyond the free cap', async ({ set }) => {
     await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
     for (let i = 0; i < FREE_CAP + 5; i++) await insertTask('ws1', 'queued');
-    expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
+    expect(await withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => 'created')).toBe('created');
   });
 
   it('terminal tasks free their slot', async () => {
     const ids: string[] = [];
     for (let i = 0; i < FREE_CAP; i++) ids.push(await insertTask('ws1', 'queued'));
-    await expect(withTaskLimitGate(TEST_USER_ID, {}, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+    await expect(withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => undefined)).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
     await db.update(tasksTable).set({ status: 'completed' }).where(eq(tasksTable.id, ids[0]));
-    expect(await withTaskLimitGate(TEST_USER_ID, {}, async () => 'created')).toBe('created');
+    expect(await withBoxGate(TEST_USER_ID, { size: 'standard' }, async () => 'created')).toBe('created');
   });
 });
 

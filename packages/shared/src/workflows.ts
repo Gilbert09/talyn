@@ -448,7 +448,14 @@ export type WorkflowRunStatus =
  */
 export type WorkflowActionFailureCode =
   | 'rate_capped'
+  /** Old rows only: the active-task cap that the concurrent-box cap replaced. */
   | 'task_limit_reached'
+  /** Parked (`pending_retry`): no box-hours or credits left this period. */
+  | 'usage_exhausted'
+  /** Parked (`pending_retry`): the plan's concurrent boxes are all in use. */
+  | 'box_limit_reached'
+  /** The plan cannot start the run's box size. Not retried. */
+  | 'size_requires_pro'
   | 'rate_gated'
   | 'no_cloud_provider'
   | 'task_already_running'
@@ -458,8 +465,9 @@ export type WorkflowActionFailureCode =
   | 'pr_not_tracked'
   | 'not_open'
   | 'github_error'
+  /** Old rows only: the merge-queue PR cap, removed with usage billing. */
   | 'merge_queue_limit_reached'
-  /** The free plan already has a review cycle in flight; it does not queue. */
+  /** Old rows only: the review-cycle cap, removed with usage billing. */
   | 'review_limit_reached'
   /** Code review cannot run here: no reviewer covers this repository. */
   | 'code_review_unavailable'

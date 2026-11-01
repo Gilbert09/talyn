@@ -12,6 +12,10 @@ import {
 import { getPoolDbClient } from '../../db/client.js';
 import { slackInstallations, slackUserLinks, users, workbenches, workspaces } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
+import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
+import { BILLING_PATH } from '../billing/usage/alerts.js';
+import { webAppUrl } from '../webApp.js';
+import { assertWorkbenchBoxStart } from '../workbenches/boxGate.js';
 import { createWorkbench } from '../workbenches/create.js';
 import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
 import { restoreWorkbench } from '../workbenches/lifecycle.js';
@@ -38,6 +42,7 @@ import {
 import { notifySlackUser } from './notify.js';
 import { recordRepoUse, resolveRepository } from './repoResolver.js';
 import { reactOnce, moveStatusToMessage, scheduleSlackStatus, setThreadStatus } from './statusReactions.js';
+import { callSlackAsBot } from './tokens.js';
 import { firstWorkspaceOf } from './store.js';
 import {
   beginThread,
@@ -416,6 +421,13 @@ async function startSession(
         actor
       );
     } catch (err) {
+      if (isBoxGateError(err)) {
+        // The plan refused the box: say so where the request was made, and
+        // start nothing. Not retried: the event is answered.
+        await replyPlanRefusal(t.teamId, t.channelId, threadTs, err);
+        await failStart(row, link.userId, source, workspaceId, err.message);
+        return 'handled';
+      }
       if (!(err instanceof WorkbenchError)) throw err;
       await failStart(row, link.userId, source, workspaceId, err.message);
       return 'handled';
@@ -470,7 +482,10 @@ async function followUp(ctx: TriggerContext, t: Trigger, install: Installation, 
   }
   try {
     const wb = await getWorkbench(workbenchId);
-    if (wb?.archivedAt) await restoreWorkbench(workbenchId);
+    if (wb?.archivedAt) {
+      await assertWorkbenchBoxStart(wb);
+      await restoreWorkbench(workbenchId);
+    }
     const chats = (await listChats(workbenchId)).filter((c) => !c.closedAt);
     const chat = chats[0];
     if (!chat) throw new WorkbenchError('The session has no open chat.', 409, 'no_chat');
@@ -478,6 +493,20 @@ async function followUp(ctx: TriggerContext, t: Trigger, install: Installation, 
     scheduleSlackStatus(workbenchId);
     return 'handled';
   } catch (err) {
+    if (isBoxGateError(err)) {
+      // The plan refused the box (a restore, or a turn on a sleeping box): a
+      // notice in the thread, not a retry. The session is untouched.
+      await replyPlanRefusal(t.teamId, t.channelId, thread.threadTs, err);
+      await setThreadStatus(moved, 'failed');
+      notify(link.userId, {
+        kind: 'start_failed',
+        message: `A Slack follow-up was not sent to the session: ${err.message}`,
+        workspaceId: thread.workspaceId,
+        workbenchId,
+        source,
+      });
+      return 'handled';
+    }
     if (!(err instanceof WorkbenchError) && !ctx.finalAttempt) throw err;
     await setThreadStatus(moved, 'failed');
     notify(link.userId, {
@@ -489,6 +518,22 @@ async function followUp(ctx: TriggerContext, t: Trigger, install: Installation, 
     });
     if (!(err instanceof WorkbenchError)) throw err;
     return 'handled';
+  }
+}
+
+/**
+ * Reply in the Slack thread that the plan refused the box, with a link to
+ * billing. Best effort: the bot may lack `chat:write` (the install asks only
+ * for reactions today), in which case the failed reaction and the in-app
+ * notice still say it.
+ */
+export async function replyPlanRefusal(teamId: string, channelId: string, threadTs: string, err: BoxGateError): Promise<void> {
+  const link = webAppUrl(BILLING_PATH);
+  const text = `Talyn did not start a session: ${err.message}${link ? `\n<${link}|Open billing>` : ''}`;
+  try {
+    await callSlackAsBot(teamId, 'chat.postMessage', { channel: channelId, thread_ts: threadTs, text });
+  } catch (error) {
+    debugBus.recordEvent({ service: 'slack_events', action: 'plan_refusal_reply_failed', summary: `Reply in ${channelId} failed`, ok: false, error });
   }
 }
 

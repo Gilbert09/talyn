@@ -29,7 +29,6 @@ import {
   BoxGateError,
   ConcurrentBoxLimitError,
   SizeRequiresProError,
-  TaskLimitError,
   UsageExhaustedError,
   assertCanActivateTask,
   assertCanEnableAutoKeepDefault,
@@ -42,12 +41,8 @@ import {
   decideBoxSize,
   isBoxGateError,
   withBoxGate,
-  withLoopLimitGate,
-  withMergeQueueLimitGate,
-  withReviewCycleGate,
-  withTaskLimitGate,
-  withWorkflowLimitGate,
 } from '../services/billing/entitlements.js';
+import * as entitlements from '../services/billing/entitlements.js';
 import { apiErrorHandler } from '../routes/index.js';
 
 const SIZES: SandboxSize[] = ['small', 'standard', 'medium', 'large', 'xlarge'];
@@ -351,49 +346,65 @@ describe('the box gate', () => {
     });
   });
 
-  describe('old gate names', () => {
-    it('TaskLimitError is the concurrent-box refusal, so old catches still defer', () => {
-      const err = new TaskLimitError(2, 2);
-      expect(err).toBeInstanceOf(ConcurrentBoxLimitError);
-      expect(new ConcurrentBoxLimitError(2, 2)).toBeInstanceOf(TaskLimitError);
-      expect(err.code).toBe(CONCURRENT_BOX_LIMIT_ERROR_CODE);
-    });
-
-    it('withTaskLimitGate is the box gate at standard: Free refuses at 2 boxes, not 3', async () => {
+  describe('existingBox (a turn or a wake on a session box)', () => {
+    type Case = { existingBox: 'awake' | 'asleep'; budgetState: BudgetState; atCap: boolean; size: SandboxSize };
+    const cases: Case[] = (['awake', 'asleep'] as const).flatMap((existingBox) =>
+      (['included left', 'exhausted'] as BudgetState[]).flatMap((budgetState) =>
+        [false, true].flatMap((atCap) => (['standard', 'large'] as SandboxSize[]).map((size) => ({ existingBox, budgetState, atCap, size })))
+      )
+    );
+    it.each(cases)('Free $existingBox $size budget=$budgetState atCap=$atCap', async ({ existingBox, budgetState, atCap, size }) => {
       await setTier('free');
-      getBudget.mockResolvedValue(budget('free', 'included left'));
-      await insertTask('queued');
-      await expect(withTaskLimitGate(OWNER, {}, async () => 'ok')).resolves.toBe('ok');
-      await insertTask('queued');
-      await expect(withTaskLimitGate(OWNER, {}, async () => 'ok')).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+      getBudget.mockResolvedValue(budget('free', budgetState));
+      await openBoxes(atCap ? 2 : 1);
+      const run = checkBoxGate(OWNER, { size, existingBox });
+      // The size is never checked again: the box exists. Budget always is;
+      // the cap only when waking a sleeping box adds one.
+      if (budgetState === 'exhausted') await expect(run).rejects.toBeInstanceOf(UsageExhaustedError);
+      else if (atCap && existingBox === 'asleep') await expect(run).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+      else await expect(run).resolves.toMatchObject({ enforced: true, size, downgraded: false });
     });
+  });
 
-    it('withTaskLimitGate refuses an exhausted budget', async () => {
-      await setTier('pro');
-      getBudget.mockResolvedValue(budget('pro', 'exhausted'));
-      await expect(withTaskLimitGate(OWNER, {}, async () => 'ok')).rejects.toBeInstanceOf(UsageExhaustedError);
-    });
-
-    it('withReviewCycleGate is the box gate at small, so a second cycle is no longer refused', async () => {
+  describe('unmetered (a PostHog Code task)', () => {
+    it.each<[BudgetState, boolean, 'ok' | 'cap']>([
+      ['exhausted', false, 'ok'],
+      ['included left', false, 'ok'],
+      ['exhausted', true, 'cap'],
+    ])('budget=%s atCap=%s → %s, at any size', async (budgetState, atCap, expected) => {
       await setTier('free');
-      getBudget.mockResolvedValue(budget('free', 'included left'));
-      await expect(withReviewCycleGate(OWNER, {}, async () => 'one')).resolves.toBe('one');
-      await expect(withReviewCycleGate(OWNER, {}, async () => 'two')).resolves.toBe('two');
-      getBudget.mockResolvedValue(budget('free', 'exhausted'));
-      await expect(withReviewCycleGate(OWNER, {}, async () => 'x')).rejects.toBeInstanceOf(UsageExhaustedError);
-    });
-
-    it.each([
-      ['merge queue', () => withMergeQueueLimitGate(OWNER, { adding: 50 }, async () => 'ran')],
-      ['workflows', () => withWorkflowLimitGate(OWNER, async () => 'ran')],
-      ['loops', () => withLoopLimitGate(OWNER, async () => 'ran')],
-    ])('the %s cap is gone: a Free owner out of hours and at the box cap still passes', async (_label, call) => {
-      await setTier('free');
-      getBudget.mockResolvedValue(budget('free', 'exhausted'));
-      await openBoxes(5);
-      await expect(call()).resolves.toBe('ran');
+      getBudget.mockResolvedValue(budget('free', budgetState));
+      await openBoxes(atCap ? 2 : 0);
+      const run = checkBoxGate(OWNER, { size: 'xlarge', unmetered: true });
+      if (expected === 'cap') await expect(run).rejects.toBeInstanceOf(ConcurrentBoxLimitError);
+      else await expect(run).resolves.toMatchObject({ enforced: true, size: 'xlarge' });
+      // No box-hours: the ledger is never read.
       expect(getBudget).not.toHaveBeenCalled();
     });
+  });
+
+  describe('assertCanActivateTask options', () => {
+    it('checks the size it is given, attended', async () => {
+      await setTier('free');
+      getBudget.mockResolvedValue(budget('free', 'included left'));
+      const id = await insertTask('failed');
+      await expect(assertCanActivateTask(OWNER, id, { size: 'large' })).rejects.toBeInstanceOf(SizeRequiresProError);
+      await expect(assertCanActivateTask(OWNER, id, { size: 'small' })).resolves.toBeUndefined();
+    });
+
+    it('an unmetered task re-activates with no hours left', async () => {
+      await setTier('pro');
+      getBudget.mockResolvedValue(budget('pro', 'exhausted'));
+      const id = await insertTask('failed');
+      await expect(assertCanActivateTask(OWNER, id)).rejects.toBeInstanceOf(UsageExhaustedError);
+      await expect(assertCanActivateTask(OWNER, id, { size: 'standard', unmetered: true })).resolves.toBeUndefined();
+    });
+  });
+
+  it('the removed count caps have no gate left to call', () => {
+    for (const name of ['withTaskLimitGate', 'withReviewCycleGate', 'withMergeQueueLimitGate', 'withWorkflowLimitGate', 'withLoopLimitGate', 'TaskLimitError']) {
+      expect(name in entitlements).toBe(false);
+    }
   });
 
   describe('feature gates (auto-keep default, auto-review)', () => {
@@ -449,7 +460,6 @@ describe('402 mapping (apiErrorHandler)', () => {
     ['usage exhausted', new UsageExhaustedError({ tier: 'free', periodEnd: PERIOD_END }), USAGE_EXHAUSTED_ERROR_CODE],
     ['size requires Pro', new SizeRequiresProError({ tier: 'free', size: 'large' }), SIZE_REQUIRES_PRO_ERROR_CODE],
     ['concurrent box limit', new ConcurrentBoxLimitError(2, 2), CONCURRENT_BOX_LIMIT_ERROR_CODE],
-    ['old TaskLimitError name', new TaskLimitError(2, 2), CONCURRENT_BOX_LIMIT_ERROR_CODE],
   ])('%s → 402 with its code and notice, no console noise', (_label, err, code) => {
     const { res, logged } = handle(err);
     expect(res.statusCode).toBe(402);

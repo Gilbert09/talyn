@@ -3,6 +3,7 @@ import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { creditExpiresAt, type CreditBurn, type CreditLot, type CreditLotSource, type Micros } from '@talyn/shared';
 import { getPoolDbClient } from '../../../db/client.js';
 import { creditLedger, creditLots } from '../../../db/schema.js';
+import { domainEvents } from '../../events.js';
 import { clearExhausted } from './periods.js';
 
 export const LOT_COLUMNS = {
@@ -181,7 +182,9 @@ export async function grantCreditLot(input: GrantCreditLotInput): Promise<{ lotI
     deltaMicros: micros,
     reason: input.source === 'refund_reversal' ? 'refund' : input.source,
   });
-  await clearExhausted(input.ownerId);
+  // Credits can arrive before exhaustion was ever stamped (a gate refused on
+  // its own reading), so the budget is announced even when nothing cleared.
+  if (!(await clearExhausted(input.ownerId))) domainEvents.emit('billing:budget_restored', { ownerId: input.ownerId });
   return { lotId: id, created: true };
 }
 
