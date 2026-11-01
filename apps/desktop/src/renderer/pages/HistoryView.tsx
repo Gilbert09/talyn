@@ -10,6 +10,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { PrPill } from '../components/workbench/WorkbenchBadges';
+import { restoreWorkbench } from '../components/workbench/archiveWorkbench';
 import { isArchived, useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 
 export function archivedAtOf(wb: Workbench): string {
@@ -130,15 +131,9 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
   const at = archivedAtOf(workbench);
   const restore = async () => {
     setBusy(true);
-    try {
-      const wb = await api.workbenches.restore(workbench.id);
-      useWorkbenchStore.getState().upsertWorkbench(wb);
-      useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
-    } catch (err) {
-      toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
-    } finally {
-      setBusy(false);
-    }
+    const wb = await restoreWorkbench(workbench);
+    setBusy(false);
+    if (wb) useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
   };
   const retry = async () => {
     setBusy(true);

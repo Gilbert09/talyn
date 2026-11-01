@@ -48,7 +48,7 @@ import {
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
-import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
+import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type ArchiveOptions } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
 import { SessionPreviewChips } from './SessionPreviewChips';
 import { SlackThreadChip } from './SlackThreadChip';
@@ -179,13 +179,8 @@ export function WorkbenchHeader({
 
   const restore = async () => {
     setRestoring(true);
-    try {
-      useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.restore(workbench.id));
-    } catch (err) {
-      toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
-    } finally {
-      setRestoring(false);
-    }
+    await restoreWorkbench(workbench);
+    setRestoring(false);
   };
 
   const disabled = (action: WorkbenchAction) =>
@@ -252,9 +247,9 @@ export function WorkbenchHeader({
     }
   };
 
-  const archive = async () => {
+  const archive = async (opts: ArchiveOptions) => {
     setBusy('archive');
-    if (await archiveWorkbench(workbench.id, true)) setConfirm(null);
+    if (await archiveWorkbench(workbench.id, true, opts)) setConfirm(null);
     setBusy(null);
   };
 
@@ -489,7 +484,7 @@ export function WorkbenchHeader({
         workbench={workbench}
         open={confirm === 'archive'}
         busy={busy === 'archive'}
-        onConfirm={() => void archive()}
+        onConfirm={(opts) => void archive(opts)}
         onCancel={() => setConfirm(null)}
       />
     </div>

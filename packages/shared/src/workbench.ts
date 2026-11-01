@@ -634,6 +634,29 @@ export interface WorkbenchRuntime {
 // The local bridge (Electron preload → `window.electron.workbench`)
 // ============================================================================
 
+/** A local worktree before an archive deletes it. */
+export interface LocalWorktreeStatus {
+  /** False: Talyn did not make this folder, so it never removes it. */
+  managed: boolean;
+  exists: boolean;
+  branch: string | null;
+  /** Changed, staged and untracked paths, at most {@link LOCAL_WORKTREE_STATUS_FILES_MAX}. */
+  uncommitted: string[];
+  uncommittedCount: number;
+  /** Commits on HEAD that no remote has. Null when the repository has no remote. */
+  unpushed: number | null;
+}
+
+export const LOCAL_WORKTREE_STATUS_FILES_MAX = 20;
+
+export type RestoreWorktreeResult =
+  | { ok: true; branch: string }
+  | {
+      ok: false;
+      reason: 'not_managed' | 'path_taken' | 'repository_missing' | 'branch_missing' | 'branch_busy';
+      message: string;
+    };
+
 /**
  * The `window.electron.workbench` API the desktop preload exposes. Every
  * argument and result crosses IPC, so everything here is structured-clone
@@ -655,7 +678,24 @@ export interface WorkbenchLocalBridge {
     baseBranch: string;
     newBranch?: boolean;
   }): Promise<{ path: string; branch?: string }>;
-  removeWorktree(input: { path: string; force?: boolean }): Promise<void>;
+  /**
+   * Archive a session's worktree: stop the session's processes (by its
+   * `workbenchId`, the session id), then `git worktree remove` and prune.
+   * The branch stays, so `restoreWorktree` can make the folder again. Without
+   * `force` main refuses a worktree with uncommitted changes. Only a folder
+   * Talyn made under its own worktree root is ever removed.
+   */
+  removeWorktree(input: { path: string; workbenchId: string; force?: boolean }): Promise<void>;
+  /**
+   * What an archive would lose: the worktree's uncommitted changes and its
+   * commits that no remote has. Optional: an older main process does not have it.
+   */
+  inspectWorktree?(path: string): Promise<LocalWorktreeStatus>;
+  /**
+   * After an archive: `git worktree add <path> <branch>` again, at the same
+   * path. Optional: an older main process does not have it.
+   */
+  restoreWorktree?(input: { path: string; workbenchId: string; branch: string }): Promise<RestoreWorktreeResult>;
   startTurn(input: {
     workbenchId: string;
     chatId: string;

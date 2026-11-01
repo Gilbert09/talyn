@@ -37,6 +37,8 @@ function subscribe<T>(channel: string, callback: (frame: T) => void): () => void
 const workbench: DesktopWorkbenchBridge = {
   createWorktree: (input) => ipcRenderer.invoke('workbench:create-worktree', input),
   removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
+  inspectWorktree: (path) => ipcRenderer.invoke('workbench:inspect-worktree', path),
+  restoreWorktree: (input) => ipcRenderer.invoke('workbench:restore-worktree', input),
   startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
   cancelTurn: (chatId) => ipcRenderer.invoke('workbench:cancel-turn', chatId),
   stopWorkbench: (workbenchId) => ipcRenderer.invoke('workbench:stop-workbench', workbenchId),

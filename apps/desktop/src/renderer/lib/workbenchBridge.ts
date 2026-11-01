@@ -51,6 +51,12 @@ export function resetDeviceIdCache(): void {
   cachedDeviceId = null;
 }
 
+/** An error from the main process, without Electron's "Error invoking remote method" prefix. */
+export function bridgeErrorMessage(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '') || fallback;
+}
+
 export function newClientId(): string {
   return randomId();
 }

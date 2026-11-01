@@ -9,7 +9,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu';
-import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
+import { ArchiveWorkbenchDialog, archiveWorkbench, type ArchiveOptions } from '../workbench/archiveWorkbench';
 import { PrPill, SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewThread } from '../workbench/new/openNewWorkbench';
 
@@ -115,9 +115,9 @@ function ThreadRow({
   const [archiving, setArchiving] = useState(false);
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
-  const archive = async () => {
+  const archive = async (opts: ArchiveOptions) => {
     setArchiving(true);
-    const ok = await archiveWorkbench(thread.id, selected);
+    const ok = await archiveWorkbench(thread.id, selected, opts);
     setArchiving(false);
     if (ok) setConfirming(false);
   };
@@ -176,7 +176,7 @@ function ThreadRow({
         workbench={thread}
         open={confirming}
         busy={archiving}
-        onConfirm={() => void archive()}
+        onConfirm={(opts) => void archive(opts)}
         onCancel={() => setConfirming(false)}
       />
     </>

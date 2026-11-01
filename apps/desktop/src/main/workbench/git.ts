@@ -5,8 +5,11 @@ import path from 'path';
 import { TextDecoder } from 'util';
 import {
   isValidBranchName,
+  LOCAL_WORKTREE_STATUS_FILES_MAX,
   resolveStepArgv,
   type GitStep,
+  type LocalWorktreeStatus,
+  type RestoreWorktreeResult,
   type WorkbenchExecResult,
   type WorkbenchLocalBridge,
 } from '@talyn/shared';
@@ -257,6 +260,8 @@ async function freeWorktreeDir(
     const candidate =
       suffix === 1 ? name : `${name.slice(0, 95)}-${suffix}`;
     const target = paths.worktree(repoDir, candidate);
+    // An archived session keeps its folder name, so its restore can use it.
+    if (await paths.loadArchived(target)) continue;
     try {
       await fs.lstat(target);
     } catch (error) {
@@ -367,8 +372,8 @@ export class WorktreeManager {
       : undefined;
     const identity = source ?? input.cloneUrl!;
     const repoDir = this.paths.repoDir(identity);
-    // An archived session keeps its worktree, and a failed create can leave one:
-    // a new session with the same name gets the next free directory.
+    // A failed create can leave a folder, and an archived session keeps its
+    // folder name: a new session with the same name gets the next free one.
     const target = await freeWorktreeDir(this.paths, repoDir, input.name);
     await fs.mkdir(repoDir, { recursive: true });
     let repository = source;
@@ -436,52 +441,7 @@ export class WorktreeManager {
       }
       if (!content.split(/\r?\n/).includes('.context/'))
         await fs.appendFile(exclude, '\n.context/\n');
-      if (source) {
-        const config = await readConfig(source);
-        // Only an env file git ignores: one it does not ignore shows up as a
-        // new file in the session, and Create PR (`git add -A`) would push it.
-        const envFiles: string[] = [];
-        for (const name of await fs.readdir(source)) {
-          if (name.startsWith('.env') && (await isIgnored(source, name)))
-            envFiles.push(name);
-        }
-        for (const relative of new Set([...envFiles, ...config.filesToCopy])) {
-          if (relative.split('/').includes('.git'))
-            throw new Error('Cannot copy Git metadata');
-          let from: string;
-          try {
-            from = await safeFilePath(source, relative);
-          } catch (error) {
-            // A missing file, or a link out of the checkout, is not copied. It
-            // must not stop the session from being made.
-            console.warn(`[workbench] not copying ${relative}:`, error);
-            continue;
-          }
-          const destination = relativePath(target, relative);
-          if (!(await fs.stat(from)).isFile()) continue;
-          const realTarget = await fs.realpath(target);
-          let parent = realTarget;
-          const directories = path
-            .relative(target, path.dirname(destination))
-            .split(path.sep)
-            .filter(Boolean);
-          for (const directory of directories) {
-            const next = path.join(parent, directory);
-            try {
-              await fs.mkdir(next);
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
-                throw error;
-            }
-            parent = await fs.realpath(next);
-            if (!isInside(realTarget, parent))
-              throw new Error('Copy path escapes the worktree');
-          }
-          // Remove a destination symlink before copying secrets into the worktree.
-          await fs.rm(destination, { force: true });
-          await fs.copyFile(from, destination);
-        }
-      }
+      if (source) await copyLocalFiles(source, target);
       await this.paths.save({
         workbenchId: input.workbenchId,
         path: target,
@@ -502,20 +462,321 @@ export class WorktreeManager {
     }
   }
 
-  async removeWorktree(
+  /** What an archive of this worktree would lose. */
+  async inspectWorktree(target: string): Promise<LocalWorktreeStatus> {
+    const empty = { branch: null, uncommitted: [], uncommittedCount: 0, unpushed: null };
+    const state = typeof target === 'string' ? await this.paths.load(target) : null;
+    if (!state) return { managed: false, exists: await isDirectory(target), ...empty };
+    await this.paths.assertManagedPath(target);
+    if (!(await isDirectory(target))) return { managed: true, exists: false, ...empty };
+    const status = await exec(target, [
+      { argv: ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'] },
+    ]);
+    if (status.exitCode !== 0) throw new Error(status.stderr || 'git status failed');
+    const files = parsePorcelainPaths(status.stdout);
+    const branch = await exec(target, [{ argv: ['git', 'branch', '--show-current'] }]);
+    let unpushed: number | null = null;
+    if ((await listRemotes(target)).length) {
+      const count = await exec(target, [
+        { argv: ['git', 'rev-list', '--count', 'HEAD', '--not', '--remotes'] },
+      ]);
+      if (count.exitCode === 0) unpushed = Number(count.stdout.trim()) || 0;
+    }
+    return {
+      managed: true,
+      exists: true,
+      branch: (branch.exitCode === 0 && branch.stdout.trim()) || null,
+      uncommitted: files.slice(0, LOCAL_WORKTREE_STATUS_FILES_MAX),
+      uncommittedCount: files.length,
+      unpushed,
+    };
+  }
+
+  /**
+   * Archive: stop the session, remove its worktree, keep its branch. `stop`
+   * gets the session id from the caller, because the id in the record is the
+   * client id made before the session existed.
+   */
+  removeWorktree(
     input: Parameters<WorkbenchLocalBridge['removeWorktree']>[0],
+    stop?: (workbenchId: string) => Promise<void>,
   ): Promise<void> {
+    const pending = this.queue.then(() => this.remove(input, stop));
+    this.queue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async remove(
+    input: Parameters<WorkbenchLocalBridge['removeWorktree']>[0],
+    stop?: (workbenchId: string) => Promise<void>,
+  ): Promise<void> {
+    if (typeof input?.workbenchId !== 'string' || !input.workbenchId)
+      throw new Error('A session id is required.');
     const state = await this.paths.load(input.path);
     if (!state) throw new Error('This worktree is not managed by Talyn');
-    await git(
-      state.rootPath,
-      'worktree',
-      'remove',
-      ...(input.force === false ? [] : ['--force']),
-      '--',
-      input.path,
+    await this.paths.assertManagedPath(input.path);
+    await stop?.(input.workbenchId);
+    let branch: string | null = null;
+    if (await isDirectory(input.path)) {
+      if (!(await isLinkedWorktree(state.rootPath, input.path)))
+        throw new Error(
+          `${input.path} is not a worktree of ${state.rootPath}, so Talyn did not remove it.`,
+        );
+      const status = await this.inspectWorktree(input.path);
+      branch = status.branch;
+      if (status.uncommittedCount > 0 && input.force !== true)
+        throw new Error(
+          'The worktree has uncommitted changes, so Talyn kept it. Archive the session again to see them.',
+        );
+      await git(
+        state.rootPath,
+        'worktree',
+        'remove',
+        ...(input.force === true ? ['--force'] : []),
+        '--',
+        input.path,
+      );
+    }
+    await exec(state.rootPath, [
+      { argv: ['git', 'worktree', 'prune'], allowFailure: true },
+    ]);
+    await this.paths.archive({ ...state, workbenchId: input.workbenchId, branch });
+  }
+
+  /** Restore: the worktree again, at the same path, from the session's branch. */
+  restoreWorktree(
+    input: Parameters<NonNullable<WorkbenchLocalBridge['restoreWorktree']>>[0],
+  ): Promise<RestoreWorktreeResult> {
+    const pending = this.queue.then(() => this.restore(input));
+    this.queue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async restore(
+    input: Parameters<NonNullable<WorkbenchLocalBridge['restoreWorktree']>>[0],
+  ): Promise<RestoreWorktreeResult> {
+    if (
+      typeof input?.path !== 'string' ||
+      typeof input.branch !== 'string' ||
+      typeof input.workbenchId !== 'string' ||
+      !input.workbenchId
+    )
+      throw new Error('A path, a branch and a session id are required.');
+    const live = await this.paths.load(input.path);
+    // An archive from before Talyn removed worktrees, or a removal that failed.
+    if (live && (await isDirectory(input.path)))
+      return { ok: true, branch: input.branch };
+    const archived =
+      (await this.paths.loadArchived(input.path)) ??
+      (live ? { ...live, branch: null } : null);
+    if (!archived)
+      return {
+        ok: false,
+        reason: 'not_managed',
+        message:
+          'Talyn has no record of this worktree on this computer, so it cannot make it again.',
+      };
+    await this.paths.assertManagedPath(input.path);
+    if (await pathExists(input.path))
+      return {
+        ok: false,
+        reason: 'path_taken',
+        message: `The folder ${input.path} already exists. Move it, then restore the session again.`,
+      };
+    const repository = archived.rootPath;
+    if (!(await isDirectory(repository)))
+      return {
+        ok: false,
+        reason: 'repository_missing',
+        message: `The repository at ${repository} is gone, so Talyn cannot make the worktree again.`,
+      };
+    const wanted = [...new Set([input.branch, archived.branch])].filter(
+      (name): name is string =>
+        typeof name === 'string' && isValidBranchName(name),
     );
-    await git(state.rootPath, 'worktree', 'prune');
-    await this.paths.forget(input.path);
+    let branch = '';
+    let from: string | null = null;
+    for (const name of wanted) {
+      if (await hasRef(repository, `refs/heads/${name}`)) {
+        branch = name;
+        break;
+      }
+    }
+    // A branch deleted here that a remote still has comes back from the remote.
+    const remotes = branch ? [] : await listRemotes(repository);
+    for (const name of branch ? [] : wanted) {
+      const remote = await firstAsync(remotes, (r) =>
+        hasRef(repository, `refs/remotes/${r.name}/${name}`),
+      );
+      if (remote) {
+        branch = name;
+        from = `${remote.name}/${name}`;
+        break;
+      }
+    }
+    if (!branch)
+      return {
+        ok: false,
+        reason: 'branch_missing',
+        message: `The branch ${input.branch} was deleted from ${repository}, so Talyn cannot make the worktree again. The session stays in History.`,
+      };
+    if (!from) {
+      const holder = await checkedOutAt(repository, branch);
+      if (holder)
+        return {
+          ok: false,
+          reason: 'branch_busy',
+          message: `The branch ${branch} is checked out in ${holder}. Switch that checkout to another branch, then restore the session again.`,
+        };
+    }
+    await fs.mkdir(path.dirname(input.path), { recursive: true });
+    if (from)
+      await git(repository, 'worktree', 'add', '--no-track', '-b', branch, '--', input.path, from);
+    else await git(repository, 'worktree', 'add', '--', input.path, branch);
+    // The env files were in the folder the archive removed.
+    if (!isBareClone(repository, input.path))
+      await copyLocalFiles(repository, input.path).catch((error) =>
+        console.warn('[workbench] restoring local files failed:', error),
+      );
+    await this.paths.save({
+      workbenchId: input.workbenchId,
+      path: input.path,
+      rootPath: repository,
+      name: archived.name,
+      baseBranch: archived.baseBranch,
+    });
+    await this.paths.forgetArchived(input.path);
+    return { ok: true, branch };
+  }
+}
+
+async function firstAsync<T>(
+  items: T[],
+  test: (item: T) => Promise<boolean>,
+): Promise<T | undefined> {
+  for (const item of items) if (await test(item)) return item;
+  return undefined;
+}
+
+/** The clone Talyn made when a session had no local checkout. */
+function isBareClone(repository: string, worktree: string): boolean {
+  return repository === path.join(path.dirname(worktree), '.repo');
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.lstat(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(target)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The paths `git status --porcelain=v1 -z` lists. A rename's old path is not counted. */
+export function parsePorcelainPaths(stdout: string): string[] {
+  const tokens = stdout.split('\0');
+  const files: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.length < 4) continue;
+    files.push(token.slice(3));
+    if (token[0] === 'R' || token[0] === 'C') i++;
+  }
+  return files;
+}
+
+export async function listRemotes(
+  repository: string,
+): Promise<Array<{ name: string; url: string }>> {
+  const result = await exec(repository, [
+    {
+      argv: ['git', 'config', '--get-regexp', '^remote\\..*\\.url$'],
+      allowFailure: true,
+    },
+  ]);
+  if (result.exitCode !== 0) return [];
+  const remotes: Array<{ name: string; url: string }> = [];
+  for (const line of result.stdout.split('\n')) {
+    const match = /^remote\.(.+)\.url (.+)$/.exec(line.trim());
+    if (match) remotes.push({ name: match[1], url: match[2] });
+  }
+  return remotes;
+}
+
+/** True when `target` is a linked worktree of `repository`, never its main checkout. */
+async function isLinkedWorktree(
+  repository: string,
+  target: string,
+): Promise<boolean> {
+  const list = await exec(repository, [
+    { argv: ['git', 'worktree', 'list', '--porcelain', '-z'] },
+  ]);
+  if (list.exitCode !== 0) return false;
+  const realTarget = await fs.realpath(target);
+  const listed = list.stdout
+    .split('\0')
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length));
+  for (const [index, entry] of listed.entries()) {
+    const real = await fs.realpath(entry).catch(() => entry);
+    // Git lists the main worktree first.
+    if (real === realTarget) return index > 0;
+  }
+  return false;
+}
+
+/** Ignored env files and `filesToCopy`, from the person's checkout into a worktree. */
+async function copyLocalFiles(source: string, target: string): Promise<void> {
+  const config = await readConfig(source);
+  // Only an env file git ignores: one it does not ignore shows up as a
+  // new file in the session, and Create PR (`git add -A`) would push it.
+  const envFiles: string[] = [];
+  for (const name of await fs.readdir(source)) {
+    if (name.startsWith('.env') && (await isIgnored(source, name)))
+      envFiles.push(name);
+  }
+  for (const relative of new Set([...envFiles, ...config.filesToCopy])) {
+    if (relative.split('/').includes('.git'))
+      throw new Error('Cannot copy Git metadata');
+    let from: string;
+    try {
+      from = await safeFilePath(source, relative);
+    } catch (error) {
+      // A missing file, or a link out of the checkout, is not copied. It
+      // must not stop the session from being made.
+      console.warn(`[workbench] not copying ${relative}:`, error);
+      continue;
+    }
+    const destination = relativePath(target, relative);
+    if (!(await fs.stat(from)).isFile()) continue;
+    const realTarget = await fs.realpath(target);
+    let parent = realTarget;
+    const directories = path
+      .relative(target, path.dirname(destination))
+      .split(path.sep)
+      .filter(Boolean);
+    for (const directory of directories) {
+      const next = path.join(parent, directory);
+      try {
+        await fs.mkdir(next);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      parent = await fs.realpath(next);
+      if (!isInside(realTarget, parent))
+        throw new Error('Copy path escapes the worktree');
+    }
+    // Remove a destination symlink before copying secrets into the worktree.
+    await fs.rm(destination, { force: true });
+    await fs.copyFile(from, destination);
   }
 }

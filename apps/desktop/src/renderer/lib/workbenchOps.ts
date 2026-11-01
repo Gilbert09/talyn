@@ -157,7 +157,8 @@ export function localOps(
     if (!bridge || unavailable) throw new Error(unavailable ?? 'Local runtime unavailable.');
     return bridge;
   };
-  // Reads still work on an archived local session (its worktree stays); new work does not.
+  // No new work on an archived local session. Reads work while a worktree is
+  // still there; an archive deletes it unless Git refused.
   const notArchived = () => {
     if (workbench.status === 'archived' || workbench.archivedAt) throw new Error('This session is archived. Restore it first.');
   };

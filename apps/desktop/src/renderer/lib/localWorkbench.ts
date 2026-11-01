@@ -633,7 +633,7 @@ export function getLocalController(): LocalTurnController | null {
 /**
  * After an archive: drop the session's queued messages, so a cancelled turn
  * does not start the next one, then stop its turns, scripts and terminals on
- * this machine. The worktree and its files stay.
+ * this machine. `removeLocalWorktree` then deletes the worktree.
  */
 export async function stopLocalWorkbench(
   workbenchId: string,
