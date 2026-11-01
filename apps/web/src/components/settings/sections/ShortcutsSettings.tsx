@@ -32,6 +32,7 @@ export function shortcutRows(shortcuts: Shortcut[]): Array<{ group: string; rows
   const groups = new Map<string, Row[]>();
   let jumpsAdded = false;
   for (const s of byId.values()) {
+    if (s.alias) continue;
     let row: Row = { id: s.id, label: s.label, keys: formatKeys(s.keys) };
     if (s.id.startsWith(JUMP_PREFIX)) {
       if (jumpsAdded) continue;

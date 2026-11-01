@@ -85,13 +85,46 @@ describe('navigation keys', () => {
     expect(press(key)).toBe(false);
   });
 
-  it.each(['ArrowLeft', '['])('ignores %s in a textarea', (key) => {
+  it.each([
+    ['ArrowLeft', { view: 'home' }],
+    ['ArrowRight', { view: 'history' }],
+  ] as const)('navigates with %s in an empty composer', (key, expected) => {
     useNavigationStore.getState().navigate({ view: 'history' });
-    const input = document.createElement('textarea');
-    document.body.appendChild(input);
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    expect(press(key, composer)).toBe(true);
+    expect(useNavigationStore.getState().route).toEqual(expected);
+    composer.remove();
+  });
+
+  it.each(['ArrowLeft', 'ArrowRight'])('leaves %s to a composer with text', (key) => {
+    useNavigationStore.getState().navigate({ view: 'history' });
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const route = useNavigationStore.getState().route;
+    const composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    composer.value = 'draft';
+    document.body.appendChild(composer);
+    expect(press(key, composer)).toBe(false);
+    expect(useNavigationStore.getState().route).toEqual(route);
+    composer.remove();
+  });
+
+  it.each(['ArrowLeft', 'ArrowRight'])('leaves %s to another field or the terminal', (key) => {
+    useNavigationStore.getState().navigate({ view: 'history' });
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const route = useNavigationStore.getState().route;
+    const input = document.createElement('input');
+    const terminal = document.createElement('div');
+    terminal.className = 'xterm';
+    document.body.append(input, terminal);
     expect(press(key, input)).toBe(false);
-    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    expect(press(key, terminal)).toBe(false);
+    expect(useNavigationStore.getState().route).toEqual(route);
     input.remove();
+    terminal.remove();
   });
 });
 

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { MENU_COMMANDS } from '../../lib/menuCommands';
-import { FOCUS_COMPOSER_EVENT, dispatchKeydown, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
+import { FOCUS_COMPOSER_EVENT, dispatchKeydown, isEmptyComposer, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
@@ -109,39 +109,37 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       run: () => useWorkspaceStore.getState().toggleSidebar(),
     }),
-    {
+    fromMenu({
       id: 'nav.back',
+      group: 'General',
+      allowInInput: isEmptyComposer,
+      when: () => nav().backStack.length > 0,
+      run: () => nav().back(),
+    }),
+    fromMenu({
+      id: 'nav.forward',
+      group: 'General',
+      allowInInput: isEmptyComposer,
+      when: () => nav().forwardStack.length > 0,
+      run: () => nav().forward(),
+    }),
+    {
+      id: 'nav.back.bracket',
       keys: 'mod+[',
       label: 'Back',
       group: 'General',
       hidden: true,
+      alias: true,
       when: () => nav().backStack.length > 0,
       run: () => nav().back(),
     },
     {
-      id: 'nav.forward',
+      id: 'nav.forward.bracket',
       keys: 'mod+]',
       label: 'Forward',
       group: 'General',
       hidden: true,
-      when: () => nav().forwardStack.length > 0,
-      run: () => nav().forward(),
-    },
-    {
-      id: 'nav.back.arrow',
-      keys: 'mod+left',
-      label: 'Back',
-      group: 'General',
-      hidden: true,
-      when: () => nav().backStack.length > 0,
-      run: () => nav().back(),
-    },
-    {
-      id: 'nav.forward.arrow',
-      keys: 'mod+right',
-      label: 'Forward',
-      group: 'General',
-      hidden: true,
+      alias: true,
       when: () => nav().forwardStack.length > 0,
       run: () => nav().forward(),
     },

@@ -13,7 +13,7 @@ import {
   runShortcut,
   type Shortcut,
 } from '../renderer/lib/shortcuts';
-import { MENU_COMMANDS, toAccelerator } from '../main/menuCommands';
+import { MENU_COMMANDS, menuPresentation, toAccelerator } from '../main/menuCommands';
 
 type KeyInit = Partial<Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>>;
 
@@ -240,9 +240,20 @@ describe('menu commands', () => {
 
   it('owns the chords Electron would otherwise take', () => {
     const keys = MENU_COMMANDS.map((c) => c.keys);
-    for (const chord of ['mod+w', 'mod+n', 'mod+k', 'mod+,', 'mod+b', 'mod+j', 'mod+t', 'mod+l', 'mod+[', 'mod+]']) {
+    for (const chord of ['mod+w', 'mod+n', 'mod+k', 'mod+,', 'mod+b', 'mod+j', 'mod+t', 'mod+l', 'mod+left', 'mod+right']) {
       expect(keys).toContain(chord);
     }
     for (let i = 1; i <= 9; i += 1) expect(keys).toContain(`mod+${i}`);
+  });
+
+  it('leaves navigation arrows to the renderer', () => {
+    expect(MENU_COMMANDS.filter((command) => command.id.startsWith('nav.')).map((command) => [command.keys, command.rendererOnly])).toEqual([
+      ['mod+left', true],
+      ['mod+right', true],
+    ]);
+    const [back, forward] = MENU_COMMANDS.filter((command) => command.id.startsWith('nav.'));
+    expect(menuPresentation(back, true)).toEqual({ label: 'Back (⌘←)' });
+    expect(menuPresentation(forward, true)).toEqual({ label: 'Forward (⌘→)' });
+    expect(menuPresentation(back, false)).toEqual({ label: 'Back (Ctrl+←)' });
   });
 });

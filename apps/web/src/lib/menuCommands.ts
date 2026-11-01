@@ -15,7 +15,7 @@
  * - Jumping to a session is ⌘⌥1–9.
  * - Every session action is ⌘⌥ plus the desktop letter (P, X, M, A).
  * - Focus composer is ⌘⇧L.
- * - Back and forward have no menu entry. The shortcut registry handles their keys when the page receives them.
+ * - Back and forward use the arrow keys when the page receives them.
  * - Chords a page can catch (⌘K, ⌘B, ⌘J, ⌘,, ⌘⇧D, ⌘⌥B, ⌘⌥↑/↓) stay as on desktop.
  * On Windows and Linux `mod` is Ctrl; `shortcuts.ts` ignores Ctrl+Alt when
  * it is really AltGr.
@@ -51,6 +51,8 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'terminal.toggle', label: 'Toggle Terminal', keys: 'mod+j', section: 'view' },
   { id: 'panel.toggle', label: 'Toggle Right Panel', keys: 'mod+alt+b', section: 'view' },
   { id: 'workbench.changes', label: 'Show Changes', keys: 'mod+shift+d', section: 'view' },
+  { id: 'nav.back', label: 'Back', keys: 'mod+left', section: 'view', separatorBefore: true },
+  { id: 'nav.forward', label: 'Forward', keys: 'mod+right', section: 'view' },
   { id: 'composer.focus', label: 'Focus Composer', keys: 'mod+shift+l', section: 'workbench' },
   { id: 'workbench.createPr', label: 'Create Pull Request', keys: 'mod+alt+p', section: 'workbench' },
   { id: 'workbench.fixChecks', label: 'Fix Checks', keys: 'mod+alt+x', section: 'workbench' },

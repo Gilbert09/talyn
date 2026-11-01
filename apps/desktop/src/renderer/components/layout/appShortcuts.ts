@@ -4,6 +4,7 @@ import { MENU_COMMANDS } from '../../../main/menuCommands';
 import {
   FOCUS_COMPOSER_EVENT,
   dispatchKeydown,
+  isEmptyComposer,
   registerShortcuts,
   runShortcut,
   type Shortcut,
@@ -54,11 +55,11 @@ const inWorkbench = () => currentWorkbench() !== null;
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
-/** A shortcut whose chord the application menu owns: keys and label come from main/menuCommands.ts. */
+/** A shortcut whose keys and label come from main/menuCommands.ts. */
 function fromMenu(def: Def): Shortcut {
   const cmd = MENU_COMMANDS.find((c) => c.id === def.id);
   if (!cmd) throw new Error(`No menu command ${def.id}`);
-  return { ...def, keys: cmd.keys, label: def.label ?? cmd.label, menu: true };
+  return { ...def, keys: cmd.keys, label: def.label ?? cmd.label, menu: !cmd.rendererOnly };
 }
 
 /**
@@ -130,33 +131,34 @@ export function buildAppShortcuts(): Shortcut[] {
     fromMenu({
       id: 'nav.back',
       group: 'General',
-      allowInInput: true,
+      allowInInput: isEmptyComposer,
       when: () => nav().backStack.length > 0,
       run: () => nav().back(),
     }),
     fromMenu({
       id: 'nav.forward',
       group: 'General',
-      allowInInput: true,
+      allowInInput: isEmptyComposer,
       when: () => nav().forwardStack.length > 0,
       run: () => nav().forward(),
     }),
-    // ⌘← / ⌘→ as well, like a browser. Never while typing: there they move the cursor.
     {
-      id: 'nav.back.arrow',
-      keys: 'mod+left',
+      id: 'nav.back.bracket',
+      keys: 'mod+[',
       label: 'Back',
       group: 'General',
       hidden: true,
+      alias: true,
       when: () => nav().backStack.length > 0,
       run: () => nav().back(),
     },
     {
-      id: 'nav.forward.arrow',
-      keys: 'mod+right',
+      id: 'nav.forward.bracket',
+      keys: 'mod+]',
       label: 'Forward',
       group: 'General',
       hidden: true,
+      alias: true,
       when: () => nav().forwardStack.length > 0,
       run: () => nav().forward(),
     },

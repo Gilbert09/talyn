@@ -9,7 +9,7 @@ import { checkForUpdatesInteractively } from './updater';
 import {
   MENU_COMMANDS,
   MENU_COMMAND_CHANNEL,
-  toAccelerator,
+  menuPresentation,
   type MenuSection,
 } from './menuCommands';
 
@@ -74,9 +74,9 @@ export default class MenuBuilder {
   }
 
   /**
-   * Menu items for the renderer's shortcut registry. The menu owns these
-   * chords (it sees them before the page does), and a click sends the id to
-   * the renderer, which runs the shortcut registered under it.
+   * Menu items for the renderer's shortcut registry. A click sends the id
+   * to the renderer, which runs the registered shortcut. Renderer-only
+   * chords appear in labels and stay available to text fields.
    */
   commandItems(section: MenuSection): MenuItemConstructorOptions[] {
     const items: MenuItemConstructorOptions[] = [];
@@ -84,8 +84,7 @@ export default class MenuBuilder {
       if (cmd.section !== section) continue;
       if (cmd.separatorBefore && items.length > 0) items.push({ type: 'separator' });
       items.push({
-        label: cmd.label,
-        accelerator: toAccelerator(cmd.keys),
+        ...menuPresentation(cmd, process.platform === 'darwin'),
         click: () => {
           this.mainWindow.webContents.send(MENU_COMMAND_CHANNEL, cmd.id);
         },

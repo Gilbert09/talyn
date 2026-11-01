@@ -20,12 +20,14 @@ export interface Shortcut {
   group: string;
   /** The action applies now. A false answer lets the key through. */
   when?: () => boolean;
-  /** Run even while focus is in a text field, a contenteditable or the terminal. */
-  allowInInput?: boolean;
+  /** Run in typing targets, or use a function to allow one target. */
+  allowInInput?: boolean | ((target: EventTarget | null) => boolean);
   /** The application menu owns this chord; see the module comment. */
   menu?: boolean;
   /** Left out of the command palette's Actions list. */
   hidden?: boolean;
+  /** Keep a second chord out of the shortcut settings list. */
+  alias?: boolean;
   run: () => void;
 }
 
@@ -175,6 +177,10 @@ export function isTyping(target: EventTarget | null): boolean {
   return typeof el.closest === 'function' && el.closest('.xterm, [contenteditable="true"]') !== null;
 }
 
+export function isEmptyComposer(target: EventTarget | null): boolean {
+  return target instanceof HTMLTextAreaElement && target.hasAttribute('data-session-composer') && target.value === '';
+}
+
 export interface DispatchOptions {
   /** The application menu is present and owns the `menu: true` chords. */
   menuOwnsChords: boolean;
@@ -191,7 +197,7 @@ export function dispatchKeydown(e: KeyboardEvent, opts: DispatchOptions): boolea
   for (const s of registry.values()) {
     if (!matchesKeys(e, s.keys, opts.mac ?? IS_MAC)) continue;
     if (s.menu && opts.menuOwnsChords) return false;
-    if (typing && !s.allowInInput) continue;
+    if (typing && !(typeof s.allowInInput === 'function' ? s.allowInInput(e.target) : s.allowInInput)) continue;
     if (!shortcutEnabled(s)) continue;
     e.preventDefault();
     s.run();

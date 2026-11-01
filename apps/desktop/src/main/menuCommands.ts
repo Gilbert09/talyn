@@ -1,11 +1,11 @@
 /**
- * The chords the application menu owns.
+ * The chords shown in the application menu.
  *
  * Electron gives a menu accelerator the key before the renderer sees it, so
  * ⌘W would close the window and ⌘R would reload it. Each command here is a
- * menu item that sends `menu:command` with its id; the renderer runs the
- * shortcut registered under the same id (`renderer/lib/shortcuts.ts`) and
- * skips the chord in its own keydown listener, so it never fires twice.
+ * menu item that sends `menu:command` with its id. The renderer runs the
+ * shortcut registered under the same id (`renderer/lib/shortcuts.ts`).
+ * Renderer-only chords appear in labels without becoming accelerators.
  *
  * Pure data, no Electron import: the renderer reads it too.
  */
@@ -20,6 +20,8 @@ export interface MenuCommand {
   section: MenuSection;
   /** Draw a separator above this item. */
   separatorBefore?: boolean;
+  /** Show the chord in the label without giving it to Electron. */
+  rendererOnly?: boolean;
 }
 
 export const MENU_COMMAND_CHANNEL = 'menu:command';
@@ -42,8 +44,8 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'terminal.toggle', label: 'Toggle Terminal', keys: 'mod+j', section: 'view' },
   { id: 'panel.toggle', label: 'Toggle Right Panel', keys: 'mod+alt+b', section: 'view' },
   { id: 'workbench.changes', label: 'Show Changes', keys: 'mod+shift+d', section: 'view' },
-  { id: 'nav.back', label: 'Back', keys: 'mod+[', section: 'view', separatorBefore: true },
-  { id: 'nav.forward', label: 'Forward', keys: 'mod+]', section: 'view' },
+  { id: 'nav.back', label: 'Back', keys: 'mod+left', section: 'view', separatorBefore: true, rendererOnly: true },
+  { id: 'nav.forward', label: 'Forward', keys: 'mod+right', section: 'view', rendererOnly: true },
   { id: 'composer.focus', label: 'Focus Composer', keys: 'mod+l', section: 'workbench' },
   { id: 'workbench.createPr', label: 'Create Pull Request', keys: 'mod+shift+p', section: 'workbench' },
   { id: 'workbench.fixChecks', label: 'Fix Checks', keys: 'mod+shift+x', section: 'workbench' },
@@ -80,4 +82,10 @@ export function toAccelerator(keys: string): string {
     .split('+')
     .map((part) => ACCELERATOR_KEY[part] ?? part.toUpperCase())
     .join('+');
+}
+
+export function menuPresentation(cmd: MenuCommand, mac: boolean): { label: string; accelerator?: string } {
+  if (!cmd.rendererOnly) return { label: cmd.label, accelerator: toAccelerator(cmd.keys) };
+  const keys = cmd.keys.replace('mod+', mac ? '⌘' : 'Ctrl+').replace('left', '←').replace('right', '→');
+  return { label: `${cmd.label} (${keys})` };
 }

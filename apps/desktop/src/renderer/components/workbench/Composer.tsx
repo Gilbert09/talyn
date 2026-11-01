@@ -286,6 +286,7 @@ export function Composer({
         )}
         <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
         <textarea
+          data-session-composer
           ref={textareaRef}
           value={draft}
           rows={1}

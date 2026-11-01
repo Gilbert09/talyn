@@ -252,8 +252,8 @@ describe('menu commands (web key table)', () => {
     expect(MENU_COMMANDS.find((c) => c.id === id)?.keys).toBe(keys);
   });
 
-  it('has no back or forward: the browser owns them', () => {
-    expect(MENU_COMMANDS.find((c) => c.id === 'nav.back' || c.id === 'nav.forward')).toBeUndefined();
+  it('lists arrows as the back and forward chords', () => {
+    expect(MENU_COMMANDS.filter((c) => c.id.startsWith('nav.')).map((c) => c.keys)).toEqual(['mod+left', 'mod+right']);
   });
 
   it.each([

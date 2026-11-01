@@ -8,7 +8,7 @@ import { useNavigationStore } from '../renderer/stores/navigation';
 const press = (key: string, target: EventTarget = document.body) => {
   const e = new KeyboardEvent('keydown', { key, code: key, metaKey: true, bubbles: true, cancelable: true });
   Object.defineProperty(e, 'target', { value: target });
-  return dispatchKeydown(e, { menuOwnsChords: false, mac: true });
+  return dispatchKeydown(e, { menuOwnsChords: true, mac: true });
 };
 
 beforeEach(() => {
@@ -31,13 +31,53 @@ describe('⌘← and ⌘→', () => {
     expect(press('ArrowRight')).toBe(false);
   });
 
-  it('leave a text field alone, where they move the cursor', () => {
+  it.each([
+    ['ArrowLeft', { view: 'home' }],
+    ['ArrowRight', { view: 'history' }],
+  ] as const)('navigates with %s in an empty composer', (key, expected) => {
     useNavigationStore.getState().navigate({ view: 'history' });
-    const input = document.createElement('textarea');
-    document.body.appendChild(input);
-    expect(press('ArrowLeft', input)).toBe(false);
-    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    expect(press(key, composer)).toBe(true);
+    expect(useNavigationStore.getState().route).toEqual(expected);
+    composer.remove();
+  });
+
+  it.each(['ArrowLeft', 'ArrowRight'])('leaves %s to a composer with text', (key) => {
+    useNavigationStore.getState().navigate({ view: 'history' });
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const route = useNavigationStore.getState().route;
+    const composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    composer.value = 'draft';
+    document.body.appendChild(composer);
+    expect(press(key, composer)).toBe(false);
+    expect(useNavigationStore.getState().route).toEqual(route);
+    composer.remove();
+  });
+
+  it.each(['ArrowLeft', 'ArrowRight'])('leaves %s to another text field or the terminal', (key) => {
+    useNavigationStore.getState().navigate({ view: 'history' });
+    if (key === 'ArrowRight') useNavigationStore.getState().back();
+    const route = useNavigationStore.getState().route;
+    const input = document.createElement('input');
+    const terminal = document.createElement('div');
+    terminal.className = 'xterm';
+    document.body.append(input, terminal);
+    expect(press(key, input)).toBe(false);
+    expect(press(key, terminal)).toBe(false);
+    expect(useNavigationStore.getState().route).toEqual(route);
     input.remove();
+    terminal.remove();
+  });
+
+  it('keeps the bracket chords as hidden aliases', () => {
+    useNavigationStore.getState().navigate({ view: 'history' });
+    expect(press('[')).toBe(true);
+    expect(press(']')).toBe(true);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
   });
 });
 
