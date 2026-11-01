@@ -136,8 +136,51 @@ describe('workbench quota retry', () => {
       expect((await getWorkbench('wb'))?.settings?.fleetAccountId).toBe(first.id);
     }
     expect((await getFleetAccount(first.id))?.quotaExhausted).toEqual(
-      failure.includes('out of extra usage') ? expect.any(Object) : null,
+      failure.includes('out of extra usage')
+        ? expect.any(Object)
+        : /rate limit|usage limit/.test(failure) ? expect.objectContaining({ kind: 'rate_limit' }) : null,
     );
+  });
+
+  it('starts the next turn on another account after a rate limit it could not move', async () => {
+    const first = await addAccount('claude', 'First');
+    await seedChat('claude');
+    let runs = 0;
+    fleet.handler = (script) => {
+      if (!isAgentTurn(script, 'claude')) {
+        return script.includes('git commit-tree') ? { stdout: `${'c'.repeat(40)}\n` } : { exitCode: 0, stdout: '' };
+      }
+      runs++;
+      const failed = runs === 1;
+      return {
+        stdout: claudeTurnLines('sess', failed ? "API Error: Request rejected (429) · This request would exceed your account's rate limit." : 'done').map((line) => failed
+          ? line.replace('"subtype":"success"', '"subtype":"error_during_execution"').replace('"is_error":false', '"is_error":true')
+          : line),
+        exitCode: failed ? 1 : 0,
+      };
+    };
+    await sendMessage('chat', { text: 'go' });
+    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('error'), { timeout: 5000 });
+    expect((await getFleetAccount(first.id))?.quotaExhausted).toMatchObject({ kind: 'rate_limit' });
+
+    const other = await addAccount('claude', 'Second');
+    await sendMessage('chat', { text: 'again' });
+    await vi.waitFor(async () => expect((await getChat('chat'))?.status).toBe('idle'), { timeout: 5000 });
+    const rows = await testDb.db.select().from(workbenchEvents).where(eq(workbenchEvents.chatId, 'chat'));
+    const notes = rows.map((row) => row.event).filter((e) => e.subtype === 'fleet_account_switched');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].text).toBe('Switched to Second because First hit its rate limit.');
+    expect((await getWorkbench('wb'))?.settings?.fleetAccountId).toBe(other.id);
+  });
+
+  it.each([
+    ['no reset named', { at: '2026-11-01T10:00:00.000Z' }, '2026-11-01T10:04:59.000Z', true],
+    ['no reset named, after the window', { at: '2026-11-01T10:00:00.000Z' }, '2026-11-01T10:05:01.000Z', false],
+    ['vendor reset later than the window', { at: '2026-11-01T10:00:00.000Z', resetsAt: '2026-11-01T12:00:00.000Z' }, '2026-11-01T11:59:00.000Z', true],
+    ['vendor reset passed', { at: '2026-11-01T10:00:00.000Z', resetsAt: '2026-11-01T10:02:00.000Z' }, '2026-11-01T10:03:00.000Z', false],
+  ] as const)('a rate limit hold: %s', async (_name, record, now, held) => {
+    const { isHeldBack } = await import('../services/selfHosted/exhaustedQuota.js');
+    expect(isHeldBack({ ...record, kind: 'rate_limit' }, new Date(now))).toBe(held);
   });
   it.each([
     ['rate limit', "API Error: Request rejected (429) · This request would exceed your account's rate limit.", 'hit its rate limit', true],
