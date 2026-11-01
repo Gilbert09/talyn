@@ -1,12 +1,12 @@
-import { and, eq, sql } from 'drizzle-orm';
-import { isSandboxSize, sandboxSizeForResources, type SandboxSize, type WorkbenchSandboxState } from '@talyn/shared';
+import { eq, sql } from 'drizzle-orm';
+import { isSandboxSize, sandboxSizeForResources, type SandboxSize } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { workbenches } from '../../db/schema.js';
 import { meterBoxClosed, meterBoxOpened } from '../billing/usageHooks.js';
 import type { EndReason } from '../billing/usage/index.js';
 import { fleetInstant, type FleetSandbox } from '../selfHosted/client.js';
-import { emitWorkbenchUpdated } from './emit.js';
-import { WORKBENCH_COLUMNS, type WorkbenchRow } from './store.js';
+import { setWorkbenchSandboxState } from './sandboxState.js';
+import type { WorkbenchRow } from './store.js';
 
 /**
  * The usage meter's view of a session or thread box. A box is billed while it
@@ -38,29 +38,6 @@ export function workbenchBoxSize(row: Pick<WorkbenchRow, 'kind' | 'settings'>, s
   return isSandboxSize(row.settings?.sandboxSize) ? row.settings.sandboxSize : 'standard';
 }
 
-/**
- * Move `sandbox_state` between `running` and `suspended`, only from the state
- * named. `lost`, `deleted` and `error` are never overwritten.
- */
-async function setSandboxState(
-  sandboxId: string,
-  from: WorkbenchSandboxState,
-  to: WorkbenchSandboxState,
-): Promise<void> {
-  try {
-    const [row] = await getPoolDbClient()
-      .update(workbenches)
-      .set({ sandboxState: to, updatedAt: new Date() })
-      .where(and(eq(workbenches.sandboxId, sandboxId), eq(workbenches.sandboxState, from)))
-      .returning(WORKBENCH_COLUMNS);
-    if (!row) return;
-    const { publicWorkbench } = await import('./prLink.js');
-    await emitWorkbenchUpdated(await publicWorkbench(row));
-  } catch (err) {
-    console.warn(`[workbench] recording sandbox ${sandboxId} as ${to} failed:`, err);
-  }
-}
-
 /** The box is awake: meter it, and show it as running again if it was asleep. */
 export async function meterWorkbenchAwake(
   row: MeterRow & { sandboxId: string | null },
@@ -75,7 +52,7 @@ export async function meterWorkbenchAwake(
     size: opts.size ?? workbenchBoxSize(row),
     ...(opts.startedAt ? { startedAt: opts.startedAt } : {}),
   });
-  await setSandboxState(row.sandboxId, 'suspended', 'running');
+  await setWorkbenchSandboxState({ sandboxId: row.sandboxId }, 'suspended', 'running');
 }
 
 /**
@@ -113,7 +90,7 @@ export async function meterWorkbenchSuspended(
   suspendedAt?: Date | null,
 ): Promise<void> {
   await meterBoxClosed({ sandboxId: row.sandboxId, reason: 'suspended', endedAt: suspendedAt ?? null, workspaceId: row.workspaceId });
-  await setSandboxState(row.sandboxId, 'running', 'suspended');
+  await setWorkbenchSandboxState({ sandboxId: row.sandboxId }, 'running', 'suspended');
 }
 
 /** The box was deleted, lost or replaced. */

@@ -1,10 +1,11 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getPoolDbClient } from '../../../db/client.js';
 import { workbenches } from '../../../db/schema.js';
 import { debugBus } from '../../debugBus.js';
 import { emitWorkbenchEvents } from '../../workbenches/emit.js';
 import { fleetClientFor } from '../../workbenches/sandboxRuntime.js';
 import { appendEvents, listChats, otherRunningChats } from '../../workbenches/store.js';
+import { setWorkbenchSandboxState } from '../../workbenches/sandboxState.js';
 import { markIntervalClosed, openIntervalOfSubjectQuery, openIntervalsOfKindQuery } from './intervals.js';
 
 export const EXHAUSTED_NOTE = 'Paused: your box-hours and credits are used up. Add credits or upgrade to wake this session.';
@@ -43,10 +44,7 @@ async function suspendSessionBox(box: SessionBox, sandboxId: string, now: Date):
   // Another actor (a second replica's meter) may have closed it first; it
   // wrote the notes then.
   if (!(await markIntervalClosed(sandboxId, now, 'exhausted'))) return true;
-  await getPoolDbClient()
-    .update(workbenches)
-    .set({ sandboxState: 'suspended' })
-    .where(and(eq(workbenches.id, box.id), eq(workbenches.sandboxState, 'running')));
+  await setWorkbenchSandboxState({ workbenchId: box.id }, 'running', 'suspended');
   for (const chat of await listChats(box.id)) {
     if (chat.closedAt) continue;
     const stored = await appendEvents(chat.id, [

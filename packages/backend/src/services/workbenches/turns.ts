@@ -1,4 +1,5 @@
 import { archiveIdleSession } from './autoArchive.js';
+import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
 import { sessionHasTalynMcp } from './talynMcp.js';
 import { v4 as uuid } from 'uuid';
 import {
@@ -389,6 +390,7 @@ async function runTurnLoopBody(
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await archiveIdleSession(fin.chat.workbenchId);
+      await suspendIfOutOfBudget(fin.chat.workbenchId);
     }
     if (fin) {
       scheduleAgentBackup(chatId);
@@ -403,6 +405,15 @@ async function runTurnLoopBody(
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
     }
     next = fin?.started ?? null;
+  }
+}
+
+/** After a turn: an owner out of budget does not keep an awake box. Never fails the turn. */
+async function suspendIfOutOfBudget(workbenchId: string): Promise<void> {
+  try {
+    await suspendWorkbenchIfExhausted(workbenchId);
+  } catch (err) {
+    console.warn(`[workbench] budget check after a turn on ${workbenchId} failed:`, err);
   }
 }
 
@@ -1011,6 +1022,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await archiveIdleSession(fin.chat.workbenchId);
+      await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
     }
   }

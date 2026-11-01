@@ -3,6 +3,7 @@ import { sandboxSizeForResources, UNATTENDED_SANDBOX_SIZE, type SandboxSize, typ
 import { getPoolDbClient } from '../../../db/client.js';
 import { prCodeReviewRuns, tasks, workbenches, workspaces } from '../../../db/schema.js';
 import { debugBus } from '../../debugBus.js';
+import { setWorkbenchSandboxState } from '../../workbenches/sandboxState.js';
 import { listFleetHosts } from '../../fleetHosts.js';
 import { FleetClient, type FleetSandbox, type FleetSandboxStatus } from '../../selfHosted/client.js';
 import { fleetApiToken, fleetGatewayToken, fleetPinnedEndpoint } from '../../selfHosted/credentials.js';
@@ -130,13 +131,6 @@ export function sizeForBox(box: Pick<FleetSandbox, 'memMib' | 'vcpuCount'>, kind
   return fromResources ?? (kind === 'review_unit' ? UNATTENDED_SANDBOX_SIZE : 'standard');
 }
 
-async function setWorkbenchSandboxState(subjectId: string, from: string, to: string): Promise<void> {
-  await getPoolDbClient()
-    .update(workbenches)
-    .set({ sandboxState: to })
-    .where(and(eq(workbenches.id, subjectId), eq(workbenches.sandboxState, from)));
-}
-
 export interface SweepResult {
   opened: number;
   closed: number;
@@ -198,7 +192,7 @@ export class UsageSweep {
         closed += 1;
         this.missing.delete(interval.sandboxId);
         if (interval.subjectKind === 'workbench' && decision.reason === 'suspended') {
-          await setWorkbenchSandboxState(interval.subjectId, 'running', 'suspended');
+          await setWorkbenchSandboxState({ workbenchId: interval.subjectId }, 'running', 'suspended');
         }
       }
     }
@@ -224,7 +218,7 @@ export class UsageSweep {
       });
       if (!inserted) continue;
       opened += 1;
-      if (subject.kind === 'workbench') await setWorkbenchSandboxState(resolved.subjectId, 'suspended', 'running');
+      if (subject.kind === 'workbench') await setWorkbenchSandboxState({ workbenchId: resolved.subjectId }, 'suspended', 'running');
     }
     return { opened, closed, listErrors };
   }
