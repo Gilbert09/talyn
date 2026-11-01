@@ -51,6 +51,7 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
             <ThreadRow
               thread={thread}
               summary={threadSummary(runningSessionCount(children, chats))}
+              sessionsRunning={runningSessionCount(children, chats)}
               hasChildren={children.length > 0}
               expanded={expanded}
               selected={thread.id === openId}
@@ -86,6 +87,7 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
 function ThreadRow({
   thread,
   summary,
+  sessionsRunning,
   hasChildren,
   expanded,
   selected,
@@ -94,6 +96,7 @@ function ThreadRow({
 }: {
   thread: Workbench;
   summary: string;
+  sessionsRunning: number;
   hasChildren: boolean;
   expanded: boolean;
   selected: boolean;
@@ -102,7 +105,11 @@ function ThreadRow({
 }) {
   const chats = useWorkbenchStore((s) => s.chats[thread.id]);
   const unread = useWorkbenchStore((s) => s.unread);
-  const state = sessionState(thread, chats ?? [], unread, null);
+  const own = sessionState(thread, chats ?? [], unread, null);
+  // A resting thread whose sessions work is working too. Its own reply, question or failure still wins.
+  const state = sessionsRunning > 0 && own.kind === 'idle'
+    ? { kind: 'working' as const, label: sessionsRunning === 1 ? '1 session working' : `${sessionsRunning} sessions working` }
+    : own;
   const name = workbenchDisplayName(thread);
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
