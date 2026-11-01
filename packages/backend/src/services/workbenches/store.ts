@@ -1006,36 +1006,37 @@ export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessag
 }
 
 /**
- * A workbench failed to start: every open chat that is not running drops its
- * queue and goes to `error`, and its transcript says why. The queued messages
- * cannot run on a box that does not exist, and leaving them would make them
- * look sent. One statement for the queues, so a send at the same moment either
- * lands before the clear or sees the chat in `error`.
+ * A workbench failed to start: every open chat that is not running goes to
+ * `error`, and its transcript says why. Its queued messages STAY queued, and
+ * the composer shows them as queued, not sent. No turn starts while the
+ * workbench is not ready, and a retry that comes up sends them. Dropping them
+ * made a retry open an empty session, because the first prompt was gone.
  */
 export async function failQueued(workbenchId: string, reason: string): Promise<ChatRow[]> {
   const result = await db().execute(sql`
     WITH old AS (
-      SELECT id, queued_messages AS dropped FROM workbench_chats
+      SELECT id, queued_messages AS kept FROM workbench_chats
       WHERE workbench_id = ${workbenchId} AND closed_at IS NULL AND status <> 'running'
       FOR UPDATE
     )
     UPDATE workbench_chats c SET
-      queued_messages = '[]'::jsonb,
       status = 'error',
       status_message = ${reason},
       updated_at = now()
     FROM old
     WHERE c.id = old.id
-    RETURNING ${RETURNING_CHAT}, old.dropped AS dropped
+    RETURNING ${RETURNING_CHAT}, old.kept AS kept
   `);
   const out: ChatRow[] = [];
-  for (const raw of rowsOf<RawChatRow & { dropped: WorkbenchQueuedMessage[] | string | null }>(result)) {
+  for (const raw of rowsOf<RawChatRow & { kept: WorkbenchQueuedMessage[] | string | null }>(result)) {
     const chat = rawToChatRow(raw);
-    const dropped = (typeof raw.dropped === 'string' ? JSON.parse(raw.dropped) : raw.dropped) ?? [];
+    const kept: WorkbenchQueuedMessage[] = (typeof raw.kept === 'string' ? JSON.parse(raw.kept) : raw.kept) ?? [];
     const notSent =
-      dropped.length === 0
+      kept.length === 0
         ? ''
-        : ` ${dropped.length === 1 ? 'Your queued message was' : `${dropped.length} queued messages were`} not sent.`;
+        : kept.length === 1
+          ? ' Your message is still queued. Retry sends it.'
+          : ` ${kept.length} messages are still queued. Retry sends them.`;
     const stored = await appendEvents(chat.id, [
       {
         turn: chat.turnCount,
@@ -1043,7 +1044,7 @@ export async function failQueued(workbenchId: string, reason: string): Promise<C
           type: 'system',
           subtype: 'workbench_failed',
           text: `This session failed to start: ${reason}${notSent}`,
-          droppedMessages: dropped.map((m: WorkbenchQueuedMessage) => ({ id: m.id, text: m.text })),
+          queuedMessages: kept.map((m) => ({ id: m.id, text: m.text })),
         },
       },
     ]);
@@ -1055,6 +1056,37 @@ export async function failQueued(workbenchId: string, reason: string): Promise<C
 }
 
 /** After a retry: chats a failed start left in `error` go back to `idle`. */
+/**
+ * Before 2026-11-01 a failed start DROPPED the queue and kept only each
+ * message's text in the failure event (`droppedMessages`). Put that text back
+ * in an empty queue, so a retry of an older failed session still sends its
+ * first prompt. Attachments were never stored there, so they cannot return.
+ */
+export async function requeueDroppedMessages(workbenchId: string): Promise<void> {
+  const chats = await db()
+    .select({ id: chatsTable.id })
+    .from(chatsTable)
+    .where(and(
+      eq(chatsTable.workbenchId, workbenchId), eq(chatsTable.status, 'error'), isNull(chatsTable.closedAt),
+      sql`jsonb_array_length(${chatsTable.queuedMessages}) = 0`,
+    ));
+  for (const chat of chats) {
+    const [last] = await db()
+      .select({ event: eventsTable.event })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.chatId, chat.id), sql`${eventsTable.event} ->> 'subtype' = 'workbench_failed'`))
+      .orderBy(desc(eventsTable.seq))
+      .limit(1);
+    const dropped = (last?.event as { droppedMessages?: Array<{ id?: string; text?: string }> } | undefined)?.droppedMessages ?? [];
+    const queue: WorkbenchQueuedMessage[] = dropped
+      .filter((m) => typeof m.text === 'string' && m.text.trim() !== '')
+      .map((m) => ({ id: m.id ?? randomUUID(), text: m.text!, queuedAt: new Date().toISOString() }));
+    if (queue.length === 0) continue;
+    await db().update(chatsTable).set({ queuedMessages: queue })
+      .where(and(eq(chatsTable.id, chat.id), sql`jsonb_array_length(${chatsTable.queuedMessages}) = 0`));
+  }
+}
+
 export async function resetFailedChats(workbenchId: string): Promise<ChatRow[]> {
   const rows = await db()
     .update(chatsTable)

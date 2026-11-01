@@ -981,26 +981,39 @@ describe('workbench routes', () => {
       fleet.createSandbox = FakeFleet.prototype.createSandbox;
     };
 
-    it('shows why, marks the box as failed, and drops the queue with the reason in the chat', async () => {
+    it('shows why, marks the box as failed, and keeps the queue for a retry', async () => {
       const wb = await createFailedWorkbench(new FleetNotDeployedError(), { prompt: 'add a readme' });
       expect(await getWorkbench(wb.id)).toMatchObject({ status: 'error', sandboxState: 'error', statusMessage: NOT_DEPLOYED });
 
       const got = (await call('GET', `/workbenches/${wb.id}`)).body.data;
       expect(got).toMatchObject({ status: 'error', sandboxState: 'error', error: NOT_DEPLOYED });
-      expect(got.chats[0]).toMatchObject({ status: 'error', queuedMessages: [] });
+      expect(got.chats[0]).toMatchObject({ status: 'error', queuedMessages: [expect.objectContaining({ text: 'add a readme' })] });
 
       const page = await call('GET', `/workbenches/chats/${got.chats[0].id}/events`);
       expect(page.body.data.events.at(-1).event).toMatchObject({
         type: 'system',
         subtype: 'workbench_failed',
-        text: `This session failed to start: ${NOT_DEPLOYED} Your queued message was not sent.`,
-        droppedMessages: [{ text: 'add a readme' }],
+        text: `This session failed to start: ${NOT_DEPLOYED} Your message is still queued. Retry sends it.`,
+        queuedMessages: [expect.objectContaining({ text: 'add a readme' })],
       });
 
       const updates = emitted.filter((e) => e.type === 'workbench:updated').map((e) => (e.payload as Loose).workbench);
       expect(updates.at(-1)).toMatchObject({ status: 'error', sandboxState: 'error', error: NOT_DEPLOYED });
       const chats = emitted.filter((e) => e.type === 'workbench:chat').map((e) => (e.payload as Loose).chat);
-      expect(chats.at(-1)).toMatchObject({ status: 'error', queuedMessages: [] });
+      expect(chats.at(-1)).toMatchObject({ status: 'error', queuedMessages: [expect.objectContaining({ text: 'add a readme' })] });
+    });
+
+    it('sends the first prompt when a retry comes up', async () => {
+      const wb = await createFailedWorkbench(new FleetNotDeployedError(), { prompt: 'add a readme' });
+      restoreCreate();
+      expect((await call('POST', `/workbenches/${wb.id}/retry`)).status).toBe(200);
+      const chatId = await chatIdOf(wb.id);
+      await vi.waitFor(async () => {
+        expect(fleet.execs.some((e) => isAgentTurn(e.script))).toBe(true);
+        expect((await getChat(chatId))?.queuedMessages).toEqual([]);
+      }, { timeout: 5000 });
+      const { events } = (await call('GET', `/workbenches/chats/${chatId}/events`)).body.data;
+      expect(JSON.stringify(events)).toContain('add a readme');
     });
 
     it.each([
