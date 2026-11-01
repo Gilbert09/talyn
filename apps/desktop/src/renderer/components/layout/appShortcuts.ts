@@ -141,6 +141,25 @@ export function buildAppShortcuts(): Shortcut[] {
       when: () => nav().forwardStack.length > 0,
       run: () => nav().forward(),
     }),
+    // ⌘← / ⌘→ as well, like a browser. Never while typing: there they move the cursor.
+    {
+      id: 'nav.back.arrow',
+      keys: 'mod+left',
+      label: 'Back',
+      group: 'General',
+      hidden: true,
+      when: () => nav().backStack.length > 0,
+      run: () => nav().back(),
+    },
+    {
+      id: 'nav.forward.arrow',
+      keys: 'mod+right',
+      label: 'Forward',
+      group: 'General',
+      hidden: true,
+      when: () => nav().forwardStack.length > 0,
+      run: () => nav().forward(),
+    },
     fromMenu({
       id: 'workbench.previous',
       group: 'Sessions',
