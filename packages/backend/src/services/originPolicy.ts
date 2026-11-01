@@ -7,6 +7,8 @@
  * existed, had never been exercised against a real browser origin.
  */
 
+import { matchPreviewHost, previewBaseDomain } from './preview/previewHost.js';
+
 const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
 
 /**
@@ -31,7 +33,16 @@ export interface OriginPolicy {
 }
 
 export function createOriginPolicy(env: NodeJS.ProcessEnv = process.env): OriginPolicy {
-  const allowlist = parseAllowedOrigins(env.ALLOWED_ORIGINS);
+  // A preview host serves the session's own app, which is untrusted code. It
+  // must never be an origin the API answers.
+  const previewDomain = previewBaseDomain(env);
+  const allowlist = parseAllowedOrigins(env.ALLOWED_ORIGINS).filter((origin) => {
+    let host: string;
+    try { host = new URL(origin).host; } catch { return true; }
+    if (matchPreviewHost(host, previewDomain) === null) return true;
+    console.error(`ALLOWED_ORIGINS: ${origin} is under PREVIEW_BASE_DOMAIN and is ignored.`);
+    return false;
+  });
   // `origin === 'null'` is NOT desktop-exclusive: a sandboxed iframe, a
   // `data:` document, or a cross-origin redirect all report it, so any page
   // can produce one. It's inert today because WS auth is a Bearer JWT in the

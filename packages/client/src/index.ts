@@ -144,6 +144,7 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEvent,
   WorkbenchNextAction,
+  WorkbenchPreviewLink,
   WorkbenchReadiness,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
@@ -2937,6 +2938,13 @@ export const workbenches = {
    */
   portUrl: (id: string, port: number, path = '') =>
     `${getConfig().baseUrl}/api/v1/workbenches/${enc(id)}/ports/${port}/${path.replace(/^\/+/, '')}`,
+  /**
+   * A one-time link to the port on its own preview host, for a plain browser
+   * tab or a share link. 404 `preview_links_unavailable` when the deployment
+   * has no preview domain (`features.previewLinks` says so up front).
+   */
+  previewLink: (id: string, port: number) =>
+    request<WorkbenchPreviewLink>('POST', `/workbenches/${enc(id)}/ports/${port}/ticket`),
 
   // ---- Checkpoints ----
   checkpoints: (chatId: string) =>

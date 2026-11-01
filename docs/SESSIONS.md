@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Hosted preview links (2026-11-01)
+
+A session's port now has a URL that works in a plain browser: `https://<id>-<port>.preview.talyn.dev`. It is for the web app, which has no local forward, and for share links from the desktop. `PREVIEW_BASE_DOMAIN` turns it on. Unset, nothing changes.
+
+The design is a one-time ticket that sets a host-only cookie. `POST /workbenches/:id/ports/:port/ticket` mints the ticket. `/__talyn/auth` on the preview host spends it once and sets `__Host-talyn-preview`. A router mounted before CORS and the API serves every request on a preview host, so the app's own `/api/...` paths reach the app and never the API. Each request checks the cookie, the owner's access, the flag and the session state, with a 20-second cache. Migration `0098` adds three pool-only tables. Tickets and cookies are stored as hashes. See `docs/WORKBENCHES.md` § Previews for the rules.
+
+Three things came up on the way. First, all preview hosts are one site, so `SameSite=Lax` does not stop one preview from sending requests to another with its cookie. The router refuses `same-site` and `cross-site` requests that are not top-level page loads, and a socket must carry its own page's Origin. Second, fetch resolves `..` and `%2e%2e` in the path that the backend sends to the fleet. A crafted path could leave the ports route and call another fleet route with Talyn's fleet token. Both the new router and the existing ports route now refuse such a path. Third, the HTTP proxy code moved out of `routes/workbenches.ts` into `services/preview/portsHttp.ts`, and the socket splice in `portsWs.ts` is now one relay that both the ports route and the preview host use.
+
+The infrastructure is not set up: a wildcard DNS record and a wildcard certificate on the Railway backend service.
+
 ## Trunk merge ETA backoff and labels (2026-10-30)
 
 Trunk reads pause for one API key after a 429. A 503 with `Retry-After` also pauses reads. The backend accepts seconds or an HTTP date, defaults to one minute, and limits the pause to 15 minutes. Each replica keeps its own pause, keyed by a hash of the API key. Concurrent PRs share one repository lookup. A failed lookup can retry on the next request.

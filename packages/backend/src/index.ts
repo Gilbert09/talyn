@@ -40,6 +40,8 @@ import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js'
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
 import { initWorkbenches, stopWorkbenches } from './services/workbenches/lifecycle.js';
 import { handlePreviewPortUpgrade, matchPreviewPortPath } from './services/preview/portsWs.js';
+import { handlePreviewHostUpgrade, previewHostRouter } from './services/preview/previewHostRouter.js';
+import { matchPreviewHost, previewBaseDomain } from './services/preview/previewHost.js';
 import { handleTerminalUpgrade, matchTerminalPath } from './services/workbenches/terminalBridge.js';
 import { codeReviewPoller, initCodeReviewPoller } from './services/codeReview/poller.js';
 import {
@@ -271,6 +273,10 @@ async function main() {
   // everyone). Exactly 1 hop — trusting more would let clients spoof
   // X-Forwarded-For.
   app.set('trust proxy', 1);
+  // Hosted previews (`*.<PREVIEW_BASE_DOMAIN>`). First, so a request on a
+  // preview host never meets CORS, the API routes or auth. Other hosts pass
+  // through. See services/preview/previewLinks.ts.
+  app.use(previewHostRouter());
   // Who may talk to us from a browser — see services/originPolicy.ts. Read
   // once at boot: ALLOWED_ORIGINS is deployment config, not something that
   // should change under a running process.
@@ -404,6 +410,17 @@ async function main() {
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    // A preview host's socket (dev-server HMR). It has its own origin rule
+    // (the page's own host), so it goes before the API origin gate.
+    const previewHost = matchPreviewHost(req.headers.host, previewBaseDomain());
+    if (previewHost !== null) {
+      if (!allowWebSocketUpgrade(req)) {
+        socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
+        return;
+      }
+      handlePreviewHostUpgrade(req, socket, head, previewHost);
+      return;
+    }
     // Reject cross-site WebSocket hijacking: a browser page on a foreign
     // origin can open a WS (no CORS preflight on upgrades), so we apply the
     // same origin gate as REST — plus the desktop app's file:// origin.

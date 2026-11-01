@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { ApiResponse, Features } from '@talyn/shared';
 import { assertUser } from '../middleware/auth.js';
 import { featuresForUser } from '../services/featureFlags.js';
+import { previewLinksConfigured } from '../services/preview/previewHost.js';
 
 /**
  * Which features the calling user may see.
@@ -34,7 +35,10 @@ export function featureRoutes(): Router {
     const features = await featuresForUser({ distinctId: user.id, email: user.email });
     // Code review is no longer flagged, but desktop builds from before
     // 2026-10-26 still read this key and hide the feature without it.
-    res.json({ success: true, data: { ...features, codeReview: true } } as ApiResponse<Features>);
+    res.json({
+      success: true,
+      data: { ...features, codeReview: true, previewLinks: previewLinksConfigured() },
+    } as ApiResponse<Features>);
   });
 
   return router;

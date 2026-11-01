@@ -471,6 +471,18 @@ export interface UpdateLocalWorkbenchChatInput {
   agentSessionId?: string | null;
 }
 
+/**
+ * A hosted preview link (`POST /workbenches/:id/ports/:port/ticket`). `url`
+ * signs in once and expires at `expiresAt`. `origin` is the preview's host,
+ * which stays the same for this session and port.
+ */
+export interface WorkbenchPreviewLink {
+  url: string;
+  origin: string;
+  port: number;
+  expiresAt: string;
+}
+
 // ============================================================================
 // WebSocket payloads
 // ============================================================================

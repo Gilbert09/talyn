@@ -156,8 +156,51 @@ have no flag of their own.
   included) after `git reset --hard <base>` and `git clean -fdq`. It runs the run command in
   tmux, and opens the template's app URL or a `coder port-forward`. It syncs again after each
   turn. One preview runs per Coder workspace, because the stack uses fixed ports.
-- **Hosted URLs** on `*.preview.talyn.dev` are not built. They are for the web app and for
-  share links: a one-time ticket sets a host-only cookie on a random host name.
+- **Hosted URLs** (2026-11-01, migration `0098`). They are for the web app, which has no
+  local forward, and for share links. `PREVIEW_BASE_DOMAIN` (for example
+  `preview.talyn.dev`) turns them on. With it unset, the ticket route answers 404
+  `preview_links_unavailable` and `GET /features` says `previewLinks: false`. The
+  `workbenches` flag gates them. They have no flag of their own.
+  - **Host names.** `<id>-<port>.<domain>`. The id is 128 random bits in hex. The table
+    `workbench_preview_hosts` maps it to (session, port), one row per pair, so the host
+    stays the same and the app keeps its cookies. The port in the name must agree with the
+    stored port. `services/preview/previewHost.ts` matches the Host header with an exact
+    suffix: `x.preview.talyn.dev.evil.com` and `evilpreview.talyn.dev` are not preview
+    hosts. A name under the domain that is not a valid host gets a 404 page, never the API.
+  - **Sign-in.** `POST /workbenches/:id/ports/:port/ticket` (Bearer, the ports route's
+    gate, 30 a minute per user) returns `{ url, origin, port, expiresAt }`. The ticket works
+    once, on its own host only, for 10 minutes. `https://<host>/__talyn/auth?ticket=…`
+    spends it and sets `__Host-talyn-preview`: `HttpOnly; Secure; SameSite=Lax; Path=/`,
+    with no Domain attribute, for 12 hours. Then it redirects to `/`. Tickets and cookies
+    are random tokens stored only as SHA-256 hashes.
+  - **Each request.** `services/preview/previewHostRouter.ts` is mounted first in
+    `index.ts`, before CORS, the API routes and auth. So the app's own `/api/v1/...` paths go
+    to the app. It checks the cookie for that host, the session, that the workspace owner
+    is still the person who minted the ticket, the `workbenches` flag, and that the session
+    is a ready sandbox that is not archived. The answer is cached for 20 seconds, so a
+    revoked access stops within a minute. "Not ready" is not cached. Then it sends the
+    request to the fleet ports route with the same code as `/workbenches/:id/ports/:port/*`
+    (`services/preview/portsHttp.ts`). WebSockets go through `handlePreviewHostUpgrade` and
+    the same splice as the ports socket (`portsWs.ts`). A socket also needs the page's own
+    Origin, and its access is checked again every 30 seconds.
+  - **What never crosses.** Talyn's cookie and any `Authorization` header never reach the
+    app. The app's other cookies do. The app's `Set-Cookie` loses its Domain attribute, and
+    a cookie with Talyn's name is dropped. CORS headers and `x-fleet-host` are dropped. A
+    redirect to `http://localhost:<port>/…` becomes a path. A path with `.` or `..`
+    segments (also `%2e%2e`) is refused, because fetch would resolve it to another fleet
+    route. The ports route now refuses such a path too.
+  - **One site.** All preview hosts are the site `talyn.dev`, so `SameSite=Lax` still sends
+    the cookie on a request from another preview. The router refuses a request whose
+    `Sec-Fetch-Site` is `same-site` or `cross-site`, unless it is a top-level page load
+    (`navigate`, `document`, GET or HEAD).
+  - **Never an API origin.** `originPolicy.ts` ignores any `ALLOWED_ORIGINS` entry under
+    the preview domain. The API's CORS never sends credentials anyway. The web app keeps
+    its session as a Bearer token in localStorage, so a cookie that a preview app sets on
+    `talyn.dev` cannot take over a Talyn session.
+  - **Infrastructure.** A wildcard DNS record for `*.preview.talyn.dev` and a wildcard TLS
+    certificate on the backend service. A per-IP limit of 3000 requests a minute applies on
+    preview hosts. Local dev: `PREVIEW_BASE_DOMAIN=preview.localhost:4747` serves
+    `http://<id>-<port>.preview.localhost:4747`.
 
 Known gaps: not run end to end on a real repository. A new Coder worktree has no
 `node_modules` or Python environment, so the first run must install them. Two compose stacks
