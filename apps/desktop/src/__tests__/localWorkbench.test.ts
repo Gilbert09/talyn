@@ -281,6 +281,36 @@ describe('LocalTurnController', () => {
     expect(api.updateLocalChat).not.toHaveBeenCalledWith('c1', { status: 'idle' });
   });
 
+  it('cuts a large backlog into uploads the backend accepts, and keeps the rest after a failure', async () => {
+    const { controller, api, emit, tick } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    for (let i = 0; i < 1199; i++) emit('c1', 1, { type: 'stream_event' } as AgentEventDraft);
+    api.uploadLocalEvents.mockResolvedValueOnce({ stored: 500 }).mockRejectedValueOnce(new Error('offline'));
+    await tick();
+    expect(api.uploadLocalEvents.mock.calls.map((c) => c[1].length)).toEqual([500, 500]);
+    await tick();
+    const sizes = api.uploadLocalEvents.mock.calls.map((c) => c[1].length);
+    expect(sizes.slice(2)).toEqual([500, 200]);
+    expect(api.uploadLocalEvents.mock.calls[2][1][0].seq).toBe(501);
+  });
+
+  it('keeps uploading after the backend refuses one event for good', async () => {
+    const { controller, api, emit, tick } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    emit('c1', 1, { type: 'assistant', text: 'x'.repeat(400 * 1024) } as AgentEventDraft);
+    emit('c1', 1, { type: 'assistant' } as AgentEventDraft);
+    const refused = Object.assign(new Error('Payload too large'), { status: 413 });
+    api.uploadLocalEvents.mockImplementation(async (_chatId: string, events: WorkbenchEvent[]) => {
+      if (events.some((e) => JSON.stringify(e).length > 300 * 1024)) throw refused;
+      return { stored: events.length };
+    });
+    await tick();
+    await tick();
+    const uploaded = api.uploadLocalEvents.mock.calls.flatMap((c) => c[1].map((e: WorkbenchEvent) => e.seq));
+    expect(uploaded).toEqual(expect.arrayContaining([1, 3]));
+    expect(api.uploadLocalEvents.mock.calls.length).toBe(3);
+  });
+
   it('puts a failed upload back and retries it on the next tick', async () => {
     const { controller, api, emit, tick } = setup();
     api.uploadLocalEvents.mockRejectedValueOnce(new Error('offline'));
