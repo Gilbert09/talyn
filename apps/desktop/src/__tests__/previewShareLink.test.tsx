@@ -61,6 +61,6 @@ it.each([
 ])('hides the share button when %s', async (_name, setup) => {
   setup();
   render(<SessionPreviewChips workbench={wb} ops={ops} />);
-  await screen.findByRole('button', { name: /localhost:5173/ });
+  await screen.findByRole('button', { name: /:5173/ });
   expect(screen.queryByRole('button', { name: 'Copy a share link for port 5173' })).toBeNull();
 });

@@ -7,6 +7,7 @@ import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { toast } from '../renderer/stores/toast';
 import { archiveWorkbench } from '../renderer/components/workbench/archiveWorkbench';
 import { usePreviewStatusStore } from '../renderer/stores/previewStatus';
+import { ApiError } from '../renderer/lib/api';
 
 const get = jest.fn();
 const getToken = jest.fn();
@@ -14,8 +15,20 @@ const start = jest.fn();
 const stop = jest.fn();
 const open = jest.fn();
 const archive = jest.fn();
+const previewLink = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
-  api: { repositories: { preview: { get: (...args: unknown[]) => get(...args) } }, workbenches: { archive: (...args: unknown[]) => archive(...args) } },
+  api: {
+    repositories: { preview: { get: (...args: unknown[]) => get(...args) } },
+    workbenches: {
+      archive: (...args: unknown[]) => archive(...args),
+      previewLink: (...args: unknown[]) => previewLink(...args),
+    },
+  },
+  ApiError: class extends Error {
+    constructor(message: string, readonly status: number, readonly code?: string) {
+      super(message);
+    }
+  },
   API_BASE_URL: 'https://api.example.com',
   getAccessToken: () => getToken(),
 }));
@@ -41,6 +54,8 @@ beforeEach(() => {
   useWorkspaceStore.setState({ features: { workbenches: true } as Features });
   useWorkbenchStore.setState({ scriptOutput: {}, workbenches: {} });
   answers.mockReset().mockResolvedValue(true);
+  // Most tests run as a deployment with no preview domain: the localhost path.
+  previewLink.mockReset().mockRejectedValue(new ApiError('Preview links are not available.', 404, 'preview_links_unavailable'));
   usePreviewStatusStore.setState({ ports: {} });
 });
 
@@ -193,4 +208,41 @@ it('shows a running app as live without opening anything, and clears it when the
   expect(open).not.toHaveBeenCalled();
   act(() => useWorkbenchStore.setState({ scriptOutput: { wb1: { run: { chunks: [], total: 0, running: false, exitCode: 0 } } } }));
   await waitFor(() => expect(result.current.status(5173)).toBeNull());
+});
+
+describe('with preview links', () => {
+  const hosted = { url: 'https://abc-5173.preview.talyn.dev/__talyn/auth?ticket=t1' };
+
+  it('opens the hosted link by default and takes no local port', async () => {
+    previewLink.mockResolvedValue(hosted);
+    useWorkbenchStore.getState().markScriptStarted('wb1', 'run');
+    const { result } = renderHook(() => useSessionPreview(wb));
+    await waitFor(() => expect(result.current.ports).toHaveLength(1));
+    await act(() => result.current.openPreview(5173, ops));
+    expect(previewLink).toHaveBeenCalledWith('wb1', 5173);
+    expect(open).toHaveBeenCalledWith(hosted.url);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('opens localhost when asked, even with preview links on', async () => {
+    previewLink.mockResolvedValue(hosted);
+    useWorkbenchStore.getState().markScriptStarted('wb1', 'run');
+    const { result } = renderHook(() => useSessionPreview(wb));
+    await waitFor(() => expect(result.current.ports).toHaveLength(1));
+    await act(() => result.current.openPreview(5173, ops, { via: 'localhost' }));
+    expect(previewLink).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('http://localhost:5174');
+  });
+
+  it('reports any other link error and does not fall back', async () => {
+    previewLink.mockRejectedValue(new ApiError('Too many links.', 429, 'rate_limited'));
+    useWorkbenchStore.getState().markScriptStarted('wb1', 'run');
+    const { result } = renderHook(() => useSessionPreview(wb));
+    await waitFor(() => expect(result.current.ports).toHaveLength(1));
+    await act(() => result.current.openPreview(5173, ops));
+    expect(start).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Could not open the preview', 'Too many links.');
+  });
 });

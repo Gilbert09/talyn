@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link2, Loader2 } from 'lucide-react';
+import { Laptop, Link2, Loader2 } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { useSessionPreview } from '../../hooks/useSessionPreview';
 import { api } from '../../lib/api';
@@ -45,7 +45,8 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
   );
   return <>{ports.map(({ port, label }) => {
     const state = status(port);
-    const name = `localhost:${port}${label ? ` (${label})` : ''}`;
+    // With preview links on, the chip opens the hosted link and takes no local port.
+    const name = `${shareable ? `preview :${port}` : `localhost:${port}`}${label ? ` (${label})` : ''}`;
     return (
       <span key={port} className="inline-flex min-w-0 shrink items-center gap-0.5">
         <button
@@ -65,6 +66,19 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
           {state === 'starting' && <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />}
           <span className="truncate">{state === 'live' ? name : state === 'starting' ? `Starting ${name}…` : `Open ${name}`}</span>
         </button>
+        {shareable && state === 'live' && (
+          <button
+            type="button"
+            className="app-region-no-drag shrink-0 rounded border bg-background p-1 text-foreground hover:bg-accent disabled:opacity-50"
+            disabled={busy || Boolean(ops.unavailable)}
+            onClick={() => void openPreview(port, ops, { via: 'localhost' })}
+            data-attr="session-preview-localhost"
+            title={`Open on localhost:${port} instead. This takes a local port.`}
+            aria-label={`Open port ${port} on localhost`}
+          >
+            <Laptop className="h-3 w-3" aria-hidden />
+          </button>
+        )}
         {shareable && state === 'live' && (
           <button
             type="button"

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { workbenchesOffered, type PreviewPort, type RepositoryPreviewResponse, type Workbench } from '@talyn/shared';
-import { api, API_BASE_URL, getAccessToken } from '../lib/api';
+import { api, ApiError, API_BASE_URL, getAccessToken } from '../lib/api';
 import { openExternal } from '../lib/openExternal';
 import { getWorkbenchBridge } from '../lib/workbenchBridge';
 import { previewPortAnswers } from '../lib/previewProbe';
@@ -95,14 +95,18 @@ export function useSessionPreview(workbench: Workbench) {
     return () => { cancelled = true; };
   }, [running, portsKey, workbench.id]);
 
-  const openPreview = async (port: number, ops: WorkbenchOps) => {
+  /**
+   * Start the app if needed, wait for it, then open it. By default this opens
+   * the hosted preview link, so no local port is taken. `localhost` opens the
+   * local tunnel instead. A deployment with no preview domain falls back to
+   * localhost: the backend says so with `preview_links_unavailable`.
+   */
+  const openPreview = async (port: number, ops: WorkbenchOps, opts: { via?: 'preview' | 'localhost' } = {}) => {
     if (opening.current || !ports.some((item) => item.port === port) || ops.unavailable) return;
     opening.current = true;
     setBusy(true);
     const statuses = usePreviewStatusStore.getState();
     try {
-      const preview = getWorkbenchBridge()?.preview;
-      if (!preview) throw new Error('Restart Talyn to enable previews.');
       if (!(await getAccessToken())) throw new Error('Sign in to open the preview.');
       if (statuses.ports[previewKey(workbench.id, port)] !== 'live') {
         statuses.set(workbench.id, port, 'starting');
@@ -116,6 +120,19 @@ export function useSessionPreview(workbench: Workbench) {
       }
       const current = useWorkbenchStore.getState().workbenches[workbench.id] ?? workbench;
       if (isArchivedWorkbench(current) || !workbenchesOffered(useWorkspaceStore.getState().features)) return;
+      if (opts.via !== 'localhost') {
+        const link = await api.workbenches.previewLink(workbench.id, port).catch((error: unknown) => {
+          if (error instanceof ApiError && error.code === 'preview_links_unavailable') return null;
+          throw error;
+        });
+        if (link) {
+          usePreviewStatusStore.getState().set(workbench.id, port, 'live');
+          await openExternal(link.url);
+          return;
+        }
+      }
+      const preview = getWorkbenchBridge()?.preview;
+      if (!preview) throw new Error('Restart Talyn to enable previews.');
       const token = await getAccessToken();
       if (!token) throw new Error('Sign in to open the preview.');
       const forward = await preview.start({ workbenchId: workbench.id, port, token, apiBaseUrl: API_BASE_URL });
