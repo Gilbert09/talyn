@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Coder previews explain each failed check (2026-11-01)
+
+Tom selected "Preview in Coder" and nothing happened. The panel showed five grey circles, every button was disabled, and there was no message. `which coder` found nothing on his Mac. Two causes were found.
+
+- **The CLI was there, in a folder Talyn did not search.** `hogli devbox:setup` installs its own `coder` in `~/.hogli/bin` and does not add it to PATH. hogli itself prefers that copy. `CoderCli` now finds the binary first (`locate('coder', coderSearchDirs())`): `~/.hogli/bin`, then the login PATH, which always includes `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`. It runs the absolute path with `execFile` and an argument array, so a Finder launch without the shell PATH still works.
+- **The patch came first.** `startCoderPreview` read `GET /workbenches/:id/patch` before any check. That call can wake a sleeping sandbox, and the client has no timeout, so the button stayed busy with no text. Now the checks run first, and the patch read has its own progress text.
+
+What the panel does now. Each check has a state (done, a spinner, failed, or not yet). The steps are CLI installed, Signed in, Workspace running, Worktree ready, Synced and Running. A failed check shows the reason, the exact fix as commands with copy buttons, and the CLI's own output. Talyn never runs a fix command. The panel checks once when it first opens, and "Check again" runs the checks on request. The cases are: no CLI (`brew install coder/coder/coder`; the install script is named only as text), not signed in or expired (`coder login <url>`), signed in to another deployment, a deployment that does not answer (a network error from `whoami` or `list`, or a 30 s whoami timeout), no workspace for the template (Talyn does not create one, because a template asks for choices; it gives `coder create --template <t>`), several workspaces, and a stopped workspace ("Start workspace" runs `coder start` and shows each status). With `hogli.yaml` in the detection reasons, the fixes add `hogli devbox:setup`, `devbox:doctor` or `devbox:start`. "Preview in Coder" still starts a stopped workspace, because the person asked for a preview. Errors from every action, the background turn sync included, stay in the panel as well as in a toast, without Electron's "Error invoking remote method" prefix.
+
+Other silent failures fixed: `appUrls` hid a CLI that could not answer behind the port-forward fallback; a timed-out command gave Node's text with no command name; `coder list` and `coder start` failures could drop stdout; the worktree step had the 120 s exec limit, too short for a `git fetch` of posthog/posthog on a stale checkout (now 10 minutes).
+
 ## Agent speed guidance and session resize (2026-11-01)
 
 A real posthog/posthog session spent 48 of 110 minutes in `sleep 200`..`sleep 580` loops, 25 minutes in whole test suites that each hit the 10-minute command limit, and 10 minutes compiling `sqlx-cli`. Two changes address the agent's part of that.
