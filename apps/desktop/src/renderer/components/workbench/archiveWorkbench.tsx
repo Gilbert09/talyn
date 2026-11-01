@@ -3,6 +3,8 @@ import { workbenchDisplayName, type LocalWorktreeStatus, type Workbench, type Wo
 import { stopCoderPreview } from '../../lib/coderPreview';
 import { bridgeErrorMessage, getDeviceId, getWorkbenchBridge } from '../../lib/workbenchBridge';
 import { stopLocalWorkbench } from '../../lib/localWorkbench';
+import { markDialogArchive } from '../../lib/localArchive';
+import { detectedCheckout, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -26,6 +28,7 @@ export function ownsLocalWorktree(workbench: LocalFields): boolean {
 
 /** Archive a session. `leave` clears the selection when the session is the open one. */
 export async function archiveWorkbench(id: string, leave: boolean, opts: ArchiveOptions = {}): Promise<boolean> {
+  markDialogArchive(id, true);
   try {
     const wb = await api.workbenches.archive(id);
     useWorkbenchStore.getState().upsertWorkbench(wb);
@@ -45,6 +48,8 @@ export async function archiveWorkbench(id: string, leave: boolean, opts: Archive
   } catch (err) {
     toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
     return false;
+  } finally {
+    markDialogArchive(id, false);
   }
 }
 
@@ -82,12 +87,14 @@ export async function restoreWorkbench(
   try {
     if (workbench.runtime === 'local' && workbench.localPath) {
       if (workbench.deviceId && workbench.deviceId !== getDeviceId()) {
-        throw new Error('This session lives on another computer. Restore it there.');
-      }
-      if (!bridge) throw new Error('A local session needs the Talyn desktop app.');
-      if (bridge.restoreWorktree) {
-        const made = await bridge.restoreWorktree({ path: workbench.localPath, workbenchId: workbench.id, branch: workbench.branch });
-        if (!made.ok) throw new Error(made.message);
+        const checkout = await detectedCheckout(workbench.repoFullName);
+        if (checkout) await takeOverLocalWorkbench(workbench, checkout);
+      } else {
+        if (!bridge) throw new Error('A local session needs the Talyn desktop app.');
+        if (bridge.restoreWorktree) {
+          const made = await bridge.restoreWorktree({ path: workbench.localPath, workbenchId: workbench.id, branch: workbench.branch });
+          if (!made.ok) throw new Error(made.message);
+        }
       }
     }
     const wb = await api.workbenches.restore(workbench.id);

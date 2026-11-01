@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { stopCoderPreview, syncCoderTurn } from '../lib/coderPreview';
+import { reconcileLocalArchive } from '../lib/localArchive';
 import { isArchivedWorkbench } from '../lib/workbenchActions';
 import { api, wsClient } from '../lib/api';
 import { prefetchSkills } from '../lib/skillsData';
@@ -456,6 +457,7 @@ export function useApiConnection() {
         if (isArchivedWorkbench(payload.workbench)) stopCoderPreview(payload.workbench.id);
         const store = useWorkbenchStore.getState();
         store.upsertWorkbench(payload.workbench);
+        void reconcileLocalArchive(payload.workbench).catch(console.error);
         // The row embeds its open chats; replacing the list is what makes a closed chat disappear.
         const embedded = payload.workbench.chats;
         if (embedded) {

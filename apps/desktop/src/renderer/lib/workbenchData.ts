@@ -1,6 +1,7 @@
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api, type WorkbenchEventsPage } from './api';
 import { useWorkbenchStore } from '../stores/workbenches';
+import { reconcileLocalArchive } from './localArchive';
 
 /**
  * Fetching workbench data into the store. The WS handlers in `useApi.ts` keep
@@ -17,6 +18,7 @@ export async function loadWorkbenches(workspaceId: string): Promise<void> {
   try {
     const list = await api.workbenches.list(workspaceId, { includeArchived: true, kinds: ['session', 'thread'] });
     useWorkbenchStore.getState().setWorkbenches(workspaceId, list);
+    for (const wb of list) void reconcileLocalArchive(wb).catch(console.error);
     for (const wb of list) absorbEmbeddedChats(wb);
   } catch (err) {
     useWorkbenchStore.getState().setListError(err instanceof Error ? err.message : 'Could not load sessions.');
@@ -38,6 +40,7 @@ export async function loadWorkbench(id: string): Promise<Workbench | null> {
   try {
     const wb = await api.workbenches.get(id);
     useWorkbenchStore.getState().upsertWorkbench(wb);
+    void reconcileLocalArchive(wb).catch(console.error);
     absorbEmbeddedChats(wb);
     if (wb.runtime === 'sandbox') void loadScriptOutput(wb.id);
     return wb;

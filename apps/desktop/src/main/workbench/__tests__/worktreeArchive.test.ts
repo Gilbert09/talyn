@@ -49,6 +49,75 @@ const create = (name = 'paris') =>
   });
 
 describe('archiving a local worktree', () => {
+  test('automatic archive removes a clean worktree once and keeps its branch', async () => {
+    const { path: worktree, branch } = await create();
+    const stop = jest.fn(async () => {});
+    const input = { path: worktree, workbenchId: 'session-1' };
+
+    expect(await manager.processArchivedWorktree(input, stop)).toEqual({ keptWorktree: null });
+    expect(await manager.processArchivedWorktree(input, stop)).toEqual({ keptWorktree: null });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(await exists(worktree)).toBe(false);
+    expect(await runGit(repo, ['branch', '--list', branch])).toContain(branch);
+  });
+
+  test('automatic archive keeps a dirty worktree and saves its reason after restart', async () => {
+    const { path: worktree } = await create();
+    await fs.writeFile(path.join(worktree, 'draft.txt'), 'draft');
+    const stop = jest.fn(async () => {});
+    const input = { path: worktree, workbenchId: 'session-1' };
+    const keptWorktree = { reason: 'uncommitted', files: 1, path: worktree, names: ['draft.txt'] };
+
+    expect(await manager.processArchivedWorktree(input, stop)).toEqual({ keptWorktree });
+    const restarted = new WorktreeManager(new WorkbenchPaths(path.join(directory, 'state'), path.join(directory, 'workbenches')));
+    expect(await restarted.processArchivedWorktree(input, stop)).toEqual({ keptWorktree });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(await exists(worktree)).toBe(true);
+    expect(await paths.load(worktree)).toMatchObject({ archiveChecked: true, keptWorktree });
+  });
+
+  test('a session archived while closed is handled on the next start', async () => {
+    const { path: worktree } = await create();
+    const restarted = new WorktreeManager(new WorkbenchPaths(path.join(directory, 'state'), path.join(directory, 'workbenches')));
+    const stop = jest.fn(async () => {});
+    await restarted.processArchivedWorktree({ path: worktree, workbenchId: 'session-1' }, stop);
+    expect(await exists(worktree)).toBe(false);
+    expect(stop).toHaveBeenCalledWith('session-1');
+  });
+
+  test.each([false, true])('copied file changed after creation: %s', async (changed) => {
+    await fs.writeFile(path.join(repo, 'copy.txt'), 'original');
+    await fs.writeFile(path.join(repo, 'conductor.json'), JSON.stringify({ filesToCopy: ['copy.txt'] }));
+    const { path: worktree } = await create();
+    if (changed) await fs.writeFile(path.join(worktree, 'copy.txt'), 'changed');
+    const status = await manager.inspectWorktree(worktree);
+    expect(status.uncommittedCount).toBe(changed ? 1 : 0);
+    expect(status.uncommitted).toEqual(changed ? ['copy.txt'] : []);
+    const result = await manager.processArchivedWorktree({ path: worktree, workbenchId: 'session-1' }, async () => {});
+    expect(result.keptWorktree?.files ?? 0).toBe(changed ? 1 : 0);
+    expect(await exists(worktree)).toBe(changed);
+  });
+
+  test('an unchanged copy over a tracked file does not block a clean archive', async () => {
+    await fs.writeFile(path.join(repo, 'tracked.txt'), 'local content');
+    await fs.writeFile(path.join(repo, 'conductor.json'), JSON.stringify({ filesToCopy: ['tracked.txt'] }));
+    const { path: worktree } = await create();
+    expect((await manager.inspectWorktree(worktree)).uncommittedCount).toBe(0);
+    await manager.processArchivedWorktree({ path: worktree, workbenchId: 'session-1' }, async () => {});
+    expect(await exists(worktree)).toBe(false);
+  });
+
+  (process.platform === 'win32' ? test.skip : test)('a copied path replaced by a link remains a change', async () => {
+    await fs.writeFile(path.join(repo, 'copy.txt'), 'initial\n');
+    await fs.writeFile(path.join(repo, 'conductor.json'), JSON.stringify({ filesToCopy: ['copy.txt'] }));
+    const { path: worktree } = await create();
+    await fs.unlink(path.join(worktree, 'copy.txt'));
+    await fs.symlink('tracked.txt', path.join(worktree, 'copy.txt'));
+    expect((await manager.inspectWorktree(worktree)).uncommitted).toEqual(['copy.txt']);
+    await manager.processArchivedWorktree({ path: worktree, workbenchId: 'session-1' }, async () => {});
+    expect(await fs.readFile(path.join(worktree, 'tracked.txt'), 'utf8')).toBe('initial\n');
+  });
+
   test('a clean archive removes the worktree and keeps the branch and its commits', async () => {
     const { path: worktree, branch } = await create();
     const head = await commitOn(worktree, 'work.txt', 'work', 'Work');

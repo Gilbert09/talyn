@@ -14,6 +14,8 @@ const bridge = {
   inspectWorktree: jest.fn<Promise<LocalWorktreeStatus>, [string]>(),
   removeWorktree: jest.fn(async (_input: { path: string; workbenchId: string; force?: boolean }) => {}),
   restoreWorktree: jest.fn(),
+  takeOverWorktree: jest.fn(),
+  repoPaths: { get: jest.fn(async () => ({})), detect: jest.fn(async () => ({})) },
   stopWorkbench: jest.fn(async () => {}),
   preview: { stop: jest.fn(async () => {}) },
 };
@@ -24,7 +26,7 @@ jest.mock('../renderer/lib/workbenchBridge', () => ({
   getDeviceId: () => 'dev1',
 }));
 jest.mock('../renderer/lib/api', () => ({
-  api: { workbenches: { archive: jest.fn(), restore: jest.fn() } },
+  api: { workbenches: { archive: jest.fn(), restore: jest.fn(), update: jest.fn() } },
 }));
 jest.mock('../renderer/lib/coderPreview', () => ({ stopCoderPreview: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
@@ -58,11 +60,15 @@ const status = (over: Partial<LocalWorktreeStatus> = {}): LocalWorktreeStatus =>
 
 const archive = api.workbenches.archive as jest.Mock;
 const restore = api.workbenches.restore as jest.Mock;
+const update = api.workbenches.update as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
   archive.mockResolvedValue({ ...WB, status: 'archived', archivedAt: '2026-11-01T00:00:00Z' });
   restore.mockResolvedValue(WB);
+  update.mockResolvedValue(WB);
+  bridge.repoPaths.get.mockResolvedValue({});
+  bridge.repoPaths.detect.mockResolvedValue({});
 });
 afterEach(cleanup);
 
@@ -187,10 +193,35 @@ describe('restoreWorkbench', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not restore the session', message));
   });
 
-  it('refuses a local session that lives on another computer', async () => {
-    expect(await restoreWorkbench({ ...archived, deviceId: 'dev2' })).toBeNull();
+  it('restores read-only when this computer has no checkout', async () => {
+    const foreign = { ...archived, deviceId: 'dev2', status: 'ready', archivedAt: null } as Workbench;
+    restore.mockResolvedValueOnce(foreign);
+    expect(await restoreWorkbench({ ...archived, deviceId: 'dev2' })).toEqual(foreign);
     expect(bridge.restoreWorktree).not.toHaveBeenCalled();
-    expect(restore).not.toHaveBeenCalled();
+    expect(bridge.takeOverWorktree).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalledWith('wb1');
+  });
+
+  it('takes over a remote branch before restoring the session', async () => {
+    bridge.repoPaths.get.mockResolvedValue({ 'owner/repo': '/checkout' });
+    bridge.takeOverWorktree.mockResolvedValue({ ok: true, branch: 'tom/lisbon', path: '/managed/repo/lisbon' });
+    await restoreWorkbench({ ...archived, repoFullName: 'owner/repo', deviceId: 'dev2' });
+    expect(bridge.takeOverWorktree).toHaveBeenCalledWith({
+      repoPath: '/checkout', repoFullName: 'owner/repo', workbenchId: 'wb1', name: 'lisbon',
+      branch: 'tom/lisbon', baseBranch: 'main',
+    });
+    expect(update).toHaveBeenCalledWith('wb1', { deviceId: 'dev1', localPath: '/managed/repo/lisbon' });
+    expect(update.mock.invocationCallOrder[0]).toBeLessThan(restore.mock.invocationCallOrder[0]);
+  });
+
+  it('restores read-only when the branch is absent from the remote', async () => {
+    bridge.repoPaths.get.mockResolvedValue({ 'owner/repo': '/checkout' });
+    bridge.takeOverWorktree.mockResolvedValue({ ok: false, reason: 'branch_missing', message: 'Not on remote' });
+    const foreign = { ...archived, deviceId: 'dev2', status: 'ready', archivedAt: null } as Workbench;
+    restore.mockResolvedValueOnce(foreign);
+    expect(await restoreWorkbench({ ...archived, repoFullName: 'owner/repo', deviceId: 'dev2' })).toEqual(foreign);
+    expect(update).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalledWith('wb1');
   });
 
   it('restores a sandbox session through the backend only', async () => {

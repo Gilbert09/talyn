@@ -79,6 +79,8 @@ export interface CoderPreviewState {
 export interface CoderPreviewBridge {
   /** Runs the read-only checks (CLI, sign-in, workspace) and reports the first problem. */
   check(input: CoderPreviewCheckInput): Promise<CoderPreviewState>;
+  openSignIn(sessionId: string): Promise<void>;
+  signIn(sessionId: string, token: string): Promise<void>;
   startWorkspace(sessionId: string): Promise<CoderPreviewState>;
   prepare(input: CoderPreviewInput): Promise<CoderPreviewState>;
   sync(input: { sessionId: string; base: string; patch: string; turn?: number }): Promise<CoderPreviewState>;

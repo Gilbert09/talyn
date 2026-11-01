@@ -18,6 +18,9 @@ import { WorkbenchHeader } from './WorkbenchHeader';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
+import { useRepoPaths } from './new/useRepoPaths';
+import { getDeviceId } from '../../lib/workbenchBridge';
+import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 
 /**
  * One workbench. Centre: the header, the chat tab strip, the transcript and
@@ -27,6 +30,14 @@ import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSel
  */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const ops = useWorkbenchOps(workbench);
+  const repoPaths = useRepoPaths();
+  const foreign = workbench.runtime === 'local' && Boolean(workbench.deviceId) && workbench.deviceId !== getDeviceId();
+  const checkout = foreign ? checkoutFor(repoPaths.paths, workbench.repoFullName) : null;
+  const reason = foreign && repoPaths.ready && !checkout
+    ? `Choose the folder of your ${workbench.repoFullName} checkout to continue this session here.`
+    : ops.unavailable;
+  const viewOps = useMemo(() => reason === ops.unavailable ? ops : { ...ops, unavailable: reason }, [ops, reason]);
+  const [choosing, setChoosing] = useState(false);
   const chat = useSelectedChat(workbench.id);
   const pr = useWorkbenchPr(workbench);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
@@ -37,19 +48,39 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
     wakeWorkbench(workbench.id);
   }, [workbench.id]);
 
+  const chooseFolder = async () => {
+    setChoosing(true);
+    try {
+      const chosen = await repoPaths.pickFolder(workbench.repoFullName);
+      if (chosen) await takeOverLocalWorkbench(workbench, chosen.path);
+    } catch (error) {
+      toast.error('Could not move the session', error instanceof Error ? error.message : undefined);
+    } finally {
+      setChoosing(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
-        <StatusBanner workbench={workbench} ops={ops} />
+        <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={viewOps} />
+        {foreign && reason && (
+          <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={reason}
+            action={!checkout && repoPaths.ready ? (
+              <Button variant="outline" className="h-6 px-2 text-xs" disabled={choosing} onClick={() => void chooseFolder()}>
+                Choose folder
+              </Button>
+            ) : undefined} />
+        )}
+        {!foreign && <StatusBanner workbench={workbench} ops={viewOps} />}
         <ChatTabs workbench={workbench} selected={chat} />
-        <ChatView workbench={workbench} chat={chat} ops={ops} />
+        <ChatView workbench={workbench} chat={chat} ops={viewOps} />
       </div>
       {rightPanelOpen &&
         (isThread(workbench) ? (
           <WorkPanel thread={workbench} />
         ) : (
-          <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
+          <GitPanel workbench={workbench} chat={chat} ops={viewOps} pr={pr} />
         ))}
     </div>
   );

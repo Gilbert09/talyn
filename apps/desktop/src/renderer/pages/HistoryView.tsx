@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Archive, ArrowRight, Cloud, Laptop, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react';
-import { workbenchDisplayName, type Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type LocalWorktreeStatus, type Workbench } from '@talyn/shared';
 import { workbenchPlaceLabel } from '../lib/threads';
 import { api } from '../lib/api';
 import { toast } from '../stores/toast';
@@ -10,7 +10,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { PrPill } from '../components/workbench/WorkbenchBadges';
-import { restoreWorkbench } from '../components/workbench/archiveWorkbench';
+import { ownsLocalWorktree, restoreWorkbench } from '../components/workbench/archiveWorkbench';
+import { getWorkbenchBridge } from '../lib/workbenchBridge';
 import { isArchived, useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 
 export function archivedAtOf(wb: Workbench): string {
@@ -127,6 +128,7 @@ export function HistoryView() {
 
 function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [worktreeStatus, setWorktreeStatus] = useState<LocalWorktreeStatus | null>(null);
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   const at = archivedAtOf(workbench);
   const restore = async () => {
@@ -144,6 +146,31 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       toast.error('Could not save the session', err instanceof Error ? err.message : undefined);
     } finally { setBusy(false); }
   };
+  const confirmWorktreeDelete = async () => {
+    const bridge = getWorkbenchBridge();
+    if (!bridge?.inspectWorktree || !workbench.keptWorktree || !ownsLocalWorktree(workbench)) return;
+    setBusy(true);
+    try {
+      const status = await bridge.inspectWorktree(workbench.keptWorktree.path);
+      if (!status.managed || !status.exists) throw new Error('The worktree is no longer available.');
+      setWorktreeStatus(status);
+    } catch (err) {
+      toast.error('Could not check the worktree', err instanceof Error ? err.message : undefined);
+    } finally { setBusy(false); }
+  };
+  const deleteWorktree = async () => {
+    if (!workbench.keptWorktree || !ownsLocalWorktree(workbench)) return;
+    const bridge = getWorkbenchBridge();
+    if (!bridge) return;
+    setBusy(true);
+    try {
+      await bridge.removeWorktree({ path: workbench.keptWorktree.path, workbenchId: workbench.id, force: true });
+      useWorkbenchStore.getState().upsertWorkbench({ ...workbench, keptWorktree: null });
+      setWorktreeStatus(null);
+    } catch (err) {
+      toast.error('Could not delete the worktree', err instanceof Error ? err.message : undefined);
+    } finally { setBusy(false); }
+  };
   return (
     <li className="flex items-center gap-3 px-3 py-2 text-[13px]">
       <RuntimeIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label={`${workbench.runtime} runtime`} />
@@ -157,6 +184,14 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
           <ArrowRight className="h-3 w-3 shrink-0" />
           <span className="truncate">{workbench.baseBranch}</span>
         </div>
+        {ownsLocalWorktree(workbench) && workbench.keptWorktree && (
+          <div className="mt-1 text-xs text-muted-foreground">
+            Worktree kept: {workbench.keptWorktree.files} uncommitted files in {workbench.keptWorktree.path}
+            <Button variant="outline" size="sm" className="ml-2 h-6 text-xs" disabled={busy} onClick={() => void confirmWorktreeDelete()}>
+              Delete worktree
+            </Button>
+          </div>
+        )}
       </div>
       {workbench.status === 'archiveError' && (
         <div className="max-w-sm text-xs text-destructive">
@@ -188,6 +223,22 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       >
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
+      <ConfirmDialog
+        open={worktreeStatus !== null}
+        title="Delete worktree?"
+        description={
+          <span>
+            The branch stays. The following {worktreeStatus?.uncommittedCount ?? 0} uncommitted files will be lost:
+            {worktreeStatus?.uncommitted.map((file) => <span key={file} className="block font-mono">{file}</span>)}
+            {(worktreeStatus?.uncommittedCount ?? 0) > (worktreeStatus?.uncommitted.length ?? 0) &&
+              <span className="block">and {(worktreeStatus?.uncommittedCount ?? 0) - (worktreeStatus?.uncommitted.length ?? 0)} more</span>}
+          </span>
+        }
+        confirmLabel="Delete worktree and lose changes"
+        busy={busy}
+        onConfirm={() => void deleteWorktree()}
+        onCancel={() => setWorktreeStatus(null)}
+      />
     </li>
   );
 }

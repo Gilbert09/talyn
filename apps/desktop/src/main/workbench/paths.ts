@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import type { KeptWorktree } from '@talyn/shared';
 
 export interface WorkbenchState {
   workbenchId: string;
@@ -9,6 +10,9 @@ export interface WorkbenchState {
   rootPath: string;
   name: string;
   baseBranch: string;
+  copiedFiles?: Record<string, string>;
+  archiveChecked?: boolean;
+  keptWorktree?: KeptWorktree | null;
 }
 
 /** A worktree an archive removed. Its path stays reserved, so a restore can use it again. */

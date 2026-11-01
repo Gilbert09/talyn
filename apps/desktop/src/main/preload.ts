@@ -37,8 +37,10 @@ function subscribe<T>(channel: string, callback: (frame: T) => void): () => void
 const workbench: DesktopWorkbenchBridge = {
   createWorktree: (input) => ipcRenderer.invoke('workbench:create-worktree', input),
   removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
+  processArchivedWorktree: (input) => ipcRenderer.invoke('workbench:process-archived-worktree', input),
   inspectWorktree: (path) => ipcRenderer.invoke('workbench:inspect-worktree', path),
   restoreWorktree: (input) => ipcRenderer.invoke('workbench:restore-worktree', input),
+  takeOverWorktree: (input) => ipcRenderer.invoke('workbench:take-over-worktree', input),
   startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
   cancelTurn: (chatId) => ipcRenderer.invoke('workbench:cancel-turn', chatId),
   runningTurns: () => ipcRenderer.invoke('workbench:running-turns'),
@@ -80,6 +82,8 @@ const workbench: DesktopWorkbenchBridge = {
   },
   coderPreview: {
     check: (input) => ipcRenderer.invoke('workbench:coder-preview:check', input),
+    openSignIn: (id) => ipcRenderer.invoke('workbench:coder-preview:open-sign-in', id),
+    signIn: (id, token) => ipcRenderer.invoke('workbench:coder-preview:sign-in', id, token),
     startWorkspace: (id) => ipcRenderer.invoke('workbench:coder-preview:start-workspace', id),
     prepare: (input) => ipcRenderer.invoke('workbench:coder-preview:prepare', input),
     sync: (input) => ipcRenderer.invoke('workbench:coder-preview:sync', input),

@@ -97,10 +97,17 @@ export function registerWorkbenchIpc(
       trees.removeWorktree(input, stopSession),
   );
   handle('inspect-worktree', (target: string) => trees.inspectWorktree(target));
+  handle('process-archived-worktree', (input: { path: string; workbenchId: string }) =>
+    trees.processArchivedWorktree(input, stopSession));
   handle(
     'restore-worktree',
     (input: Parameters<NonNullable<WorkbenchLocalBridge['restoreWorktree']>>[0]) =>
       trees.restoreWorktree(input),
+  );
+  handle(
+    'take-over-worktree',
+    (input: Parameters<NonNullable<WorkbenchLocalBridge['takeOverWorktree']>>[0]) =>
+      trees.takeOverWorktree(input),
   );
   handle(
     'start-turn',
@@ -210,6 +217,8 @@ export function registerWorkbenchIpc(
   handle('coder:status', (url?: string) => coder.status(url));
   handle('coder:workspaces', () => coder.workspaces());
   handle('coder-preview:check', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['check']>[0]) => coderPreviews.check(input));
+  handle('coder-preview:open-sign-in', (id: string) => coderPreviews.openSignIn(id));
+  handle('coder-preview:sign-in', (id: string, token: string) => coderPreviews.signIn(id, token));
   handle('coder-preview:start-workspace', (id: string) => coderPreviews.startWorkspace(id));
   handle('coder-preview:prepare', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['prepare']>[0]) => coderPreviews.prepare(input));
   handle('coder-preview:sync', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['sync']>[0]) => coderPreviews.sync(input));

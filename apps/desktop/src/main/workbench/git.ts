@@ -1,5 +1,5 @@
 import { execFile, type ChildProcess } from 'child_process';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { TextDecoder } from 'util';
@@ -9,6 +9,7 @@ import {
   resolveStepArgv,
   type GitStep,
   type LocalWorktreeStatus,
+  type LocalArchiveResult,
   type RestoreWorktreeResult,
   type WorkbenchExecResult,
   type WorkbenchLocalBridge,
@@ -16,7 +17,7 @@ import {
 import { processEnv } from './environment';
 import { readConfig } from './config';
 import { WorkbenchPaths } from './paths';
-import { chooseRemote, type GitRemote } from './remotes';
+import { chooseRemote, repoFullNameFromRemote, type GitRemote } from './remotes';
 
 const children = new Set<ChildProcess>();
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -350,6 +351,66 @@ export class WorktreeManager {
 
   constructor(private readonly paths: WorkbenchPaths) {}
 
+  takeOverWorktree(
+    input: Parameters<NonNullable<WorkbenchLocalBridge['takeOverWorktree']>>[0],
+  ): Promise<RestoreWorktreeResult & { path?: string }> {
+    const pending = this.queue.then(() => this.takeOver(input));
+    this.queue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async takeOver(
+    input: Parameters<NonNullable<WorkbenchLocalBridge['takeOverWorktree']>>[0],
+  ): Promise<RestoreWorktreeResult & { path?: string }> {
+    if (!input?.repoPath || !input.workbenchId || !input.repoFullName ||
+        !isValidBranchName(input.branch) || !isValidBranchName(input.baseBranch))
+      throw new Error('A checkout, repository, session id and valid branches are required.');
+    const repository = await fs.realpath(await git(input.repoPath, 'rev-parse', '--show-toplevel'));
+    const repoDir = this.paths.repoDir(repository);
+    const folders = await fs.readdir(repoDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const folder of folders) {
+      const target = path.join(repoDir, folder);
+      const saved = await this.paths.load(target);
+      if (saved?.workbenchId === input.workbenchId && saved.rootPath === repository && await isDirectory(target)) {
+        await this.paths.assertManagedPath(target);
+        if (await git(target, 'branch', '--show-current') === input.branch)
+          return { ok: true, branch: input.branch, path: target };
+      }
+    }
+    const remotes = await listRemotes(repository);
+    const named = remotes.filter((remote) => repoFullNameFromRemote(remote.url)?.toLowerCase() === input.repoFullName.toLowerCase());
+    const remote = chooseRemote(remotes, input.repoFullName);
+    if (!remote || (remotes.some((item) => repoFullNameFromRemote(item.url)) && named.length === 0))
+      return { ok: false, reason: 'branch_missing', message: 'This checkout has no remote for the session repository.' };
+    const branchRef = `refs/heads/${input.branch}`;
+    const advertised = await exec(repository, [{ argv: ['git', 'ls-remote', '--exit-code', '--heads', remote, branchRef] }]);
+    if (advertised.exitCode === 2 || !advertised.stdout.trim() && advertised.exitCode === 0)
+      return { ok: false, reason: 'branch_missing', message: `The branch ${input.branch} is not on the remote.` };
+    if (advertised.exitCode !== 0) throw new Error(advertised.stderr || 'Could not check the remote branch.');
+    const remoteSha = advertised.stdout.trim().split(/\s+/)[0];
+    if (await hasRef(repository, branchRef)) {
+      const localSha = await git(repository, 'rev-parse', branchRef);
+      if (localSha !== remoteSha) {
+        const ancestor = await exec(repository, [{ argv: ['git', 'merge-base', '--is-ancestor', localSha, remoteSha] }]);
+        if (ancestor.exitCode !== 0)
+          return { ok: false, reason: 'branch_busy', message: `The local branch ${input.branch} has different commits. Move or rename it before taking over.` };
+      }
+    }
+    const made = await this.create({
+      repoPath: repository,
+      repoFullName: input.repoFullName,
+      workbenchId: input.workbenchId,
+      name: input.name,
+      branch: input.branch,
+      baseBranch: input.baseBranch,
+      newBranch: false,
+    });
+    return { ok: true, branch: made.branch, path: made.path };
+  }
+
   createWorktree(
     input: Parameters<WorkbenchLocalBridge['createWorktree']>[0],
   ): Promise<{ path: string; branch: string; notice?: string }> {
@@ -460,13 +521,14 @@ export class WorktreeManager {
       }
       if (!content.split(/\r?\n/).includes('.context/'))
         await fs.appendFile(exclude, '\n.context/\n');
-      if (source) await copyLocalFiles(source, target);
+      const copiedFiles = source ? await copyLocalFiles(source, target) : {};
       await this.paths.save({
         workbenchId: input.workbenchId,
         path: target,
         rootPath: repository,
         name: input.name,
         baseBranch: input.baseBranch,
+        copiedFiles,
       });
       return { path: target, branch, ...(notice ? { notice } : {}) };
     } catch (error) {
@@ -492,7 +554,7 @@ export class WorktreeManager {
       { argv: ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'] },
     ]);
     if (status.exitCode !== 0) throw new Error(status.stderr || 'git status failed');
-    const files = parsePorcelainPaths(status.stdout);
+    const files = await this.changedFiles(target, state.copiedFiles ?? {}, parsePorcelainEntries(status.stdout));
     const branch = await exec(target, [{ argv: ['git', 'branch', '--show-current'] }]);
     let unpushed: number | null = null;
     if ((await listRemotes(target)).length) {
@@ -509,6 +571,73 @@ export class WorktreeManager {
       uncommittedCount: files.length,
       unpushed,
     };
+  }
+
+  private async changedFiles(
+    target: string,
+    copied: Record<string, string>,
+    entries: Array<{ file: string; status: string }>,
+  ): Promise<string[]> {
+    const changed: string[] = [];
+    for (const { file, status } of entries) {
+      if (status.includes('R') || status.includes('C')) {
+        changed.push(file);
+        continue;
+      }
+      const expected = Object.prototype.hasOwnProperty.call(copied, file) ? copied[file] : undefined;
+      if (expected) {
+        try {
+          const actual = await copiedFileHash(target, file);
+          if (actual === expected) continue;
+        } catch {
+          // A missing file or an unsafe link remains an uncommitted change.
+        }
+      }
+      changed.push(file);
+    }
+    return changed;
+  }
+
+  processArchivedWorktree(
+    input: { path: string; workbenchId: string },
+    stop: (workbenchId: string) => Promise<void>,
+  ): Promise<LocalArchiveResult> {
+    const pending = this.queue.then(() => this.processArchive(input, stop));
+    this.queue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async processArchive(
+    input: { path: string; workbenchId: string },
+    stop: (workbenchId: string) => Promise<void>,
+  ): Promise<LocalArchiveResult> {
+    if (typeof input?.workbenchId !== 'string' || !input.workbenchId)
+      throw new Error('A session id is required.');
+    const state = await this.paths.load(input.path);
+    if (!state) {
+      const archived = await this.paths.loadArchived(input.path);
+      return { keptWorktree: archived?.keptWorktree ?? null };
+    }
+    await this.paths.assertManagedPath(input.path);
+    if (state.archiveChecked) return { keptWorktree: state.keptWorktree ?? null };
+    await stop(input.workbenchId);
+    const status = await this.inspectWorktree(input.path);
+    if (!status.exists) {
+      await this.remove(input);
+      return { keptWorktree: null };
+    }
+    if (status.uncommittedCount > 0) {
+      const keptWorktree = {
+        reason: 'uncommitted' as const,
+        files: status.uncommittedCount,
+        path: input.path,
+        names: status.uncommitted,
+      };
+      await this.paths.save({ ...state, archiveChecked: true, keptWorktree });
+      return { keptWorktree };
+    }
+    await this.remove(input);
+    return { keptWorktree: null };
   }
 
   /**
@@ -547,6 +676,7 @@ export class WorktreeManager {
         throw new Error(
           'The worktree has uncommitted changes, so Talyn kept it. Archive the session again to see them.',
         );
+      if (input.force !== true) await this.removeUnchangedCopies(input.path, state.copiedFiles ?? {});
       await git(
         state.rootPath,
         'worktree',
@@ -559,7 +689,28 @@ export class WorktreeManager {
     await exec(state.rootPath, [
       { argv: ['git', 'worktree', 'prune'], allowFailure: true },
     ]);
-    await this.paths.archive({ ...state, workbenchId: input.workbenchId, branch });
+    await this.paths.archive({ ...state, workbenchId: input.workbenchId, branch, archiveChecked: true, keptWorktree: null });
+  }
+
+  private async removeUnchangedCopies(target: string, copied: Record<string, string>): Promise<void> {
+    const status = await exec(target, [
+      { argv: ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'] },
+    ]);
+    if (status.exitCode !== 0) throw new Error(status.stderr || 'git status failed');
+    for (const token of status.stdout.split('\0')) {
+      if (token.length < 4 || token.slice(0, 2).includes('R') || token.slice(0, 2).includes('C')) continue;
+      const relative = token.slice(3);
+      const expected = Object.prototype.hasOwnProperty.call(copied, relative) ? copied[relative] : undefined;
+      if (!expected) continue;
+      const file = relativePath(target, relative);
+      const actual = await copiedFileHash(target, relative);
+      if (actual !== expected) throw new Error('A copied file changed after the worktree check.');
+      if (token.startsWith('?? ')) await fs.unlink(file);
+      else if (token[0] === 'A') {
+        await git(target, 'reset', '--', relative);
+        await fs.unlink(file);
+      } else await git(target, 'restore', '--source=HEAD', '--staged', '--worktree', '--', relative);
+    }
   }
 
   /** Restore: the worktree again, at the same path, from the session's branch. */
@@ -653,20 +804,29 @@ export class WorktreeManager {
       await git(repository, 'worktree', 'add', '--no-track', '-b', branch, '--', input.path, from);
     else await git(repository, 'worktree', 'add', '--', input.path, branch);
     // The env files were in the folder the archive removed.
-    if (!isBareClone(repository, input.path))
-      await copyLocalFiles(repository, input.path).catch((error) =>
-        console.warn('[workbench] restoring local files failed:', error),
-      );
+    const copiedFiles = !isBareClone(repository, input.path)
+      ? await copyLocalFiles(repository, input.path).catch((error) => {
+        console.warn('[workbench] restoring local files failed:', error);
+        return {};
+      })
+      : {};
     await this.paths.save({
       workbenchId: input.workbenchId,
       path: input.path,
       rootPath: repository,
       name: archived.name,
       baseBranch: archived.baseBranch,
+      copiedFiles,
     });
     await this.paths.forgetArchived(input.path);
     return { ok: true, branch };
   }
+}
+
+async function copiedFileHash(root: string, relative: string): Promise<string> {
+  const file = relativePath(root, relative);
+  if (!(await fs.lstat(file)).isFile()) throw new Error('A copied file is no longer a regular file.');
+  return createHash('sha256').update(await fs.readFile(await safeFilePath(root, relative))).digest('hex');
 }
 
 async function firstAsync<T>(
@@ -702,13 +862,18 @@ async function isDirectory(target: string): Promise<boolean> {
 
 /** The paths `git status --porcelain=v1 -z` lists. A rename's old path is not counted. */
 export function parsePorcelainPaths(stdout: string): string[] {
+  return parsePorcelainEntries(stdout).map(({ file }) => file);
+}
+
+function parsePorcelainEntries(stdout: string): Array<{ file: string; status: string }> {
   const tokens = stdout.split('\0');
-  const files: string[] = [];
+  const files: Array<{ file: string; status: string }> = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (token.length < 4) continue;
-    files.push(token.slice(3));
-    if (token[0] === 'R' || token[0] === 'C') i++;
+    const status = token.slice(0, 2);
+    files.push({ file: token.slice(3), status });
+    if (status.includes('R') || status.includes('C')) i++;
   }
   return files;
 }
@@ -754,8 +919,9 @@ async function isLinkedWorktree(
 }
 
 /** Ignored env files and `filesToCopy`, from the person's checkout into a worktree. */
-async function copyLocalFiles(source: string, target: string): Promise<void> {
+async function copyLocalFiles(source: string, target: string): Promise<Record<string, string>> {
   const config = await readConfig(source);
+  const copied: Record<string, string> = {};
   // Only an env file git ignores: one it does not ignore shows up as a
   // new file in the session, and Create PR (`git add -A`) would push it.
   const envFiles: string[] = [];
@@ -797,5 +963,10 @@ async function copyLocalFiles(source: string, target: string): Promise<void> {
     // Remove a destination symlink before copying secrets into the worktree.
     await fs.rm(destination, { force: true });
     await fs.copyFile(from, destination);
+    if (config.filesToCopy.includes(relative)) {
+      const normalized = path.relative(target, destination).split(path.sep).join('/');
+      copied[normalized] = createHash('sha256').update(await fs.readFile(destination)).digest('hex');
+    }
   }
+  return copied;
 }
