@@ -524,7 +524,8 @@ describe('workbench routes', () => {
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
-      expect(fleet.execs.some((e) => e.script.includes('.claude/rules') || e.script.includes('AGENTS.md'))).toBe(false);
+      // The Talyn briefing (rules/talyn.md, the talyn:briefing block) rides the skill pack. The instruction sync writes neither of these.
+      expect(fleet.execs.some((e) => e.script.includes('rules/talyn-') || e.script.includes('talyn:instructions'))).toBe(false);
     });
 
     it('runs claude as a sandbox turn: checkpoint, fresh credentials, then the CLI', async () => {
