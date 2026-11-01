@@ -70,7 +70,7 @@ const toolsByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 describe('session skill pack', () => {
   describe('the files', () => {
-    it('ships the eight skills, in the order the prompt names them', () => {
+    it('ships the nine skills, in the order the prompt names them', () => {
       expect([...TALYN_SKILL_PACK]).toEqual([
         'talyn-multi-repo',
         'talyn-delegate',
@@ -80,6 +80,7 @@ describe('session skill pack', () => {
         'talyn-wrap-up',
         'talyn-memory',
         'talyn-thread',
+        'talyn-speed',
       ]);
       expect(readSkillPack().map((s) => s.name)).toEqual([...TALYN_SKILL_PACK]);
     });
@@ -175,6 +176,25 @@ describe('session skill pack', () => {
       for (const tool of ['talyn_list_accounts', 'talyn_set_session_account', 'talyn_send_session_message']) expect(thread).toContain(tool);
       expect(thread).toContain('Do not wait and retry on the same account.');
       expect(TALYN_THREAD_NOTE).toContain('`talyn-thread`');
+      // Speed: the skill and the briefing give the same rules for waits, tests and a bigger box.
+      const speed = skillText('talyn-speed');
+      for (const text of [speed, TALYN_BRIEFING]) {
+        expect(text).toContain('talyn_resize_session');
+        expect(text).toContain('60 seconds or less');
+        expect(text).toContain('cargo binstall');
+        expect(text).toContain('Never `sleep` for minutes');
+      }
+    });
+
+    it('the briefing has a short speed section that names no tool Talyn lacks', () => {
+      const section = TALYN_BRIEFING.split('## Speed\n')[1]?.split('\n## ')[0] ?? '';
+      expect(section).not.toBe('');
+      expect(section.trim().split('\n').length).toBeLessThanOrEqual(8);
+      expect(section).toContain('memory');
+      expect(section).toContain('`talyn-speed`');
+      // The setup-step tool may not exist yet: the line names no tool, so it is true either way.
+      expect(section).toMatch(/When Talyn gives you a tool that records setup steps/);
+      expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_resize_session']);
     });
   });
 

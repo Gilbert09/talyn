@@ -52,6 +52,7 @@ export const TALYN_SKILL_PACK = [
   'talyn-wrap-up',
   'talyn-memory',
   'talyn-thread',
+  'talyn-speed',
 ] as const;
 
 export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
@@ -59,8 +60,9 @@ export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 /** Added to {@link TALYN_TOOLS_NOTE} when the box has the skill pack. */
 export const TALYN_SKILLS_NOTE =
   'Talyn installed the skills `talyn-multi-repo`, `talyn-delegate`, `talyn-ci-triage`, `talyn-ship-pr`, ' +
-  '`talyn-review-loop`, `talyn-wrap-up`, `talyn-memory` and `talyn-thread`: use them for other repositories, child sessions, ' +
-  'failing CI, the pull request, review feedback, ending the session, saving what you learn and running a thread.';
+  '`talyn-review-loop`, `talyn-wrap-up`, `talyn-memory`, `talyn-thread` and `talyn-speed`: use them for other repositories, ' +
+  'child sessions, failing CI, the pull request, review feedback, ending the session, saving what you learn, running a thread, ' +
+  'and slow setups, builds and tests.';
 
 /** Told to every turn of a thread: a conversation with no repository that starts sessions. */
 export const TALYN_THREAD_NOTE =
