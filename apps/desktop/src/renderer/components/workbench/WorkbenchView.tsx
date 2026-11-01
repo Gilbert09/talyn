@@ -87,6 +87,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
             loading={state.loading}
             error={state.error}
             ops={ops}
+            canRetry={queued === 0 && workbench.status !== 'error' && workbench.sandboxState !== 'error'}
             emptyHint={startingHint}
             older={{
               hasOlder: state.hasOlder,

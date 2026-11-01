@@ -1,10 +1,11 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
+import { toast } from '../renderer/stores/toast';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
@@ -139,6 +140,81 @@ it.each(['The agent stopped unexpectedly.', 'The tool connection failed.'])('sho
   }];
   render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
   expect(screen.getByText(message)).toBeInTheDocument();
+});
+
+const errorResult = (seq: number, turn: number, result = 'API 429'): WorkbenchEvent => ({
+  chatId: 'c1', seq, turn,
+  event: { seq, type: 'result', is_error: true, result, subtype: 'error_during_execution' } as AgentEvent,
+});
+
+const retryButton = () => document.querySelector('[data-attr="turn-retry"]') as HTMLButtonElement | null;
+
+it('shows Retry under only the last error result of an idle chat', () => {
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, 'old'), userEvent(3, 2), errorResult(4, 2)]}
+    loading={false} error={null} ops={ops} />);
+  expect(screen.getAllByText('Ended with error')).toHaveLength(2);
+  expect(document.querySelectorAll('[data-attr="turn-retry"]')).toHaveLength(1);
+  expect(retryButton()?.previousElementSibling).toHaveTextContent('API 429');
+});
+
+it.each([
+  ['a running chat', { status: 'running' } as Partial<WorkbenchChat>, undefined],
+  ['a queued message', { queuedMessages: [{ id: 'q1' }] } as unknown as Partial<WorkbenchChat>, undefined],
+  ['a failed session', {}, false],
+])('hides Retry for %s', (_name, patch, canRetry) => {
+  render(<WorkbenchTranscript chat={{ ...chat, ...patch }} events={[userEvent(1, 1), errorResult(2, 1)]}
+    loading={false} error={null} ops={ops} canRetry={canRetry} />);
+  expect(retryButton()).not.toBeInTheDocument();
+});
+
+it('hides Retry when a later turn followed the error', () => {
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1), userEvent(3, 2)]}
+    loading={false} error={null} ops={ops} />);
+  expect(retryButton()).not.toBeInTheDocument();
+});
+
+it('hides Retry for a cancelled turn', () => {
+  const cancelled = { ...errorResult(2, 1), event: { ...errorResult(2, 1).event, subtype: 'cancelled' } as AgentEvent };
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), cancelled]}
+    loading={false} error={null} ops={ops} />);
+  expect(retryButton()).not.toBeInTheDocument();
+});
+
+it('does not add Retry to a thread session failure card', () => {
+  const threadFailure: WorkbenchEvent = {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'talyn_thread', action: 'session_finished', sessionId: 's1', name: 'Fix', repo: 'owner/repo', status: 'error' } as AgentEvent,
+  };
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), threadFailure]}
+    loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(/stopped with an error/)).toBeInTheDocument();
+  expect(retryButton()).not.toBeInTheDocument();
+});
+
+it('sends the retry message once and disables Retry while sending', async () => {
+  let resolveSend!: (value: { queued: boolean }) => void;
+  const send = jest.fn(() => new Promise<{ queued: boolean }>((resolve) => { resolveSend = resolve; }));
+  const reason = `  ${'x'.repeat(310)}  `;
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, reason)]}
+    loading={false} error={null} ops={{ ...ops, send }} />);
+  fireEvent.click(retryButton()!);
+  expect(retryButton()).toBeDisabled();
+  fireEvent.click(retryButton()!);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledWith(chat, { text: `Continue from where you stopped. The last turn ended with an error: ${'x'.repeat(300)}.` });
+  await act(async () => resolveSend({ queued: false }));
+  await waitFor(() => expect(retryButton()).not.toBeDisabled());
+});
+
+it('shows a toast when Retry fails', async () => {
+  const errorToast = jest.spyOn(toast, 'error').mockImplementation(() => 'toast');
+  const send = jest.fn().mockRejectedValue(new Error('offline'));
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1)]}
+    loading={false} error={null} ops={{ ...ops, send }} />);
+  fireEvent.click(retryButton()!);
+  await waitFor(() => expect(errorToast).toHaveBeenCalledWith('Could not retry the turn', 'offline'));
+  expect(retryButton()).not.toBeDisabled();
+  errorToast.mockRestore();
 });
 
 it.each(['[Request interrupted by user]', '[Request interrupted by user for tool use]'])(

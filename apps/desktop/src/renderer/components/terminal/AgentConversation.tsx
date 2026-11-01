@@ -129,12 +129,14 @@ export function AgentBlocks({
   envName,
   scopeId,
   hideCompletedResults = false,
+  retryResult,
 }: {
   events: AgentEvent[];
   envName?: string;
   scopeId?: string;
   /** Drop the footer of a turn that ended well; the caller shows the totals once. */
   hideCompletedResults?: boolean;
+  retryResult?: { key: string; action: React.ReactNode };
 }) {
   const blocks = useMemo(() => {
     const all = groupToolRuns(mergeToolBlocks(buildBlocks(events)));
@@ -144,13 +146,10 @@ export function AgentBlocks({
   return (
     <>
       {blocks.map((block) => (
-        <BlockView
-          key={`${scopeId ?? ''}:${block.key}`}
-          block={block}
-          envName={envName}
-          scopeId={scopeId}
-          skills={skills}
-        />
+        <React.Fragment key={`${scopeId ?? ''}:${block.key}`}>
+          <BlockView block={block} envName={envName} scopeId={scopeId} skills={skills} />
+          {block.kind === 'result' && block.key === retryResult?.key && retryResult.action}
+        </React.Fragment>
       ))}
     </>
   );

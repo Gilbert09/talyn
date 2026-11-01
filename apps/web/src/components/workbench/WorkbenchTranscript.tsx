@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { History, Loader2 } from 'lucide-react';
-import { findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { History, Loader2, RotateCcw } from 'lucide-react';
+import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { renderMarkdownish } from '../../lib/markdown';
 import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
@@ -23,6 +23,7 @@ export function WorkbenchTranscript({
   ops,
   emptyHint,
   older = NO_OLDER,
+  canRetry = true,
 }: {
   chat: WorkbenchChat;
   events: WorkbenchEvent[];
@@ -32,6 +33,7 @@ export function WorkbenchTranscript({
   emptyHint?: React.ReactNode;
   /** Paging backwards: the transcript holds the newest events and loads older ones as it scrolls up. */
   older?: OlderHistory;
+  canRetry?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
@@ -104,6 +106,7 @@ export function WorkbenchTranscript({
           {turns.map((turn, i) => {
             const plan = plans[i];
             const last = i === turns.length - 1;
+            const result = last ? buildBlocks(turn.events).filter((block) => block.kind === 'result').at(-1) : undefined;
             const planState: PlanCardState = last
               ? 'open'
               : turns[i + 1].userText === PLAN_APPROVED_MESSAGE
@@ -113,8 +116,12 @@ export function WorkbenchTranscript({
               <TurnView
                 key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
                 chatId={chat.id}
+                chat={chat}
                 turn={turn}
                 ops={ops}
+                retryResult={canRetry && !loading && !error && (chat.status === 'idle' || chat.status === 'error') && !chat.queuedMessages?.length && result?.kind === 'result' && result.isError && !turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled')
+                  ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.' }
+                  : undefined}
                 canRevert={!running && !ops.unavailable && turn.userText !== null}
                 plan={
                   plan ? (
@@ -245,14 +252,18 @@ function ChatTotalsFooter({ totals, partial }: { totals: ReturnType<typeof chatT
 
 const TurnView = React.memo(function TurnView({
   chatId,
+  chat,
   turn,
   ops,
+  retryResult,
   canRevert,
   plan,
 }: {
   chatId: string;
+  chat: WorkbenchChat;
   turn: TranscriptTurn;
   ops: WorkbenchOps;
+  retryResult?: { key: string; reason: string };
   canRevert: boolean;
   /** The turn's plan card, drawn after its blocks. */
   plan: React.ReactNode;
@@ -270,12 +281,38 @@ const TurnView = React.memo(function TurnView({
         />
       )}
       {turn.events.length > 0 && (
-        <AgentBlocks events={turn.events} scopeId={`${chatId}:${turn.turn}`} hideCompletedResults />
+        <AgentBlocks
+          events={turn.events}
+          scopeId={`${chatId}:${turn.turn}`}
+          hideCompletedResults
+          retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} /> } : undefined}
+        />
       )}
       {plan}
     </div>
   );
 });
+
+function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string }) {
+  const [sending, setSending] = useState(false);
+  const send = async () => {
+    if (sending) return;
+    setSending(true);
+    try {
+      await ops.send(chat, { text: `Continue from where you stopped. The last turn ended with an error: ${reason.trim().slice(0, 300)}.` });
+    } catch (err) {
+      toast.error('Could not retry the turn', err instanceof Error ? err.message : undefined);
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
+      className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
+      {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Retry
+    </button>
+  );
+}
 
 function UserMessage({
   chatId,
