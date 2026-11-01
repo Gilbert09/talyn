@@ -181,6 +181,8 @@ export interface Workbench {
   deviceId: string | null;
   /** Local runtime only: the worktree's absolute path on that device. */
   localPath: string | null;
+  /** Desktop-only result of an automatic local archive. */
+  keptWorktree?: KeptWorktree | null;
   /** Sandbox runtime only: the fleet sandbox id. */
   sandboxId: string | null;
   sandboxState: WorkbenchSandboxState;
@@ -438,6 +440,9 @@ export type ConfirmWorkbenchBranchNameResult =
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
   branch?: string;
+  /** Both fields identify a local session moved to this device. */
+  deviceId?: string;
+  localPath?: string;
   /** A rename. Also sets `title` to the new name, so a generated title cannot replace it. */
   name?: string;
   /** A display title a person chose. Null or blank clears it. */
@@ -647,6 +652,17 @@ export interface LocalWorktreeStatus {
   unpushed: number | null;
 }
 
+export interface KeptWorktree {
+  reason: 'uncommitted';
+  files: number;
+  path: string;
+  names: string[];
+}
+
+export interface LocalArchiveResult {
+  keptWorktree: KeptWorktree | null;
+}
+
 export const LOCAL_WORKTREE_STATUS_FILES_MAX = 20;
 
 export type RestoreWorktreeResult =
@@ -692,6 +708,8 @@ export interface WorkbenchLocalBridge {
    * Talyn made under its own worktree root is ever removed.
    */
   removeWorktree(input: { path: string; workbenchId: string; force?: boolean }): Promise<void>;
+  /** Finish a backend archive once. The result is saved on this computer. */
+  processArchivedWorktree?(input: { path: string; workbenchId: string }): Promise<LocalArchiveResult>;
   /**
    * What an archive would lose: the worktree's uncommitted changes and its
    * commits that no remote has. Optional: an older main process does not have it.
@@ -702,6 +720,7 @@ export interface WorkbenchLocalBridge {
    * path. Optional: an older main process does not have it.
    */
   restoreWorktree?(input: { path: string; workbenchId: string; branch: string }): Promise<RestoreWorktreeResult>;
+  takeOverWorktree?(input: { repoPath: string; repoFullName: string; workbenchId: string; name: string; branch: string; baseBranch: string }): Promise<RestoreWorktreeResult & { path?: string }>;
   startTurn(input: {
     workbenchId: string;
     chatId: string;

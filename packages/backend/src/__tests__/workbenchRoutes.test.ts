@@ -1412,6 +1412,22 @@ describe('workbench routes', () => {
   });
 
   describe('a local workbench', () => {
+    it('claims a restored session for another computer and records a transcript note', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      expect((await call('POST', `/workbenches/${wb.id}/archive`)).status).toBe(200);
+      const moved = await call('PATCH', `/workbenches/${wb.id}`, {
+        deviceId: 'dev-2', localPath: '/managed/repo/lisbon',
+      });
+      expect(moved.body.data).toMatchObject({ deviceId: 'dev-2', localPath: '/managed/repo/lisbon' });
+      expect((await call('POST', `/workbenches/${wb.id}/restore`)).body.data).toMatchObject({
+        status: 'ready', deviceId: 'dev-2', localPath: '/managed/repo/lisbon',
+      });
+      const events = (await call('GET', `/workbenches/chats/${chatId}/events`)).body.data.events;
+      expect(events.at(-1).event).toMatchObject({ type: 'system', subtype: 'local_session_moved',
+        text: 'Moved to this computer. Commits that were not pushed from the other computer are not here.' });
+    });
+
     it('is ready at once and never touches the fleet', async () => {
       const wb = await createLocalWorkbench();
       expect(wb).toMatchObject({ runtime: 'local', status: 'ready', sandboxId: null, sandboxState: 'none', deviceId: 'dev-1', localPath: '/tmp/wt' });
