@@ -4,7 +4,7 @@ import type { Workbench } from '@talyn/shared';
 import { useSessionPreview } from '../../hooks/useSessionPreview';
 import { api } from '../../lib/api';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { startCoderPreview } from '../../lib/coderPreview';
+import { errorText, startCoderPreview } from '../../lib/coderPreview';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { toast } from '../../stores/toast';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -32,7 +32,7 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
     useWorkbenchStore.getState().setTerminalOpen(true);
     setCoderBusy(true);
     try { await startCoderPreview(workbench, config); }
-    catch (error) { toast.error('Could not start the Coder preview', error instanceof Error ? error.message : undefined); }
+    catch (error) { toast.error('Could not start the Coder preview', errorText(error)); }
     finally { setCoderBusy(false); }
   };
   if (config?.target === 'coder') return (
@@ -41,6 +41,7 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
       className="app-region-no-drag shrink-0 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
       disabled={coderBusy || Boolean(ops.unavailable)}
       onClick={() => void startCoder()}
+      title={ops.unavailable ?? (coderBusy ? 'The Coder preview is starting. The Run tab shows each step.' : 'Run this session in your Coder workspace. The Run tab shows each step.')}
     >Preview in Coder</button>
   );
   return <>{ports.map(({ port, label }) => {
