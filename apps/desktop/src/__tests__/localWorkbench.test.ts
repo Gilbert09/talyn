@@ -81,6 +81,10 @@ function makeApi() {
         pullRequest: null,
       })
     ),
+    removeQueuedMessage: jest.fn(async (chatId: string, messageId: string) => {
+      const held = useWorkbenchStore.getState().chats.wb1?.find((c) => c.id === chatId) ?? chat({ id: chatId });
+      return { ...held, queuedMessages: held.queuedMessages.filter((m) => m.id !== messageId) };
+    }),
   };
 }
 
@@ -354,6 +358,66 @@ describe('LocalTurnController', () => {
     expect(seqs()).toEqual([]);
   });
 });
+
+describe('LocalTurnController backend queue', () => {
+  const queued = (id: string, text: string) => ({ id, text, queuedAt: '2026-10-13T00:00:00Z' });
+  const owned = { deviceId: () => 'dev1' };
+  const stops: Array<() => void> = [];
+  afterEach(() => stops.splice(0).forEach((stop) => stop()));
+  const own = (extra: Parameters<typeof setup>[1] = owned) => {
+    const made = setup([], extra);
+    stops.push(made.stop);
+    return made;
+  };
+
+  it('runs the first prompt the backend queued when the session was made', async () => {
+    const { bridge, api } = own();
+    useWorkbenchStore.getState().upsertChat(chat({ queuedMessages: [queued('m1', 'fix the login redirect')] }));
+    await waitForCall(bridge.startTurn);
+
+    expect(api.removeQueuedMessage).toHaveBeenCalledWith('c1', 'm1');
+    expect(api.removeQueuedMessage.mock.invocationCallOrder[0]).toBeLessThan(bridge.startTurn.mock.invocationCallOrder[0]);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'c1', turn: 1, prompt: 'fix the login redirect' }));
+    expect(userMessageText(useWorkbenchStore.getState().chatEvents.c1.events[0].event)).toBe('fix the login redirect');
+  });
+
+  it('runs a queue that was already loaded when the controller started', async () => {
+    useWorkbenchStore.setState(initial, true);
+    useWorkbenchStore.getState().upsertWorkbench(WB);
+    useWorkbenchStore.getState().upsertChat(chat({ queuedMessages: [queued('m1', 'first')] }));
+    const { bridge } = makeBridge();
+    const api = makeApi();
+    stops.push(new LocalTurnController({ bridge, api, loadHistory: async () => {}, ...owned, setTimer: () => 0, clearTimer: () => {} }).start());
+    await waitForCall(bridge.startTurn);
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'first' }));
+  });
+
+  it('runs the first message and queues the rest on this computer', async () => {
+    const { bridge } = own();
+    useWorkbenchStore.getState().upsertChat(chat({ queuedMessages: [queued('m1', 'one'), queued('m2', 'two')] }));
+    await waitForCall(bridge.startTurn);
+    await settle();
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect(useWorkbenchStore.getState().localQueues.c1?.map((m) => m.text)).toEqual(['two']);
+  });
+
+  it.each([
+    ['on another computer', { deviceId: () => 'dev2' }, {}],
+    ['archived', owned, { archivedAt: '2026-10-14T00:00:00Z' }],
+  ])('leaves the queue of a session %s alone', async (_name, extra, over) => {
+    const { bridge, api } = own(extra);
+    useWorkbenchStore.getState().upsertWorkbench({ ...WB, ...over });
+    useWorkbenchStore.getState().upsertChat(chat({ queuedMessages: [queued('m1', 'go')] }));
+    await settle();
+    expect(api.removeQueuedMessage).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+  });
+});
+
+async function waitForCall(fn: jest.Mock): Promise<void> {
+  for (let i = 0; i < 50 && fn.mock.calls.length === 0; i++) await settle();
+}
 
 describe('LocalTurnController Create PR', () => {
   const CREATE_PR = { text: 'Create a pull request', intent: 'create_pr' as const };

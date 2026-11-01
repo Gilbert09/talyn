@@ -53,7 +53,7 @@ export const LOCAL_UPLOAD_INTERVAL_MS = 1000;
 export const LOCAL_BRANCH_NAMING_DEADLINE_MS = 60_000;
 
 type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'> &
-  Partial<Pick<typeof api.workbenches, 'update' | 'adoptPullRequest' | 'nameBranch' | 'confirmBranchName'>>;
+  Partial<Pick<typeof api.workbenches, 'update' | 'adoptPullRequest' | 'nameBranch' | 'confirmBranchName' | 'removeQueuedMessage'>>;
 
 export interface LocalControllerDeps {
   bridge: WorkbenchLocalBridge;
@@ -69,6 +69,8 @@ export interface LocalControllerDeps {
   clearTimer?: (handle: unknown) => void;
   /** Overrides {@link LOCAL_BRANCH_NAMING_DEADLINE_MS}, for tests. */
   branchNamingDeadlineMs?: number;
+  /** This computer's id. Defaults to {@link getDeviceId}. */
+  deviceId?: () => string;
 }
 
 interface RunningTurn {
@@ -91,6 +93,8 @@ export class LocalTurnController {
   private pending = new Map<string, WorkbenchEvent[]>();
   private uploadTimer: unknown = null;
   private unsubscribers: Array<() => void> = [];
+  /** Chats whose backend queue this controller is moving to this computer. */
+  private readonly draining = new Set<string>();
 
   constructor(deps: LocalControllerDeps) {
     this.deps = deps;
@@ -99,12 +103,73 @@ export class LocalTurnController {
   /** Subscribe to the bridge's turn and script streams. Returns the teardown. */
   start(): () => void {
     const { bridge } = this.deps;
+    let chats = useWorkbenchStore.getState().chats;
     this.unsubscribers.push(
       bridge.onTurnEvent((frame) => this.handleTurnEvent(frame.chatId, frame.turn, frame.event)),
       bridge.onTurnEnd((frame) => void this.handleTurnEnd(frame.chatId, frame)),
-      bridge.scripts.onFrame((frame) => useWorkbenchStore.getState().appendScriptFrame(frame))
+      bridge.scripts.onFrame((frame) => useWorkbenchStore.getState().appendScriptFrame(frame)),
+      // A chat arrives from a load or a broadcast; one with queued messages runs them here.
+      useWorkbenchStore.subscribe((state) => {
+        if (state.chats === chats) return;
+        chats = state.chats;
+        this.drainBackendQueues();
+      })
     );
+    this.drainBackendQueues();
     return () => this.stop();
+  }
+
+  /** Local sessions whose worktree is on this computer, with their chats. */
+  private ownedChats(): Array<{ workbench: Workbench; chat: WorkbenchChat }> {
+    const deviceId = (this.deps.deviceId ?? getDeviceId)();
+    const { workbenches, chats } = useWorkbenchStore.getState();
+    const owned: Array<{ workbench: Workbench; chat: WorkbenchChat }> = [];
+    for (const workbench of Object.values(workbenches)) {
+      if (workbench.runtime !== 'local' || workbench.deviceId !== deviceId || !workbench.localPath) continue;
+      if (workbench.status === 'archived' || workbench.archivedAt) continue;
+      for (const chat of chats[workbench.id] ?? []) owned.push({ workbench, chat });
+    }
+    return owned;
+  }
+
+  /**
+   * The backend puts a message in a chat's queue when a session is made
+   * with a first prompt, and only a sandbox drains that queue. For a local
+   * chat this computer takes the messages off the backend, then sends them
+   * like any other local message.
+   */
+  drainBackendQueues(): void {
+    for (const { workbench, chat } of this.ownedChats()) {
+      if (!chat.queuedMessages?.length || this.draining.has(chat.id)) continue;
+      void this.drainBackendQueue(workbench, chat);
+    }
+  }
+
+  private async drainBackendQueue(workbench: Workbench, chat: WorkbenchChat): Promise<void> {
+    const remove = this.deps.api.removeQueuedMessage;
+    if (!remove) return;
+    this.draining.add(chat.id);
+    const queued = [...chat.queuedMessages];
+    try {
+      // Off the backend first: a reload must not run a message twice.
+      let latest = chat;
+      for (const message of queued) latest = await remove(chat.id, message.id);
+      useWorkbenchStore.getState().upsertChat(latest);
+      for (const message of queued) {
+        await this.send(workbench, findChat(chat.id) ?? latest, {
+          text: message.text,
+          attachments: message.attachments,
+          planMode: message.planMode,
+          model: message.model,
+          effort: message.effort,
+          intent: message.intent,
+        });
+      }
+    } catch (err) {
+      toast.error('A queued message did not start', err instanceof Error ? err.message : undefined);
+    } finally {
+      this.draining.delete(chat.id);
+    }
   }
 
   stop(): void {
