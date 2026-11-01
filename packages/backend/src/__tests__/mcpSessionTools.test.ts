@@ -119,7 +119,7 @@ describe('session tools', () => {
 
   it('marks every session tool with the workbenches feature', () => {
     const sessions = TOOLS.filter((t) => /^talyn_\w*session/.test(t.name));
-    expect(sessions).toHaveLength(16);
+    expect(sessions).toHaveLength(17);
     for (const t of sessions) expect(t.feature).toBe('workbenches');
   });
 
