@@ -668,16 +668,22 @@ export interface WorkbenchLocalBridge {
    * With `newBranch`, `branch` is only a wish: main adds a suffix when a local or
    * remote branch already has that name, and returns the name it used. An older
    * main process ignores `newBranch` and returns no `branch`.
+   *
+   * Main fetches from the remote whose URL is `repoFullName`, else from the
+   * only remote. With no remote it makes the worktree from the local base
+   * branch, and `notice` says so.
    */
   createWorktree(input: {
     repoPath?: string;
     cloneUrl?: string;
+    /** `owner/name` on GitHub: picks the remote to fetch from. */
+    repoFullName?: string;
     workbenchId: string;
     name: string;
     branch: string;
     baseBranch: string;
     newBranch?: boolean;
-  }): Promise<{ path: string; branch?: string }>;
+  }): Promise<{ path: string; branch?: string; notice?: string }>;
   /**
    * Archive a session's worktree: stop the session's processes (by its
    * `workbenchId`, the session id), then `git worktree remove` and prune.
@@ -782,8 +788,12 @@ export interface WorkbenchLocalBridge {
   onTurnEnd(callback: (frame: { chatId: string; turn: number } & WorkbenchTurnOutcome) => void): () => void;
   /** Absolute path of each CLI on the user's PATH, or null. */
   detectAgents(): Promise<{ claude: string | null; codex: string | null }>;
-  /** Native folder picker. Null when the user cancels. */
-  pickRepoFolder(): Promise<string | null>;
+  /**
+   * The native folder picker; resolves to the repository root, or null when
+   * cancelled. With `expectRepo`, a folder that is not a Git checkout of
+   * that GitHub repository is refused with a clear error.
+   */
+  pickRepoFolder(expectRepo?: string): Promise<string | null>;
   /** What this machine can run. Cached for 30 s in main; `force` bypasses the cache. */
   readiness(force?: boolean): Promise<WorkbenchLocalReadiness>;
   /** Per-machine map of `owner/name` to local checkout path. */

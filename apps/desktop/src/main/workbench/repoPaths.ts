@@ -1,6 +1,9 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { git } from './git';
+import { git, listRemotes } from './git';
+import { repoFullNameFromRemote } from './remotes';
+
+export { repoFullNameFromRemote } from './remotes';
 
 export type RepoPathMap = Record<string, string>;
 interface RepoPathState {
@@ -8,14 +11,28 @@ interface RepoPathState {
   scanRoots: string[];
 }
 
-/** `owner/name` from an https or ssh GitHub remote URL, or null. */
-export function repoFullNameFromRemote(remoteUrl: string): string | null {
-  const match = remoteUrl
-    .trim()
-    .match(
-      /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|git@)github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i,
-    );
-  return match ? `${match[1]}/${match[2]}` : null;
+/** The top of the Git repository at `folder`, or a clear refusal. */
+export async function repositoryRoot(folder: string): Promise<string> {
+  try {
+    // Git prints forward slashes on Windows; store the platform's own form.
+    return path.resolve(await git(folder, 'rev-parse', '--show-toplevel'));
+  } catch {
+    throw new Error('That folder is not a Git repository.');
+  }
+}
+
+/**
+ * Refuse a checkout that is not of `repoFullName`: some remote must point
+ * to it. A fork's checkout passes when its `upstream` does.
+ */
+export async function assertCheckoutOf(root: string, repoFullName: string): Promise<void> {
+  const names = (await listRemotes(root))
+    .sort((a, b) => Number(b.name === 'origin') - Number(a.name === 'origin'))
+    .map((remote) => repoFullNameFromRemote(remote.url));
+  if (names.some((name) => name?.toLowerCase() === repoFullName.toLowerCase())) return;
+  const other = names.find(Boolean);
+  if (other) throw new Error(`That folder is a checkout of ${other}, not ${repoFullName}.`);
+  throw new Error(`That folder has no Git remote for ${repoFullName}.`);
 }
 
 export class RepoPaths {
@@ -78,44 +95,33 @@ export class RepoPaths {
     if (!/^[^/\s]+\/[^/\s]+$/.test(repoFullName))
       throw new Error('Invalid repository name');
     if (!path.isAbsolute(input.path)) throw new Error('The path must be absolute');
-    let root: string;
-    try {
-      // Git prints forward slashes on Windows; store the platform's own form.
-      root = path.resolve(await git(input.path, 'rev-parse', '--show-toplevel'));
-    } catch {
-      throw new Error('That folder is not a Git repository');
-    }
-    let remote: string;
-    try {
-      remote = await git(root, 'remote', 'get-url', 'origin');
-    } catch {
-      remote = '';
-    }
-    const actual = remote ? repoFullNameFromRemote(remote) : null;
-    let matches = actual?.toLowerCase() === repoFullName.toLowerCase();
-    if (!matches) {
-      const remotes = (await git(root, 'remote')).split(/\r?\n/).filter(Boolean);
-      for (const name of remotes) {
-        if (name === 'origin') continue;
-        const url = await git(root, 'remote', 'get-url', name);
-        const candidate = repoFullNameFromRemote(url);
-        if (candidate?.toLowerCase() === repoFullName.toLowerCase()) {
-          matches = true;
-          break;
-        }
-      }
-    }
-    if (!matches) {
-      if (!remote) throw new Error('That repository has no origin or matching remote');
-      throw new Error(
-        `That repository's origin is ${actual ?? remote}, not ${repoFullName}`,
-      );
-    }
+    const root = await repositoryRoot(input.path);
+    await assertCheckoutOf(root, repoFullName);
     return this.mutate(({ paths }) => {
       const key = this.keyFor(paths, repoFullName);
       if (!input.ifMissing || !paths[key]) paths[key] = root;
       return paths;
     });
+  }
+
+  /**
+   * A folder the person picked. With `expectRepo` it must be a checkout of
+   * that repository, or this throws why not. Without it, the folder is
+   * recorded for the GitHub repository its remote names, if any. Returns the
+   * repository root.
+   */
+  async record(folder: string, expectRepo?: string): Promise<string> {
+    const root = await repositoryRoot(folder);
+    if (expectRepo) {
+      await this.set({ repoFullName: expectRepo, path: root });
+      return root;
+    }
+    const remotes = (await listRemotes(root)).sort(
+      (a, b) => Number(b.name === 'origin') - Number(a.name === 'origin'),
+    );
+    const repoFullName = remotes.map((remote) => repoFullNameFromRemote(remote.url)).find(Boolean);
+    if (repoFullName) await this.set({ repoFullName, path: root }).catch(() => undefined);
+    return root;
   }
 
   remove(repoFullName: string): Promise<RepoPathMap> {

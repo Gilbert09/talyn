@@ -68,7 +68,7 @@ const workbench: DesktopWorkbenchBridge = {
   onTurnEvent: (callback) => subscribe('workbench:turn-event', callback),
   onTurnEnd: (callback) => subscribe('workbench:turn-end', callback),
   detectAgents: () => ipcRenderer.invoke('workbench:detect-agents'),
-  pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
+  pickRepoFolder: (expectRepo) => ipcRenderer.invoke('workbench:pick-repo-folder', expectRepo),
   readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
   coder: {
     status: (url) => ipcRenderer.invoke('workbench:coder:status', url),

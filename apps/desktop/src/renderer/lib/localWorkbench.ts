@@ -798,6 +798,7 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
   const created = await bridge.createWorktree({
     repoPath: input.repoPath,
     cloneUrl: input.repoPath ? undefined : `https://github.com/${input.repoFullName}.git`,
+    repoFullName: input.repoFullName,
     workbenchId: newClientId(),
     name,
     branch: wantedBranch,
@@ -807,6 +808,7 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
   });
   const { path } = created;
   const branch = created.branch ?? wantedBranch;
+  if (created.notice) toast.info('Made from your local branch', created.notice);
   return api.workbenches.create({
     workspaceId: input.workspaceId,
     repositoryId: input.repositoryId,

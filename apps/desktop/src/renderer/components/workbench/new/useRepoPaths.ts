@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
+import { bridgeErrorMessage, getWorkbenchBridge } from '../../../lib/workbenchBridge';
 
 export interface RepoPathsState {
   /** `owner/name` → local checkout. Empty outside the desktop app. */
@@ -41,11 +41,18 @@ export function useRepoPaths(): RepoPathsState {
   const pickFolder = useCallback(
     async (expectRepo?: string) => {
       if (!bridge) return null;
-      const path = await bridge.pickRepoFolder();
+      let path: string | null;
+      try {
+        // Main refuses a folder that is not a checkout of `expectRepo`, and says why.
+        path = await bridge.pickRepoFolder(expectRepo);
+      } catch (err) {
+        throw new Error(bridgeErrorMessage(err, 'Could not read that folder.'));
+      }
       if (!path) return null;
       let map = (await bridge.repoPaths?.get().catch(() => null)) ?? {};
-      let repoFullName = Object.keys(map).find((name) => map[name] === path) ?? null;
-      // No GitHub remote the main process could read: trust the person's choice for the repo they picked it for.
+      const names = Object.keys(map).filter((name) => map[name] === path);
+      let repoFullName = names.find((name) => name.toLowerCase() === expectRepo?.toLowerCase()) ?? names[0] ?? null;
+      // An older main process does not record the folder for `expectRepo`. `set` checks it.
       if (!repoFullName && expectRepo && bridge.repoPaths) {
         map = await bridge.repoPaths.set({ repoFullName: expectRepo, path });
         repoFullName = expectRepo;
