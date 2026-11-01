@@ -126,22 +126,11 @@ function ThreadRow({
           >
             <button
               type="button"
-              onClick={onToggle}
-              disabled={!hasChildren}
-              aria-expanded={hasChildren ? expanded : undefined}
-              aria-controls={hasChildren ? `thread-children-${thread.id}` : undefined}
-              aria-label={expanded ? `Hide the sessions of ${name}` : `Show the sessions of ${name}`}
-              className="app-region-no-drag flex h-6 w-5 shrink-0 items-center justify-center pl-1 text-muted-foreground disabled:opacity-0"
-            >
-              <Chevron className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
               onClick={onSelect}
               data-attr="sidebar-thread-row"
               aria-current={selected ? 'page' : undefined}
               title={`${state.label}\n${name}`}
-              className="app-region-no-drag flex min-w-0 flex-1 items-center gap-2 py-1 pr-3 text-left"
+              className={cn('app-region-no-drag flex min-w-0 flex-1 items-center gap-2 py-1 pl-3 text-left', hasChildren ? 'pr-1' : 'pr-3')}
             >
               <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
                 <SessionStateIcon state={state} />
@@ -150,6 +139,17 @@ function ThreadRow({
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-attr="sidebar-thread-summary">
                 {summary}
               </span>
+            </button>
+            <button
+              type="button"
+              onClick={onToggle}
+              disabled={!hasChildren}
+              aria-expanded={hasChildren ? expanded : undefined}
+              aria-controls={hasChildren ? `thread-children-${thread.id}` : undefined}
+              aria-label={expanded ? `Hide the sessions of ${name}` : `Show the sessions of ${name}`}
+              className="app-region-no-drag mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:hidden"
+            >
+              <Chevron className="h-3 w-3" />
             </button>
           </div>
         </ContextMenuTrigger>
