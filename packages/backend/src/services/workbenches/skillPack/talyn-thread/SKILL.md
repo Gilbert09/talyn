@@ -84,6 +84,14 @@ The message names one session. Other sessions may also have changed.
 5. If a session went wrong or asked a question, answer it with `talyn_send_session_message`.
 6. Start the sessions that were waiting for this one.
 
+When a session stopped on a rate limit or a "usage limit" error, the code is not at fault:
+
+1. Call `talyn_list_accounts`. It shows each account's usage, any hold, and the account each session runs on.
+2. If the session's account is limited and another account of the same agent has usage, call `talyn_set_session_account` with that account.
+3. Send the session a message with `talyn_send_session_message` to continue. Talyn also moves a turn to an account with usage when it starts.
+
+Do not wait and retry on the same account.
+
 ## 6. Report
 
 When every session is done, report to the person:
