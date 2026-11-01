@@ -475,6 +475,12 @@ export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
 export type Features = Record<AccountFeatureFlagKey, boolean> & {
   /** Priority access without the export button bundled into older clients. */
   reviewPriorityMode: boolean;
+  /**
+   * Whether this deployment serves hosted preview links (`PREVIEW_BASE_DOMAIN`
+   * is set). Configuration, not a flag: the `workbenches` flag still gates them.
+   * Absent from older backends.
+   */
+  previewLinks?: boolean;
 };
 
 /**

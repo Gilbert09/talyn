@@ -231,6 +231,7 @@ describe('workflow routes', () => {
         workbenches: false,
         trunkMergeEta: false,
         codeReview: true,
+        previewLinks: false,
       });
     });
 
@@ -256,6 +257,7 @@ describe('workflow routes', () => {
         workbenches: false,
         trunkMergeEta: false,
         codeReview: true,
+        previewLinks: false,
       });
     });
   });

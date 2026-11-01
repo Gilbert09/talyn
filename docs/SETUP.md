@@ -1053,6 +1053,15 @@ POSTHOG_HOST=https://us.i.posthog.com
 # user on the API origin. Only ever read from env, never from a request.
 # WEB_APP_URL=https://app.talyn.dev
 #
+# PREVIEW_BASE_DOMAIN: the domain for hosted session previews. A session port
+# gets the host `<random id>-<port>.<domain>`. Unset turns hosted previews off,
+# and the ticket route answers 404 `preview_links_unavailable`. It needs a
+# wildcard DNS record and a wildcard TLS certificate on the backend service.
+# A `*.localhost` value (with a port) works for local dev over http. Never put a
+# preview host in ALLOWED_ORIGINS; the backend ignores one if you do.
+# See docs/WORKBENCHES.md § Previews.
+# PREVIEW_BASE_DOMAIN=preview.talyn.dev
+#
 # TALYN_ALLOW_NULL_ORIGIN_WS: kill switch, defaults ON. The packaged desktop
 # renderer loads from file://, whose WS handshake Chromium reports as the
 # opaque `null`, so the upgrade accepts it. `null` is forgeable by ANY page

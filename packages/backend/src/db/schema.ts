@@ -2416,3 +2416,59 @@ export const workspaceMemories = pgTable(
       .where(sql`${t.forgottenAt} IS NULL`),
   })
 );
+
+/**
+ * Hosted preview links (migration 0098). Pool-only. A host maps a random id to
+ * one session port. Tickets and cookies are stored as SHA-256 hashes. See
+ * `services/preview/previewLinks.ts`.
+ */
+export const workbenchPreviewHosts = pgTable(
+  'workbench_preview_hosts',
+  {
+    id: text('id').primaryKey(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    port: integer('port').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workbenchPortUq: uniqueIndex('uq_workbench_preview_hosts_workbench_port').on(t.workbenchId, t.port),
+  })
+);
+
+export const workbenchPreviewTickets = pgTable(
+  'workbench_preview_tickets',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    hostId: text('host_id')
+      .notNull()
+      .references(() => workbenchPreviewHosts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('idx_workbench_preview_tickets_expires').on(t.expiresAt),
+  })
+);
+
+export const workbenchPreviewSessions = pgTable(
+  'workbench_preview_sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    hostId: text('host_id')
+      .notNull()
+      .references(() => workbenchPreviewHosts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('idx_workbench_preview_sessions_expires').on(t.expiresAt),
+  })
+);

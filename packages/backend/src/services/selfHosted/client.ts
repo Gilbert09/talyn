@@ -1280,14 +1280,15 @@ export class FleetClient {
     });
   }
 
-  openPortWebSocket(id: string, port: number, pathAndQuery: string, protocol = ''): WebSocket {
+  /** `headers` are the app's own (its cookies on a preview host). The fleet's Authorization always wins. */
+  openPortWebSocket(id: string, port: number, pathAndQuery: string, protocol = '', headers: Record<string, string> = {}): WebSocket {
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid preview port.');
     const path = sandboxPath(id, `/ports/${port}/${pathAndQuery.replace(/^\/+/, '')}`);
     const target = new URL(this.url(path));
     target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
     const started = Date.now();
     const ws = new WebSocket(target, protocol ? [protocol] : [], {
-      headers: { Authorization: `Bearer ${this.token}` },
+      headers: { ...headers, Authorization: `Bearer ${this.token}` },
       handshakeTimeout: 20_000,
       maxPayload: 1024 * 1024,
       followRedirects: false,
