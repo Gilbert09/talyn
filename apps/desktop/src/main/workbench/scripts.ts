@@ -1,3 +1,4 @@
+import net from 'net';
 import path from 'path';
 import {
   WORKBENCH_PORT_COUNT,
@@ -9,24 +10,71 @@ import { WorkbenchPaths } from './paths';
 import { Terminals, type TerminalKind } from './terminals';
 import type { Emit } from './processes';
 
+/** True when nothing listens on `port` at 127.0.0.1: a quick listen, then close. */
+export function portIsFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen({ port, host: '127.0.0.1', exclusive: true }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+export const FIRST_SESSION_PORT = 55100;
+
+/**
+ * `TALYN_PORT` for each session: the first of {@link WORKBENCH_PORT_COUNT}
+ * consecutive ports that are free on this computer and that no other session
+ * holds. A session keeps its block until it is archived or the app quits.
+ */
 export class PortAllocator {
   private readonly ports = new Map<string, number>();
+  private queue: Promise<unknown> = Promise.resolve();
 
-  allocate(workbenchId: string): number {
+  constructor(
+    private readonly isFree: (port: number) => Promise<boolean> = portIsFree,
+    private readonly first = FIRST_SESSION_PORT,
+  ) {}
+
+  allocate(workbenchId: string): Promise<number> {
+    // One search at a time, so two sessions cannot both take a block.
+    const pending = this.queue.then(() => this.find(workbenchId));
+    this.queue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async find(workbenchId: string): Promise<number> {
     const existing = this.ports.get(workbenchId);
     if (existing !== undefined) return existing;
-    const used = new Set(this.ports.values());
-    for (
-      let port = 55100;
-      port + WORKBENCH_PORT_COUNT - 1 <= 65535;
-      port += WORKBENCH_PORT_COUNT
-    ) {
-      if (!used.has(port)) {
-        this.ports.set(workbenchId, port);
-        return port;
+    const held = [...this.ports.values()];
+    let start = this.first;
+    while (start + WORKBENCH_PORT_COUNT - 1 <= 65535) {
+      const overlap = held.find(
+        (port) => port < start + WORKBENCH_PORT_COUNT && start < port + WORKBENCH_PORT_COUNT,
+      );
+      if (overlap !== undefined) {
+        start = overlap + WORKBENCH_PORT_COUNT;
+        continue;
       }
+      const busy = await this.firstBusy(start);
+      if (busy === null) {
+        this.ports.set(workbenchId, start);
+        return start;
+      }
+      start = busy + 1;
     }
-    throw new Error('No session port range is available');
+    throw new Error(
+      `No ${WORKBENCH_PORT_COUNT} free ports in a row from ${this.first}. Stop some local servers, then try again.`,
+    );
+  }
+
+  private async firstBusy(start: number): Promise<number | null> {
+    for (let port = start; port < start + WORKBENCH_PORT_COUNT; port++) {
+      if (!(await this.isFree(port))) return port;
+    }
+    return null;
   }
 
   release(workbenchId: string): void {
@@ -35,7 +83,6 @@ export class PortAllocator {
 }
 
 export class Scripts {
-  readonly ports = new PortAllocator();
   private readonly running = new Map<
     string,
     { workbenchId: string; name: string; kind: TerminalKind; id: string }
@@ -47,6 +94,7 @@ export class Scripts {
     private readonly paths: WorkbenchPaths,
     private readonly terminals: Terminals,
     private readonly emit: Emit,
+    readonly ports = new PortAllocator(),
   ) {}
 
   run(
@@ -87,7 +135,7 @@ export class Scripts {
         rootPath: state?.rootPath ?? input.path,
         name: state?.name ?? path.basename(input.path),
         defaultBranch: state?.baseBranch,
-        port: this.ports.allocate(input.workbenchId),
+        port: await this.ports.allocate(input.workbenchId),
       }),
     };
     const key = this.key(input);

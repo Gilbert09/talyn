@@ -17,7 +17,6 @@ import {
   resolveWorkbenchConfig,
   untrackedFilePatch,
   untrackedFiles,
-  workbenchEnv,
   type GitStep,
   type SendWorkbenchMessageInput,
   type Workbench,
@@ -281,7 +280,8 @@ export function localOps(
         path,
         name,
         command,
-        env: workbenchEnv({ workbenchPath: path, rootPath: path, name: workbench.name, port: portFor(workbench.id), defaultBranch: workbench.baseBranch }),
+        // Main sets the TALYN_* variables: the root path and a port block it checked is free.
+        env: {},
       });
     },
     stopScript: (name) => need().scripts.stop({ workbenchId: workbench.id, name }),
@@ -320,16 +320,6 @@ export function localOps(
     },
   };
   return ops;
-}
-
-/**
- * The first of ten ports this workbench's scripts may use. Stable per
- * workbench, so a dev server comes back on the same port after a restart.
- */
-export function portFor(workbenchId: string): number {
-  let hash = 0;
-  for (let i = 0; i < workbenchId.length; i++) hash = (hash * 31 + workbenchId.charCodeAt(i)) >>> 0;
-  return 40000 + (hash % 2000) * 10;
 }
 
 export function opsFor(workbench: Workbench): WorkbenchOps {
