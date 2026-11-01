@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { eq, sql } from 'drizzle-orm';
-import { shellQuote, TALYN_SKILL_PACK } from '@talyn/shared';
+import { shellQuote, TALYN_BRIEFING_MARKER, TALYN_BRIEFING, TALYN_SKILL_PACK } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { workspaces } from '../../db/schema.js';
 import { shellPath, writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
@@ -77,6 +77,49 @@ export function loadSkillPack(): PackSkill[] {
   return cached;
 }
 
+/** Where the Talyn briefing goes for Claude: a user rule. Outside the `talyn-*.md` names the instruction sync manages. */
+export const CLAUDE_BRIEFING_FILE = '~/.claude/rules/talyn.md';
+export const CODEX_AGENTS_FILE = '~/.codex/AGENTS.md';
+export const CODEX_BRIEFING_START = '<!-- talyn:briefing:start -->';
+export const CODEX_BRIEFING_END = '<!-- talyn:briefing:end -->';
+
+const q = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Install the staged briefing, or remove it when `staged` is null. Claude's
+ * file is replaced only when it is Talyn's (its first line is the marker) or
+ * absent. Codex's block goes at the TOP of AGENTS.md: the instruction sync
+ * strips and appends its own block at the end, so a block at the end would
+ * swap places with it on every turn. Each file is written only when it changes.
+ */
+function briefingScript(staged: string | null): string {
+  const claude = shellPath(CLAUDE_BRIEFING_FILE);
+  const codex = shellPath(CODEX_AGENTS_FILE);
+  const tmp = shellPath(`${CODEX_AGENTS_FILE}.talyn-briefing-tmp`);
+  const ours = `head -n 1 ${claude} 2>/dev/null | grep -qxF ${q(TALYN_BRIEFING_MARKER)}`;
+  const strip =
+    `awk -v s=${q(CODEX_BRIEFING_START)} -v e=${q(CODEX_BRIEFING_END)} ` +
+    `'$0==s{skip=1;next} $0==e{skip=0;next} skip{next} !started && $0==""{next} {started=1; print}'`;
+  const lines: string[] = [];
+  if (staged) {
+    lines.push(
+      `mkdir -p ${shellPath('~/.claude/rules')}`,
+      `if [ ! -e ${claude} ] || ${ours}; then`,
+      `  if ! cmp -s ${staged} ${claude}; then cp ${staged} ${claude}.talyn-tmp && mv -f ${claude}.talyn-tmp ${claude}; fi`,
+      'fi',
+      `mkdir -p ${shellPath('~/.codex')}`,
+      `{ echo ${q(CODEX_BRIEFING_START)}; cat ${staged}; echo ${q(CODEX_BRIEFING_END)}; if [ -s ${codex} ]; then echo; ${strip} ${codex}; fi; } > ${tmp}`,
+    );
+  } else {
+    lines.push(
+      `if ${ours}; then rm -f ${claude}; fi`,
+      `if [ -f ${codex} ] && grep -qxF ${q(CODEX_BRIEFING_START)} ${codex}; then ${strip} ${codex} > ${tmp}; fi`,
+    );
+  }
+  lines.push(`if [ -e ${tmp} ]; then if cmp -s ${tmp} ${codex}; then rm -f ${tmp}; else mv -f ${tmp} ${codex}; fi; fi`);
+  return lines.join('\n');
+}
+
 /** Remove every stamped `talyn-*` skill under `root` whose name is not in `keep`. */
 function removeStaleScript(root: string, keep: readonly string[]): string {
   const remove = `rm -f "$d"/SKILL.md "$d"/${SKILL_PACK_STAMP}; rmdir "$d" 2>/dev/null || true`;
@@ -113,7 +156,10 @@ function installScript(root: string, name: string): string {
  * each staged file takes at least one env var and an exec carries four: six
  * files would cost a second exec on every turn.
  */
-export function skillPackSyncPlan(skills: PackSkill[] | null): [SandboxFile[], { after: string }] {
+export function skillPackSyncPlan(
+  skills: PackSkill[] | null,
+  briefing: string | null = null,
+): [SandboxFile[], { after: string }] {
   const list = skills ?? [];
   const bundle = shellPath(`${STAGING_DIR}/bundle`);
   const lines: string[] = [];
@@ -126,13 +172,22 @@ export function skillPackSyncPlan(skills: PackSkill[] | null): [SandboxFile[], {
     parts.push(bytes);
     offset += bytes.length;
   }
+  let briefingPath: string | null = null;
+  if (briefing) {
+    const bytes = Buffer.from(briefing, 'utf8');
+    briefingPath = `${shellPath(STAGING_DIR)}/briefing.md`;
+    lines.push(`mkdir -p ${shellPath(STAGING_DIR)}`, `head -c ${offset + bytes.length} ${bundle} | tail -c ${bytes.length} > ${briefingPath}`);
+    parts.push(bytes);
+    offset += bytes.length;
+  }
   const keep = list.map((s) => s.name);
   for (const root of SKILL_PACK_ROOTS) {
     if (list.length > 0) lines.push(`mkdir -p ${shellPath(root)}`, ...list.map((s) => installScript(root, s.name)));
     lines.push(removeStaleScript(root, keep));
   }
+  lines.push(briefingScript(briefingPath));
   lines.push(`rm -rf ${shellPath(STAGING_DIR)}`);
-  const files = list.length > 0 ? [{ path: `${STAGING_DIR}/bundle`, base64: Buffer.concat(parts).toString('base64') }] : [];
+  const files = parts.length > 0 ? [{ path: `${STAGING_DIR}/bundle`, base64: Buffer.concat(parts).toString('base64') }] : [];
   return [files, { after: lines.join('\n') }];
 }
 
@@ -153,7 +208,8 @@ export async function sessionSkillPackEnabled(workspaceId: string): Promise<bool
  */
 export async function syncSkillPack(row: WorkbenchRow, opts: { talynTools: boolean }): Promise<boolean> {
   const enabled = opts.talynTools && (await sessionSkillPackEnabled(row.workspaceId));
-  const [files, scripts] = skillPackSyncPlan(enabled ? loadSkillPack() : null);
+  // The briefing describes Talyn's tools, so it goes wherever the `talyn` server does, pack or not.
+  const [files, scripts] = skillPackSyncPlan(enabled ? loadSkillPack() : null, opts.talynTools ? TALYN_BRIEFING : null);
   await writeSandboxFiles(row, files, scripts);
   return enabled;
 }

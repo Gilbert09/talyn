@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import {
   renderMemoryIndex,
   TALYN_MEMORY_NOTE,
+  TALYN_BRIEFING,
   TALYN_SKILL_PACK,
   TALYN_SKILLS_NOTE,
   TALYN_THREAD_NOTE,
@@ -46,6 +47,8 @@ vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => (
 }));
 
 const {
+  CODEX_BRIEFING_END,
+  CODEX_BRIEFING_START,
   MAX_SKILL_DESCRIPTION_CHARS,
   SKILL_PACK_SOURCE_DIR,
   SKILL_PACK_STAMP,
@@ -195,7 +198,7 @@ describe('session skill pack', () => {
     it('stages nothing and only removes when the pack is off', () => {
       const [files, { after }] = skillPackSyncPlan(null);
       expect(files).toEqual([]);
-      expect(after).not.toContain('cmp -s');
+      expect(after).not.toContain('SKILL.md.talyn-tmp');
       expect(after).toContain(SKILL_PACK_STAMP);
     });
 
@@ -246,6 +249,55 @@ describe('session skill pack', () => {
 
     it('treats a workspace it cannot find as on, so a missing row never strips a box', async () => {
       expect(await sessionSkillPackEnabled('ws-missing')).toBe(true);
+    });
+
+    describe('the Talyn briefing', () => {
+      const claudeFile = () => home('.claude', 'rules', 'talyn.md');
+      const agentsFile = () => home('.codex', 'AGENTS.md');
+      const block = `${CODEX_BRIEFING_START}\n${TALYN_BRIEFING}${CODEX_BRIEFING_END}\n`;
+
+      it('goes to Claude as a rule and to the top of Codex AGENTS.md, in the same exec', async () => {
+        await fs.mkdir(home('.codex'), { recursive: true });
+        await fs.writeFile(agentsFile(), 'Fleet briefing.\n\n<!-- talyn:instructions:start -->\nmine\n<!-- talyn:instructions:end -->\n');
+        await syncSkillPack(row, { talynTools: true });
+        expect(sandbox.calls).toHaveLength(1);
+        expect(await fs.readFile(claudeFile(), 'utf8')).toBe(TALYN_BRIEFING);
+        const agents = await fs.readFile(agentsFile(), 'utf8');
+        expect(agents).toBe(`${block}\nFleet briefing.\n\n<!-- talyn:instructions:start -->\nmine\n<!-- talyn:instructions:end -->\n`);
+        // Unchanged on the next turn, so the agents' caches keep it.
+        await syncSkillPack(row, { talynTools: true });
+        expect(await fs.readFile(agentsFile(), 'utf8')).toBe(agents);
+        expect(await fs.readFile(claudeFile(), 'utf8')).toBe(TALYN_BRIEFING);
+      });
+
+      it('creates AGENTS.md when the box has none', async () => {
+        await syncSkillPack(row, { talynTools: true });
+        expect(await fs.readFile(agentsFile(), 'utf8')).toBe(block);
+      });
+
+      it('still goes in when the skill pack is off, because it describes the talyn tools', async () => {
+        await setPack(false);
+        expect(await syncSkillPack(row, { talynTools: true })).toBe(false);
+        expect(await fs.readFile(claudeFile(), 'utf8')).toBe(TALYN_BRIEFING);
+      });
+
+      it('comes out of both files when the box has no talyn server, and leaves the rest', async () => {
+        await fs.mkdir(home('.codex'), { recursive: true });
+        await fs.writeFile(agentsFile(), 'Fleet briefing.\n');
+        await syncSkillPack(row, { talynTools: true });
+        await syncSkillPack(row, { talynTools: false });
+        expect(await exists(claudeFile())).toBe(false);
+        expect(await fs.readFile(agentsFile(), 'utf8')).toBe('Fleet briefing.\n');
+      });
+
+      it('never replaces or removes a talyn.md rule a person wrote', async () => {
+        await fs.mkdir(home('.claude', 'rules'), { recursive: true });
+        await fs.writeFile(claudeFile(), 'My own Talyn notes.\n');
+        await syncSkillPack(row, { talynTools: true });
+        expect(await fs.readFile(claudeFile(), 'utf8')).toBe('My own Talyn notes.\n');
+        await syncSkillPack(row, { talynTools: false });
+        expect(await fs.readFile(claudeFile(), 'utf8')).toBe('My own Talyn notes.\n');
+      });
     });
 
     it('writes every skill for Claude and Codex, stamped, in one exec, and clears the staging', async () => {
