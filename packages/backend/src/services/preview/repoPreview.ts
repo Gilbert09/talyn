@@ -18,12 +18,20 @@ export async function getPreviewRepository(id: string): Promise<PreviewRow | nul
   return row ?? null;
 }
 
+/** A detection younger than this is answered without asking GitHub for the branch head. */
+export const PREVIEW_FRESH_MS = 10 * 60_000;
+
 export async function detectRepoPreview(workspaceId: string, repo: PreviewRow, options: { force?: boolean } = {}): Promise<CachedPreview | null> {
   const cached = repo.settings?.preview?.detected ?? null;
+  if (!options.force && cached && Date.now() - Date.parse(cached.at) < PREVIEW_FRESH_MS) return cached;
   try {
     const [owner, name] = repo.name.split('/');
     const sha = await githubService.getRefSha(workspaceId, owner, name, repo.defaultBranch);
-    if (!options.force && cached?.sha === sha) return cached;
+    if (!options.force && cached?.sha === sha) {
+      const checked = { ...cached, at: new Date().toISOString() };
+      await mergePreview(repo.id, { detected: checked });
+      return checked;
+    }
     const results = await Promise.allSettled([
       ...PREVIEW_DETECT_PATHS.map(async (path) => ({
         path, content: (await githubService.getFileContent(workspaceId, owner, name, path, sha, 64 * 1024))?.content ?? null,
