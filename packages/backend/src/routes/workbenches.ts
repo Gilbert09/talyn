@@ -1,7 +1,10 @@
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
-import { Readable } from 'stream';
+import { forwardRequestHeaders, isSafePreviewPath, proxyBody, proxyPortRequest } from '../services/preview/portsHttp.js';
+import { mintPreviewTicket, PREVIEW_TICKET_RATE } from '../services/preview/previewLinks.js';
+import { previewBaseDomain } from '../services/preview/previewHost.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 import { v4 as uuid } from 'uuid';
 import {
   isValidBranchName,
@@ -116,8 +119,6 @@ const DEFAULT_EVENT_PAGE = 500;
 const MAX_EVENT_PAGE = 2000;
 /** One local-events upload. The JSON body limit (2 MB) bounds it anyway; this makes the refusal say why. */
 const MAX_LOCAL_EVENT_BATCH = 1000;
-/** A request body forwarded to a preview port. A dev server's form post, not an upload service. */
-const MAX_PROXY_BODY_BYTES = 10 * 1024 * 1024;
 
 const CHAT_STATUSES: readonly WorkbenchChatStatus[] = ['idle', 'running', 'awaiting_input', 'error'];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -949,6 +950,25 @@ export function workbenchRoutes(): Router {
 
   // ---- Preview: a port a script listens on in the sandbox, behind the same gate ----
 
+  // A one-time sign-in link to the port on its own preview host. Declared
+  // before the proxy route, which would otherwise read `ticket` as a path.
+  const ticketLimit = rateLimit({
+    ...PREVIEW_TICKET_RATE,
+    keyFn: (req) => req.user?.id ?? req.ip ?? 'unknown',
+    message: 'Too many preview links. Wait a minute, then try again.',
+  });
+  router.post('/:id/ports/:port/ticket', ticketLimit, async (req, res) => {
+    const domain = previewBaseDomain();
+    if (!domain) return bad(res, 404, 'Hosted previews are not set up on this deployment.', 'preview_links_unavailable');
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const port = Number(req.params.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
+    if (row.runtime !== 'sandbox') return bad(res, 400, 'Only sandbox sessions have hosted previews.', 'local_runtime');
+    if (row.archivedAt || row.status === 'archived') return bad(res, 409, 'This session is archived.', 'not_ready');
+    ok(res, await mintPreviewTicket({ workbenchId: row.id, port, userId: assertUser(req).id }, domain));
+  });
+
   router.all('/:id/ports/:port/*', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
@@ -959,27 +979,15 @@ export function workbenchRoutes(): Router {
       const body = await proxyBody(req);
       if (body === 'too_large') return bad(res, 413, 'That request body is too large to forward.');
       const rest = (req.params as Record<string, string>)[0] ?? '';
+      if (!isSafePreviewPath(rest)) return bad(res, 400, 'That preview path is not allowed.');
       const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
-      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-      const controller = new AbortController();
-      res.on('close', () => controller.abort());
-      const upstream = await client.proxyPort(row.sandboxId!, port, `${rest}${query}`, {
-        method: req.method,
-        headers: forwardRequestHeaders(req),
-        ...(body ? { body } : {}),
-        signal: controller.signal,
-      });
-      res.status(upstream.status);
-      upstream.headers.forEach((value, key) => {
-        if (!DROPPED_RESPONSE_HEADERS.has(key.toLowerCase())) res.setHeader(key, value);
-      });
-      if (!upstream.body) {
-        res.end();
-        return;
-      }
-      Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0])
-        .on('error', () => res.end())
-        .pipe(res);
+      await proxyPortRequest(
+        req,
+        res,
+        { workspaceId: row.workspaceId, fleetHost: row.fleetHost, sandboxId: row.sandboxId!, port },
+        `${rest}${query}`,
+        { headers: forwardRequestHeaders(req), body },
+      );
     } catch (err) {
       if (res.headersSent) {
         res.end();
@@ -990,37 +998,6 @@ export function workbenchRoutes(): Router {
   });
 
   return router;
-}
-
-/**
- * Headers not passed back from a preview. Hop-by-hop ones belong to the
- * fleet's connection, not ours; `content-encoding` and `content-length`
- * describe bytes fetch has already decoded; and the app's own cookies and
- * CORS headers must not be set on the API's origin.
- */
-const DROPPED_RESPONSE_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'transfer-encoding',
-  'upgrade',
-  'content-encoding',
-  'content-length',
-  'set-cookie',
-  'access-control-allow-origin',
-  'access-control-allow-credentials',
-  'x-fleet-host',
-]);
-
-/** What a preview request carries on. Never the caller's Authorization — that is Talyn's, not the dev server's. */
-const FORWARDED_REQUEST_HEADERS = ['accept', 'accept-language', 'content-type', 'user-agent', 'range', 'if-none-match', 'if-modified-since'];
-
-function forwardRequestHeaders(req: Request): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const name of FORWARDED_REQUEST_HEADERS) {
-    const value = req.headers[name];
-    if (typeof value === 'string') out[name] = value;
-  }
-  return out;
 }
 
 const IMPORT_LIMIT_MB = WORKBENCH_IMPORT_MAX_BYTES / (1024 * 1024);
@@ -1035,20 +1012,6 @@ function readImportBody(req: Request): Promise<Buffer | null | 'too_large'> {
       resolve(Buffer.isBuffer(req.body) && req.body.length > 0 ? req.body : null);
     });
   });
-}
-
-/** The body to forward: what `express.json` already parsed, or the raw stream it left alone. */
-async function proxyBody(req: Request): Promise<Buffer | null | 'too_large'> {
-  if (req.method === 'GET' || req.method === 'HEAD') return null;
-  if (req.is('application/json') && req.body !== undefined) return Buffer.from(JSON.stringify(req.body));
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_PROXY_BODY_BYTES) return 'too_large';
-    chunks.push(chunk);
-  }
-  return chunks.length > 0 ? Buffer.concat(chunks) : null;
 }
 
 /** A settings patch, checked for shape. Returns the cleaned value, or a message. */

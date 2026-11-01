@@ -176,6 +176,8 @@ describe('Data API database boundary', () => {
       'slack_installations', 'slack_user_links', 'slack_events', 'slack_oauth_states',
       'slack_threads', 'slack_trigger_messages', 'slack_repo_memory', 'session_mcp_tokens',
       'repository_instructions', 'workspace_memories',
+      // Preview links (0098): the host router reads them before any auth.
+      'workbench_preview_hosts', 'workbench_preview_tickets', 'workbench_preview_sessions',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });
