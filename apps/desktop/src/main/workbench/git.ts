@@ -1,4 +1,5 @@
 import { execFile, type ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { TextDecoder } from 'util';
@@ -33,6 +34,39 @@ export async function readFileBase64(root: string, relative: string): Promise<st
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Write a pasted file to `.context/attachments/` in a worktree and return its
+ * relative path. The data goes over IPC, never in an argv: a process argv
+ * holds about 1 MiB on macOS, and a screenshot is often more.
+ */
+export async function writeAttachment(
+  root: string,
+  name: string,
+  dataBase64: string,
+): Promise<string> {
+  if (typeof dataBase64 !== 'string' || dataBase64.length > Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4)
+    throw new Error('File exceeds the 10 MiB limit');
+  const data = Buffer.from(dataBase64, 'base64');
+  if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+  const safe =
+    String(name ?? '')
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^[-.]+/, '')
+      .slice(-100) || 'attachment';
+  const realRoot = await fs.realpath(root);
+  let parent = realRoot;
+  for (const directory of ['.context', 'attachments']) {
+    const next = path.join(parent, directory);
+    await fs.mkdir(next, { recursive: true, mode: 0o700 });
+    if ((await fs.lstat(next)).isSymbolicLink())
+      throw new Error('Attachment directory must not be a symlink');
+    parent = next;
+  }
+  const relative = `.context/attachments/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+  await fs.writeFile(path.join(realRoot, relative), data, { mode: 0o600, flag: 'wx' });
+  return relative;
 }
 
 export async function exec(

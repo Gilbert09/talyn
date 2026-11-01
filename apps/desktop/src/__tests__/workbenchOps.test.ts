@@ -169,6 +169,20 @@ describe('localOps', () => {
     expect(argv.slice(0, 2)).toEqual(['sh', '-c']);
     expect(argv.slice(-2)).toEqual(['aGVsbG8=', attachment.path]);
   });
+
+  it('sends a pasted image over IPC, not in an argv, when main can write it', async () => {
+    const { bridge, exec } = bridgeWith(() => undefined);
+    const writeAttachment = jest.fn(async () => '.context/attachments/1-abc-shot.png');
+    const big = 'A'.repeat(2 * 1024 * 1024);
+    const attachment = await localOps(wb(), { ...bridge, writeAttachment }, null).attach({
+      name: 'shot.png',
+      mimeType: 'image/png',
+      dataBase64: big,
+    });
+    expect(writeAttachment).toHaveBeenCalledWith('/work/lisbon', 'shot.png', big);
+    expect(exec).not.toHaveBeenCalled();
+    expect(attachment).toEqual({ name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/1-abc-shot.png' });
+  });
 });
 
 describe('openLocalPullRequest', () => {

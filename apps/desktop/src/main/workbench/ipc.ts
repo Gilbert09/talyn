@@ -17,6 +17,7 @@ import {
   readFileBase64,
   stopGitProcesses,
   WorktreeManager,
+  writeAttachment,
 } from './git';
 import { discoverInstructionFiles } from './instructionFiles';
 import { WorkbenchPaths } from './paths';
@@ -166,6 +167,12 @@ export function registerWorkbenchIpc(
   });
   handle('read-file', readFile);
   handle('read-file-base64', readFileBase64);
+  handle('write-attachment', async (root: string, name: string, dataBase64: string) => {
+    // Writes go only into a worktree Talyn made.
+    if (typeof root !== 'string' || !(await paths.load(root)))
+      throw new Error('This worktree is not managed by Talyn');
+    return writeAttachment(root, name, dataBase64);
+  });
   handle('read-config', readConfigWithDetection);
   handle('save-detected-config', saveDetectedConfig);
   handle('list-files', listFiles);

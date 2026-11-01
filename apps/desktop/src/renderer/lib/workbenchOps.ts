@@ -287,6 +287,12 @@ export function localOps(
       await ops.send(chat, { text: prompt });
     },
     attach: async (file) => {
+      const local = need();
+      // The data goes over IPC. An argv holds about 1 MiB, less than many screenshots.
+      if (local.writeAttachment) {
+        const rel = await local.writeAttachment(path, file.name, file.dataBase64);
+        return { name: file.name, mimeType: file.mimeType, path: rel };
+      }
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '') || 'attachment';
       const rel = `${ATTACHMENT_DIR}/${Date.now()}-${safe}`;
       await run([

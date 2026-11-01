@@ -45,6 +45,7 @@ const workbench: DesktopWorkbenchBridge = {
   exec: (path, steps) => ipcRenderer.invoke('workbench:exec', path, steps),
   readFile: (path, relativePath) => ipcRenderer.invoke('workbench:read-file', path, relativePath),
   readFileBase64: (path, relativePath) => ipcRenderer.invoke('workbench:read-file-base64', path, relativePath),
+  writeAttachment: (path, name, dataBase64) => ipcRenderer.invoke('workbench:write-attachment', path, name, dataBase64),
   listFiles: (path) => ipcRenderer.invoke('workbench:list-files', path),
   readConfig: (path) => ipcRenderer.invoke('workbench:read-config', path),
   saveDetectedConfig: (path) => ipcRenderer.invoke('workbench:save-detected-config', path),
