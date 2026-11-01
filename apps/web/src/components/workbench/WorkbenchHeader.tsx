@@ -51,6 +51,7 @@ import { createChatTab } from './ChatTabs';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { SessionPreviewLinks } from './SessionPreviewLinks';
 import { timeAgo } from './new/RecentWorkbenches';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
@@ -282,6 +283,7 @@ export function WorkbenchHeader({
           )}
           {!thread && workbench.threadId && <ThreadChip threadId={workbench.threadId} />}
           {slackSourceOf(workbench) && <SlackThreadChip source={slackSourceOf(workbench)!} />}
+          {!thread && <SessionPreviewLinks workbench={workbench} ops={ops} />}
           {workbench.settings?.internetAccess === false && (
             <span
               className="shrink-0 text-[10px] text-muted-foreground"
