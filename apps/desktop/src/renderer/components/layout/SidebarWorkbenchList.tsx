@@ -128,11 +128,15 @@ function WorkbenchRow({
               (suspended || done) && !selected && 'opacity-60'
             )}>{workbenchDisplayName(workbench)}</span>
             {diff && !done && (
+              // All or nothing: when the counts do not fit, they wrap to a hidden second line.
               <span
-                className="min-w-0 shrink overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums"
+                className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums"
                 title={`+${diff.added} −${diff.removed}`}
               >
-                <span className="text-success">+{compactCount(diff.added)}</span> <span className="text-destructive">−{compactCount(diff.removed)}</span>
+                <span className="w-0" aria-hidden />
+                <span className="whitespace-nowrap">
+                  <span className="text-success">+{compactCount(diff.added)}</span> <span className="text-destructive">−{compactCount(diff.removed)}</span>
+                </span>
               </span>
             )}
             <ThreadTag threadId={workbench.threadId} />
