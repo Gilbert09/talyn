@@ -313,8 +313,12 @@ describe('AppSidebar', () => {
 
   it('collapses to an icon rail with the toggle', () => {
     render(<AppSidebar />);
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Forward' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Forward' })).not.toBeInTheDocument();
     expect(screen.queryByText('lisbon')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pull requests' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));

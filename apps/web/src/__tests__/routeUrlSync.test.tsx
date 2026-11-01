@@ -29,7 +29,13 @@ const go = (route: Route, replace = false) => act(() => useNavigationStore.getSt
 beforeEach(() => {
   installNavigation();
   useWorkbenchStore.setState({ workspaceId: null, workbenches: {}, selectedWorkbenchId: null, listLoaded: false });
-  useNavigationStore.setState({ route: { view: 'home' }, lastWorkbenchId: null, replace: false });
+  useNavigationStore.setState({
+    route: { view: 'home' },
+    lastWorkbenchId: null,
+    replace: false,
+    backStack: [],
+    forwardStack: [],
+  });
   useWorkspaceStore.setState({ activePanel: 'workbenches', settingsSection: 'workspace' });
   currentPath = '';
 });
@@ -90,6 +96,16 @@ describe('route URL sync', () => {
     act(() => move(1));
     expect(currentPath).toBe('/s/one');
     expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('one');
+  });
+
+  it('updates the URL for app back and forward', () => {
+    mount('/prs');
+    go({ view: 'history' });
+    expect(currentPath).toBe('/history');
+    act(() => useNavigationStore.getState().back());
+    expect(currentPath).toBe('/prs');
+    act(() => useNavigationStore.getState().forward());
+    expect(currentPath).toBe('/history');
   });
 
   it('replaces an invalid session without a history stop', () => {

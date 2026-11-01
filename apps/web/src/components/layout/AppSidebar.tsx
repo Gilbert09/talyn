@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { workbenchesOffered } from '@talyn/shared';
 import {
+  ArrowLeft,
+  ArrowRight,
   ChevronLeft,
   ChevronRight,
   FolderPlus,
@@ -71,6 +73,11 @@ export function AppSidebar() {
               dragging ? 'after:bg-primary' : 'hover:after:bg-primary/60 focus-visible:after:bg-primary'
             )}
           />
+        )}
+        {!collapsed && (
+          <div className="flex h-7 shrink-0 items-center justify-end gap-0.5 px-1.5">
+            <HistoryButtons />
+          </div>
         )}
         <div className="px-2 pb-1 pt-1">
           <WorkspaceSwitcher collapsed={collapsed} />
@@ -305,5 +312,37 @@ function WithTooltip({
         {keys && <span className="text-muted-foreground">{formatKeys(keys)}</span>}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+export function HistoryButtons() {
+  const canBack = useNavigationStore((s) => s.backStack.length > 0);
+  const canForward = useNavigationStore((s) => s.forwardStack.length > 0);
+  const button = 'rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent';
+  return (
+    <>
+      <button
+        type="button"
+        className={button}
+        disabled={!canBack}
+        onClick={() => useNavigationStore.getState().back()}
+        aria-label="Back"
+        title={`Back (${formatKeys('mod+left')})`}
+        data-attr="nav-back"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        className={button}
+        disabled={!canForward}
+        onClick={() => useNavigationStore.getState().forward()}
+        aria-label="Forward"
+        title={`Forward (${formatKeys('mod+right')})`}
+        data-attr="nav-forward"
+      >
+        <ArrowRight className="h-3.5 w-3.5" />
+      </button>
+    </>
   );
 }

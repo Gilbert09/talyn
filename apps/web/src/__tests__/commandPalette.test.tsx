@@ -260,9 +260,14 @@ it.each([null, { workbenches: false }])('hides sessions and their actions when f
   expect(screen.queryByText('Create Pull Request')).not.toBeInTheDocument();
 });
 
-it('uses browser shortcuts without app history commands', () => {
+it('uses browser chords and keeps app history actions hidden', () => {
   const shortcuts = buildAppShortcuts();
   expect(shortcuts.find((s) => s.id === 'workbench.new')?.keys).toBe('mod+shift+o');
   expect(shortcuts.find((s) => s.id === 'workbench.jump.1')?.keys).toBe('mod+alt+1');
-  expect(shortcuts.some((s) => s.id === 'nav.back' || s.id === 'nav.forward')).toBe(false);
+  expect(shortcuts.filter((s) => s.id.startsWith('nav.')).map((s) => [s.id, s.keys, s.hidden, s.menu])).toEqual([
+    ['nav.back', 'mod+[', true, undefined],
+    ['nav.forward', 'mod+]', true, undefined],
+    ['nav.back.arrow', 'mod+left', true, undefined],
+    ['nav.forward.arrow', 'mod+right', true, undefined],
+  ]);
 });

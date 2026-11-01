@@ -15,7 +15,7 @@
  * - Jumping to a session is ⌘⌥1–9.
  * - Every session action is ⌘⌥ plus the desktop letter (P, X, M, A).
  * - Focus composer is ⌘⇧L.
- * - Back and forward are the browser's own, so they have no entry here.
+ * - Back and forward have no menu entry. The shortcut registry handles their keys when the page receives them.
  * - Chords a page can catch (⌘K, ⌘B, ⌘J, ⌘,, ⌘⇧D, ⌘⌥B, ⌘⌥↑/↓) stay as on desktop.
  * On Windows and Linux `mod` is Ctrl; `shortcuts.ts` ignores Ctrl+Alt when
  * it is really AltGr.

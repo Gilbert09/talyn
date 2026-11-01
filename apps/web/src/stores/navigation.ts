@@ -36,6 +36,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 ];
 
 export const HOME: Route = { view: 'home' };
+export const HISTORY_LIMIT = 50;
 
 export function isRoute(value: unknown): value is Route {
   if (!value || typeof value !== 'object') return false;
@@ -119,11 +120,15 @@ export function routeForPanel(
 interface NavigationState {
   route: Route;
   replace: boolean;
+  backStack: Route[];
+  forwardStack: Route[];
   lastWorkbenchId: string | null;
   paletteOpen: boolean;
   addRepositoryOpen: boolean;
 
   navigate: (route: Route, opts?: { replace?: boolean }) => void;
+  back: () => void;
+  forward: () => void;
   setPaletteOpen: (open: boolean) => void;
   togglePalette: () => void;
   setAddRepositoryOpen: (open: boolean) => void;
@@ -158,17 +163,57 @@ const initialRoute = HOME;
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   route: initialRoute,
   replace: false,
+  backStack: [],
+  forwardStack: [],
   lastWorkbenchId: null,
   paletteOpen: false,
   addRepositoryOpen: false,
 
   navigate: (route, opts) => {
-    set({
-      route,
-      replace: opts?.replace ?? false,
-      lastWorkbenchId: route.view === 'workbench' ? route.id : get().lastWorkbenchId,
-    });
+    const cur = get().route;
+    const lastWorkbenchId = route.view === 'workbench' ? route.id : get().lastWorkbenchId;
+    if (routesEqual(cur, route)) {
+      set({ lastWorkbenchId });
+    } else if (opts?.replace) {
+      set({ route, replace: true, lastWorkbenchId });
+    } else {
+      set((s) => ({
+        route,
+        replace: false,
+        lastWorkbenchId,
+        backStack: [...s.backStack, cur].slice(-HISTORY_LIMIT),
+        forwardStack: [],
+      }));
+    }
     applyRoute(route);
+  },
+
+  back: () => {
+    const { backStack, route } = get();
+    if (backStack.length === 0) return;
+    const prev = backStack[backStack.length - 1];
+    set((s) => ({
+      route: prev,
+      replace: true,
+      backStack: s.backStack.slice(0, -1),
+      forwardStack: [route, ...s.forwardStack].slice(0, HISTORY_LIMIT),
+      lastWorkbenchId: prev.view === 'workbench' ? prev.id : s.lastWorkbenchId,
+    }));
+    applyRoute(prev);
+  },
+
+  forward: () => {
+    const { forwardStack, route } = get();
+    if (forwardStack.length === 0) return;
+    const next = forwardStack[0];
+    set((s) => ({
+      route: next,
+      replace: true,
+      forwardStack: s.forwardStack.slice(1),
+      backStack: [...s.backStack, route].slice(-HISTORY_LIMIT),
+      lastWorkbenchId: next.view === 'workbench' ? next.id : s.lastWorkbenchId,
+    }));
+    applyRoute(next);
   },
 
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),

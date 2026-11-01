@@ -55,12 +55,12 @@ describe('navigation store', () => {
     expect(ws.useWorkspaceStore.getState().activePanel).toBe('workbenches');
   });
 
-  it('does not persist routes or maintain history stacks', async () => {
+  it('keeps route history in memory without persisting it', async () => {
     const { nav } = await load();
     nav.useNavigationStore.getState().navigate({ view: 'history' });
     expect(localStorage.getItem('talyn-last-route')).toBeNull();
-    expect(nav.useNavigationStore.getState()).not.toHaveProperty('backStack');
-    expect(nav.useNavigationStore.getState()).not.toHaveProperty('forwardStack');
+    expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+    expect(nav.useNavigationStore.getState().forwardStack).toEqual([]);
   });
 
   it('a workbench route whose workbench is gone falls back to home', async () => {
