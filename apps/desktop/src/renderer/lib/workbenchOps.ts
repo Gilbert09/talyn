@@ -157,6 +157,10 @@ export function localOps(
     if (!bridge || unavailable) throw new Error(unavailable ?? 'Local runtime unavailable.');
     return bridge;
   };
+  // Reads still work on an archived local session (its worktree stays); new work does not.
+  const notArchived = () => {
+    if (workbench.status === 'archived' || workbench.archivedAt) throw new Error('This session is archived. Restore it first.');
+  };
   const run = async (steps: GitStep[]): Promise<string> => {
     const res = await need().exec(path, steps);
     if (res.exitCode !== 0 && !steps.every((s) => s.allowFailure)) {
@@ -205,6 +209,7 @@ export function localOps(
     canAttach: !unavailable,
     send: async (chat, input) => {
       need();
+      notArchived();
       if (!controller) throw new Error('Local runtime unavailable.');
       return controller.send(workbench, chat, input);
     },
@@ -266,6 +271,7 @@ export function localOps(
       await run(checkpointRestoreSteps({ sha: hit.sha, tmpIndexPath: `${gitDir}/talyn-restore-index` }));
     },
     runScript: async (name) => {
+      notArchived();
       const command = await scriptCommand(name);
       if (!command) throw new Error(`No ${name} script is configured for this repository.`);
       useWorkbenchStore.getState().markScriptStarted(workbench.id, name);

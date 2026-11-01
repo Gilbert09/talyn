@@ -170,6 +170,20 @@ describe('localOps', () => {
     expect(argv.slice(-2)).toEqual(['aGVsbG8=', attachment.path]);
   });
 
+  it.each([
+    ['status', { status: 'archived' as const }],
+    ['archivedAt', { archivedAt: '2026-10-14T00:00:00Z' }],
+  ])('refuses new work on a session archived by %s, but still reads it', async (_name, over) => {
+    const { bridge } = bridgeWith(() => undefined);
+    const controller = { send: jest.fn() };
+    const ops = localOps(wb(over), bridge, controller as never);
+    await expect(ops.send({ id: 'c1' } as never, { text: 'hi' })).rejects.toThrow('archived');
+    await expect(ops.runScript('run')).rejects.toThrow('archived');
+    expect(controller.send).not.toHaveBeenCalled();
+    expect(bridge.scripts.run).not.toHaveBeenCalled();
+    await expect(ops.listFiles()).resolves.toEqual([]);
+  });
+
   it('sends a pasted image over IPC, not in an argv, when main can write it', async () => {
     const { bridge, exec } = bridgeWith(() => undefined);
     const writeAttachment = jest.fn(async () => '.context/attachments/1-abc-shot.png');

@@ -111,6 +111,12 @@ export function registerWorkbenchIpc(
       agents.startTurn(input),
   );
   handle('cancel-turn', (chatId: string) => agents.cancelTurn(chatId));
+  handle('stop-workbench', async (workbenchId: string) => {
+    if (typeof workbenchId !== 'string' || !workbenchId) throw new Error('A session id is required.');
+    await agents.stopWorkbench(workbenchId);
+    await scripts.stopWorkbench(workbenchId);
+    await terminals.stopWorkbench(workbenchId);
+  });
   handle(
     'generate-title',
     (input: Parameters<NonNullable<WorkbenchLocalBridge['generateTitle']>>[0]) =>

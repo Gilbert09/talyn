@@ -39,6 +39,7 @@ const workbench: DesktopWorkbenchBridge = {
   removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
   startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
   cancelTurn: (chatId) => ipcRenderer.invoke('workbench:cancel-turn', chatId),
+  stopWorkbench: (workbenchId) => ipcRenderer.invoke('workbench:stop-workbench', workbenchId),
   generateTitle: (input) => ipcRenderer.invoke('workbench:generate-title', input),
   suggestBranchName: (input) => ipcRenderer.invoke('workbench:suggest-branch-name', input),
   renameBranch: (input) => ipcRenderer.invoke('workbench:rename-branch', input),
