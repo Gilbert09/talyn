@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
+import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
 import { buildAppShortcuts } from '../components/layout/appShortcuts';
 import { clearShortcuts, formatKeys, registerShortcuts } from '../lib/shortcuts';
@@ -11,7 +12,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-vi.mock('../lib/api', () => ({ api: { workbenches: {}, pullRequests: {} } }));
+vi.mock('../lib/api', () => ({ api: { workbenches: { list: vi.fn(), restore: vi.fn() }, pullRequests: {} } }));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {
@@ -51,6 +52,8 @@ beforeAll(() => {
 let unregister: () => void = () => {};
 
 beforeEach(() => {
+  vi.mocked(api.workbenches.list).mockReset().mockResolvedValue([]);
+  vi.mocked(api.workbenches.restore).mockReset();
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
     features: { workbenches: true, workflows: true } as Features,
@@ -80,6 +83,7 @@ describe('CommandPalette', () => {
     useNavigationStore.setState({ paletteOpen: false });
     render(<CommandPalette />);
     expect(screen.queryByPlaceholderText(/Search sessions/)).not.toBeInTheDocument();
+    expect(vi.mocked(api.workbenches.list)).not.toHaveBeenCalled();
   });
 
   it('lists live workbenches, with their repository, and leaves archived ones out', () => {
@@ -122,6 +126,59 @@ describe('CommandPalette', () => {
     expect(screen.getAllByText(/^(latest|same-a|same-b|older)$/).map((item) => item.textContent)).toEqual([
       'latest', 'same-a', 'same-b', 'older',
     ]);
+  });
+
+  it('loads archived sessions once on open and filters name, branch, and repository', async () => {
+    const archived = [
+      wb('named', { name: 'Hidden report', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }),
+      wb('branch', { branch: 'fix/hidden', status: 'archived', archivedAt: '2026-10-13T02:00:00Z' }),
+      wb('repo', { repoFullName: 'hidden/service', status: 'archived', archivedAt: '2026-10-13T03:00:00Z' }),
+      wb('other', { status: 'archived', archivedAt: '2026-10-13T04:00:00Z' }),
+    ];
+    vi.mocked(api.workbenches.list).mockResolvedValue(archived);
+    render(<CommandPalette />);
+    expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledWith('ws1', { includeArchived: true });
+    const input = screen.getByPlaceholderText(/Search sessions/);
+    for (const term of ['report', 'fix/hidden', 'hidden/service']) {
+      fireEvent.change(input, { target: { value: term } });
+      const group = await screen.findByText('Archived');
+      expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(1);
+    }
+    expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('other')).not.toBeInTheDocument();
+  });
+
+  it('limits archived results to eight', async () => {
+    vi.mocked(api.workbenches.list).mockResolvedValue(Array.from({ length: 10 }, (_, index) =>
+      wb(`past-${index}`, { status: 'archived', archivedAt: `2026-10-13T${String(index).padStart(2, '0')}:00:00Z` })
+    ));
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'past-' } });
+    const group = await screen.findByText('Archived');
+    expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(8);
+  });
+
+  it('opens an archived session without restoring it', async () => {
+    vi.mocked(api.workbenches.list).mockResolvedValue([
+      wb('past', { name: 'Past work', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }),
+    ]);
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'Past work' } });
+    fireEvent.click(await screen.findByText('Past work'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'past' });
+    expect(useNavigationStore.getState().paletteOpen).toBe(false);
+    expect(useWorkbenchStore.getState().workbenches.past).toBeDefined();
+    expect(vi.mocked(api.workbenches.restore)).not.toHaveBeenCalled();
+  });
+
+  it('shows no archived results when the load fails', async () => {
+    vi.mocked(api.workbenches.list).mockRejectedValue(new Error('offline'));
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'gone' } });
+    await waitFor(() => expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Archived')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search sessions/)).toBeInTheDocument();
   });
 
   it('picking a workbench opens it and closes the palette', () => {

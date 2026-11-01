@@ -92,7 +92,7 @@ describe('Sidebar threads', () => {
     render(<AppSidebar />);
     const section = screen.getByRole('group', { name: 'Threads' });
     const rows = within(section).getAllByRole('button').filter((b) => b.getAttribute('data-attr') === 'sidebar-thread-row');
-    expect(rows.map((r) => r.textContent)).toEqual(['Talyn fleet hardening2 running', 'Slack integration']);
+    expect(rows.map((r) => r.textContent)).toEqual(['Slack integration', 'Talyn fleet hardening2 running']);
     expect(within(section).queryByText('Old thread')).not.toBeInTheDocument();
     // Above the repository groups in document order.
     const sessions = screen.getByRole('group', { name: 'posthog/posthog' });
@@ -104,6 +104,22 @@ describe('Sidebar threads', () => {
     const fleet = screen.getByRole('group', { name: 'Sessions of Talyn fleet hardening' });
     const children = within(fleet).getAllByRole('button');
     expect(children.map((c) => c.textContent)).toEqual(['talyn · tom/skillpack', 'yas · tom/vsock#7']);
+  });
+
+
+  it('orders threads and their children by activity', () => {
+    setWorkbenches([
+      thread('older', { title: 'Older', updatedAt: '2026-10-10T00:00:00Z' }),
+      thread('newer', { title: 'Newer', updatedAt: '2026-10-15T00:00:00Z' }),
+      wb('old-child', { threadId: 'newer', updatedAt: '2026-10-11T00:00:00Z' }),
+      wb('new-child', { threadId: 'newer', updatedAt: '2026-10-16T00:00:00Z' }),
+    ]);
+    render(<AppSidebar />);
+    const section = screen.getByRole('group', { name: 'Threads' });
+    const rows = within(section).getAllByRole('button').filter((row) => row.getAttribute('data-attr') === 'sidebar-thread-row');
+    expect(rows.map((row) => row.textContent)).toEqual(['Newer', 'Older']);
+    const children = within(screen.getByRole('group', { name: 'Sessions of Newer' })).getAllByRole('button');
+    expect(children.map((row) => row.textContent)).toEqual(['app · tom/new-child', 'app · tom/old-child']);
   });
 
   it('opens a thread and a thread session on click', () => {

@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   PanelBottom,
   PanelRight,
+  RotateCcw,
   Wrench,
 } from 'lucide-react';
 import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
@@ -151,6 +152,7 @@ export function WorkbenchHeader({
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
   const [continuing, setContinuing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const thread = isThread(workbench);
   const continueInThread = async () => {
     setContinuing(true);
@@ -176,6 +178,17 @@ export function WorkbenchHeader({
   const primary = primaryWorkbenchAction(workbench, prLike);
   const available = availableWorkbenchActions(workbench, prLike);
   const archived = isArchivedWorkbench(workbench);
+
+  const restore = async () => {
+    setRestoring(true);
+    try {
+      useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.restore(workbench.id));
+    } catch (err) {
+      toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   const disabled = (action: WorkbenchAction) =>
     busy !== null ||
@@ -364,6 +377,12 @@ export function WorkbenchHeader({
         >
           <GitPullRequest className="h-3.5 w-3.5" />
           PR #{pr.number}
+        </Button>
+      )}
+      {archived && (
+        <Button variant="outline" className="h-7 gap-1.5 px-2.5 text-xs" onClick={() => void restore()} disabled={restoring}>
+          {restoring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+          Restore
         </Button>
       )}
       {!archived && (

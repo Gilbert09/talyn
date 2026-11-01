@@ -1,8 +1,10 @@
-import { useMemo, useSyncExternalStore } from 'react';
-import { GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { Archive, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
 import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
+import { api } from '../lib/api';
+import { archivedAtOf, relativeTime } from '../pages/HistoryView';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -70,6 +72,32 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const features = useWorkspaceStore((s) => s.features);
   const all = useWorkspaceWorkbenches();
+  const workspaceId = useWorkbenchStore((s) => s.workspaceId);
+  const [query, setQuery] = useState('');
+  const [archiveCache, setArchiveCache] = useState<{ workspaceId: string; rows: Workbench[] } | null>(null);
+  const archived = archiveCache?.workspaceId === workspaceId ? archiveCache.rows : [];
+  const sessionsOffered = workbenchesOffered(features);
+  useEffect(() => {
+    if (!workspaceId || !sessionsOffered) return;
+    let active = true;
+    void api.workbenches.list(workspaceId, { includeArchived: true }).then(
+      (list) => {
+        const rows = list.filter(isArchived);
+        if (active && rows.length > 0) setArchiveCache({ workspaceId, rows });
+      },
+      () => {}
+    );
+    return () => { active = false; };
+  }, [workspaceId, sessionsOffered]);
+  const archivedMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !sessionsOffered) return [];
+    return archived
+      .filter((wb) => [workbenchDisplayName(wb), wb.name, wb.branch, wb.repoFullName]
+        .some((value) => value.toLowerCase().includes(q)))
+      .sort((a, b) => archivedAtOf(b).localeCompare(archivedAtOf(a)))
+      .slice(0, 8);
+  }, [archived, query, sessionsOffered]);
   useSyncExternalStore(subscribeVersion, readVersion);
 
   const workbenches = useMemo(
@@ -123,13 +151,34 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <CommandDialog open onOpenChange={(next) => !next && onClose()}>
-      <CommandInput placeholder="Search sessions, pages and actions…" autoFocus />
+      <CommandInput placeholder="Search sessions, pages and actions…" value={query} onValueChange={setQuery} autoFocus />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         {workbenchesOffered(features) && workbenches.length > 0 && (
           <CommandGroup heading="Sessions">
             {workbenches.map((wb) => (
               <PaletteSessionItem key={wb.id} workbench={wb} onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))} />
+            ))}
+          </CommandGroup>
+        )}
+        {archivedMatches.length > 0 && (
+          <CommandGroup heading="Archived">
+            {archivedMatches.map((wb) => (
+              <CommandItem
+                key={wb.id}
+                value={`archived ${workbenchDisplayName(wb)} ${wb.name} ${wb.branch} ${wb.repoFullName}`}
+                onSelect={() => pick(() => {
+                  useWorkbenchStore.getState().upsertWorkbench(wb);
+                  navigate({ view: 'workbench', id: wb.id });
+                })}
+              >
+                <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{workbenchDisplayName(wb)}</span>
+                <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(wb)}</span>
+                <span className="ml-auto shrink-0 text-[11px] text-muted-foreground" title={new Date(archivedAtOf(wb)).toLocaleString()}>
+                  {relativeTime(archivedAtOf(wb))}
+                </span>
+              </CommandItem>
             ))}
           </CommandGroup>
         )}

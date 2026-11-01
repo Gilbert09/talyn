@@ -4,6 +4,7 @@ import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { liveThreads, runningSessionCount, threadChildren, threadSummary } from '../../lib/threads';
+import { newestSessions } from '../../lib/sessionOrder';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -21,7 +22,7 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
   const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
   const chats = useWorkbenchStore((s) => s.chats);
-  const threads = useMemo(() => liveThreads(workbenches), [workbenches]);
+  const threads = useMemo(() => newestSessions(liveThreads(workbenches)), [workbenches]);
   const [collapsed, setCollapsed] = useState<Record<string, true>>({});
   const openId = route.view === 'workbench' ? route.id : null;
 
@@ -43,7 +44,7 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
         </button>
       </div>
       {threads.map((thread) => {
-        const children = threadChildren(workbenches, thread.id);
+        const children = newestSessions(threadChildren(workbenches, thread.id));
         const expanded = !collapsed[thread.id];
         return (
           <div key={thread.id}>

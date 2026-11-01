@@ -3,8 +3,9 @@
  */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
+import { api } from '../renderer/lib/api';
 import { CommandPalette } from '../renderer/components/CommandPalette';
 import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
 import { clearShortcuts, formatKeys, registerShortcuts } from '../renderer/lib/shortcuts';
@@ -13,7 +14,7 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-jest.mock('../renderer/lib/api', () => ({ api: { workbenches: {}, pullRequests: {} } }));
+jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { list: jest.fn(), restore: jest.fn() }, pullRequests: {} } }));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {
@@ -53,6 +54,8 @@ beforeAll(() => {
 let unregister: () => void = () => {};
 
 beforeEach(() => {
+  jest.mocked(api.workbenches.list).mockReset().mockResolvedValue([]);
+  jest.mocked(api.workbenches.restore).mockReset();
   useWorkspaceStore.setState({ features: { workbenches: true, workflows: true } as Features });
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore.getState().setWorkbenches('ws1', [
@@ -77,6 +80,7 @@ describe('CommandPalette', () => {
     useNavigationStore.setState({ paletteOpen: false });
     render(<CommandPalette />);
     expect(screen.queryByPlaceholderText(/Search sessions/)).not.toBeInTheDocument();
+    expect(jest.mocked(api.workbenches.list)).not.toHaveBeenCalled();
   });
 
   it('lists live workbenches, with their repository, and leaves archived ones out', () => {
@@ -119,6 +123,59 @@ describe('CommandPalette', () => {
     expect(screen.getAllByText(/^(latest|same-a|same-b|older)$/).map((item) => item.textContent)).toEqual([
       'latest', 'same-a', 'same-b', 'older',
     ]);
+  });
+
+  it('loads archived sessions once on open and filters name, branch, and repository', async () => {
+    const archived = [
+      wb('named', { name: 'Hidden report', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }),
+      wb('branch', { branch: 'fix/hidden', status: 'archived', archivedAt: '2026-10-13T02:00:00Z' }),
+      wb('repo', { repoFullName: 'hidden/service', status: 'archived', archivedAt: '2026-10-13T03:00:00Z' }),
+      wb('other', { status: 'archived', archivedAt: '2026-10-13T04:00:00Z' }),
+    ];
+    jest.mocked(api.workbenches.list).mockResolvedValue(archived);
+    render(<CommandPalette />);
+    expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledWith('ws1', { includeArchived: true });
+    const input = screen.getByPlaceholderText(/Search sessions/);
+    for (const term of ['report', 'fix/hidden', 'hidden/service']) {
+      fireEvent.change(input, { target: { value: term } });
+      const group = await screen.findByText('Archived');
+      expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(1);
+    }
+    expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('other')).not.toBeInTheDocument();
+  });
+
+  it('limits archived results to eight', async () => {
+    jest.mocked(api.workbenches.list).mockResolvedValue(Array.from({ length: 10 }, (_, index) =>
+      wb(`past-${index}`, { status: 'archived', archivedAt: `2026-10-13T${String(index).padStart(2, '0')}:00:00Z` })
+    ));
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'past-' } });
+    const group = await screen.findByText('Archived');
+    expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(8);
+  });
+
+  it('opens an archived session without restoring it', async () => {
+    jest.mocked(api.workbenches.list).mockResolvedValue([
+      wb('past', { name: 'Past work', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' }),
+    ]);
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'Past work' } });
+    fireEvent.click(await screen.findByText('Past work'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'past' });
+    expect(useNavigationStore.getState().paletteOpen).toBe(false);
+    expect(useWorkbenchStore.getState().workbenches.past).toBeDefined();
+    expect(jest.mocked(api.workbenches.restore)).not.toHaveBeenCalled();
+  });
+
+  it('shows no archived results when the load fails', async () => {
+    jest.mocked(api.workbenches.list).mockRejectedValue(new Error('offline'));
+    render(<CommandPalette />);
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'gone' } });
+    await waitFor(() => expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Archived')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search sessions/)).toBeInTheDocument();
   });
 
   it('picking a workbench opens it and closes the palette', () => {

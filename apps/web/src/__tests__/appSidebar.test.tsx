@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, within, act } from '@testing-librar
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
 import { AppSidebar } from '../components/layout/AppSidebar';
+import { buildAppShortcuts, orderedLiveWorkbenches } from '../components/layout/appShortcuts';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
@@ -88,7 +89,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('AppSidebar', () => {
-  it('groups live workbenches by repository, repositories alphabetical, archived left out', () => {
+  it('groups live workbenches by repository, repositories by activity, archived left out', () => {
     render(<AppSidebar />);
     const api = screen.getByRole('group', { name: 'acme/api' });
     const web = screen.getByRole('group', { name: 'acme/web' });
@@ -96,11 +97,24 @@ describe('AppSidebar', () => {
       within(api)
         .getAllByRole('button')
         .map((b) => b.textContent)
-    ).toEqual(['oslo', 'rome']);
+    ).toEqual(['rome', 'oslo']);
     expect(within(web).getByRole('button')).toHaveTextContent('lisbon');
     expect(screen.queryByText('gone')).not.toBeInTheDocument();
-    // acme/api sorts before acme/web.
+    // The newest acme/api session puts its group first.
     expect(api.compareDocumentPosition(web) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+
+  it('uses the visual activity order for numbered shortcuts', () => {
+    useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
+      repoFullName: 'acme/web', updatedAt: '2026-10-16T00:00:00Z',
+    }));
+    render(<AppSidebar />);
+    const rows = screen.getAllByRole('button').filter((row) => row.getAttribute('data-attr') === 'sidebar-workbench-row');
+    expect(rows.map((row) => row.textContent)).toEqual(['lisbon', 'rome', 'oslo']);
+    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['lisbon', 'rome', 'oslo']);
+    act(() => buildAppShortcuts().find((shortcut) => shortcut.id === 'workbench.jump.1')?.run());
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'lisbon' });
   });
 
   it('shows the diff stat of a row', () => {

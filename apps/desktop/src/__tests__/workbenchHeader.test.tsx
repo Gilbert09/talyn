@@ -11,6 +11,7 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
 const merge = jest.fn();
 const archive = jest.fn();
+const restore = jest.fn();
 const createChat = jest.fn();
 const unlinkPullRequest = jest.fn();
 const openPullRequests = jest.fn().mockResolvedValue([]);
@@ -19,6 +20,7 @@ jest.mock('../renderer/lib/api', () => ({
     pullRequests: { merge: (...a: unknown[]) => merge(...a) },
     workbenches: {
       archive: (...a: unknown[]) => archive(...a),
+      restore: (...a: unknown[]) => restore(...a),
       unlinkPullRequest: (...a: unknown[]) => unlinkPullRequest(...a),
       openPullRequests: (...a: unknown[]) => openPullRequests(...a),
       createChat: (...a: unknown[]) => createChat(...a),
@@ -233,6 +235,16 @@ describe('WorkbenchHeader action cycle', () => {
     const button = screen.queryByRole('button', { name: `PR #${row.number}` });
     if (shown) expect(button).toBeInTheDocument();
     else expect(button).toBeNull();
+  });
+
+  it('offers Restore on an archived session and waits for a click', async () => {
+    const archived = { ...WB, status: 'archived' as const, archivedAt: '2026-10-13T01:00:00Z' };
+    restore.mockResolvedValue(WB);
+    render(<WorkbenchHeader workbench={archived} pr={null} chat={chat} ops={ops()} />);
+    expect(restore).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(restore).toHaveBeenCalledWith('wb1'));
+    expect(useWorkbenchStore.getState().workbenches.wb1?.status).toBe('ready');
   });
 
   it('an archived workbench shows no actions', () => {

@@ -347,16 +347,16 @@ describe('composer triggers', () => {
 });
 
 describe('sidebar order', () => {
-  const wb = (id: string, repo: string, createdAt: string) => ({ id, repoFullName: repo, createdAt }) as Workbench;
+  const wb = (id: string, repo: string, createdAt: string) => ({ id, repoFullName: repo, createdAt, updatedAt: createdAt }) as Workbench;
 
-  it('groups by repository alphabetically, oldest first within a repository', () => {
+  it('groups by newest activity and sorts sessions newest first', () => {
     const groups = groupByRepository([
       wb('3', 'zeta/app', '2026-10-01'),
       wb('2', 'acme/app', '2026-10-03'),
       wb('1', 'acme/app', '2026-10-02'),
     ]);
     expect(groups.map((g) => [g.repo, g.items.map((w) => w.id)])).toEqual([
-      ['acme/app', ['1', '2']],
+      ['acme/app', ['2', '1']],
       ['zeta/app', ['3']],
     ]);
   });

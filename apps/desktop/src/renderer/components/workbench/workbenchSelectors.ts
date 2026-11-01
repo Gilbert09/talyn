@@ -5,18 +5,14 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
+import { newestSessions } from '../../lib/sessionOrder';
 
 export interface RepoGroup {
   repo: string;
   items: Workbench[];
 }
 
-/**
- * Live sessions grouped by repository, repositories alphabetical and sessions
- * oldest first. Creation order rather than recency, so the ⌘1–9 numbers do
- * not move every time an agent writes something. Threads have no repository
- * and have their own section; a thread's sessions stay under their repository.
- */
+/** Live sessions grouped by repository, with the newest activity first. */
 export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
   const map = new Map<string, Workbench[]>();
   for (const wb of workbenches) {
@@ -26,8 +22,8 @@ export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
     else map.set(wb.repoFullName, [wb]);
   }
   return [...map.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([repo, items]) => ({ repo, items: items.sort((a, b) => a.createdAt.localeCompare(b.createdAt)) }));
+    .map(([repo, items]) => ({ repo, items: newestSessions(items) }))
+    .sort((a, b) => b.items[0].updatedAt.localeCompare(a.items[0].updatedAt) || a.repo.localeCompare(b.repo));
 }
 
 export function isArchived(wb: Workbench): boolean {

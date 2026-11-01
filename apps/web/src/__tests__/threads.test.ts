@@ -13,6 +13,7 @@ import {
   threadSummary,
   workbenchPlaceLabel,
 } from '../lib/threads';
+import { newestSessions } from '../lib/sessionOrder';
 import { groupByRepository } from '../components/workbench/workbenchSelectors';
 import { availableWorkbenchActions, primaryWorkbenchAction } from '../lib/workbenchActions';
 
@@ -201,6 +202,27 @@ describe('groupByRepository', () => {
     expect(groups.map((g) => [g.repo, g.items.map((w) => w.id)])).toEqual([
       ['acme/api', ['b']],
       ['acme/web', ['a']],
+    ]);
+  });
+});
+
+describe('activity order', () => {
+  it.each([
+    ['latest update', [wb('old', { updatedAt: '2026-10-12' }), wb('new', { updatedAt: '2026-10-14' })], ['new', 'old']],
+    ['creation tie', [wb('old', { createdAt: '2026-10-12' }), wb('new', { createdAt: '2026-10-14' })], ['new', 'old']],
+    ['ID tie', [wb('z'), wb('a')], ['a', 'z']],
+  ])('%s', (_case, sessions, expected) => {
+    expect(newestSessions(sessions).map((row) => row.id)).toEqual(expected);
+  });
+
+  it('orders groups by their newest session', () => {
+    const groups = groupByRepository([
+      wb('a', { repoFullName: 'acme/a', updatedAt: '2026-10-11' }),
+      wb('b', { repoFullName: 'acme/b', updatedAt: '2026-10-14' }),
+      wb('c', { repoFullName: 'acme/a', updatedAt: '2026-10-13' }),
+    ]);
+    expect(groups.map((group) => [group.repo, group.items.map((row) => row.id)])).toEqual([
+      ['acme/b', ['b']], ['acme/a', ['c', 'a']],
     ]);
   });
 });
