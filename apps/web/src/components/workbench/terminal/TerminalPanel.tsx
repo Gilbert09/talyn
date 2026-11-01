@@ -145,7 +145,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
           </button>
         ))}
         <div className="flex-1" />
-        {open && config && config.source !== 'none' && (tab === 'setup' || tab === 'run') && (
+        {open && config && (config.source !== 'none' || (tab === 'run' && detected?.run)) && (tab === 'setup' || tab === 'run') && (
           <ScriptControls workbench={workbench} ops={ops} name={tab} />
         )}
         <button
@@ -161,13 +161,13 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
       <div className={cn('relative min-h-0 flex-1 border-t', !open && 'hidden')}>
         {open &&
           (tab === 'setup' || tab === 'run') &&
-          (detected?.[tab] ? (
+          (tab === 'setup' && detected?.setup ? (
             <div className="m-3 space-y-2 rounded border bg-muted p-3 text-xs">
               <p>
-                Detected: <code className="break-all">{detected[tab].command}</code>{' '}
-                <span className="text-muted-foreground">({detected[tab].reason})</span>
+                Detected: <code className="break-all">{detected.setup.command}</code>{' '}
+                <span className="text-muted-foreground">({detected.setup.reason})</span>
               </p>
-              <p className="text-muted-foreground">Talyn does not run detected commands until you save them.</p>
+              <p className="text-muted-foreground">Talyn runs it once, before the first run of the app. Save it to change it.</p>
               <button
                 type="button"
                 className="rounded border bg-background px-2 py-1 hover:bg-accent disabled:opacity-50"
@@ -178,22 +178,44 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
               </button>
             </div>
           ) : (
-            <ScriptOutput
-              key={`${workbench.id}:${tab}`}
-              workbenchId={workbench.id}
-              name={tab}
-              emptyText={
-                !config
-                  ? 'Loading the repository config.'
-                  : tab === 'setup'
-                    ? config.setup
-                      ? 'The setup script has not run yet.'
-                      : 'This repository has no setup script.'
-                    : config.run.length
-                      ? 'No run output yet. Press Run to start the run script from the repository config.'
-                      : 'This repository has no run script.'
-              }
-            />
+            <div className="flex h-full flex-col">
+              {tab === 'run' && detected?.run && (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted px-3 py-1.5 text-xs">
+                  <span className="min-w-0 flex-1">
+                    Run uses the detected command <code className="break-all">{detected.run.command}</code>{' '}
+                    <span className="text-muted-foreground">({detected.run.reason})</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded border bg-background px-2 py-0.5 hover:bg-accent disabled:opacity-50"
+                    disabled={saving || Boolean(ops.unavailable)}
+                    onClick={() => void saveDetected()}
+                  >
+                    Save to .talyn/settings.toml
+                  </button>
+                </div>
+              )}
+              <div className="relative min-h-0 flex-1">
+                <ScriptOutput
+                  key={`${workbench.id}:${tab}`}
+                  workbenchId={workbench.id}
+                  name={tab}
+                  emptyText={
+                    !config
+                      ? 'Loading the repository config.'
+                      : tab === 'setup'
+                        ? config.setup
+                          ? 'The setup script has not run yet.'
+                          : 'This repository has no setup script.'
+                        : config.run.length
+                          ? 'No run output yet. Press Run to start the run script from the repository config.'
+                          : detected?.run
+                            ? 'No run output yet. Press Run to start the detected command.'
+                            : 'This repository has no run script.'
+                  }
+                />
+              </div>
+            </div>
           ))}
         {shellStarted && (
           <div className={cn('absolute inset-0', tab !== 'terminal' && 'invisible')}>

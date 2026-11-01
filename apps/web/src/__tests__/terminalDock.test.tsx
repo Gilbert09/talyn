@@ -154,7 +154,7 @@ describe('terminal dock', () => {
     },
   };
 
-  it.each(['setup', 'run'] as const)('offers to save detected %s commands without running them', async (tab) => {
+  it.each(['setup', 'run'] as const)('shows detected %s commands and offers to save them', async (tab) => {
     readConfig.mockResolvedValueOnce({
       ...configured,
       source: 'none',
@@ -167,8 +167,14 @@ describe('terminal dock', () => {
     expect(screen.getAllByRole('tab')).toHaveLength(3);
     expect(screen.getByText(detection[tab].command)).toBeInTheDocument();
     expect(screen.getByText(`(${detection[tab].reason})`)).toBeInTheDocument();
-    expect(screen.getByText('Talyn does not run detected commands until you save them.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    if (tab === 'setup') {
+      expect(screen.getByText('Talyn runs it once, before the first run of the app. Save it to change it.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    } else {
+      // A repository with no config runs its detected command.
+      expect(screen.getByText(/Run uses the detected command/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Save to .talyn/settings.toml' }));
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
