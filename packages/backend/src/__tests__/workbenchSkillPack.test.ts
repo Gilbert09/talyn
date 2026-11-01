@@ -109,6 +109,18 @@ describe('session skill pack', () => {
       }
     });
 
+    it('the briefing explains subscriptions and cites only real session tools', () => {
+      expect(TALYN_BRIEFING).toContain('## Subscriptions');
+      expect(TALYN_BRIEFING).toContain('is not a code problem');
+      expect(TALYN_BRIEFING).toContain('Never wait and retry on the same account.');
+      const cited = new Set(TALYN_BRIEFING.match(/\btalyn_[a-z0-9_]+\b/g) ?? []);
+      for (const tool of ['talyn_list_accounts', 'talyn_set_session_account']) expect(cited.has(tool)).toBe(true);
+      for (const tool of cited) {
+        expect(toolsByName.has(tool), `the briefing cites ${tool}, which is not a registered tool`).toBe(true);
+        expect(SESSION_TOKEN_TOOLS.has(tool), `the briefing cites ${tool}, which a session token may not call`).toBe(true);
+      }
+    });
+
     it.each(TALYN_SKILL_PACK.map((n) => [n]))('%s never names a tool without its talyn_ prefix', (name) => {
       const bare = new Set(TOOLS.map((t) => t.name.replace(/^talyn_/, '')));
       const backticked = [...skillText(name).matchAll(/`([a-z][a-z0-9_]*)`/g)].map((m) => m[1]);
@@ -159,6 +171,9 @@ describe('session skill pack', () => {
       expect(thread).toContain('Do not poll');
       expect(thread).toContain('talyn_list_thread_sessions');
       expect(thread).toContain('`thread`');
+      // A rate limit is recovered with accounts, not retried on the same one.
+      for (const tool of ['talyn_list_accounts', 'talyn_set_session_account', 'talyn_send_session_message']) expect(thread).toContain(tool);
+      expect(thread).toContain('Do not wait and retry on the same account.');
       expect(TALYN_THREAD_NOTE).toContain('`talyn-thread`');
     });
   });

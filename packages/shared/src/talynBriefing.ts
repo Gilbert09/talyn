@@ -46,6 +46,12 @@ ports = [{ port = 3000, label = "App", primary = true }]
 - To land a pull request, add it to Talyn's merge queue with the \`talyn\` tools. Do not merge it yourself.
 - For failing CI, review comments and shipping, use the \`talyn-ci-triage\`, \`talyn-review-loop\` and \`talyn-ship-pr\` skills when they are installed.
 
+## Subscriptions
+- The workspace may have several Claude and Codex subscriptions. Talyn picks one with usage at each turn start. When a turn hits a rate limit, Talyn moves it to another subscription of the same agent.
+- A rate limit or "usage limit" error is not a code problem. Do not change code to fix it.
+- To recover a stopped session, send it a message with \`talyn_send_session_message\`. Talyn picks an account with usage. To see the accounts, use \`talyn_list_accounts\`. To pick one for the next turn, use \`talyn_set_session_account\`.
+- Never wait and retry on the same account.
+
 ## Memory
 - Talyn keeps memory across sessions. Its index is in your instructions. Save durable facts and the person's feedback with \`talyn_memory_write\`. Do not save what the repository already records.
 
