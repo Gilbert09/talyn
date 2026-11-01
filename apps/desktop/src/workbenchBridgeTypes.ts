@@ -7,11 +7,19 @@ export interface PreviewForward {
   url: string;
 }
 
+/** Why `coder whoami` did not give a usable sign-in. */
+export type CoderStatusProblem = 'not_installed' | 'not_logged_in' | 'wrong_deployment' | 'unreachable' | 'error';
+
 export interface CoderStatus {
   installed: boolean;
   loggedIn: boolean;
   url?: string;
   user?: string;
+  /** The absolute path of the `coder` binary that Talyn found. */
+  binary?: string;
+  problem?: CoderStatusProblem;
+  /** The CLI's own output for a failure, so the person sees the real cause. */
+  detail?: string;
 }
 
 export interface CoderWorkspace { name: string; owner: string; status: string; template: string }
@@ -21,11 +29,39 @@ export interface CoderPreviewInput {
   base: string;
   config: EffectivePreview;
 }
+/** The checks and actions of a Coder preview, in the order they run. */
+export type CoderStep = 'cli' | 'login' | 'workspace' | 'worktree' | 'sync' | 'run' | 'open';
+export type CoderProblemCode =
+  | CoderStatusProblem
+  | 'no_workspace' | 'choose_workspace' | 'workspace_stopped' | 'workspace_busy' | 'workspace_failed';
+
+/** A failed check: what is wrong and how the person fixes it. */
+export interface CoderProblem {
+  step: CoderStep;
+  code: CoderProblemCode | 'error';
+  message: string;
+  /** Commands the person can copy and run in a terminal. Talyn never runs them. */
+  commands?: { command: string; label?: string }[];
+  /** Plain text after the commands, for example another install method. */
+  note?: string;
+  /** The CLI's own output. */
+  detail?: string;
+  /** An action that Talyn can do for the person. */
+  action?: 'start_workspace';
+}
+export interface CoderPreviewCheckInput {
+  sessionId: string;
+  repoName: string;
+  config: EffectivePreview;
+}
 export interface CoderPreviewState {
   sessionId: string;
   url: string;
   workspace?: string;
+  /** The `coder` binary is installed. */
   cliReady: boolean;
+  /** The CLI is signed in to this deployment. */
+  signedIn: boolean;
   workspaceRunning: boolean;
   worktreeReady: boolean;
   active: boolean;
@@ -33,8 +69,17 @@ export interface CoderPreviewState {
   syncedAt?: string;
   turn?: number;
   error?: string;
+  /** The step that runs now. */
+  step?: CoderStep;
+  /** Progress text for the step that runs now, for example a workspace status. */
+  stepDetail?: string;
+  /** The first check that failed in the last action. */
+  problem?: CoderProblem;
 }
 export interface CoderPreviewBridge {
+  /** Runs the read-only checks (CLI, sign-in, workspace) and reports the first problem. */
+  check(input: CoderPreviewCheckInput): Promise<CoderPreviewState>;
+  startWorkspace(sessionId: string): Promise<CoderPreviewState>;
   prepare(input: CoderPreviewInput): Promise<CoderPreviewState>;
   sync(input: { sessionId: string; base: string; patch: string; turn?: number }): Promise<CoderPreviewState>;
   run(sessionId: string): Promise<CoderPreviewState>;

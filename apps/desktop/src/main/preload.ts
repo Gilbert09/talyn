@@ -76,6 +76,8 @@ const workbench: DesktopWorkbenchBridge = {
     prepare: (input) => ipcRenderer.invoke('workbench:claude-import:prepare', input),
   },
   coderPreview: {
+    check: (input) => ipcRenderer.invoke('workbench:coder-preview:check', input),
+    startWorkspace: (id) => ipcRenderer.invoke('workbench:coder-preview:start-workspace', id),
     prepare: (input) => ipcRenderer.invoke('workbench:coder-preview:prepare', input),
     sync: (input) => ipcRenderer.invoke('workbench:coder-preview:sync', input),
     run: (id) => ipcRenderer.invoke('workbench:coder-preview:run', id),

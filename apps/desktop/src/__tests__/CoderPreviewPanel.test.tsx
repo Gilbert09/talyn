@@ -8,10 +8,12 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { syncCoderTurn } from '../renderer/lib/coderPreview';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
+import type { CoderPreviewState, CoderProblem } from '../workbenchBridgeTypes';
 
 const patch = jest.fn();
 const previewGet = jest.fn();
 const bridge = {
+  check: jest.fn(), startWorkspace: jest.fn(),
   prepare: jest.fn(), sync: jest.fn(), run: jest.fn(), open: jest.fn(), stop: jest.fn(), remove: jest.fn(), state: jest.fn(),
 };
 jest.mock('../renderer/lib/api', () => ({ api: {
@@ -39,6 +41,9 @@ it('prepares, syncs, runs, and opens in order', async () => {
   await waitFor(() => expect(bridge.open).toHaveBeenCalledWith(wb.id));
   expect(bridge.prepare).toHaveBeenCalledWith(expect.objectContaining({ sessionId: wb.id, repoName: 'org/repo', config }));
   expect(bridge.sync).toHaveBeenCalledWith({ sessionId: wb.id, base: 'a'.repeat(40), patch: 'binary patch' });
+  // The checks run before the patch, which can wake a sleeping sandbox.
+  expect(bridge.check.mock.invocationCallOrder[0]).toBeLessThan(patch.mock.invocationCallOrder[0]);
+  expect(patch.mock.invocationCallOrder[0]).toBeLessThan(bridge.prepare.mock.invocationCallOrder[0]);
   expect(bridge.prepare.mock.invocationCallOrder[0]).toBeLessThan(bridge.sync.mock.invocationCallOrder[0]);
   expect(bridge.sync.mock.invocationCallOrder[0]).toBeLessThan(bridge.run.mock.invocationCallOrder[0]);
   expect(bridge.run.mock.invocationCallOrder[0]).toBeLessThan(bridge.open.mock.invocationCallOrder[0]);
@@ -47,7 +52,7 @@ it('prepares, syncs, runs, and opens in order', async () => {
 it('shows the synced turn and runs the Stop and Remove actions', async () => {
   bridge.state.mockResolvedValue({ active: true, running: true, worktreeReady: true, syncedAt: 'now', turn: 4 });
   render(<CoderPreviewPanel workbench={wb} config={config} />);
-  expect(await screen.findByText('✓ Synced after turn 4')).toBeInTheDocument();
+  expect(await screen.findByText('Synced after turn 4')).toHaveAttribute('data-state', 'done');
   fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
   await waitFor(() => expect(bridge.sync).toHaveBeenCalled());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled());
@@ -93,4 +98,123 @@ it('does not sync stopped previews', async () => {
   useWorkbenchStore.setState({ chats: { [wb.id]: [{ id: 'stopped', workbenchId: wb.id } as WorkbenchChat] } });
   await act(async () => { syncCoderTurn('stopped', [{ turn: 1, event: { type: 'result' } }] as WorkbenchEvent[]); });
   expect(patch).not.toHaveBeenCalled();
+});
+
+let sessions = 0;
+// A new session id per test: the lib keeps errors and running actions per session.
+const session = () => ({ ...wb, id: `coder-session-${++sessions}` }) as Workbench;
+const base = { sessionId: 'x', url: 'https://coder.example', cliReady: false, signedIn: false, workspaceRunning: false, worktreeReady: false, active: false, running: false };
+const withProblem = (problem: CoderProblem, extra: Partial<CoderPreviewState> = {}): CoderPreviewState =>
+  ({ ...base, ...extra, problem, error: problem.message });
+const writeText = jest.fn();
+beforeEach(() => {
+  writeText.mockReset().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+});
+
+const notInstalled: CoderProblem = {
+  step: 'cli', code: 'not_installed', message: 'Talyn cannot find the Coder CLI. Install it, then select Check again.',
+  commands: [{ command: 'brew install coder/coder/coder' }], note: 'You can also use the official install script: curl -L https://coder.com/install.sh | sh',
+};
+
+it('checks the setup when the panel first opens', async () => {
+  const item = session();
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  await waitFor(() => expect(bridge.check).toHaveBeenCalledWith({ sessionId: item.id, repoName: 'org/repo', config }));
+  expect(bridge.prepare).not.toHaveBeenCalled();
+});
+it('shows a missing CLI with the install command and a copy button', async () => {
+  const item = session();
+  bridge.check.mockResolvedValue(withProblem(notInstalled));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  bridge.state.mockResolvedValue(withProblem(notInstalled));
+  fireEvent.click(screen.getByRole('button', { name: 'Preview in Coder' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Talyn cannot find the Coder CLI.');
+  expect(alert).toHaveTextContent('curl -L https://coder.com/install.sh | sh');
+  expect(screen.getByText('brew install coder/coder/coder').tagName).toBe('CODE');
+  expect(screen.getByText('CLI installed')).toHaveAttribute('data-state', 'failed');
+  fireEvent.click(screen.getByRole('button', { name: 'Copy brew install coder/coder/coder' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith('brew install coder/coder/coder'));
+  expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+  expect(patch).not.toHaveBeenCalled();
+  expect(bridge.prepare).not.toHaveBeenCalled();
+});
+it.each<[string, CoderProblem, string]>([
+  ['not signed in', { step: 'login', code: 'not_logged_in', message: 'The Coder CLI is not signed in to https://coder.example, or the sign-in expired.', commands: [{ command: 'coder login https://coder.example' }, { label: 'Or use hogli, from the PostHog repository:', command: 'hogli devbox:setup' }] }, 'coder login https://coder.example'],
+  ['unreachable', { step: 'login', code: 'unreachable', message: 'Talyn cannot reach https://coder.example. Connect to that network, then select Check again.', detail: 'dial tcp: lookup coder.example: no such host' }, 'no such host'],
+])('shows the %s problem and its fix', async (_name, problem, text) => {
+  const item = session();
+  bridge.state.mockResolvedValue(withProblem(problem, { cliReady: true }));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent(problem.message);
+  expect(alert).toHaveTextContent(text);
+  expect(screen.getByText('Signed in')).toHaveAttribute('data-state', 'failed');
+  expect(screen.getByText('CLI installed')).toHaveAttribute('data-state', 'done');
+  for (const { command } of problem.commands ?? []) expect(screen.getByRole('button', { name: `Copy ${command}` })).toBeInTheDocument();
+});
+it('offers to start a stopped workspace', async () => {
+  const item = session();
+  const problem: CoderProblem = { step: 'workspace', code: 'workspace_stopped', message: 'The workspace dev is stopped.', commands: [{ command: 'coder start dev' }], action: 'start_workspace' };
+  bridge.state.mockResolvedValue(withProblem(problem, { cliReady: true, signedIn: true, workspace: 'dev' }));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Start workspace' }));
+  await waitFor(() => expect(bridge.startWorkspace).toHaveBeenCalledWith(item.id));
+});
+it('shows a spinner on the step that runs and its progress text', async () => {
+  const item = session();
+  let release!: (value: CoderPreviewState) => void;
+  bridge.state.mockResolvedValue({ ...base, cliReady: true, step: 'login', stepDetail: 'Checking the sign-in to https://coder.example' });
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  bridge.check.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Check setup' }));
+  await waitFor(() => expect(screen.getByText('Signed in')).toHaveAttribute('data-state', 'current'));
+  expect(screen.getByLabelText('In progress')).toBeInTheDocument();
+  expect(screen.getByText('Checking the sign-in to https://coder.example')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Preview in Coder' })).toBeDisabled();
+  await act(async () => { release({ ...base }); });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Preview in Coder' })).toBeEnabled());
+});
+it('runs the checks again on request', async () => {
+  const item = session();
+  bridge.state.mockResolvedValue(withProblem(notInstalled));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+  await waitFor(() => expect(bridge.check).toHaveBeenCalledWith({ sessionId: item.id, repoName: 'org/repo', config }));
+});
+it.each<[string, () => void, string]>([
+  ['the check throws', () => bridge.check.mockRejectedValue(new Error("Error invoking remote method 'workbench:coder-preview:check': Error: Invalid repository name.")), 'Invalid repository name.'],
+  ['the patch cannot be read', () => patch.mockRejectedValue(new Error('The sandbox is not ready.')), 'The sandbox is not ready.'],
+  ['prepare fails', () => bridge.prepare.mockRejectedValue(new Error("Error invoking remote method 'workbench:coder-preview:prepare': Error: Coder command failed (128): fatal: not a git repository")), 'Coder command failed (128): fatal: not a git repository'],
+  ['the run fails', () => bridge.run.mockRejectedValue(new Error('Sync this preview before you run it.')), 'Sync this preview before you run it.'],
+  ['open fails', () => bridge.open.mockRejectedValue(new Error('Local port 8010 is in use.')), 'Local port 8010 is in use.'],
+])('never fails silently when %s', async (_name, fail, text) => {
+  const item = session();
+  bridge.state.mockResolvedValue({ ...base });
+  fail();
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Preview in Coder' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent(text);
+  expect(alert).not.toHaveTextContent('Error invoking remote method');
+  expect(screen.getByRole('button', { name: 'Preview in Coder' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+});
+it('stops before the patch when a check finds a problem', async () => {
+  const item = session();
+  bridge.state.mockResolvedValue({ ...base });
+  bridge.check.mockResolvedValue(withProblem({ step: 'login', code: 'not_logged_in', message: 'Sign in.' }));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Preview in Coder' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Sign in.');
+  expect(patch).not.toHaveBeenCalled();
+});
+it('continues past a stopped workspace, because prepare starts it', async () => {
+  const item = session();
+  bridge.state.mockResolvedValue({ ...base });
+  bridge.check.mockResolvedValue(withProblem({ step: 'workspace', code: 'workspace_stopped', message: 'Stopped.', action: 'start_workspace' }));
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Preview in Coder' }));
+  await waitFor(() => expect(bridge.open).toHaveBeenCalledWith(item.id));
 });

@@ -97,9 +97,21 @@ function executableNames(name: string): string[] {
   return extensions.map((extension) => name + extension.toLowerCase());
 }
 
-async function locate(name: string): Promise<string | null> {
-  const directories = (await loginPath()).split(path.delimiter);
-  for (const directory of directories) {
+/**
+ * The first executable `name` in `extraDirs`, then in the login shell's PATH.
+ * An app opened from Finder does not inherit the shell's PATH, so a bare
+ * `execFile(name)` can miss a binary the person's terminal finds.
+ */
+export async function locate(
+  name: string,
+  extraDirs: string[] = [],
+  searchPath?: string,
+): Promise<string | null> {
+  const directories = [
+    ...extraDirs,
+    ...(searchPath ?? (await loginPath())).split(path.delimiter),
+  ];
+  for (const directory of new Set(directories)) {
     for (const file of executableNames(name)) {
       const candidate = path.join(directory, file);
       try {

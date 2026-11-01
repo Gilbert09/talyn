@@ -215,6 +215,8 @@ export function registerWorkbenchIpc(
   handle('readiness', (force?: boolean) => localReadiness(force === true));
   handle('coder:status', (url?: string) => coder.status(url));
   handle('coder:workspaces', () => coder.workspaces());
+  handle('coder-preview:check', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['check']>[0]) => coderPreviews.check(input));
+  handle('coder-preview:start-workspace', (id: string) => coderPreviews.startWorkspace(id));
   handle('coder-preview:prepare', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['prepare']>[0]) => coderPreviews.prepare(input));
   handle('coder-preview:sync', (input: Parameters<DesktopWorkbenchBridge['coderPreview']['sync']>[0]) => coderPreviews.sync(input));
   handle('coder-preview:run', (id: string) => coderPreviews.run(id));
