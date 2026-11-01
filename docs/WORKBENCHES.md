@@ -156,6 +156,10 @@ have no flag of their own.
   included) after `git reset --hard <base>` and `git clean -fdq`. It runs the run command in
   tmux, and opens the template's app URL or a `coder port-forward`. It syncs again after each
   turn. One preview runs per Coder workspace, because the stack uses fixed ports.
+  The checks (CLI, sign-in, workspace) run before the patch read, and they stop at the first
+  failure. The failure goes in `CoderPreviewState.problem` with its fix as copyable commands.
+  The CLI is found in `~/.hogli/bin` (hogli's own copy) and then the login PATH. See the
+  2026-11-01 note in `SESSIONS.md`.
 - **Hosted URLs** (2026-11-01, migration `0098`). They are for the web app, which has no
   local forward, and for share links. `PREVIEW_BASE_DOMAIN` (for example
   `preview.talyn.dev`) turns them on. With it unset, the ticket route answers 404
