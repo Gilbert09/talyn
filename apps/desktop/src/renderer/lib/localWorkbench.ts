@@ -526,7 +526,15 @@ export class LocalTurnController {
   }
 
   async cancel(chatId: string): Promise<void> {
+    const ours = this.running.has(chatId);
     await this.deps.bridge.cancelTurn(chatId);
+    // A chat left `running` by an app that quit or crashed mid-turn has no
+    // turn here to end it, so nothing would ever report it idle.
+    const chat = findChat(chatId);
+    if (!ours && !this.running.has(chatId) && chat?.status === 'running') {
+      this.setStatus(chat, 'idle');
+      await this.report(chatId, { status: 'idle' });
+    }
   }
 
   private setStatus(chat: WorkbenchChat, status: WorkbenchChat['status']): void {

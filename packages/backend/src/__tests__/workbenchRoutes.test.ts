@@ -1467,6 +1467,17 @@ describe('workbench routes', () => {
       expect(stored[0].event.text).toContain('�');
     });
 
+    it.each([
+      ['running', 'idle'],
+      ['error', 'error'],
+    ])('closing a local chat that is %s leaves it %s', async (before, after) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await call('PATCH', `/workbenches/chats/${chatId}/local`, { status: before });
+      expect((await call('DELETE', `/workbenches/chats/${chatId}`)).status).toBe(200);
+      expect((await getChat(chatId))?.status).toBe(after);
+    });
+
     it('pages a local chat backwards from the newest event, by whole turns', async () => {
       const wb = await createLocalWorkbench();
       const chatId = await chatIdOf(wb.id);

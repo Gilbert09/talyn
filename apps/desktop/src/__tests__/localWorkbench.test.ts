@@ -264,6 +264,23 @@ describe('LocalTurnController', () => {
     expect(controller.isRunning('c1')).toBe(false);
   });
 
+  it('Stop on a chat left running by an app that quit mid-turn reports it idle', async () => {
+    const { controller, bridge, api } = setup();
+    useWorkbenchStore.getState().upsertChat(chat({ status: 'running' }));
+    await controller.cancel('c1');
+    expect(bridge.cancelTurn).toHaveBeenCalledWith('c1');
+    expect(api.updateLocalChat).toHaveBeenCalledWith('c1', { status: 'idle' });
+    expect(useWorkbenchStore.getState().chats.wb1?.find((c) => c.id === 'c1')?.status).toBe('idle');
+  });
+
+  it('Stop on a turn this app runs leaves the status to the turn end', async () => {
+    const { controller, api } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    api.updateLocalChat.mockClear();
+    await controller.cancel('c1');
+    expect(api.updateLocalChat).not.toHaveBeenCalledWith('c1', { status: 'idle' });
+  });
+
   it('puts a failed upload back and retries it on the next tick', async () => {
     const { controller, api, emit, tick } = setup();
     api.uploadLocalEvents.mockRejectedValueOnce(new Error('offline'));

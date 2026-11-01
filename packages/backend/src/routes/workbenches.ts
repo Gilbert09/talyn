@@ -257,7 +257,9 @@ export function workbenchRoutes(): Router {
     if (found.workbench.runtime === 'sandbox' && found.chat.status === 'running') {
       await cancelTurn(found.chat.id).catch((err) => console.warn('[workbench] cancel on close failed:', err));
     }
-    await updateChat(found.chat.id, { closedAt: new Date(), queuedMessages: [] });
+    // A local turn runs on the desktop, which may be gone: a closed chat must not stay `running`.
+    const stale = found.workbench.runtime === 'local' && found.chat.status === 'running';
+    await updateChat(found.chat.id, { closedAt: new Date(), queuedMessages: [], ...(stale ? { status: 'idle' as const } : {}) });
     // The embedded list is how a client learns a chat is gone.
     const workbench = await getWorkbench(found.workbench.id);
     if (workbench) await emitWorkbenchUpdated(await publicWorkbench(workbench));
