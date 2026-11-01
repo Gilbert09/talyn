@@ -438,6 +438,9 @@ export type ConfirmWorkbenchBranchNameResult =
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
   branch?: string;
+  /** Both fields identify a local session moved to this device. */
+  deviceId?: string;
+  localPath?: string;
   /** A rename. Also sets `title` to the new name, so a generated title cannot replace it. */
   name?: string;
   /** A display title a person chose. Null or blank clears it. */
