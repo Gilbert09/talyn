@@ -111,6 +111,8 @@ export type WorkbenchDiffScope = 'combined' | 'uncommitted' | 'committed';
 export interface WorkbenchSettings {
   prUnlinked?: number;
   fleetSandboxId?: string;
+  /** The fleet account the session runs on, and the one its next turn tries first. Server-written. */
+  fleetAccountId?: string;
   /** Absent means internet access is on. */
   internetAccess?: boolean;
   /** Absent uses the device default. */

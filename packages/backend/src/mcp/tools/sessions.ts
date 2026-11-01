@@ -5,6 +5,8 @@ import {
   isTalynOriginMessage,
   type AgentEvent,
   type CreateWorkbenchPullRequestResult,
+  type FleetAccountView,
+  type FleetAccountsResponse,
   type Workbench,
   type WorkbenchChanges,
   type WorkbenchChat,
@@ -148,6 +150,30 @@ const SELF_CANCEL = 'That would stop the reply you are writing now. To stop, end
 const SELF_RESTORE = 'This is your own session, and it is running. There is nothing to restore.';
 const SELF_ARCHIVE_DEFERRED =
   'This session will be archived when this reply ends. Finish the reply now, and do not start more work.';
+
+const ACCOUNT_AGENT_LABEL = { claude: 'Claude', codex: 'Codex' } as const;
+
+function accountUsageText(account: FleetAccountView): string {
+  const parts: string[] = [];
+  if (account.needsReauth) parts.push('needs to be signed in again');
+  if (account.held) parts.push(`rate limited or out of usage until ${account.held.until ?? 'unknown'}`);
+  if (account.usage && 'windows' in account.usage) {
+    for (const w of account.usage.windows) parts.push(`${w.label} ${Math.round(w.usedPercent)}%`);
+  } else if (!account.needsReauth && !account.held) {
+    parts.push('usage unknown');
+  }
+  return parts.join(', ');
+}
+
+/** The sessions whose accounts a call may show or change: the caller's own, and a thread's sessions. */
+async function accountSessions(ownerId: string, args: Record<string, unknown>, ctx: McpCallContext | undefined): Promise<Workbench[]> {
+  const anchorId = str(args.session_id) ?? ctx?.session?.workbenchId;
+  if (!anchorId) return [];
+  const anchor = await loadSession(ownerId, anchorId);
+  if (anchor.kind !== 'thread') return [anchor];
+  const children = await callApi<Workbench[]>(ownerId, 'GET', `/workbenches/${encodeURIComponent(anchor.id)}/sessions`);
+  return [anchor, ...children];
+}
 
 const eventSeq = (key: string): number | null => {
   const match = /^(\d+)(?:\.|$)/.exec(key);
@@ -370,6 +396,70 @@ export const SESSIONS = [
         return result.queued
           ? `Message queued on chat ${chatId}. It runs when the current turn ends.`
           : `Message sent. A turn started on chat ${chatId}.`;
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'list_accounts',
+    "List the workspace's Claude and Codex subscriptions: label, usage, and whether one is rate limited. Also shows which account this session, or each session of this thread, runs on. Never shows secrets.",
+    {
+      workspace_id: { type: 'string', description: 'The workspace. Default: the only workspace.' },
+      session_id: { type: 'string', description: 'Show this session and, for a thread, its sessions. Default: the calling session.' },
+    },
+    [],
+    { readOnlyHint: true },
+    async (ownerId, args, ctx) => {
+      const sessions = await accountSessions(ownerId, args, ctx);
+      const workspaceId = str(args.workspace_id) ?? sessions[0]?.workspaceId ?? (await resolveWorkspace(ownerId, args));
+      const data = await callApi<FleetAccountsResponse>(
+        ownerId,
+        'GET',
+        `/cloud-providers/selfhosted/accounts?workspaceId=${encodeURIComponent(workspaceId)}`
+      );
+      const lines: string[] = [];
+      for (const agent of ['claude', 'codex'] as const) {
+        const accounts = data.accounts.filter((a) => a.agent === agent);
+        if (accounts.length === 0) continue;
+        lines.push(`${ACCOUNT_AGENT_LABEL[agent]} accounts (Talyn tries them in this order):`);
+        for (const a of accounts) {
+          lines.push(`  ${a.id}  "${a.label}"  ${a.over ? '[not usable now]' : '[usable]'}  ${accountUsageText(a)}`);
+        }
+      }
+      if (lines.length === 0) return 'No Claude or Codex accounts are connected.';
+      if (sessions.length > 0) {
+        lines.push('', 'Sessions:');
+        for (const wb of sessions) {
+          const id = wb.settings?.fleetAccountId;
+          const label = data.accounts.find((a) => a.id === id)?.label;
+          const mine = wb.id === ctx?.session?.workbenchId ? ' (this session)' : '';
+          lines.push(`  ${wb.id}  "${wb.title || wb.name}"${mine}  ${wb.agent}  account: ${id ? `${label ? `"${label}" ` : ''}${id}` : 'not chosen yet'}`);
+        }
+      }
+      return lines.join('\n');
+    },
+    FEATURE
+  ),
+  defineTool(
+    'set_session_account',
+    "Choose the Claude or Codex account a session uses from its NEXT turn. It does not stop a running turn. Talyn still moves to another account at turn start when the chosen one is rate limited.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session.' },
+      account_id: { type: 'string', description: 'An account id from talyn_list_accounts. It must be an account of the session\'s agent.' },
+    },
+    ['account_id'],
+    { idempotentHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        const accountId = requireId(args, 'account_id');
+        const self = ctx?.session?.workbenchId;
+        const sessionId = str(args.session_id) ?? self;
+        if (!sessionId) throw new Error('session_id is required');
+        if (self && sessionId !== self) {
+          const target = await loadSession(ownerId, sessionId);
+          if (target.threadId !== self) throw new Error('A session can change its own account, or the account of a session in its thread.');
+        }
+        const wb = await callApi<Workbench>(ownerId, 'PUT', `/workbenches/${encodeURIComponent(sessionId)}/account`, { accountId });
+        return `Session ${wb.id} will use account ${accountId} from its next turn.`;
       }),
     FEATURE
   ),
