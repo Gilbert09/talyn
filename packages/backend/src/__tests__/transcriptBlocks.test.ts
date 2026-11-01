@@ -402,6 +402,7 @@ describe('system lines', () => {
     ['sandbox_low_disk', 'Less than 2 GB free.', { kind: 'system', text: 'Less than 2 GB free.' }],
     ['sandbox_processes_stopped', 'Start them again.', { kind: 'system', text: 'Start them again.' }],
     ['fleet_account_switched', 'Moved to "Teams".', { kind: 'system', text: 'Moved to "Teams".' }],
+    ['local_turn_interrupted', 'The app quit during this turn.', { kind: 'system', text: 'The app quit during this turn.' }],
     ['stderr', 'boom', { kind: 'system', text: 'boom', subtype: 'stderr' }],
     ['init', 'hidden', null],
   ])('%s', (subtype, text, expected) => {
