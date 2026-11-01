@@ -162,14 +162,15 @@ test.each(['local', 'clone'] as const)(
     await fs.mkdir(path.join(result.path, '.context'));
     await fs.writeFile(path.join(result.path, '.context/file'), 'ignored');
     expect(await listFiles(result.path)).not.toContain('.context/file');
-    await manager.removeWorktree({ path: result.path });
+    // copy.txt is not ignored, so the worktree has an untracked file.
+    await manager.removeWorktree({ path: result.path, workbenchId: 'wb', force: true });
     await expect(fs.access(result.path)).rejects.toThrow();
     // The existing branch must be reusable after removal.
     const again = await manager.createWorktree(input);
     expect(await runGit(again.path, ['branch', '--show-current'])).toBe(
       'tom/london',
     );
-    await manager.removeWorktree({ path: again.path });
+    await manager.removeWorktree({ path: again.path, workbenchId: 'wb', force: true });
   },
 );
 

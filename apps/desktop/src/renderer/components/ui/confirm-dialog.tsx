@@ -45,6 +45,7 @@ export function ConfirmDialog({
   confirmLabel = 'Delete',
   cancelLabel = 'Cancel',
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -56,6 +57,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   /** The action is in flight: both buttons lock and Confirm shows a spinner. */
   busy?: boolean;
+  /** Confirm stays off, for example while the dialog still reads what is at stake. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -94,7 +97,7 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </Button>
-          <Button variant="destructive" size="sm" onClick={onConfirm} disabled={busy}>
+          <Button variant="destructive" size="sm" onClick={onConfirm} disabled={busy || confirmDisabled}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : confirmLabel}
           </Button>
         </DialogFooter>

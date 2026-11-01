@@ -93,17 +93,23 @@ export function registerWorkbenchIpc(
     (input: Parameters<WorkbenchLocalBridge['createWorktree']>[0]) =>
       trees.createWorktree(input),
   );
+  // Turns, scripts and terminals are keyed by the session id.
+  const stopSession = async (workbenchId: string) => {
+    if (typeof workbenchId !== 'string' || !workbenchId) throw new Error('A session id is required.');
+    await agents.stopWorkbench(workbenchId);
+    await scripts.stopWorkbench(workbenchId);
+    await terminals.stopWorkbench(workbenchId);
+  };
   handle(
     'remove-worktree',
-    async (input: Parameters<WorkbenchLocalBridge['removeWorktree']>[0]) => {
-      const state = await paths.load(input.path);
-      if (state) {
-        await agents.stopWorkbench(state.workbenchId);
-        await scripts.stopWorkbench(state.workbenchId);
-        await terminals.stopWorkbench(state.workbenchId);
-      }
-      await trees.removeWorktree(input);
-    },
+    (input: Parameters<WorkbenchLocalBridge['removeWorktree']>[0]) =>
+      trees.removeWorktree(input, stopSession),
+  );
+  handle('inspect-worktree', (target: string) => trees.inspectWorktree(target));
+  handle(
+    'restore-worktree',
+    (input: Parameters<NonNullable<WorkbenchLocalBridge['restoreWorktree']>>[0]) =>
+      trees.restoreWorktree(input),
   );
   handle(
     'start-turn',
@@ -111,12 +117,7 @@ export function registerWorkbenchIpc(
       agents.startTurn(input),
   );
   handle('cancel-turn', (chatId: string) => agents.cancelTurn(chatId));
-  handle('stop-workbench', async (workbenchId: string) => {
-    if (typeof workbenchId !== 'string' || !workbenchId) throw new Error('A session id is required.');
-    await agents.stopWorkbench(workbenchId);
-    await scripts.stopWorkbench(workbenchId);
-    await terminals.stopWorkbench(workbenchId);
-  });
+  handle('stop-workbench', stopSession);
   handle(
     'generate-title',
     (input: Parameters<NonNullable<WorkbenchLocalBridge['generateTitle']>>[0]) =>

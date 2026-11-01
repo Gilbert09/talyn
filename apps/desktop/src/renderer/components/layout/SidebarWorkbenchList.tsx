@@ -11,7 +11,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '../ui/context-menu';
-import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
+import { ArchiveWorkbenchDialog, archiveWorkbench, type ArchiveOptions } from '../workbench/archiveWorkbench';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -96,9 +96,9 @@ function WorkbenchRow({
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
   };
 
-  const archive = async () => {
+  const archive = async (opts: ArchiveOptions) => {
     setArchiving(true);
-    const ok = await archiveWorkbench(workbench.id, selected);
+    const ok = await archiveWorkbench(workbench.id, selected, opts);
     setArchiving(false);
     if (ok) setConfirming(false);
   };
@@ -172,7 +172,7 @@ function WorkbenchRow({
         workbench={workbench}
         open={confirming}
         busy={archiving}
-        onConfirm={() => void archive()}
+        onConfirm={(opts) => void archive(opts)}
         onCancel={() => setConfirming(false)}
       />
     </>
