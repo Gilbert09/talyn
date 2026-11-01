@@ -827,6 +827,10 @@ async function detectScripts(row: WorkbenchRow, requireAbsent = false) {
   });
 }
 
+export function detectWorkbenchScriptsInBox(row: WorkbenchRow) {
+  return detectScripts(row);
+}
+
 export async function loadWorkbenchConfigWithDetection(row: WorkbenchRow): Promise<WorkbenchConfig> {
   const config = await loadWorkbenchConfig(row);
   if (config.source === 'none' && row.kind !== 'thread') config.detected = await detectScripts(row);

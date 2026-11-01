@@ -58,6 +58,31 @@ export function detectWorkbenchScripts(input: {
   return detected;
 }
 
+const DETECTED_SETUP_MARKER = '/tmp/talyn-detected-setup-done';
+
+/**
+ * A shell line that runs the detected run command when the repository has no
+ * run script. The detected setup runs first, once per box: a new box has no
+ * installed dependencies. Null when nothing was detected.
+ */
+export function detectedRunScript(
+  detected: DetectedWorkbenchScripts,
+  setupMarker = DETECTED_SETUP_MARKER,
+): string | null {
+  if (!detected.run) return null;
+  const note = `echo ${shellWord(`Talyn: this repository has no run script, so Talyn runs "${detected.run.command}" (${detected.run.reason}).`)}`;
+  if (!detected.setup) return `${note}; ${detected.run.command}`;
+  return [
+    note,
+    `if [ ! -f ${setupMarker} ]; then (${detected.setup.command}) && touch ${setupMarker} || exit $?; fi`,
+    detected.run.command,
+  ].join('; ');
+}
+
+function shellWord(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
 export function detectedScriptsToToml(detected: DetectedWorkbenchScripts): string {
   const lines = ['# Talyn wrote this file from the detected files.', '[scripts]'];
   for (const name of ['setup', 'run'] as const) {
