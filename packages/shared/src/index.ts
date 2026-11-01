@@ -1154,6 +1154,12 @@ export type WSEventType =
   // Per-user billing fact (broadcastToUser) — fired by the Polar webhook
   // handler after a plan change; payload is the fresh BillingStatus.
   | 'subscription:updated'
+  // Usage billing, per user (broadcastToUser). One alert per threshold
+  // (50/80/100% of included box-hours) per period; payload `UsageAlertEvent`.
+  | 'billing:usage_alert'
+  // Included hours and credits ran out; new boxes are refused and idle
+  // workbench boxes suspend. Payload `UsageExhaustedEvent`.
+  | 'billing:exhausted'
   // One workflow evaluated one PR and finished acting. Carries the whole
   // WorkflowRun row, which is what makes the Workflows page's history and its
   // derived stats live rather than poll-shaped.
