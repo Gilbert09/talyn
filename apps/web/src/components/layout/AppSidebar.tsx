@@ -17,6 +17,7 @@ import { cn } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { useSidebarWidth } from '../../lib/sidebarWidth';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePrBadgeCounts } from '../../hooks/usePrBadgeCounts';
 import { useAuth } from '../auth/AuthProvider';
@@ -32,6 +33,7 @@ import { UserChip } from './UserChip';
 
 export function AppSidebar() {
   const collapsed = useWorkspaceStore((s) => s.sidebarCollapsed);
+  const { width, dragging, handleProps } = useSidebarWidth();
   const toggleSidebar = useWorkspaceStore((s) => s.toggleSidebar);
   const features = useWorkspaceStore((s) => s.features);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
@@ -53,10 +55,23 @@ export function AppSidebar() {
       <aside
         data-attr="app-sidebar"
         className={cn(
-          'flex h-full shrink-0 flex-col border-r bg-card text-[13px] transition-[width] duration-150',
-          collapsed ? 'w-14' : 'w-60'
+          'relative flex h-full shrink-0 flex-col border-r bg-card text-[13px]',
+          !dragging && 'transition-[width] duration-150',
+          collapsed && 'w-14'
         )}
+        style={collapsed ? undefined : { width }}
       >
+        {!collapsed && (
+          <div
+            {...handleProps}
+            data-attr="sidebar-resize-handle"
+            className={cn(
+              'app-region-no-drag absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize focus-visible:outline-none',
+              'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
+              dragging ? 'after:bg-primary' : 'hover:after:bg-primary/60 focus-visible:after:bg-primary'
+            )}
+          />
+        )}
         <div className="px-2 pb-1 pt-1">
           <WorkspaceSwitcher collapsed={collapsed} />
         </div>
