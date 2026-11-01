@@ -707,6 +707,11 @@ export interface WorkbenchLocalBridge {
   ): Promise<WorkbenchExecResult>;
   readFile(path: string, relativePath: string): Promise<{ content: string; binary: boolean }>;
   readFileBase64(path: string, relativePath: string): Promise<string>;
+  /**
+   * Write a pasted file into `.context/attachments/` of the worktree at `path`
+   * and return its relative path. Optional: an older main process does not have it.
+   */
+  writeAttachment?(path: string, name: string, dataBase64: string): Promise<string>;
   readConfig(path: string): Promise<WorkbenchConfig>;
   saveDetectedConfig(path: string): Promise<void>;
   listFiles(path: string): Promise<string[]>;
