@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { detectCheckouts, uniqueMainCheckouts } from '../detectCheckouts';
+import { detectCheckouts, matchingRemote, uniqueMainCheckouts } from '../detectCheckouts';
 
 let root: string;
 
@@ -120,4 +120,19 @@ test('the startup scan skips a chosen folder on another volume, a manual scan re
   const opts = { mounts, roots: [], extraRoots: [path.join(root, 'disk')] };
   expect(await detectCheckouts(['o/r'], { ...opts, localOnly: true })).toEqual({});
   expect(await detectCheckouts(['o/r'], opts)).toEqual({ 'o/r': [checkout] });
+});
+
+describe('matchingRemote', () => {
+  const config = (remotes: Record<string, string>) =>
+    Object.entries(remotes).map(([name, url]) => `[remote "${name}"]\n\turl = ${url}\n`).join('');
+  const wanted = new Set(['posthog/posthog']);
+
+  it.each([
+    ['origin is the repo', { origin: 'git@github.com:PostHog/posthog.git' }, [['posthog/posthog', true]]],
+    ['origin is a fork, upstream the repo', { origin: 'https://github.com/someone/posthog.git', upstream: 'git@github.com:PostHog/posthog.git' }, [['posthog/posthog', false]]],
+    ['no origin, another remote is the repo', { upstream: 'git@github.com:PostHog/posthog.git' }, [['posthog/posthog', false]]],
+    ['origin is another project with a remote for the repo', { origin: 'git@github.com:Gilbert09/talyn.git', posthog: 'git@github.com:PostHog/posthog.git' }, []],
+  ])('%s', (_name, remotes, expected) => {
+    expect([...matchingRemote(config(remotes), wanted)]).toEqual(expected);
+  });
 });

@@ -77,8 +77,17 @@ export async function readCheckoutConfig(checkout: string, main: boolean): Promi
   }
 }
 
+/**
+ * The repositories a checkout is a clone of, each with whether `origin` names
+ * it. A remote other than `origin` counts only when `origin` is missing or is
+ * a fork of the same repository (same name, another owner). A project whose
+ * `origin` is a different repository is not a checkout of a repository it
+ * merely has a remote for: Talyn's own repo with a `posthog` remote is not a
+ * PostHog checkout.
+ */
 export function matchingRemote(config: string, wanted: Set<string>): Map<string, boolean> {
   let remote = '';
+  let originName: string | null = null;
   const matches = new Map<string, boolean>();
   for (const line of config.split(/\r?\n/)) {
     const section = line.match(/^\s*\[remote\s+"([^"]+)"\s*\]/i);
@@ -93,7 +102,14 @@ export function matchingRemote(config: string, wanted: Set<string>): Map<string,
     const url = remote && line.match(/^\s*url\s*=\s*(.*?)\s*$/i);
     if (!url) continue;
     const name = repoFullNameFromRemote(url[1])?.toLowerCase();
+    if (remote === 'origin' && name) originName = name;
     if (name && wanted.has(name)) matches.set(name, matches.get(name) || remote === 'origin');
+  }
+  if (originName) {
+    const originRepo = originName.split('/')[1];
+    for (const [name, viaOrigin] of matches) {
+      if (!viaOrigin && name.split('/')[1] !== originRepo) matches.delete(name);
+    }
   }
   return matches;
 }
