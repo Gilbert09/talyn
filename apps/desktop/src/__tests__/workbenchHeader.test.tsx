@@ -99,6 +99,26 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
+describe('WorkbenchHeader layout', () => {
+  it('puts actions above branch details, chips, and panel toggles', () => {
+    const { container } = render(<WorkbenchHeader workbench={WB} pr={prRow({ blockingReason: 'checks_failed', ciStatus: 'failing_required' })} chat={chat} ops={ops()} />);
+    const titleRow = container.querySelector('[data-attr="workbench-header-title-row"]');
+    const metaRow = container.querySelector('[data-attr="workbench-header-meta-row"]');
+    expect(titleRow).toContainElement(screen.getByRole('heading', { name: 'lisbon' }));
+    expect(titleRow).toContainElement(screen.getByTestId('workbench-primary-action'));
+    expect(titleRow).toContainElement(container.querySelector('[data-attr="workbench-open-pr"]'));
+    expect(metaRow).toContainElement(screen.getByRole('button', { name: 'Copy the branch name' }));
+    expect(metaRow).toContainElement(screen.getByRole('button', { name: 'Toggle the terminal' }));
+    expect(metaRow).toContainElement(screen.getByRole('button', { name: 'Toggle the right panel' }));
+    expect(metaRow).toHaveTextContent('lisbon');
+    expect(metaRow).toHaveTextContent('main');
+    expect(metaRow).toContainElement(screen.getByTitle(/Required CI checks failing/));
+    const chips = container.querySelector('[data-attr="workbench-header-chips"]');
+    expect(chips).toContainElement(screen.getByText('Sandbox'));
+    expect(chips).toHaveClass('overflow-x-auto');
+  });
+});
+
 describe('WorkbenchHeader action cycle', () => {
   it.each([
     ['sandbox', false, true],
