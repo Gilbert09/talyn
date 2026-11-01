@@ -32,6 +32,20 @@ import {
   requireWorkspaceAccess,
 } from '../middleware/auth.js';
 
+
+const refreshing = new Set<string>();
+
+/**
+ * Run a detection without making the request wait. Detections answer from
+ * their own store while it is fresh, so this costs nothing most of the time.
+ * One refresh per key runs at a time in this process.
+ */
+function refreshInBackground(key: string, run: () => Promise<unknown>): void {
+  if (refreshing.has(key)) return;
+  refreshing.add(key);
+  void run().catch(() => undefined).finally(() => refreshing.delete(key));
+}
+
 export function repositoryRoutes(): Router {
   const router = Router();
 
@@ -149,7 +163,10 @@ export function repositoryRoutes(): Router {
     if (!(await previewGate(req, res))) return;
     const row = await getPreviewRepository(req.params.id);
     if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
-    const detected = await detectRepoPreview(row.workspaceId, row);
+    // A stored answer returns at once; an old one refreshes in the background.
+    const detected = row.settings?.preview?.detected
+      ? (refreshInBackground(`preview:${row.id}`, () => detectRepoPreview(row.workspaceId, row)), row.settings.preview.detected)
+      : await detectRepoPreview(row.workspaceId, row);
     row.settings = { ...row.settings, preview: { ...row.settings?.preview, ...(detected ? { detected } : {}) } };
     res.json({ success: true, data: previewResponse(row) });
   });
@@ -178,7 +195,9 @@ export function repositoryRoutes(): Router {
     if (!(await previewGate(req, res))) return;
     const row = await getSizeRepository(req.params.id);
     if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
-    const detected = await detectRepoSandboxSize(row.workspaceId, row);
+    const detected = row.settings?.detectedSandboxSize
+      ? (refreshInBackground(`size:${row.id}`, () => detectRepoSandboxSize(row.workspaceId, row)), row.settings.detectedSandboxSize)
+      : await detectRepoSandboxSize(row.workspaceId, row);
     row.settings = { ...row.settings, ...(detected ? { detectedSandboxSize: detected } : {}) };
     res.json({ success: true, data: sandboxSizeResponse(row) });
   });

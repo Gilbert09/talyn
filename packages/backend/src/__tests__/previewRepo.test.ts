@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { repositories, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
-import { detectRepoPreview, effectivePreview, getPreviewRepository, mergePreview } from '../services/preview/repoPreview.js';
+import { detectRepoPreview, effectivePreview, getPreviewRepository, mergePreview, PREVIEW_FRESH_MS } from '../services/preview/repoPreview.js';
 import { repositoryRoutes } from '../routes/repositories.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 
@@ -60,9 +60,27 @@ describe('repository preview detection', () => {
     await detectRepoPreview('ws', (await getPreviewRepository('repo'))!);
     expect(githubService.getFileContent).toHaveBeenCalledTimes(count);
     expect((await getPreviewRepository('repo'))?.settings?.preview?.detected?.ports).toContainEqual({ port: 5173, primary: true });
+    // While fresh, a new head is not even asked for.
+    const heads = vi.mocked(githubService.getRefSha).mock.calls.length;
     vi.mocked(githubService.getRefSha).mockResolvedValue('next');
     await detectRepoPreview('ws', (await getPreviewRepository('repo'))!);
+    expect(githubService.getRefSha).toHaveBeenCalledTimes(heads);
+    // Once stale, the new head is read and detection runs again.
+    const detected = (await getPreviewRepository('repo'))!.settings!.preview!.detected!;
+    await mergePreview('repo', { detected: { ...detected, at: new Date(Date.now() - PREVIEW_FRESH_MS - 1000).toISOString() } });
+    await detectRepoPreview('ws', (await getPreviewRepository('repo'))!);
     expect(githubService.getFileContent).toHaveBeenCalledTimes(count * 2);
+  });
+
+  it('only stamps the check time when a stale detection finds the same head', async () => {
+    await detectRepoPreview('ws', (await getPreviewRepository('repo'))!);
+    const count = vi.mocked(githubService.getFileContent).mock.calls.length;
+    const detected = (await getPreviewRepository('repo'))!.settings!.preview!.detected!;
+    const old = new Date(Date.now() - PREVIEW_FRESH_MS - 1000).toISOString();
+    await mergePreview('repo', { detected: { ...detected, at: old } });
+    await detectRepoPreview('ws', (await getPreviewRepository('repo'))!);
+    expect(githubService.getFileContent).toHaveBeenCalledTimes(count);
+    expect((await getPreviewRepository('repo'))!.settings!.preview!.detected!.at).not.toBe(old);
   });
 
   it('merges detection into the latest user choice', async () => {
