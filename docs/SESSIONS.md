@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Agent speed guidance and session resize (2026-11-01)
+
+A real posthog/posthog session spent 48 of 110 minutes in `sleep 200`..`sleep 580` loops, 25 minutes in whole test suites that each hit the 10-minute command limit, and 10 minutes compiling `sqlx-cli`. Two changes address the agent's part of that.
+
+The briefing (`talynBriefing.ts`) has a short Speed section, and a new `talyn-speed` skill gives the details: read memory and the repository's instructions for setup facts first, install prebuilt tools, run the changed files' tests first and a whole suite once, and check a long background command with waits of 60 seconds or less. No per-turn note was added, because the briefing is static and cached. The briefing's line about setup steps names no tool, so it stays true before a setup-step tool exists.
+
+`talyn_resize_session` moves a session to a box of another size. The fleet cannot change a running box's memory or CPUs, so a resize is a move (`move.ts`, reason `resize`). It never cuts a turn. The request goes on the row as `settings.resizeTo`, and the end of the turn, the next turn start, or an idle session applies it. Every later box of the session keeps the size (`settings.sandboxSize`). `continue_with` queues a Talyn message, so the next turn starts on the new box. A size refusal is strict for a resize: the move fails, the session keeps its box, the request is cleared, and the transcript says why in the existing refusal words. A resize is tried once and records no move backoff. `remember_for_repository` writes the existing per-repository size (`repositories.settings.sandboxSize`).
+
+Two things came up. First, the transcript dropped every `system` note except two subtypes, so the move, size-fallback, low-disk and account-switch notes were stored and never shown. `SESSION_NOTE_SUBTYPES` in `transcript.ts` now shows them, with the new resize notes. Second, a branch rename that runs during a move renames the old box after the export. A resize now waits for this process's in-flight branch naming first (`settleBranchNaming`). The other move triggers still have that small window.
+
+The tenant's limit is not known before a create, because YAS has no read for it. So the tool cannot refuse an over-limit size at call time. The refusal arrives at the move, and the transcript note reports it.
+
 ## Hosted preview links (2026-11-01)
 
 A session's port now has a URL that works in a plain browser: `https://<id>-<port>.preview.talyn.dev`. It is for the web app, which has no local forward, and for share links from the desktop. `PREVIEW_BASE_DOMAIN` turns it on. Unset, nothing changes.
