@@ -22,6 +22,7 @@ jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false
 
 const mockApi = {
   readiness: jest.fn(),
+  list: jest.fn().mockResolvedValue([]),
   create: jest.fn(),
   get: jest.fn(),
   import: jest.fn(),
