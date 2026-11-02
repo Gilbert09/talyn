@@ -543,7 +543,7 @@ export const mcpTokens = pgTable(
   })
 );
 
-// ---------- Public API tokens (migration 0101) ----------
+// ---------- Public API tokens (migration 0100) ----------
 //
 // Personal access tokens for `/v1`. The SHA-256 of the token is stored, never
 // the plaintext. Backend-pool-only (RLS on, no policy): the `/v1` requests have

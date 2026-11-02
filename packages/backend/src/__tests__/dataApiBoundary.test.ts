@@ -180,7 +180,7 @@ describe('Data API database boundary', () => {
       'workbench_preview_hosts', 'workbench_preview_tickets', 'workbench_preview_sessions',
       // Turn time reports and setup recipes (0099): written by the turn-end job.
       'workbench_turn_timings', 'repository_setup_steps',
-      // Public API tokens and idempotency keys (0101): `/v1` carries no JWT.
+      // Public API tokens and idempotency keys (0100): `/v1` carries no JWT.
       'api_tokens', 'api_idempotency_keys',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
