@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 /**
  * The evaluation must be scheduled AFTER the plan gate's transaction commits.
  *
- * `withReviewCycleGate` holds a transaction. `scheduleReviewEvaluation` detaches
+ * The box gate (`runBoxGate`) holds a transaction. `scheduleReviewEvaluation` detaches
  * onto its own connection, so a pass triggered from INSIDE the gate read the
  * review before the transition had committed — saw the phase it held before
  * (`ready` or `fixed`, both at rest), decided there was nothing to do, and
@@ -26,11 +26,12 @@ const scheduleReviewEvaluation = vi.fn(() => {
 
 vi.mock('../services/codeReview/evaluator.js', () => ({ scheduleReviewEvaluation }));
 
-vi.mock('../services/billing/entitlements.js', () => ({
-  ReviewCycleLimitError: class extends Error {},
+vi.mock('../services/billing/boxDeferral.js', () => ({
+  boxDeferral: vi.fn(),
+  boxDeferralEventCode: vi.fn(),
   // Faithful to the real gate in the one way that matters: the callback runs
   // inside it, and the "commit" happens only once the callback has returned.
-  withReviewCycleGate: vi.fn(async (_owner: string, _opts: unknown, fn: () => Promise<unknown>) => {
+  runBoxGate: vi.fn(async (_owner: string, _opts: unknown, fn: () => Promise<unknown>) => {
     order.push('gate:open');
     const result = await fn();
     order.push('gate:commit');

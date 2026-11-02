@@ -257,6 +257,18 @@ at the call site.
 | `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** | general |
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
+| `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | gated |
+
+#### Public API (`/v1`)
+
+The backend serves the public API at `/v1` on its normal host. Customers use
+`https://api.talyn.dev/v1`: add `api.talyn.dev` as a Railway custom domain on
+the backend service and point a CNAME at it. No path rewrite is needed.
+Evaluate the `public-api` flag against the token OWNER (the Supabase user id,
+with the email as a person property). Set `PUBLIC_API_ENABLED=true` to use the
+API locally with no PostHog project. Rate limits use `REDIS_URL` when it is
+set, and count in each process when it is not. See
+[`PUBLIC_API.md`](./PUBLIC_API.md).
 
 `availability` is a separate question from `fallback`: it says whether the
 "What's new" modal may describe the feature yet. `general` does NOT mean
@@ -711,6 +723,86 @@ notification that never arrives leaves the event in the feed.
 
 See `packages/backend/src/services/todiex.ts`.
 
+### 5c. Polar billing (usage pricing)
+
+Polar is the merchant of record. It sells Pro, the credit packs and the team
+seats, and it charges auto top-ups. Talyn keeps the usage ledger and the
+credit balance. Do these steps in the **sandbox** org (sandbox.polar.sh)
+first, then again in the production org.
+
+**Do steps 1 to 6 before `tom/workbenches` merges into `main`.** The backend
+refuses to boot with the old Polar env (the Unlimited ids only), because the
+core group now includes the Pro and credit-pack ids. Railway's health gate
+then keeps the old build serving, so nothing breaks, but nothing deploys.
+
+1. **Pro products.** Create two recurring products:
+   - "Talyn Pro (monthly)": fixed price, $40, every month.
+   - "Talyn Pro (annual)": fixed price, $400, every year.
+
+   Copy the two ids to `POLAR_PRODUCT_ID_PRO_MONTHLY` and
+   `POLAR_PRODUCT_ID_PRO_ANNUAL`.
+2. **Credit packs.** Create three **one-time** products, each with a
+   **fixed** price (not "pay what you want"): $25, $100 and $500. Copy the ids
+   to `POLAR_PRODUCT_ID_CREDITS_25`, `POLAR_PRODUCT_ID_CREDITS_100` and
+   `POLAR_PRODUCT_ID_CREDITS_500`. Use one product per pack, not one product
+   with a custom amount: Polar's off-session orders (auto top-up) accept only
+   a one-time **fixed-price** product, and the product id is how the webhook
+   knows which pack was bought. The bonus credit (+5% on $100, +10% on $500)
+   is Talyn's (`CREDIT_PACKS` in `packages/shared/src/pricing.ts`); do not add
+   a benefit for it in Polar. Turn off discount codes on these products.
+3. **Old Unlimited products.** Keep them as they are. Do not archive them,
+   because existing subscriptions renew on them. Hide them from any public
+   checkout link. Keep `POLAR_PRODUCT_ID_MONTHLY` and `POLAR_PRODUCT_ID_ANNUAL`
+   set: the backend reads them to put those subscribers on Legacy Pro.
+4. **Team seats.** Create two new **seat-based** products, $40 a seat a month
+   and $400 a seat a year (volume tiers, minimum 1 seat). Copy the ids to
+   `POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY` and `POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL`.
+   Do NOT re-price the old team products: a team's tier comes from its
+   product id, so a re-priced old product would make new $40 teams read as
+   Legacy Pro. Keep the old team products and their two env vars; their teams
+   stay on Legacy Pro terms. New teams buy the Pro team product as soon as its
+   two vars are set.
+5. **Off-session charges (auto top-up).** Ask Polar to enable the
+   off-session charges preview on the org (it is the
+   `off_session_charges_enabled` feature on Polar's side, on a paid Polar
+   plan). Until it is on, every auto top-up records "Automatic charges are
+   not available on this account yet" and the app shows the "buy credits"
+   prompt. Nothing else changes, so this step does not block the release.
+6. **Access token.** Create an organization access token with these scopes:
+   `checkouts:write`, `customer_sessions:write`, `customers:read`,
+   `orders:read`, `orders:write`, `products:read`, `subscriptions:write`.
+   `orders:write` is new (auto top-up). Put it in `POLAR_ACCESS_TOKEN`.
+7. **Webhook.** Endpoint `<backend>/api/v1/webhooks/polar`, format "Raw".
+   Subscribe to `subscription.created`, `subscription.active`,
+   `subscription.updated`, `subscription.canceled`,
+   `subscription.uncanceled`, `subscription.revoked`, `order.paid` and
+   `order.refunded`. The two `order.*` events are new: `order.paid` grants a
+   credit pack, `order.refunded` takes back what is left of it. Put the
+   signing secret in `POLAR_WEBHOOK_SECRET`.
+8. **Return URLs.** Checkout returns to `WEB_APP_URL` +
+   `/settings/billing` (`?checkout=success&kind=plan|credits` on success).
+   `POLAR_SUCCESS_URL`, when set, replaces the success page. With neither,
+   Polar shows its own receipt page.
+
+How the pieces behave:
+
+- **Free → Pro** is a hosted checkout (`POST /billing/checkout`). A user who
+  already has a live subscription gets a 409 `already_subscribed`.
+- **Legacy Pro → Pro** changes the live subscription
+  (`POST /billing/change-plan`) with `proration_behavior: invoice`: Polar
+  charges the prorated difference for the rest of the period at once. The
+  `subscription.updated` webhook writes the new product id; the tier follows.
+- **Credits** are a hosted checkout (`POST /billing/credits/checkout`). The
+  `order.paid` webhook grants the pack. Free accounts cannot buy credits.
+- **Auto top-up** runs from the usage meter when the balance falls below the
+  owner's trigger. It creates a draft order and finalizes it against the saved
+  payment method. A paid answer grants the credits at once; the later
+  `order.paid` grants nothing more (both are keyed on the order id). A
+  refused charge records the reason, and the app shows "buy credits" until the
+  user saves the auto top-up settings again. Nothing retries a declined card
+  by itself. A partial refund of a credit pack changes no credit: adjust it by
+  hand from the operator console.
+
 ### 6. PostHog project
 
 Single source of truth for analytics + error tracking + logs (Phase 18.8).
@@ -976,29 +1068,26 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
 POSTHOG_PROJECT_API_KEY=phc_xxx     # optional, for when 18.8 lands
 POSTHOG_HOST=https://us.i.posthog.com
 
-# Polar billing (free 3-active-task limit / $15/mo Unlimited). Optional as a
-# group — when ALL are unset, plan limits are simply not enforced (loud boot
-# warning); a PARTIAL group is a boot error. Use the sandbox
-# (sandbox.polar.sh) org + products for anything that isn't prod. Register
-# the webhook at <backend>/api/v1/webhooks/polar for subscription.* events.
+# Polar billing (usage pricing: Free / Pro / Legacy Pro, credits, auto
+# top-up). Optional as a group: when ALL core vars are unset, limits are not
+# enforced. A PARTIAL core group is a boot error. Full steps: § 5c below.
 # POLAR_ACCESS_TOKEN=polar_oat_...
 # POLAR_WEBHOOK_SECRET=<the standard-webhooks secret from the webhook config>
 # POLAR_ENVIRONMENT=sandbox            # or production
-# POLAR_PRODUCT_ID_MONTHLY=<uuid of the $15/mo product>
-# POLAR_PRODUCT_ID_ANNUAL=<uuid of the $150/yr product>
+# POLAR_PRODUCT_ID_PRO_MONTHLY=<uuid of Pro, $40/month>
+# POLAR_PRODUCT_ID_PRO_ANNUAL=<uuid of Pro, $400/year>
+# POLAR_PRODUCT_ID_CREDITS_25=<uuid of the $25 one-time credit pack>
+# POLAR_PRODUCT_ID_CREDITS_100=<uuid of the $100 one-time credit pack>
+# POLAR_PRODUCT_ID_CREDITS_500=<uuid of the $500 one-time credit pack>
 # POLAR_SUCCESS_URL=https://www.talyn.dev/checkout-success   # optional
 #
-# Team plan (seat billing). A second optional group ON TOP of the one above —
-# both set, or neither; one alone, or either without Polar billing, is a boot
-# error. In the Polar dashboard: turn on seat-based pricing for the org, then
-# create one product with a SEAT-BASED price (volume tiers, minimum 1 seat)
-# per period. Team subscriptions arrive on the same webhook; they are told
-# apart by the customer's `team_<id>` external id and by these product ids.
-# The in-app picker reads the tiers from Polar, so a price change here needs
-# no deploy. The UI is behind the `teams` PostHog flag (TEAMS_ENABLED=true to
-# run it locally).
-# POLAR_PRODUCT_ID_TEAM_MONTHLY=<uuid of the seat-based monthly team product>
-# POLAR_PRODUCT_ID_TEAM_ANNUAL=<uuid of the seat-based annual team product>
+# Optional pairs on top of the core group (both or neither):
+# POLAR_PRODUCT_ID_MONTHLY=<uuid of the OLD $15/mo Unlimited product>   # Legacy Pro
+# POLAR_PRODUCT_ID_ANNUAL=<uuid of the OLD $150/yr Unlimited product>   # Legacy Pro
+# POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY=<uuid of the $40/seat monthly team product>
+# POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL=<uuid of the $400/seat annual team product>
+# POLAR_PRODUCT_ID_TEAM_MONTHLY=<uuid of the OLD seat-based monthly team product>
+# POLAR_PRODUCT_ID_TEAM_ANNUAL=<uuid of the OLD seat-based annual team product>
 
 # Release notes ("What's new" modal). The nightly publish workflow POSTs each
 # release's generated highlights to <backend>/api/v1/release-notes with this

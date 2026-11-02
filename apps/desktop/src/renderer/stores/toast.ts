@@ -69,7 +69,8 @@ export const toast = {
   // A toast with a button stays long enough to reach the button.
   success: (title: string, description?: string, action?: ToastAction) =>
     show('success', title, description, action ? ERROR_TTL_MS : DEFAULT_TTL_MS, action),
-  info: (title: string, description?: string) => show('info', title, description),
+  info: (title: string, description?: string, action?: ToastAction) =>
+    show('info', title, description, action ? ERROR_TTL_MS : DEFAULT_TTL_MS, action),
   error: (title: string, description?: string) =>
     show('error', title, description, ERROR_TTL_MS),
   dismiss: (id: string) => useToastStore.getState().dismiss(id),

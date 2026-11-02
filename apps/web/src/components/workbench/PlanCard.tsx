@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /**
  * - `open`: the last turn's plan; the person can approve it or keep planning.
@@ -29,6 +30,7 @@ export async function approvePlan(chat: WorkbenchChat, ops: WorkbenchOps): Promi
     });
     if (res.queued) toast.info('Queued', 'It runs when the current turn ends.');
   } catch (err) {
+    if (maybeHandleBillingLimit(err, 'session_plan_approve')) return;
     toast.error('Could not start the build', err instanceof Error ? err.message : undefined);
     return;
   }

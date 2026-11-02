@@ -11,6 +11,9 @@ import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useLoopRuns } from './useLoops';
 
+/** Failure codes that mean the plan refused the run's box (usage billing). */
+const BOX_REFUSAL_CODES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit_reached', 'size_requires_pro']);
+
 /**
  * One loop's history.
  *
@@ -109,6 +112,11 @@ function RunRow({ run }: { run: LoopRun }) {
             )}
           >
             {run.failureCode ? LOOP_RUN_FAILURE_LABELS[run.failureCode] : run.error}
+            {/* A plan refusal carries the plan's own sentence (when hours
+                reset, how many boxes run): the label alone says only "waiting". */}
+            {run.failureCode && BOX_REFUSAL_CODES.has(run.failureCode) && run.error && (
+              <span className="block text-muted-foreground">{run.error}</span>
+            )}
           </p>
         )}
       </div>

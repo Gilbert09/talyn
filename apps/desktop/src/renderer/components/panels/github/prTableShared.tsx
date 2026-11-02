@@ -57,6 +57,7 @@ import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
+import { deferralNotice } from '../../../hooks/useDeferredRuns';
 import { useWorkspaceStore } from '../../../stores/workspace';
 
 /**
@@ -941,10 +942,16 @@ const PRTableRow = React.memo(function PRTableRow({
                     data-attr="pr-row-run-deferred"
                     onClick={(e) => {
                       e.stopPropagation();
-                      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+                      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred', deferralNotice(row));
                     }}
                     className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
-                    title={`Waiting for a free task slot — a fix run for this PR was skipped because all ${FREE_PLAN_ACTIVE_TASK_LIMIT} free-plan slots were busy. Click to see why.`}
+                    title={
+                      // The plan's own sentence (usage billing); the old
+                      // free-plan slot wording only for an older backend.
+                      row.autoMergeState.deferredMessage
+                        ? `${row.autoMergeState.deferredMessage} Click to see your options.`
+                        : `Waiting for a free task slot — a fix run for this PR was skipped because all ${FREE_PLAN_ACTIVE_TASK_LIMIT} free-plan slots were busy. Click to see why.`
+                    }
                   >
                     <PauseCircle className="h-2.5 w-2.5" />
                     Waiting

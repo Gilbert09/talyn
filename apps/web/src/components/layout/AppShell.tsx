@@ -20,6 +20,7 @@ import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { usePullRequestSync } from '../../hooks/usePullRequestSync';
 import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
+import { useBillingLive } from '../../hooks/useBillingLive';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -38,6 +39,7 @@ export function AppShell() {
   usePullRequestSync();
   useWhatsNew();
   useDeferredRuns();
+  useBillingLive();
   useWorkbenchList();
   useAppShortcuts();
   const codeReviewIntro = useCodeReviewIntro();

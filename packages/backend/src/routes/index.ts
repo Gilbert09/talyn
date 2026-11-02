@@ -26,6 +26,7 @@ import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
+import { apiTokenRoutes } from './apiTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
 import { mcpRoutes } from '../mcp/transport.js';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
@@ -34,11 +35,7 @@ import { asyncHandler, wrapAsyncRoutes } from '../middleware/asyncHandler.js';
 import {
   AutoKeepDefaultPlanError,
   AutoReviewPlanError,
-  MergeQueueLimitError,
-  ReviewCycleLimitError,
-  TaskLimitError,
-  WorkflowLimitError,
-  LoopLimitError,
+  isBoxGateError,
 } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -229,6 +226,11 @@ export function setupRoutes(app: Express): void {
   // routes/developer.ts.
   app.use(`${api}/developer`, mount(developerRoutes()));
 
+  // Personal access tokens for the public API (`/v1`), managed from Settings →
+  // Developer. Pre-ownerScope: `api_tokens` is a backend-pool-only table, so
+  // every handler passes req.user.id itself. See routes/apiTokens.ts.
+  app.use(`${api}/api-tokens`, mount(apiTokenRoutes()));
+
   // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
   // Pre-ownerScope for the billing reason, and more so: most handlers wait on
   // the fleet (an archive runs a script and a push; the preview proxy can hold
@@ -307,26 +309,28 @@ export function apiErrorHandler(
     next(err);
     return;
   }
-  // Central mapping for the free-plan gates. Task creation/reactivation throws
-  // TaskLimitError, the merge-queue toggle MergeQueueLimitError, creating a
-  // workflow WorkflowLimitError, creating a loop LoopLimitError, starting a
-  // second code review ReviewCycleLimitError; turning on the auto-keep default
-  // throws AutoKeepDefaultPlanError and turning on automatic code review throws
-  // AutoReviewPlanError. Every one lands here so the 402 + code contract lives
-  // in exactly one place. Expected traffic, not an error — no console spam.
+  // Central mapping for the plan gates, so the 402 + code contract lives in
+  // exactly one place. Expected traffic, not an error: no console spam.
   //
-  // The last two are FEATURE gates rather than usage caps: there is no count to
-  // wait out, which is why they carry their own codes and the client pitches an
-  // upgrade instead of quoting a limit nobody is at.
+  // Every new box goes through `withBoxGate`, whose refusals are BoxGateErrors:
+  // `usage_exhausted` (no included hours, no credits, no auto top-up),
+  // `size_requires_pro` (a size the tier cannot start) and
+  // `concurrent_box_limit_reached` (the tier's concurrent-box cap). Turning on
+  // the auto-keep default throws AutoKeepDefaultPlanError and turning on
+  // automatic code review throws AutoReviewPlanError: FEATURE gates with their
+  // own codes, so the client pitches Pro instead of quoting a limit.
   //
-  // MCP servers are deliberately absent: they are uncapped on every plan, so
-  // there is no limit error for them to throw.
+  // There are no count caps any more (workflows, loops, merge-queue PRs and
+  // review cycles were removed with usage billing), and MCP servers were never
+  // capped, so none of those has an error to throw.
+  //
+  // A box refusal also carries its structured notice (limit, period end,
+  // allowed sizes), so a client can say more than the message does.
+  if (isBoxGateError(err)) {
+    res.status(402).json({ success: false, error: err.message, code: err.code, notice: err.notice });
+    return;
+  }
   if (
-    err instanceof TaskLimitError ||
-    err instanceof MergeQueueLimitError ||
-    err instanceof WorkflowLimitError ||
-    err instanceof LoopLimitError ||
-    err instanceof ReviewCycleLimitError ||
     err instanceof AutoKeepDefaultPlanError ||
     err instanceof AutoReviewPlanError
   ) {

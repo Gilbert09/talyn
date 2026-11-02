@@ -55,11 +55,17 @@ function relative(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+/** Action codes parked by the plan (usage billing): the run retries by itself, so they are a wait, not a failure. */
+const PARKED_CODES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit_reached']);
+
 function OutcomeLine({ outcome }: { outcome: WorkflowActionOutcome }) {
   const label = WORKFLOW_ACTION_LABELS[outcome.type] ?? outcome.type;
+  const parked = !outcome.ok && outcome.code !== undefined && PARKED_CODES.has(outcome.code);
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <span className={outcome.ok ? 'text-green-500' : 'text-red-500'}>{outcome.ok ? '+' : 'x'}</span>
+      <span className={outcome.ok ? 'text-green-500' : parked ? 'text-amber-500' : 'text-red-500'}>
+        {outcome.ok ? '+' : parked ? '…' : 'x'}
+      </span>
       <span className="font-medium">{label}</span>
       <span className="text-muted-foreground">{outcome.detail ?? outcome.error ?? ''}</span>
     </div>

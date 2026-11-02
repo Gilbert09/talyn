@@ -272,12 +272,13 @@ describe('derived fields', () => {
 
   it('reports effectivePlan from the override, not just the plan column', async () => {
     // Alice is comped: plan='free', planOverride='unlimited'. Showing 'free'
-    // here would contradict what the entitlement gate actually enforces.
+    // here would contradict what the entitlement gate actually enforces. An
+    // old Unlimited comp is Pro under usage billing.
     const { body } = await get<UserPage>('/api/v1/admin/users');
     const alice = body.data.items.find((u) => u.email === 'alice@example.test')!;
     expect(alice.plan).toBe('free');
     expect(alice.planOverride).toBe('unlimited');
-    expect(alice.effectivePlan).toBe('unlimited');
+    expect(alice.effectivePlan).toBe('pro');
   });
 
   it('surfaces the fleet fields the SQL extracts', async () => {

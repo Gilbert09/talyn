@@ -61,6 +61,15 @@ export interface DomainPrSessionEvent {
   trigger: string;
 }
 
+/**
+ * An owner's box budget may have come back: credits were added, or a period
+ * that was exhausted is not any more. Unattended runs parked on
+ * `usage_exhausted` look again now instead of at their recheck time.
+ */
+export interface DomainBudgetRestoredEvent {
+  ownerId: string;
+}
+
 interface DomainEvents {
   on(event: 'task:status', listener: (evt: DomainTaskStatusEvent) => void): DomainEventEmitter;
   on(event: 'pr:snapshot', listener: (evt: DomainPrSnapshotEvent) => void): DomainEventEmitter;
@@ -74,6 +83,9 @@ interface DomainEvents {
   emit(event: 'pr:snapshot', evt: DomainPrSnapshotEvent): boolean;
   emit(event: 'pr:checks', evt: DomainPrChecksEvent): boolean;
   emit(event: 'pr:session', evt: DomainPrSessionEvent): boolean;
+  on(event: 'billing:budget_restored', listener: (evt: DomainBudgetRestoredEvent) => void): DomainEventEmitter;
+  off(event: 'billing:budget_restored', listener: (evt: DomainBudgetRestoredEvent) => void): DomainEventEmitter;
+  emit(event: 'billing:budget_restored', evt: DomainBudgetRestoredEvent): boolean;
 }
 
 class DomainEventEmitter extends EventEmitter implements DomainEvents {}

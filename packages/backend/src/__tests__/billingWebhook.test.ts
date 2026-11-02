@@ -191,7 +191,8 @@ describe('handlePolarWebhook — state machine', () => {
     await post('evt-1', { type: 'subscription.created', data: subscription() });
     expect(spy).toHaveBeenCalledWith(
       TEST_USER_ID,
-      expect.objectContaining({ plan: 'unlimited', planSource: 'subscription' })
+      // The old Unlimited product (no Pro product id stored) is Legacy Pro.
+      expect.objectContaining({ plan: 'legacy_pro', planSource: 'subscription' })
     );
   });
 });

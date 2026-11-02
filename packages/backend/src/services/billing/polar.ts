@@ -1,11 +1,16 @@
 import { Polar } from '@polar-sh/sdk';
+import type { Order } from '@polar-sh/sdk/models/components/order.js';
 import {
+  CREDIT_PACK_IDS,
   TEAM_MIN_SEATS,
   type BillingOrder,
+  type CreditPackId,
   type TeamPriceTiers,
   type TeamPricing,
+  type TeamTier,
 } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
+import { webAppUrl } from '../webApp.js';
 import { billingEnabled } from './entitlements.js';
 
 /**
@@ -15,17 +20,109 @@ import { billingEnabled } from './entitlements.js';
  * replacing this file + webhook.ts and nothing else.
  *
  * Env (all-or-nothing, enforced by validateEnv):
- *   POLAR_ACCESS_TOKEN        — org access token
- *   POLAR_WEBHOOK_SECRET      — standard-webhooks signing secret
- *   POLAR_ENVIRONMENT         — 'sandbox' | 'production'
- *   POLAR_PRODUCT_ID_MONTHLY  — the $15/mo product
- *   POLAR_PRODUCT_ID_ANNUAL   — the annual product
+ *   POLAR_ACCESS_TOKEN            — org access token
+ *   POLAR_WEBHOOK_SECRET          — standard-webhooks signing secret
+ *   POLAR_ENVIRONMENT             — 'sandbox' | 'production'
+ *   POLAR_PRODUCT_ID_PRO_MONTHLY  — Pro, $40/mo
+ *   POLAR_PRODUCT_ID_PRO_ANNUAL   — Pro, $400/yr
+ *   POLAR_PRODUCT_ID_CREDITS_25   — one-time credit pack, $25
+ *   POLAR_PRODUCT_ID_CREDITS_100  — one-time credit pack, $100 (+5% credit)
+ *   POLAR_PRODUCT_ID_CREDITS_500  — one-time credit pack, $500 (+10% credit)
+ * Optional pair — the old Unlimited products, no longer sold. Their
+ * subscribers resolve to Legacy Pro, so keep them set while any exist:
+ *   POLAR_PRODUCT_ID_MONTHLY / POLAR_PRODUCT_ID_ANNUAL
  * Optional:
- *   POLAR_SUCCESS_URL         — browser landing page after checkout
- * Optional group (all-or-nothing) — the team plan:
- *   POLAR_PRODUCT_ID_TEAM_MONTHLY — seat-based team product, monthly
- *   POLAR_PRODUCT_ID_TEAM_ANNUAL  — seat-based team product, annual
+ *   POLAR_SUCCESS_URL             — browser landing page after checkout
+ *                                   (default: the web app's billing page)
+ * Optional pairs — the team plan. New teams buy the Pro team product when it
+ * is set; the old team product stays recognised (its teams are Legacy Pro):
+ *   POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY / POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL
+ *   POLAR_PRODUCT_ID_TEAM_MONTHLY / POLAR_PRODUCT_ID_TEAM_ANNUAL
  */
+
+export type BillingPeriod = 'monthly' | 'annual';
+
+const PRO_PRODUCT_ENV: Record<BillingPeriod, string> = {
+  monthly: 'POLAR_PRODUCT_ID_PRO_MONTHLY',
+  annual: 'POLAR_PRODUCT_ID_PRO_ANNUAL',
+};
+const LEGACY_PRODUCT_ENV: Record<BillingPeriod, string> = {
+  monthly: 'POLAR_PRODUCT_ID_MONTHLY',
+  annual: 'POLAR_PRODUCT_ID_ANNUAL',
+};
+const TEAM_PRO_PRODUCT_ENV: Record<BillingPeriod, string> = {
+  monthly: 'POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY',
+  annual: 'POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL',
+};
+const TEAM_LEGACY_PRODUCT_ENV: Record<BillingPeriod, string> = {
+  monthly: 'POLAR_PRODUCT_ID_TEAM_MONTHLY',
+  annual: 'POLAR_PRODUCT_ID_TEAM_ANNUAL',
+};
+export const CREDIT_PACK_PRODUCT_ENV: Record<CreditPackId, string> = {
+  '25': 'POLAR_PRODUCT_ID_CREDITS_25',
+  '100': 'POLAR_PRODUCT_ID_CREDITS_100',
+  '500': 'POLAR_PRODUCT_ID_CREDITS_500',
+};
+
+function envProduct(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+function matchesAny(productId: string | null | undefined, names: readonly string[]): boolean {
+  if (!productId) return false;
+  return names.some((name) => envProduct(name) === productId);
+}
+
+export function proProductId(period: BillingPeriod): string | undefined {
+  return envProduct(PRO_PRODUCT_ENV[period]);
+}
+
+export function creditPackProductId(pack: CreditPackId): string | undefined {
+  return envProduct(CREDIT_PACK_PRODUCT_ENV[pack]);
+}
+
+/** The credit pack a product sells, or null for any other product. */
+export function creditPackForProduct(productId: string | null | undefined): CreditPackId | null {
+  if (!productId) return null;
+  return CREDIT_PACK_IDS.find((pack) => creditPackProductId(pack) === productId) ?? null;
+}
+
+/**
+ * The tier a personal subscription product gives: Pro for the Pro products,
+ * Legacy Pro for the old Unlimited ones, null for anything else (a credit
+ * pack, a team product, an id this deployment does not know).
+ */
+export function personalProductTier(productId: string | null | undefined): TeamTier | null {
+  if (matchesAny(productId, Object.values(PRO_PRODUCT_ENV))) return 'pro';
+  if (matchesAny(productId, Object.values(LEGACY_PRODUCT_ENV))) return 'legacy_pro';
+  return null;
+}
+
+/** The tier a team product gives each seat, or null when the product is not a team product. */
+export function teamProductTier(productId: string | null | undefined): TeamTier | null {
+  if (matchesAny(productId, Object.values(TEAM_PRO_PRODUCT_ENV))) return 'pro';
+  if (matchesAny(productId, Object.values(TEAM_LEGACY_PRODUCT_ENV))) return 'legacy_pro';
+  return null;
+}
+
+/** Where the web app shows billing. Checkout comes back here. */
+export const BILLING_PAGE_PATH = '/settings/billing';
+
+/**
+ * Where a hosted checkout sends the browser. `POLAR_SUCCESS_URL` (operator
+ * env) wins; otherwise the web app's billing page, built with `webAppUrl()`
+ * so the target is fixed by env and never by a request. Both keys are left
+ * out when no web app is deployed: Polar then shows its own receipt page.
+ */
+export function checkoutRedirects(kind: 'plan' | 'credits'): { successUrl?: string; returnUrl?: string } {
+  const success = process.env.POLAR_SUCCESS_URL?.trim() || webAppUrl(BILLING_PAGE_PATH, { checkout: 'success', kind });
+  const back = webAppUrl(BILLING_PAGE_PATH);
+  return {
+    ...(success ? { successUrl: success } : {}),
+    ...(back ? { returnUrl: back } : {}),
+  };
+}
 
 let client: Polar | null = null;
 
@@ -80,29 +177,127 @@ async function timed<T>(method: string, label: string, fn: () => Promise<T>): Pr
 }
 
 /**
- * Create a hosted-checkout session for the $15/mo or annual product,
- * pre-linked to our user: `externalCustomerId` becomes the Polar customer's
- * `external_id`, which arrives on every subsequent webhook — that's the
- * whole user-mapping story. Returns the URL to open in the system browser.
+ * Create a hosted-checkout session for Pro (monthly or annual), pre-linked to
+ * our user: `externalCustomerId` becomes the Polar customer's `external_id`,
+ * which arrives on every subsequent webhook — that's the whole user-mapping
+ * story. Returns the URL to open in the system browser.
+ *
+ * The old Unlimited products are never sold again. Their subscribers move to
+ * Pro through {@link changeSubscriptionProduct}, not a second checkout.
  */
-export async function createCheckoutUrl(
-  userId: string,
-  period: 'monthly' | 'annual'
-): Promise<string> {
-  const productId =
-    period === 'annual'
-      ? process.env.POLAR_PRODUCT_ID_ANNUAL
-      : process.env.POLAR_PRODUCT_ID_MONTHLY;
-  if (!productId) throw new Error(`Polar product id for ${period} is not set`);
+export async function createCheckoutUrl(userId: string, period: BillingPeriod): Promise<string> {
+  const productId = proProductId(period);
+  if (!productId) throw new Error(`Polar Pro product id for ${period} is not set`);
 
   const checkout = await timed('POST', 'checkouts.create', () =>
     getPolarClient().checkouts.create({
       products: [productId],
       externalCustomerId: userId,
-      ...(process.env.POLAR_SUCCESS_URL ? { successUrl: process.env.POLAR_SUCCESS_URL } : {}),
+      metadata: { kind: 'plan', plan: 'pro' },
+      ...checkoutRedirects('plan'),
     })
   );
   return checkout.url;
+}
+
+/**
+ * Hosted checkout for one credit pack (a one-time, fixed-price product). The
+ * `order.paid` webhook grants the credits; the product id says which pack, so
+ * the metadata is a label for the Polar dashboard, never an input. Discount
+ * codes are off: the pack grants a fixed amount of credit whatever was paid.
+ */
+export async function createCreditCheckoutUrl(userId: string, pack: CreditPackId): Promise<string> {
+  const productId = creditPackProductId(pack);
+  if (!productId) throw new Error(`Polar product id for the ${pack} credit pack is not set`);
+  const checkout = await timed('POST', 'checkouts.create', () =>
+    getPolarClient().checkouts.create({
+      products: [productId],
+      externalCustomerId: userId,
+      allowDiscountCodes: false,
+      metadata: { kind: 'credit_pack', pack },
+      ...checkoutRedirects('credits'),
+    })
+  );
+  return checkout.url;
+}
+
+/**
+ * How a plan change bills. `invoice` charges the prorated difference for the
+ * rest of the period at once. `prorate` would add it to the next renewal
+ * instead, so somebody who upgrades and then cancels before renewal would get
+ * Pro hours they never pay for; and a failed card should surface now, while
+ * the person is looking at the upgrade, not at renewal.
+ */
+export const PLAN_CHANGE_PRORATION = 'invoice' as const;
+
+/**
+ * Move a live subscription to another recurring product (Legacy Pro → Pro).
+ * The `subscription.updated` webhook writes the new product id, and the tier
+ * follows it; nothing is written here.
+ */
+export async function changeSubscriptionProduct(subscriptionId: string, productId: string): Promise<void> {
+  await timed('PATCH', 'subscriptions.update', () =>
+    getPolarClient().subscriptions.update({
+      id: subscriptionId,
+      subscriptionUpdate: { productId, prorationBehavior: PLAN_CHANGE_PRORATION },
+    })
+  );
+}
+
+// ---------- Off-session orders (auto top-up) ----------
+//
+// Preview API on Polar's side: the org needs off-session charges enabled.
+// `orders.create` makes a DRAFT against a saved payment method; `finalize`
+// charges it synchronously and answers with the order `paid`, or a 4xx with
+// the order left in draft (402 declined / action required, 403 not enabled,
+// 412 not a draft).
+
+/** The Polar customer id behind our user, or null when Polar has none. */
+export async function getCustomerIdForUser(userId: string): Promise<string | null> {
+  try {
+    const customer = await timed('GET', 'customers.getExternal', () =>
+      getPolarClient().customers.getExternal({ externalId: userId })
+    );
+    return customer.id;
+  } catch (err) {
+    if (polarStatusCode(err) === 404) return null;
+    throw err;
+  }
+}
+
+export async function createDraftOrder(input: {
+  customerId: string;
+  productId: string;
+  metadata: Record<string, string>;
+  /** Sent as the `Idempotency-Key` header; one key per attempt. */
+  idempotencyKey: string;
+}): Promise<Order> {
+  return timed('POST', 'orders.create', () =>
+    getPolarClient().orders.create(
+      { customerId: input.customerId, productId: input.productId, metadata: input.metadata },
+      { headers: { 'Idempotency-Key': input.idempotencyKey } }
+    )
+  );
+}
+
+export async function finalizeOrder(orderId: string): Promise<Order> {
+  return timed('POST', 'orders.finalize', () => getPolarClient().orders.finalize({ id: orderId }));
+}
+
+export async function getOrder(orderId: string): Promise<Order> {
+  return timed('GET', 'orders.get', () => getPolarClient().orders.get({ id: orderId }));
+}
+
+/** The HTTP status of a Polar SDK error, or null for anything else (a network failure). */
+export function polarStatusCode(err: unknown): number | null {
+  const code = (err as { statusCode?: unknown } | null)?.statusCode;
+  return typeof code === 'number' ? code : null;
+}
+
+/** The error name Polar sent (`PaymentFailed`, `PaymentActionRequired`, …), when there is one. */
+export function polarErrorName(err: unknown): string | null {
+  const name = (err as { error?: unknown } | null)?.error;
+  return typeof name === 'string' ? name : null;
 }
 
 /**
@@ -219,31 +414,31 @@ export function teamIdFromCustomerExternalId(externalId: string | null | undefin
   return teamId.length > 0 ? teamId : null;
 }
 
-function teamProductId(period: 'monthly' | 'annual'): string | undefined {
-  return period === 'annual'
-    ? process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL
-    : process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY;
+function pairConfigured(names: Record<BillingPeriod, string>): boolean {
+  return Boolean(envProduct(names.monthly)) && Boolean(envProduct(names.annual));
+}
+
+/**
+ * The team product a new team buys: the Pro team product ($40 a seat) when it
+ * is configured, else the old team product (whose seats are Legacy Pro).
+ */
+function teamProductId(period: BillingPeriod): string | undefined {
+  return pairConfigured(TEAM_PRO_PRODUCT_ENV)
+    ? envProduct(TEAM_PRO_PRODUCT_ENV[period])
+    : envProduct(TEAM_LEGACY_PRODUCT_ENV[period]);
 }
 
 /**
  * Whether the team plan can be sold here. Its product ids are their own
- * all-or-nothing group (validateEnv), so a deployment can bill personally
+ * all-or-nothing groups (validateEnv), so a deployment can bill personally
  * without selling teams.
  */
 export function teamBillingConfigured(): boolean {
-  return (
-    billingEnabled() &&
-    Boolean(process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY) &&
-    Boolean(process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL)
-  );
+  return billingEnabled() && (pairConfigured(TEAM_PRO_PRODUCT_ENV) || pairConfigured(TEAM_LEGACY_PRODUCT_ENV));
 }
 
 export function isTeamProductId(productId: string | null | undefined): boolean {
-  if (!productId) return false;
-  return (
-    productId === process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY ||
-    productId === process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL
-  );
+  return teamProductTier(productId) !== null;
 }
 
 /** Hosted checkout for `seats` seats of the team product. */
@@ -260,7 +455,7 @@ export async function createTeamCheckoutUrl(
       externalCustomerId: teamCustomerExternalId(teamId),
       seats,
       minSeats: TEAM_MIN_SEATS,
-      ...(process.env.POLAR_SUCCESS_URL ? { successUrl: process.env.POLAR_SUCCESS_URL } : {}),
+      ...checkoutRedirects('plan'),
     })
   );
   return checkout.url;

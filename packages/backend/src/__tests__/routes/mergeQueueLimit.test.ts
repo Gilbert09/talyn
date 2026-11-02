@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { _resetMergeQueueBroadcasts } from '../../services/mergeQueueBroadcast.js';
-import { FREE_PLAN_MERGE_QUEUE_LIMIT, MERGE_QUEUE_LIMIT_ERROR_CODE } from '@talyn/shared';
+import { MERGE_QUEUE_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { pullRequestRoutes } from '../../routes/pullRequests.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -19,14 +19,10 @@ import {
 import { eq } from 'drizzle-orm';
 
 /**
- * Free-plan merge-queue cap at the route surface: POST /:id/merge-queue must
- * 402 with MERGE_QUEUE_LIMIT_ERROR_CODE once the owner has
- * FREE_PLAN_MERGE_QUEUE_LIMIT PRs queued — and pass for comped/unlimited
- * users, dequeues, and re-arms of an already-queued PR. Uses the REAL
- * apiErrorHandler so the status/code contract is the one production serves.
- *
- * Enforcement is unconditional: the transitional client-version exemption is
- * gone, so the version header changes nothing here.
+ * POST /:id/merge-queue has no plan cap any more: usage billing removed the
+ * free plan's three-PR limit. These tests pin that queueing is never refused
+ * for a count, for any caller shape, with billing on or off. Uses the REAL
+ * apiErrorHandler.
  */
 
 const headers = {
@@ -69,7 +65,7 @@ async function makeServer(): Promise<{ url: string; close: () => Promise<void> }
   };
 }
 
-describe('free-plan merge-queue limit at the route surface', () => {
+describe('POST /:id/merge-queue has no plan cap', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let url: string;
@@ -140,43 +136,49 @@ describe('free-plan merge-queue limit at the route surface', () => {
     await cleanup();
   });
 
+  // Usage billing removed the merge-queue cap (it was 3 PRs on the free plan).
+  // Queueing a PR starts no box; a fix run it needs is gated where the task is
+  // created.
+  const MANY = 6;
+
   async function fillQueue(): Promise<void> {
-    for (let i = 0; i < FREE_PLAN_MERGE_QUEUE_LIMIT; i++) {
-      await insertPr({ queued: true });
-    }
+    for (let i = 0; i < MANY; i++) await insertPr({ queued: true });
   }
 
-  it('402s with the merge-queue code once a free owner has a full queue', async () => {
-    await fillQueue();
-    const pr = await insertPr({ queued: false });
-    const res = await enqueue(pr);
-    expect(res.status).toBe(402);
-    const body = await res.json();
-    expect(body.code).toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
-    // The PR must NOT have been queued.
+  async function isQueued(prId: string): Promise<boolean | undefined> {
     const rows = await db
       .select({ mergeQueued: pullRequestsTable.mergeQueued })
       .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, pr));
-    expect(rows[0]?.mergeQueued).toBe(false);
-  });
+      .where(eq(pullRequestsTable.id, prId));
+    return rows[0]?.mergeQueued;
+  }
 
-  it('queues normally below the limit', async () => {
-    await insertPr({ queued: true });
+  it.each([
+    { label: 'free', set: {} },
+    { label: 'old Unlimited subscriber', set: { plan: 'unlimited' } },
+    { label: 'comp', set: { planOverride: 'unlimited' } },
+  ])('a $label owner queues past the old cap of three', async ({ set }) => {
+    if (Object.keys(set).length) await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
+    await fillQueue();
     const pr = await insertPr({ queued: false });
-    expect((await enqueue(pr)).status).toBe(200);
+    const res = await enqueue(pr);
+    expect(res.status).toBe(200);
+    expect(await isQueued(pr)).toBe(true);
   });
 
-  it('closed/merged rows never eat a free slot', async () => {
-    // Stale bookkeeping: queued flags on non-open PRs must not count.
-    for (let i = 0; i < FREE_PLAN_MERGE_QUEUE_LIMIT; i++) {
-      await insertPr({ queued: true, state: 'merged' });
-    }
+  it.each([
+    ['headerless callers (CLI / MCP / curl)', () => headerlessHeaders],
+    ['an old release (0.2.8)', () => legacyClientHeaders],
+    ['an unstamped local build (0.1.0)', () => placeholderClientHeaders],
+  ])('%s are not refused either', async (_label, hdrs) => {
+    await fillQueue();
     const pr = await insertPr({ queued: false });
-    expect((await enqueue(pr)).status).toBe(200);
+    const res = await enqueue(pr, hdrs());
+    expect(res.status).toBe(200);
+    expect((await res.json()).code).not.toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
   });
 
-  it('re-arming an already-queued PR at the limit never self-blocks', async () => {
+  it('re-arming an already-queued PR still works', async () => {
     await fillQueue();
     const rows = await db
       .select({ id: pullRequestsTable.id })
@@ -186,7 +188,7 @@ describe('free-plan merge-queue limit at the route surface', () => {
     expect((await enqueue(rows[0].id)).status).toBe(200);
   });
 
-  it('dequeueing is never gated, even at the limit', async () => {
+  it('dequeueing still works', async () => {
     await fillQueue();
     const rows = await db
       .select({ id: pullRequestsTable.id })
@@ -201,48 +203,7 @@ describe('free-plan merge-queue limit at the route surface', () => {
     expect(res.status).toBe(200);
   });
 
-  it('comped (plan_override) owners are unlimited', async () => {
-    await db
-      .update(usersTable)
-      .set({ planOverride: 'unlimited' })
-      .where(eq(usersTable.id, TEST_USER_ID));
-    await fillQueue();
-    const pr = await insertPr({ queued: false });
-    expect((await enqueue(pr)).status).toBe(200);
-  });
-
-  it('headerless callers (CLI / MCP / curl) are enforced', async () => {
-    await fillQueue();
-    const pr = await insertPr({ queued: false });
-    const res = await enqueue(pr, headerlessHeaders);
-    expect(res.status).toBe(402);
-    expect((await res.json()).code).toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
-    // And the PR must NOT have been queued — the old code fell through to an
-    // ungated armQueue(), which uncapped the whole subsystem.
-    const rows = await db
-      .select({ mergeQueued: pullRequestsTable.mergeQueued })
-      .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, pr));
-    expect(rows[0]?.mergeQueued).toBe(false);
-  });
-
-  it.each([
-    ['an old release (0.2.8)', () => legacyClientHeaders],
-    ['an unstamped local build (0.1.0)', () => placeholderClientHeaders],
-  ])('%s is enforced like everyone else', async (_label, hdrs) => {
-    await fillQueue();
-    const pr = await insertPr({ queued: false });
-    const res = await enqueue(pr, hdrs());
-    expect(res.status).toBe(402);
-    expect((await res.json()).code).toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
-    const rows = await db
-      .select({ mergeQueued: pullRequestsTable.mergeQueued })
-      .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, pr));
-    expect(rows[0]?.mergeQueued).toBe(false);
-  });
-
-  it('no POLAR env → no enforcement (the kill switch)', async () => {
+  it('no POLAR env → the same', async () => {
     delete process.env.POLAR_ACCESS_TOKEN;
     await fillQueue();
     const pr = await insertPr({ queued: false });

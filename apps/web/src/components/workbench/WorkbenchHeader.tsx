@@ -56,6 +56,7 @@ import { timeAgo } from './new/RecentWorkbenches';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 const NO_CHECKS: PRChecks = {
   total: 0,
@@ -122,6 +123,7 @@ export async function sendCreatePullRequest(
       );
     }
   } catch (err) {
+    if (maybeHandleBillingLimit(err, 'session_create_pr')) return;
     toast.error('Could not create the pull request', err instanceof Error ? err.message : undefined);
   }
 }
@@ -185,6 +187,7 @@ export function WorkbenchHeader({
     try {
       useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.restore(workbench.id));
     } catch (err) {
+      if (maybeHandleBillingLimit(err, 'session_restore')) return;
       toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
     } finally {
       setRestoring(false);

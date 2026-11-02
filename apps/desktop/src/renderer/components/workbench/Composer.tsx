@@ -16,6 +16,7 @@ import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } fr
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createChatTab } from './ChatTabs';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
@@ -196,6 +197,9 @@ export function Composer({
       }
     } catch (err) {
       setDraft(draftKey, text);
+      // The plan refused the box (out of hours, all boxes busy): the upgrade
+      // modal says why and what to do, and the text stays in the composer.
+      if (maybeHandleBillingLimit(err, 'workbench_send')) return;
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {

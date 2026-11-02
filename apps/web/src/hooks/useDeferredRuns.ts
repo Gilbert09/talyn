@@ -3,6 +3,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import type { PRRow } from '../lib/api';
 import { useBillingStore } from '../stores/billing';
 import { trackEvent } from '../lib/analytics';
+import { deferralNotice, upgradeReasonForCode, usageBillingOf } from '../lib/usageBilling';
 
 /**
  * Tells a free user when auto-keep silently stopped keeping their PRs green.
@@ -61,12 +62,16 @@ export function shouldAnnounceDeferral(
  */
 export function useDeferredRuns(): void {
   const plan = useBillingStore((s) => s.status?.plan);
+  // Usage billing: any tier can run out (a Pro account with no credits), so
+  // the plan alone no longer says whether there is anything to announce.
+  const usageOn = useBillingStore((s) => usageBillingOf(s.status) !== null);
 
   useEffect(() => {
     // Upgrading is the fix, so there is nothing to say to someone who already
     // has. Waiting for the status to load also stops the modal racing ahead of
     // a snapshot that would have said `unlimited`.
-    if (!plan || plan !== 'free') return;
+    if (!plan) return;
+    if (!usageOn && plan !== 'free') return;
 
     const check = (rows: PRRow[]): void => {
       if (announcedThisLaunch) return;
@@ -76,15 +81,19 @@ export function useDeferredRuns(): void {
 
       announcedThisLaunch = true;
       writeLastShown(now);
+      // The row's own reason, from a backend with usage billing. Absent on an
+      // older backend, which keeps the old "free plan task slot" copy.
+      const notice = deferred.map((r) => deferralNotice(r.autoMergeState)).find((n) => n !== null) ?? null;
+      const reason = notice ? upgradeReasonForCode(notice.code) : 'task_deferred';
       trackEvent('paywall_shown', {
         // Same event as the 402 path so the funnel has one denominator; the
         // reason is what separates "we refused you" from "this quietly stopped".
-        reason: 'task_deferred',
+        reason,
         trigger: 'auto_keep_deferred',
         deferred_prs: deferred.length,
         plan,
       });
-      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+      useBillingStore.getState().setUpgradeModalOpen(true, reason, notice);
     };
 
     // Subscribed outside React: this hook lives in MainLayout, and a `rows`
@@ -93,7 +102,7 @@ export function useDeferredRuns(): void {
     return usePullRequestStore.subscribe((state, prev) => {
       if (state.rows !== prev.rows) check(state.rows);
     });
-  }, [plan]);
+  }, [plan, usageOn]);
 }
 
 /**

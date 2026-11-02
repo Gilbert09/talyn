@@ -8,6 +8,8 @@ import { ensureChatHistory, loadOlderEvents, loadWorkbench } from '../../lib/wor
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { wakeWorkbench } from '../../lib/wakeWorkbench';
 import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
+import { maybeHandleBillingLimit, useBillingStore } from '../../stores/billing';
+import { BoxRefusalAction, sessionRefusalText } from '../billing/BoxRefusalAction';
 import { Button } from '../ui/button';
 import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
@@ -138,6 +140,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
 function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
   const setTerminalTab = useWorkbenchStore((s) => s.setTerminalTab);
   const hasSetupOutput = useWorkbenchStore((s) => (s.scriptOutput[workbench.id]?.setup?.total ?? 0) > 0);
+  const refusal = useBillingStore((s) => s.sessionRefusals[workbench.id]);
   const [retrying, setRetrying] = useState(false);
 
   // Errors first: a failed start can still say sandboxState 'creating', and a spinner would hide it.
@@ -147,7 +150,9 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       try {
         useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
       } catch (err) {
-        toast.error('Could not retry', err instanceof Error ? err.message : undefined);
+        if (!maybeHandleBillingLimit(err, 'workbench_retry')) {
+          toast.error('Could not retry', err instanceof Error ? err.message : undefined);
+        }
       } finally {
         setRetrying(false);
       }
@@ -197,6 +202,16 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
             </Button>
           ) : undefined
         }
+      />
+    );
+  }
+  if (workbench.runtime === 'sandbox' && refusal) {
+    return (
+      <Banner
+        tone="muted"
+        icon={<AlertTriangle className="h-3.5 w-3.5" />}
+        text={sessionRefusalText(refusal)}
+        action={<BoxRefusalAction code={refusal.status} notice={refusal.notice} />}
       />
     );
   }

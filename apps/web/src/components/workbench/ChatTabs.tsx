@@ -7,6 +7,7 @@ import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { StatusDot } from './WorkbenchBadges';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /** Make a new chat tab and open it. Shared with the composer's first send. */
 export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat | null> {
@@ -18,6 +19,7 @@ export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat
     store.selectChat(workbench.id, chat.id);
     return chat;
   } catch (err) {
+    if (maybeHandleBillingLimit(err, 'session_new_chat')) return null;
     toast.error('Could not open a new chat', err instanceof Error ? err.message : undefined);
     return null;
   }

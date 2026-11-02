@@ -7,10 +7,18 @@ import {
   TASK_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   LOOP_LIMIT_ERROR_CODE,
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  USAGE_EXHAUSTED_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
 import { api, ApiError } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
+import {
+  CREDITS_REQUIRE_PAID_PLAN_ERROR_CODE,
+  boxRefusalFromError,
+  type BoxRefusalNotice,
+} from '../lib/usageBilling';
 
 /**
  * Billing state: the user's plan/usage snapshot plus the upgrade-modal flag.
@@ -31,8 +39,14 @@ interface BillingState {
   upgradeModalOpen: boolean;
   /** What the user was refused, so the modal can pitch that thing. */
   upgradeReason: UpgradeReason | null;
+  /** The refusal's own notice (usage billing), so the modal can quote it. */
+  upgradeNotice: BoxRefusalNotice | null;
   setStatus: (status: BillingStatus) => void;
-  setUpgradeModalOpen: (open: boolean, reason?: UpgradeReason | null) => void;
+  setUpgradeModalOpen: (
+    open: boolean,
+    reason?: UpgradeReason | null,
+    notice?: BoxRefusalNotice | null
+  ) => void;
   /** Re-fetch the snapshot from the backend. Safe to call repeatedly. */
   refresh: () => Promise<void>;
   /** Start (or restart) the post-checkout poll burst. */
@@ -47,6 +61,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   status: null,
   upgradeModalOpen: false,
   upgradeReason: null,
+  upgradeNotice: null,
 
   setStatus: (status) => {
     const prev = get().status;
@@ -65,9 +80,13 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     }
   },
 
-  setUpgradeModalOpen: (upgradeModalOpen, reason) =>
+  setUpgradeModalOpen: (upgradeModalOpen, reason, notice) =>
     // Clear the reason on close so the next open can't inherit stale copy.
-    set({ upgradeModalOpen, upgradeReason: upgradeModalOpen ? (reason ?? null) : null }),
+    set({
+      upgradeModalOpen,
+      upgradeReason: upgradeModalOpen ? (reason ?? null) : null,
+      upgradeNotice: upgradeModalOpen ? (notice ?? null) : null,
+    }),
 
   refresh: async () => {
     try {
@@ -98,8 +117,15 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   },
 }));
 
-/** The 402 codes the free plan can reject with. */
+/**
+ * The 402 codes that open the modal. The old count-cap codes stay: the
+ * production backend sends them until usage billing ships.
+ */
 const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
+  USAGE_EXHAUSTED_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  CREDITS_REQUIRE_PAID_PLAN_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
@@ -146,9 +172,27 @@ export type UpgradeReason =
    * checkbox and is nowhere near a count, and quoting one answers a question they
    * did not ask.
    */
-  | 'auto_review';
+  | 'auto_review'
+  // Usage billing. Each arrives as an explicit server code with a notice, so
+  // each outranks every derived branch in the modal.
+  /** The period's box-hours and the credits are spent. */
+  | 'usage_exhausted'
+  /** The plan cannot start the box size that was asked for. */
+  | 'size_requires_pro'
+  /** Every box the plan runs at once is in use. */
+  | 'concurrent_box_limit'
+  /** A Free account tried to buy credits. */
+  | 'credits_require_paid_plan'
+  /** Nothing was refused: the person asked to upgrade (the gauge, the plan page). */
+  | 'upgrade'
+  /** Nothing was refused: the person asked to buy credits. */
+  | 'add_credits';
 
 function reasonFor(code: string): UpgradeReason {
+  if (code === USAGE_EXHAUSTED_ERROR_CODE) return 'usage_exhausted';
+  if (code === SIZE_REQUIRES_PRO_ERROR_CODE) return 'size_requires_pro';
+  if (code === CONCURRENT_BOX_LIMIT_ERROR_CODE) return 'concurrent_box_limit';
+  if (code === CREDITS_REQUIRE_PAID_PLAN_ERROR_CODE) return 'credits_require_paid_plan';
   if (code === MERGE_QUEUE_LIMIT_ERROR_CODE) return 'merge_queue_limit';
   if (code === WORKFLOW_LIMIT_ERROR_CODE) return 'workflow_limit';
   if (code === LOOP_LIMIT_ERROR_CODE) return 'loop_limit';
@@ -169,12 +213,16 @@ function reasonFor(code: string): UpgradeReason {
  * monetization funnel, broken out so we can see which surface drives upgrades.
  */
 export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean {
-  if (!(err instanceof ApiError) || !err.code || !BILLING_LIMIT_CODES.has(err.code)) {
+  // The code first: most errors carry none, and a plain Error should not need
+  // the ApiError class at all.
+  const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+  if (typeof code !== 'string' || !BILLING_LIMIT_CODES.has(code) || !(err instanceof ApiError)) {
     return false;
   }
   const store = useBillingStore.getState();
   const status = store.status;
-  const reason = reasonFor(err.code);
+  const reason = reasonFor(code);
+  const notice = boxRefusalFromError(err);
   trackEvent('paywall_shown', {
     // 'task_limit' | 'merge_queue_limit' | 'workflow_limit' | 'loop_limit' |
     // 'auto_keep_default' — what was refused.
@@ -192,8 +240,10 @@ export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean
     active_reviews: status?.activeReviews,
     active_review_limit: status?.activeReviewLimit,
     plan: status?.plan,
+    tier: status?.tier,
+    usage_percent: status?.usage?.percent,
   });
   void store.refresh();
-  store.setUpgradeModalOpen(true, reason);
+  store.setUpgradeModalOpen(true, reason, notice);
   return true;
 }

@@ -1,7 +1,11 @@
 import { archiveIdleSession } from './autoArchive.js';
+import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
+import type { BoxGateError } from '../billing/entitlements.js';
+import { existingBoxRefusal } from './boxGate.js';
 import { sessionHasTalynMcp } from './talynMcp.js';
 import { v4 as uuid } from 'uuid';
 import {
+  boxRefusalReason,
   buildClaudeArgv,
   buildCodexArgv,
   checkpointCreateSteps,
@@ -75,6 +79,7 @@ import {
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { checkpointWork, noteTurnActivity, settleTurnActivity } from './workCheckpoint.js';
 import { startTitleGeneration } from './title.js';
+import { meterWorkbenchAwake } from './usageMeter.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
   appendEvents,
@@ -274,6 +279,15 @@ export async function sendMessage(
   const message = normaliseMessage(input);
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
+  // A person's message that would start a turn now asks the plan first, so
+  // the route can answer 402 and the composer keeps the text. A message
+  // behind a running turn just queues: that turn's box is already paid for,
+  // and the next turn start asks then. Talyn's own messages never throw
+  // here; their turn start holds them in the queue instead.
+  if (wb.status === 'ready' && chat.status !== 'running' && opts.origin !== 'talyn') {
+    const refusal = await existingBoxRefusal(wb);
+    if (refusal) throw refusal;
+  }
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
@@ -372,6 +386,9 @@ async function runTurnLoopBody(
       next = { message: outcome.relaunch.message, turn: heldTurn };
       continue;
     }
+    // Back in the queue, held by the plan: nothing restarts it until a person
+    // sends again or the budget comes back. Restarting here would loop.
+    if (outcome.held) return;
     // Back in the queue: the move that is running starts it when it ends.
     if (outcome.requeued) { await startQueuedIfIdle(chatId); return; }
     // T3: a turn that failed on a full disk is not run again (its side effects
@@ -388,6 +405,7 @@ async function runTurnLoopBody(
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await archiveIdleSession(fin.chat.workbenchId);
+      await suspendIfOutOfBudget(fin.chat.workbenchId);
     }
     if (fin) {
       scheduleAgentBackup(chatId);
@@ -402,6 +420,15 @@ async function runTurnLoopBody(
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
     }
     next = fin?.started ?? null;
+  }
+}
+
+/** After a turn: an owner out of budget does not keep an awake box. Never fails the turn. */
+async function suspendIfOutOfBudget(workbenchId: string): Promise<void> {
+  try {
+    await suspendWorkbenchIfExhausted(workbenchId);
+  } catch (err) {
+    console.warn(`[workbench] budget check after a turn on ${workbenchId} failed:`, err);
   }
 }
 
@@ -453,6 +480,8 @@ interface TurnOutcome {
   diskFull?: boolean;
   /** The workbench was moving: the message went back to the queue and nothing ran. */
   requeued?: boolean;
+  /** The plan refused the turn's box: the message went back to the queue and nothing ran. */
+  held?: boolean;
   handedOff?: boolean;
   /** Why the lease is being given up, for the log line. */
   handoffReason?: string;
@@ -577,6 +606,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
     }
   }
+  // The plan, before anything wakes the box: a turn needs budget, and waking a
+  // sleeping box needs a free box slot. A relaunch of a turn that already
+  // started is not asked again; a turn already running is never stopped.
+  if (early && firstAttempt === 0) {
+    const refusal = await existingBoxRefusal(early);
+    if (refusal) return holdTurn(chatId, message, refusal);
+  }
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
@@ -617,6 +653,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         },
       });
     }
+    // The box is awake now (an exec wakes a box the fleet suspended), so it is billed.
+    await meterWorkbenchAwake(wb);
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
     // The session's account, or the next one when it has crossed the threshold.
@@ -825,6 +863,24 @@ async function failOverAccount(
   };
 }
 
+export const TURN_HELD_NOTE = 'Talyn did not start this message. It stays in the queue: send a message to try again.';
+
+/** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
+async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
+  const requeued = await requeueTurn(chatId, message);
+  if (requeued) {
+    const stored = await appendEvents(chatId, [
+      {
+        turn: requeued.turnCount,
+        event: { type: 'system', subtype: boxRefusalReason(refusal.code), text: `${refusal.message} ${TURN_HELD_NOTE}` },
+      },
+    ]);
+    emitWorkbenchEvents(requeued.workspaceId, chatId, stored);
+    emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+  }
+  return { status: 'idle', statusMessage: null, cancelled: false, requeued: true, held: true };
+}
+
 async function cancelledOutcome(events: EventBatcher, sawResult = false): Promise<TurnOutcome> {
   if (!sawResult) events.add(errorResultEvent('cancelled', 'Stopped.'));
   await events.flush();
@@ -1008,6 +1064,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       await archiveIdleSession(fin.chat.workbenchId);
+      await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
     }
   }

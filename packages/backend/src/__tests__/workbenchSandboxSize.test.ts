@@ -113,7 +113,7 @@ describe('resolveSandboxSize', () => {
 
 describe('sandbox resources', () => {
   it.each<[SandboxSize, number, number, string]>([
-    ['small', 2048, 2000, 'Small · 2 GB'],
+    ['small', 4096, 2000, 'Small · 2 vCPU'],
     ['standard', 4096, 4000, 'Standard · 4 GB'],
     ['medium', 8192, 4000, 'Medium · 8 GB'],
     ['large', 12288, 6000, 'Large · 12 GB'],

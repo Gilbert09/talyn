@@ -5,6 +5,7 @@ import { useAdminQuery } from '../hooks/useAdminQuery';
 import { Page, Pill } from '../components/layout/Page';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { absolute, relativeAge } from '../lib/format';
+import { UsageTile } from '../components/admin/UsageTile';
 
 /**
  * Who did what, when, and why.
@@ -111,6 +112,8 @@ export function AuditPage() {
         )
       }
     >
+      <UsageTile />
+
       {pending > 0 && (
         // A row stuck on `pending` means we wrote the intent, dialled out, and
         // never learned how it ended — usually a backend restart mid-call.

@@ -18,6 +18,7 @@ import { WorkbenchHeader } from './WorkbenchHeader';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
@@ -122,6 +123,7 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       try {
         useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
       } catch (err) {
+        if (maybeHandleBillingLimit(err, 'session_retry')) return;
         toast.error('Could not retry', err instanceof Error ? err.message : undefined);
       } finally {
         setRetrying(false);

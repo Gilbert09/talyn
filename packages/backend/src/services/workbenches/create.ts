@@ -17,7 +17,9 @@ import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { allocateWorkbenchBranch, sessionBranchPrefix, uniqueViolationConstraint } from './branchAllocation.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { WorkbenchError } from './errors.js';
-import { scheduleProvision } from './lifecycle.js';
+import { assertNewWorkbenchBox } from './boxGate.js';
+import { scheduleProvision, THREAD_SANDBOX_SIZE } from './lifecycle.js';
+import { sizeForSession } from './sandboxSize.js';
 import { publicWorkbench } from './prLink.js';
 import { sandboxRefusal, workbenchReadiness, type ReadinessUser } from './readiness.js';
 import { sandboxIdFor } from './sandboxRuntime.js';
@@ -146,6 +148,9 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
     // inserted that would only fail later.
     const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, actor), body.agent);
     if (refusal) throw refusal;
+    // The plan: budget, the concurrent-box cap and the box's size. A refusal
+    // is a BoxGateError, a 402 with its notice, and nothing is inserted.
+    await assertNewWorkbenchBox(workspaceId, () => sizeForSession({ repositoryId: repo.id, workspaceId }));
   }
 
   const requestedName = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
@@ -256,6 +261,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
   if (body.runtime !== 'sandbox') throw refuse(400, 'A thread runs in a sandbox.');
   const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, actor), body.agent);
   if (refusal) throw refusal;
+  await assertNewWorkbenchBox(workspaceId, THREAD_SANDBOX_SIZE);
 
   const requestedName = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
   if (requestedName && !NAME_PATTERN.test(requestedName)) {

@@ -111,6 +111,9 @@ export * from './transcript.js';
 // browser that reads the proxied stream.
 export * from './sse.js';
 
+// The public API (`/v1`): token scopes and the token management shapes.
+export * from './publicApi.js';
+
 // Workbenches — a branch, an agent chat, a diff and a terminal, in a sandbox or
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
@@ -124,6 +127,7 @@ export * from './workbenchDetect.js';
 export * from './talynBriefing.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
+export * from './pricing.js';
 export * from './bake.js';
 export * from './turnTiming.js';
 export * from './setupRecipe.js';
@@ -138,6 +142,17 @@ import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './ski
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
 import type { GithubHealth } from './githubHealth.js';
+import type {
+  AutoTopupConfig,
+  AutoTopupSettings,
+  BillingPricing,
+  ConcurrentBoxUsage,
+  CreditPackId,
+  CreditSummary,
+  PlanTier,
+  SizePrice,
+  UsageSummary,
+} from './pricing.js';
 
 // ============================================================================
 // Workspace
@@ -1142,6 +1157,12 @@ export type WSEventType =
   // Per-user billing fact (broadcastToUser) — fired by the Polar webhook
   // handler after a plan change; payload is the fresh BillingStatus.
   | 'subscription:updated'
+  // Usage billing, per user (broadcastToUser). One alert per threshold
+  // (50/80/100% of included box-hours) per period; payload `UsageAlertEvent`.
+  | 'billing:usage_alert'
+  // Included hours and credits ran out; new boxes are refused and idle
+  // workbench boxes suspend. Payload `UsageExhaustedEvent`.
+  | 'billing:exhausted'
   // One workflow evaluated one PR and finished acting. Carries the whole
   // WorkflowRun row, which is what makes the Workflows page's history and its
   // derived stats live rather than poll-shaped.
@@ -1598,68 +1619,44 @@ export interface PaginatedResponse<T> {
 // Billing
 // ============================================================================
 
-export type Plan = 'free' | 'unlimited';
+/**
+ * The plan a billing status reports: a usage-billing tier, or `'unlimited'`.
+ *
+ * `'unlimited'` stays in the union on purpose. Branch builds of the apps talk
+ * to the production backend, which still sends the old `'free' | 'unlimited'`
+ * model until usage billing ships, and a client must read that without a type
+ * error. A backend on usage billing never sends it; it maps old Unlimited
+ * subscribers to `legacy_pro` and old comps to `pro`.
+ */
+export type Plan = PlanTier | 'unlimited';
 
-/** Max simultaneously-active tasks (pending/queued/in_progress) on the free plan. */
+/*
+ * The old free-plan count caps. Usage billing removed them: the backend no
+ * longer enforces any of these, and the concurrent-box cap in
+ * `PLAN_LIMITS[tier].concurrentBoxes` replaced the active-task cap. The
+ * merge-queue (3) and review-cycle (1) constants are deleted. The three below
+ * stay ONLY because branch builds of the desktop and web apps talk to the
+ * production backend, which still enforces them until usage billing ships
+ * (their UpgradeModal and PR-row copy quote them). Delete them, and the
+ * matching *_LIMIT_ERROR_CODE constants, once the apps stop reading them.
+ */
+
+/** @deprecated Old free-plan active-task cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
 
-/** Max PRs sitting in the merge queue at once on the free plan. */
-export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
-
-/**
- * Max workflows an owner may have on the free plan, across every workspace
- * they own.
- *
- * Counts DEFINITIONS, not enabled ones: the cap is on how many rules you keep,
- * so disabling one does not free a slot. Counting only the enabled ones would
- * make the limit a toggle — keep twelve, run three, swap whenever — which is
- * not a limit.
- */
+/** @deprecated Old free-plan workflow cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_WORKFLOW_LIMIT = 3;
 
-/**
- * Max loops an owner may have on the free plan, across every workspace they own.
- *
- * Counts DEFINITIONS, like the workflow cap above and for the same reason:
- * counting only the enabled ones would make the limit a toggle — keep twelve,
- * run three, swap whenever.
- *
- * Note this caps how many SCHEDULES you keep, not how much they run. Each
- * firing still goes through the active-task limit, so a free user with three
- * loops on a one-minute cron does not get unlimited agent time; they get three
- * tasks in flight and a history full of "waiting for a task slot".
- */
+/** @deprecated Old free-plan loop cap (3). Read only by the apps' old paywall copy. */
 export const FREE_PLAN_LOOP_LIMIT = 3;
-
-/**
- * How many code-review-and-fix CYCLES a free owner may have in flight. One, and
- * there is no queue behind it.
- *
- * It counts cycles, not runs: one review may spend six sandboxes, and metering
- * those individually would make the cap incomprehensible. A review resting with
- * findings on screen does NOT hold the slot — only a cycle that is actually
- * working does (reviewing, or fixing) — which is what lets one number cover both
- * halves of "review and fix" instead of needing two.
- *
- * Deliberately no queueing. A queued review is indistinguishable from a working
- * one on a PR row, and this feature's whole credibility is that its progress bar
- * is telling the truth, so the second request is refused rather than parked.
- *
- * It COMPOSES with the task cap rather than replacing it. A review's own units
- * are not tasks and never touch that cap; the fix run IS an ordinary task and
- * does. When the two collide the fix waits visibly for a task slot instead of
- * being refused — a person who was invited to press Fix should not be told no
- * for a reason they cannot see.
- */
-export const FREE_PLAN_REVIEW_CYCLE_LIMIT = 1;
 
 /* MCP servers are deliberately UNCAPPED, on every plan.
  *
- * They were capped at 3 like the four above, and that turned out to be the
+ * They were capped at 3 like the old count caps, and that turned out to be the
  * wrong shape for what they are. A task, a queued PR, a workflow and a loop all
  * SPEND something when they exist — agent time, a merge, a firing. A connected
  * MCP server spends nothing until a run uses it, and what a run costs is
- * already bounded by the task cap. Charging for the connection was charging
+ * already bounded by the box it runs in. Charging for the connection was charging
  * twice for one thing.
  *
  * It is also the third time a round number here took away a capability somebody
@@ -1689,45 +1686,96 @@ export interface TaskScheduleError {
   maxAttempts?: number;
 }
 
+/** @deprecated The old active-task cap's 402 code. The production backend still sends it until usage billing ships. */
 export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
 
-/** ApiResponse.code when queueing a PR is rejected by the free merge-queue limit. */
+/** @deprecated The old merge-queue cap's 402 code. The production backend still sends it until usage billing ships. */
 export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
 
-/**
- * ApiResponse.code when creating a workflow is rejected by the free-plan cap.
- * A usage cap like the two above — deleting a workflow frees the slot.
- */
+/** @deprecated The old workflow cap's 402 code. The production backend still sends it until usage billing ships. */
 export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 
-/**
- * ApiResponse.code when creating a loop is rejected by the free-plan cap.
- * A usage cap like the others — deleting a loop frees the slot.
- */
+/** @deprecated The old loop cap's 402 code. The production backend still sends it until usage billing ships. */
 export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
 
 /**
- * ApiResponse.code when a free plan tries to turn ON the workspace default
- * "auto-keep new PRs mergeable". Unlike the two limit codes this is a FEATURE
- * gate, not a usage cap — there is no count to wait out, so the client must
- * pitch the upgrade rather than "wait for a slot".
+ * ApiResponse.code when a tier without auto features (Free) tries to turn ON
+ * the workspace default "auto-keep new PRs mergeable". A FEATURE gate, not a
+ * usage cap: there is no count to wait out, so the client pitches Pro.
  */
 export const AUTO_KEEP_DEFAULT_ERROR_CODE = 'auto_keep_default_requires_unlimited';
 
-/**
- * ApiResponse.code when starting a code review is rejected by the free plan's
- * one-cycle-at-a-time rule. A usage cap: the slot frees itself when the review
- * in flight finishes, so the client may say "or wait for this one".
- */
+/** @deprecated The old review-cycle cap's 402 code. The production backend still sends it until usage billing ships. */
 export const REVIEW_CYCLE_LIMIT_ERROR_CODE = 'code_review_limit_reached';
 
 /**
- * ApiResponse.code when a free plan tries to turn ON "review my new pull
- * requests automatically". A FEATURE gate like AUTO_KEEP_DEFAULT_ERROR_CODE and
- * not a usage cap — the user is nowhere near a count, so quoting one would
- * answer a question they did not ask.
+ * ApiResponse.code when a tier without auto features (Free) tries to turn ON
+ * "review my new pull requests automatically". A FEATURE gate like
+ * AUTO_KEEP_DEFAULT_ERROR_CODE.
  */
 export const AUTO_REVIEW_ERROR_CODE = 'auto_review_requires_unlimited';
+
+/**
+ * ApiResponse.code (402) when a box cannot start because the period's
+ * included box-hours and the credit balance are both spent. A running turn
+ * finishes; only NEW boxes are refused. Unattended runs defer instead.
+ */
+export const USAGE_EXHAUSTED_ERROR_CODE = 'usage_exhausted';
+
+/**
+ * ApiResponse.code (402) when the plan may not start the requested sandbox
+ * size (Free: small and standard only). A feature gate: the client pitches Pro.
+ * Unattended callers get `small` instead of this error.
+ */
+export const SIZE_REQUIRES_PRO_ERROR_CODE = 'size_requires_pro';
+
+/**
+ * ApiResponse.code (402) when the owner already runs as many boxes as the
+ * plan allows at once. A usage cap: a slot frees when a box stops.
+ */
+export const CONCURRENT_BOX_LIMIT_ERROR_CODE = 'concurrent_box_limit_reached';
+
+/** The usage-billing 402 codes, for clients that route them to the upgrade or credits flow. */
+export const USAGE_BILLING_ERROR_CODES = [
+  USAGE_EXHAUSTED_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+] as const;
+export type UsageBillingErrorCode = (typeof USAGE_BILLING_ERROR_CODES)[number];
+
+/**
+ * Why an unattended run (a loop firing, a merge-queue or auto-keep fix, a
+ * workflow action, an automatic review) did not start a box. Recorded on the
+ * run's own history as a visible deferral, never as a failure:
+ *
+ * - `usage_exhausted`: no included box-hours, no credits, no auto top-up. The
+ *   run waits for the period reset or for credits.
+ * - `box_limit_reached`: the plan's concurrent-box cap is full. The run waits
+ *   for a box to stop.
+ * - `size_requires_pro`: the plan cannot start the size. Unattended runs are
+ *   downsized instead, so this is not expected; it is not retried.
+ */
+export type BoxRefusalReason = 'usage_exhausted' | 'box_limit_reached' | 'size_requires_pro';
+
+export const BOX_REFUSAL_REASONS: readonly BoxRefusalReason[] = ['usage_exhausted', 'box_limit_reached', 'size_requires_pro'];
+
+/** The deferral reason for a box gate's 402 code. */
+export function boxRefusalReason(code: UsageBillingErrorCode): BoxRefusalReason {
+  switch (code) {
+    case USAGE_EXHAUSTED_ERROR_CODE:
+      return 'usage_exhausted';
+    case CONCURRENT_BOX_LIMIT_ERROR_CODE:
+      return 'box_limit_reached';
+    case SIZE_REQUIRES_PRO_ERROR_CODE:
+      return 'size_requires_pro';
+  }
+}
+
+export const BOX_REFUSAL_LABELS: Record<BoxRefusalReason, string> = {
+  usage_exhausted: 'Waiting for box-hours or credits',
+  box_limit_reached: 'Waiting for a free box',
+  size_requires_pro: 'The plan cannot start this box size',
+};
 
 /** ApiResponse.code when a team admin assigns more seats than the team pays for. */
 export const TEAM_SEATS_FULL_ERROR_CODE = 'team_seats_full';
@@ -1785,11 +1833,46 @@ export interface BillingStatus {
   activeReviews: number;
   /** null = unlimited. */
   activeReviewLimit: number | null;
+
+  // Usage billing. Every field below is OPTIONAL and stays so: the production
+  // backend does not send them before usage billing ships, and a client reads
+  // their ABSENCE as "draw the old view". Money is micro-dollars (see pricing.ts).
+
+  /** The usage-billing tier. Absent on a backend without usage billing. */
+  tier?: PlanTier;
+  /** The current period's box-hours. */
+  usage?: UsageSummary;
+  /** Credit balance and live lots. Absent when the tier cannot hold credits. */
+  credits?: CreditSummary;
+  /** Absent when the tier cannot use auto top-up. */
+  autoTopup?: AutoTopupSettings;
+  /** Every size with its weight, hourly price and whether this tier may start it. */
+  sizePrices?: SizePrice[];
+  /** Boxes running now against the tier's concurrency cap. */
+  concurrentBoxes?: ConcurrentBoxUsage;
+  /** List prices, so no client hard-codes a dollar amount. */
+  pricing?: BillingPricing;
 }
 
 export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
+  /** The product to buy. Absent means the backend's default (Pro on usage billing). */
+  plan?: 'pro';
 }
+
+/** `POST /billing/credits/checkout`. */
+export interface CreditCheckoutRequest {
+  pack: CreditPackId;
+}
+
+/** `POST /billing/change-plan`: move a Legacy Pro subscription to Pro. */
+export interface ChangePlanRequest {
+  to: 'pro';
+  period: 'monthly' | 'annual';
+}
+
+/** `PUT /billing/auto-topup`. Validate with `validateAutoTopupConfig`. */
+export type UpdateAutoTopupRequest = AutoTopupConfig;
 
 // ---------- Team plan ----------
 //

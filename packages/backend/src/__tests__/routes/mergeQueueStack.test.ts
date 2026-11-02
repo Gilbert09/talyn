@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { _resetMergeQueueBroadcasts } from '../../services/mergeQueueBroadcast.js';
-import { FREE_PLAN_MERGE_QUEUE_LIMIT, MERGE_QUEUE_LIMIT_ERROR_CODE } from '@talyn/shared';
+import { MERGE_QUEUE_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { pullRequestRoutes } from '../../routes/pullRequests.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -296,85 +296,34 @@ describe('merge-queue stack enqueue', () => {
     });
   });
 
-  describe('free-plan limit', () => {
-    async function goUnlimited(): Promise<void> {
-      await db
-        .update(usersTable)
-        .set({ planOverride: 'unlimited' })
-        .where(eq(usersTable.id, TEST_USER_ID));
-    }
+  // Usage billing removed the merge-queue cap (3 on the free plan). A stack
+  // of any length is queued whole, on any tier.
+  describe('no plan cap', () => {
+    const LONG = 6;
 
-    it('refuses a stack that does not fit, and enqueues NOTHING', async () => {
-      // All-or-nothing: a half-enqueued stack stops silently halfway, because
-      // the retarget of the next rung only happens if that rung is queued.
-      const ids: string[] = [];
-      for (let i = 0; i < FREE_PLAN_MERGE_QUEUE_LIMIT + 1; i++) {
-        ids.push(
-          await insertPr({ head: `feat-${i}`, base: i === 0 ? 'main' : `feat-${i - 1}` })
-        );
-      }
-
-      const res = await post(ids[ids.length - 1]!, { enabled: true });
-
-      expect(res.status).toBe(402);
-      const body = (await res.json()) as { code: string; error: string };
-      expect(body.code).toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
-      // The copy has to name the shortfall — the modal has nowhere else to
-      // learn that this was a stack rather than one PR.
-      expect(body.error).toContain(`${FREE_PLAN_MERGE_QUEUE_LIMIT + 1} merge-queue slots`);
-      expect(await queuedIds()).toEqual([]);
-    });
-
-    it('counts what is already queued against the stack', async () => {
+    it.each([
+      { label: 'free', set: {} },
+      { label: 'comp', set: { planOverride: 'unlimited' } },
+    ])('a $label owner enqueues a long stack whole', async ({ set }) => {
+      if (Object.keys(set).length) await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
       await insertPr({ head: 'unrelated', base: 'main', queued: true });
-      const a = await insertPr({ head: 'feat-a', base: 'main' });
-      const b = await insertPr({ head: 'feat-b', base: 'feat-a' });
-      const c = await insertPr({ head: 'feat-c', base: 'feat-b' });
-
-      // 1 queued + 3 more > 3.
-      expect((await post(c, { enabled: true })).status).toBe(402);
-      expect(await queuedIds()).toHaveLength(1);
-
-      // 1 queued + 2 more == 3: fits exactly.
-      expect((await post(b, { enabled: true })).status).toBe(200);
-      expect(await queuedIds()).toHaveLength(3);
-      void a;
-    });
-
-    it('never lets an already-queued member make its own stack unaffordable', async () => {
-      const { a, b, c } = await seedStack();
-      await post(c, { enabled: true });
-
-      // Re-arming the same three must not count them twice.
-      expect((await post(c, { enabled: true })).status).toBe(200);
-      expect(await queuedIds()).toEqual([a, b, c].sort());
-    });
-
-    it('lets an unlimited plan enqueue a stack past the free cap', async () => {
-      await goUnlimited();
       const ids: string[] = [];
-      for (let i = 0; i < FREE_PLAN_MERGE_QUEUE_LIMIT + 2; i++) {
-        ids.push(
-          await insertPr({ head: `feat-${i}`, base: i === 0 ? 'main' : `feat-${i - 1}` })
-        );
+      for (let i = 0; i < LONG; i++) {
+        ids.push(await insertPr({ head: `feat-${i}`, base: i === 0 ? 'main' : `feat-${i - 1}` }));
       }
 
       const res = await post(ids[ids.length - 1]!, { enabled: true });
 
       expect(res.status).toBe(200);
-      expect(await queuedIds()).toHaveLength(FREE_PLAN_MERGE_QUEUE_LIMIT + 2);
+      expect(((await res.json()) as { code?: string }).code).not.toBe(MERGE_QUEUE_LIMIT_ERROR_CODE);
+      expect(await queuedIds()).toHaveLength(LONG + 1);
     });
 
-    it('does not gate a dequeue', async () => {
-      await goUnlimited();
-      const { c } = await seedStack();
-      await post(c, { enabled: true, includeDescendants: true });
-      await db
-        .update(usersTable)
-        .set({ planOverride: null })
-        .where(eq(usersTable.id, TEST_USER_ID));
-
-      expect((await post(c, { enabled: false })).status).toBe(200);
+    it('re-arming an already-queued stack keeps it queued once', async () => {
+      const { a, b, c } = await seedStack();
+      await post(c, { enabled: true });
+      expect((await post(c, { enabled: true })).status).toBe(200);
+      expect(await queuedIds()).toEqual([a, b, c].sort());
     });
   });
 });

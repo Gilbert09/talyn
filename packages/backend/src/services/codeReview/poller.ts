@@ -3,7 +3,8 @@ import { TickGuard } from '../tickGuard.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { getSelfHostedClient } from '../selfHosted/credentials.js';
-import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { FleetRunNotFoundError, fleetInstant } from '../selfHosted/client.js';
+import { meterBoxClosed } from '../billing/usageHooks.js';
 import { fleetAgentForModel, type AgentEvent } from '@talyn/shared';
 import {
   initialTaskOf,
@@ -147,6 +148,9 @@ class CodeReviewPoller {
     const age = Date.now() - (run.dispatchedAt?.getTime() ?? Date.now());
     if (age < MAX_UNIT_LIFETIME_MS + DEADLINE_GRACE_MS) return false;
     await settleRun(run.id, { status: 'failed', failureCode: 'timeout' });
+    if (run.provider === 'selfhosted' && run.sandboxId) {
+      await meterBoxClosed({ sandboxId: run.sandboxId, reason: 'vanished', workspaceId: run.workspaceId });
+    }
     // The fleet stops its own sandbox at `timeoutSec`; PostHog Code has no such
     // budget, so a unit we gave up on keeps its session open until told.
     await this.releasePostHogRun(run);
@@ -166,6 +170,7 @@ class CodeReviewPoller {
       if (err instanceof FleetRunNotFoundError) {
         // A healthy host is authoritative about what it is running, so a run it
         // has never heard of is gone rather than pending. Terminal.
+        await meterBoxClosed({ sandboxId: run.sandboxId, reason: 'vanished', workspaceId: run.workspaceId });
         await settleRun(run.id, { status: 'failed', failureCode: 'run_vanished' });
         void scheduleReviewEvaluation(run.reviewId, 'poller:vanished');
         return;
@@ -195,6 +200,12 @@ class CodeReviewPoller {
     }
 
     if (!isFleetSandboxTerminal(sandbox.status)) return;
+    await meterBoxClosed({
+      sandboxId: run.sandboxId,
+      reason: 'terminal',
+      endedAt: fleetInstant(sandbox.endedAt),
+      workspaceId: run.workspaceId,
+    });
 
     // Terminal. Re-read the tail from the durable log rather than trusting a
     // transcript we never kept, then ingest.

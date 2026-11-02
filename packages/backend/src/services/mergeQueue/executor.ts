@@ -14,6 +14,7 @@
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
+  boxRefusalReason,
   buildMergeablePrompt,
   externalQueueProviderLabel,
   prNeedsFollowup,
@@ -56,7 +57,8 @@ import {
 } from '../visualReview.js';
 import { prMonitorService } from '../prMonitor.js';
 import { createCloudTask } from '../taskCreate.js';
-import { TaskLimitError } from '../billing/entitlements.js';
+import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
+import { boxDeferral, boxDeferralEventCode, workspaceBoxHold } from '../billing/boxDeferral.js';
 import {
   ACTIVE_STATUSES,
   activePrTaskId,
@@ -1463,6 +1465,14 @@ async function fireFixRun(
   }
   const fixKind: FixKind = queueFailure ? 'queue_failure' : resign ? 'resign' : 'blockers';
 
+  // The owner's plan refused a box moments ago and has not cleared: stay
+  // queued and write NOTHING. Without this an owner who is out of hours would
+  // claim, refuse and roll back (two event rows) on every stale-group pass of
+  // the reconciler until the period resets. The deferral the first refusal
+  // recorded is still the entry's latest word.
+  const held = await workspaceBoxHold(ctx.pr.workspaceId, { unmetered: resolved.provider !== 'selfhosted' });
+  if (held) return ensureQueuedDeferred(ctx, boxDeferralEventCode(held), deferralMessage(held));
+
   // Phase A — claim. Whoever wins this CAS owns the dispatch; concurrent
   // evaluations at the same version lose here and create no task. No
   // resignAttempts bump / no fixTaskId yet, so a TaskLimit deferral below can
@@ -1557,24 +1567,24 @@ async function fireFixRun(
       pullRequestId: ctx.pr.id,
     });
   } catch (err) {
-    if (err instanceof TaskLimitError) {
-      // Free-plan concurrency limit — transient; a slot frees when a task ends
-      // (the task:status trigger re-evaluates). Roll the claim back to queued
+    if (isBoxGateError(err)) {
+      // The plan refused the box: a full concurrency cap (a slot frees when a
+      // box stops; the task:status trigger and the reconciler re-evaluate) or
+      // used-up hours (the owner hold above keeps later passes quiet until the
+      // recheck time or until credits arrive). Roll the claim back to queued
       // and burn NOTHING (no attempt was counted in Phase A).
       //
-      // The `deferred_task_limit` casTransition below records this for the
-      // ENTRY; this records it for the FUNNEL. They are not the same audience
-      // and the entry event cannot serve both — it is scoped to one queue
-      // entry's history, while the question here is "how often does the free
-      // plan actually bite, across every surface that can be bitten". Paired
-      // with the auto-keep watcher's copy, `paywall_deferred` is the whole
-      // silent half of the paywall: a cap that is hit with no request to
-      // refuse, so no 402 and no UpgradeModal ever happen.
+      // The casTransition below records this for the ENTRY, with the gate's
+      // own sentence; this records it for the FUNNEL. They are not the same
+      // audience: the entry event is one queue entry's history, while the
+      // question here is "how often does the plan bite, across every surface
+      // that can be bitten". Paired with the auto-keep watcher's copy,
+      // `paywall_deferred` is the silent half of the paywall: a refusal with
+      // no request behind it, so no 402 and no UpgradeModal ever happen.
       captureWorkspaceEvent(ctx.pr.workspaceId, 'paywall_deferred', {
         source: 'merge_queue',
-        gate: 'task_limit',
-        limit: err.limit,
-        active: err.active,
+        gate: boxRefusalReason(err.code),
+        ...(err.notice.limit !== undefined ? { limit: err.notice.limit, active: err.notice.active } : {}),
         repo: `${ctx.pr.owner}/${ctx.pr.repo}`,
         pr_number: ctx.pr.number,
       });
@@ -1591,8 +1601,9 @@ async function fireFixRun(
           trigger: ctx.trigger,
           fromStatus: 'fixing',
           toStatus: 'queued',
-          code: 'deferred_task_limit',
-          message: 'Fix run deferred — free-plan task slots are full.',
+          code: boxDeferralEventCode(err),
+          message: deferralMessage(err),
+          detail: { deferral: boxDeferral(err), notice: err.notice },
         }
       );
       if (!revertOk) return { casLost: true };
@@ -1662,6 +1673,10 @@ async function cancelUndispatchedFixTask(taskId: string): Promise<void> {
   } catch (err) {
     console.warn(`[mergeQueueV2] failed to cancel duplicate fix task ${taskId}:`, err);
   }
+}
+
+function deferralMessage(err: BoxGateError): string {
+  return `Fix run deferred: ${err.message}`;
 }
 
 async function ensureQueuedDeferred(

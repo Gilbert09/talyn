@@ -2,10 +2,13 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@talyn/shared';
 import {
   fleetAgentForModel,
+  isSandboxSize,
   parseNeedsHumanSentinel,
   readCloudTaskMeta,
   readCloudTaskProvider,
+  sandboxSizeForResources,
   TASK_STATUS_TERMINAL,
+  type SandboxSize,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable, repositories as repositoriesTable } from '../../db/schema.js';
@@ -26,7 +29,7 @@ import { resolveRunCredential } from './accountSelection.js';
 import { findHotSwap, forgetHotSwapRun, recordHotSwap } from './hotSwap.js';
 import { finalTextFromEvents, toAgentEvent } from './eventCursor.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
-import { FleetRunNotFoundError } from './client.js';
+import { FleetRunNotFoundError, fleetInstant } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
 import {
@@ -36,6 +39,8 @@ import {
   rateLimitedAgentFrom,
 } from './exhaustedQuota.js';
 import { failoverExhaustedRun } from '../cloudProviders/quotaFailover.js';
+import { meterBoxClosed, meterBoxOpened } from '../billing/usageHooks.js';
+import { fleetRunAttempt, fleetRunIdForTask } from './executor.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
 // each had a byte-identical copy of the predicate and the two constants behind
@@ -172,6 +177,14 @@ class SelfHostedPoller {
    * repair; this stays correct as the eager path rather than the only one.
    */
   private recredentialed = new Map<string, string>();
+  /**
+   * Run ids this process saw `suspended`, so the next awake status reopens the
+   * meter without an insert on every tick. A suspend this process missed is
+   * the meter sweep's to find.
+   */
+  private meterSuspended = new Set<string>();
+  /** Run ids whose interval this process already closed from the backfill branch. */
+  private meterClosed = new Set<string>();
 
   /** Entry point the generic cloud poller calls via the provider seam. */
   async reconcileTask(row: CloudTaskRow): Promise<void> {
@@ -214,6 +227,13 @@ class SelfHostedPoller {
     // loop came back through the backfill branch, which did not exist then.
     // PostHog Code's reconcile has carried the equivalent guard from the start.
     if (TASK_STATUS_TERMINAL[row.status]) {
+      // A task that ended without this poller seeing its box stop (a cancel,
+      // a failover) stops costing anything now.
+      if (!this.meterClosed.has(runId) && (cloud.status === 'queued' || cloud.status === 'running')) {
+        if (this.meterClosed.size > 10_000) this.meterClosed.clear();
+        this.meterClosed.add(runId);
+        await meterBoxClosed({ sandboxId: runId, reason: 'terminal', workspaceId: row.workspaceId });
+      }
       await this.syncTranscript(row, client, runId, true);
       await markTranscriptFinal(row.id);
       this.stopFollow(row.id);
@@ -246,6 +266,7 @@ class SelfHostedPoller {
       throw new Error('Fleet sandbox not found in this workspace');
     }
     const terminal = isFleetSandboxTerminal(sandbox.status);
+    await this.meterSandbox(row, runId, sandbox, terminal);
 
     // An ADOPTED sandbox survived a fleetd restart, but its credentials did
     // not: the fleet holds them only in memory, deliberately, so the surviving
@@ -309,6 +330,44 @@ class SelfHostedPoller {
       await this.linkPr(row.workspaceId, row.repositoryId, row.id, prUrl);
     }
     await this.finalize(row.id, row.workspaceId, sandbox, prUrl);
+  }
+
+  /**
+   * Keep the meter in step with what the fleet reports: a stopped box closes
+   * at its end time, a suspended one at its suspend time, and a box that woke
+   * after this process saw it asleep opens again.
+   */
+  private async meterSandbox(row: CloudTaskRow, runId: string, sandbox: FleetSandbox, terminal: boolean): Promise<void> {
+    if (terminal) {
+      this.meterSuspended.delete(runId);
+      await meterBoxClosed({
+        sandboxId: runId,
+        reason: 'terminal',
+        endedAt: fleetInstant(sandbox.endedAt),
+        workspaceId: row.workspaceId,
+      });
+      return;
+    }
+    if (sandbox.status === 'suspended') {
+      if (this.meterSuspended.has(runId)) return;
+      this.meterSuspended.add(runId);
+      await meterBoxClosed({
+        sandboxId: runId,
+        reason: 'suspended',
+        endedAt: fleetInstant(sandbox.suspendedAt),
+        workspaceId: row.workspaceId,
+      });
+      return;
+    }
+    if (this.meterSuspended.delete(runId)) {
+      await meterBoxOpened({
+        workspaceId: row.workspaceId,
+        subjectKind: 'task',
+        subjectId: row.id,
+        sandboxId: runId,
+        size: taskBoxSize(row, sandbox),
+      });
+    }
   }
 
   private async syncTranscript(
@@ -689,6 +748,13 @@ class SelfHostedPoller {
     clearWatched(row.id);
     this.cursor.delete(row.id);
 
+    // A box can exist when the create succeeded and the bookkeeping did not.
+    await meterBoxClosed({
+      sandboxId: fleetRunIdForTask(row.id, fleetRunAttempt(row)),
+      reason: 'vanished',
+      workspaceId: row.workspaceId,
+    });
+
     const summary =
       'This task never reached the fleet: it is marked in progress but carries no run, ' +
       'so no host is working on it and nothing can report back. Retry it to dispatch a fresh run.';
@@ -743,6 +809,8 @@ class SelfHostedPoller {
       'The fleet host no longer has this sandbox — it was lost when the host restarted ' +
       'or the microVM was reclaimed. Retry the task to start a fresh one.';
     const result: TaskResult = { success: false, summary, error: `run ${runId} not found: ${detail}` };
+    this.meterSuspended.delete(runId);
+    await meterBoxClosed({ sandboxId: runId, reason: 'vanished', workspaceId: row.workspaceId });
 
     const now = new Date();
     await getDbClient()
@@ -982,6 +1050,13 @@ class SelfHostedPoller {
       // Analytics must never affect task processing.
     }
   }
+}
+
+/** The size a task's box was created at: what dispatch recorded, else what the fleet reports. */
+function taskBoxSize(row: CloudTaskRow, sandbox: FleetSandbox): SandboxSize {
+  const recorded = readCloudTaskMeta({ metadata: row.metadata })?.extra?.sandboxSize;
+  if (isSandboxSize(recorded)) return recorded;
+  return sandboxSizeForResources(sandbox.memMib, sandbox.milliVcpu ?? (sandbox.vcpuCount ? sandbox.vcpuCount * 1000 : null)) ?? 'standard';
 }
 
 function parsePrUrl(url: string): { owner: string; repo: string; number: number } | null {

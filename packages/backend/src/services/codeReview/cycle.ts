@@ -1,11 +1,13 @@
 import { v4 as uuid } from 'uuid';
 import {
   CODE_REVIEW_PHASE_AT_REST,
+  UNATTENDED_SANDBOX_SIZE,
   customReviewersForRepo,
   type CodeReviewPhase,
   type CodeReviewPreset,
 } from '@talyn/shared';
-import { withReviewCycleGate } from '../billing/entitlements.js';
+import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
+import { boxDeferral, boxDeferralEventCode, runBoxGate, type BoxDeferral } from '../billing/boxDeferral.js';
 import { getSelfHostedClient } from '../selfHosted/credentials.js';
 import { getPostHogCodeClient } from '../posthogCode/credentials.js';
 import { discardFindings } from './findings.js';
@@ -40,6 +42,19 @@ export type StartOutcome =
       ok: false;
       code: 'pr_closed' | 'pr_missing' | 'busy' | 'no_reviewers';
       message: string;
+    }
+  | {
+      /**
+       * An automatic cycle the plan refused a box for. Recorded on the review
+       * (its last error and an event) and retried by the next trigger after
+       * the owner hold ends. A person's start throws the refusal instead,
+       * which the route answers with a 402.
+       */
+      ok: false;
+      code: 'deferred';
+      message: string;
+      deferral: BoxDeferral;
+      error: BoxGateError;
     };
 
 export interface StartReviewInput {
@@ -93,7 +108,7 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
   const builtInLenses = settings.builtInReviewers ? lensesForPreset(preset) : [];
   if (!builtInLenses.length && !customReviewers.length) {
     // Refused before the plan gate and before any row moves. A cycle with no
-    // reviewer can only fail, and it would spend a free plan's one cycle to do it.
+    // reviewer can only fail, and it would spend box-hours to do it.
     return {
       ok: false,
       code: 'no_reviewers',
@@ -108,70 +123,79 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
 
   const ownerId = await workspaceOwner(pr.workspaceId);
 
-  const outcome = await withReviewCycleGate(
-    ownerId,
-    { excludeReviewId: existing?.id },
-    async (): Promise<StartOutcome> => {
-      const review =
-        existing ??
-        (await ensureReview({
-          id: uuid(),
-          workspaceId: pr.workspaceId,
-          repositoryId: pr.repositoryId,
-          pullRequestId: input.pullRequestId,
-          startedBy: input.userId ?? null,
-        }));
+  // One box's worth: a cycle's units are small boxes, and a started cycle
+  // finishes, so the units are not gated one by one. An automatic cycle is
+  // unattended: it reads the owner hold, and a refusal is a deferral.
+  let outcome: StartOutcome;
+  try {
+    outcome = await runBoxGate(
+      ownerId,
+      { size: UNATTENDED_SANDBOX_SIZE, unattended: input.auto === true, workspaceId: pr.workspaceId },
+      async (): Promise<StartOutcome> => {
+        const review =
+          existing ??
+          (await ensureReview({
+            id: uuid(),
+            workspaceId: pr.workspaceId,
+            repositoryId: pr.repositoryId,
+            pullRequestId: input.pullRequestId,
+            startedBy: input.userId ?? null,
+          }));
 
-      if (input.reset) await discardFindings(review.id);
+        if (input.reset) await discardFindings(review.id);
 
-      const moved = await casTransition(
-        review.id,
-        review.version,
-        {
-          phase: 'queued',
-          phaseStartedAt: new Date(),
-          cycle: review.cycle + 1,
-          preset,
-          lensKeys: builtInLenses,
-          customReviewers,
-          auto: input.auto === true,
-          startedBy: input.userId ?? review.startedBy,
-          lastError: null,
-          lastErrorAt: null,
-        },
-        {
-          fromPhase: review.phase as CodeReviewPhase,
-          toPhase: 'queued',
-          trigger: input.auto ? 'auto' : 'user:start',
-          code: 'cycle_started',
-          message: input.reset
-            ? 'Reviewing again, discarding the earlier findings.'
-            : 'Review queued.',
-          detail: {
-            preset,
+        const moved = await casTransition(
+          review.id,
+          review.version,
+          {
+            phase: 'queued',
+            phaseStartedAt: new Date(),
             cycle: review.cycle + 1,
-            builtInReviewers: builtInLenses.length > 0,
-            customReviewers: customReviewers.length,
+            preset,
+            lensKeys: builtInLenses,
+            customReviewers,
+            auto: input.auto === true,
+            startedBy: input.userId ?? review.startedBy,
+            lastError: null,
+            lastErrorAt: null,
           },
+          {
+            fromPhase: review.phase as CodeReviewPhase,
+            toPhase: 'queued',
+            trigger: input.auto ? 'auto' : 'user:start',
+            code: 'cycle_started',
+            message: input.reset
+              ? 'Reviewing again, discarding the earlier findings.'
+              : 'Review queued.',
+            detail: {
+              preset,
+              cycle: review.cycle + 1,
+              builtInReviewers: builtInLenses.length > 0,
+              customReviewers: customReviewers.length,
+            },
+          }
+        );
+
+        if (!moved) {
+          // Somebody else moved it between our read and our write. Whatever they did
+          // is at least as current as what we wanted.
+          const current = await getReviewForPr(input.pullRequestId);
+          return current
+            ? { ok: true, review: current, started: false }
+            : { ok: false, code: 'busy', message: 'The review changed while it was starting.' };
         }
-      );
 
-      if (!moved) {
-        // Somebody else moved it between our read and our write. Whatever they did
-        // is at least as current as what we wanted.
-        const current = await getReviewForPr(input.pullRequestId);
-        return current
-          ? { ok: true, review: current, started: false }
-          : { ok: false, code: 'busy', message: 'The review changed while it was starting.' };
+        return {
+          ok: true,
+          review: { ...review, cycle: review.cycle + 1, preset, lensKeys: builtInLenses, customReviewers },
+          started: true,
+        };
       }
-
-      return {
-        ok: true,
-        review: { ...review, cycle: review.cycle + 1, preset, lensKeys: builtInLenses, customReviewers },
-        started: true,
-      };
-    }
-  );
+    );
+  } catch (err) {
+    if (!input.auto || !isBoxGateError(err)) throw err;
+    return deferAutomaticCycle(existing, { ...pr, pullRequestId: input.pullRequestId }, err, input.userId ?? null);
+  }
 
   // Scheduled AFTER the gate, never inside it.
   //
@@ -255,3 +279,43 @@ export async function cancelReviewCycle(review: ReviewRow): Promise<void> {
 // caller keeps its import.
 export { reportingBarsFor, workspaceReviewSettings } from './workspaceSettings.js';
 export { workspaceOwner, workspacePreset };
+
+/**
+ * Record that the plan refused an automatic cycle: the review's last error
+ * says why, with one event. Written only when the sentence changes, because
+ * an automatic review is considered on every PR snapshot, and the owner hold
+ * hands back the same refusal on each of them until it ends.
+ */
+async function deferAutomaticCycle(
+  existing: ReviewRow | null,
+  pr: { workspaceId: string; repositoryId: string; pullRequestId: string },
+  err: BoxGateError,
+  userId: string | null
+): Promise<StartOutcome> {
+  const deferral = boxDeferral(err);
+  const outcome: StartOutcome = { ok: false, code: 'deferred', message: err.message, deferral, error: err };
+  if (existing?.lastError === err.message) return outcome;
+  const review =
+    existing ??
+    (await ensureReview({
+      id: uuid(),
+      workspaceId: pr.workspaceId,
+      repositoryId: pr.repositoryId,
+      pullRequestId: pr.pullRequestId,
+      startedBy: userId,
+    }));
+  await casTransition(
+    review.id,
+    review.version,
+    { lastError: err.message, lastErrorAt: new Date() },
+    {
+      fromPhase: review.phase as CodeReviewPhase,
+      toPhase: review.phase as CodeReviewPhase,
+      trigger: 'auto',
+      code: boxDeferralEventCode(err),
+      message: err.message,
+      detail: { deferral, notice: err.notice },
+    }
+  );
+  return outcome;
+}

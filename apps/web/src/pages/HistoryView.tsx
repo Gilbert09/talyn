@@ -11,6 +11,7 @@ import { Input } from '../components/ui/input';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { PrPill } from '../components/workbench/WorkbenchBadges';
 import { isArchived, useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
+import { maybeHandleBillingLimit } from '../stores/billing';
 
 export function archivedAtOf(wb: Workbench): string {
   return wb.archivedAt ?? wb.updatedAt;
@@ -134,6 +135,7 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
     } catch (err) {
+      if (maybeHandleBillingLimit(err, 'session_restore')) return;
       toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(false);

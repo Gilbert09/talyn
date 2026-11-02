@@ -65,11 +65,20 @@ import type {
   CreateMcpTokenRequest,
   CreateMcpTokenResponse,
   McpToken,
+  ApiToken,
+  CreateApiTokenRequest,
+  CreateApiTokenResponse,
   ApiResponse,
+  AutoTopupSettings,
   BillingOrder,
   BillingStatus,
+  BillingUsageResponse,
+  ChangePlanRequest,
   CheckoutSessionResponse,
   CreateCheckoutRequest,
+  CreditCheckoutRequest,
+  CreditSummary,
+  UpdateAutoTopupRequest,
   AssignTeamSeatsRequest,
   AssignTeamSeatsResponse,
   CreateTeamRequest,
@@ -101,6 +110,11 @@ import type {
   AdminGoldenDeleteRequest,
   AdminGoldenDeleteResult,
   AdminGoldenRebakeRequest,
+  AdminBillingView,
+  AdminGrantCreditsRequest,
+  AdminGrantCreditsResult,
+  AdminReverseLotResult,
+  AdminUsageSummary,
   AdminGrantRequest,
   AdminMutationRequest,
   AdminPage,
@@ -488,6 +502,16 @@ export const mcpTokens = {
   create: (data: CreateMcpTokenRequest = {}) =>
     request<CreateMcpTokenResponse>('POST', '/mcp-tokens', data),
   revoke: (id: string) => request<void>('DELETE', `/mcp-tokens/${id}`),
+};
+
+/**
+ * Personal access tokens for the public API (`/v1`). Minting needs the
+ * `publicApi` flag; listing and revoking always work.
+ */
+export const apiTokens = {
+  list: () => request<ApiToken[]>('GET', '/api-tokens'),
+  create: (data: CreateApiTokenRequest) => request<CreateApiTokenResponse>('POST', '/api-tokens', data),
+  revoke: (id: string) => request<void>('DELETE', `/api-tokens/${id}`),
 };
 
 // Task metadata generation response
@@ -1094,11 +1118,21 @@ export interface PRRow {
     paused: boolean;
     /**
      * ISO timestamp of when auto-keep first wanted a fix run for this PR and
-     * could not get one, because the owner's free-plan task slots were full;
-     * null when nothing is waiting. The deferral has no request behind it, so
-     * this is the ONLY way a user learns their PRs stopped being kept green.
+     * could not get one, because the owner's plan refused the box; null when
+     * nothing is waiting. The deferral has no request behind it, so this is
+     * the ONLY way a user learns their PRs stopped being kept green.
      */
     deferredSince?: string | null;
+    /**
+     * Why it waits: `usage_exhausted` (no box-hours or credits),
+     * `box_limit_reached` (the plan's concurrent boxes are in use). Absent
+     * from a backend older than usage billing.
+     */
+    deferredReason?: 'usage_exhausted' | 'box_limit_reached' | 'size_requires_pro' | null;
+    /** The plan's own sentence for the wait, for a tooltip. */
+    deferredMessage?: string | null;
+    /** When the watcher looks again (ISO). */
+    deferredRetryAt?: string | null;
     /**
      * Set while the watcher is standing down because the run it fired reported
      * that only a person can carry the PR forward.
@@ -2157,11 +2191,37 @@ class WebSocketClient {
   }
 }
 
-// Billing — plan status, hosted checkout, hosted customer portal.
+// Billing — plan status, hosted checkout, hosted customer portal, usage and
+// credits. The usage-billing routes (usage, credits, changePlan, autoTopup)
+// 404 on a backend that predates usage billing; callers treat that as "draw
+// the old view", never as an error to show.
 export const billing = {
   status: () => request<BillingStatus>('GET', '/billing/status'),
+  /** Pro checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. */
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
+  /** Legacy Pro → Pro on the live subscription. 409 `no_subscription` when there is none. */
+  changePlan: (data: ChangePlanRequest) =>
+    request<{ ok: true }>('POST', '/billing/change-plan', data),
+  /** Box-hours per UTC day and the recent intervals. `from`/`to` are ISO; default the last 30 days. */
+  usage: (range: { from?: string; to?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (range.from) params.set('from', range.from);
+    if (range.to) params.set('to', range.to);
+    const query = params.toString();
+    return request<BillingUsageResponse>('GET', `/billing/usage${query ? `?${query}` : ''}`);
+  },
+  /** Live credit lots, balance and what expires within 30 days. */
+  credits: () => request<CreditSummary>('GET', '/billing/credits'),
+  /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. */
+  creditCheckout: (data: CreditCheckoutRequest) =>
+    request<CheckoutSessionResponse>('POST', '/billing/credits/checkout', data),
+  autoTopup: {
+    get: () => request<AutoTopupSettings>('GET', '/billing/auto-topup'),
+    /** Saving also clears a recorded charge failure (the "try again"). */
+    update: (data: UpdateAutoTopupRequest) =>
+      request<AutoTopupSettings>('PUT', '/billing/auto-topup', data),
+  },
   portal: () => request<CheckoutSessionResponse>('POST', '/billing/portal'),
   orders: () => request<BillingOrder[]>('GET', '/billing/orders'),
   invoice: (orderId: string) =>
@@ -2402,7 +2462,19 @@ export const admin = {
     /** Grant or revoke operator access. 403s unless the deploy opts in. */
     setAdmin: (id: string, body: AdminGrantRequest) =>
       request<{ isAdmin: boolean }>('POST', `/admin/users/${encodeURIComponent(id)}/admin`, body),
+    /** Tier, usage, boxes, credit lots and auto top-up for one account. */
+    billing: (id: string) => request<AdminBillingView>('GET', `/admin/users/${encodeURIComponent(id)}/billing`),
+    grantCredits: (id: string, body: AdminGrantCreditsRequest) =>
+      request<AdminGrantCreditsResult>('POST', `/admin/users/${encodeURIComponent(id)}/billing/grant`, body),
+    reverseCreditLot: (id: string, lotId: string, body: AdminMutationRequest) =>
+      request<AdminReverseLotResult>(
+        'POST',
+        `/admin/users/${encodeURIComponent(id)}/billing/lots/${encodeURIComponent(lotId)}/reverse`,
+        body
+      ),
   },
+  /** Box-hours and credits across every account, for the Ops page. */
+  usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
       request<AdminPage<AdminWorkspaceSummary>>(
@@ -3072,6 +3144,7 @@ export const api = {
   slack,
   skills,
   mcpTokens,
+  apiTokens,
   debug,
   developer,
   billing,

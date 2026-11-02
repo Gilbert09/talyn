@@ -12,6 +12,8 @@ import type {
   AutoKeepNeedsHumanEvent,
   Task,
   TaskStatus,
+  UsageAlertEvent,
+  UsageExhaustedEvent,
   WorkflowRun,
   WSEvent,
 } from '@talyn/shared';
@@ -452,7 +454,45 @@ function deliverBroadcastLocal(event: WSEvent): void {
   }
 }
 
+/**
+ * In-process listeners on a workspace's broadcasts: the public API's SSE
+ * streams. They get every frame this replica's WebSocket clients get, the
+ * frames relayed from other replicas included, because both paths end in
+ * `deliverToWorkspaceLocal`.
+ */
+type WorkspaceListener = (event: WSEvent) => void;
+const workspaceListeners = new Map<string, Set<WorkspaceListener>>();
+
+/** Listen to one workspace's broadcasts. Returns the function that stops it. A listener must not block or throw. */
+export function subscribeWorkspace(workspaceId: string, listener: WorkspaceListener): () => void {
+  let set = workspaceListeners.get(workspaceId);
+  if (!set) {
+    set = new Set();
+    workspaceListeners.set(workspaceId, set);
+  }
+  set.add(listener);
+  return () => {
+    const current = workspaceListeners.get(workspaceId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) workspaceListeners.delete(workspaceId);
+  };
+}
+
+function notifyWorkspaceListeners(workspaceId: string, event: WSEvent): void {
+  const set = workspaceListeners.get(workspaceId);
+  if (!set) return;
+  for (const listener of [...set]) {
+    try {
+      listener(event);
+    } catch (err) {
+      console.warn('[ws] a workspace listener failed:', err);
+    }
+  }
+}
+
 function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
+  notifyWorkspaceListeners(workspaceId, event);
   const message = JSON.stringify(event);
   let sent = 0;
   for (const [client, workspaces] of subscriptions) {
@@ -768,6 +808,26 @@ export function emitSubscriptionUpdated(ownerId: string, status: BillingStatus):
   broadcastToUser(ownerId, {
     type: 'subscription:updated',
     payload: status,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// Usage billing: a threshold of the included box-hours was crossed. Fired once
+// per threshold per period by the usage meter.
+export function emitUsageAlert(ownerId: string, alert: UsageAlertEvent): void {
+  broadcastToUser(ownerId, {
+    type: 'billing:usage_alert',
+    payload: alert,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// Usage billing: included hours and credits are spent. Fired once per
+// exhaustion (the period's exhausted_at stamp).
+export function emitUsageExhausted(ownerId: string, event: UsageExhaustedEvent): void {
+  broadcastToUser(ownerId, {
+    type: 'billing:exhausted',
+    payload: event,
     timestamp: new Date().toISOString(),
   });
 }

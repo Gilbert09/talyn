@@ -12,8 +12,12 @@ import {
   HISTORY_STATUS_PARAM,
   HISTORY_TASK_STATUSES,
 } from '../stores/workspace';
-import type { BillingStatus, Task } from '@talyn/shared';
+import type { BillingStatus, Task, UsageAlertEvent, UsageExhaustedEvent } from '@talyn/shared';
 import { maybeHandleBillingLimit, useBillingStore } from '../stores/billing';
+import { hasUsageBilling } from '../lib/usageBilling';
+
+/** The usage meter's REST fallback between WS alerts. */
+const USAGE_POLL_MS = 5 * 60_000;
 import type {
   AgentEvent,
   TaskStatusEvent,
@@ -337,12 +341,29 @@ export function useApiConnection() {
   // Billing snapshot: fetch once on mount, and re-fetch on window focus —
   // the backstop for plan changes made in the browser (checkout / portal)
   // while the WS was down.
+  //
+  // With usage billing the snapshot also carries the box-hours meter, which
+  // moves while the app sits open. The WS alerts cover the thresholds; this
+  // slow poll is the fallback between them, and only while the window is
+  // visible and the backend actually sends usage (an older backend has
+  // nothing that moves, so it is never polled).
   useEffect(() => {
     const refresh = () => void useBillingStore.getState().refresh();
     refresh();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const poll = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (!hasUsageBilling(useBillingStore.getState().status)) return;
+      refresh();
+    }, USAGE_POLL_MS);
     window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(poll);
       useBillingStore.getState().stopCheckoutPollBurst();
     };
   }, []);
@@ -504,6 +525,14 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<BillingStatus>('subscription:updated', (payload) => {
         useBillingStore.getState().setStatus(payload);
+      }),
+      // Usage billing: 50/80/100% of the included box-hours, and out of hours
+      // and credits. Each refreshes the snapshot and says so once per period.
+      wsClient.on<UsageAlertEvent>('billing:usage_alert', (payload) => {
+        useBillingStore.getState().handleUsageAlert(payload);
+      }),
+      wsClient.on<UsageExhaustedEvent>('billing:exhausted', (payload) => {
+        useBillingStore.getState().handleExhausted(payload);
       })
     );
 

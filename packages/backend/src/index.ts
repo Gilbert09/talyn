@@ -7,6 +7,8 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { eq, sql } from 'drizzle-orm';
 import { setupRoutes } from './routes/index.js';
+import { publicApiRouter } from './routes/public/index.js';
+import { startIdempotencySweep } from './services/public/idempotency.js';
 import { createWebSocketUpgradeGuard, setupWebSocket, WS_MAX_PAYLOAD } from './services/websocket.js';
 import { initWsBus, shutdownWsBus } from './services/wsBus.js';
 import { closeRedis } from './services/redis.js';
@@ -49,6 +51,8 @@ import {
   initCodeReviewReconciler,
 } from './services/codeReview/reconciler.js';
 import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
+import { initUsageMeter, usageMeter } from './services/billing/usage/meter.js';
+import { initBoxDeferrals } from './services/billing/boxDeferral.js';
 import {
   featureFlagsEvaluateLocally,
   isFeatureFlagServiceConfigured,
@@ -209,6 +213,12 @@ async function main() {
   // nobody in the audience costs one `SELECT id FROM workspaces` an hour.
   initReviewPrioritySweep();
 
+  // Usage billing: bills running fleet boxes every minute and reconciles the
+  // ledger with the fleet. Armed unconditionally: metering runs everywhere,
+  // and enforcement inside it only acts when the POLAR_* env group is set.
+  initUsageMeter();
+  initBoxDeferrals();
+
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
   // services read them (the plaintext read fallbacks are gone). Per-row
   // failures are logged inside; a total failure must not block the boot.
@@ -259,6 +269,8 @@ async function main() {
   // processed ones after 7 days. Cheap when Slack is not in use: one indexed
   // SELECT a minute that finds nothing.
   slackEventSweep.init();
+  // Public API idempotency keys expire after 24 hours; one range delete an hour.
+  startIdempotencySweep();
   // Slack sessions show their state as a reaction on the triggering message.
   registerSlackStatusReactions();
 
@@ -277,6 +289,11 @@ async function main() {
   // preview host never meets CORS, the API routes or auth. Other hosts pass
   // through. See services/preview/previewLinks.ts.
   app.use(previewHostRouter());
+  // The public API (`/v1`, served as api.talyn.dev/v1). BEFORE cors() on
+  // purpose: no `Access-Control-*` header is ever sent on it, so no web page
+  // can read an answer made with a personal access token. It parses its own
+  // JSON (1 MB) and answers its own 404s and errors. See routes/public/index.ts.
+  app.use('/v1', publicApiRouter());
   // Who may talk to us from a browser — see services/originPolicy.ts. Read
   // once at boot: ALLOWED_ORIGINS is deployment config, not something that
   // should change under a running process.
@@ -481,6 +498,7 @@ async function main() {
     dbWatchdog.shutdown();
     githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
+    usageMeter.stop();
     prAutoMergeWatcher.shutdown();
     mergeQueueReconciler.shutdown();
     postHogCodeStreamer.shutdownAll();

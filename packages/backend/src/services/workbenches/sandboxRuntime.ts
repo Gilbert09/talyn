@@ -62,6 +62,7 @@ import {
 } from './execFailures.js';
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
+import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
 import { withLearnedSetup } from './setupRecipe.js';
 import type { WorkbenchRow } from './store.js';
 
@@ -220,10 +221,11 @@ export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void
     pending = client
       .resumeSandbox(sandboxId)
       .then(
-        () => {
+        async () => {
           const ms = Date.now() - startedAt;
           console.log(`[workbench] resumed sandbox ${sandboxId} in ${ms} ms`);
           debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms } });
+          await meterWorkbenchAwakeBySandboxId(sandboxId);
         },
         (error: unknown) => {
           const ms = Date.now() - startedAt;

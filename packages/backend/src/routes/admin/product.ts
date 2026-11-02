@@ -34,7 +34,7 @@ import {
   setAdminFlag,
   setPlanOverride,
 } from '../../services/admin/mutations.js';
-import { ADMIN_LAST_ADMIN, type AdminPlan } from '@talyn/shared';
+import { ADMIN_LAST_ADMIN, PLAN_OVERRIDE_VALUES, isPlanOverride } from '@talyn/shared';
 
 /**
  * Cross-tenant product reads for the operator console.
@@ -163,11 +163,11 @@ export function adminProductRoutes(): Router {
     withGuards(async (req, res) => {
       const body = req.body as { planOverride?: unknown };
       const value = body.planOverride;
-      if (value !== null && value !== 'free' && value !== 'unlimited') {
+      if (value !== null && !isPlanOverride(value)) {
         throw new AdminGuardError(
           400,
           'invalid_plan',
-          "planOverride must be 'free', 'unlimited', or null."
+          `planOverride must be one of ${PLAN_OVERRIDE_VALUES.map((v) => `'${v}'`).join(', ')}, or null.`
         );
       }
 
@@ -189,7 +189,7 @@ export function adminProductRoutes(): Router {
           params: { planOverride: value, email },
         },
         async (tx) => {
-          const changed = await setPlanOverride(tx, req.params.id, value as AdminPlan | null);
+          const changed = await setPlanOverride(tx, req.params.id, value);
           if (!changed) throw new AdminGuardError(404, 'not_found', 'User not found');
           return { result: changed.after, before: changed.before, after: changed.after };
         }

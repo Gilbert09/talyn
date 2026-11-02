@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { encryptString } from '../services/tokenCrypto.js';
+import { noteBoxRefusal, releaseBoxHold, resetBoxDeferralsForTests } from '../services/billing/boxDeferral.js';
 import { prAutoMergeWatcher } from '../services/prAutoMergeWatcher.js';
 import * as taskCreateModule from '../services/taskCreate.js';
-import { TaskLimitError } from '../services/billing/entitlements.js';
+import { ConcurrentBoxLimitError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { graphqlBudget } from '../services/graphqlBudget.js';
 import { githubRateGate } from '../services/githubRateGate.js';
@@ -206,6 +207,7 @@ describe('prAutoMergeWatcher', () => {
   afterEach(async () => {
     await cleanup();
     vi.restoreAllMocks();
+    resetBoxDeferralsForTests();
     prAutoMergeWatcher._resetLabelRetries();
     _resetMergeGateCache();
     _resetExternalQueueState();
@@ -515,7 +517,7 @@ describe('prAutoMergeWatcher', () => {
     const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
     const create = vi
       .spyOn(taskCreateModule, 'createCloudTask')
-      .mockRejectedValue(new TaskLimitError(3, 3));
+      .mockRejectedValue(new ConcurrentBoxLimitError(3, 3));
 
     await prAutoMergeWatcher.runOnce();
 
@@ -527,7 +529,7 @@ describe('prAutoMergeWatcher', () => {
       'paywall_deferred',
       expect.objectContaining({
         source: 'auto_keep',
-        gate: 'task_limit',
+        gate: 'box_limit_reached',
         limit: 3,
         active: 3,
         pr_number: 1,
@@ -550,11 +552,60 @@ describe('prAutoMergeWatcher', () => {
     expect(state.deferredSince).toBeTruthy();
   });
 
+  it.each([
+    ['out of hours', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 86_400_000) }), 'usage_exhausted'],
+    ['at the box cap', () => new ConcurrentBoxLimitError(2, 2), 'box_limit_reached'],
+  ] as const)('a fix run refused %s records why, once per episode, never per tick', async (_label, make, reason) => {
+    const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+    const err = make();
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(err);
+
+    await prAutoMergeWatcher.runOnce();
+    const first = (await getPr(db, prId)).autoMergeState as Record<string, unknown>;
+    await prAutoMergeWatcher.runOnce();
+    await prAutoMergeWatcher.runOnce();
+
+    const state = (await getPr(db, prId)).autoMergeState as Record<string, unknown>;
+    expect(state).toEqual(first);
+    expect(state).toMatchObject({ attempts: 0, deferral: { reason, message: err.message } });
+    expect((state.deferral as { retryAt: string }).retryAt).toBeTruthy();
+    const captured = mockCaptureWorkspaceEvent.mock.calls.filter(([, e]) => e === 'paywall_deferred');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.[2]).toMatchObject({ source: 'auto_keep', gate: reason });
+  });
+
+  it('a new reason starts a new record: the chip says what the wall is now', async () => {
+    const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+    const create = vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new ConcurrentBoxLimitError(2, 2));
+    await prAutoMergeWatcher.runOnce();
+    const since = ((await getPr(db, prId)).autoMergeState as { deferredSince: string }).deferredSince;
+    create.mockRejectedValue(new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 86_400_000) }));
+    await prAutoMergeWatcher.runOnce();
+    const state = (await getPr(db, prId)).autoMergeState as { deferredSince: string; deferral: { reason: string } };
+    // One episode of "not kept green": the age is kept, the reason moves.
+    expect(state.deferredSince).toBe(since);
+    expect(state.deferral.reason).toBe('usage_exhausted');
+  });
+
+  it('inside an owner hold, the watcher waits without building a prompt or creating a task', async () => {
+    vi.stubEnv('POLAR_ACCESS_TOKEN', 'polar-test-token');
+    try {
+      const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+      const create = vi.spyOn(taskCreateModule, 'createCloudTask');
+      noteBoxRefusal(OWNER, new ConcurrentBoxLimitError(2, 2));
+      await prAutoMergeWatcher.runOnce();
+      expect(create).not.toHaveBeenCalled();
+      expect(((await getPr(db, prId)).autoMergeState as { deferral?: { reason: string } }).deferral?.reason).toBe('box_limit_reached');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('keeps the first deferral timestamp across a run of them', async () => {
     // The age is the point: restamping every tick would make a half-hour
     // outage read as permanently one minute old.
     await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
-    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new TaskLimitError(3, 3));
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new ConcurrentBoxLimitError(3, 3));
 
     await prAutoMergeWatcher.runOnce();
     const first = ((await db.select().from(pullRequestsTable))[0].autoMergeState as {
@@ -624,11 +675,11 @@ describe('prAutoMergeWatcher', () => {
     expect(tasks[0].prompt).not.toContain('Every reviewer comment');
   });
 
-  describe('free-plan task limit', () => {
+  describe('free-plan concurrent-box cap', () => {
     const savedPolarToken = process.env.POLAR_ACCESS_TOKEN;
 
     beforeEach(() => {
-      // Billing configured → the 3-active-task limit is enforced.
+      // Billing configured → the free plan's 2-box cap is enforced.
       process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
     });
 
@@ -638,11 +689,10 @@ describe('prAutoMergeWatcher', () => {
     });
 
     async function fillOwnerSlots() {
-      // Three active tasks NOT linked to any watched PR — they only occupy
-      // the owner's free-plan slots.
+      // Two active tasks NOT linked to any watched PR: they only occupy the
+      // owner's two free-plan box slots.
       await insertTask(db, 'filler-1', 'queued', null);
       await insertTask(db, 'filler-2', 'in_progress', null);
-      await insertTask(db, 'filler-3', 'pending', null);
     }
 
     it('defers the fix run at the limit without burning an attempt', async () => {
@@ -651,7 +701,7 @@ describe('prAutoMergeWatcher', () => {
 
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(3); // no new task
+      expect(await countTasks(db)).toBe(2); // no new task
       const pr = await getPr(db, prId);
       const state = pr.autoMergeState as { attempts?: number; lastAutoTaskId?: string } | null;
       expect(state?.lastAutoTaskId).toBeUndefined();
@@ -662,21 +712,24 @@ describe('prAutoMergeWatcher', () => {
       await fillOwnerSlots();
       const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
       await prAutoMergeWatcher.runOnce();
-      expect(await countTasks(db)).toBe(3);
+      expect(await countTasks(db)).toBe(2);
 
       await db
         .update(tasksTable)
         .set({ status: 'completed' })
         .where(eq(tasksTable.id, 'filler-1'));
+      // The task:status listener releases the owner's box-cap hold in
+      // production (billing/boxDeferral.ts); this test writes the row directly.
+      releaseBoxHold(OWNER, { onlyBoxLimit: true });
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(4);
+      expect(await countTasks(db)).toBe(3);
       const pr = await getPr(db, prId);
       const state = pr.autoMergeState as { lastAutoTaskId?: string };
       expect(state.lastAutoTaskId).toBeTruthy();
     });
 
-    it('unlimited owner is never deferred', async () => {
+    it('a comped (Pro) owner is never deferred', async () => {
       const { users } = await import('../db/schema.js');
       await db.update(users).set({ planOverride: 'unlimited' }).where(eq(users.id, OWNER));
       await fillOwnerSlots();
@@ -684,7 +737,7 @@ describe('prAutoMergeWatcher', () => {
 
       await prAutoMergeWatcher.runOnce();
 
-      expect(await countTasks(db)).toBe(4);
+      expect(await countTasks(db)).toBe(3);
     });
   });
 

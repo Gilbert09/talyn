@@ -55,6 +55,8 @@ export type AdminAuditAction =
   | 'user.admin'
   | 'task.retry'
   | 'task.kill'
+  | 'billing.grant_credits'
+  | 'billing.reverse_credit_lot'
   // The one READ we audit: another tenant's agent conversation is the most
   // sensitive thing this console can show, and recording the access is what
   // makes showing it defensible.
@@ -84,6 +86,94 @@ export interface AdminAuditEntry {
   outcome: AdminAuditOutcome;
   error: string | null;
   durationMs: number | null;
+}
+
+// ============================================================================
+// Usage billing
+// ============================================================================
+
+/** Money is integer micro-dollars (USD x 1e6); usage is integer weighted seconds. */
+export interface AdminBillingLot {
+  id: string;
+  source: string;
+  totalMicros: number;
+  remainingMicros: number;
+  purchasedAt: string;
+  expiresAt: string;
+  /** Credit is left and the lot has not expired: it can be reversed. */
+  live: boolean;
+}
+
+export interface AdminBillingBox {
+  id: string;
+  subjectKind: string;
+  subjectId: string;
+  sandboxId: string;
+  size: string;
+  startedAt: string;
+}
+
+export interface AdminBillingInterval extends AdminBillingBox {
+  endedAt: string | null;
+  endReason: string | null;
+  billedWsec: number;
+}
+
+export interface AdminBillingView {
+  tier: string;
+  /** Where the tier came from: override, subscription, team seat or default. */
+  source: string;
+  period: { start: string; end: string };
+  /** Null when the owner has no usage row for this period yet. */
+  usage: {
+    tier: string;
+    includedWsec: number;
+    usedWsec: number;
+    creditMicrosUsed: number;
+    uncoveredMicros: number;
+    exhaustedAt: string | null;
+  } | null;
+  openBoxes: AdminBillingBox[];
+  lots: AdminBillingLot[];
+  creditBalanceMicros: number;
+  autoTopup: {
+    enabled: boolean;
+    triggerMicros: number;
+    pack: string;
+    monthlyLimitMicros: number;
+    monthSpentMicros: number;
+    lastFailure: string | null;
+    lastFailureAt: string | null;
+  } | null;
+  recentIntervals: AdminBillingInterval[];
+}
+
+export interface AdminGrantCreditsRequest extends AdminMutationRequest {
+  /** US dollars, whole cents. */
+  amountUsd: number;
+  /** Repeating a request with the same key grants once. The server makes one when absent. */
+  idempotencyKey?: string;
+}
+
+export interface AdminGrantCreditsResult {
+  lotId: string;
+  created: boolean;
+  micros: number;
+}
+
+export interface AdminReverseLotResult {
+  lotId: string;
+  reversedMicros: number;
+}
+
+export interface AdminUsageSummary {
+  periodBoxWsec: number;
+  ownersWithUsage: number;
+  ownersExhausted: number;
+  /** Month to date, UTC. `purchase` and `auto_topup` lots. */
+  creditsSoldMicros: number;
+  /** Month to date, UTC. `grant` lots. */
+  creditsGrantedMicros: number;
 }
 
 // ============================================================================
@@ -442,7 +532,12 @@ export interface AdminGoldenRebakeRequest extends AdminMutationRequest {
 // Product
 // ============================================================================
 
-export type AdminPlan = 'free' | 'unlimited';
+/**
+ * A plan value the console reads or writes. Matches `PLAN_OVERRIDE_VALUES` in
+ * pricing.ts: the usage tiers plus `unlimited`, the old comp value (which
+ * grants Pro). `effectivePlan` is always a tier, never `unlimited`.
+ */
+export type AdminPlan = 'free' | 'unlimited' | 'pro' | 'legacy_pro';
 
 export interface AdminUserSummary {
   id: string;
@@ -453,7 +548,7 @@ export interface AdminUserSummary {
   plan: AdminPlan;
   /** The manual comp flag. Wins over `plan` when set. */
   planOverride: AdminPlan | null;
-  /** plan_override ?? plan — what entitlement checks actually use. */
+  /** The usage tier the gates enforce, from the override, the subscription and its product. */
   effectivePlan: AdminPlan;
   subscriptionStatus: string | null;
   currentPeriodEnd: string | null;

@@ -417,7 +417,7 @@ describe('resizing a session', () => {
       ['a resize with no reason', {
         reason: 'resize', conversation: 'carried', stopped: false, manifest: { skipped: [], skippedCount: 0, skippedDirs: [] },
         resized: { size: 'small', why: null },
-      }, 'Talyn moved this session to a Small · 2 GB sandbox.'],
+      }, 'Talyn moved this session to a Small · 2 vCPU sandbox.'],
       ['a resize that stopped processes', {
         reason: 'resize', conversation: 'carried', stopped: true, manifest: { skipped: [], skippedCount: 0, skippedDirs: [] },
         resized: { size: 'large' },

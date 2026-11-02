@@ -52,6 +52,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'developer',
   'mcpServers',
   'mcp',
+  'apiTokens',
   'about',
 ];
 

@@ -98,7 +98,7 @@ export type LoopRunStatus =
   | 'skipped';
 
 export const LOOP_RUN_STATUS_LABELS: Record<LoopRunStatus, string> = {
-  waiting_slot: 'Waiting for a task slot',
+  waiting_slot: 'Waiting to start',
   queued: 'Queued',
   running: 'Running',
   succeeded: 'Succeeded',
@@ -115,7 +115,14 @@ export type LoopRunTrigger = 'schedule' | 'manual';
  */
 export type LoopRunFailureCode =
   | 'overlap'
+  /** Old rows only: the active-task cap that the concurrent-box cap replaced. */
   | 'task_limit_reached'
+  /** Parked (`waiting_slot`): no box-hours or credits left this period. */
+  | 'usage_exhausted'
+  /** Parked (`waiting_slot`): the plan's concurrent boxes are all in use. */
+  | 'box_limit_reached'
+  /** The plan cannot start the run's box size. Not retried. */
+  | 'size_requires_pro'
   | 'repo_missing'
   | 'environment_missing'
   | 'fleet_not_allowed'
@@ -128,6 +135,9 @@ export type LoopRunFailureCode =
 export const LOOP_RUN_FAILURE_LABELS: Record<LoopRunFailureCode, string> = {
   overlap: 'The previous run was still going',
   task_limit_reached: 'The plan’s task limit was full',
+  usage_exhausted: 'Waiting for box-hours or credits',
+  box_limit_reached: 'Waiting for a free box',
+  size_requires_pro: 'The plan cannot start this box size',
   repo_missing: 'The repository is no longer connected',
   environment_missing: 'The agent is no longer connected',
   fleet_not_allowed: 'This workspace lost access to Talyn Fleet',

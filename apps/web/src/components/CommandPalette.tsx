@@ -42,6 +42,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   appearance: 'Appearance',
   developer: 'Developer',
   mcp: 'Talyn MCP server',
+  apiTokens: 'API tokens',
   about: 'About',
 };
 

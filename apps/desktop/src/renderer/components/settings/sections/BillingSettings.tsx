@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, CreditCard, Download, Loader2, Zap } from 'lucide-react';
-import type { BillingOrder } from '@talyn/shared';
+import { AlertCircle, Check, CreditCard, Loader2, Zap } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { openExternal } from '../../../lib/openExternal';
 import { cn } from '../../../lib/utils';
@@ -9,18 +8,9 @@ import { BillingTeamNotice } from '../../panels/TeamBilling';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { SettingsPage } from '../../ui/settings';
-
-function formatRenewalDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-  } catch {
-    return iso;
-  }
-}
+import { hasUsageBilling } from '../../../lib/usageBilling';
+import { PlanUsageSettings } from './PlanUsageSettings';
+import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
 
 /** One free-plan usage row: label, n/limit count, and a fill bar that goes
  *  destructive at the cap. Used for active tasks and the merge queue. */
@@ -44,7 +34,17 @@ function UsageMeter({ label, used, limit }: { label: string; used: number; limit
   );
 }
 
+/**
+ * Settings → Billing. With usage billing it is the plan and usage page; on an
+ * older backend (the production backend until release) it is the old page.
+ */
 export function BillingSettings() {
+  const status = useBillingStore((s) => s.status);
+  if (hasUsageBilling(status)) return <PlanUsageSettings status={status} />;
+  return <LegacyBillingSettings />;
+}
+
+function LegacyBillingSettings() {
   const status = useBillingStore((s) => s.status);
   const refresh = useBillingStore((s) => s.refresh);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
@@ -52,9 +52,6 @@ export function BillingSettings() {
   const [checkoutBusy, setCheckoutBusy] = useState<null | 'monthly' | 'annual'>(null);
   const [awaitingCheckout, setAwaitingCheckout] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [orders, setOrders] = useState<BillingOrder[] | null>(null);
-  const [invoiceBusy, setInvoiceBusy] = useState<string | null>(null);
-  const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
   const billingOn = status?.billingEnabled === true;
 
@@ -63,37 +60,6 @@ export function BillingSettings() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  // Order history — also refetched when the plan changes (a fresh checkout
-  // lands its first order moments after the WS push flips the plan).
-  useEffect(() => {
-    if (!billingOn) return;
-    let cancelled = false;
-    api.billing
-      .orders()
-      .then((rows) => {
-        if (!cancelled) setOrders(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setOrders([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [billingOn, status?.plan]);
-
-  const openInvoice = async (orderId: string) => {
-    setInvoiceBusy(orderId);
-    setInvoiceError(null);
-    try {
-      const { url } = await api.billing.invoice(orderId);
-      await openExternal(url);
-    } catch (err) {
-      setInvoiceError(err instanceof Error ? err.message : 'Could not fetch the invoice');
-    } finally {
-      setInvoiceBusy(null);
-    }
-  };
 
   // Checkout directly from the plan cards — the settings page IS the pitch,
   // so no modal detour here (the UpgradeModal stays for the at-limit flow).
@@ -327,63 +293,7 @@ export function BillingSettings() {
         </div>
       )}
 
-      {/* Order history — shown for anyone with past orders (a now-free user
-          can still grab an old invoice). */}
-      {orders != null && orders.length > 0 && (
-        <div>
-          <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Order history</h3>
-          <Card className="divide-y p-0">
-            {orders.map((order) => (
-              <div key={order.id} className="flex items-center gap-3 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-medium truncate">
-                    {order.productName ?? 'Talyn Unlimited'}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatRenewalDate(order.createdAt)}
-                    {order.invoiceNumber ? ` · ${order.invoiceNumber}` : ''}
-                  </p>
-                </div>
-                <div className="text-[13px] font-medium tabular-nums">
-                  {formatOrderAmount(order.amount, order.currency)}
-                </div>
-                {order.status !== 'paid' && (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground capitalize">
-                    {order.status.replace('_', ' ')}
-                  </span>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openInvoice(order.id)}
-                  disabled={invoiceBusy !== null}
-                  className="shrink-0"
-                  title="Open the invoice in your browser"
-                >
-                  {invoiceBusy === order.id ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Download className="w-3.5 h-3.5" />
-                  )}
-                  Invoice
-                </Button>
-              </div>
-            ))}
-          </Card>
-          {invoiceError && <p className="text-xs text-destructive mt-2">{invoiceError}</p>}
-        </div>
-      )}
+      {billingOn && <OrderHistory planKey={status.plan} fallbackName="Talyn Unlimited" />}
     </SettingsPage>
   );
-}
-
-function formatOrderAmount(cents: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    }).format(cents / 100);
-  } catch {
-    return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
-  }
 }

@@ -5,7 +5,7 @@ import {
   tasks as tasksTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
-import { createCloudTask, TaskReferenceError } from '../services/taskCreate.js';
+import { createCloudTask, taskBoxGateOptions, TaskReferenceError } from '../services/taskCreate.js';
 import { liveWorkbenchForPr, prHasSessionBody } from '../services/workbenches/prSessions.js';
 import {
   ACTIVE_TASK_STATUSES,
@@ -51,6 +51,33 @@ import {
  * here create/list/inspect tasks, enqueue them, and proxy cloud follow-up
  * actions (refresh logs, send a message) to the provider.
  */
+/**
+ * The box gate for a person re-activating a task (PATCH to an active status,
+ * retry, start): the task's real size, metered only when it runs on the
+ * fleet, and attended, because a person asked. Nothing to check for a task
+ * that does not exist; the caller answers the 404.
+ */
+async function assertCanReactivate(ownerId: string, taskId: string, assignedEnvironmentId?: string | null): Promise<void> {
+  const [row] = await getDbClient()
+    .select({
+      workspaceId: tasksTable.workspaceId,
+      repositoryId: tasksTable.repositoryId,
+      assignedEnvironmentId: tasksTable.assignedEnvironmentId,
+      metadata: tasksTable.metadata,
+    })
+    .from(tasksTable)
+    .where(eq(tasksTable.id, taskId))
+    .limit(1);
+  if (!row) return;
+  const options = await taskBoxGateOptions({
+    workspaceId: row.workspaceId,
+    repositoryId: row.repositoryId,
+    assignedEnvironmentId: assignedEnvironmentId || row.assignedEnvironmentId,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+  });
+  await assertCanActivateTask(ownerId, taskId, { ...options, unattended: false });
+}
+
 export function taskRoutes(): Router {
   const router = Router();
 
@@ -317,16 +344,16 @@ export function taskRoutes(): Router {
       }
     }
 
-    // Reactivating via PATCH is subject to the same free-plan concurrency
-    // gate as create/retry/start — without this it's a limit bypass. Throws
-    // TaskLimitError → 402 via the error middleware. The task itself is
-    // excluded from the count, so re-asserting an already-active status
-    // never self-blocks.
+    // Reactivating via PATCH is subject to the same box gate as
+    // create/retry/start — without this it's a limit bypass. A refusal is a
+    // BoxGateError → 402 with its notice via the error middleware. The task
+    // itself is excluded from the count, so re-asserting an already-active
+    // status never self-blocks.
     if (
       body.status !== undefined &&
       (ACTIVE_TASK_STATUSES as readonly string[]).includes(body.status)
     ) {
-      await assertCanActivateTask(assertUser(req).id, req.params.id);
+      await assertCanReactivate(assertUser(req).id, req.params.id, body.assignedEnvironmentId);
     }
 
     const existing = await db
@@ -400,8 +427,8 @@ export function taskRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
-    // Free-plan gate: a retry re-occupies a slot. Throws → 402.
-    await assertCanActivateTask(assertUser(req).id, req.params.id);
+    // Box gate: a retry starts a box again. Throws → 402.
+    await assertCanReactivate(assertUser(req).id, req.params.id);
 
     // Clear the prior cloud run so dispatch starts a fresh one rather than
     // treating the task as already dispatched (idempotency short-circuit).
@@ -449,8 +476,8 @@ export function taskRoutes(): Router {
     }
     const task = rowToTask(rows[0]);
     if (task.status !== 'in_progress') {
-      // Free-plan gate: queueing re-occupies a slot. Throws → 402.
-      await assertCanActivateTask(assertUser(req).id, task.id);
+      // Box gate: queueing starts a box again. Throws → 402.
+      await assertCanReactivate(assertUser(req).id, task.id);
       await taskQueueService.queueTask(task.id);
     }
     const updated = await db

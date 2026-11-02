@@ -43,7 +43,8 @@ import {
   _resetQueueHealth,
 } from '../../services/repoQueueHealth.js';
 import { _resetStackBatching } from '../../services/repoStackBatching.js';
-import { TaskLimitError } from '../../services/billing/entitlements.js';
+import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../../services/billing/entitlements.js';
+import { noteBoxRefusal, resetBoxDeferralsForTests } from '../../services/billing/boxDeferral.js';
 import { ensureActiveEntry, getActiveEntryForPr } from '../../services/mergeQueue/store.js';
 import {
   evaluateGroupNow,
@@ -345,6 +346,7 @@ describe('mergeQueue v2 pipeline', () => {
   });
 
   afterEach(async () => {
+    resetBoxDeferralsForTests();
     // A merge broadcasts positions detached; it must not read the next test's DB.
     _resetMergeQueueBroadcasts();
     await cleanup();
@@ -691,7 +693,7 @@ describe('mergeQueue v2 pipeline', () => {
 
   it('rolls the claim back to queued and burns nothing on a task-limit deferral', async () => {
     const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
-    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new TaskLimitError(3, 3));
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new ConcurrentBoxLimitError(3, 3));
 
     await evaluateGroupNow('repo1', 'main', 'test');
 
@@ -702,7 +704,7 @@ describe('mergeQueue v2 pipeline', () => {
     expect(entry?.fixTaskId).toBeNull();
     expect(await countTasks(db)).toBe(0); // nothing dispatched
 
-    // The `deferred_task_limit` entry event above says it happened to THIS
+    // The `deferred_box_limit` entry event says it happened to THIS
     // entry; this says it happened to the FUNNEL. A cap hit on a watcher path
     // has no request to refuse, so it produces no 402 and no client-side
     // `paywall_shown` — without this the free plan reads as never binding.
@@ -711,11 +713,64 @@ describe('mergeQueue v2 pipeline', () => {
       'paywall_deferred',
       expect.objectContaining({
         source: 'merge_queue',
-        gate: 'task_limit',
+        gate: 'box_limit_reached',
         limit: 3,
         active: 3,
       })
     );
+  });
+
+  it.each([
+    ['out of hours', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 86_400_000) }), 'deferred_usage_exhausted', 'usage_exhausted'],
+    ['at the box cap', () => new ConcurrentBoxLimitError(2, 2), 'deferred_box_limit', 'box_limit_reached'],
+    ['a size the plan cannot start', () => new SizeRequiresProError({ tier: 'free', size: 'large' }), 'deferred_size_requires_pro', 'size_requires_pro'],
+  ] as const)('a fix run refused %s: back to queued, a visible deferral with the notice', async (_label, make, code, reason) => {
+    const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+    const err = make();
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(err);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry).toMatchObject({ status: 'queued', fixAttempts: 0, fixTaskId: null });
+    const deferral = (await eventsOf(db, entry!.id)).find((e) => e.code === code);
+    expect(deferral?.message).toBe(`Fix run deferred: ${err.message}`);
+    expect(deferral?.detail).toMatchObject({ deferral: { reason, message: err.message }, notice: { code: err.code } });
+  });
+
+  it('an exhausted hold does not stop a PostHog Code fix: it uses no box-hours', async () => {
+    // This workspace's provider is PostHog Code.
+    vi.stubEnv('POLAR_ACCESS_TOKEN', 'polar-test-token');
+    try {
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      noteBoxRefusal(OWNER, new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 86_400_000) }));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect((await entryOf(db, prId))?.status).toBe('fixing');
+      expect(await countTasks(db)).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('an owner the plan already refused: no claim, no task, no new event rows (no spin)', async () => {
+    const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+    const create = vi.spyOn(taskCreateModule, 'createCloudTask');
+    vi.stubEnv('POLAR_ACCESS_TOKEN', 'polar-test-token');
+    // A full box cap holds every run, PostHog Code ones too: they count.
+    noteBoxRefusal(OWNER, new ConcurrentBoxLimitError(2, 2));
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+    const entry = await entryOf(db, prId);
+    const after = await eventsOf(db, entry!.id);
+    // Twenty more reconciler passes write nothing.
+    for (let i = 0; i < 20; i++) await evaluateGroupNow('repo1', 'main', 'reconcile');
+
+    expect(create).not.toHaveBeenCalled();
+    expect((await entryOf(db, prId))?.status).toBe('queued');
+    expect(after.some((e) => e.code === 'fix_run_claimed')).toBe(false);
+    expect(await eventsOf(db, entry!.id)).toHaveLength(after.length);
+    expect(await countTasks(db)).toBe(0);
+    vi.unstubAllEnvs();
   });
 
   it('re-fires a dispatch left half-claimed (fixing + null fixTaskId) by a crash', async () => {

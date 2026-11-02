@@ -7,9 +7,18 @@ import {
   TASK_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
 } from '@talyn/shared';
+import {
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  USAGE_EXHAUSTED_ERROR_CODE,
+} from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
 import { maybeHandleBillingLimit, useBillingStore } from '../renderer/stores/billing';
 import { trackEvent } from '../renderer/lib/analytics';
+import { toast } from '../renderer/stores/toast';
+import { _resetUsageAlertGuard } from '../renderer/lib/usageBilling';
+import { applyWakeAnswer } from '../renderer/lib/wakeWorkbench';
+import { usageStatus } from '../testing/billingStatus';
 
 jest.mock('../renderer/lib/supabase', () => ({
   isSupabaseConfigured: () => false,
@@ -19,7 +28,9 @@ jest.mock('../renderer/lib/supabase', () => ({
 }));
 
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), info: jest.fn(), error: jest.fn() } }));
 const trackEventMock = trackEvent as jest.Mock;
+const toastMock = toast as unknown as { success: jest.Mock; info: jest.Mock; error: jest.Mock };
 
 function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
   return {
@@ -50,7 +61,7 @@ function mockStatusFetch(payload: BillingStatus) {
 
 function reset() {
   useBillingStore.getState().stopCheckoutPollBurst();
-  useBillingStore.setState({ status: null, upgradeModalOpen: false });
+  useBillingStore.setState({ status: null, upgradeModalOpen: false, upgradeReason: null, upgradeNotice: null, sessionRefusals: {} });
 }
 
 describe('billing store', () => {
@@ -230,6 +241,166 @@ describe('ApiError code propagation through request()', () => {
       name: 'ApiError',
       status: 400,
       code: undefined,
+    });
+  });
+});
+
+describe('usage billing in the billing store', () => {
+  const realRefresh = useBillingStore.getState().refresh;
+  beforeEach(() => {
+    reset();
+    trackEventMock.mockClear();
+    Object.values(toastMock).forEach((m) => m.mockClear());
+    localStorage.clear();
+    _resetUsageAlertGuard();
+    mockStatusFetch(usageStatus('free'));
+  });
+  afterEach(() => {
+    useBillingStore.getState().stopCheckoutPollBurst();
+    useBillingStore.setState({ refresh: realRefresh });
+  });
+
+  it.each([
+    { code: USAGE_EXHAUSTED_ERROR_CODE, reason: 'usage_exhausted' },
+    { code: SIZE_REQUIRES_PRO_ERROR_CODE, reason: 'size_requires_pro' },
+    { code: CONCURRENT_BOX_LIMIT_ERROR_CODE, reason: 'concurrent_box_limit' },
+    { code: 'credits_require_paid_plan', reason: 'credits_require_paid_plan' },
+  ])('opens the modal for $code with the notice from the 402 body', ({ code, reason }) => {
+    const notice = { code, message: 'The plan says no.', tier: 'free', limit: 2, active: 2 };
+    const err = new ApiError('The plan says no.', 402, code, { success: false, code, notice });
+    expect(maybeHandleBillingLimit(err, 'workbench_send')).toBe(true);
+    const state = useBillingStore.getState();
+    expect(state.upgradeModalOpen).toBe(true);
+    expect(state.upgradeReason).toBe(reason);
+    expect(state.upgradeNotice).toEqual(notice);
+    expect(trackEventMock).toHaveBeenCalledWith('paywall_shown', expect.objectContaining({ reason, trigger: 'workbench_send' }));
+  });
+
+  it('falls back to the error message when the body has no notice', () => {
+    maybeHandleBillingLimit(new ApiError('Out of hours.', 402, USAGE_EXHAUSTED_ERROR_CODE));
+    expect(useBillingStore.getState().upgradeNotice).toEqual({ code: USAGE_EXHAUSTED_ERROR_CODE, message: 'Out of hours.' });
+  });
+
+  it('clears the notice when the modal closes', () => {
+    useBillingStore.getState().setUpgradeModalOpen(true, 'usage_exhausted', { message: 'x' });
+    useBillingStore.getState().setUpgradeModalOpen(false);
+    expect(useBillingStore.getState().upgradeNotice).toBeNull();
+    expect(useBillingStore.getState().upgradeReason).toBeNull();
+  });
+
+  describe('alerts', () => {
+    const alert = (thresholdPct: 50 | 80 | 100, tier: 'free' | 'pro' | 'legacy_pro' = 'free', periodEnd = '2026-12-01T00:00:00.000Z') => ({
+      thresholdPct,
+      usedWsec: (thresholdPct / 100) * 36_000,
+      includedWsec: 36_000,
+      tier,
+      periodEnd,
+    });
+
+    it('toasts each threshold once per period and refreshes every time', () => {
+      const refresh = jest.fn().mockResolvedValue(undefined);
+      useBillingStore.setState({ refresh });
+      useBillingStore.getState().handleUsageAlert(alert(50));
+      useBillingStore.getState().handleUsageAlert(alert(50));
+      expect(toastMock.info).toHaveBeenCalledTimes(1);
+      expect(toastMock.info).toHaveBeenCalledWith('50% of your box-hours used', expect.stringContaining('5 of 10 box-hours'), expect.objectContaining({ label: 'Upgrade' }));
+      expect(refresh).toHaveBeenCalledTimes(2);
+      useBillingStore.getState().handleUsageAlert(alert(80));
+      useBillingStore.getState().handleUsageAlert(alert(50, 'free', '2027-01-01T00:00:00.000Z'));
+      expect(toastMock.info).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([
+      ['free', 80, 'Upgrade'],
+      ['legacy_pro', 50, 'Move to Pro'],
+      ['legacy_pro', 80, 'Add credits'],
+      ['pro', 50, 'Add credits'],
+    ] as const)('offers %s at %i%%: %s', (tier, pct, label) => {
+      useBillingStore.getState().handleUsageAlert(alert(pct, tier));
+      expect(toastMock.info).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ label }));
+    });
+
+    it.each([
+      ['free', /New boxes start again on/],
+      ['pro', /Boxes now use your credits until/],
+    ] as const)('words the 100%% alert for %s', (tier, body) => {
+      useBillingStore.getState().handleUsageAlert(alert(100, tier));
+      expect(toastMock.info).toHaveBeenCalledWith('You have used your included box-hours', expect.stringMatching(body), expect.anything());
+    });
+
+    it('says once per period that new boxes are paused', () => {
+      const event = { tier: 'pro' as const, periodEnd: '2026-12-01T00:00:00.000Z', creditsAllowed: true };
+      useBillingStore.getState().handleExhausted(event);
+      useBillingStore.getState().handleExhausted(event);
+      expect(toastMock.info).toHaveBeenCalledTimes(1);
+      expect(toastMock.info).toHaveBeenCalledWith(
+        'Out of hours: new boxes paused',
+        expect.stringContaining('Add credits or turn on auto top-up'),
+        expect.objectContaining({ label: 'Add credits' }),
+      );
+    });
+
+    it('points Free at the reset or Pro when paused', () => {
+      useBillingStore.getState().handleExhausted({ tier: 'free', periodEnd: '2026-12-01T00:00:00.000Z', creditsAllowed: false });
+      expect(toastMock.info).toHaveBeenCalledWith(
+        'Out of hours: new boxes paused',
+        expect.stringContaining('upgrade to Pro'),
+        expect.objectContaining({ label: 'Upgrade' }),
+      );
+    });
+  });
+
+  describe('checkout poll burst', () => {
+    it('waits for credits to land, then announces them', () => {
+      useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 1_000_000 }));
+      useBillingStore.getState().startCheckoutPollBurst('credits');
+      // A refresh with the same balance keeps polling.
+      useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 1_000_000 }));
+      expect(toastMock.success).not.toHaveBeenCalled();
+      useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 26_000_000 }));
+      expect(toastMock.success).toHaveBeenCalledWith('Credits added', 'Your balance is $26.00.');
+      (global.fetch as jest.Mock).mockClear();
+      jest.advanceTimersByTime(10_000);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('waits for Legacy Pro to become Pro, not merely for a paid plan', () => {
+      useBillingStore.getState().setStatus(usageStatus('legacy_pro'));
+      useBillingStore.getState().startCheckoutPollBurst('plan');
+      useBillingStore.getState().setStatus(usageStatus('legacy_pro'));
+      expect(toastMock.success).not.toHaveBeenCalled();
+      useBillingStore.getState().setStatus(usageStatus('pro'));
+      expect(toastMock.success).toHaveBeenCalledWith('You are on Pro', expect.any(String));
+    });
+
+    it('announces nothing when no burst is running', () => {
+      useBillingStore.getState().setStatus(usageStatus('free'));
+      useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 5_000_000 }));
+      expect(toastMock.success).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('session wake refusals', () => {
+    it.each([
+      ['exhausted', { code: USAGE_EXHAUSTED_ERROR_CODE, message: 'Out.' }],
+      ['box_limit', { code: CONCURRENT_BOX_LIMIT_ERROR_CODE, message: 'Busy.' }],
+    ] as const)('records a %s wake and clears it on the next good one', (wake, notice) => {
+      applyWakeAnswer('wb1', { status: wake, code: notice.code, notice });
+      expect(useBillingStore.getState().sessionRefusals.wb1).toEqual({ status: wake, notice });
+      applyWakeAnswer('wb1', { status: 'resuming' });
+      expect(useBillingStore.getState().sessionRefusals.wb1).toBeUndefined();
+    });
+
+    it.each(['skipped', 'moving', 'awake'] as const)('records nothing for %s', (wake) => {
+      applyWakeAnswer('wb1', { status: wake });
+      expect(useBillingStore.getState().sessionRefusals).toEqual({});
+    });
+
+    it('drops an exhausted refusal once hours are back, and keeps a box-limit one', () => {
+      applyWakeAnswer('a', { status: 'exhausted' });
+      applyWakeAnswer('b', { status: 'box_limit' });
+      useBillingStore.getState().setStatus(usageStatus('pro', { usedHours: 10 }));
+      expect(Object.keys(useBillingStore.getState().sessionRefusals)).toEqual(['b']);
     });
   });
 });

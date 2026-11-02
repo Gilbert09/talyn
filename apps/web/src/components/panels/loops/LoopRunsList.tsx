@@ -108,7 +108,7 @@ function RunRow({ run }: { run: LoopRun }) {
               run.status === 'failed' ? 'text-red-500' : 'text-muted-foreground'
             )}
           >
-            {run.failureCode ? LOOP_RUN_FAILURE_LABELS[run.failureCode] : run.error}
+            {loopRunReason(run)}
           </p>
         )}
       </div>
@@ -187,4 +187,15 @@ export function LoopRunsList({
       )}
     </div>
   );
+}
+
+/** Box refusals park a run; the backend's own sentence says why and what to do. */
+const BOX_REFUSAL_CODES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit_reached', 'size_requires_pro']);
+
+/** The reason line: the code's label, plus the plan's own sentence for a box refusal. */
+export function loopRunReason(run: Pick<LoopRun, 'failureCode' | 'error'>): string | null {
+  if (!run.failureCode) return run.error;
+  const label = LOOP_RUN_FAILURE_LABELS[run.failureCode];
+  if (BOX_REFUSAL_CODES.has(run.failureCode) && run.error && run.error !== label) return `${label}. ${run.error}`;
+  return label;
 }
