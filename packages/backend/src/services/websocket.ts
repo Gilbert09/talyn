@@ -9,6 +9,7 @@ import type {
   Environment,
   LoopRun,
   MergeQueueBlockedEvent,
+  MergeQueueReviewWaitEvent,
   AutoKeepNeedsHumanEvent,
   Task,
   TaskStatus,
@@ -741,6 +742,18 @@ export function emitMergeQueueBlocked(
 ): void {
   broadcastToWorkspace(workspaceId, {
     type: 'merge_queue:blocked',
+    payload,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/** The one "still waiting for a review" reminder — see MergeQueueReviewWaitEvent. */
+export function emitMergeQueueReviewWait(
+  workspaceId: string,
+  payload: MergeQueueReviewWaitEvent
+): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'merge_queue:review_wait',
     payload,
     timestamp: new Date().toISOString(),
   });

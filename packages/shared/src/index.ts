@@ -981,6 +981,41 @@ export const TASK_STATUS_TERMINAL: Record<TaskStatus, boolean> = {
 
 const ALL_TASK_STATUSES = Object.keys(TASK_STATUS_TERMINAL) as TaskStatus[];
 
+/**
+ * A later fact about a `needs_human` task: what it asked a person for is no
+ * longer needed, because the work moved on without it (the merge queue saw the
+ * PR approved and green and submitted it, or the PR merged). Stored on
+ * `metadata.needsHumanResolved`, NOT as a new `TaskStatus`: the run's own
+ * outcome stays as it was, and the status vocabulary stays closed.
+ */
+export interface NeedsHumanResolution {
+  /** ISO time of the resolution. */
+  at: string;
+  by: 'merge_queue';
+  /** Why, for a tooltip. */
+  note: string;
+}
+
+/**
+ * Does this task still need a person? False for every status except
+ * `needs_human`, and false for a `needs_human` task whose request was resolved
+ * AFTER the run ended. The time check matters: a terminal task row is reused
+ * by the next dispatch, so a resolution written for an earlier run must not
+ * hide a later run's real request.
+ */
+export function taskNeedsHumanOpen(
+  task: Pick<Task, 'status' | 'metadata' | 'completedAt'>
+): boolean {
+  if (task.status !== 'needs_human') return false;
+  const resolved = task.metadata?.needsHumanResolved as Partial<NeedsHumanResolution> | undefined;
+  if (!resolved?.at) return true;
+  const resolvedAt = Date.parse(resolved.at);
+  if (Number.isNaN(resolvedAt)) return true;
+  if (!task.completedAt) return false;
+  const completedAt = Date.parse(task.completedAt);
+  return Number.isNaN(completedAt) ? false : resolvedAt < completedAt;
+}
+
 /** Every task status, for runtime validation of untrusted input. */
 export const TASK_STATUSES: readonly TaskStatus[] = ALL_TASK_STATUSES;
 
@@ -1150,6 +1185,9 @@ export type WSEventType =
   | 'task:files_changed'
   | 'pull_request:updated'
   | 'merge_queue:blocked'
+  // One gentle reminder that a queued PR has waited a long time for a
+  // required review. Not an alarm: nothing failed and nothing was given up on.
+  | 'merge_queue:review_wait'
   | 'auto_keep:needs_human'
   | 'environment:status'
   | 'environment:created'
@@ -1575,6 +1613,25 @@ export interface AutoKeepNeedsHumanEvent {
   reason: string;
   /** The run that reported it, so the client can deep-link to the transcript. */
   taskId: string;
+}
+
+/**
+ * Fired ONCE per wait when a merge-queue PR has waited a long time (24 hours)
+ * for a required review. Worded as a reminder, deliberately not as
+ * {@link MergeQueueBlockedEvent}: the queue is not stuck, it is waiting for a
+ * person, and it carries on by itself when an approving review lands.
+ */
+export interface MergeQueueReviewWaitEvent {
+  pullRequestId: string;
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** When the wait started (ISO). */
+  waitingSince: string;
+  /** Ready-to-show sentence, e.g. "#126933 is still waiting for a review". */
+  message: string;
 }
 
 export interface EnvironmentStatusEvent {

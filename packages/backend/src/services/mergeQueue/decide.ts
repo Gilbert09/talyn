@@ -28,7 +28,12 @@ import {
   type ExternalQueueStatus,
   type PRMergeableSummary,
 } from '@talyn/shared';
-import { MAX_INFRA_SUBMITS_PER_HEAD, MAX_RETARGETS } from './types.js';
+import {
+  GITHUB_FAULT_FIRST_WAIT_MS,
+  MAX_INFRA_SUBMITS_PER_HEAD,
+  MAX_RETARGETS,
+  REVIEW_REMINDER_AFTER_MS,
+} from './types.js';
 import type {
   Action,
   BlockedCode,
@@ -79,6 +84,24 @@ export function externalQueueInfraReason(
 }
 
 /**
+ * The queue gave this head back because GitHub failed it, every time Talyn
+ * submitted it. Names GitHub as the cause, so that nobody looks for a fault in
+ * a PR that has none, and says what to do next.
+ */
+export function externalQueueGithubFaultReason(
+  status: ExternalQueueStatus,
+  attempts: number
+): string {
+  const provider = externalQueueProviderLabel(status.provider);
+  return (
+    `${provider} could not test or merge this PR because GitHub returned errors to it, ` +
+    `not because of anything in this PR (${status.evidence}). Talyn submitted this commit ` +
+    `${attempts} time(s), with a longer wait each time, and GitHub failed each time. ` +
+    `Re-submit it to ${provider} when GitHub is healthy again.`
+  );
+}
+
+/**
  * The queue itself is the problem, and the PR is a bystander. Says so, and says
  * that waiting is the plan — a reader told only "blocked" goes looking for
  * something to fix in a PR that has nothing wrong with it.
@@ -86,7 +109,7 @@ export function externalQueueInfraReason(
 export function externalQueueUnhealthyReason(prs: number[]): string {
   return (
     `The merge queue on this branch looks unhealthy: ${prs.length} pull requests failed ` +
-    `in it on CI infrastructure rather than on their own code, and nothing merged in ` +
+    `in it on infrastructure (CI runners or GitHub) rather than on their own code, and nothing merged in ` +
     `between. Submitting now would join a batch that fails and gets bisected, which ` +
     `slows down the PRs already queued, so the queue is waiting. It submits again on ` +
     `its own once anything merges or the runners recover.`
@@ -449,6 +472,61 @@ export function awaitingRequiredReview(pr: PrSnapshot, ctx: DecisionContext): bo
     !ciInFlight(pr) &&
     pr.summary.reviewDecision === 'REVIEW_REQUIRED'
   );
+}
+
+/**
+ * R7b's body: wait quietly for the missing required review.
+ *
+ * GitHub's `reviewDecision` says REVIEW_REQUIRED, so this is a WAIT and not a
+ * failure: no fix run, no "merge queue blocked" alarm. The entry resumes by
+ * itself when an approving review changes `reviewDecision`.
+ *
+ * Two extras. A finished fix run is accounted here, quietly: its "needs a
+ * review" refusal is the same fact GitHub already shows, and leaving it
+ * unaccounted would park the entry and send the alarm the moment the approval
+ * lands. And after {@link REVIEW_REMINDER_AFTER_MS} of waiting, ONE gentle
+ * reminder goes out.
+ */
+function decideAwaitingReview(
+  d: DecisionBuilder,
+  ctx: DecisionContext,
+  runActive: boolean
+): Decision {
+  const unaccounted = !!d.entry.fixTaskId && !d.entry.fixTaskAccounted && !runActive;
+  if (d.entry.status !== 'awaiting_review' || unaccounted) {
+    const said =
+      unaccounted && typeof ctx.fixTaskNeedsHumanReason === 'string' && ctx.fixTaskNeedsHumanReason
+        ? ` The fix run said: ${ctx.fixTaskNeedsHumanReason}`
+        : '';
+    d.transition('awaiting_review', {
+      ...(unaccounted ? { set: { fixTaskAccounted: true } } : {}),
+      event: {
+        code: 'awaiting_review',
+        message: `Waiting for an approving review. GitHub says a required review is missing.${said}`,
+        detail: {
+          reviewDecision: 'REVIEW_REQUIRED',
+          ...(unaccounted ? { taskId: d.entry.fixTaskId } : {}),
+        },
+      },
+    });
+    return d.done('advance');
+  }
+  const wait = ctx.reviewWait;
+  if (wait && !wait.reminded) {
+    const waitedMs = Date.parse(ctx.nowIso) - Date.parse(wait.since);
+    if (Number.isFinite(waitedMs) && waitedMs >= REVIEW_REMINDER_AFTER_MS) {
+      const hours = Math.floor(waitedMs / 3_600_000);
+      d.transition('awaiting_review', {
+        event: {
+          code: 'review_wait_reminder',
+          message: `Still waiting for an approving review after ${hours} hours. Sent one reminder.`,
+          detail: { since: wait.since, hours },
+        },
+      });
+      d.act({ kind: 'notify_review_wait', since: wait.since });
+    }
+  }
+  return d.done('advance');
 }
 
 /**
@@ -1185,8 +1263,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // no remediation applies; wait and self-heal on the review webhook. (v1
   // funneled this into fix runs via the bare-BLOCKED branch of needsUpdate.)
   if (awaitingRequiredReview(pr, ctx)) {
-    d.ensure('awaiting_review');
-    return d.done('advance');
+    return decideAwaitingReview(d, ctx, runActive);
   }
 
   // R8 — account the last fix run now that it's terminal. We only ever
@@ -1208,7 +1285,33 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     // once the blockers actually move.
     // `typeof === 'string'`, not `!== null`: the field is absent on contexts
     // built before it existed, and an absent value must mean "no", never "yes".
-    if (typeof ctx.fixTaskNeedsHumanReason === 'string') {
+    if (typeof ctx.fixTaskNeedsHumanReason === 'string' && !stillBlocked) {
+      // The run asked for a person, but GitHub's own data shows nothing that
+      // blocks the merge: no conflict, no requested change, no red required
+      // check, and (R7b has already run) no missing required review. On a base
+      // that merges only through an external queue, GitHub reports BLOCKED for
+      // EVERY approved, green PR until that queue lands it, and agents read
+      // that BLOCKED as "probably needs an approving review"
+      // (PostHog/posthog#126933, 2026-11-02, which was approved). Parking here
+      // only sent a "merge queue blocked" alarm: the blocked gate below
+      // releases a clean entry on the very next pass anyway. So carry on now,
+      // with the run's words in the timeline, and let the clean path submit.
+      const reason = ctx.fixTaskNeedsHumanReason || 'no reason given';
+      d.transition('queued', {
+        set: { fixTaskAccounted: true },
+        event: {
+          code: 'fix_run_needs_human_superseded',
+          message:
+            `The fix run stopped for a human (${reason}), but GitHub shows nothing that ` +
+            'blocks this PR' +
+            (ctx.externalGate !== null
+              ? ' except the external merge queue it must go through — submitting it there.'
+              : ' — carrying on.'),
+          detail: { taskId: d.entry.fixTaskId, signature },
+        },
+      });
+      // Fall through: the clean path below submits or merges the PR.
+    } else if (typeof ctx.fixTaskNeedsHumanReason === 'string') {
       const reason =
         ctx.fixTaskNeedsHumanReason || 'The run stopped and needs a person to continue.';
       d.transition('blocked', {
@@ -1216,7 +1319,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
         blockedReason: reason,
         set: {
           fixTaskAccounted: true,
-          ...(stillBlocked ? { seenSignatures: withSignature(d.entry, signature) } : {}),
+          seenSignatures: withSignature(d.entry, signature),
         },
         event: {
           code: 'fix_run_needs_human',
@@ -1851,9 +1954,7 @@ function decideCleanButWaitingOnCi(
     if (signing === 'clear') {
       const heldForRun = submitHeldForRun(d, ctx, runActive);
       if (heldForRun) return heldForRun;
-      const backoff = queueBackoff(d, ctx);
-      if (backoff) return backoff;
-      const waiting = submitCallBackoff(d, ctx);
+      const waiting = submitWait(d, pr, ctx);
       if (waiting) return waiting;
       d.act({ kind: 'submit_external' });
       return d.done('advance');
@@ -1907,6 +2008,65 @@ function decideExternalEjection(
   // making progress through the PR's problems, and earns another go.
   const signature = queueSignature(ext);
   const recurred = signatureSeen(d.entry, signature);
+
+  // The provider says GITHUB failed it: its own calls to GitHub's API kept
+  // failing while it prepared or merged the PR. Before this rule, trunk's "could
+  // not start testing because GitHub repeatedly returned errors" read as a test
+  // failure and sent a fix run, which found nothing and stopped for a human with
+  // "re-submit it to Trunk" — something Talyn can do itself (PostHog/posthog
+  // #126944 and three more PRs on 2026-11-02, three on 2026-10-07).
+  //
+  // Same budget and same reasoning as the CI-runner case below, with a wait
+  // before each re-submit: see GITHUB_FAULT_FIRST_WAIT_MS and githubFaultBackoff.
+  if (ext.githubFault) {
+    if (d.entry.submitAttempts < MAX_INFRA_SUBMITS_PER_HEAD) {
+      const attempt = d.entry.submitAttempts + 1;
+      const waitMs = githubFaultWaitMs(d.entry.submitAttempts);
+      d.transition('queued', {
+        set: {
+          externalSubmitVia: null,
+          externalSubmittedAt: null,
+          externalState: ext.state,
+          // The start of the wait. githubFaultBackoff reads it.
+          lastError: ext.evidence,
+          lastErrorAt: ctx.nowIso,
+        },
+        event: {
+          code: 'external_queue_github_failure',
+          message:
+            `${provider} failed this PR on GitHub API errors, not on its code — ` +
+            `re-submitting in ${waitInWords(waitMs)} (attempt ${attempt} of ${MAX_INFRA_SUBMITS_PER_HEAD}).`,
+          detail: {
+            evidence: ext.evidence,
+            source: ext.source,
+            state: ext.state,
+            attempt,
+            maxAttempts: MAX_INFRA_SUBMITS_PER_HEAD,
+            retryInMs: waitMs,
+          },
+        },
+      });
+      return null;
+    }
+    d.transition('blocked', {
+      blockedCode: 'external_queue_rejected',
+      blockedReason: externalQueueGithubFaultReason(ext, d.entry.submitAttempts),
+      set: {
+        externalSubmitVia: null,
+        externalSubmittedAt: null,
+        externalState: ext.state,
+      },
+      event: {
+        code: 'external_queue_github_exhausted',
+        message:
+          `${provider} failed this PR on GitHub API errors across ` +
+          `${d.entry.submitAttempts} submissions of this commit — stopping until a person re-submits it.`,
+        detail: { evidence: ext.evidence, source: ext.source, state: ext.state },
+      },
+    });
+    d.act({ kind: 'notify_blocked' });
+    return d.done('advance');
+  }
 
   // The queue's own run died on INFRASTRUCTURE — it never reached a test, so
   // the failure is not about this PR at all (its checks are green on its
@@ -2714,6 +2874,39 @@ function submitCallBackoff(d: DecisionBuilder, ctx: DecisionContext): Decision |
   return d.done('advance');
 }
 
+/** How long to wait before re-submitting after the `submissions`-th GitHub fault. */
+export function githubFaultWaitMs(submissions: number): number {
+  return submissions > 0 ? GITHUB_FAULT_FIRST_WAIT_MS * 2 ** (submissions - 1) : 0;
+}
+
+/**
+ * Hold a submit while the provider still reports a GitHub fault and the wait
+ * after it is still running. Returns null when the entry may submit.
+ *
+ * Keyed on the provider's LIVE answer, not on stored state: once its comment
+ * says anything else (somebody re-submitted, a new push), there is nothing to
+ * wait out. While Talyn's own detector says GitHub is down, the entry waits
+ * without a limit and spends nothing, the same as a failed submit call.
+ */
+function githubFaultBackoff(
+  d: DecisionBuilder,
+  pr: PrSnapshot,
+  ctx: DecisionContext
+): Decision | null {
+  if (!externalQueueOf(pr, ctx)?.githubFault) return null;
+  if (ctx.githubDown) return d.done('advance');
+  if (!d.entry.lastErrorAt) return null;
+  const failedAt = Date.parse(d.entry.lastErrorAt);
+  if (Number.isNaN(failedAt)) return null;
+  if (Date.parse(ctx.nowIso) >= failedAt + githubFaultWaitMs(d.entry.submitAttempts)) return null;
+  return d.done('advance');
+}
+
+/** Every wait that can hold an external submit, in order. Null when none does. */
+function submitWait(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionContext): Decision | null {
+  return queueBackoff(d, ctx) ?? submitCallBackoff(d, ctx) ?? githubFaultBackoff(d, pr, ctx);
+}
+
 function queueBackoff(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
   if (!ctx.queueHealth || ctx.queueHealth.state !== 'degraded') return null;
   if (d.entry.status === 'blocked' && d.entry.blockedCode === 'external_queue_unhealthy') {
@@ -2725,8 +2918,8 @@ function queueBackoff(d: DecisionBuilder, ctx: DecisionContext): Decision | null
     event: {
       code: 'external_queue_unhealthy',
       message:
-        `The merge queue on this branch failed ${ctx.queueHealth.prs.length} PRs on CI ` +
-        'infrastructure without merging anything — holding this one back rather than ' +
+        `The merge queue on this branch failed ${ctx.queueHealth.prs.length} PRs on ` +
+        'infrastructure (CI runners or GitHub) without merging anything — holding this one back rather than ' +
         'adding to the pile.',
       detail: { prs: ctx.queueHealth.prs },
     },
@@ -2773,9 +2966,7 @@ function decideCleanPath(
   if (ctx.externalGate) {
     const heldForRun = submitHeldForRun(d, ctx, runActive);
     if (heldForRun) return heldForRun;
-    const backoff = queueBackoff(d, ctx);
-    if (backoff) return backoff;
-    const waiting = submitCallBackoff(d, ctx);
+    const waiting = submitWait(d, pr, ctx);
     if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');
@@ -2824,9 +3015,7 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
           'GitHub refused the App merge on a branch governed by an external merge queue — submitting the PR to it instead.',
       },
     });
-    const backoff = queueBackoff(d, ctx);
-    if (backoff) return backoff;
-    const waiting = submitCallBackoff(d, ctx);
+    const waiting = submitWait(d, pr, ctx);
     if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');
@@ -2854,9 +3043,7 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
           'This branch is governed by an external merge queue — submitting the PR to it instead of merging.',
       },
     });
-    const backoff = queueBackoff(d, ctx);
-    if (backoff) return backoff;
-    const waiting = submitCallBackoff(d, ctx);
+    const waiting = submitWait(d, pr, ctx);
     if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');

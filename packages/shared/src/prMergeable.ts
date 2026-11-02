@@ -550,6 +550,8 @@ export function talynNeedsHumanRule(): string {
   - Make the LAST line of your final message exactly:
       ${TALYN_NEEDS_HUMAN_SENTINEL} <one line: what is needed, and from whom>
   - Verbatim prefix, on its own line, one line, nothing after it. Talyn reads this line to route the PR to a person instead of retrying you — omit it and it will simply run you again against the same wall.
+  - Write ONLY what you VERIFIED on that line, never a guess stated as a fact. GitHub's \`mergeStateStatus: BLOCKED\` does not say WHY a PR is blocked: on a base that merges only through a merge queue (Trunk, for example), GitHub reports BLOCKED for every approved, green PR. Before you write that a review or approval is missing, read the PR's \`reviewDecision\` and its reviews; if \`reviewDecision\` is APPROVED, a review is not what is missing. If you could not find the cause, write "cause not verified" and name what you checked.
+  - Never stop only to have the PR submitted or re-submitted to a merge queue. Talyn submits PRs to the merge queue itself.
   - Emit it ONLY when you are actually stopping for a human. Never quote, echo, or discuss this line otherwise.`;
 }
 
@@ -674,7 +676,8 @@ export function queueFailureRule(input: {
   - What ${input.provider} reported: "${input.evidence}"${named}
   - START THERE, not with the PR's check list. Find the queue's failure output — the provider's comments on the PR, its check runs, and any linked CI job it names — and read what actually broke.
   - REPRODUCE IT the way the queue did: merge the latest ${input.baseBranch} into this branch (or rebase onto it) and run the failing tests against that combination. A failure that only appears merged is usually a semantic conflict — two changes that are each fine alone and contradict together.
-  - If you genuinely cannot find any failure after merging ${input.baseBranch} and running the relevant tests, say so plainly in your summary rather than pushing a speculative change. A no-op run that explains itself is worth more than a guess.`;
+  - If you genuinely cannot find any failure after merging ${input.baseBranch} and running the relevant tests, say so plainly in your summary rather than pushing a speculative change. A no-op run that explains itself is worth more than a guess.
+  - If the queue's failure was not about the code at all (its own infrastructure, or GitHub errors), say so in your summary and stop WITHOUT the TALYN_NEEDS_HUMAN line: re-submitting the PR to ${input.provider} is Talyn's job, not a person's.`;
 }
 
 /**

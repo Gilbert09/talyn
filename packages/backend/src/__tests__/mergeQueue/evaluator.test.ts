@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
+import { taskNeedsHumanOpen } from '@talyn/shared';
 import { encryptString } from '../../services/tokenCrypto.js';
 import { githubService, MergeNotPermittedForAppError } from '../../services/github.js';
 import { githubRateGate } from '../../services/githubRateGate.js';
@@ -971,6 +972,169 @@ describe('mergeQueue v2 pipeline', () => {
       expect(fixRun).not.toHaveBeenCalled(); // no cloud agent sent at a runner
       expect(comment).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number), '/trunk merge');
       const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('awaiting_external');
+      expect(entry?.submitAttempts).toBe(2);
+    });
+
+    // PostHog/posthog#126944, 2026-11-02: GitHub, not the PR, failed trunk. The
+    // queue used to send a fix run, which stopped for a human with "re-submit it
+    // to Trunk". Now it waits, then re-submits through the usual door.
+    // PostHog/posthog#126933, 2026-11-02: approved and green, BLOCKED only
+    // because master merges through Trunk. The fix run guessed "needs an
+    // approving review"; the queue parked, alarmed, and un-parked a pass later.
+    it('submits an approved PR to Trunk when the fix run guessed it needs a review', async () => {
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      // Trunk's instruction comment, untouched: the PR is not submitted yet.
+      vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+        {
+          user: { login: 'trunk-io[bot]' },
+          body:
+            '<!-- Trunk Merge -->\nMerging to `master` in this repository is managed by Trunk.\n' +
+            '<!-- Start PR Submit Checkbox -->\n- [ ] <!-- End PR Submit Checkbox -->To merge this ' +
+            'pull request, check the box to the left or comment `/trunk merge` below.',
+        },
+      ]);
+      const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
+      await insertTask(db, 'task-nh', 'needs_human');
+      await db
+        .update(tasksTable)
+        .set({
+          result: { success: false, needsHuman: { reason: 'Needs an approving review.' } },
+          completedAt: new Date(Date.now() - 60_000),
+        })
+        .where(eq(tasksTable.id, 'task-nh'));
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: {
+          ...cleanSummary(),
+          nodeId: 'PR_node',
+          mergeStateStatus: 'BLOCKED',
+          reviewDecision: 'APPROVED',
+          blockingReason: 'blocked',
+        },
+        entry: { status: 'fixing', fixTaskId: 'task-nh', fixTaskAccounted: false },
+      });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(blockedSpy).not.toHaveBeenCalled();
+      expect(comment).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number), '/trunk merge');
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('awaiting_external');
+      expect(entry?.blockedCode).toBeNull();
+      const codes = (await eventsOf(db, entryId)).map((e) => e.code);
+      expect(codes).toContain('fix_run_needs_human_superseded');
+      expect(codes).not.toContain('fix_run_needs_human');
+      // The task's "Needs you" is resolved, and its status is left as it was.
+      const [task] = await db
+        .select({ status: tasksTable.status, metadata: tasksTable.metadata, completedAt: tasksTable.completedAt })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, 'task-nh'));
+      expect(task!.status).toBe('needs_human');
+      expect((task!.metadata as Record<string, unknown>).needsHumanResolved).toMatchObject({
+        by: 'merge_queue',
+      });
+      expect(
+        taskNeedsHumanOpen({
+          status: 'needs_human',
+          metadata: task!.metadata as Record<string, unknown>,
+          completedAt: task!.completedAt!.toISOString(),
+        })
+      ).toBe(false);
+    });
+
+    it('waits quietly for a required review and reminds once after 24 hours', async () => {
+      gated();
+      const reminder = vi
+        .spyOn(websocketModule, 'emitMergeQueueReviewWait')
+        .mockImplementation(() => {});
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: {
+          ...cleanSummary(),
+          mergeStateStatus: 'BLOCKED',
+          reviewDecision: 'REVIEW_REQUIRED',
+          blockingReason: 'blocked',
+        },
+      });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect((await entryOf(db, prId))?.status).toBe('awaiting_review');
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(blockedSpy).not.toHaveBeenCalled();
+      expect(reminder).not.toHaveBeenCalled();
+
+      // A day passes: move the start of the wait back 25 hours.
+      await db
+        .update(mergeQueueEvents)
+        .set({ at: new Date(Date.now() - 25 * 60 * 60_000) })
+        .where(eq(mergeQueueEvents.entryId, entryId));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(reminder).toHaveBeenCalledTimes(1);
+      expect(reminder.mock.calls[0]![1]).toMatchObject({
+        number: expect.any(Number),
+        message: expect.stringContaining('still waiting for a review'),
+      });
+      const codes = (await eventsOf(db, entryId)).map((e) => e.code);
+      expect(codes.filter((c) => c === 'review_wait_reminder')).toHaveLength(1);
+      expect(blockedSpy).not.toHaveBeenCalled();
+      expect(fixRun).not.toHaveBeenCalled();
+    });
+
+    it('re-submits after a wait, with no fix run, when trunk says GitHub failed it', async () => {
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+        {
+          user: { login: 'trunk-io[bot]' },
+          body:
+            '\u{274C} This pull request could not start testing because GitHub repeatedly ' +
+            'returned errors while Trunk was preparing the test branch. See more details ' +
+            '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/126944).',
+        },
+      ]);
+      const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      noteExternalQueueSubmitRoute('a', 'b', { provider: 'trunk', command: '/trunk merge' });
+
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), nodeId: 'PR_node' },
+      });
+      await db
+        .update(mergeQueueEntries)
+        .set({
+          status: 'awaiting_external',
+          externalSubmitVia: 'comment',
+          externalSubmittedAt: new Date(Date.now() - 60 * 60_000),
+          submitAttempts: 1,
+        })
+        .where(eq(mergeQueueEntries.id, entryId));
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      const events = await eventsOf(db, entryId);
+      const fault = events.find((e) => e.code === 'external_queue_github_failure');
+      expect(fault?.message).toContain('attempt 2 of 4');
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(comment).not.toHaveBeenCalled(); // the wait has only started
+      let entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('queued');
+      expect(entry?.submitAttempts).toBe(1);
+
+      // The wait is over: the next evaluation submits the usual way.
+      await db
+        .update(mergeQueueEntries)
+        .set({ lastErrorAt: new Date(Date.now() - 6 * 60_000) })
+        .where(eq(mergeQueueEntries.id, entryId));
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(comment).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number), '/trunk merge');
+      expect(fixRun).not.toHaveBeenCalled();
+      entry = await entryOf(db, prId);
       expect(entry?.status).toBe('awaiting_external');
       expect(entry?.submitAttempts).toBe(2);
     });

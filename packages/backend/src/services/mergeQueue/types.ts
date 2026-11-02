@@ -52,6 +52,30 @@ export const MAX_RETARGETS = 8;
  */
 export const MAX_INFRA_SUBMITS_PER_HEAD = 4;
 
+/**
+ * The wait before re-submitting a PR the external queue gave back because
+ * GITHUB failed it (`ExternalQueueStatus.githubFault`). Each later wait is
+ * twice the one before: 5, 10 and 20 minutes inside the same per-head budget
+ * of {@link MAX_INFRA_SUBMITS_PER_HEAD} submissions.
+ *
+ * Not zero, unlike a CI-runner death: trunk says GitHub failed "repeatedly",
+ * so trunk has already retried inside its own run, and an immediate re-submit
+ * mostly meets the same GitHub incident. 35 minutes in total covers a typical
+ * short GitHub API incident, and it costs little, because a trunk test cycle
+ * on posthog/posthog is about 40 minutes anyway.
+ */
+export const GITHUB_FAULT_FIRST_WAIT_MS = 5 * 60_000;
+
+/**
+ * How long an entry waits for a required review before Talyn sends ONE gentle
+ * reminder. A review is a person's work, and most land within a working day;
+ * 24 hours means a full working day has passed in every time zone, so the
+ * reminder never fires on an ordinary review cycle. One per wait, never a
+ * repeat: the reminder says the PR is waiting, and saying it again adds noise
+ * and no information.
+ */
+export const REVIEW_REMINDER_AFTER_MS = 24 * 60 * 60_000;
+
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
 
 /**
@@ -430,6 +454,13 @@ export interface DecisionContext {
    */
   fixTaskNeedsHumanReason?: string | null;
   /**
+   * How long this entry has waited for a required review, read off its own
+   * timeline, and whether the one reminder has already gone out. Asked only for
+   * an entry in `awaiting_review`; absent everywhere else, and absent means "no
+   * reminder", never "send one".
+   */
+  reviewWait?: { since: string; reminded: boolean } | null;
+  /**
    * An unresolved code-review blocker on this PR's current head, or null.
    *
    * Absent on a context built before this existed, and absent must mean "no" —
@@ -700,7 +731,9 @@ export type Action =
   /** Force-refetch the PR summary now (post-failed-merge staleness fix). */
   | { kind: 'refresh_snapshot' }
   /** Fire the one-shot merge_queue:blocked notification (dedup is the executor's). */
-  | { kind: 'notify_blocked' };
+  | { kind: 'notify_blocked' }
+  /** The one gentle "still waiting for a review" reminder (merge_queue:review_wait). */
+  | { kind: 'notify_review_wait'; since: string };
 
 /**
  * One round's decision. `verdict` is the group-walk semantics carried over

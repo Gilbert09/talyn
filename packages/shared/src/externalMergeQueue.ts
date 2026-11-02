@@ -100,6 +100,14 @@ export interface ExternalQueueStatus {
    * services/externalQueueFailure.ts.
    */
   failureUrl?: string;
+  /**
+   * The provider says GITHUB failed it, not the PR's code: its calls to
+   * GitHub's API kept failing while it prepared or merged the PR. Set only on
+   * an ejected state, and only when the provider's own sentence says so — see
+   * `TRUNK_GITHUB_FAULT_PATTERNS`. A fix run cannot repair GitHub, so the
+   * queue re-submits such a PR after a wait instead (decideExternalEjection).
+   */
+  githubFault?: true;
 }
 
 /**
@@ -201,6 +209,12 @@ const TRUNK_STATUS_PATTERNS: Array<{ re: RegExp; state: ExternalQueueState }> = 
   // "🚫 … because it was pushed to by @x. Please re-submit it in order to
   //  merge." — a new commit invalidated what trunk accepted.
   { re: /removed from the merge queue because it was pushed to/i, state: 'ejected' },
+  // "❌ This pull request was removed from the merge queue because GitHub
+  //  repeatedly reported that a merge was already in progress and would not
+  //  merge it at this time." (PostHog/posthog#124994, 2026-10-29). GitHub's
+  //  answer, not the PR's and not a person's, so it must not reach the
+  //  `cancelled` rule below. See TRUNK_GITHUB_FAULT_PATTERNS.
+  { re: /removed from the merge queue because github repeatedly reported/i, state: 'ejected' },
   // Any OTHER removal reason. Unrecognised means possibly a human pulling the
   // PR out on purpose, so this stays the conservative terminal state — fixing
   // or resubmitting over a deliberate removal is not a repair.
@@ -260,6 +274,32 @@ const TRUNK_STATUS_PATTERNS: Array<{ re: RegExp; state: ExternalQueueState }> = 
   //  be unable to merge this PR." Appended to the instruction body, so it must
   //  be read before the checkbox: the box is ticked and nothing will happen.
   { re: /unable to merge this pr/i, state: 'rejected' },
+];
+
+/**
+ * Trunk's sentences that blame GITHUB for an ejection. Verbatim on
+ * posthog/posthog:
+ *
+ *   "❌ This pull request could not start testing because GitHub repeatedly
+ *    returned errors while Trunk was preparing the test branch."
+ *    (#113218, #113226, #113423 on 2026-10-07; #126944, #126956, #126980,
+ *    #127084 on 2026-11-02)
+ *   "❌ This pull request was removed from the merge queue because GitHub
+ *    repeatedly reported that a merge was already in progress and would not
+ *    merge it at this time." (#124994, 2026-10-29)
+ *
+ * The first matched the merge-conflict rule ("could not start testing") and
+ * read as a test failure, so every one sent a `queue_failure` fix run. The run
+ * found nothing to fix and stopped for a human, who was told to re-submit.
+ *
+ * Deliberately NOT here: "GitHub returned the following error message when
+ * attempting to merge it - `Repository rule violations found`" is a ruleset
+ * that refuses the merge every time, and "GitHub failed to merge it" came in
+ * the same minute as that one (2026-10-30). Neither clears by waiting.
+ */
+const TRUNK_GITHUB_FAULT_PATTERNS: RegExp[] = [
+  /because github repeatedly returned errors/i,
+  /because github repeatedly reported that a merge was already in progress/i,
 ];
 
 /**
@@ -404,13 +444,20 @@ export function externalQueueStatusFromComment(
     if (re.test(body)) {
       const failedChecks = failedChecksFrom(body);
       const url = state === 'failed' ? failureRunUrl(body, re) : undefined;
+      const evidence = statusEvidence(body, re);
+      // Read off the sentence that carried the state, never the whole body: a
+      // later line of the same comment must not turn a test failure into a
+      // GitHub one.
+      const githubFault =
+        isExternalQueueEjected(state) && TRUNK_GITHUB_FAULT_PATTERNS.some((p) => p.test(evidence));
       return {
         provider: 'trunk',
         state,
         source: 'comment',
-        evidence: statusEvidence(body, re),
+        evidence,
         ...(failedChecks.length > 0 ? { failedChecks } : {}),
         ...(url ? { failureUrl: url } : {}),
+        ...(githubFault ? { githubFault: true as const } : {}),
       };
     }
   }

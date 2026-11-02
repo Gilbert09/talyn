@@ -80,6 +80,7 @@ import {
   broadcastPositionsAfterQueueWrite,
   emitDequeued,
   publishDraftsThenKick,
+  resubmitQueueEntry,
   setQueueMembership,
 } from '../services/mergeQueue/membership.js';
 import { QUEUE_RESET_COLUMNS } from '../services/mergeQueueBroadcast.js';
@@ -102,6 +103,7 @@ import type { ApiResponse, PRPriorityVerdict, PRStackInfo } from '@talyn/shared'
  *   POST  /pull-requests/:id/refresh      force fetch + upsert
  *   POST  /pull-requests/:id/auto-keep-mergeable  toggle the watcher
  *   POST  /pull-requests/:id/merge-queue  add/remove from the merge queue
+ *   POST  /pull-requests/:id/merge-queue/resubmit  re-submit a parked entry
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
  *   POST  /pull-requests/watch            track an arbitrary PR by URL
@@ -1057,6 +1059,40 @@ export function pullRequestRoutes(): Router {
       trigger: enabled ? 'user:enqueue' : 'user:dequeue',
     });
 
+    res.json({ success: true, data: null } as ApiResponse<null>);
+  });
+
+  // "Re-submit to the merge queue" on a parked entry: for a PR the external
+  // queue (trunk) gave back for a reason a person has now dealt with, or that
+  // Talyn stopped re-submitting (GitHub kept failing the queue). Re-arms the
+  // entry and lets the pipeline submit it the usual way. 409 when the entry is
+  // not parked or never went near an external queue.
+  router.post('/:id/merge-queue/resubmit', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select(PR_FLAG_COLUMNS)
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const result = await resubmitQueueEntry(row, 'user:resubmit');
+    if (!result.ok) {
+      const error =
+        result.code === 'not_queued'
+          ? 'This pull request is not in the merge queue.'
+          : result.code === 'not_parked'
+            ? 'The merge queue is still working on this pull request. Nothing to re-submit.'
+            : 'This pull request has not been through an external merge queue.';
+      return res.status(409).json({ success: false, error, code: result.code });
+    }
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
 
