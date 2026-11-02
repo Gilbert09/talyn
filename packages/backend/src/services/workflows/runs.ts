@@ -170,20 +170,24 @@ export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowR
 /**
  * Failure codes worth trying again.
  *
- * Only `rate_gated`. It is the one failure that is unambiguously TRANSIENT and
- * that tells us WHEN it clears — the gate holds the instant, so the retry can be
- * scheduled rather than guessed at.
+ * `rate_gated`, and the two box refusals. Each is TRANSIENT and tells us WHEN
+ * it clears, so the retry can be scheduled rather than guessed at: the rate
+ * gate holds its instant, `box_limit_reached` clears when a box stops (a short
+ * recheck), and `usage_exhausted` clears at the period reset or when credits
+ * arrive (the earlier of the reset and a quarter-hour recheck, and the moment
+ * a `billing:budget_restored` event pulls the run forward). The attempt cap
+ * still applies, so a run whose PR event is old news stops being owed.
  *
  * Deliberately not the others, each for its own reason:
- *  - `task_limit_reached` is a plan decision, not a fault. Retrying it in a loop
- *    would be Talyn nagging its way around a limit the user has chosen to live
- *    with, and the slot frees on a human timescale anyway.
+ *  - `size_requires_pro` does not clear by waiting. Unattended runs are
+ *    downsized before it can happen.
+ *  - `task_limit_reached` is the old plan cap, kept for history rows only.
  *  - `github_error` covers a 500 and a 422 alike, and nothing in the message
  *    reliably separates "try again" from "this will never work".
  *  - `task_already_running` resolves, but by the time it does the PR event that
  *    triggered the workflow is old news.
  */
-const RETRYABLE_CODES: ReadonlySet<string> = new Set(['rate_gated']);
+const RETRYABLE_CODES: ReadonlySet<string> = new Set(['rate_gated', 'usage_exhausted', 'box_limit_reached']);
 
 /** Whether an outcome is one the sweep should have another go at. */
 export function isRetryable(outcome: WorkflowActionOutcome): boolean {

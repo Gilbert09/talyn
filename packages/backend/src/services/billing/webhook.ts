@@ -8,9 +8,18 @@ import {
   users as usersTable,
 } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
+import { CREDIT_PACKS, formatUsd, type CreditPackId } from '@talyn/shared';
 import { emitSubscriptionUpdated } from '../websocket.js';
+import { settleCreditOrder } from './autoTopup.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
-import { isTeamProductId, polarWebhookSecret, teamIdFromCustomerExternalId } from './polar.js';
+import {
+  creditPackForProduct,
+  isTeamProductId,
+  polarWebhookSecret,
+  teamIdFromCustomerExternalId,
+  teamProductTier,
+} from './polar.js';
+import { grantCreditLot, reverseCreditLot } from './usage/credits.js';
 import { seatAllAdmins, teamAudienceUserIds } from './teams.js';
 import { notifyTodiex, type TodiexLevel } from '../todiex.js';
 import {
@@ -37,6 +46,11 @@ import {
  *   checkout, not a reorder.
  * - Unmappable events (no user for the customer) are recorded + 200'd:
  *   Polar's retries can never make an unknown user appear.
+ * - Orders: `order.paid` for a credit-pack product grants the pack's credits
+ *   (unique on the order id, so the finalize response of an auto top-up and
+ *   this webhook grant once between them). `order.refunded` takes back what
+ *   is left of the lot. A refund that arrives BEFORE its `order.paid` leaves
+ *   an empty lot on the order id, so the late `order.paid` grants nothing.
  */
 
 /** Subscription statuses that keep paid access. `past_due` stays unlimited
@@ -79,7 +93,7 @@ export interface PolarSubscription {
 
 export interface ApplyResult {
   applied: boolean;
-  reason?: 'no_user' | 'no_team' | 'stale' | 'ignored_type';
+  reason?: 'no_user' | 'no_team' | 'stale' | 'ignored_type' | 'already_granted' | 'partial_refund';
   userId?: string;
   /** Set instead of `userId` when the event was a team subscription's. */
   teamId?: string;
@@ -325,11 +339,17 @@ export async function applyTeamSubscriptionEvent(
       ? sub.seats
       : null;
 
+  // The product decides the seats' tier: the Pro team product gives Pro, the
+  // old team product Legacy Pro. An event without a known product keeps both.
+  const tier = teamProductTier(sub.productId);
+
   await db
     .update(teamsTable)
     .set({
       plan: grants ? 'team' : 'none',
       ...(seats !== null ? { seatsPurchased: seats } : {}),
+      ...(sub.productId ? { polarProductId: sub.productId } : {}),
+      ...(tier ? { tier } : {}),
       polarSubscriptionId: sub.id,
       ...(sub.customerId ?? sub.customer?.id
         ? { polarCustomerId: (sub.customerId ?? sub.customer?.id)! }
@@ -392,7 +412,10 @@ export async function applySubscriptionEvent(
   await db
     .update(usersTable)
     .set({
+      // `plan` stays the "has a granting personal subscription" column. Which
+      // tier it grants (Pro or Legacy Pro) is read from the product id.
       plan: grants ? 'unlimited' : 'free',
+      ...(sub.productId ? { polarProductId: sub.productId } : {}),
       polarSubscriptionId: sub.id,
       ...(sub.customerId ?? sub.customer?.id
         ? { polarCustomerId: (sub.customerId ?? sub.customer?.id)! }
@@ -406,6 +429,141 @@ export async function applySubscriptionEvent(
     .where(eq(usersTable.id, userId));
 
   return { applied: true, userId, previouslyGranting };
+}
+
+/**
+ * The slice of Polar's order entity we read. Dates arrive as `Date` from the
+ * SDK's parser and as strings from a raw body, so both are accepted.
+ */
+export interface PolarOrder {
+  id: string;
+  status?: string;
+  paid?: boolean;
+  productId?: string | null;
+  customerId?: string;
+  customer?: { id?: string; externalId?: string | null; email?: string | null; name?: string | null };
+  metadata?: Record<string, unknown> | null;
+  createdAt?: Date | string;
+  /** Minor units (cents). */
+  totalAmount?: number;
+  refundedAmount?: number;
+  currency?: string;
+}
+
+function orderFromEvent(data: unknown): PolarOrder | null {
+  const order = data as PolarOrder | null;
+  if (!order || typeof order.id !== 'string') return null;
+  return order;
+}
+
+/**
+ * Map an order to our user: the customer's external id, then the stored
+ * customer id. A team customer (`team_…`) never maps: a team does not hold
+ * credits, and the buyer must not receive credits the team paid for.
+ */
+async function resolveOrderUserId(order: PolarOrder): Promise<string | null> {
+  const externalId = order.customer?.externalId;
+  if (teamIdFromCustomerExternalId(externalId)) return null;
+  return resolveUserId({
+    id: order.id,
+    status: order.status ?? '',
+    ...(order.customerId ? { customerId: order.customerId } : {}),
+    ...(order.customer ? { customer: order.customer } : {}),
+  });
+}
+
+function orderDate(order: PolarOrder): Date | undefined {
+  if (!order.createdAt) return undefined;
+  const date = order.createdAt instanceof Date ? order.createdAt : new Date(order.createdAt);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+export interface OrderApplyResult extends ApplyResult {
+  pack?: CreditPackId;
+  source?: 'purchase' | 'auto_topup';
+}
+
+/**
+ * Apply `order.paid` / `order.refunded`. Only credit-pack products do
+ * anything; a subscription's renewal order is `ignored_type`. Exported for
+ * tests.
+ */
+export async function applyOrderEvent(eventType: string, order: PolarOrder): Promise<OrderApplyResult> {
+  const pack = creditPackForProduct(order.productId);
+  if (!pack) return { applied: false, reason: 'ignored_type' };
+  const userId = await resolveOrderUserId(order);
+  if (!userId) return { applied: false, reason: 'no_user', pack };
+  const source = order.metadata?.kind === 'auto_topup' ? 'auto_topup' : 'purchase';
+
+  if (eventType === 'order.paid') {
+    const purchasedAt = orderDate(order);
+    const { created } = await settleCreditOrder({
+      ownerId: userId,
+      orderId: order.id,
+      pack,
+      source,
+      ...(purchasedAt ? { purchasedAt } : {}),
+    });
+    return created
+      ? { applied: true, userId, pack, source }
+      : { applied: false, reason: 'already_granted', userId, pack, source };
+  }
+
+  // order.refunded. A partial refund is left to an operator: which part of
+  // the credit it should take back is a judgement, not arithmetic.
+  const partial =
+    order.status === 'partially_refunded' ||
+    (typeof order.refundedAmount === 'number' &&
+      typeof order.totalAmount === 'number' &&
+      order.refundedAmount < order.totalAmount);
+  if (partial) return { applied: false, reason: 'partial_refund', userId, pack, source };
+  await reverseCreditLot(order.id);
+  // No lot yet (the refund overtook `order.paid`): an empty one on the order
+  // id makes the late grant a no-op. A no-op itself when a lot exists.
+  await grantCreditLot({ ownerId: userId, micros: 0, source: 'refund_reversal', polarOrderId: order.id });
+  return { applied: true, userId, pack, source };
+}
+
+/** The phone notification for a credit order. Best effort, after the 200. */
+function notifyCreditOrder(eventType: string, order: PolarOrder, result: OrderApplyResult, eventId: string, occurredAt: Date): void {
+  if (!result.userId || !result.pack) return;
+  const userId = result.userId;
+  const pack = CREDIT_PACKS[result.pack];
+  const paid = eventType === 'order.paid';
+  if (paid && !result.applied) return;
+  const kind = !paid
+    ? result.reason === 'partial_refund'
+      ? 'credits.partial_refund'
+      : 'credits.refunded'
+    : result.source === 'auto_topup'
+      ? 'credits.auto_topup'
+      : 'credits.purchased';
+  const title = {
+    'credits.purchased': 'Talyn credits bought',
+    'credits.auto_topup': 'Talyn credits auto top-up',
+    'credits.refunded': 'Talyn credit pack refunded',
+    'credits.partial_refund': 'Talyn credit pack partly refunded: credits left as they were, adjust by hand',
+  }[kind];
+  notifyTodiex(async () => {
+    const stored = await describeUser(userId);
+    const person = { ...stored, email: stored.email ?? order.customer?.email ?? null };
+    const who = personLabel(person);
+    return {
+      kind,
+      level: kind === 'credits.partial_refund' ? 'warn' : paid ? 'success' : 'warn',
+      title: who ? `${title} — ${who}` : title,
+      message: `${formatUsd(pack.priceMicros)} pack, ${formatUsd(pack.creditMicros)} of credit.`,
+      metadata: compactMetadata({
+        ...personMetadata(person),
+        pack: result.pack ?? null,
+        price: formatSubscriptionPrice(order.totalAmount, order.currency),
+        order_id: order.id,
+        polar_event_type: eventType,
+      }),
+      dedupeKey: `polar:${eventId}`,
+      occurredAt: occurredAt.toISOString(),
+    };
+  });
 }
 
 /**
@@ -533,8 +691,21 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
   }
 
   let result: ApplyResult = { applied: false, reason: 'ignored_type' };
+  const order =
+    event.type === 'order.paid' || event.type === 'order.refunded' ? orderFromEvent(event.data) : null;
   if (sub) {
     result = await applySubscriptionEvent(event.type, sub, occurredAt);
+  } else if (order) {
+    try {
+      result = await applyOrderEvent(event.type, order);
+    } catch (err) {
+      // Paid credit must not be lost to a transient failure. Drop the gate
+      // row so Polar's retry processes the event again; the grant and the
+      // reversal are idempotent on the order id, so a retry is safe.
+      await db.delete(billingEventsTable).where(eq(billingEventsTable.eventId, eventId));
+      throw err;
+    }
+    notifyCreditOrder(event.type, order, result, eventId, occurredAt);
   }
 
   await db
@@ -558,7 +729,11 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
     await afterTeamEvent(result, sub, event.type, eventId, occurredAt);
   }
 
-  if (result.applied && result.userId) {
+  if (order && result.applied && result.userId) {
+    emitSubscriptionUpdated(result.userId, await buildBillingStatus(result.userId));
+  }
+
+  if (sub && result.applied && result.userId) {
     emitSubscriptionUpdated(result.userId, await buildBillingStatus(result.userId));
 
     // Money moving is the one billing signal worth a phone buzz. Keyed on the

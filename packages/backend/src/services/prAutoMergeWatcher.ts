@@ -20,7 +20,8 @@ import {
 } from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { createCloudTask } from './taskCreate.js';
-import { TaskLimitError } from './billing/entitlements.js';
+import { isBoxGateError, type BoxGateError } from './billing/entitlements.js';
+import { boxDeferral, workspaceBoxHold, type BoxDeferral } from './billing/boxDeferral.js';
 import { getExternalMergeGate } from './repoMergeGate.js';
 import { readExternalQueueState } from './externalQueueState.js';
 import { readFailingChecks } from './failingChecks.js';
@@ -73,8 +74,9 @@ interface AutoMergeState {
   appliedLabels?: string[];
   /**
    * When this PR first wanted a fix run and could not have one, because the
-   * owner's free-plan task slots were all busy. Cleared the moment a run
-   * actually fires, or the PR is seen mergeable and stops needing one.
+   * owner's plan refused the box (a full concurrent-box cap, or used-up
+   * box-hours and credits). Cleared the moment a run actually fires, or the
+   * PR is seen mergeable and stops needing one.
    *
    * Persisted rather than kept in memory because **the user is usually not
    * watching when it happens.** A watcher deferral has no request behind it,
@@ -86,6 +88,12 @@ interface AutoMergeState {
    * going on, and so the client can tell one continuous episode from a new one.
    */
   deferredSince?: string;
+  /**
+   * Why the run waits, in the gate's own words, and when the watcher looks
+   * again. Written when an episode starts or its reason changes, never per
+   * tick. Cleared with `deferredSince`.
+   */
+  deferral?: BoxDeferral;
   /**
    * Set when the last auto-run ended `needs_human` — the agent stopped because
    * only a person can clear what is left.
@@ -154,12 +162,25 @@ function readState(row: PRRow): AutoMergeState {
     // like it works — the write lands — and then every read behaves as if it
     // were never set. Add new fields in BOTH places.
     deferredSince: typeof s?.deferredSince === 'string' ? s.deferredSince : undefined,
+    deferral: readDeferral(s?.deferral),
     // Validated as a UNIT: a half-written object would stand the watcher down
     // with no way to ever re-arm (an absent signature can never change), which
     // is a worse failure than ignoring it and retrying.
     needsHuman: readNeedsHuman(s?.needsHuman),
     sessionHold: readSessionHold(s?.sessionHold),
   };
+}
+
+function readDeferral(value: unknown): BoxDeferral | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (
+    (v.reason !== 'usage_exhausted' && v.reason !== 'box_limit_reached' && v.reason !== 'size_requires_pro') ||
+    typeof v.message !== 'string'
+  ) {
+    return undefined;
+  }
+  return { reason: v.reason, message: v.message, retryAt: typeof v.retryAt === 'string' ? v.retryAt : null };
 }
 
 function readSessionHold(value: unknown): AutoMergeState['sessionHold'] {
@@ -196,6 +217,9 @@ function publicState(s: AutoMergeState): {
   attempts: number;
   paused: boolean;
   deferredSince: string | null;
+  deferredReason: BoxDeferral['reason'] | null;
+  deferredMessage: string | null;
+  deferredRetryAt: string | null;
   needsHuman: { reason: string; since: string } | null;
   waitingOnSession: { name: string; reason: string; since: string } | null;
 } {
@@ -206,6 +230,12 @@ function publicState(s: AutoMergeState): {
     // clear its chip, and `??`-merging an absent field would leave a stale
     // "waiting" badge on a PR whose run has since fired.
     deferredSince: s.deferredSince ?? null,
+    // Why it waits and until when, so the chip can say "out of box-hours"
+    // rather than "waiting for a slot". Null with deferredSince, for the same
+    // transition-to-null reason.
+    deferredReason: s.deferredSince ? (s.deferral?.reason ?? null) : null,
+    deferredMessage: s.deferredSince ? (s.deferral?.message ?? null) : null,
+    deferredRetryAt: s.deferredSince ? (s.deferral?.retryAt ?? null) : null,
     // Same reasoning — and distinct from `paused`, which means the attempt
     // budget ran out. These read very differently to a user: one is "Talyn
     // gave up", the other is "Talyn is waiting on you".
@@ -659,6 +689,7 @@ class PRAutoMergeWatcher {
         // A clean PR is not waiting on a slot. Leaving this set would show a
         // "waiting for a free slot" chip on a PR with nothing left to fix.
         state.deferredSince = undefined;
+        state.deferral = undefined;
         // Nor is it waiting on a person — whatever they were asked for either
         // happened or stopped mattering.
         state.needsHuman = undefined;
@@ -717,6 +748,14 @@ class PRAutoMergeWatcher {
     if (!resolved) return; // No connected cloud provider — can't dispatch.
     const { envId, provider } = resolved;
 
+    // The owner's plan refused a box moments ago: wait without building the
+    // prompt (a GitHub read) or asking the ledger. See billing/boxDeferral.ts.
+    const held = await workspaceBoxHold(row.workspaceId, { unmetered: provider !== 'selfhosted' });
+    if (held) {
+      await this.recordDeferral(row, state, held);
+      return;
+    }
+
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
     const template = await workspacePromptTemplate(row.workspaceId, 'mergeable');
@@ -751,42 +790,18 @@ class PRAutoMergeWatcher {
         pullRequestId: row.id,
       });
     } catch (err) {
-      if (err instanceof TaskLimitError) {
-        // Free-plan concurrency limit — skip this tick without burning an
-        // attempt; the watcher retries once a slot frees up.
+      if (isBoxGateError(err)) {
+        // The plan refused the box. Skip this tick without burning an attempt;
+        // the watcher retries when the owner hold ends (a slot frees, the
+        // recheck time passes, or credits arrive).
         //
-        // This is the free plan's REAL wall for a watcher-driven user, and
-        // until now it left nothing behind but this log line. There is no
-        // request to answer, so there is no 402, no UpgradeModal, and no
-        // client-side `paywall_shown` — and unlike the merge-queue path
-        // (executor.ts), no `merge_queue_events` row either. The result was a
-        // paywall that fires constantly and reads, in every funnel, as a
-        // paywall that never fires at all.
-        //
-        // Captured SERVER-side on purpose: the user hitting this hardest may
-        // be running a client that reports nothing (see Session 116), so
-        // anything client-emitted would miss exactly the population it exists
-        // to measure. This is telemetry only — it shows the user nothing.
+        // There is no request to answer, so there is no 402, no UpgradeModal
+        // and no client-side `paywall_shown`. The deferral is persisted on the
+        // PR so the UI can say why, and captured SERVER-side once per episode:
+        // the user hitting this hardest may be running a client that reports
+        // nothing (see Session 116).
         console.log(`[autoKeep] ${ref}: fix run deferred — ${err.message}`);
-        // Keep the FIRST deferral's timestamp across a run of them: this is
-        // one episode of "your PRs are not being kept green", and restamping
-        // it every tick would reset the age the UI reports and make a
-        // half-hour outage look permanently one minute old.
-        if (!state.deferredSince) {
-          state.deferredSince = new Date().toISOString();
-          await this.persist(row, state);
-        }
-        captureWorkspaceEvent(row.workspaceId, 'paywall_deferred', {
-          // The surface that wanted a task, so auto-keep and the merge queue
-          // stay separable — `task_dispatched` records no dispatch source, so
-          // this is currently the only place that distinction is captured.
-          source: 'auto_keep',
-          gate: 'task_limit',
-          limit: err.limit,
-          active: err.active,
-          repo: `${row.owner}/${row.repo}`,
-          pr_number: row.number,
-        });
+        await this.recordDeferral(row, state, err);
         return;
       }
       throw err;
@@ -796,7 +811,35 @@ class PRAutoMergeWatcher {
     state.accounted = false;
     // The wait is over — a run is actually going.
     state.deferredSince = undefined;
+    state.deferral = undefined;
     await this.persist(row, state);
+  }
+
+  /**
+   * Record that the plan refused this PR's fix run. Writes (and captures
+   * `paywall_deferred`) only when an episode starts or its reason changes,
+   * never per tick: an owner out of hours for weeks must not rewrite every
+   * armed PR every minute.
+   *
+   * Keeps the FIRST deferral's timestamp across an episode: restamping it
+   * every tick would reset the age the UI reports and make a half-hour
+   * outage look permanently one minute old.
+   */
+  private async recordDeferral(row: PRRow, state: AutoMergeState, err: BoxGateError): Promise<void> {
+    const next = boxDeferral(err);
+    if (state.deferredSince && state.deferral?.reason === next.reason) return;
+    state.deferredSince ??= new Date().toISOString();
+    state.deferral = next;
+    await this.persist(row, state);
+    captureWorkspaceEvent(row.workspaceId, 'paywall_deferred', {
+      // The surface that wanted a task, so auto-keep and the merge queue
+      // stay separable.
+      source: 'auto_keep',
+      gate: next.reason,
+      ...(err.notice.limit !== undefined ? { limit: err.notice.limit, active: err.notice.active } : {}),
+      repo: `${row.owner}/${row.repo}`,
+      pr_number: row.number,
+    });
   }
 
   private async ensureLabels(

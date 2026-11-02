@@ -26,15 +26,6 @@ import { loopRuns as runsTable, loops as loopsTable, tasks as tasksTable } from 
 export const ACTIVE_RUN_STATUSES: LoopRunStatus[] = ['waiting_slot', 'queued', 'running'];
 
 /**
- * How long a task-limited run waits before trying again.
- *
- * One sweep interval: there is no point re-asking faster than the loop that
- * would ask, and a slot frees when some other task finishes rather than on a
- * schedule of its own.
- */
-export const WAITING_SLOT_RETRY_MS = 30_000;
-
-/**
  * The columns a firing needs. An explicit projection typed with `Pick`, so a
  * consumer that later reads a column this drops fails `tsc` rather than
  * silently re-bloating the query — the house rule for anything on a poll loop.
@@ -385,6 +376,8 @@ export async function dueWaitingSlots(limit: number): Promise<
     runId: string;
     loopId: string;
     scheduledFor: Date;
+    /** What it waits for (`usage_exhausted`, `box_limit_reached`, an old `task_limit_reached`). */
+    failureCode: string | null;
   }[]
 > {
   const rows = await getDbClient()
@@ -392,6 +385,7 @@ export async function dueWaitingSlots(limit: number): Promise<
       runId: runsTable.id,
       loopId: runsTable.loopId,
       scheduledFor: runsTable.scheduledFor,
+      failureCode: runsTable.failureCode,
     })
     .from(runsTable)
     // Same workspace join as the settlement paths. Re-dispatching a malformed

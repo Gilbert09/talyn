@@ -6,6 +6,7 @@ import {
   ADMIN_PAGE_LIMIT_MAX,
   ADMIN_SEARCH_MIN_LENGTH,
   type AdminPage,
+  isPlanOverride,
   type AdminPlan,
   type AdminTaskDetail,
   type AdminTaskSummary,
@@ -138,7 +139,7 @@ function toPage<T extends { createdAt: Date; id: string }, R>(
 }
 
 function plan(value: string | null): AdminPlan | null {
-  return value === 'free' || value === 'unlimited' ? value : null;
+  return isPlanOverride(value) ? value : null;
 }
 
 // ============================================================================
@@ -158,6 +159,8 @@ export const ADMIN_USER_COLUMNS = {
   isAdmin: usersTable.isAdmin,
   plan: usersTable.plan,
   planOverride: usersTable.planOverride,
+  // A product id, not a customer identifier: the effective tier needs it.
+  polarProductId: usersTable.polarProductId,
   subscriptionStatus: usersTable.subscriptionStatus,
   currentPeriodEnd: usersTable.currentPeriodEnd,
   cancelAtPeriodEnd: usersTable.cancelAtPeriodEnd,
@@ -193,7 +196,11 @@ function toUserSummary(row: AdminUserRow, workspaceCount: number): AdminUserSumm
     // `planOverride ?? plan` — if that rule ever changes, the console must
     // change with it, not drift into showing a different answer than the gate
     // actually enforces.
-    effectivePlan: deriveEntitlement({ plan: row.plan, planOverride: row.planOverride }).plan,
+    effectivePlan: deriveEntitlement({
+      plan: row.plan,
+      planOverride: row.planOverride,
+      polarProductId: row.polarProductId,
+    }).tier,
     subscriptionStatus: row.subscriptionStatus,
     currentPeriodEnd: row.currentPeriodEnd?.toISOString() ?? null,
     cancelAtPeriodEnd: row.cancelAtPeriodEnd,

@@ -10,6 +10,18 @@ import { encryptString } from '../services/tokenCrypto.js';
 
 const STRONG_KEY = randomBytes(32).toString('base64');
 
+/** A complete Polar core group (usage billing). */
+const POLAR_CORE = {
+  POLAR_ACCESS_TOKEN: 'polar_at',
+  POLAR_WEBHOOK_SECRET: 'whsec_x',
+  POLAR_ENVIRONMENT: 'sandbox',
+  POLAR_PRODUCT_ID_PRO_MONTHLY: 'pro-m',
+  POLAR_PRODUCT_ID_PRO_ANNUAL: 'pro-a',
+  POLAR_PRODUCT_ID_CREDITS_25: 'c-25',
+  POLAR_PRODUCT_ID_CREDITS_100: 'c-100',
+  POLAR_PRODUCT_ID_CREDITS_500: 'c-500',
+};
+
 /** A fully valid env to mutate per-case. */
 function validEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -81,11 +93,35 @@ describe('validateEnv', () => {
     const errors = validateEnv(validEnv({ POLAR_ACCESS_TOKEN: 'polar_at' }));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('Polar billing is partially configured');
-    expect(errors[0]).toContain('POLAR_WEBHOOK_SECRET');
-    expect(errors[0]).toContain('POLAR_PRODUCT_ID_ANNUAL');
+    for (const name of [
+      'POLAR_WEBHOOK_SECRET',
+      'POLAR_PRODUCT_ID_PRO_MONTHLY',
+      'POLAR_PRODUCT_ID_PRO_ANNUAL',
+      'POLAR_PRODUCT_ID_CREDITS_25',
+      'POLAR_PRODUCT_ID_CREDITS_100',
+      'POLAR_PRODUCT_ID_CREDITS_500',
+    ]) {
+      expect(errors[0]).toContain(name);
+    }
   });
 
   it('accepts a fully configured Polar billing group', () => {
+    expect(validateEnv(validEnv(POLAR_CORE))).toEqual([]);
+  });
+
+  it.each([
+    'POLAR_PRODUCT_ID_PRO_MONTHLY',
+    'POLAR_PRODUCT_ID_PRO_ANNUAL',
+    'POLAR_PRODUCT_ID_CREDITS_25',
+    'POLAR_PRODUCT_ID_CREDITS_100',
+    'POLAR_PRODUCT_ID_CREDITS_500',
+  ])('the core group needs %s', (name) => {
+    const errors = validateEnv(validEnv({ ...POLAR_CORE, [name]: undefined }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(new RegExp(`partially configured.*also set ${name}$`));
+  });
+
+  it('the old Unlimited-only group from before usage billing no longer boots', () => {
     const errors = validateEnv(
       validEnv({
         POLAR_ACCESS_TOKEN: 'polar_at',
@@ -95,7 +131,48 @@ describe('validateEnv', () => {
         POLAR_PRODUCT_ID_ANNUAL: 'prod-a',
       })
     );
-    expect(errors).toEqual([]);
+    expect(errors.some((e) => e.includes('Polar billing is partially configured'))).toBe(true);
+  });
+
+  it.each<[string, Record<string, string>, RegExp | null]>([
+    ['legacy pair, both', { POLAR_PRODUCT_ID_MONTHLY: 'l-m', POLAR_PRODUCT_ID_ANNUAL: 'l-a' }, null],
+    ['legacy pair, one', { POLAR_PRODUCT_ID_MONTHLY: 'l-m' }, /old Unlimited products .*partially configured.*POLAR_PRODUCT_ID_ANNUAL/],
+    ['old team pair, both', { POLAR_PRODUCT_ID_TEAM_MONTHLY: 't-m', POLAR_PRODUCT_ID_TEAM_ANNUAL: 't-a' }, null],
+    ['old team pair, one', { POLAR_PRODUCT_ID_TEAM_ANNUAL: 't-a' }, /Polar team plan is partially configured/],
+    ['Pro team pair, both', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m', POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'tp-a' }, null],
+    ['Pro team pair, one', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m' }, /Pro team plan is partially configured/],
+  ])('optional pair on top of billing: %s', (_name, extra, expected) => {
+    const errors = validateEnv(validEnv({ ...POLAR_CORE, ...extra }));
+    if (expected) {
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(expected);
+    } else {
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['the legacy pair', { POLAR_PRODUCT_ID_MONTHLY: 'l-m', POLAR_PRODUCT_ID_ANNUAL: 'l-a' }, /old Unlimited products/],
+    ['the Pro team pair', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m', POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'tp-a' }, /Pro team plan/],
+  ])('%s without billing is refused', (_name, extra, label) => {
+    const errors = validateEnv(validEnv(extra));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(label);
+    expect(errors[0]).toMatch(/but Polar billing is not/);
+  });
+
+  it.each([
+    ['a credit pack equal to a Pro product', { POLAR_PRODUCT_ID_CREDITS_25: 'pro-m' }, ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_CREDITS_25']],
+    [
+      'a legacy product equal to a team product',
+      { POLAR_PRODUCT_ID_MONTHLY: 'same', POLAR_PRODUCT_ID_ANNUAL: 'l-a', POLAR_PRODUCT_ID_TEAM_MONTHLY: 'same', POLAR_PRODUCT_ID_TEAM_ANNUAL: 't-a' },
+      ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_MONTHLY'],
+    ],
+  ])('product ids must be distinct: %s', (_name, extra, names) => {
+    const errors = validateEnv(validEnv({ ...POLAR_CORE, ...extra }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/must be distinct/);
+    for (const name of names) expect(errors[0]).toContain(name);
   });
 
   it('accepts an entirely absent Polar billing group (limits simply off)', () => {
@@ -103,15 +180,7 @@ describe('validateEnv', () => {
   });
 
   it('rejects an invalid POLAR_ENVIRONMENT value', () => {
-    const errors = validateEnv(
-      validEnv({
-        POLAR_ACCESS_TOKEN: 'polar_at',
-        POLAR_WEBHOOK_SECRET: 'whsec_x',
-        POLAR_ENVIRONMENT: 'staging',
-        POLAR_PRODUCT_ID_MONTHLY: 'prod-m',
-        POLAR_PRODUCT_ID_ANNUAL: 'prod-a',
-      })
-    );
+    const errors = validateEnv(validEnv({ ...POLAR_CORE, POLAR_ENVIRONMENT: 'staging' }));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/POLAR_ENVIRONMENT must be 'sandbox' or 'production'/);
   });

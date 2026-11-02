@@ -1,7 +1,7 @@
 import { TASK_STATUS_TERMINAL, type TaskStatus } from '@talyn/shared';
 import { domainEvents } from '../events.js';
 import { runWithoutScope } from '../../db/client.js';
-import { resolveEntitlement } from '../billing/entitlements.js';
+import { ownerHasAutoFeatures } from '../billing/entitlements.js';
 import { settleFixRun } from './fix.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { startReviewCycle, workspaceOwner, workspaceReviewSettings } from './cycle.js';
@@ -84,8 +84,7 @@ async function onSnapshot(
   // account that later downgrades would otherwise keep reviewing every pull request
   // for ever on a plan that does not include it.
   const ownerId = await workspaceOwner(workspaceId);
-  const entitlement = await resolveEntitlement(ownerId);
-  if (entitlement.plan !== 'unlimited') return;
+  if (!(await ownerHasAutoFeatures(ownerId))) return;
 
   // Only when the head has actually moved past what the findings describe, which
   // is what makes this idempotent against an event that fires on every poll: a
@@ -116,7 +115,9 @@ async function onSnapshot(
     // shouts on every ordinary refusal trains people to ignore the log.
     // `no_reviewers` is the workspace's own setup, and it is the answer on every
     // push to a repository none of its reviewers covers.
-    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy' && outcome.code !== 'no_reviewers') {
+    // `deferred` is the plan refusing a box: recorded on the review once, and
+    // handed back on every snapshot until the owner hold ends.
+    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy' && outcome.code !== 'no_reviewers' && outcome.code !== 'deferred') {
       console.log(`[code-review] auto review for ${prId} declined: ${outcome.code}`);
     }
   }

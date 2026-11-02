@@ -5,7 +5,6 @@ import {
   pullRequests as pullRequestsTable,
 } from '../../db/schema.js';
 import { runWithoutScope } from '../../db/client.js';
-import { withMergeQueueLimitGate } from '../billing/entitlements.js';
 import { disableAutoMerge, markReadyForReview } from '../githubAutoMerge.js';
 import { prMonitorService } from '../prMonitor.js';
 import { emitPullRequestUpdated } from '../websocket.js';
@@ -253,34 +252,22 @@ export function broadcastPositionsAfterQueueWrite(workspaceId: string): void {
 }
 
 /**
- * The whole per-call enqueue/dequeue for ONE pull request: the plan gate, the
- * bookkeeping, the draft publish or the cleared badge, the position rebroadcast,
- * and the evaluation kick that merges an already-clean PR without waiting for
- * the reconciler.
+ * The whole per-call enqueue/dequeue for ONE pull request: the bookkeeping,
+ * the draft publish or the cleared badge, the position rebroadcast, and the
+ * evaluation kick that merges an already-clean PR without waiting for the
+ * reconciler.
  *
- * `ownerId` rather than "the calling user" on purpose: a workflow enqueues with
- * no request behind it, and the plan allowance belongs to the workspace's owner
- * either way. Throws `MergeQueueLimitError` when a free owner is at the cap —
- * the route turns that into a 402, and the workflow engine records it as the
- * action's failure code.
+ * Queueing is free: no plan caps how many PRs wait. A fix run the queue
+ * starts is gated where it is created (`createCloudTask`).
  */
 export async function setQueueMembership(opts: {
   row: QueueMembershipRow;
   enabled: boolean;
   method: string;
   trigger: string;
-  ownerId: string;
 }): Promise<void> {
-  const { row, enabled, method, trigger, ownerId } = opts;
-  const apply = () => applyQueueMembership(row, { enabled, method, trigger });
-
-  if (enabled) {
-    // Free-plan queue cap. The PR itself is excluded from the count so
-    // re-arming an already-queued PR never self-blocks.
-    await withMergeQueueLimitGate(ownerId, { excludePrId: row.id }, apply);
-  } else {
-    await apply();
-  }
+  const { row, enabled, method, trigger } = opts;
+  await applyQueueMembership(row, { enabled, method, trigger });
 
   // When disabling, the row is no longer in the queue so the group rebroadcast
   // below will not touch it — emit its cleared badge explicitly here.

@@ -2,13 +2,15 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import {
+  boxRefusalReason,
   buildReviewFixPrompt,
   type CodeReviewPhase,
   type CodeReviewSeverity,
 } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { captureFixSettled } from './analytics.js';
-import { TaskLimitError } from '../billing/entitlements.js';
+import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
+import { boxDeferral, boxDeferralEventCode, type BoxDeferral } from '../billing/boxDeferral.js';
 import { createCloudTask } from '../taskCreate.js';
 import { githubService } from '../github.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
@@ -49,7 +51,20 @@ import { workspaceReviewSettings } from './cycle.js';
 
 export type FixOutcome =
   | { ok: true; taskId: string }
-  | { ok: false; code: 'nothing_selected' | 'busy' | 'no_provider' | 'deferred'; message: string };
+  | { ok: false; code: 'nothing_selected' | 'busy' | 'no_provider'; message: string }
+  | {
+      /**
+       * The plan refused the fix run's box. The review is back at `ready`
+       * with the refusal as its last error, so the findings stay actionable.
+       * The route answers a person with a 402 carrying `error`'s notice; an
+       * automatic fix just records it.
+       */
+      ok: false;
+      code: 'deferred';
+      message: string;
+      deferral: BoxDeferral;
+      error: BoxGateError;
+    };
 
 export async function startFixRun(
   review: ReviewRow,
@@ -151,27 +166,21 @@ export async function startFixRun(
         cycle: review.cycle,
         findingIds: findings.map((f) => f.id),
       },
+      // A person pressed Fix: their refusal is a 402, not a deferral.
+      unattended: userId === null,
     });
   } catch (err) {
-    if (err instanceof TaskLimitError) {
-      // The plan's TASK cap, not its review cap — the user is allowed this cycle
-      // and simply has no machine slot for it yet. Rolled back to `ready` so the
-      // findings stay actionable, reported as a visible wait rather than a
-      // refusal, and retried when a task finishes. Exactly what the merge queue
-      // does with the same collision.
-      await rollBackToReady(review, review.version + 1, 'deferred_task_limit', 'Waiting for a task slot.');
+    if (isBoxGateError(err)) {
+      // The plan refused the box: a full concurrent-box cap or used-up hours.
+      // Rolled back to `ready` so the findings stay actionable, with the
+      // gate's own sentence as the review's last error and its event.
+      await rollBackToReady(review, review.version + 1, boxDeferralEventCode(err), err.message);
       void captureWorkspaceEvent(review.workspaceId, 'paywall_deferred', {
         source: 'code_review',
-        gate: 'task_limit',
-        limit: err.limit,
-        active: err.active,
+        gate: boxRefusalReason(err.code),
+        ...(err.notice.limit !== undefined ? { limit: err.notice.limit, active: err.notice.active } : {}),
       });
-      return {
-        ok: false,
-        code: 'deferred',
-        message:
-          'Your other tasks are using every slot on the free plan. This fix will start when one finishes.',
-      };
+      return { ok: false, code: 'deferred', message: err.message, deferral: boxDeferral(err), error: err };
     }
     await rollBackToReady(
       review,

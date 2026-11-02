@@ -101,6 +101,10 @@ export const users = pgTable(
     // Timestamp of the last-applied Polar event for this subscription —
     // out-of-order webhook deliveries older than this are ignored.
     subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
+    // The Polar product of the subscription (migration 0100), written by the
+    // webhook. The usage tier follows it; null on a granting subscription
+    // reads as Legacy Pro (it predates the Pro product).
+    polarProductId: text('polar_product_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -165,6 +169,10 @@ export const teams = pgTable(
     currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
     cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
     subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
+    // The tier each seat gives (migration 0100): 'pro' | 'legacy_pro'. Teams
+    // bought before usage billing keep Legacy Pro terms.
+    tier: text('tier').notNull().default('legacy_pro'),
+    polarProductId: text('polar_product_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -216,6 +224,133 @@ export const teamSeats = pgTable(
     teamIdx: index('idx_team_seats_team').on(t.teamId),
   })
 );
+
+// ---------- Usage billing (migration 0100) ----------
+//
+// The box-hour ledger and USD credits. Money is integer micro-dollars, usage
+// is integer weighted seconds (see packages/shared/src/pricing.ts). Every
+// table is backend-pool-only, like the team tables: RLS on, no policy, no
+// talyn_backend grant. No jsonb anywhere, and budget reads are counters, so a
+// hot path reads one row.
+
+/**
+ * One stretch of time a fleet box runs. At most one open interval per box
+ * (the partial unique index), and `billed_through` is the charge step's CAS
+ * cursor, so two replicas never bill the same seconds.
+ */
+export const usageIntervals = pgTable(
+  'usage_intervals',
+  {
+    id: text('id').primaryKey(),
+    // No FK, like billing_events: the audit must survive an account wipe.
+    ownerId: text('owner_id').notNull(),
+    workspaceId: text('workspace_id'),
+    subjectKind: text('subject_kind').notNull(), // UsageSubjectKind
+    subjectId: text('subject_id').notNull(),
+    sandboxId: text('sandbox_id').notNull(),
+    size: text('size').notNull(), // SandboxSize
+    // SIZE_WEIGHT at open time, for audit. The charge math reads `size`.
+    weight: numeric('weight', { precision: 4, scale: 2 }).notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    endReason: text('end_reason'), // EndReason
+    billedThrough: timestamp('billed_through', { withTimezone: true }).notNull(),
+    billedWsec: bigint('billed_wsec', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    openUq: uniqueIndex('uq_usage_intervals_open').on(t.sandboxId).where(sql`${t.endedAt} IS NULL`),
+    ownerOpenIdx: index('idx_usage_intervals_owner_open').on(t.ownerId).where(sql`${t.endedAt} IS NULL`),
+    unbilledIdx: index('idx_usage_intervals_unbilled')
+      .on(t.ownerId)
+      .where(sql`${t.endedAt} IS NULL OR ${t.billedThrough} < ${t.endedAt}`),
+    ownerStartedIdx: index('idx_usage_intervals_owner_started').on(t.ownerId, t.startedAt),
+  })
+);
+
+/** One owner's usage in one monthly period. Counters, stamped once per threshold. */
+export const usagePeriods = pgTable(
+  'usage_periods',
+  {
+    ownerId: text('owner_id').notNull(),
+    periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+    periodEnd: timestamp('period_end', { withTimezone: true }).notNull(),
+    tier: text('tier').notNull(), // PlanTier
+    includedWsec: bigint('included_wsec', { mode: 'number' }).notNull(),
+    usedWsec: bigint('used_wsec', { mode: 'number' }).notNull().default(0),
+    creditMicrosUsed: bigint('credit_micros_used', { mode: 'number' }).notNull().default(0),
+    // Overage the credits could not cover (a turn or task that finished after
+    // the budget ran out). Recorded, not billed.
+    uncoveredMicros: bigint('uncovered_micros', { mode: 'number' }).notNull().default(0),
+    alert50At: timestamp('alert_50_at', { withTimezone: true }),
+    alert80At: timestamp('alert_80_at', { withTimezone: true }),
+    alert100At: timestamp('alert_100_at', { withTimezone: true }),
+    exhaustedAt: timestamp('exhausted_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'usage_periods_pkey', columns: [t.ownerId, t.periodStart] }),
+  })
+);
+
+/** USD credit from one purchase or grant, with its own expiry. */
+export const creditLots = pgTable(
+  'credit_lots',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    totalMicros: bigint('total_micros', { mode: 'number' }).notNull(),
+    remainingMicros: bigint('remaining_micros', { mode: 'number' }).notNull(),
+    source: text('source').notNull(), // CreditLotSource
+    polarOrderId: text('polar_order_id'),
+    purchasedAt: timestamp('purchased_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    polarOrderUq: uniqueIndex('uq_credit_lots_polar_order').on(t.polarOrderId),
+    ownerLiveIdx: index('idx_credit_lots_owner_live')
+      .on(t.ownerId, t.expiresAt)
+      .where(sql`${t.remainingMicros} > 0`),
+  })
+);
+
+/** Append-only audit of every credit movement. Never read on a hot path. */
+export const creditLedger = pgTable(
+  'credit_ledger',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    lotId: text('lot_id').references(() => creditLots.id, { onDelete: 'set null' }),
+    deltaMicros: bigint('delta_micros', { mode: 'number' }).notNull(),
+    // 'purchase' | 'auto_topup' | 'grant' | 'burn' | 'expire' | 'refund'
+    reason: text('reason').notNull(),
+    intervalId: text('interval_id'),
+    periodStart: timestamp('period_start', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    ownerIdx: index('idx_credit_ledger_owner').on(t.ownerId, t.createdAt),
+  })
+);
+
+/** An owner's auto top-up policy and its monthly spend counter. */
+export const autoTopupSettings = pgTable('auto_topup_settings', {
+  ownerId: text('owner_id').primaryKey(),
+  enabled: boolean('enabled').notNull().default(false),
+  triggerMicros: bigint('trigger_micros', { mode: 'number' }).notNull().default(5_000_000),
+  pack: text('pack').notNull().default('25'), // CreditPackId
+  monthlyLimitMicros: bigint('monthly_limit_micros', { mode: 'number' }).notNull().default(100_000_000),
+  // 'YYYY-MM' (UTC) that month_spent_micros belongs to.
+  monthKey: text('month_key'),
+  monthSpentMicros: bigint('month_spent_micros', { mode: 'number' }).notNull().default(0),
+  // CAS claim: one charge at a time.
+  inflightOrderId: text('inflight_order_id'),
+  inflightStartedAt: timestamp('inflight_started_at', { withTimezone: true }),
+  lastFailure: text('last_failure'),
+  lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ---------- Admin audit log (operator console) ----------
 //

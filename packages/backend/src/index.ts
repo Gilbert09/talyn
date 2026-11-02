@@ -49,6 +49,8 @@ import {
   initCodeReviewReconciler,
 } from './services/codeReview/reconciler.js';
 import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
+import { initUsageMeter, usageMeter } from './services/billing/usage/meter.js';
+import { initBoxDeferrals } from './services/billing/boxDeferral.js';
 import {
   featureFlagsEvaluateLocally,
   isFeatureFlagServiceConfigured,
@@ -208,6 +210,12 @@ async function main() {
   // OWNER before it spends a single GraphQL point, and a pass that finds
   // nobody in the audience costs one `SELECT id FROM workspaces` an hour.
   initReviewPrioritySweep();
+
+  // Usage billing: bills running fleet boxes every minute and reconciles the
+  // ledger with the fleet. Armed unconditionally: metering runs everywhere,
+  // and enforcement inside it only acts when the POLAR_* env group is set.
+  initUsageMeter();
+  initBoxDeferrals();
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
   // services read them (the plaintext read fallbacks are gone). Per-row
@@ -481,6 +489,7 @@ async function main() {
     dbWatchdog.shutdown();
     githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
+    usageMeter.stop();
     prAutoMergeWatcher.shutdown();
     mergeQueueReconciler.shutdown();
     postHogCodeStreamer.shutdownAll();

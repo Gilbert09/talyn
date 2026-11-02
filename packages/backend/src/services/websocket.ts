@@ -12,6 +12,8 @@ import type {
   AutoKeepNeedsHumanEvent,
   Task,
   TaskStatus,
+  UsageAlertEvent,
+  UsageExhaustedEvent,
   WorkflowRun,
   WSEvent,
 } from '@talyn/shared';
@@ -768,6 +770,26 @@ export function emitSubscriptionUpdated(ownerId: string, status: BillingStatus):
   broadcastToUser(ownerId, {
     type: 'subscription:updated',
     payload: status,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// Usage billing: a threshold of the included box-hours was crossed. Fired once
+// per threshold per period by the usage meter.
+export function emitUsageAlert(ownerId: string, alert: UsageAlertEvent): void {
+  broadcastToUser(ownerId, {
+    type: 'billing:usage_alert',
+    payload: alert,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// Usage billing: included hours and credits are spent. Fired once per
+// exhaustion (the period's exhausted_at stamp).
+export function emitUsageExhausted(ownerId: string, event: UsageExhaustedEvent): void {
+  broadcastToUser(ownerId, {
+    type: 'billing:exhausted',
+    payload: event,
     timestamp: new Date().toISOString(),
   });
 }

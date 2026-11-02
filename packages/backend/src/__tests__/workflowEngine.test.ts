@@ -22,7 +22,9 @@ import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
 import * as prSessions from '../services/workbenches/prSessions.js';
 import * as taskCreate from '../services/taskCreate.js';
-import { TaskLimitError } from '../services/billing/entitlements.js';
+import * as reviewCycle from '../services/codeReview/cycle.js';
+import { boxDeferral } from '../services/billing/boxDeferral.js';
+import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import * as analytics from '../services/analytics.js';
 
 /**
@@ -413,6 +415,29 @@ describe('workflow engine', () => {
       expect(outcome?.error).toContain('"paris"');
     });
 
+    it.each([
+      ['box cap', () => new ConcurrentBoxLimitError(2, 2), 'box_limit_reached', 'pending_retry'],
+      ['exhausted', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 7 * 86_400_000) }), 'usage_exhausted', 'pending_retry'],
+      ['size', () => new SizeRequiresProError({ tier: 'free', size: 'large' }), 'size_requires_pro', 'failed'],
+    ] as const)('a code review the plan deferred (%s) parks like a task would', async (_label, make, code, status) => {
+      const err = make();
+      vi.spyOn(reviewCycle, 'startReviewCycle').mockResolvedValue({
+        ok: false,
+        code: 'deferred',
+        message: err.message,
+        deferral: boxDeferral(err),
+        error: err,
+      });
+      await addWorkflow({ actions: [{ type: 'run_code_review' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const [run] = await db.select().from(runsTable);
+      expect(run?.status).toBe(status);
+      expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe(code);
+      expect(run?.retryAfter === null).toBe(status === 'failed');
+    });
+
     it('keeps the outcome when the task it links to has vanished', async () => {
       // A task deleted mid-run (or a PR un-watched, which deletes its row) must
       // not cost the run its record: the outcome is the history, the link is a
@@ -432,16 +457,35 @@ describe('workflow engine', () => {
       expect((run?.actions as Array<{ ok: boolean }>)[0]?.ok).toBe(true);
     });
 
-    it('records the plan cap as a refusal rather than throwing', async () => {
-      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(new TaskLimitError(3, 3, 1));
+    const PERIOD_END = new Date(Date.now() + 7 * 86_400_000);
+    it.each([
+      // A full box cap and used-up hours both clear on their own: the action
+      // PARKS like a rate-gated one, at the refusal's own recheck time.
+      ['box cap', new ConcurrentBoxLimitError(2, 2), 'box_limit_reached', 'pending_retry', 30_000],
+      ['exhausted', new UsageExhaustedError({ tier: 'free', periodEnd: PERIOD_END }), 'usage_exhausted', 'pending_retry', 15 * 60_000],
+      // A size the plan cannot start does not clear by waiting.
+      ['size', new SizeRequiresProError({ tier: 'free', size: 'large' }), 'size_requires_pro', 'failed', null],
+    ] as const)('records a %s refusal rather than throwing', async (_label, err, code, status, retryInMs) => {
+      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(err);
       await addWorkflow({ actions: [{ type: 'run_prompt', prompt: 'Review this' }] });
 
+      const before = Date.now();
       await evaluateWorkflowsForDelivery(delivery(), [target]);
 
       const [run] = await db.select().from(runsTable);
-      expect(run?.status).toBe('failed');
+      expect(run?.status).toBe(status);
       expect(run?.taskId).toBeNull();
-      expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('task_limit_reached');
+      const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
+      expect(outcome?.code).toBe(code);
+      expect(outcome?.error).toBe(err.message);
+      if (retryInMs === null) {
+        expect(run?.retryAfter).toBeNull();
+      } else {
+        const due = run!.retryAfter!.getTime() - before;
+        expect(due).toBeGreaterThanOrEqual(retryInMs);
+        // The schedule's grace is seconds, never another recheck.
+        expect(due).toBeLessThan(retryInMs + 60_000);
+      }
     });
   });
 

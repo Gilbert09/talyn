@@ -10,7 +10,7 @@ let flag = true;
 vi.mock('../services/workbenches/store.js', () => ({ getWorkbench }));
 vi.mock('../services/workbenches/sandboxFiles.js', () => ({ writeSandboxFiles }));
 vi.mock('../services/workbenches/sandboxRuntime.js', () => ({
-  repoDirFor: () => '/work/acme/app', runCapture, recordWorkbenchEvent: vi.fn(),
+  SANDBOX_WORK_ROOT: '/work', repoDirFor: () => '/work/acme/app', runCapture, recordWorkbenchEvent: vi.fn(),
 }));
 vi.mock('../services/workbenches/access.js', () => ({
   userMayUseWorkbenches: async () => flag, workbenchesRefusalReason: () => 'disabled',

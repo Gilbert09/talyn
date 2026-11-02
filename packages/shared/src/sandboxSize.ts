@@ -1,6 +1,10 @@
-/** The ordered sizes supply resources and labels to the backend and both apps. */
+/**
+ * The ordered sizes supply resources and labels to the backend and both apps.
+ * `small` and `standard` both have 4 GB; CPU is what tells them apart, so match
+ * a fleet box to a size with {@link sandboxSizeForResources}, not by memory alone.
+ */
 export const SANDBOX_SIZES = {
-  small: { memMib: 2048, milliVcpu: 2000, label: 'Small · 2 GB', hint: 'Docs and scripts' },
+  small: { memMib: 4096, milliVcpu: 2000, label: 'Small · 2 vCPU', hint: 'Docs, scripts and unattended runs' },
   standard: { memMib: 4096, milliVcpu: 4000, label: 'Standard · 4 GB', hint: 'Most repos' },
   medium: { memMib: 8192, milliVcpu: 4000, label: 'Medium · 8 GB', hint: 'Big builds, one database' },
   large: { memMib: 12288, milliVcpu: 6000, label: 'Large · 12 GB', hint: 'Full test stacks' },
@@ -35,6 +39,20 @@ export interface RepositorySandboxSizeResponse {
   detected: CachedSandboxSize | null;
   /** What a new session gets today: the setting, else the detected size, else standard. */
   effective: SandboxSize;
+}
+
+/**
+ * The size a box with these resources was created at. With `milliVcpu` both
+ * must match. With memory alone, a tie (`small` and `standard` share 4 GB)
+ * reads as `standard`, the default size. Null when nothing matches.
+ */
+export function sandboxSizeForResources(memMib: number | null | undefined, milliVcpu?: number | null): SandboxSize | null {
+  if (!memMib) return null;
+  const matches = (Object.keys(SANDBOX_SIZES) as SandboxSize[]).filter(
+    (size) => SANDBOX_SIZES[size].memMib === memMib && (!milliVcpu || SANDBOX_SIZES[size].milliVcpu === milliVcpu),
+  );
+  if (matches.includes('standard')) return 'standard';
+  return matches[0] ?? null;
 }
 
 /** Resolution order: the person's choice, then detection, then standard. */

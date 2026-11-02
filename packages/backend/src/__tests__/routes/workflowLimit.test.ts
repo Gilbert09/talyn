@@ -2,11 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
-import {
-  FREE_PLAN_WORKFLOW_LIMIT,
-  validateWorkflow,
-  WORKFLOW_LIMIT_ERROR_CODE,
-} from '@talyn/shared';
+import { validateWorkflow, WORKFLOW_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { workflowRoutes } from '../../routes/workflows.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -18,14 +14,10 @@ import { _resetWorkflowStore, createWorkflow } from '../../services/workflows/st
 import { eq } from 'drizzle-orm';
 
 /**
- * Free-plan workflow cap at the route surface: POST /workflows must 402 with
- * WORKFLOW_LIMIT_ERROR_CODE once the owner keeps FREE_PLAN_WORKFLOW_LIMIT
- * workflows — counted across EVERY workspace they own, because the limit is
- * per user and a second workspace is free to make.
- *
- * Uses the REAL apiErrorHandler, so the status/code contract pinned here is the
- * one production serves. Enforcement is unconditional: the CLI, the MCP server
- * and plain `curl` hit the same gate the desktop does.
+ * POST /workflows has no plan cap any more: usage billing removed the free
+ * plan's three-workflow limit. These tests pin that a workflow is never
+ * refused for a count, on any tier, with billing on or off. Uses the REAL
+ * apiErrorHandler.
  */
 
 const OTHER_USER_ID = 'user-other';
@@ -53,7 +45,7 @@ async function makeServer(): Promise<{ url: string; close: () => Promise<void> }
   };
 }
 
-describe('free-plan workflow limit at the route surface', () => {
+describe('POST /workflows has no plan cap', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let url: string;
@@ -83,14 +75,6 @@ describe('free-plan workflow limit at the route surface', () => {
     return ((await res.json()) as { data: unknown[] }).data.length;
   }
 
-  /** Fill the owner's allowance, spread across both of their workspaces. */
-  async function fillAllowance(): Promise<void> {
-    for (let i = 0; i < FREE_PLAN_WORKFLOW_LIMIT; i++) {
-      const res = await post({ workspaceId: i % 2 === 0 ? 'ws-mine' : 'ws-second' });
-      expect(res.status).toBe(200);
-    }
-  }
-
   beforeEach(async () => {
     ({ db, cleanup } = await createTestDb());
     process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
@@ -116,102 +100,44 @@ describe('free-plan workflow limit at the route surface', () => {
     await cleanup();
   });
 
-  it('402s with the workflow code once a free owner is at the limit', async () => {
-    await fillAllowance();
-    const res = await post();
-    expect(res.status).toBe(402);
-    const json = (await res.json()) as { code: string; error: string };
-    expect(json.code).toBe(WORKFLOW_LIMIT_ERROR_CODE);
-    expect(json.error).toMatch(new RegExp(`${FREE_PLAN_WORKFLOW_LIMIT} workflows`));
-    // Refused, not silently created.
-    expect((await countIn('ws-mine')) + (await countIn('ws-second'))).toBe(
-      FREE_PLAN_WORKFLOW_LIMIT
-    );
-  });
+  // Usage billing removed the workflow cap (it was 3 on the free plan). A rule
+  // spends nothing by existing; a run it starts is a box, gated where the task
+  // is created.
+  const MANY = 8;
 
-  it('creates normally below the limit', async () => {
-    for (let i = 0; i < FREE_PLAN_WORKFLOW_LIMIT - 1; i++) {
-      expect((await post()).status).toBe(200);
+  it.each([
+    { label: 'free', set: {} },
+    { label: 'old Unlimited subscriber', set: { plan: 'unlimited' } },
+    { label: 'comp', set: { planOverride: 'unlimited' } },
+    { label: 'legacy_pro override', set: { planOverride: 'legacy_pro' } },
+  ])('a $label owner keeps any number of workflows across workspaces', async ({ set }) => {
+    if (Object.keys(set).length) await db.update(usersTable).set(set).where(eq(usersTable.id, TEST_USER_ID));
+    for (let i = 0; i < MANY; i++) {
+      expect((await post({ workspaceId: i % 2 === 0 ? 'ws-mine' : 'ws-second' })).status).toBe(200);
     }
-    expect((await post()).status).toBe(200);
+    expect((await countIn('ws-mine')) + (await countIn('ws-second'))).toBe(MANY);
   });
 
-  it('counts every workspace the owner has — a second one is not a second allowance', async () => {
-    await fillAllowance();
-    // A brand-new workspace does not reset anything.
-    expect((await post({ workspaceId: 'ws-second' })).status).toBe(402);
+  it('disabled workflows are never refused either', async () => {
+    for (let i = 0; i < MANY; i++) expect((await post({ enabled: false })).status).toBe(200);
   });
 
-  it('another owner’s workflows never eat a slot', async () => {
-    // Seeded through the store rather than the route: these belong to a
-    // workspace this caller cannot post to, which is exactly the point.
-    for (let i = 0; i < FREE_PLAN_WORKFLOW_LIMIT; i++) {
+  it('another owner’s workflows change nothing', async () => {
+    for (let i = 0; i < MANY; i++) {
       await createWorkflow('ws-theirs', validateWorkflow(body({ workspaceId: 'ws-theirs' })));
     }
-    await fillAllowance();
-    // Our own allowance is what refused us, at our own count — not theirs.
-    const res = await post();
-    expect(res.status).toBe(402);
-    expect(((await res.json()) as { error: string }).error).toMatch(
-      new RegExp(`\\(${FREE_PLAN_WORKFLOW_LIMIT} in use\\)`)
-    );
+    expect((await post()).status).toBe(200);
   });
 
-  it('a disabled workflow still occupies its slot', async () => {
-    for (let i = 0; i < FREE_PLAN_WORKFLOW_LIMIT; i++) {
-      expect((await post({ enabled: false })).status).toBe(200);
+  it('is never refused with the old workflow code, billing on or off', async () => {
+    for (const billing of [true, false]) {
+      if (billing) process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
+      else delete process.env.POLAR_ACCESS_TOKEN;
+      for (let i = 0; i < 4; i++) {
+        const res = await post();
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { code?: string }).code).not.toBe(WORKFLOW_LIMIT_ERROR_CODE);
+      }
     }
-    expect((await post()).status).toBe(402);
-  });
-
-  it('editing an existing workflow at the limit is never gated', async () => {
-    await fillAllowance();
-    const listed = await fetch(`${url}/workflows?workspaceId=ws-mine`, { headers });
-    const [first] = ((await listed.json()) as { data: { id: string }[] }).data;
-    const res = await fetch(`${url}/workflows/${first.id}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ name: 'Renamed at the limit', enabled: false }),
-    });
-    expect(res.status).toBe(200);
-    // And switching it back ON is an edit too, not a new workflow.
-    const back = await fetch(`${url}/workflows/${first.id}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(back.status).toBe(200);
-  });
-
-  it('deleting a workflow frees its slot', async () => {
-    await fillAllowance();
-    expect((await post()).status).toBe(402);
-    const listed = await fetch(`${url}/workflows?workspaceId=ws-mine`, { headers });
-    const [first] = ((await listed.json()) as { data: { id: string }[] }).data;
-    expect(
-      (await fetch(`${url}/workflows/${first.id}`, { method: 'DELETE', headers })).status
-    ).toBe(200);
-    expect((await post()).status).toBe(200);
-  });
-
-  it('comped (plan_override) owners are unlimited', async () => {
-    await db
-      .update(usersTable)
-      .set({ planOverride: 'unlimited' })
-      .where(eq(usersTable.id, TEST_USER_ID));
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
-  });
-
-  it('subscribed owners are unlimited', async () => {
-    await db.update(usersTable).set({ plan: 'unlimited' }).where(eq(usersTable.id, TEST_USER_ID));
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
-  });
-
-  it('is off entirely when billing is not configured', async () => {
-    delete process.env.POLAR_ACCESS_TOKEN;
-    await fillAllowance();
-    expect((await post()).status).toBe(200);
   });
 });

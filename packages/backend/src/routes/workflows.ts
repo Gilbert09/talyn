@@ -3,8 +3,7 @@ import type { ApiResponse } from '@talyn/shared';
 import { validateWorkflow } from '@talyn/shared';
 import type { NormalizedWorkflow } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { withWorkflowLimitGate } from '../services/billing/entitlements.js';
+import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   countWorkflows,
   createWorkflow,
@@ -181,12 +180,9 @@ export function workflowRoutes(): Router {
         error: err instanceof Error ? err.message : 'invalid workflow',
       });
     }
-    // Free-plan cap on how many workflows an owner keeps, counted across every
-    // workspace they own. WorkflowLimitError → 402 via the error middleware.
-    // Creation only: a PATCH replaces a rule rather than adding one.
-    const data = await withWorkflowLimitGate(assertUser(req).id, () =>
-      createWorkflow(workspaceId, normalized)
-    );
+    // No plan caps how many workflows an owner keeps. A run a workflow starts
+    // is gated where its task is created.
+    const data = await createWorkflow(workspaceId, normalized);
     // Server-side, not from the client: `workflow_ran` can tell us how often
     // workflows FIRE but not how many people build one, and a user whose three
     // workflows never match is indistinguishable from a user who built none.

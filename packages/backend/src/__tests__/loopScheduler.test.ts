@@ -13,7 +13,7 @@ import {
 } from '../db/schema.js';
 import { createLoop } from '../services/loops/store.js';
 import { loopScheduler } from '../services/loops/scheduler.js';
-import { TaskLimitError } from '../services/billing/entitlements.js';
+import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import * as taskCreate from '../services/taskCreate.js';
 import * as fleetAccess from '../services/cloudProviders/fleetAccess.js';
 import * as registry from '../services/cloudProviders/registry.js';
@@ -296,22 +296,39 @@ describe('loop scheduler', () => {
   });
 
   describe('the plan limit', () => {
-    it('parks the run visibly rather than losing it', async () => {
+    const PERIOD_END = new Date(Date.now() + 7 * 86_400_000);
+    it.each([
+      ['box cap', () => new ConcurrentBoxLimitError(2, 2), 'waiting_slot', 'box_limit_reached', 30_000],
+      // Used-up hours wait a quarter hour (or the reset, if sooner), never
+      // one sweep: an exhausted owner's loop must not ask every 30 seconds.
+      ['exhausted', () => new UsageExhaustedError({ tier: 'free', periodEnd: PERIOD_END }), 'waiting_slot', 'usage_exhausted', 15 * 60_000],
+      ['exhausted, reset in 5 min', () => new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 5 * 60_000) }), 'waiting_slot', 'usage_exhausted', 5 * 60_000],
+      ['size', () => new SizeRequiresProError({ tier: 'free', size: 'large' }), 'failed', 'size_requires_pro', null],
+    ] as const)('parks a %s refusal visibly rather than losing it', async (_label, make, status, code, retryInMs) => {
       // There is no request to answer with a 402 and no modal to open, so the
       // run row IS the notification. A silent deferral is why the paywall read
       // as never firing.
-      createTask.mockRejectedValueOnce(new TaskLimitError(3, 3));
+      const err = make();
+      createTask.mockRejectedValueOnce(err);
       const loop = await dueLoop(db);
+      const before = Date.now();
       await loopScheduler.tick();
 
       const [run] = await runsFor(db, loop.id);
-      expect(run.status).toBe('waiting_slot');
-      expect(run.failureCode).toBe('task_limit_reached');
-      expect(run.retryAfter).toBeTruthy();
+      expect(run.status).toBe(status);
+      expect(run.failureCode).toBe(code);
+      expect(run.error).toBe(err.message);
+      if (retryInMs === null) {
+        expect(run.retryAfter).toBeNull();
+      } else {
+        const due = run.retryAfter!.getTime() - before;
+        expect(due).toBeGreaterThan(retryInMs - 5_000);
+        expect(due).toBeLessThanOrEqual(retryInMs + 5_000);
+      }
     });
 
     it('retries a parked run once its retry is due', async () => {
-      createTask.mockRejectedValueOnce(new TaskLimitError(3, 3));
+      createTask.mockRejectedValueOnce(new ConcurrentBoxLimitError(3, 3));
       const loop = await dueLoop(db);
       await loopScheduler.tick();
       await db
@@ -329,7 +346,7 @@ describe('loop scheduler', () => {
     it('gives up when the NEXT occurrence has been claimed, not after N tries', async () => {
       // Supersession rather than an attempt cap: a cron payload is "it is
       // time", which does not go stale until the next time arrives.
-      createTask.mockRejectedValue(new TaskLimitError(3, 3));
+      createTask.mockRejectedValue(new ConcurrentBoxLimitError(3, 3));
       const loop = await dueLoop(db);
       await loopScheduler.tick();
 
@@ -352,7 +369,7 @@ describe('loop scheduler', () => {
 
       const parked = (await runsFor(db, loop.id)).find((r) => r.id !== 'newer');
       expect(parked?.status).toBe('skipped');
-      expect(parked?.failureCode).toBe('task_limit_reached');
+      expect(parked?.failureCode).toBe('box_limit_reached');
     });
   });
 
@@ -454,7 +471,7 @@ describe('loop scheduler', () => {
       // Already reported as `paywall_deferred` by the dispatcher, which knows
       // the limit and the plan. Reporting it twice would double-count refusals.
       await dueLoop(db);
-      createTask.mockRejectedValueOnce(new TaskLimitError(3, 3));
+      createTask.mockRejectedValueOnce(new ConcurrentBoxLimitError(3, 3));
 
       const capture = captureSpy();
       await loopScheduler.tick();

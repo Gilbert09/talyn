@@ -273,6 +273,7 @@ describe('workbench routes', () => {
       expect((await getWorkbench(wb.id))?.settings).toEqual({
         internetAccess: false,
         fleetSandboxId: `${sandboxIdFor(wb.id)}--3542ee`,
+        boxSize: 'standard',
       });
     });
 
@@ -358,7 +359,9 @@ describe('workbench routes', () => {
       [false, false],
     ] as const)('stores internetAccess %s and creates the box with access %s', async (flag, open) => {
       const wb = await createSandboxWorkbench(flag === undefined ? {} : { internetAccess: flag });
-      expect((await getWorkbench(wb.id))?.settings).toEqual(flag === undefined ? {} : { internetAccess: flag });
+      expect((await getWorkbench(wb.id))?.settings).toEqual(
+        flag === undefined ? { boxSize: 'standard' } : { internetAccess: flag, boxSize: 'standard' },
+      );
       expect(fleet.created[0].policy?.egress).toEqual(open ? { mode: 'open' } : undefined);
     });
 
