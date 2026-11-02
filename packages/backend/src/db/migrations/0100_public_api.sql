@@ -12,9 +12,9 @@
 -- no talyn_backend grant. The `/v1` requests carry no Supabase JWT, and the
 -- management routes scope every query to the caller themselves.
 --
--- Numbered 0101 because tom/workbenches already holds 0100_usage_billing. The
--- drizzle migrator skips a migration whose timestamp is older than the newest
--- applied one, so 0100 must reach production before or with this one.
+-- Shipped before usage billing, which moved to 0101 with a later timestamp.
+-- The drizzle migrator skips a migration whose timestamp is older than the
+-- newest applied one, so a renumbered migration must also get a new timestamp.
 CREATE TABLE IF NOT EXISTS "api_tokens" (
 	"id" text PRIMARY KEY NOT NULL,
 	"owner_id" text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,

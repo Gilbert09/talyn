@@ -6,16 +6,17 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 The public API is a separate mount at `/v1`, served to customers as `api.talyn.dev/v1`. It shares the services with `/api/v1` and nothing else. The design is in `docs/PUBLIC_API.md` and the guides in `docs/api/`.
 
-Personal access tokens (`talyn_pat_`) are the only credential. The table `api_tokens` (migration `0101`) stores the SHA-256 of each token, its scopes, an optional workspace binding and the expiry. The management routes are `/api/v1/api-tokens`; only minting is gated on the `public-api` flag, so a person can always list and revoke. Every `/v1` request checks the same flag against the token owner, and the session routes also check `workbenches`.
+Personal access tokens (`talyn_pat_`) are the only credential. The table `api_tokens` (migration `0100`) stores the SHA-256 of each token, its scopes, an optional workspace binding and the expiry. The management routes are `/api/v1/api-tokens`; only minting is gated on the `public-api` flag, so a person can always list and revoke. Every `/v1` request checks the same flag against the token owner, and the session routes also check `workbenches`.
 
 Phase 1 has `GET /me`, workspaces and repositories (read), sessions (create, list, get, archive, restore, retry), chats (create, get, send a message, cancel), transcript pages and two SSE streams. Each route is declared once in `routes/public/` with its scope and its zod schemas. The router mounts the declarations, and `docs/api/openapi.json` is generated from them (`npm run openapi:generate -w @talyn/backend`). `openapi.contract.test.ts` fails when the committed file and the routes disagree.
 
 Things that did not go as first planned:
 - The per-IP limit before authentication counts only FAILED authentications. A plain per-IP limit of 300 a minute sat below the per-token limit of 600, so one CI runner with a good token hit the IP limit first.
 - `last_used_at` is written in the request, not after it. A write left running after the response outlived the test database and hung the test run at full CPU.
-- Migration `0101`, not `0100`: `tom/workbenches` holds `0100_usage_billing`. The drizzle migrator skips a migration with an older timestamp than the newest applied one, so `0100` must reach production before or with `0101`.
+- Migration `0100`. It was `0101` on the branch, behind `0100_usage_billing`. It shipped first, so usage billing moved to `0101` with a later `when` stamp. The drizzle migrator skips a migration whose stamp is older than the newest applied one, so a renumber must also restamp.
 - On `main`, session creates go through a seam, `assertSessionPlanAllows` in `services/workbenches/create.ts`, with no cap. On `tom/workbenches` the usage-billing box gate (`assertNewWorkbenchBox`) is the cap, and `/v1` maps its refusals to 402 with the notice in snake_case.
 - No Scalar page on the backend. Its "try it" form takes a token, and a page that loads a CDN script must not hold one. The spec is at `GET /v1/openapi.json`.
+
 ## Coder previews explain each failed check (2026-11-01)
 
 Tom selected "Preview in Coder" and nothing happened. The panel showed five grey circles, every button was disabled, and there was no message. `which coder` found nothing on his Mac. Two causes were found.

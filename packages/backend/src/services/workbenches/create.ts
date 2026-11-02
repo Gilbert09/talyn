@@ -12,6 +12,7 @@ import {
   type WorkbenchSource,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
+import { billingEnabled, resolveEntitlement } from '../billing/entitlements.js';
 import { pullRequests as prTable, repositories as reposTable } from '../../db/schema.js';
 import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { allocateWorkbenchBranch, sessionBranchPrefix, uniqueViolationConstraint } from './branchAllocation.js';
@@ -51,6 +52,21 @@ import { normaliseMessage } from './turns.js';
  */
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * The plan gate for a new sandbox box: a session or a thread. Every creator
+ * passes here (the apps' route, the MCP server through that route, Slack and
+ * the public API), so a cap added here holds for all of them. A refusal is a
+ * plan-limit error the routes turn into a 402.
+ *
+ * TODO(usage billing): there is no session cap on this branch yet, so this
+ * allows every create. The usage-based billing work (`assertNewWorkbenchBox`
+ * in `boxGate.ts` on tom/workbenches) is the gate that goes here.
+ */
+export async function assertSessionPlanAllows(ownerId: string): Promise<void> {
+  if (!billingEnabled()) return;
+  await resolveEntitlement(ownerId);
+}
 
 const refuse = (status: number, message: string, code = ''): WorkbenchError => new WorkbenchError(message, status, code);
 
