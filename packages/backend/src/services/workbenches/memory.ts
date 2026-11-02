@@ -124,6 +124,15 @@ export interface ListMemoryOptions {
  * when asked for.
  */
 export function listMemoriesQuery(workspaceId: string, opts: ListMemoryOptions = {}) {
+  return db()
+    .select({ ...SUMMARY_COLUMNS, body: opts.includeBody ? table.body : sql<string | null>`null` })
+    .from(table)
+    .where(memoryListWhere(workspaceId, opts))
+    .orderBy(asc(isNotNull(table.forgottenAt)), asc(SCOPE_ORDER), asc(sql`lower(${table.name})`));
+}
+
+/** The filter of a list: shared by the app's list and the public API's paged list. */
+export function memoryListWhere(workspaceId: string, opts: Omit<ListMemoryOptions, 'includeBody'> = {}): SQL {
   const where: SQL[] = [eq(table.workspaceId, workspaceId)];
   if (!opts.includeForgotten) where.push(isNull(table.forgottenAt));
   if (opts.scope) {
@@ -138,11 +147,7 @@ export function listMemoriesQuery(workspaceId: string, opts: ListMemoryOptions =
     const pattern = `%${escapeLike(q)}%`;
     where.push(or(ilike(table.name, pattern), ilike(table.description, pattern), ilike(table.body, pattern))!);
   }
-  return db()
-    .select({ ...SUMMARY_COLUMNS, body: opts.includeBody ? table.body : sql<string | null>`null` })
-    .from(table)
-    .where(and(...where))
-    .orderBy(asc(isNotNull(table.forgottenAt)), asc(SCOPE_ORDER), asc(sql`lower(${table.name})`));
+  return and(...where)!;
 }
 
 export async function listMemories(
