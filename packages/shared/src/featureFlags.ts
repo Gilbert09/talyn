@@ -337,6 +337,23 @@ export const FEATURE_FLAGS = {
     availability: 'gated',
     releaseScopes: ['trunk-eta'],
   },
+
+  /**
+   * The public API (`/v1`) and the personal access tokens that call it.
+   *
+   * Fails CLOSED: a token starts sandbox sessions on fleet hardware and spends
+   * the owner's agent subscription, so a PostHog outage must not open that to
+   * every account. Evaluated against the TOKEN OWNER on every `/v1` request
+   * and when a token is minted; listing and revoking tokens are never gated.
+   */
+  publicApi: {
+    posthogKey: 'public-api',
+    envOverride: 'PUBLIC_API_ENABLED',
+    fallback: false,
+    description: 'Public API — personal access tokens and the /v1 endpoints',
+    availability: 'gated',
+    releaseScopes: ['api', 'public-api'],
+  },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -461,6 +478,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'teams',
   'workbenches',
   'trunkMergeEta',
+  'publicApi',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

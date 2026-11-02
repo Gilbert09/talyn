@@ -65,6 +65,9 @@ import type {
   CreateMcpTokenRequest,
   CreateMcpTokenResponse,
   McpToken,
+  ApiToken,
+  CreateApiTokenRequest,
+  CreateApiTokenResponse,
   ApiResponse,
   AutoTopupSettings,
   BillingOrder,
@@ -499,6 +502,16 @@ export const mcpTokens = {
   create: (data: CreateMcpTokenRequest = {}) =>
     request<CreateMcpTokenResponse>('POST', '/mcp-tokens', data),
   revoke: (id: string) => request<void>('DELETE', `/mcp-tokens/${id}`),
+};
+
+/**
+ * Personal access tokens for the public API (`/v1`). Minting needs the
+ * `publicApi` flag; listing and revoking always work.
+ */
+export const apiTokens = {
+  list: () => request<ApiToken[]>('GET', '/api-tokens'),
+  create: (data: CreateApiTokenRequest) => request<CreateApiTokenResponse>('POST', '/api-tokens', data),
+  revoke: (id: string) => request<void>('DELETE', `/api-tokens/${id}`),
 };
 
 // Task metadata generation response
@@ -3131,6 +3144,7 @@ export const api = {
   slack,
   skills,
   mcpTokens,
+  apiTokens,
   debug,
   developer,
   billing,
