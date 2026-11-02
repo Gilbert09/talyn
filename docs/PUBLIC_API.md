@@ -228,6 +228,17 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/chats/{id}/cancel` | `sessions:write` | Stop the running turn |
 | GET | `/chats/{id}/events` | `sessions:read` | Read a transcript page |
 | GET | `/chats/{id}/events/stream` | `sessions:read` | Stream a transcript |
+| GET | `/webhooks` | `webhooks:read` | List webhook endpoints |
+| POST | `/webhooks` | `webhooks:write` | Create a webhook endpoint |
+| GET | `/webhooks/{id}` | `webhooks:read` | Get a webhook endpoint |
+| PATCH | `/webhooks/{id}` | `webhooks:write` | Change, disable or enable a webhook endpoint |
+| DELETE | `/webhooks/{id}` | `webhooks:write` | Delete a webhook endpoint |
+| POST | `/webhooks/{id}/rotate-secret` | `webhooks:write` | Rotate the signing secret |
+| POST | `/webhooks/{id}/test` | `webhooks:write` | Send a `ping` event |
+| GET | `/webhooks/{id}/deliveries` | `webhooks:read` | List the deliveries of an endpoint |
+| GET | `/webhook-deliveries/{id}` | `webhooks:read` | Get a delivery and its payload |
+| POST | `/webhook-deliveries/{id}/redeliver` | `webhooks:write` | Send a delivery again |
+| GET | `/webhook-event-types` | `webhooks:read` | List the event types |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Local sessions
@@ -253,12 +264,12 @@ A session that you start through the API counts against your plan in the same wa
 - [Idempotency](api/idempotency.md): retry a create without a duplicate.
 - [Streaming](api/streaming.md): server-sent events, reconnect, polling.
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
+- [Webhooks](api/webhooks.md): events, signatures, retries and delivery logs.
 
 ## What is not in v1 yet
 
 - Tasks
 - Pull requests
 - Code review
-- Webhooks
 - SDKs
 - Threads beyond `kind: "thread"` on `POST /sessions`

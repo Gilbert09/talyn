@@ -2,6 +2,31 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Public API, phase 2: webhooks (2026-11-02)
+
+Outbound webhooks for `/v1`. A customer registers an https URL, and Talyn sends signed `POST`s to it for session, chat, pull request, merge queue and code review events. The guide is `docs/api/webhooks.md`.
+
+What shipped:
+- Migration `0101_api_webhooks` (`when` 1790900000021): `api_webhook_endpoints` (secret AES-GCM encrypted, previous secret kept for a rotation window, failure streak), `api_webhook_deliveries` (one row per event per endpoint, `UNIQUE (endpoint_id, event_id)`, partial index on pending `next_attempt_at`) and `api_webhook_object_states`. All backend-pool-only, like `api_tokens`.
+- 11 routes under `webhooks:read` / `webhooks:write` (new scopes in `packages/shared/src/publicApi.ts`). The secret is in the create and rotate answers only.
+- `services/apiWebhooks/`: `signing.ts` (Standard Webhooks, checked against the spec vector and the `standardwebhooks` package), `urlPolicy.ts` (SSRF rules), `dispatch.ts` (signals to delivery rows), `worker.ts` (the sender), `signals.ts` (the seam the emitters call).
+- Events: `session.created`, `session.updated`, `session.archived`, `session.pull_request_opened`, `chat.turn_started`, `chat.turn_completed`, `pull_request.updated`, `pull_request.merged`, `pull_request.closed`, `merge_queue.blocked`, `code_review.completed`, and `ping` from the test route.
+
+Design points:
+- Signals are sent where a change happens, not from `subscribeWorkspace`. That fan-out also gets frames relayed from other replicas, so a listener there would enqueue once per replica. Turns are hooked in `turns.ts` beside `claimOrEnqueue` / `finishTurn`, creation in `create.ts`, sessions through `onWorkbenchEmit`, pull requests and the merge queue in `websocket.ts`.
+- `signals.ts` is a leaf. Importing the dispatcher from `websocket.ts` made a cycle through `services/public/projections.ts` (`cursorTimeColumn is not a function` at import time). `startApiWebhooks()` connects the seam at boot.
+- Exactly once across replicas: a fact with a natural key (a turn number, a merge, a review cycle) gets a hashed event id and the unique key drops a repeat. A change of state uses one compare-and-set upsert on `api_webhook_object_states`.
+- The worker claims with a CTE `FOR UPDATE SKIP LOCKED` and uses `next_attempt_at` as a 60 s lease, with a claim token on every settle. No advisory lock. Retries: 5 s, 5 min, 30 min, 2 h, 5 h, 10 h, 10 h (8 attempts, about 28 hours). 410 disables at once; 3 days and 10 failed attempts in a row disables with a reason.
+- Delivery uses `node:http(s)` with a `lookup` that checks the address it connects to, so DNS rebinding cannot reach `169.254.169.254`. No redirects.
+- The idempotency table must not hold a plaintext secret. `define.ts` has two new optional hooks, `idempotentBody` and `replayBody`: create and rotate store their answer without the secret, and a replay reads the current secret again.
+- The dispatcher checks the `public-api` flag for the workspace owner (cached 30 s with the endpoint list). No new flag.
+
+Things that did not go as first planned:
+- `UPDATE ... WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` claimed more than `n` rows in pglite. The planner can run the subquery again. The claim is a CTE now.
+- `session.updated` follows the public status only, not the sandbox state. The public session shape has no sandbox state, so a sleep or a wake would be an event with no visible change.
+- No `merge_queue.merged` event: nothing internal says "the queue merged this". `pull_request.merged` covers the merge.
+- The first sight of a pull request records a baseline and sends nothing, to avoid a burst of one event per tracked pull request when an endpoint is added. The first sight of a session sends `session.updated`.
+
 ## Public API, phase 1 (2026-11-02)
 
 The public API is a separate mount at `/v1`, served to customers as `api.talyn.dev/v1`. It shares the services with `/api/v1` and nothing else. The design is in `docs/PUBLIC_API.md` and the guides in `docs/api/`.

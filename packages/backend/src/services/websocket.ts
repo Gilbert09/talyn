@@ -17,6 +17,7 @@ import type {
   WSEvent,
 } from '@talyn/shared';
 import { domainEvents } from './events.js';
+import { sendWebhookSignal } from './apiWebhooks/signals.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
 import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser } from './wsBus.js';
 import { verifyTokenAndGetUser, enforceAllowList, AuthError, type AuthUser } from '../middleware/auth.js';
@@ -712,6 +713,11 @@ export function emitPullRequestUpdated(
     payload,
     timestamp: new Date().toISOString(),
   });
+  sendWebhookSignal({
+    kind: 'pull_request',
+    workspaceId,
+    pullRequest: { id: payload.id, state: payload.state, lastSummary: payload.lastSummary, codeReview: payload.codeReview },
+  });
 }
 
 /**
@@ -742,6 +748,13 @@ export function emitMergeQueueBlocked(
     type: 'merge_queue:blocked',
     payload,
     timestamp: new Date().toISOString(),
+  });
+  sendWebhookSignal({
+    kind: 'merge_queue_blocked',
+    workspaceId,
+    pullRequestId: payload.pullRequestId,
+    reason: payload.reason,
+    attempts: payload.attempts,
   });
 }
 

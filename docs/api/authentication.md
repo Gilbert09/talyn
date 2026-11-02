@@ -44,6 +44,8 @@ You can revoke a token in the same screen at any time.
 | `repositories:read` | `GET /repositories` |
 | `sessions:read` | Read sessions, chats and events. Open the streams. |
 | `sessions:write` | Start, archive, restore and retry sessions. Open chats. Send messages. Stop turns. Also includes `sessions:read`. |
+| `webhooks:read` | List and read webhook endpoints, their deliveries and the event types. |
+| `webhooks:write` | Create, change, delete and test webhook endpoints. Rotate secrets. Redeliver. Also includes `webhooks:read`. |
 
 A write scope includes its read scope. A token with `sessions:write` can call all `sessions:read` endpoints.
 
