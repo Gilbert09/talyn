@@ -123,9 +123,13 @@ export class CoderCli {
     return found;
   }
 
-  private async call(args: string[], input?: string, timeout = 60_000, sessionToken?: string): Promise<CoderResult> {
+  private async call(args: string[], input?: string, timeout = 60_000, envChange: Record<string, string | undefined> = {}): Promise<CoderResult> {
     const [file, PATH] = await Promise.all([this.binary(), this.getPath()]);
-    const env = { ...process.env, PATH, NO_COLOR: '1', ...(sessionToken === undefined ? {} : { CODER_SESSION_TOKEN: sessionToken }) };
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH, NO_COLOR: '1' };
+    for (const [key, value] of Object.entries(envChange)) {
+      if (value === undefined) delete env[key];
+      else env[key] = value;
+    }
     const command = `coder ${args.slice(0, 2).join(' ')}`;
     return new Promise((resolve, reject) => {
       const child = this.execute(file, args, { env, timeout, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -154,9 +158,21 @@ export class CoderCli {
     const sessionToken = token.trim();
     const redact = (output: string) => output.split(sessionToken).join('[redacted]');
     try {
-      // Coder reads CODER_SESSION_TOKEN for login. The token stays out of argv and CLI output returned to the renderer.
-      const result = await this.call(['login', origin], undefined, 30_000, sessionToken);
-      if (result.code) throw new Error(`coder login failed (${result.code}): ${redact((result.stderr || result.stdout).trim())}`);
+      // `coder login` refuses to run while CODER_SESSION_TOKEN is set, and a
+      // --token flag would put the token in argv, where `ps` shows it. So the
+      // token goes to the CLI's own "Paste your token here" prompt on stdin.
+      // CODER_NO_OPEN stops the CLI opening the sign-in page a second time.
+      const result = await this.call(['login', origin], `${sessionToken}\n`, 30_000, {
+        CODER_SESSION_TOKEN: undefined,
+        CODER_NO_OPEN: '1',
+      });
+      if (result.code) {
+        const output = (result.stderr || result.stdout).trim();
+        if (/not a valid token/i.test(output)) {
+          throw new Error('Coder did not accept that token. Copy it again from the sign-in page.');
+        }
+        throw new Error(`coder login failed (${result.code}): ${redact(output)}`);
+      }
     } catch (error) {
       throw new Error(redact(error instanceof Error ? error.message : String(error)));
     }

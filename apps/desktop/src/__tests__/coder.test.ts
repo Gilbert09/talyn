@@ -90,15 +90,28 @@ it('names the command that timed out', async () => {
 it('does not hide a CLI that cannot answer behind the port-forward fallback', async () => {
   await expect(fakeCli([{ killed: true }]).cli.appUrls('dev')).rejects.toThrow('did not finish');
 });
-it('passes a login token only through the environment', async () => {
+it('passes a login token only on stdin, with no session token in the environment and no browser', async () => {
   const token = 'sensitive-token';
-  const { cli, execute, writes } = fakeCli([{ stdout: token }]);
-  await expect(cli.login('https://coder.example/path', token)).resolves.toBeUndefined();
-  expect(execute).toHaveBeenCalledWith(BINARY, ['login', 'https://coder.example'], expect.objectContaining({
-    timeout: 30_000, env: expect.objectContaining({ CODER_SESSION_TOKEN: token }),
-  }), expect.any(Function));
-  expect(execute.mock.calls[0][1]).not.toContain(token);
-  expect(writes).toEqual([]);
+  const previous = process.env.CODER_SESSION_TOKEN;
+  process.env.CODER_SESSION_TOKEN = 'inherited';
+  try {
+    const { cli, execute, writes } = fakeCli([{ stdout: 'Welcome to Coder' }]);
+    await expect(cli.login('https://coder.example/path', token)).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledWith(BINARY, ['login', 'https://coder.example'], expect.objectContaining({
+      timeout: 30_000, env: expect.objectContaining({ CODER_NO_OPEN: '1' }),
+    }), expect.any(Function));
+    const env = execute.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    expect(env).not.toHaveProperty('CODER_SESSION_TOKEN');
+    expect(execute.mock.calls[0][1]).not.toContain(token);
+    expect(writes).toEqual([`${token}\n`]);
+  } finally {
+    if (previous === undefined) delete process.env.CODER_SESSION_TOKEN;
+    else process.env.CODER_SESSION_TOKEN = previous;
+  }
+});
+it('says plainly when Coder rejects the token', async () => {
+  const { cli } = fakeCli([{ code: 1, stdout: "> Paste your token here: That's not a valid token!" }]);
+  await expect(cli.login('https://coder.example', 'sensitive-token')).rejects.toThrow('Coder did not accept that token.');
 });
 it.each([
   [{ code: 1, stderr: 'bad sensitive-token' }, 'coder login failed (1): bad [redacted]'],
