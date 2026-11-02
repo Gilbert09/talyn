@@ -370,8 +370,10 @@ async function buildBaseContext(
   // provider linked the run, and memoised per job — so this is one REST call per
   // ejection, not one per evaluation. `null` (not asked / GitHub wouldn't say)
   // reads exactly like `unknown`: the failure is treated as real.
+  // Not asked when the provider already said GitHub failed it: that answer is
+  // more specific than anything the job steps can add.
   const externalFailure =
-    externalQueue?.state === 'failed'
+    externalQueue?.state === 'failed' && !externalQueue.githubFault
       ? await classifyExternalQueueFailure(
           pr.workspaceId,
           pr.owner,
@@ -982,8 +984,9 @@ async function disarmAutoMerge(ctx: ActionContext): Promise<ActionOutcome> {
 /**
  * Feed the cross-PR queue-health tally off the transitions the pipeline already
  * writes, rather than from a second observation path that could disagree with
- * the timeline. Only the two INFRASTRUCTURE codes count against the queue —
- * a failure Talyn could not classify stays the PR's own problem — and any
+ * the timeline. Only the INFRASTRUCTURE codes (a dead CI runner, or GitHub
+ * failing the provider) count against the queue — a failure Talyn could not
+ * classify stays the PR's own problem — and any
  * merge, however it was reached, clears the record.
  */
 function noteQueueHealth(
@@ -999,7 +1002,9 @@ function noteQueueHealth(
   }
   if (
     action.event.code === 'external_queue_infra_failure' ||
-    action.event.code === 'external_queue_infra_exhausted'
+    action.event.code === 'external_queue_infra_exhausted' ||
+    action.event.code === 'external_queue_github_failure' ||
+    action.event.code === 'external_queue_github_exhausted'
   ) {
     noteInfraFailure(owner, repo, base, number);
   }

@@ -17,9 +17,13 @@ import {
   unsignedCommitsBlockReason,
   SUBMIT_CALL_FIRST_WAIT_MS,
   SUBMIT_CALL_MAX_FAILURES,
+  githubFaultWaitMs,
   submitCallWaitMs,
 } from '../../services/mergeQueue/decide.js';
-import { MAX_INFRA_SUBMITS_PER_HEAD } from '../../services/mergeQueue/types.js';
+import {
+  GITHUB_FAULT_FIRST_WAIT_MS,
+  MAX_INFRA_SUBMITS_PER_HEAD,
+} from '../../services/mergeQueue/types.js';
 import type {
   Action,
   Decision,
@@ -2976,6 +2980,190 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
           expect(lastTransition(d)!.event.code).not.toBe('external_queue_infra_failure');
         }
       );
+    });
+
+    // PostHog/posthog#126944 (2026-11-02): trunk said "could not start testing
+    // because GitHub repeatedly returned errors while Trunk was preparing the
+    // test branch". The queue sent a fix run, which stopped for a human with
+    // "someone needs to re-submit it to Trunk". Talyn re-submits it itself now.
+    describe('a queue run GitHub failed', () => {
+      const GH_FAILED =
+        '❌ This pull request could not start testing because GitHub repeatedly returned errors while Trunk was preparing the test branch.';
+      const ghFault = (state: ExternalQueueState = 'failed') =>
+        ({ ...observed(state, GH_FAILED), githubFault: true }) as const;
+      const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+      const MIN = 60_000;
+
+      it('re-submits after a wait instead of spending a fix run', () => {
+        const d = decide(
+          commented(longAgo, { submitAttempts: 1 }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', externalQueue: ghFault() })
+        );
+        const t = lastTransition(d)!;
+        expect(t.to).toBe('queued');
+        expect(t.event.code).toBe('external_queue_github_failure');
+        expect(t.event.message).toContain('GitHub API errors');
+        expect(t.event.message).toContain(`attempt 2 of ${MAX_INFRA_SUBMITS_PER_HEAD}`);
+        expect(t.event.message).toContain('5 min');
+        expect(t.event.detail).toMatchObject({
+          attempt: 2,
+          maxAttempts: MAX_INFRA_SUBMITS_PER_HEAD,
+          retryInMs: GITHUB_FAULT_FIRST_WAIT_MS,
+          evidence: GH_FAILED,
+        });
+        // The wait starts now, so nothing is submitted on this pass.
+        expect(t.set?.lastErrorAt).toBe(NOW);
+        expect(kinds(d)).not.toContain('submit_external');
+        expect(kinds(d)).not.toContain('fire_fix_run');
+        expect(kinds(d)).not.toContain('notify_blocked');
+        // Not a reason this PR can defeat, so it must not count as a repeat later.
+        expect(t.set?.seenSignatures).toBeUndefined();
+        expect(d.verdict).toBe('advance');
+      });
+
+      it('ignores a recorded signature for the same sentence — a repeat is not the PR at fault', () => {
+        const failed = ghFault();
+        const d = decide(
+          commented(longAgo, { submitAttempts: 2, seenSignatures: [queueSignature(failed)] }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', externalQueue: failed })
+        );
+        expect(lastTransition(d)!.event.code).toBe('external_queue_github_failure');
+        expect(kinds(d)).not.toContain('fire_fix_run');
+      });
+
+      it('takes the same path when trunk says GitHub kept a merge "in progress"', () => {
+        const d = decide(
+          commented(longAgo, { submitAttempts: 1 }),
+          cleanPr(),
+          ctx({
+            externalGate: 'confirmed',
+            externalQueue: {
+              ...observed(
+                'ejected',
+                '❌ This pull request was removed from the merge queue because GitHub repeatedly reported that a merge was already in progress and would not merge it at this time.'
+              ),
+              githubFault: true,
+            },
+          })
+        );
+        expect(lastTransition(d)!.event.code).toBe('external_queue_github_failure');
+        expect(kinds(d)).not.toContain('submit_external');
+      });
+
+      it('wins over a CI-job verdict of `unknown`', () => {
+        const d = decide(
+          commented(longAgo, { submitAttempts: 1 }),
+          cleanPr(),
+          ctx({
+            externalGate: 'confirmed',
+            externalQueue: ghFault(),
+            externalFailure: { kind: 'unknown', detail: '' },
+          })
+        );
+        expect(lastTransition(d)!.event.code).toBe('external_queue_github_failure');
+        expect(kinds(d)).not.toContain('fire_fix_run');
+      });
+
+      it.each([
+        [1, 5],
+        [2, 10],
+        [3, 20],
+      ])('waits %i → %i minutes before the next submission', (submissions, minutes) => {
+        expect(githubFaultWaitMs(submissions)).toBe(minutes * MIN);
+      });
+
+      it('adds up to about 35 minutes across the whole budget', () => {
+        let total = 0;
+        for (let n = 1; n < MAX_INFRA_SUBMITS_PER_HEAD; n += 1) total += githubFaultWaitMs(n);
+        expect(total).toBe(35 * MIN);
+        expect(githubFaultWaitMs(0)).toBe(0);
+      });
+
+      // The requeued entry, on a later evaluation: trunk's comment still says
+      // GitHub failed it, and the wait runs from `lastErrorAt`.
+      const waiting = (submitAttempts: number, sinceMs: number, o: Partial<DecisionContext> = {}) =>
+        decide(
+          entry({ status: 'queued', submitAttempts, externalState: 'failed', lastErrorAt: ago(sinceMs) }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', externalQueue: ghFault(), ...o })
+        );
+
+      it.each([
+        [1, 0],
+        [1, 4 * MIN],
+        [2, 9 * MIN],
+        [3, 19 * MIN],
+      ])('does not submit %i submissions in, %i ms after the fault', (submitAttempts, sinceMs) => {
+        const d = waiting(submitAttempts, sinceMs);
+        expect(kinds(d)).not.toContain('submit_external');
+        expect(d.actions).toEqual([]);
+        expect(d.verdict).toBe('advance');
+      });
+
+      it.each([
+        [1, 5 * MIN],
+        [2, 10 * MIN],
+        [3, 20 * MIN],
+        [1, 24 * 60 * MIN],
+      ])('submits %i submissions in, %i ms after the fault', (submitAttempts, sinceMs) => {
+        expect(kinds(waiting(submitAttempts, sinceMs))).toContain('submit_external');
+      });
+
+      it('keeps waiting, without a limit, while GitHub is down', () => {
+        const d = waiting(1, 24 * 60 * MIN, { githubDown: true });
+        expect(kinds(d)).not.toContain('submit_external');
+        expect(d.actions).toEqual([]);
+      });
+
+      it('submits at once when trunk no longer reports the GitHub fault', () => {
+        const d = waiting(1, 0, { externalQueue: observed('not_submitted') });
+        expect(kinds(d)).toContain('submit_external');
+      });
+
+      it('submits at once when no wait was recorded (a person re-armed it)', () => {
+        const d = decide(
+          entry({ status: 'queued', submitAttempts: 0, lastErrorAt: null }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', externalQueue: ghFault() })
+        );
+        expect(kinds(d)).toContain('submit_external');
+      });
+
+      it('parks with a GitHub reason and a notification once the budget is spent', () => {
+        const d = decide(
+          commented(longAgo, { submitAttempts: MAX_INFRA_SUBMITS_PER_HEAD }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', externalQueue: ghFault() })
+        );
+        const t = lastTransition(d)!;
+        expect(t.to).toBe('blocked');
+        expect(t.blockedCode).toBe('external_queue_rejected');
+        expect(t.event.code).toBe('external_queue_github_exhausted');
+        expect(t.blockedReason).toContain('GitHub returned errors');
+        expect(t.blockedReason).toContain(`${MAX_INFRA_SUBMITS_PER_HEAD} time(s)`);
+        expect(t.blockedReason).toContain('Re-submit it to Trunk');
+        expect(kinds(d)).toContain('notify_blocked');
+        expect(kinds(d)).not.toContain('submit_external');
+        expect(kinds(d)).not.toContain('fire_fix_run');
+      });
+
+      it('still sends a fix run for the merge-conflict sentence it resembles', () => {
+        const d = decide(
+          commented(longAgo, { submitAttempts: 1 }),
+          cleanPr(),
+          ctx({
+            externalGate: 'confirmed',
+            externalQueue: observed(
+              'failed',
+              '❌ This pull request could not start testing because there was a merge conflict.'
+            ),
+          })
+        );
+        expect(lastTransition(d)!.event.code).toBe('external_queue_failed_fixing');
+        expect(kinds(d)).toContain('fire_fix_run');
+      });
     });
 
     it('blocks an `ejected` PR only once the SAME ejection repeats', () => {

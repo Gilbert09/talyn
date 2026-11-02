@@ -302,6 +302,98 @@ describe('externalQueueStatusFromComment — trunk states, as trunk writes them'
     });
   });
 
+  // GitHub, not the PR, failed these. The first read as a merge-conflict-style
+  // test failure and sent a fix run that could only stop and ask a person to
+  // re-submit (PostHog/posthog#126944, #126956, #126980, #127084 on 2026-11-02;
+  // #113218, #113226, #113423 on 2026-10-07). The second read as a deliberate
+  // `cancelled` (#124994, 2026-10-29). Both bodies are verbatim sentences from
+  // the merge-queue events of those entries.
+  describe('ejections trunk blames on GitHub', () => {
+    const CHECKBOX =
+      '\n<!-- Start PR Submit Checkbox -->\n- [ ] <!-- End PR Submit Checkbox -->To merge this pull request, check the box to the left or comment `/trunk merge` below.';
+
+    it.each<[string, string, ExternalQueueState]>([
+      [
+        'GitHub errors while preparing the test branch',
+        `\u{274C} This pull request could not start testing because GitHub repeatedly returned errors while Trunk was preparing the test branch. See more details [here]${LINK}.`,
+        'failed',
+      ],
+      [
+        'the same, with the resubmit checkbox trunk offers after an ejection',
+        `\u{274C} This pull request could not start testing because GitHub repeatedly returned errors while Trunk was preparing the test branch. See more details [here]${LINK}.${CHECKBOX}`,
+        'failed',
+      ],
+      [
+        'GitHub reporting a merge already in progress',
+        `\u{274C} This pull request was removed from the merge queue because GitHub repeatedly reported that a merge was already in progress and would not merge it at this time. See more details [here]${LINK}.`,
+        'ejected',
+      ],
+    ])('flags %s as a GitHub fault', (_name, body, state) => {
+      const status = externalQueueStatusFromComment(trunk(body));
+      expect(status).toMatchObject({ provider: 'trunk', state, source: 'comment', githubFault: true });
+      expect(isExternalQueueEjected(status!.state)).toBe(true);
+      // The instruction is still found, so the queue can re-submit through it.
+      if (body.includes(CHECKBOX)) {
+        expect(externalQueueInstructionFromComments([trunk(body)])).toEqual({
+          provider: 'trunk',
+          command: '/trunk merge',
+        });
+      }
+    });
+
+    it.each<[string, string, ExternalQueueState | null]>([
+      [
+        'a real merge conflict',
+        `\u{274C} This pull request could not start testing because there was a merge conflict. See more details [here]${LINK}.`,
+        'failed',
+      ],
+      [
+        'a ruleset that refuses the merge every time',
+        `\u{274C} This pull request was removed from the merge queue because GitHub returned the following error message when attempting to merge it - \`Repository rule violations found\`. See more details [here]${LINK}.`,
+        'cancelled',
+      ],
+      [
+        'a stack GitHub failed to merge',
+        `\u{274C} This stack was removed from the merge queue because GitHub failed to merge it. See more details [here]${LINK}.`,
+        'cancelled',
+      ],
+      [
+        'a test failure',
+        `\u{274C} This pull request was removed from the merge queue because it failed tests. PR [#84396](https://www.github.com/PostHog/posthog/pull/84396) was used for testing. See more details [here]${LINK}.`,
+        'failed',
+      ],
+      // A later line that talks about GitHub errors must not turn a test failure
+      // into a GitHub one: only the sentence that carried the state counts.
+      [
+        'a test failure whose table names a check about GitHub errors',
+        `\u{274C} This pull request was removed from the merge queue because it failed tests. See more details [here]${LINK}.\n|Failed Required Status|Conclusion|\n|-|-|\n|Fails because GitHub repeatedly returned errors|[Failure](https://github.com/PostHog/posthog/actions/runs/1)|`,
+        'failed',
+      ],
+      // Trunk still holds the PR in these, so there is nothing to re-submit.
+      [
+        'a holding state',
+        `\u{23F3} Waiting to start tests on this pull request because GitHub repeatedly returned errors - [details]${LINK}.`,
+        'queued',
+      ],
+      // Not trunk's queue comment at all.
+      [
+        'the flaky-test comment',
+        '<!-- Trunk Test Analytics -->\n\nThis pull request could not start testing because GitHub repeatedly returned errors.',
+        null,
+      ],
+    ])('does not flag %s', (_name, body, state) => {
+      const status = externalQueueStatusFromComment(trunk(body));
+      expect(status?.state ?? null).toBe(state);
+      expect(status?.githubFault).toBeUndefined();
+    });
+
+    it('does not believe a person who writes the sentence', () => {
+      const body = `\u{274C} This pull request could not start testing because GitHub repeatedly returned errors while Trunk was preparing the test branch. See more details [here]${LINK}.`;
+      expect(externalQueueStatusFromComment({ body, user: { login: 'Gilbert09' } })).toBeNull();
+      expect(externalQueueStatusFromComment({ body, user: { login: 'trunk-io' } })).toBeNull();
+    });
+  });
+
   // Trunk names the pusher and the batch PR in exactly the two reasons that
   // repeat, so the raw sentence made every ejection look like a new one and
   // the recurrence guard that bounds eject → resubmit → eject never fired.

@@ -1417,6 +1417,14 @@ export const pullRequests = {
     method?: 'merge' | 'squash' | 'rebase'
   ) => request<null>('POST', `/pull-requests/${id}/merge-queue`, { enabled, method }),
   /**
+   * Re-submit a PARKED queue entry to its external merge queue (trunk). The
+   * server resets the entry's budgets and submits through the queue's usual
+   * door. 409 (`code`: `not_queued` | `not_parked` | `no_external_queue`) when
+   * there is nothing to re-submit.
+   */
+  resubmitMergeQueue: (id: string) =>
+    request<null>('POST', `/pull-requests/${id}/merge-queue/resubmit`),
+  /**
    * Enqueue (or dequeue) a whole stack of dependent PRs in one call.
    *
    * `id` may be ANY member — the server resolves the chain itself, so a stale

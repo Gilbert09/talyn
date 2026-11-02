@@ -160,6 +160,8 @@ export interface EnsureEntryInput {
   mergeMethod: MergeMethod;
   headSha: string;
   trigger: string;
+  /** The timeline event a RE-ARM writes. Defaults to the plain re-queue. */
+  rearmEvent?: { code: string; message: string };
 }
 
 /**
@@ -214,8 +216,8 @@ export async function ensureActiveEntry(
         fromStatus: existing.status,
         toStatus: 'queued',
         trigger: input.trigger,
-        code: 'requeued',
-        message: 'Re-armed by the user — budgets reset.',
+        code: input.rearmEvent?.code ?? 'requeued',
+        message: input.rearmEvent?.message ?? 'Re-armed by the user — budgets reset.',
       });
     });
     return existing.id;

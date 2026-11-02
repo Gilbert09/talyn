@@ -52,6 +52,20 @@ export const MAX_RETARGETS = 8;
  */
 export const MAX_INFRA_SUBMITS_PER_HEAD = 4;
 
+/**
+ * The wait before re-submitting a PR the external queue gave back because
+ * GITHUB failed it (`ExternalQueueStatus.githubFault`). Each later wait is
+ * twice the one before: 5, 10 and 20 minutes inside the same per-head budget
+ * of {@link MAX_INFRA_SUBMITS_PER_HEAD} submissions.
+ *
+ * Not zero, unlike a CI-runner death: trunk says GitHub failed "repeatedly",
+ * so trunk has already retried inside its own run, and an immediate re-submit
+ * mostly meets the same GitHub incident. 35 minutes in total covers a typical
+ * short GitHub API incident, and it costs little, because a trunk test cycle
+ * on posthog/posthog is about 40 minutes anyway.
+ */
+export const GITHUB_FAULT_FIRST_WAIT_MS = 5 * 60_000;
+
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
 
 /**

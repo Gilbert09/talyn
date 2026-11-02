@@ -920,6 +920,64 @@ describe('mergeQueue v2 pipeline', () => {
       expect(entry?.submitAttempts).toBe(2);
     });
 
+    // PostHog/posthog#126944, 2026-11-02: GitHub, not the PR, failed trunk. The
+    // queue used to send a fix run, which stopped for a human with "re-submit it
+    // to Trunk". Now it waits, then re-submits through the usual door.
+    it('re-submits after a wait, with no fix run, when trunk says GitHub failed it', async () => {
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+        {
+          user: { login: 'trunk-io[bot]' },
+          body:
+            '\u{274C} This pull request could not start testing because GitHub repeatedly ' +
+            'returned errors while Trunk was preparing the test branch. See more details ' +
+            '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/126944).',
+        },
+      ]);
+      const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      noteExternalQueueSubmitRoute('a', 'b', { provider: 'trunk', command: '/trunk merge' });
+
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), nodeId: 'PR_node' },
+      });
+      await db
+        .update(mergeQueueEntries)
+        .set({
+          status: 'awaiting_external',
+          externalSubmitVia: 'comment',
+          externalSubmittedAt: new Date(Date.now() - 60 * 60_000),
+          submitAttempts: 1,
+        })
+        .where(eq(mergeQueueEntries.id, entryId));
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      const events = await eventsOf(db, entryId);
+      const fault = events.find((e) => e.code === 'external_queue_github_failure');
+      expect(fault?.message).toContain('attempt 2 of 4');
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(comment).not.toHaveBeenCalled(); // the wait has only started
+      let entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('queued');
+      expect(entry?.submitAttempts).toBe(1);
+
+      // The wait is over: the next evaluation submits the usual way.
+      await db
+        .update(mergeQueueEntries)
+        .set({ lastErrorAt: new Date(Date.now() - 6 * 60_000) })
+        .where(eq(mergeQueueEntries.id, entryId));
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(comment).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number), '/trunk merge');
+      expect(fixRun).not.toHaveBeenCalled();
+      entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('awaiting_external');
+      expect(entry?.submitAttempts).toBe(2);
+    });
+
     // PostHog/posthog#99003, 2026-09-11. Trunk reported a failed check while
     // it still held the PR, waiting on the PRs ahead. This line was read as an
     // ejection: a queue_failure run went out, merged master in three minutes

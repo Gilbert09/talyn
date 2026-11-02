@@ -11,7 +11,7 @@ import { prMonitorService } from '../prMonitor.js';
 import { emitPullRequestUpdated } from '../websocket.js';
 import { broadcastMergeQueuePositions, noteMergeQueueEmitted } from '../mergeQueueBroadcast.js';
 import { onQueueMembershipChanged } from './triggers.js';
-import { closeActiveEntry, ensureActiveEntry } from './store.js';
+import { closeActiveEntry, ensureActiveEntry, getActiveEntryForPr } from './store.js';
 import type { MergeMethod } from './types.js';
 
 /**
@@ -250,6 +250,55 @@ export function emitDequeued(row: QueueMembershipRow): void {
  */
 export function broadcastPositionsAfterQueueWrite(workspaceId: string): void {
   afterQueueWrite(() => broadcastMergeQueuePositions(workspaceId));
+}
+
+export type ResubmitRefusal = 'not_queued' | 'not_parked' | 'no_external_queue';
+
+/**
+ * A person's "Re-submit to the merge queue" on a PARKED entry that has been
+ * through an external queue (trunk). It re-arms the entry, so budgets reset and
+ * the block clears, and kicks an evaluation, which submits the PR through the
+ * same door the queue always uses (`submit_external`). Nothing here posts to
+ * GitHub itself: one submit path, with every guard it already has.
+ *
+ * Refuses, and changes nothing, when there is no active entry, when the entry
+ * is not parked (the queue is working the PR, and a second submit would fight
+ * it), or when the entry has never been near an external queue.
+ *
+ * No plan gate: the entry already exists, so nothing is added to the queue.
+ */
+export async function resubmitQueueEntry(
+  row: QueueMembershipRow,
+  trigger: string
+): Promise<{ ok: true } | { ok: false; code: ResubmitRefusal }> {
+  const entry = await getActiveEntryForPr(row.id);
+  if (!entry) return { ok: false, code: 'not_queued' };
+  if (entry.status !== 'blocked' && entry.status !== 'blocked_manual') {
+    return { ok: false, code: 'not_parked' };
+  }
+  const external =
+    entry.externalState !== null ||
+    entry.blockedCode === 'external_gate' ||
+    entry.blockedCode === 'external_queue_rejected';
+  if (!external) return { ok: false, code: 'no_external_queue' };
+
+  const summary = row.lastSummary as { baseBranch?: string; headSha?: string } | null;
+  await ensureActiveEntry({
+    pullRequestId: row.id,
+    workspaceId: row.workspaceId,
+    repositoryId: row.repositoryId,
+    baseBranch: summary?.baseBranch ?? '',
+    mergeMethod: entry.mergeMethod as MergeMethod,
+    headSha: summary?.headSha ?? '',
+    trigger,
+    rearmEvent: {
+      code: 'user_resubmit',
+      message: 'Re-submit to the merge queue requested by the user — budgets reset.',
+    },
+  });
+  broadcastPositionsAfterQueueWrite(row.workspaceId);
+  publishDraftsThenKick([row], trigger);
+  return { ok: true };
 }
 
 /**
