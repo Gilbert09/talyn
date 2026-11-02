@@ -32,6 +32,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'appearance',
   'developer',
   'mcp',
+  'apiTokens',
   'about',
 ];
 

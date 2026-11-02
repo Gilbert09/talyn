@@ -44,6 +44,7 @@ import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
 import { SettingsPage } from '../ui/settings';
+import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { TeamSettings } from './TeamBilling';
 import { BillingSettings } from '../settings/sections/BillingSettings';
@@ -161,6 +162,11 @@ export function SettingsPanel() {
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
     { id: 'mcp' as const, icon: Plug, label: 'Talyn MCP server' },
+    // The body also lists existing tokens when the flag is off, but the nav
+    // entry follows the flag.
+    ...(features?.publicApi === true
+      ? [{ id: 'apiTokens' as const, icon: KeyRound, label: 'API tokens' }]
+      : []),
     { id: 'about' as const, icon: Info, label: 'About' },
   ];
 
@@ -219,7 +225,8 @@ export function SettingsPanel() {
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
             {activeSection === 'codeReview' && <CodeReviewSettingsCard />}
-      {activeSection === 'mcp' && <MCPServerSettings />}
+            {activeSection === 'mcp' && <MCPServerSettings />}
+            {activeSection === 'apiTokens' && <ApiTokensSettings />}
             {activeSection === 'about' && <AboutSettings />}
           </div>
         </ScrollArea>

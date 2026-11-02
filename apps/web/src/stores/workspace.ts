@@ -101,6 +101,7 @@ export type SettingsSection =
   | 'appearance'
   | 'developer'
   | 'mcp'
+  | 'apiTokens'
   | 'about';
 
 // Simplified repository type for store (matches API response)
