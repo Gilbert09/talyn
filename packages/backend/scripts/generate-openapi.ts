@@ -9,6 +9,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+// Load the workbench lifecycle first. The workbench services import each
+// other in a cycle that resolves only when lifecycle.ts loads first.
+import '../src/services/workbenches/lifecycle.js';
 import { OPENAPI_DOCUMENT_PATH, serializeOpenApiDocument } from '../src/routes/public/openapi.js';
 import { publicOpenApiDocument } from '../src/routes/public/routes.js';
 

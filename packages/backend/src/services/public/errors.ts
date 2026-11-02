@@ -1,14 +1,6 @@
 import { ZodError } from 'zod';
 import { AccessError } from '../../middleware/auth.js';
-import {
-  AutoKeepDefaultPlanError,
-  AutoReviewPlanError,
-  LoopLimitError,
-  MergeQueueLimitError,
-  ReviewCycleLimitError,
-  TaskLimitError,
-  WorkflowLimitError,
-} from '../billing/entitlements.js';
+import { AutoKeepDefaultPlanError, AutoReviewPlanError, isBoxGateError } from '../billing/entitlements.js';
 import { fleetErrorAsRefusal } from '../workbenches/errors.js';
 
 import { errorTypeForStatus, type PublicErrorType } from './errorTypes.js';
@@ -42,27 +34,25 @@ export const invalid = (message: string, param?: string, code = 'invalid_paramet
   new PublicApiError(400, code, message, param ? { param } : {});
 
 /**
- * The plan-limit errors the services throw. The 402 carries the same code the
- * apps get, plus the numbers when the error has them.
+ * The plan refusals the services throw. The 402 carries the same code the
+ * apps get. A box gate refusal (budget, concurrent boxes, box size) also
+ * carries its notice, in snake_case.
  */
 function planLimitError(err: unknown): PublicApiError | null {
-  if (
-    err instanceof TaskLimitError ||
-    err instanceof MergeQueueLimitError ||
-    err instanceof WorkflowLimitError ||
-    err instanceof LoopLimitError ||
-    err instanceof ReviewCycleLimitError ||
-    err instanceof AutoKeepDefaultPlanError ||
-    err instanceof AutoReviewPlanError
-  ) {
-    const fields = err as unknown as { limit?: number; active?: number; queued?: number; count?: number };
-    const inUse = fields.active ?? fields.queued ?? fields.count;
-    return new PublicApiError(402, err.code, err.message, {
-      details: {
-        ...(typeof fields.limit === 'number' ? { limit: fields.limit } : {}),
-        ...(typeof inUse === 'number' ? { in_use: inUse } : {}),
-      },
-    });
+  if (isBoxGateError(err)) {
+    const n = err.notice;
+    const details: Record<string, unknown> = { tier: n.tier };
+    if (n.limit !== undefined) details.limit = n.limit;
+    if (n.active !== undefined) details.in_use = n.active;
+    if (n.size !== undefined) details.size = n.size;
+    if (n.allowedSizes !== undefined) details.allowed_sizes = n.allowedSizes;
+    if (n.periodEnd !== undefined) details.period_end = n.periodEnd;
+    if (n.creditsAllowed !== undefined) details.credits_allowed = n.creditsAllowed;
+    if (n.retryAt !== undefined) details.retry_at = n.retryAt;
+    return new PublicApiError(402, err.code, err.message, { details });
+  }
+  if (err instanceof AutoKeepDefaultPlanError || err instanceof AutoReviewPlanError) {
+    return new PublicApiError(402, err.code, err.message);
   }
   return null;
 }

@@ -11,7 +11,7 @@ import { publicApiRouter } from '../routes/public/index.js';
 import { revokeApiToken, validateApiToken } from '../services/apiTokens.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 import { PublicApiError, toPublicApiError } from '../services/public/errors.js';
-import { LoopLimitError, MergeQueueLimitError, TaskLimitError } from '../services/billing/entitlements.js';
+import { AutoReviewPlanError, ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
 import { AccessError } from '../middleware/auth.js';
 
@@ -268,15 +268,21 @@ describe('no CORS', () => {
 
 describe('error mapping', () => {
   it.each([
-    [new TaskLimitError(3, 3), 'task_limit_reached', { limit: 3, in_use: 3 }],
-    [new MergeQueueLimitError(3, 2), 'merge_queue_limit_reached', { limit: 3, in_use: 2 }],
-    [new LoopLimitError(3, 3), 'loop_limit_reached', { limit: 3, in_use: 3 }],
-  ])('maps a plan limit to a 402 with its code and numbers', (err, code, details) => {
+    [new ConcurrentBoxLimitError(2, 2, 'free'), 'concurrent_box_limit_reached', { tier: 'free', limit: 2, in_use: 2 }],
+    [
+      new UsageExhaustedError({ tier: 'free', periodEnd: new Date('2026-12-01T00:00:00.000Z') }),
+      'usage_exhausted',
+      { tier: 'free', period_end: '2026-12-01T00:00:00.000Z', retry_at: '2026-12-01T00:00:00.000Z' },
+    ],
+    [new SizeRequiresProError({ tier: 'free', size: 'large' }), 'size_requires_pro', { tier: 'free', size: 'large' }],
+    [new AutoReviewPlanError(), 'auto_review_requires_unlimited', undefined],
+  ])('maps a plan refusal to a 402 with its code and details', (err, code, details) => {
     const mapped = toPublicApiError(err);
     expect(mapped.status).toBe(402);
     expect(mapped.type).toBe('plan_limit_error');
+    expect(mapped.code).toBe(err.code);
     expect(mapped.code).toBe(code);
-    expect(mapped.options.details).toEqual(details);
+    if (details) expect(mapped.options.details).toMatchObject(details);
   });
 
   it.each([
