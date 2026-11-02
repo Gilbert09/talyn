@@ -8,9 +8,11 @@
 // half-parsed SSE stream looks exactly like a quiet one.
 //
 // The wire format is deliberately narrow here: `data:` lines carry JSON, blank
-// lines separate frames, and anything else is a comment. That is all any of our
-// endpoints emit — no `event:`, no `id:`, no multi-line `data:` — so this parser
-// implements what we use rather than the whole spec.
+// lines separate frames, and anything else is a comment. The fleet and admin
+// streams emit nothing else. The public API's transcript stream also sends
+// `id:` and `event:` lines (see `formatSseEventFrame` below). No endpoint sends
+// a multi-line `data:`, so these parsers implement what we use rather than the
+// whole spec.
 
 /** Frames are separated by a blank line. */
 const FRAME_SEPARATOR = '\n\n';
@@ -65,6 +67,64 @@ export function createSseJsonParser<T = unknown>(): SseJsonParser<T> {
           } catch {
             // See the docblock: a bad frame is a gap, not a failure.
           }
+        }
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * One named, numbered frame: the public API's transcript stream. `id` is what
+ * an EventSource sends back as `Last-Event-ID` when it connects again.
+ */
+export interface SseEventFrame<T = unknown> {
+  id?: string;
+  event?: string;
+  data: T;
+}
+
+/** Serialize a frame with optional `id:` and `event:` lines. */
+export function formatSseEventFrame(frame: SseEventFrame): string {
+  const lines: string[] = [];
+  if (frame.id !== undefined) lines.push(`id: ${frame.id}`);
+  if (frame.event !== undefined) lines.push(`event: ${frame.event}`);
+  lines.push(`${DATA_PREFIX}${JSON.stringify(frame.data)}`);
+  return `${lines.join('\n')}${FRAME_SEPARATOR}`;
+}
+
+/**
+ * A parser that keeps `id:` and `event:`. A frame with no `data:` line (a
+ * keepalive comment) gives nothing. A frame with bad JSON is dropped, as in
+ * {@link createSseJsonParser}.
+ */
+export function createSseEventParser<T = unknown>(): { push(chunk: string): SseEventFrame<T>[] } {
+  let buffer = '';
+  return {
+    push(chunk: string): SseEventFrame<T>[] {
+      buffer += chunk;
+      const out: SseEventFrame<T>[] = [];
+      let sep: number;
+      while ((sep = buffer.indexOf(FRAME_SEPARATOR)) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + FRAME_SEPARATOR.length);
+        let id: string | undefined;
+        let event: string | undefined;
+        let data: string | undefined;
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('id: ')) id = line.slice(4);
+          else if (line.startsWith('event: ')) event = line.slice(7);
+          else if (line.startsWith(DATA_PREFIX)) data = line.slice(DATA_PREFIX.length);
+        }
+        if (data === undefined) continue;
+        try {
+          out.push({
+            ...(id !== undefined ? { id } : {}),
+            ...(event !== undefined ? { event } : {}),
+            data: JSON.parse(data) as T,
+          });
+        } catch {
+          // A bad frame is a gap, not a failure.
         }
       }
       return out;
