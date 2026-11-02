@@ -19,12 +19,7 @@ import { WorkbenchTranscript } from './WorkbenchTranscript';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 
-/**
- * One workbench. Centre: the header, the chat tab strip, the transcript and
- * the composer. Right: the GitPanel (files, changes, pull request) with the
- * terminal dock under it; ⌘⌥B hides it. A thread has no repository: its
- * right column is the WorkPanel (its sessions, memory and repositories).
- */
+/** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const ops = useWorkbenchOps(workbench);
   const chat = useSelectedChat(workbench.id);
@@ -38,19 +33,21 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   }, [workbench.id]);
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
-        <StatusBanner workbench={workbench} ops={ops} />
-        <ChatTabs workbench={workbench} selected={chat} />
-        <ChatView workbench={workbench} chat={chat} ops={ops} />
+    <div className="flex h-full min-h-0 flex-col" data-attr="workbench-view">
+      <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
+      <div className="flex min-h-0 min-w-0 flex-1" data-attr="workbench-columns">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ChatTabs workbench={workbench} selected={chat} />
+          <StatusBanner workbench={workbench} ops={ops} />
+          <ChatView workbench={workbench} chat={chat} ops={ops} />
+        </div>
+        {rightPanelOpen &&
+          (isThread(workbench) ? (
+            <WorkPanel thread={workbench} />
+          ) : (
+            <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
+          ))}
       </div>
-      {rightPanelOpen &&
-        (isThread(workbench) ? (
-          <WorkPanel thread={workbench} />
-        ) : (
-          <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
-        ))}
     </div>
   );
 }

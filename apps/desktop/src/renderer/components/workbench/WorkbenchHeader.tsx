@@ -269,7 +269,7 @@ export function WorkbenchHeader({
         <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
           {workbenchDisplayName(workbench)}
         </h1>
-        <div className="flex min-w-0 max-w-[70%] shrink items-center gap-2">
+        <div className="app-region-no-drag flex min-w-0 max-w-[70%] shrink items-center gap-2">
           {pr?.state === 'open' && pr.summary.url && (
             <Button
               variant="outline"
@@ -402,12 +402,38 @@ export function WorkbenchHeader({
             </div>
           )}
         </div>
+        <div className="app-region-no-drag flex shrink-0 items-center gap-1">
+          {!thread && (
+            <Button
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={toggleTerminal}
+              title={`Toggle the terminal (${formatKeys('mod+j')})`}
+              aria-label="Toggle the terminal"
+            >
+              <PanelBottom className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            className={cn(
+              'h-7 w-7 p-0',
+              !rightPanelOpen && 'text-muted-foreground',
+            )}
+            onClick={toggleRightPanel}
+            title={`${rightPanelOpen ? 'Hide' : 'Show'} the right panel (${formatKeys('mod+alt+b')})`}
+            aria-label="Toggle the right panel"
+            aria-pressed={rightPanelOpen}
+          >
+            <PanelRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <div
         className="mt-1 flex min-w-0 items-center gap-2"
         data-attr="workbench-header-meta-row"
       >
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-[0_1_auto]">
           {pr?.state === 'merged' && (
             <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               <span className="shrink-0 rounded bg-merged/15 px-1.5 py-0.5 font-medium text-merged">
@@ -451,9 +477,9 @@ export function WorkbenchHeader({
             </div>
           )}
         </div>
-        <div className="flex min-w-0 max-w-[65%] shrink items-center gap-1.5">
+        <div className="ml-auto flex min-w-0 flex-[0_100_auto] items-center gap-1.5">
           <div
-            className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&>*]:max-w-32 [&>*]:truncate"
+            className="app-region-no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&>*]:max-w-32 [&>*]:truncate"
             data-attr="workbench-header-chips"
           >
             {thread && (
@@ -522,32 +548,6 @@ export function WorkbenchHeader({
                 />
               </button>
             )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {!thread && (
-              <Button
-                variant="ghost"
-                className="h-7 w-7 p-0"
-                onClick={toggleTerminal}
-                title={`Toggle the terminal (${formatKeys('mod+j')})`}
-                aria-label="Toggle the terminal"
-              >
-                <PanelBottom className="h-4 w-4" />
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              className={cn(
-                'h-7 w-7 p-0',
-                !rightPanelOpen && 'text-muted-foreground',
-              )}
-              onClick={toggleRightPanel}
-              title={`${rightPanelOpen ? 'Hide' : 'Show'} the right panel (${formatKeys('mod+alt+b')})`}
-              aria-label="Toggle the right panel"
-              aria-pressed={rightPanelOpen}
-            >
-              <PanelRight className="h-4 w-4" />
-            </Button>
           </div>
         </div>
       </div>

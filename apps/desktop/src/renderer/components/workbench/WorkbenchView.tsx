@@ -22,12 +22,7 @@ import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 
-/**
- * One workbench. Centre: the header, the chat tab strip, the transcript and
- * the composer. Right: the GitPanel (files, changes, pull request) with the
- * terminal dock under it; ⌘⌥B hides it. A thread has no repository: its
- * right column is the WorkPanel (its sessions, memory and repositories).
- */
+/** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const ops = useWorkbenchOps(workbench);
   const repoPaths = useRepoPaths();
@@ -61,27 +56,29 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   };
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={viewOps} />
-        {foreign && reason && (
-          <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={reason}
-            action={!checkout && repoPaths.ready ? (
-              <Button variant="outline" className="h-6 px-2 text-xs" disabled={choosing} onClick={() => void chooseFolder()}>
-                Choose folder
-              </Button>
-            ) : undefined} />
-        )}
-        {!foreign && <StatusBanner workbench={workbench} ops={viewOps} />}
-        <ChatTabs workbench={workbench} selected={chat} />
-        <ChatView workbench={workbench} chat={chat} ops={viewOps} />
+    <div className="flex h-full min-h-0 flex-col" data-attr="workbench-view">
+      <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={viewOps} />
+      <div className="flex min-h-0 min-w-0 flex-1" data-attr="workbench-columns">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ChatTabs workbench={workbench} selected={chat} />
+          {foreign && reason && (
+            <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={reason}
+              action={!checkout && repoPaths.ready ? (
+                <Button variant="outline" className="h-6 px-2 text-xs" disabled={choosing} onClick={() => void chooseFolder()}>
+                  Choose folder
+                </Button>
+              ) : undefined} />
+          )}
+          {!foreign && <StatusBanner workbench={workbench} ops={viewOps} />}
+          <ChatView workbench={workbench} chat={chat} ops={viewOps} />
+        </div>
+        {rightPanelOpen &&
+          (isThread(workbench) ? (
+            <WorkPanel thread={workbench} />
+          ) : (
+            <GitPanel workbench={workbench} chat={chat} ops={viewOps} pr={pr} />
+          ))}
       </div>
-      {rightPanelOpen &&
-        (isThread(workbench) ? (
-          <WorkPanel thread={workbench} />
-        ) : (
-          <GitPanel workbench={workbench} chat={chat} ops={viewOps} pr={pr} />
-        ))}
     </div>
   );
 }
