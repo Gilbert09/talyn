@@ -3,6 +3,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import type { PRRow } from '../lib/api';
 import { useBillingStore } from '../stores/billing';
 import { trackEvent } from '../lib/analytics';
+import { codeForDeferredReason, hasUsageBilling, type BoxNotice } from '../lib/usageBilling';
 
 /**
  * Tells a free user when auto-keep silently stopped keeping their PRs green.
@@ -61,12 +62,15 @@ export function shouldAnnounceDeferral(
  */
 export function useDeferredRuns(): void {
   const plan = useBillingStore((s) => s.status?.plan);
+  // With usage billing any tier can run out of box-hours, so a deferral is
+  // news on every plan. On an older backend only the free plan defers.
+  const usageBilling = useBillingStore((s) => hasUsageBilling(s.status));
 
   useEffect(() => {
-    // Upgrading is the fix, so there is nothing to say to someone who already
-    // has. Waiting for the status to load also stops the modal racing ahead of
-    // a snapshot that would have said `unlimited`.
-    if (!plan || plan !== 'free') return;
+    // Old backend: upgrading is the fix, so there is nothing to say to someone
+    // who already has. Waiting for the status to load also stops the modal
+    // racing ahead of a snapshot that would have said `unlimited`.
+    if (!plan || (!usageBilling && plan !== 'free')) return;
 
     const check = (rows: PRRow[]): void => {
       if (announcedThisLaunch) return;
@@ -84,7 +88,7 @@ export function useDeferredRuns(): void {
         deferred_prs: deferred.length,
         plan,
       });
-      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred', deferralNotice(deferred[0]));
     };
 
     // Subscribed outside React: this hook lives in MainLayout, and a `rows`
@@ -93,7 +97,21 @@ export function useDeferredRuns(): void {
     return usePullRequestStore.subscribe((state, prev) => {
       if (state.rows !== prev.rows) check(state.rows);
     });
-  }, [plan]);
+  }, [plan, usageBilling]);
+}
+
+/**
+ * The plan's own words for an auto-keep deferral, for the upgrade modal.
+ * Null from an older backend, which records only `deferredSince`.
+ */
+export function deferralNotice(row: PRRow | undefined): BoxNotice | null {
+  const state = row?.autoMergeState;
+  if (!state?.deferredReason && !state?.deferredMessage) return null;
+  return {
+    code: codeForDeferredReason(state.deferredReason) ?? undefined,
+    message: state.deferredMessage ?? undefined,
+    retryAt: state.deferredRetryAt ?? undefined,
+  };
 }
 
 /**

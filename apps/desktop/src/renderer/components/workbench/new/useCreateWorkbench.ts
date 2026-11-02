@@ -4,6 +4,7 @@ import { api } from '../../../lib/api';
 import { createLocalWorkbench } from '../../../lib/localWorkbench';
 import { opsFor } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
+import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -69,11 +70,15 @@ export function useCreateWorkbench(): CreateWorkbenchState {
             model: spec.model, effort: spec.effort, planMode: spec.planMode,
           });
         } catch (err) {
-          toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
+          if (!maybeHandleBillingLimit(err, 'workbench_send')) {
+            toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
+          }
         }
       }
       return wb;
     } catch (err) {
+      // A plan refusal also opens the upgrade modal; its sentence stays on the page.
+      maybeHandleBillingLimit(err, spec.kind === 'thread' ? 'thread_create' : 'workbench_create');
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {

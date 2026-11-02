@@ -7,10 +7,29 @@ import {
   TASK_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   LOOP_LIMIT_ERROR_CODE,
+  USAGE_BILLING_ERROR_CODES,
+  PLAN_TIER_LABELS,
+  formatBoxHoursUsage,
+  formatUsd,
   type BillingStatus,
+  type UsageAlertEvent,
+  type UsageExhaustedEvent,
 } from '@talyn/shared';
-import { api, ApiError } from '../lib/api';
+import { api, type ApiError } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
+import {
+  CREDITS_REQUIRE_PAID_PLAN_CODE,
+  claimUsageAlert,
+  formatShortDate,
+  hasUsageBilling,
+  noticeFromDetails,
+  usageAlertKey,
+  usageReasonForCode,
+  type BoxNotice,
+  type UsageUpgradeReason,
+} from '../lib/usageBilling';
+import { toast } from './toast';
+import { useWorkspaceStore } from './workspace';
 
 /**
  * Billing state: the user's plan/usage snapshot plus the upgrade-modal flag.
@@ -26,27 +45,49 @@ import { trackEvent } from '../lib/analytics';
 const POLL_BURST_INTERVAL_MS = 3_000;
 const POLL_BURST_MAX_MS = 2 * 60_000;
 
+/** What a checkout poll burst waits for: a plan change, or credits landing. */
+export type CheckoutKind = 'plan' | 'credits';
+
+/** A session's box that the plan would not wake, from `POST /workbenches/:id/wake`. */
+export interface SessionRefusal {
+  status: 'exhausted' | 'box_limit';
+  notice: BoxNotice | null;
+}
+
 interface BillingState {
   status: BillingStatus | null;
   upgradeModalOpen: boolean;
   /** What the user was refused, so the modal can pitch that thing. */
   upgradeReason: UpgradeReason | null;
+  /** The refusal's own notice (402 body or a deferral), when there is one. */
+  upgradeNotice: BoxNotice | null;
+  /** Sessions whose box the plan would not wake, by workbench id. */
+  sessionRefusals: Record<string, SessionRefusal>;
   setStatus: (status: BillingStatus) => void;
-  setUpgradeModalOpen: (open: boolean, reason?: UpgradeReason | null) => void;
+  setUpgradeModalOpen: (open: boolean, reason?: UpgradeReason | null, notice?: BoxNotice | null) => void;
+  setSessionRefusal: (workbenchId: string, refusal: SessionRefusal | null) => void;
   /** Re-fetch the snapshot from the backend. Safe to call repeatedly. */
   refresh: () => Promise<void>;
   /** Start (or restart) the post-checkout poll burst. */
-  startCheckoutPollBurst: () => void;
+  startCheckoutPollBurst: (kind?: CheckoutKind) => void;
   stopCheckoutPollBurst: () => void;
+  /** `billing:usage_alert`: refresh, and say so once per threshold per period. */
+  handleUsageAlert: (event: UsageAlertEvent) => void;
+  /** `billing:exhausted`: refresh, and say so once per period. */
+  handleExhausted: (event: UsageExhaustedEvent) => void;
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollDeadline = 0;
+/** What the running burst compares against to know its checkout landed. */
+let burstBaseline: { kind: CheckoutKind; plan: string | null; balanceMicros: number } | null = null;
 
 export const useBillingStore = create<BillingState>((set, get) => ({
   status: null,
   upgradeModalOpen: false,
   upgradeReason: null,
+  upgradeNotice: null,
+  sessionRefusals: {},
 
   setStatus: (status) => {
     const prev = get().status;
@@ -58,16 +99,42 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     if (prev?.plan === 'free' && status.plan !== 'free') {
       trackEvent('upgrade_completed', { plan_source: status.planSource });
     }
-    // The burst exists to catch the plan flip; once we're not free (or
-    // billing turns out to be off) there's nothing left to poll for.
-    if (status.plan !== 'free' || !status.billingEnabled) {
+    // Box-hours came back (a reset, credits, an upgrade): a session refused
+    // on wake may start again, so its notice must not linger.
+    if (hasUsageBilling(status) && !status.usage.exhausted && Object.keys(get().sessionRefusals).length > 0) {
+      const kept = Object.fromEntries(
+        Object.entries(get().sessionRefusals).filter(([, r]) => r.status === 'box_limit'),
+      );
+      set({ sessionRefusals: kept });
+    }
+    if (!status.billingEnabled) {
+      get().stopCheckoutPollBurst();
+      return;
+    }
+    if (!pollTimer) return;
+    const landed = checkoutLanded(burstBaseline, status);
+    if (landed) {
+      announceCheckout(landed, status);
       get().stopCheckoutPollBurst();
     }
   },
 
-  setUpgradeModalOpen: (upgradeModalOpen, reason) =>
+  setUpgradeModalOpen: (upgradeModalOpen, reason, notice) =>
     // Clear the reason on close so the next open can't inherit stale copy.
-    set({ upgradeModalOpen, upgradeReason: upgradeModalOpen ? (reason ?? null) : null }),
+    set({
+      upgradeModalOpen,
+      upgradeReason: upgradeModalOpen ? (reason ?? null) : null,
+      upgradeNotice: upgradeModalOpen ? (notice ?? null) : null,
+    }),
+
+  setSessionRefusal: (workbenchId, refusal) => {
+    const current = get().sessionRefusals;
+    if (!refusal && !(workbenchId in current)) return;
+    const next = { ...current };
+    if (refusal) next[workbenchId] = refusal;
+    else delete next[workbenchId];
+    set({ sessionRefusals: next });
+  },
 
   refresh: async () => {
     try {
@@ -78,8 +145,14 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     }
   },
 
-  startCheckoutPollBurst: () => {
+  startCheckoutPollBurst: (kind = 'plan') => {
     pollDeadline = Date.now() + POLL_BURST_MAX_MS;
+    const current = get().status;
+    burstBaseline = {
+      kind,
+      plan: current ? (current.tier ?? current.plan) : null,
+      balanceMicros: current?.credits?.balanceMicros ?? 0,
+    };
     if (pollTimer) return; // already running — just extended the deadline
     pollTimer = setInterval(() => {
       if (Date.now() > pollDeadline) {
@@ -95,11 +168,93 @@ export const useBillingStore = create<BillingState>((set, get) => ({
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    burstBaseline = null;
+  },
+
+  handleUsageAlert: (event) => {
+    void get().refresh();
+    if (!claimUsageAlert(usageAlertKey(event.periodEnd, event.thresholdPct))) return;
+    const usage = formatBoxHoursUsage(event.usedWsec, event.includedWsec);
+    const reset = formatShortDate(event.periodEnd);
+    trackEvent('usage_alert_shown', { threshold: event.thresholdPct, tier: event.tier });
+    if (event.thresholdPct >= 100) {
+      const paid = event.tier !== 'free';
+      toast.info(
+        'You have used your included box-hours',
+        paid
+          ? `${usage}. Boxes now use your credits until ${reset}.`
+          : `${usage}. New boxes start again on ${reset}.`,
+        alertAction(event.tier, true),
+      );
+      return;
+    }
+    toast.info(
+      `${event.thresholdPct}% of your box-hours used`,
+      `${usage} this period. Included hours reset on ${reset}.`,
+      alertAction(event.tier, event.thresholdPct >= 80),
+    );
+  },
+
+  handleExhausted: (event) => {
+    void get().refresh();
+    if (!claimUsageAlert(usageAlertKey(event.periodEnd, 'exhausted'))) return;
+    trackEvent('usage_exhausted_shown', { tier: event.tier });
+    const reset = formatShortDate(event.periodEnd);
+    toast.info(
+      'Out of hours: new boxes paused',
+      event.creditsAllowed
+        ? `Running turns finish. Add credits or turn on auto top-up to start new boxes. Included hours reset on ${reset}.`
+        : `Running turns finish. New boxes start again on ${reset}, or upgrade to Pro for more hours.`,
+      alertAction(event.tier, true),
+    );
   },
 }));
 
-/** The 402 codes the free plan can reject with. */
+/** What landed while a burst ran, or null while the checkout is still pending. */
+function checkoutLanded(
+  baseline: typeof burstBaseline,
+  status: BillingStatus,
+): CheckoutKind | null {
+  if (!baseline) return status.plan !== 'free' ? 'plan' : null;
+  if (baseline.kind === 'credits') {
+    return (status.credits?.balanceMicros ?? 0) > baseline.balanceMicros ? 'credits' : null;
+  }
+  const now = status.tier ?? status.plan;
+  if (baseline.plan === null) return status.plan !== 'free' ? 'plan' : null;
+  return now !== baseline.plan ? 'plan' : null;
+}
+
+/** The success notice for a checkout that landed in this session. */
+function announceCheckout(kind: CheckoutKind, status: BillingStatus): void {
+  if (!hasUsageBilling(status)) return; // the old modal shows its own success state
+  if (kind === 'credits') {
+    toast.success('Credits added', `Your balance is ${formatUsd(status.credits?.balanceMicros ?? 0)}.`);
+    return;
+  }
+  toast.success(`You are on ${PLAN_TIER_LABELS[status.tier]}`, 'Your new box-hours are ready to use.');
+}
+
+/** The toast button for an alert: credits for a paid tier, else the upgrade. */
+function alertAction(tier: UsageAlertEvent['tier'], urgent: boolean) {
+  if (tier === 'free') {
+    return {
+      label: 'Upgrade',
+      onClick: () => useBillingStore.getState().setUpgradeModalOpen(true, 'usage_alert'),
+    };
+  }
+  if (tier === 'legacy_pro' && !urgent) {
+    return {
+      label: 'Move to Pro',
+      onClick: () => useBillingStore.getState().setUpgradeModalOpen(true, 'usage_alert'),
+    };
+  }
+  return { label: 'Add credits', onClick: () => useWorkspaceStore.getState().openSettings('billing') };
+}
+
+/** The 402 codes the plan can reject with: the old count caps and the usage-billing box gate. */
 const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
+  ...USAGE_BILLING_ERROR_CODES,
+  CREDITS_REQUIRE_PAID_PLAN_CODE,
   TASK_LIMIT_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
@@ -146,9 +301,18 @@ export type UpgradeReason =
    * checkbox and is nowhere near a count, and quoting one answers a question they
    * did not ask.
    */
-  | 'auto_review';
+  | 'auto_review'
+  /**
+   * Usage billing. A box refusal (`usage_exhausted`, `size_requires_pro`,
+   * `concurrent_box_limit`), credits on a plan that cannot hold them, or the
+   * action button on a usage alert. The modal reads the tier and the notice.
+   */
+  | UsageUpgradeReason
+  | 'usage_alert';
 
 function reasonFor(code: string): UpgradeReason {
+  const usage = usageReasonForCode(code);
+  if (usage) return usage;
   if (code === MERGE_QUEUE_LIMIT_ERROR_CODE) return 'merge_queue_limit';
   if (code === WORKFLOW_LIMIT_ERROR_CODE) return 'workflow_limit';
   if (code === LOOP_LIMIT_ERROR_CODE) return 'loop_limit';
@@ -169,12 +333,13 @@ function reasonFor(code: string): UpgradeReason {
  * monetization funnel, broken out so we can see which surface drives upgrades.
  */
 export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean {
-  if (!(err instanceof ApiError) || !err.code || !BILLING_LIMIT_CODES.has(err.code)) {
+  if (!isApiError(err) || !err.code || !BILLING_LIMIT_CODES.has(err.code)) {
     return false;
   }
   const store = useBillingStore.getState();
   const status = store.status;
   const reason = reasonFor(err.code);
+  const notice = noticeFromDetails(err.details);
   trackEvent('paywall_shown', {
     // 'task_limit' | 'merge_queue_limit' | 'workflow_limit' | 'loop_limit' |
     // 'auto_keep_default' — what was refused.
@@ -192,8 +357,18 @@ export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean
     active_reviews: status?.activeReviews,
     active_review_limit: status?.activeReviewLimit,
     plan: status?.plan,
+    tier: status?.tier,
+    usage_percent: status?.usage?.percent,
   });
   void store.refresh();
-  store.setUpgradeModalOpen(true, reason);
+  store.setUpgradeModalOpen(true, reason, notice ?? (err.message ? { code: err.code, message: err.message } : null));
   return true;
+}
+
+/**
+ * By name, not `instanceof`: `@talyn/client` ships CommonJS and ESM builds,
+ * and a 402 thrown by one copy must still be read by code holding the other.
+ */
+function isApiError(err: unknown): err is ApiError {
+  return err instanceof Error && err.name === 'ApiError';
 }

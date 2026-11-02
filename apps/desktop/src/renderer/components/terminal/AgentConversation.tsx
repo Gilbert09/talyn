@@ -5,11 +5,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChevronDown, ChevronRight, GitPullRequest, Shield } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
+import { BoxRefusalAction } from '../billing/BoxRefusalAction';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
@@ -632,9 +633,26 @@ function PullRequestLine({ text, url, isError }: { text: string; url?: string; i
   );
 }
 
+/** Chat subtypes the backend writes when the plan refused a turn's box. */
+const BOX_REFUSAL_SUBTYPES = new Set(['usage_exhausted', 'box_limit_reached', 'size_requires_pro']);
+
 function SystemBlock({ text, subtype }: { text: string; subtype?: string }) {
   if (subtype === 'talyn_interruption') {
     return <div className="text-xs text-muted-foreground">Interrupted</div>;
+  }
+  if (subtype && BOX_REFUSAL_SUBTYPES.has(subtype)) {
+    return (
+      <div
+        className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs"
+        data-testid="box-refusal-note"
+      >
+        <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+        <p className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {text || (subtype === 'usage_exhausted' ? 'Out of box-hours. This message waits in the queue.' : 'All your boxes are busy. This message waits in the queue.')}
+        </p>
+        <BoxRefusalAction code={subtype} notice={text ? { message: text } : null} />
+      </div>
+    );
   }
   return (
     <div className="text-xs text-muted-foreground italic border-l-2 border-border pl-2">

@@ -7,6 +7,7 @@ import { markDialogArchive } from '../../lib/localArchive';
 import { detectedCheckout, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
@@ -101,7 +102,9 @@ export async function restoreWorkbench(
     useWorkbenchStore.getState().upsertWorkbench(wb);
     return wb;
   } catch (err) {
-    toast.error('Could not restore the session', bridgeErrorMessage(err, 'Try again.'));
+    if (!maybeHandleBillingLimit(err, 'workbench_restore')) {
+      toast.error('Could not restore the session', bridgeErrorMessage(err, 'Try again.'));
+    }
     return null;
   }
 }

@@ -31,7 +31,7 @@ import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { SidebarThreadList } from './SidebarThreadList';
 import { SidebarSlackPending } from './SidebarSlackPending';
 import { UpdateNotice } from './UpdateNotice';
-import { CloudProviderStatus } from './CloudProviderStatus';
+import { SidebarAccountStatus } from './UsageGauge';
 import { UserChip } from './UserChip';
 
 /**
@@ -188,7 +188,7 @@ export function AppSidebar() {
 
         <div className="border-t p-2">
           <UpdateNotice collapsed={collapsed} />
-          <CloudProviderStatus collapsed={collapsed} />
+          <SidebarAccountStatus collapsed={collapsed} />
           <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
             <IconButton
               label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}

@@ -1,0 +1,283 @@
+/**
+ * @jest-environment jsdom
+ */
+import {
+  CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  SIZE_REQUIRES_PRO_ERROR_CODE,
+  USAGE_EXHAUSTED_ERROR_CODE,
+  sizePriceTable,
+} from '@talyn/shared';
+import type { CloudProviderInfo } from '@talyn/client';
+import {
+  _resetUsageAlertGuard,
+  claimUsageAlert,
+  codeForDeferredReason,
+  gaugeAction,
+  gaugeTone,
+  hasUsageBilling,
+  noticeFromDetails,
+  usageAlertKey,
+  usageReasonForCode,
+  type UsageBillingStatus,
+} from '../renderer/lib/usageBilling';
+import { refusalActionLabel, refusalCode } from '../renderer/components/billing/BoxRefusalAction';
+import { usageUpgradeCopy } from '../renderer/components/modals/UsageUpgradeModal';
+import { sizeOptionLabel } from '../renderer/components/widgets/RepoSandboxSize';
+import { agentWarnings } from '../renderer/components/layout/UsageGauge';
+import { oldStatus, usageStatus } from '../testing/billingStatus';
+
+jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+
+describe('hasUsageBilling', () => {
+  it.each([
+    ['null', null, false],
+    ['an old backend status', oldStatus(), false],
+    ['an old Unlimited status', oldStatus({ plan: 'unlimited' }), false],
+    ['billing turned off', usageStatus('free', { overrides: { billingEnabled: false } }), false],
+    ['a tier with no usage', { ...oldStatus(), tier: 'free' as const }, false],
+    ['a free usage status', usageStatus('free'), true],
+    ['a pro usage status', usageStatus('pro'), true],
+    ['a legacy usage status', usageStatus('legacy_pro'), true],
+  ])('%s → %s', (_label, status, expected) => {
+    expect(hasUsageBilling(status)).toBe(expected);
+  });
+});
+
+describe('gaugeTone', () => {
+  it.each([
+    [0, false, 'ok'],
+    [49, false, 'ok'],
+    [50, false, 'notice'],
+    [79, false, 'notice'],
+    [80, false, 'warning'],
+    [99, false, 'warning'],
+    [100, false, 'danger'],
+    [10, true, 'danger'],
+  ])('%i%% exhausted=%s → %s', (percent, exhausted, tone) => {
+    expect(gaugeTone({ percent, exhausted })).toBe(tone);
+  });
+});
+
+describe('gaugeAction', () => {
+  const status = (tier: 'free' | 'pro' | 'legacy_pro', usedHours: number, exhausted = false) =>
+    usageStatus(tier, { usedHours, exhausted }) as UsageBillingStatus;
+
+  it.each([
+    ['free under 80%', status('free', 1), 'upgrade'],
+    ['free over 80%', status('free', 9), 'upgrade'],
+    ['free exhausted', status('free', 10, true), 'upgrade'],
+    ['pro under 80%', status('pro', 10), 'add_credits'],
+    ['pro over 80%', status('pro', 170), 'add_credits'],
+    ['legacy under 80%', status('legacy_pro', 10), 'upgrade'],
+    ['legacy at 80%', status('legacy_pro', 40), 'add_credits'],
+    ['legacy exhausted', status('legacy_pro', 50, true), 'add_credits'],
+  ])('%s → %s', (_label, s, action) => {
+    expect(gaugeAction(s)).toBe(action);
+  });
+});
+
+describe('noticeFromDetails', () => {
+  it.each([
+    ['no details', undefined, null],
+    ['no notice', { code: 'x' }, null],
+    ['a string notice', { notice: 'nope' }, null],
+    ['an array notice', { notice: [] }, null],
+  ])('%s → null', (_label, details, expected) => {
+    expect(noticeFromDetails(details as Record<string, unknown> | undefined)).toBe(expected);
+  });
+
+  it('returns the notice object', () => {
+    const notice = { code: USAGE_EXHAUSTED_ERROR_CODE, message: 'Out.', tier: 'free' };
+    expect(noticeFromDetails({ notice })).toEqual(notice);
+  });
+});
+
+describe('code mapping', () => {
+  it.each([
+    [USAGE_EXHAUSTED_ERROR_CODE, 'usage_exhausted'],
+    [SIZE_REQUIRES_PRO_ERROR_CODE, 'size_requires_pro'],
+    [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'concurrent_box_limit'],
+    ['credits_require_paid_plan', 'credits_require_paid_plan'],
+    ['task_limit_reached', null],
+    ['', null],
+  ])('usageReasonForCode(%s) → %s', (code, reason) => {
+    expect(usageReasonForCode(code)).toBe(reason);
+  });
+
+  it.each([
+    ['usage_exhausted', USAGE_EXHAUSTED_ERROR_CODE],
+    ['box_limit_reached', CONCURRENT_BOX_LIMIT_ERROR_CODE],
+    ['size_requires_pro', SIZE_REQUIRES_PRO_ERROR_CODE],
+    [null, null],
+    [undefined, null],
+    ['something_else', null],
+  ])('codeForDeferredReason(%s) → %s', (reason, code) => {
+    expect(codeForDeferredReason(reason)).toBe(code);
+  });
+
+  it.each([
+    ['exhausted', USAGE_EXHAUSTED_ERROR_CODE],
+    ['usage_exhausted', USAGE_EXHAUSTED_ERROR_CODE],
+    ['box_limit', CONCURRENT_BOX_LIMIT_ERROR_CODE],
+    ['box_limit_reached', CONCURRENT_BOX_LIMIT_ERROR_CODE],
+    [CONCURRENT_BOX_LIMIT_ERROR_CODE, CONCURRENT_BOX_LIMIT_ERROR_CODE],
+    [SIZE_REQUIRES_PRO_ERROR_CODE, SIZE_REQUIRES_PRO_ERROR_CODE],
+    ['stderr', null],
+    [null, null],
+  ])('refusalCode(%s) → %s', (input, code) => {
+    expect(refusalCode(input)).toBe(code);
+  });
+
+  it.each([
+    [USAGE_EXHAUSTED_ERROR_CODE, 'free', 'Upgrade'],
+    [USAGE_EXHAUSTED_ERROR_CODE, 'pro', 'Add credits'],
+    [USAGE_EXHAUSTED_ERROR_CODE, 'legacy_pro', 'Add credits'],
+    [USAGE_EXHAUSTED_ERROR_CODE, null, 'Upgrade'],
+    [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'free', 'Upgrade'],
+    [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'pro', null],
+    [SIZE_REQUIRES_PRO_ERROR_CODE, 'free', 'Upgrade'],
+    [SIZE_REQUIRES_PRO_ERROR_CODE, 'legacy_pro', null],
+    [null, 'free', null],
+  ] as const)('refusalActionLabel(%s, %s) → %s', (code, tier, label) => {
+    expect(refusalActionLabel(code, tier)).toBe(label);
+  });
+});
+
+describe('claimUsageAlert', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    _resetUsageAlertGuard();
+  });
+
+  it('claims each threshold of a period once', () => {
+    const key = usageAlertKey('2026-12-01T00:00:00.000Z', 80);
+    expect(claimUsageAlert(key)).toBe(true);
+    expect(claimUsageAlert(key)).toBe(false);
+  });
+
+  it('remembers a claim across launches', () => {
+    const key = usageAlertKey('2026-12-01T00:00:00.000Z', 50);
+    expect(claimUsageAlert(key)).toBe(true);
+    _resetUsageAlertGuard();
+    expect(claimUsageAlert(key)).toBe(false);
+  });
+
+  it('treats another threshold and another period as new', () => {
+    expect(claimUsageAlert(usageAlertKey('2026-12-01T00:00:00.000Z', 50))).toBe(true);
+    expect(claimUsageAlert(usageAlertKey('2026-12-01T00:00:00.000Z', 80))).toBe(true);
+    expect(claimUsageAlert(usageAlertKey('2027-01-01T00:00:00.000Z', 50))).toBe(true);
+    expect(claimUsageAlert(usageAlertKey('2027-01-01T00:00:00.000Z', 'exhausted'))).toBe(true);
+  });
+
+  it('still says it once a launch when storage throws', () => {
+    const spy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const key = usageAlertKey('2026-12-01T00:00:00.000Z', 100);
+    expect(claimUsageAlert(key)).toBe(true);
+    expect(claimUsageAlert(key)).toBe(false);
+    spy.mockRestore();
+  });
+});
+
+describe('usageUpgradeCopy', () => {
+  const periodEnd = '2026-12-01T00:00:00.000Z';
+
+  it('prefers the notice sentence when there is one', () => {
+    expect(
+      usageUpgradeCopy({ tier: 'free', reason: 'usage_exhausted', notice: { message: 'The server says so.' }, periodEnd }),
+    ).toEqual({ title: 'You are out of box-hours', body: 'The server says so.' });
+  });
+
+  it.each([
+    ['free', 'usage_exhausted', 'You are out of box-hours', /10 box-hours.*Pro includes 200 box-hours/],
+    ['pro', 'usage_exhausted', 'You are out of box-hours', /Add credits or turn on auto top-up/],
+    ['legacy_pro', 'usage_exhausted', 'You are out of box-hours', /Add credits or turn on auto top-up/],
+    ['free', 'size_requires_pro', 'Larger boxes need Pro', /small and standard/],
+    ['free', 'concurrent_box_limit', 'All your boxes are busy', /runs 2 boxes.*Pro runs up to 100/],
+    ['pro', 'concurrent_box_limit', 'All your boxes are busy', /runs 100 boxes/],
+    ['free', 'credits_require_paid_plan', 'Credits come with Pro', /come with Pro/],
+    ['free', 'auto_keep_default', 'Keep every new PR mergeable', /Pro feature/],
+    ['free', 'auto_review', 'Review every new pull request', /Pro feature/],
+    ['free', 'task_deferred', 'A fix run is waiting', /could not start a box/],
+    ['free', null, 'Upgrade to Pro', /200 box-hours a month/],
+    ['legacy_pro', null, 'Move to Pro', /200 box-hours a month instead of 50 box-hours/],
+    ['pro', null, 'Add credits', /Credits keep/],
+    ['legacy_pro', 'usage_alert', 'Move to Pro', /instead of 50/],
+  ] as const)('%s / %s → %s', (tier, reason, title, body) => {
+    const copy = usageUpgradeCopy({ tier, reason, notice: null, periodEnd });
+    expect(copy.title).toBe(title);
+    expect(copy.body).toMatch(body);
+    expect(copy.body).not.toMatch(/—/);
+  });
+
+  it('uses the notice limit for a box cap', () => {
+    expect(usageUpgradeCopy({ tier: 'free', reason: 'concurrent_box_limit', notice: { limit: 7 } }).body).toMatch(
+      /runs 7 boxes/,
+    );
+  });
+});
+
+describe('sizeOptionLabel', () => {
+  it('keeps the old label and hint without usage billing', () => {
+    expect(sizeOptionLabel('standard', undefined)).toBe('Standard · 4 GB — Most repos');
+  });
+
+  it.each([
+    ['free', 'small', 'Small · 2 vCPU: $0.11/h, 0.5x box-hours'],
+    ['free', 'standard', 'Standard · 4 GB: $0.22/h, 1x box-hours'],
+    ['free', 'medium', 'Medium · 8 GB (Pro)'],
+    ['free', 'large', 'Large · 12 GB (Pro)'],
+    ['free', 'xlarge', 'X-Large · 16 GB (Pro)'],
+    ['pro', 'medium', 'Medium · 8 GB: $0.275/h, 1.25x box-hours'],
+    ['pro', 'large', 'Large · 12 GB: $0.44/h, 2x box-hours'],
+    ['legacy_pro', 'xlarge', 'X-Large · 16 GB: $0.55/h, 2.5x box-hours'],
+  ] as const)('%s %s → %s', (tier, size, label) => {
+    const price = sizePriceTable(tier).find((p) => p.size === size);
+    expect(sizeOptionLabel(size, price)).toBe(label);
+  });
+});
+
+describe('agentWarnings', () => {
+  const provider = (over: Partial<CloudProviderInfo>): CloudProviderInfo => ({
+    type: 'selfhosted',
+    displayName: 'Talyn Fleet',
+    connected: true,
+    ...over,
+  });
+
+  it.each([
+    ['no providers', null, []],
+    ['an empty list', [], []],
+    ['a healthy fleet', [provider({ connectedAgents: ['claude'] })], []],
+    [
+      'a healthy fleet beside an unconnected PostHog Code',
+      [provider({ connectedAgents: ['claude'] }), provider({ type: 'posthog_code', displayName: 'PostHog Code', connected: false })],
+      [],
+    ],
+    [
+      'a fleet agent that needs reconnecting',
+      [provider({ connectedAgents: ['claude', 'codex'], reauthAgents: ['claude'] })],
+      ['Claude needs reconnecting'],
+    ],
+    [
+      'a provider that needs reconnecting with no agent named',
+      [provider({ type: 'posthog_code', displayName: 'PostHog Code', needsReconnect: true })],
+      ['PostHog Code needs reconnecting'],
+    ],
+    [
+      'nothing connected at all',
+      [provider({ connected: false }), provider({ type: 'posthog_code', displayName: 'PostHog Code', connected: false })],
+      ['No agent is connected'],
+    ],
+  ])('%s', (_label, providers, expected) => {
+    expect(agentWarnings(providers as CloudProviderInfo[] | null)).toEqual(expected);
+  });
+
+  it('reads the PostHog re-auth flag', () => {
+    expect(agentWarnings([provider({ type: 'posthog_code', displayName: 'PostHog Code' })], true)).toEqual([
+      'PostHog Code needs reconnecting',
+    ]);
+  });
+});

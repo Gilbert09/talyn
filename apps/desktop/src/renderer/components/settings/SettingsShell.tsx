@@ -24,6 +24,7 @@ import {
 import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { useBillingStore } from '../../stores/billing';
+import { hasUsageBilling } from '../../lib/usageBilling';
 import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace';
 import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsCard';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
@@ -172,7 +173,7 @@ export function SettingsShell() {
         ...(features?.teams === true || billingStatus?.team
           ? [{ id: 'teams' as const, icon: Users, label: 'Team' }]
           : []),
-        { id: 'billing', icon: CreditCard, label: 'Billing' },
+        { id: 'billing', icon: CreditCard, label: hasUsageBilling(billingStatus) ? 'Plan and usage' : 'Billing' },
       ],
     },
     {

@@ -33,6 +33,7 @@ import { api, type PRChecks, type PRRow } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { NEXT_ACTION_LABEL, prRowAsLike } from '../../lib/workbenchFormat';
 import {
@@ -156,6 +157,7 @@ export function WorkbenchHeader({
     try {
       await continueAsThread(workbench);
     } catch (err) {
+      if (maybeHandleBillingLimit(err, 'thread_continue')) return;
       toast.error('Could not continue as a thread', err instanceof Error ? err.message : undefined);
     } finally {
       setContinuing(false);

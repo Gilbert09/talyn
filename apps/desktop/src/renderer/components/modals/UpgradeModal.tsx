@@ -19,17 +19,38 @@ import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { hasUsageBilling } from '../../lib/usageBilling';
+import { UsageUpgradeModal } from './UsageUpgradeModal';
 
 type Period = 'monthly' | 'annual';
 
 /**
- * The upgrade pitch. Opens when a free user hits the active-task limit (see
+ * The upgrade pitch. On a backend with usage billing it is the box-hours and
+ * credits modal; on an older backend (the production backend until release)
+ * it is the old Unlimited pitch, unchanged.
+ */
+export function UpgradeModal({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const status = useBillingStore((s) => s.status);
+  if (hasUsageBilling(status)) {
+    return <UsageUpgradeModal status={status} open={open} onOpenChange={onOpenChange} />;
+  }
+  return <LegacyUpgradeModal open={open} onOpenChange={onOpenChange} />;
+}
+
+/**
+ * The old pitch. Opens when a free user hits the active-task limit (see
  * maybeHandleTaskLimit) or from Settings → Billing. Checkout happens in the
  * system browser; completion arrives via the subscription:updated WS push
  * backed by the store's poll burst — the modal flips to a success state on
  * its own when the plan changes.
  */
-export function UpgradeModal({
+function LegacyUpgradeModal({
   open,
   onOpenChange,
 }: {
