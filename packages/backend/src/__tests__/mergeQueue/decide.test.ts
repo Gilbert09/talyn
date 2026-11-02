@@ -23,6 +23,7 @@ import {
 import {
   GITHUB_FAULT_FIRST_WAIT_MS,
   MAX_INFRA_SUBMITS_PER_HEAD,
+  REVIEW_REMINDER_AFTER_MS,
 } from '../../services/mergeQueue/types.js';
 import type {
   Action,
@@ -4296,5 +4297,256 @@ describe('decide — a live session holds back fix runs', () => {
     );
     expect(fixRun(d)).toBeUndefined();
     expect(lastTransition(d)?.blockedCode).not.toBe('session_active');
+  });
+});
+
+// PostHog/posthog#126933, 2026-11-02. The PR was APPROVED and green; GitHub
+// said BLOCKED because master merges only through Trunk. A fix run read that
+// BLOCKED as "probably needs an approving review", the queue parked the entry
+// and sent "merge queue blocked", and released it again on the next pass.
+describe('decide — a missing review is a quiet wait, read from GitHub and never from BLOCKED alone', () => {
+  const HOUR = 60 * 60_000;
+  const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+  /** GitHub's own answer: a required review is missing. */
+  const reviewRequired = () =>
+    pr({ mergeStateStatus: 'BLOCKED' }, { reviewDecision: 'REVIEW_REQUIRED', blockingReason: 'blocked' });
+  /** Approved and green; BLOCKED only because the base merges through Trunk. */
+  const approvedBehindTrunk = () =>
+    pr({ mergeStateStatus: 'BLOCKED' }, { reviewDecision: 'APPROVED', blockingReason: 'blocked' });
+  const gated = (o: Partial<DecisionContext> = {}) => ctx({ externalGate: 'confirmed', ...o });
+
+  it.each([
+    ['an ungated base', () => ctx()],
+    ['a Trunk-gated base', () => gated()],
+  ])('waits in awaiting_review on %s, with no fix run and no alarm', (_label, c) => {
+    const d = decide(entry({ status: 'queued' }), reviewRequired(), c());
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('awaiting_review');
+    expect(t.event.code).toBe('awaiting_review');
+    expect(t.event.message).toContain('Waiting for an approving review');
+    expect(kinds(d)).not.toContain('fire_fix_run');
+    expect(kinds(d)).not.toContain('notify_blocked');
+    expect(kinds(d)).not.toContain('submit_external');
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('stays silent on later passes', () => {
+    const d = decide(entry({ status: 'awaiting_review' }), reviewRequired(), gated());
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('accounts a finished fix run quietly when GitHub agrees a review is missing', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      reviewRequired(),
+      gated({ fixTaskState: 'terminal', fixTaskNeedsHumanReason: 'Needs a code-owner approval.' })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('awaiting_review');
+    expect(t.set?.fixTaskAccounted).toBe(true);
+    expect(t.set?.fixAttempts).toBeUndefined();
+    expect(t.event.message).toContain('Needs a code-owner approval.');
+    expect(t.blockedCode).toBeNull();
+    expect(kinds(d)).not.toContain('notify_blocked');
+  });
+
+  it('does not account a run that is still going', () => {
+    const d = decide(
+      entry({ status: 'awaiting_review', fixTaskId: 't1', fixTaskAccounted: false }),
+      reviewRequired(),
+      gated({ fixTaskState: 'active' })
+    );
+    expect(transitions(d).some((t) => t.set?.fixTaskAccounted === true)).toBe(false);
+  });
+
+  it('does not wait while CI is still running — CI comes first', () => {
+    const d = decide(
+      entry({ status: 'queued' }),
+      pr(
+        { mergeStateStatus: 'BLOCKED' },
+        {
+          reviewDecision: 'REVIEW_REQUIRED',
+          blockingReason: 'blocked',
+          checks: { total: 3, failed: 0, inProgress: 2 },
+        }
+      ),
+      ctx()
+    );
+    expect(transitions(d).some((t) => t.to === 'awaiting_review')).toBe(false);
+  });
+
+  it('sends a real blocker to the fix path, not to the wait', () => {
+    const d = decide(
+      entry({ status: 'queued', rerunAttempts: 1 }),
+      pr(
+        { mergeStateStatus: 'BLOCKED' },
+        {
+          reviewDecision: 'REVIEW_REQUIRED',
+          blockingReason: 'checks_failed',
+          checks: { total: 3, failed: 1, inProgress: 0 },
+        }
+      ),
+      ctx()
+    );
+    expect(transitions(d).some((t) => t.to === 'awaiting_review')).toBe(false);
+    expect(fixRun(d)).toBeTruthy();
+  });
+
+  describe('BLOCKED alone is never read as a missing review', () => {
+    it('submits an approved, green, BLOCKED PR to Trunk', () => {
+      const d = decide(entry({ status: 'queued' }), approvedBehindTrunk(), gated());
+      expect(kinds(d)).toContain('submit_external');
+      expect(transitions(d).some((t) => t.to === 'awaiting_review')).toBe(false);
+      expect(kinds(d)).not.toContain('fire_fix_run');
+    });
+
+    it.each([['APPROVED'], [null]] as const)(
+      'does not wait for a review when reviewDecision is %s',
+      (reviewDecision) => {
+        const d = decide(
+          entry({ status: 'queued' }),
+          pr({ mergeStateStatus: 'BLOCKED' }, { reviewDecision, blockingReason: 'blocked' }),
+          ctx()
+        );
+        expect(transitions(d).some((t) => t.to === 'awaiting_review')).toBe(false);
+      }
+    );
+  });
+
+  describe('resumes by itself once the approval lands', () => {
+    it('submits to Trunk on a gated base', () => {
+      const d = decide(entry({ status: 'awaiting_review' }), approvedBehindTrunk(), gated());
+      expect(kinds(d)).toContain('submit_external');
+      expect(kinds(d)).not.toContain('notify_blocked');
+    });
+
+    it('merges on an ungated base', () => {
+      const d = decide(entry({ status: 'awaiting_review' }), cleanPr(), ctx());
+      expect(kinds(d)).toContain('verify_live_then_merge');
+    });
+
+    it('does not replay an old needs_human refusal as an alarm', () => {
+      const after = decide(
+        entry({ status: 'awaiting_review', fixTaskId: 't1', fixTaskAccounted: true }),
+        approvedBehindTrunk(),
+        gated({ fixTaskState: 'terminal', fixTaskNeedsHumanReason: 'Needs approval.' })
+      );
+      expect(kinds(after)).not.toContain('notify_blocked');
+      expect(transitions(after).some((t) => t.blockedCode === 'agent_needs_human')).toBe(false);
+      expect(kinds(after)).toContain('submit_external');
+    });
+  });
+
+  describe('the one reminder', () => {
+    const waiting = (wait: DecisionContext['reviewWait']) =>
+      decide(entry({ status: 'awaiting_review' }), reviewRequired(), gated({ reviewWait: wait }));
+
+    it('fires once the entry has waited 24 hours', () => {
+      const since = ago(25 * HOUR);
+      const d = waiting({ since, reminded: false });
+      expect(d.actions).toContainEqual({ kind: 'notify_review_wait', since });
+      const t = lastTransition(d)!;
+      expect(t.to).toBe('awaiting_review');
+      expect(t.event.code).toBe('review_wait_reminder');
+      expect(t.event.message).toContain('25 hours');
+      expect(kinds(d)).not.toContain('notify_blocked');
+    });
+
+    it('fires at exactly the threshold', () => {
+      expect(kinds(waiting({ since: ago(REVIEW_REMINDER_AFTER_MS), reminded: false }))).toContain(
+        'notify_review_wait'
+      );
+    });
+
+    it.each<[string, DecisionContext['reviewWait']]>([
+      ['before 24 hours', { since: ago(23 * HOUR), reminded: false }],
+      ['after the one reminder', { since: ago(72 * HOUR), reminded: true }],
+      ['with no reading of the wait', undefined],
+      ['with a null reading', null],
+      ['with a time that does not parse', { since: 'not-a-date', reminded: false }],
+    ])('stays silent %s', (_label, wait) => {
+      expect(waiting(wait).actions).toEqual([]);
+    });
+  });
+});
+
+describe('decide — a needs_human run on a PR GitHub shows clean', () => {
+  const approvedBehindTrunk = () =>
+    pr({ mergeStateStatus: 'BLOCKED' }, { reviewDecision: 'APPROVED', blockingReason: 'blocked' });
+  const finished = () => entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false });
+  const GUESS =
+    'PR #126933 needs an approving review (Team Warehouse Sources or the stamphog AI approval) before the Trunk merge queue can take it.';
+
+  it('submits to Trunk instead of parking, with no alarm', () => {
+    const d = decide(
+      finished(),
+      approvedBehindTrunk(),
+      ctx({ externalGate: 'confirmed', fixTaskState: 'terminal', fixTaskNeedsHumanReason: GUESS })
+    );
+    const acct = transitions(d)[0]!;
+    expect(acct.to).toBe('queued');
+    expect(acct.event.code).toBe('fix_run_needs_human_superseded');
+    expect(acct.event.message).toContain(GUESS);
+    expect(acct.event.message).toContain('submitting it there');
+    expect(acct.set?.fixTaskAccounted).toBe(true);
+    expect(acct.set?.fixAttempts).toBeUndefined();
+    expect(kinds(d)).toContain('submit_external');
+    expect(kinds(d)).not.toContain('notify_blocked');
+    expect(transitions(d).some((t) => t.blockedCode === 'agent_needs_human')).toBe(false);
+  });
+
+  it('merges on an ungated base when GitHub shows the PR clean', () => {
+    const d = decide(
+      finished(),
+      cleanPr(),
+      ctx({ fixTaskState: 'terminal', fixTaskNeedsHumanReason: 'Somebody should look.' })
+    );
+    expect(transitions(d)[0]!.event.code).toBe('fix_run_needs_human_superseded');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(kinds(d)).not.toContain('notify_blocked');
+  });
+
+  it.each([
+    [
+      'a red required check',
+      () =>
+        pr(
+          { mergeStateStatus: 'BLOCKED' },
+          {
+            reviewDecision: 'APPROVED',
+            blockingReason: 'checks_failed',
+            checks: { total: 3, failed: 1, inProgress: 0 },
+          }
+        ),
+    ],
+    [
+      'a human gate',
+      () => pr({ mergeStateStatus: 'BLOCKED' }, { reviewDecision: 'APPROVED', blockingReason: 'needs_human' }),
+    ],
+    [
+      'requested changes',
+      () =>
+        pr(
+          { mergeStateStatus: 'BLOCKED' },
+          { reviewDecision: 'CHANGES_REQUESTED', blockingReason: 'changes_requested' }
+        ),
+    ],
+  ])('still parks and notifies when GitHub shows %s', (_label, snapshot) => {
+    const d = decide(
+      finished(),
+      snapshot(),
+      ctx({
+        externalGate: 'confirmed',
+        fixTaskState: 'terminal',
+        fixTaskNeedsHumanReason: 'A person must act.',
+      })
+    );
+    const acct = transitions(d)[0]!;
+    expect(acct.to).toBe('blocked');
+    expect(acct.blockedCode).toBe('agent_needs_human');
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(kinds(d)).not.toContain('submit_external');
   });
 });

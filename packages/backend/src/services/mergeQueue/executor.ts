@@ -68,7 +68,12 @@ import {
   workspacePromptTemplate,
   workspaceRespondToHumanComments,
 } from '../promptTemplates.js';
-import { emitPullRequestUpdated, emitMergeQueueBlocked } from '../websocket.js';
+import {
+  emitPullRequestUpdated,
+  emitMergeQueueBlocked,
+  emitMergeQueueReviewWait,
+} from '../websocket.js';
+import { resolveNeedsHumanTask } from './needsHumanResolve.js';
 import {
   broadcastMergeQueuePositions,
   noteMergeQueueEmitted,
@@ -89,6 +94,7 @@ import { githubHealthMonitor } from '../githubHealthMonitor.js';
 import { toPublicMergeQueue } from './legacy.js';
 import {
   casTransition,
+  reviewWaitFor,
   rowToEntrySnapshot,
   type CasPatch,
   type EntryRow,
@@ -100,6 +106,7 @@ import {
   type Action,
   type DecisionContext,
   type EntrySnapshot,
+  type EntryStatus,
   type FixKind,
   type MergeOutcome,
   type PrSnapshot,
@@ -437,6 +444,10 @@ async function buildBaseContext(
     fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
     fixTaskNeedsHumanReason:
       ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
+    // Only an entry already waiting for a review can owe a reminder.
+    ...(entry.status === 'awaiting_review'
+      ? { reviewWait: await reviewWaitFor(entry.id).catch(() => null) }
+      : {}),
     // An unresolved code-review blocker on this commit. One indexed read of the
     // open-findings partial index, and only when there is a review at all — a
     // workspace not using the feature pays a single miss.
@@ -635,6 +646,20 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     }
     case 'notify_blocked': {
       notifyBlocked(ctx.entry, ctx.pr);
+      return {};
+    }
+    case 'notify_review_wait': {
+      const summary = ctx.pr.lastSummary as { title?: string; url?: string } | null;
+      emitMergeQueueReviewWait(ctx.pr.workspaceId, {
+        pullRequestId: ctx.pr.id,
+        owner: ctx.pr.owner,
+        repo: ctx.pr.repo,
+        number: ctx.pr.number,
+        title: summary?.title ?? '',
+        url: summary?.url ?? '',
+        waitingSince: action.since,
+        message: `#${ctx.pr.number} is still waiting for a review.`,
+      });
       return {};
     }
     case 'mark_signing_required': {
@@ -1010,6 +1035,44 @@ function noteQueueHealth(
   }
 }
 
+/**
+ * Statuses that mean the queue moved on WITHOUT the person a fix run asked
+ * for. Not `awaiting_review` (a person does owe a review), not a block, and not
+ * `removed` (the person took the PR out; whatever the run asked may still
+ * stand).
+ */
+const MOVED_ON: ReadonlySet<EntryStatus> = new Set<EntryStatus>([
+  'queued',
+  'awaiting_ci',
+  'awaiting_external',
+  'awaiting_stack',
+  'automerge_armed',
+  'merging',
+  'merged',
+]);
+
+/**
+ * Does this transition resolve the last fix run's `needs_human` request? Yes
+ * when the queue decided GitHub shows nothing for a person to do
+ * (`fix_run_needs_human_superseded`), or when the entry leaves its
+ * `agent_needs_human` park for a status that is moving the PR forward. Returns
+ * the note to store, or null.
+ */
+function needsHumanResolvedBy(
+  before: EntrySnapshot,
+  action: Extract<Action, { kind: 'transition' }>
+): string | null {
+  if (action.event.code === 'fix_run_needs_human_superseded') {
+    return 'GitHub showed nothing blocking the PR, so the merge queue carried on.';
+  }
+  if (before.blockedCode === 'agent_needs_human' && MOVED_ON.has(action.to)) {
+    return action.to === 'merged'
+      ? 'The pull request merged.'
+      : 'The merge queue picked the pull request back up.';
+  }
+  return null;
+}
+
 async function applyTransition(
   action: Extract<Action, { kind: 'transition' }>,
   ctx: ActionContext
@@ -1065,6 +1128,10 @@ async function applyTransition(
     }
   );
   if (!ok) return { casLost: true };
+  const resolvedNote = needsHumanResolvedBy(ctx.entry, action);
+  if (resolvedNote && ctx.entry.fixTaskId) {
+    await resolveNeedsHumanTask(ctx.entry.fixTaskId, resolvedNote);
+  }
   debugBus.recordEvent({
     service: 'merge_queue',
     action: `${ctx.entry.status}->${action.to}`,
@@ -1707,6 +1774,7 @@ async function verifyMerged(pr: PrEvalRow): Promise<boolean> {
  */
 async function recordMerged(entry: EntrySnapshot, pr: PrEvalRow): Promise<void> {
   const db = getDbClient();
+  if (entry.fixTaskId) await resolveNeedsHumanTask(entry.fixTaskId, 'The pull request merged.');
   await db
     .update(pullRequestsTable)
     .set({ state: 'merged', mergedAt: new Date(), ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })

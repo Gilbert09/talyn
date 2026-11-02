@@ -112,6 +112,35 @@ describe('buildMergeablePrompt — provider dispatch', () => {
   });
 });
 
+// PostHog/posthog#126933, 2026-11-02: an approved PR on a Trunk-gated base read
+// BLOCKED, and the run stopped with "needs an approving review" as if it were
+// a fact. Its other runs that day stopped to ask a person to re-submit to Trunk.
+describe('buildMergeablePrompt — the stopping line says what was verified', () => {
+  it.each<[CloudProviderType]>([['posthog_code'], ['selfhosted']])('%s', (provider) => {
+    const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+    expect(prompt).toContain('Write ONLY what you VERIFIED');
+    expect(prompt).toMatch(/mergeStateStatus: BLOCKED`? does not say WHY/);
+    expect(prompt).toContain('reviewDecision');
+    expect(prompt).toContain('cause not verified');
+    expect(prompt).toContain('Never stop only to have the PR submitted or re-submitted to a merge queue');
+  });
+
+  it('tells a queue-failure run not to ask a person to re-submit', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme',
+      repo: 'widgets',
+      number: 7,
+      summary,
+      provider: 'selfhosted',
+      queueFailure: {
+        provider: 'Trunk',
+        evidence: 'This pull request could not start testing because there was a merge conflict.',
+      },
+    });
+    expect(prompt).toContain("re-submitting the PR to Trunk is Talyn's job, not a person's");
+  });
+});
+
 describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: plain push, signed through GitHub)', () => {
   const prompt = buildMergeablePrompt({
     owner: 'acme',

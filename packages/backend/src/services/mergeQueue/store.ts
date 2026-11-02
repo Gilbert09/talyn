@@ -6,7 +6,7 @@
 // newer state), and every transition appends its audit event in the same
 // transaction — the timeline can't lie about what happened.
 
-import { and, asc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import { getDbClient } from '../../db/client.js';
 import {
@@ -16,6 +16,7 @@ import {
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import type { ExternalQueueState, MergeQueueMode } from '@talyn/shared';
+import { resolveNeedsHumanTask } from './needsHumanResolve.js';
 import type {
   BlockedCode,
   EntrySnapshot,
@@ -258,6 +259,10 @@ export async function closeActiveEntry(
 ): Promise<EntryRow | null> {
   const existing = await getActiveEntryForPr(prId, db);
   if (!existing) return null;
+  // A merged PR needs nothing from the person a fix run asked for.
+  if (outcome === 'merged' && existing.fixTaskId) {
+    await resolveNeedsHumanTask(existing.fixTaskId, 'The pull request merged.');
+  }
   await db.transaction(async (tx) => {
     await tx
       .update(mergeQueueEntries)
@@ -277,6 +282,47 @@ export async function closeActiveEntry(
     });
   });
   return existing;
+}
+
+/**
+ * How long an `awaiting_review` entry has waited, read off its own timeline:
+ * the latest transition INTO `awaiting_review`, and whether a reminder was
+ * logged since then. Null when the timeline has no such transition.
+ *
+ * Two indexed reads on (entry_id, at), each one row, and only for entries in
+ * `awaiting_review`. No column for it: the timeline already holds the fact,
+ * and a second copy could disagree with it.
+ */
+export async function reviewWaitFor(
+  entryId: string,
+  db: Db = getDbClient()
+): Promise<{ since: string; reminded: boolean } | null> {
+  const started = await db
+    .select({ at: mergeQueueEvents.at })
+    .from(mergeQueueEvents)
+    .where(
+      and(
+        eq(mergeQueueEvents.entryId, entryId),
+        eq(mergeQueueEvents.toStatus, 'awaiting_review'),
+        or(isNull(mergeQueueEvents.fromStatus), ne(mergeQueueEvents.fromStatus, 'awaiting_review'))
+      )
+    )
+    .orderBy(desc(mergeQueueEvents.at))
+    .limit(1);
+  const since = started[0]?.at;
+  if (!since) return null;
+  const reminder = await db
+    .select({ at: mergeQueueEvents.at })
+    .from(mergeQueueEvents)
+    .where(
+      and(
+        eq(mergeQueueEvents.entryId, entryId),
+        eq(mergeQueueEvents.code, 'review_wait_reminder'),
+        gte(mergeQueueEvents.at, since)
+      )
+    )
+    .limit(1);
+  return { since: since.toISOString(), reminded: reminder.length > 0 };
 }
 
 // ── CAS transitions (the pipeline's only status writer) ──

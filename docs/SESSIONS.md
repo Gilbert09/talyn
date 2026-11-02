@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Merge queue: Trunk's GitHub errors, review waits, and false "blocked" alarms (2026-11-02)
+
+On 2026-11-02 four posthog/posthog PRs (#126944, #126956, #126980, #127084) and #126933 got "merge queue blocked" alarms that asked a person to re-submit them to Trunk. Three more PRs had the same failure on 2026-10-07.
+
+Trunk said "could not start testing because GitHub repeatedly returned errors while Trunk was preparing the test branch". The parser matched the merge-conflict rule ("could not start testing"), so the queue sent a `queue_failure` fix run. The run found nothing and stopped with `TALYN_NEEDS_HUMAN`. The parser now sets `githubFault` on that sentence and on "GitHub repeatedly reported that a merge was already in progress" (#124994, which read as `cancelled`). The queue then sends no fix run. It re-submits after 5, 10 and 20 minutes inside the per-head budget of 4 submissions, waits without a limit while GitHub is down, and after the budget parks with a GitHub reason. These count against the repo's queue health like a dead CI runner. `POST /pull-requests/:id/merge-queue/resubmit` re-arms a parked entry (client: `resubmitMergeQueue`).
+
+#126933 was APPROVED and green. GitHub reported `mergeStateStatus: BLOCKED` because master merges only through Trunk, and every approved, green PR there reads BLOCKED. A fix run read that BLOCKED as "probably needs an approving review". The queue parked the entry, sent the alarm, and released it on the next pass, because a gated base does not count bare BLOCKED as a blocker. Now a `needs_human` run on a PR that GitHub shows clean (`!queueBlockedFor`) is accounted quietly (`fix_run_needs_human_superseded`) and the clean path submits or merges. A real blocker (red required check, human gate, requested changes) still parks and alarms.
+
+A missing review is read only from `reviewDecision === 'REVIEW_REQUIRED'`, never from BLOCKED. R7b (`awaiting_review`) now accounts a finished fix run quietly, so the approval does not replay the old refusal as an alarm, and sends ONE `merge_queue:review_wait` reminder after 24 hours. The wait start and the reminder are read off the entry's own timeline (`reviewWaitFor`), so no column was added. The front ends do not listen for that event yet.
+
+A `needs_human` fix task the queue moved past is marked on `metadata.needsHumanResolved` (no new `TaskStatus`). `taskNeedsHumanOpen` in shared is the reader; it compares with `completedAt`, because the task row is reused by the next dispatch. The UI does not use it yet.
+
+The stopping rule in the mergeable prompt now says to write only what was verified, that BLOCKED does not say why, to read `reviewDecision` before claiming a review is missing, and never to stop only to have a PR re-submitted to a merge queue.
+
 ## Agent speed guidance and session resize (2026-11-01)
 
 A real posthog/posthog session spent 48 of 110 minutes in `sleep 200`..`sleep 580` loops, 25 minutes in whole test suites that each hit the 10-minute command limit, and 10 minutes compiling `sqlx-cli`. Two changes address the agent's part of that.

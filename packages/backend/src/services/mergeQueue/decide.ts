@@ -28,7 +28,12 @@ import {
   type ExternalQueueStatus,
   type PRMergeableSummary,
 } from '@talyn/shared';
-import { GITHUB_FAULT_FIRST_WAIT_MS, MAX_INFRA_SUBMITS_PER_HEAD, MAX_RETARGETS } from './types.js';
+import {
+  GITHUB_FAULT_FIRST_WAIT_MS,
+  MAX_INFRA_SUBMITS_PER_HEAD,
+  MAX_RETARGETS,
+  REVIEW_REMINDER_AFTER_MS,
+} from './types.js';
 import type {
   Action,
   BlockedCode,
@@ -467,6 +472,61 @@ export function awaitingRequiredReview(pr: PrSnapshot, ctx: DecisionContext): bo
     !ciInFlight(pr) &&
     pr.summary.reviewDecision === 'REVIEW_REQUIRED'
   );
+}
+
+/**
+ * R7b's body: wait quietly for the missing required review.
+ *
+ * GitHub's `reviewDecision` says REVIEW_REQUIRED, so this is a WAIT and not a
+ * failure: no fix run, no "merge queue blocked" alarm. The entry resumes by
+ * itself when an approving review changes `reviewDecision`.
+ *
+ * Two extras. A finished fix run is accounted here, quietly: its "needs a
+ * review" refusal is the same fact GitHub already shows, and leaving it
+ * unaccounted would park the entry and send the alarm the moment the approval
+ * lands. And after {@link REVIEW_REMINDER_AFTER_MS} of waiting, ONE gentle
+ * reminder goes out.
+ */
+function decideAwaitingReview(
+  d: DecisionBuilder,
+  ctx: DecisionContext,
+  runActive: boolean
+): Decision {
+  const unaccounted = !!d.entry.fixTaskId && !d.entry.fixTaskAccounted && !runActive;
+  if (d.entry.status !== 'awaiting_review' || unaccounted) {
+    const said =
+      unaccounted && typeof ctx.fixTaskNeedsHumanReason === 'string' && ctx.fixTaskNeedsHumanReason
+        ? ` The fix run said: ${ctx.fixTaskNeedsHumanReason}`
+        : '';
+    d.transition('awaiting_review', {
+      ...(unaccounted ? { set: { fixTaskAccounted: true } } : {}),
+      event: {
+        code: 'awaiting_review',
+        message: `Waiting for an approving review. GitHub says a required review is missing.${said}`,
+        detail: {
+          reviewDecision: 'REVIEW_REQUIRED',
+          ...(unaccounted ? { taskId: d.entry.fixTaskId } : {}),
+        },
+      },
+    });
+    return d.done('advance');
+  }
+  const wait = ctx.reviewWait;
+  if (wait && !wait.reminded) {
+    const waitedMs = Date.parse(ctx.nowIso) - Date.parse(wait.since);
+    if (Number.isFinite(waitedMs) && waitedMs >= REVIEW_REMINDER_AFTER_MS) {
+      const hours = Math.floor(waitedMs / 3_600_000);
+      d.transition('awaiting_review', {
+        event: {
+          code: 'review_wait_reminder',
+          message: `Still waiting for an approving review after ${hours} hours. Sent one reminder.`,
+          detail: { since: wait.since, hours },
+        },
+      });
+      d.act({ kind: 'notify_review_wait', since: wait.since });
+    }
+  }
+  return d.done('advance');
 }
 
 /**
@@ -1203,8 +1263,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // no remediation applies; wait and self-heal on the review webhook. (v1
   // funneled this into fix runs via the bare-BLOCKED branch of needsUpdate.)
   if (awaitingRequiredReview(pr, ctx)) {
-    d.ensure('awaiting_review');
-    return d.done('advance');
+    return decideAwaitingReview(d, ctx, runActive);
   }
 
   // R8 — account the last fix run now that it's terminal. We only ever
@@ -1226,7 +1285,33 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     // once the blockers actually move.
     // `typeof === 'string'`, not `!== null`: the field is absent on contexts
     // built before it existed, and an absent value must mean "no", never "yes".
-    if (typeof ctx.fixTaskNeedsHumanReason === 'string') {
+    if (typeof ctx.fixTaskNeedsHumanReason === 'string' && !stillBlocked) {
+      // The run asked for a person, but GitHub's own data shows nothing that
+      // blocks the merge: no conflict, no requested change, no red required
+      // check, and (R7b has already run) no missing required review. On a base
+      // that merges only through an external queue, GitHub reports BLOCKED for
+      // EVERY approved, green PR until that queue lands it, and agents read
+      // that BLOCKED as "probably needs an approving review"
+      // (PostHog/posthog#126933, 2026-11-02, which was approved). Parking here
+      // only sent a "merge queue blocked" alarm: the blocked gate below
+      // releases a clean entry on the very next pass anyway. So carry on now,
+      // with the run's words in the timeline, and let the clean path submit.
+      const reason = ctx.fixTaskNeedsHumanReason || 'no reason given';
+      d.transition('queued', {
+        set: { fixTaskAccounted: true },
+        event: {
+          code: 'fix_run_needs_human_superseded',
+          message:
+            `The fix run stopped for a human (${reason}), but GitHub shows nothing that ` +
+            'blocks this PR' +
+            (ctx.externalGate !== null
+              ? ' except the external merge queue it must go through — submitting it there.'
+              : ' — carrying on.'),
+          detail: { taskId: d.entry.fixTaskId, signature },
+        },
+      });
+      // Fall through: the clean path below submits or merges the PR.
+    } else if (typeof ctx.fixTaskNeedsHumanReason === 'string') {
       const reason =
         ctx.fixTaskNeedsHumanReason || 'The run stopped and needs a person to continue.';
       d.transition('blocked', {
@@ -1234,7 +1319,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
         blockedReason: reason,
         set: {
           fixTaskAccounted: true,
-          ...(stillBlocked ? { seenSignatures: withSignature(d.entry, signature) } : {}),
+          seenSignatures: withSignature(d.entry, signature),
         },
         event: {
           code: 'fix_run_needs_human',
