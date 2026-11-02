@@ -37,7 +37,7 @@ import { PUBLIC_ROUTES } from './routes.js';
  *     not drive those;
  *  3. the token, and the `publicApi` flag for its owner;
  *  4. a per-token limit, then per route: the scope, the create limit, the
- *     `workbenches` flag for session routes, and idempotency.
+ *     GitHub limit, the `workbenches` flag for session routes, and idempotency.
  */
 
 export interface PublicApiRouterOptions {
@@ -71,10 +71,23 @@ export function publicApiRouter(options: PublicApiRouterOptions = {}): Router {
     }),
   );
 
+  // GitHub gives a person about 5,000 requests an hour, and the app spends from
+  // the same budget. This tier keeps one token from using it all.
+  const githubLimiter = asyncHandler(
+    publicRateLimit({
+      name: 'github',
+      ...PUBLIC_RATE_LIMITS.github,
+      keyFn: tokenKey,
+      message: 'Too many requests that call GitHub. Wait, then retry.',
+      store,
+    }),
+  );
+
   const mount = (route: PublicRoute) => {
     const chain = [];
     if (route.scope !== 'none' && route.scope !== 'any') chain.push(requireScope(route.scope));
     if (route.creates) chain.push(createLimiter);
+    if (route.github) chain.push(githubLimiter);
     chain.push(asyncHandler((req: Request, res: Response) => runRoute(route, req, res)));
     router[route.method](expressPath(route.path), ...chain);
   };
@@ -113,7 +126,7 @@ async function runRoute(route: PublicRoute, req: Request, res: Response): Promis
   const body = route.body ? route.body.parse(req.body ?? {}) : undefined;
 
   let claim: IdempotencyClaim | null = null;
-  const rawKey = route.creates ? req.header(IDEMPOTENCY_HEADER) : undefined;
+  const rawKey = route.creates || route.idempotent ? req.header(IDEMPOTENCY_HEADER) : undefined;
   if (rawKey !== undefined) {
     const key = validateIdempotencyKey(rawKey);
     claim = await claimIdempotencyKey(token.tokenId, key, requestFingerprint(req.method, `${req.baseUrl}${req.path}`, req.body));

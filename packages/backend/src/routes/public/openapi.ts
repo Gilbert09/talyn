@@ -26,6 +26,7 @@ const ERROR_DESCRIPTIONS: Record<number, string> = {
   409: 'The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.',
   429: 'Too many requests. Wait `Retry-After` seconds.',
   500: 'A fault on our side. Quote `error.request_id`.',
+  502: 'GitHub refused or failed the request. `error.message` has its answer.',
   503: 'Talyn Fleet or GitHub cannot take the request now. Retry later.',
 };
 
@@ -40,7 +41,8 @@ function errorStatuses(route: PublicRoute): number[] {
   if (route.scope === 'none') return [429, 500];
   const statuses = [400, 401, 403, 404, 429, 500];
   if (route.method !== 'get') statuses.push(409, 503);
-  if (route.creates) statuses.push(402);
+  if (route.creates || route.planLimited) statuses.push(402);
+  if (route.github) statuses.push(502);
   return statuses.sort((a, b) => a - b);
 }
 
@@ -84,7 +86,7 @@ export function buildOpenApiDocument(routes: readonly PublicRoute[]) {
     if (route.params) request.params = route.params as never;
     if (route.query) request.query = route.query as never;
     if (route.body) request.body = { required: true, content: { 'application/json': { schema: route.body } } };
-    if (route.creates) {
+    if (route.creates || route.idempotent) {
       request.headers = z.object({
         [IDEMPOTENCY_HEADER]: z
           .string()

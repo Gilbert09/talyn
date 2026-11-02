@@ -9,6 +9,15 @@ Send the header on the endpoints that start work:
 - `POST /sessions`
 - `POST /sessions/{id}/chats`
 - `POST /chats/{id}/messages`
+- `POST /pull-requests/{id}/sessions`
+- `POST /pull-requests/{id}/code-reviews`
+
+These endpoints change something without starting work. They also accept the header:
+
+- `POST /pull-requests/{id}/merge-queue`
+- `POST /pull-requests/{id}/merge-queue/resubmit`
+- `POST /code-reviews/{id}/findings/{finding_id}/dismiss`
+- `POST /code-reviews/{id}/post`
 
 Other endpoints ignore the header.
 

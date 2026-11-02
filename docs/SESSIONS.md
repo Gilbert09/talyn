@@ -2,6 +2,27 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Public API, phase 2: pull requests, merge queue and code reviews (2026-11-02)
+
+Four new scopes: `pull_requests:read|write` and `code_reviews:read|write`. The merge-queue routes use the pull-request scopes. `POST /pull-requests/{id}/sessions` uses `sessions:write` and the `workbenches` gate, because it starts a session.
+
+What shipped:
+- Pull requests: list (filters `state`, `relationship`, `repository_id`, `merge_queued`), get, `PATCH` for auto-keep, the cached description, refresh, and a session on a pull request. The list pages on `(created_at, id)`, the time Talyn started to track the row. `last_polled_at` changes on each poll, so a cursor on it would skip and repeat rows.
+- `GET /pull-requests/{id}` reads the database only. The app's detail route makes a live GraphQL fetch on each open; the API leaves that to `POST .../refresh`, so a script that polls does not spend the user's GitHub budget.
+- Every GitHub fact is read out of `last_summary` in SQL (`->>`, `#>>`), never the blob. `body` is read only by the description route. The queue read has its own projection, without `seen_signatures` and the fix-run columns. The `.toSQL()` tests are in `publicPullRequests.test.ts`.
+- Merge queue: list for a workspace (one page), add, remove, re-submit, and the event history. All of them go through `setQueueMembership` / `resubmitQueueEntry`, so the plan gate (`merge_queue_limit_reached`) and the auto-merge disarm are the app's. The triggers are `user:api_*`: the evaluator treats a `user:` trigger as urgent, and a person waits on an API call too. Adding a closed pull request is refused (409 `pull_request_not_open`); the app route does not check this.
+- Code reviews: list (0 or 1 item), start, get with findings, cancel, events, one finding with its body, dismiss and undo, and Post to PR (always `COMMENT`). `fixTaskId` and every task id stay out. Findings with `disposition = 'discarded'` stay out too: a reset threw them away.
+
+Refactors so the app and the API call one function: `services/prRefresh.ts` (`refreshPullRequest`, `reconcileTerminalState`), `services/prAutoKeep.ts` (`setAutoKeepMergeable`, `publicAutoMergeState`), `services/mergeQueue/timeline.ts`, and `services/codeReview/actions.ts` (dismiss, undismiss and post, with their analytics events and the merge-queue notice). The app routes in `routes/pullRequests.ts` now call these. Their behaviour is the same.
+
+Router changes in `routes/public/`: a route can now be `idempotent` (accepts `Idempotency-Key` without the create budget), `github` (a new per-token tier of 30 a minute, and a 502 in the spec) and `planLimited` (a 402 in the spec). `GitHubRateLimitError` maps to 503 `github_rate_limited` with `Retry-After`.
+
+What did not go as planned:
+- There is no service that starts a "fix" session with a prompt Talyn writes. `buildMergeablePrompt` is for cloud tasks and has provider-specific git steps. `POST /pull-requests/{id}/sessions` therefore takes the caller's prompt.
+- A review is one row per pull request with a `cycle` counter. Past cycles are not stored as rows, so `GET /pull-requests/{id}/code-reviews` lists one review, not one item per cycle.
+- Post to PR is at `POST /code-reviews/{id}/post`, not under the pull request, so that it sits with the other actions on a review.
+- Not built: merging directly (the queue is the merge path, as for workflows), the stack enqueue, the review-hidden flag, code review fix runs (tasks).
+
 ## Public API, phase 1 (2026-11-02)
 
 The public API is a separate mount at `/v1`, served to customers as `api.talyn.dev/v1`. It shares the services with `/api/v1` and nothing else. The design is in `docs/PUBLIC_API.md` and the guides in `docs/api/`.

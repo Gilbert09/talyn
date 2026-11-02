@@ -100,7 +100,11 @@
                     "workspaces:read",
                     "repositories:read",
                     "sessions:read",
-                    "sessions:write"
+                    "sessions:write",
+                    "pull_requests:read",
+                    "pull_requests:write",
+                    "code_reviews:read",
+                    "code_reviews:write"
                   ]
                 }
               },
@@ -903,6 +907,1340 @@
           "first_seq",
           "last_seq"
         ]
+      },
+      "MergeQueueState": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Where the entry is: `queued`, `awaiting_ci`, `awaiting_review`, `automerge_armed`, `awaiting_external`, `awaiting_stack`, `fixing`, `merging`, `blocked` or `blocked_manual`. New values can appear.",
+            "example": "awaiting_ci"
+          },
+          "position": {
+            "type": "integer",
+            "description": "1-based place in the queue of its repository and base branch."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "squash",
+              "merge",
+              "rebase"
+            ]
+          },
+          "base_branch": {
+            "type": "string"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The head the queue last saw. Null before it has seen one."
+          },
+          "blocked_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a `blocked` or `blocked_manual` entry is parked, e.g. `draft`, `no_progress`, `awaiting_human_check`. New values can appear."
+          },
+          "blocked_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The same reason, in words for a person."
+          },
+          "auto_merge_armed": {
+            "type": "boolean",
+            "description": "GitHub's own auto-merge is armed on the pull request."
+          },
+          "external_state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The state an external merge queue (trunk.io) reports, when one owns the base branch."
+          },
+          "enqueued_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "position",
+          "method",
+          "base_branch",
+          "head_sha",
+          "blocked_code",
+          "blocked_reason",
+          "auto_merge_armed",
+          "external_state",
+          "enqueued_at"
+        ],
+        "description": "The pull request's entry in Talyn's merge queue. Null when it is not queued."
+      },
+      "CodeReviewSummary": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "phase": {
+            "type": "string",
+            "example": "ready"
+          },
+          "preset": {
+            "type": "string",
+            "example": "standard"
+          },
+          "open_count": {
+            "type": "integer",
+            "description": "Open findings at or above the workspace reporting bar."
+          },
+          "stale_for_head": {
+            "type": "boolean",
+            "description": "The pull request has new commits since the findings were made."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "phase",
+          "preset",
+          "open_count",
+          "stale_for_head",
+          "finished_at"
+        ],
+        "description": "The latest code review. Null: never reviewed. On single responses only."
+      },
+      "PullRequest": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "pull_request"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "repository_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "repository_full_name": {
+            "type": "string",
+            "example": "acme/app"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null until Talyn has read the pull request from GitHub once. So are the other GitHub fields."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author_is_bot": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Null: not known."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "merged"
+            ]
+          },
+          "draft": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "head_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "additions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deletions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "changed_files": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "authored": {
+            "type": "boolean",
+            "description": "You opened it. The \"Mine\" bucket in the app."
+          },
+          "review_requested": {
+            "type": "boolean",
+            "description": "It waits for your review. The \"Review\" bucket in the app."
+          },
+          "watching": {
+            "type": "boolean",
+            "description": "You track it by URL."
+          },
+          "review_hidden_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When you hid it from the Reviews tab.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "ci_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "passing",
+              "running",
+              "failing_optional",
+              "failing_required",
+              "needs_human"
+            ],
+            "description": "The CI picture alone. `failing_required` includes a failing check whose required-ness is not known. `needs_human`: only gates a person must clear are failing. Null: not computed yet."
+          },
+          "checks": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "passed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "in_progress": {
+                "type": "integer"
+              },
+              "skipped": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "total",
+              "passed",
+              "failed",
+              "in_progress",
+              "skipped"
+            ]
+          },
+          "human_gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "example": "Visual review"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The failing check or status."
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "name",
+                "url"
+              ]
+            },
+            "description": "Failing gates only a person can clear, e.g. a visual review."
+          },
+          "blocking_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The whole merge verdict: `mergeable`, `merge_conflicts`, `changes_requested`, `checks_failed`, `checks_failed_optional`, `blocked`, `behind`, `needs_human`, ... New values can appear."
+          },
+          "mergeable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub's answer, lower-cased: `mergeable`, `conflicting` or `unknown`."
+          },
+          "merge_state_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub's merge state, lower-cased, e.g. `clean`, `blocked`, `behind`."
+          },
+          "review_decision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`approved`, `changes_requested` or `review_required`, as the app shows it. Where the base branch does not require reviews, Talyn works it out from the reviews."
+          },
+          "unresolved_review_threads": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "auto_keep_mergeable": {
+            "type": "boolean",
+            "description": "Talyn starts a fix when the pull request stops being mergeable."
+          },
+          "merge_queue": {
+            "$ref": "#/components/schemas/MergeQueueState"
+          },
+          "merged_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "opened_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the pull request was opened on GitHub.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "last_synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When Talyn last read the pull request from GitHub.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When Talyn started to track it. Lists are ordered by this.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "session_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": "Sessions that work on this pull request and are not archived, most recent first. On single responses only."
+          },
+          "code_review": {
+            "$ref": "#/components/schemas/CodeReviewSummary"
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "workspace_id",
+          "repository_id",
+          "repository_full_name",
+          "number",
+          "title",
+          "url",
+          "author",
+          "author_is_bot",
+          "state",
+          "draft",
+          "head_branch",
+          "base_branch",
+          "head_sha",
+          "additions",
+          "deletions",
+          "changed_files",
+          "authored",
+          "review_requested",
+          "watching",
+          "review_hidden_at",
+          "ci_status",
+          "checks",
+          "human_gates",
+          "blocking_reason",
+          "mergeable",
+          "merge_state_status",
+          "review_decision",
+          "unresolved_review_threads",
+          "auto_keep_mergeable",
+          "merge_queue",
+          "merged_at",
+          "opened_at",
+          "last_synced_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PullRequestList": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PullRequest"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page. Null on the last page."
+          }
+        },
+        "required": [
+          "object",
+          "data",
+          "has_more",
+          "next_cursor"
+        ]
+      },
+      "UpdatePullRequestRequest": {
+        "type": "object",
+        "properties": {
+          "auto_keep_mergeable": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PullRequestDescription": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "pull_request_description"
+            ]
+          },
+          "pull_request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The description as Talyn last read it. Null: not read yet."
+          }
+        },
+        "required": [
+          "object",
+          "pull_request_id",
+          "body"
+        ]
+      },
+      "StartPullRequestSessionRequest": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000,
+            "description": "The first message. The agent starts on it when the sandbox is ready."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "description": "Lowercase letters, digits and hyphens. Default: made from the prompt."
+          },
+          "internet_access": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "MergeQueueEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MergeQueueState"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "object": {
+                "type": "string",
+                "enum": [
+                  "merge_queue_entry"
+                ]
+              },
+              "pull_request_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "repository_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "repository_full_name": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object",
+              "pull_request_id",
+              "repository_id",
+              "repository_full_name",
+              "number",
+              "title"
+            ]
+          }
+        ]
+      },
+      "MergeQueueList": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MergeQueueEntry"
+            }
+          },
+          "has_more": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Always false: the queue is one page."
+          },
+          "next_cursor": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "object",
+          "data",
+          "has_more",
+          "next_cursor"
+        ]
+      },
+      "AddToMergeQueueRequest": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "squash",
+              "merge",
+              "rebase"
+            ],
+            "description": "How to merge. Default: the last method used for this pull request, else `squash`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MergeQueueEvent": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "merge_queue_event"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "from_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_status": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string",
+            "example": "user:enqueue"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "at",
+          "from_status",
+          "to_status",
+          "trigger",
+          "code",
+          "message"
+        ]
+      },
+      "MergeQueueEventList": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MergeQueueEvent"
+            },
+            "description": "Newest first. At most the newest 100."
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ]
+      },
+      "CodeReviewFinding": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "code_review_finding"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "review_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "line_start": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "anchor_verified": {
+            "type": "boolean",
+            "description": "The quoted code is at the place the finding names. False: the reviewer paraphrased or named the wrong place."
+          },
+          "lenses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "example": "security"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The name the app shows.",
+                  "example": "Security"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ]
+            },
+            "description": "The reviewers that reported it. Two or more is agreement."
+          },
+          "confidence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "unvalidated",
+              "confirmed",
+              "rejected",
+              "uncertain"
+            ],
+            "description": "What the judging pass decided."
+          },
+          "verdict_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The judge's reason, in one sentence."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "selected",
+              "dismissed",
+              "fixed",
+              "stale"
+            ],
+            "description": "`selected`: a fix run works on it now. `stale`: a later review did not find it again. New values can appear."
+          },
+          "dismissed_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "not_a_problem",
+              "already_handled",
+              "wont_fix_here",
+              "wrong_about_code"
+            ]
+          },
+          "seen_count": {
+            "type": "integer",
+            "description": "How many review cycles reported it."
+          },
+          "carried_over": {
+            "type": "boolean",
+            "description": "An earlier cycle reported it first."
+          },
+          "posted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was posted to the pull request. A posted finding is never posted again.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "fixed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "fixed_head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "body": {
+            "type": "string",
+            "description": "The full text. On `GET /code-reviews/{id}/findings/{finding_id}` only."
+          },
+          "suggestion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A suggested change, as plain text. Single finding only."
+          },
+          "anchor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The code the finding quotes. Single finding only."
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "review_id",
+          "severity",
+          "category",
+          "title",
+          "file_path",
+          "line_start",
+          "line_end",
+          "anchor_verified",
+          "lenses",
+          "confidence",
+          "verdict",
+          "verdict_reason",
+          "status",
+          "dismissed_reason",
+          "seen_count",
+          "carried_over",
+          "posted_at",
+          "fixed_at",
+          "fixed_head_sha",
+          "created_at"
+        ]
+      },
+      "CodeReview": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "code_review"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "pull_request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "cycle": {
+            "type": "integer",
+            "description": "How many times this pull request has been reviewed. Each new review is a new cycle of the same review."
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "deep"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "description": "`queued`, `preparing`, `reviewing`, `sweeping`, `validating`: in progress. `ready`, `failed`, `cancelled`, `fixing`, `fixed`, `idle`: at rest. New values can appear.",
+            "example": "ready"
+          },
+          "phase_plan": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The phases this cycle goes through, in order."
+          },
+          "runs_done": {
+            "type": "integer"
+          },
+          "runs_total": {
+            "type": "integer"
+          },
+          "lenses_run": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "example": "security"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The name the app shows.",
+                  "example": "Security"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ]
+            },
+            "description": "The reviewers that ran in this cycle."
+          },
+          "head_sha": {
+            "type": "string",
+            "description": "The commit the current cycle reads."
+          },
+          "reviewed_head_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit the findings belong to."
+          },
+          "stale_for_head": {
+            "type": "boolean",
+            "description": "The pull request has new commits since the findings were made."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "blocker": {
+                "type": "integer"
+              },
+              "major": {
+                "type": "integer"
+              },
+              "minor": {
+                "type": "integer"
+              },
+              "nit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ],
+            "description": "Open findings by severity."
+          },
+          "open_count": {
+            "type": "integer",
+            "description": "Open findings at or above the workspace reporting bar. The number the app shows."
+          },
+          "dismissed_count": {
+            "type": "integer"
+          },
+          "funnel": {
+            "type": "object",
+            "properties": {
+              "raised": {
+                "type": "integer"
+              },
+              "kept": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "raised",
+              "kept",
+              "rejected"
+            ],
+            "description": "What the review did with its candidates: raised, kept by the judge, thrown out."
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deferred_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set while a reviewer waits for a free runner.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeReviewFinding"
+            },
+            "description": "Most severe first. Without `body`, `suggestion` and `anchor`. On `GET /code-reviews/{id}` only."
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "workspace_id",
+          "pull_request_id",
+          "cycle",
+          "preset",
+          "phase",
+          "phase_plan",
+          "runs_done",
+          "runs_total",
+          "lenses_run",
+          "head_sha",
+          "reviewed_head_sha",
+          "stale_for_head",
+          "counts",
+          "open_count",
+          "dismissed_count",
+          "funnel",
+          "failure_reason",
+          "deferred_since",
+          "started_at",
+          "finished_at",
+          "created_at"
+        ]
+      },
+      "CodeReviewList": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeReview"
+            },
+            "description": "A pull request has at most one review. It holds every cycle."
+          },
+          "has_more": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "next_cursor": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "object",
+          "data",
+          "has_more",
+          "next_cursor"
+        ]
+      },
+      "StartCodeReviewRequest": {
+        "type": "object",
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "deep"
+            ],
+            "description": "How deep to review. Default: the workspace setting."
+          },
+          "reset": {
+            "type": "boolean",
+            "description": "Throw away the findings on record instead of carrying them forward."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CodeReviewEvent": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "code_review_event"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "from_phase": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_phase": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "at",
+          "from_phase",
+          "to_phase",
+          "trigger",
+          "code",
+          "message"
+        ]
+      },
+      "CodeReviewEventList": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeReviewEvent"
+            },
+            "description": "Newest first. At most the newest 200."
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ]
+      },
+      "DismissFindingRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_a_problem",
+              "already_handled",
+              "wont_fix_here",
+              "wrong_about_code"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CodeReviewPost": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "code_review_post"
+            ]
+          },
+          "review_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "posted": {
+            "type": "integer",
+            "description": "Findings written to the pull request."
+          },
+          "inline": {
+            "type": "integer",
+            "description": "Of those, comments on a line of the diff."
+          },
+          "in_summary": {
+            "type": "integer",
+            "description": "Of those, in the review body."
+          },
+          "review_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GitHub review."
+          }
+        },
+        "required": [
+          "object",
+          "review_id",
+          "posted",
+          "inline",
+          "in_summary",
+          "review_url"
+        ]
+      },
+      "PostCodeReviewRequest": {
+        "type": "object",
+        "properties": {
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 500,
+            "description": "The findings to post. Empty or absent: every open finding not posted yet."
+          }
+        },
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -3376,6 +4714,3047 @@
           },
           "500": {
             "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests": {
+      "get": {
+        "operationId": "listPullRequests",
+        "summary": "List pull requests",
+        "description": "The pull requests Talyn tracks in a workspace, newest tracked first. Default: open ones. The data is what Talyn last read from GitHub; `last_synced_at` says when.\n\nScope: `pull_requests:read`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Required unless the token is bound to exactly one workspace."
+            },
+            "required": false,
+            "name": "workspace_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "merged",
+                "all"
+              ],
+              "default": "open",
+              "description": "Default `open`."
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "authored",
+                "review_requested",
+                "watching"
+              ],
+              "description": "`authored` is the \"Mine\" bucket, `review_requested` the \"Review\" bucket. Default: all."
+            },
+            "required": false,
+            "name": "relationship",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "repository_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Only pull requests in (true) or not in (false) the merge queue."
+            },
+            "required": false,
+            "name": "merge_queued",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "description": "Items per page, 1 to 200. Default 50."
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "description": "The `next_cursor` of the previous page. Absent for the first page."
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of pull requests.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}": {
+      "get": {
+        "operationId": "getPullRequest",
+        "summary": "Get a pull request",
+        "description": "With its live sessions and its latest code review. Reads no data from GitHub: use `POST /pull-requests/{id}/refresh` for that.\n\nScope: `pull_requests:read`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePullRequest",
+        "summary": "Update a pull request",
+        "description": "`auto_keep_mergeable: true` makes Talyn start a fix when the pull request stops being mergeable (conflicts, failing checks), for as long as it stays open. Each fix counts against the plan like any other run.\n\nScope: `pull_requests:write`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePullRequestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pull request.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/description": {
+      "get": {
+        "operationId": "getPullRequestDescription",
+        "summary": "Get the description of a pull request",
+        "description": "The description as Talyn last read it from GitHub.\n\nScope: `pull_requests:read`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The description.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestDescription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/refresh": {
+      "post": {
+        "operationId": "refreshPullRequest",
+        "summary": "Read a pull request from GitHub again",
+        "description": "Fetches the pull request from GitHub now and stores it. A pull request that is no longer open gets its closed or merged state. Uses your GitHub rate limit, so it has its own, lower limit (see rate limits). Answers 409 `cannot_refresh` when GitHub does not have it.\n\nScope: `pull_requests:write`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request, as GitHub has it now.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub refused or failed the request. `error.message` has its answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/sessions": {
+      "post": {
+        "operationId": "startPullRequestSession",
+        "summary": "Start a session on a pull request",
+        "description": "Starts a sandbox session on the pull request's head branch and links it to the pull request. The same as `POST /sessions` with `pull_request_id`. Send a `prompt` to tell the agent what to do, for example to fix the failing checks.\n\nScope: `sessions:write`.",
+        "tags": [
+          "Pull requests"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "sessions:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPullRequestSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new session. `status` is `provisioning`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The plan limit is reached. `error.code` says which limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/merge-queue": {
+      "get": {
+        "operationId": "listMergeQueue",
+        "summary": "List the merge queue",
+        "description": "Every pull request in the merge queue of a workspace, in the order they joined. One page.\n\nScope: `pull_requests:read`.",
+        "tags": [
+          "Merge queue"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Required unless the token is bound to exactly one workspace."
+            },
+            "required": false,
+            "name": "workspace_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The queue.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/merge-queue": {
+      "post": {
+        "operationId": "addToMergeQueue",
+        "summary": "Add a pull request to the merge queue",
+        "description": "Talyn merges it when it is clean, and starts a fix run when it has conflicts or failing checks. Adding a pull request that is already queued changes only its `method`. The free plan holds 3 queued pull requests: over that, the answer is 402 `merge_queue_limit_reached`.\n\nScope: `pull_requests:write`.",
+        "tags": [
+          "Merge queue"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddToMergeQueueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pull request, with `merge_queue` set.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The plan limit is reached. `error.code` says which limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeFromMergeQueue",
+        "summary": "Remove a pull request from the merge queue",
+        "description": "Also turns off the GitHub auto-merge that Talyn armed, if any. A pull request that is not queued answers the same.\n\nScope: `pull_requests:write`.",
+        "tags": [
+          "Merge queue"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request, with `merge_queue: null`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/merge-queue/resubmit": {
+      "post": {
+        "operationId": "resubmitToMergeQueue",
+        "summary": "Re-submit a parked pull request",
+        "description": "For a pull request an external merge queue (trunk.io) gave back, after a person dealt with the cause. Resets the budgets and submits it again. 409 `not_queued`, `not_parked` or `no_external_queue` otherwise.\n\nScope: `pull_requests:write`.",
+        "tags": [
+          "Merge queue"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pull request.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/merge-queue/events": {
+      "get": {
+        "operationId": "listMergeQueueEvents",
+        "summary": "List the merge-queue history of a pull request",
+        "description": "What the queue did with the pull request and why: the current entry, or the last one when it is not queued.\n\nScope: `pull_requests:read`.",
+        "tags": [
+          "Merge queue"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "pull_requests:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events, newest first.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueEventList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pull-requests/{id}/code-reviews": {
+      "get": {
+        "operationId": "listPullRequestCodeReviews",
+        "summary": "List the code reviews of a pull request",
+        "description": "A pull request has at most one review. Each new review is a new `cycle` of it, and findings carry over between cycles.\n\nScope: `code_reviews:read`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review, if there is one. Without findings.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "startCodeReview",
+        "summary": "Start a code review",
+        "description": "Starts a new review cycle on the pull request. If a cycle is already running, the answer is that cycle with status 200. The free plan allows 1 cycle at a time: over that, 402 `code_review_limit_reached`. 409 `no_reviewers` when the workspace turned Talyn's reviewers off and has none of its own for this repository; 409 `pr_closed` for a pull request that is not open.\n\nScope: `code_reviews:write`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartCodeReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A cycle was already running. This is it.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReview"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new cycle.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The plan limit is reached. `error.code` says which limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}": {
+      "get": {
+        "operationId": "getCodeReview",
+        "summary": "Get a code review with its findings",
+        "description": "Scope: `code_reviews:read`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review and its findings.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}/cancel": {
+      "post": {
+        "operationId": "cancelCodeReview",
+        "summary": "Stop a running code review",
+        "description": "Stops the reviewers of the running cycle. A review at rest answers as it is.\n\nScope: `code_reviews:write`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The review.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}/events": {
+      "get": {
+        "operationId": "listCodeReviewEvents",
+        "summary": "List the history of a code review",
+        "description": "Each phase change and action, with the reason.\n\nScope: `code_reviews:read`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events, newest first.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewEventList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}/findings/{finding_id}": {
+      "get": {
+        "operationId": "getCodeReviewFinding",
+        "summary": "Get a finding",
+        "description": "With its full `body`, the `suggestion` and the quoted `anchor`.\n\nScope: `code_reviews:read`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "finding_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The finding.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewFinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}/findings/{finding_id}/dismiss": {
+      "post": {
+        "operationId": "dismissCodeReviewFinding",
+        "summary": "Dismiss a finding",
+        "description": "A dismissal stays across cycles: a later review that finds the same thing does not ask again. Dismissing a blocker can let a parked merge-queue entry go on.\n\nScope: `code_reviews:write`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "finding_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissFindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The finding.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewFinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "undismissCodeReviewFinding",
+        "summary": "Undo a dismissal",
+        "description": "Scope: `code_reviews:write`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "finding_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The finding, open again.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewFinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/code-reviews/{id}/post": {
+      "post": {
+        "operationId": "postCodeReview",
+        "summary": "Post findings to the pull request",
+        "description": "Writes the findings to the pull request as one GitHub review from your account, always as a comment (never approve or request changes). A finding goes on a line of the diff only when its quoted code was found there; the others go in the review body. A finding is never posted twice. 409 `code_review_post_not_ready` or `code_review_post_nothing_to_post`; 502 `code_review_post_github_failed` when GitHub refuses.\n\nScope: `code_reviews:write`.",
+        "tags": [
+          "Code reviews"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "code_reviews:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostCodeReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was posted.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeReviewPost"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub refused or failed the request. `error.message` has its answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
             "content": {
               "application/json": {
                 "schema": {

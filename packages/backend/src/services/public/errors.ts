@@ -9,6 +9,7 @@ import {
   TaskLimitError,
   WorkflowLimitError,
 } from '../billing/entitlements.js';
+import { GitHubRateLimitError } from '../githubRateGate.js';
 import { fleetErrorAsRefusal } from '../workbenches/errors.js';
 
 import { errorTypeForStatus, type PublicErrorType } from './errorTypes.js';
@@ -94,6 +95,12 @@ export function toPublicApiError(err: unknown): PublicApiError {
   if (err instanceof AccessError) return new PublicApiError(404, 'not_found', 'No such resource.');
   const plan = planLimitError(err);
   if (plan) return plan;
+  if (err instanceof GitHubRateLimitError) {
+    const seconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+    return new PublicApiError(503, 'github_rate_limited', 'GitHub is rate limiting this account. Wait, then retry.', {
+      headers: { 'Retry-After': String(seconds) },
+    });
+  }
   const refusal = fleetErrorAsRefusal(err);
   if (refusal) return new PublicApiError(refusal.status, refusal.code || 'invalid_request', refusal.message);
   // body-parser's own errors carry a status and a type.

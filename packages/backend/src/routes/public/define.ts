@@ -47,6 +47,12 @@ interface RouteFields {
   scope: ApiScope | 'any' | 'none';
   /** Starts work: honours `Idempotency-Key`, and counts against the per-token create budget. */
   creates?: boolean;
+  /** Changes something but starts no agent: honours `Idempotency-Key`, without the create budget. */
+  idempotent?: boolean;
+  /** Calls GitHub as the token owner: also counts against the per-token GitHub budget. */
+  github?: boolean;
+  /** Can answer 402 for a plan limit. A `creates` route always can. */
+  planLimited?: boolean;
   /** Reads or changes sessions: also needs the `workbenches` flag for the token owner. */
   sessions?: boolean;
   /** Success responses. Error responses are added to the spec for every route. */

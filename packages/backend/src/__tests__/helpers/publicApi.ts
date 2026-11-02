@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
-import type { ApiScope } from '@talyn/shared';
+import { API_SCOPES, type ApiScope } from '@talyn/shared';
 import { MemoryRateLimitStore } from '../../middleware/publicRateLimit.js';
 import { publicApiRouter } from '../../routes/public/index.js';
 import { createApiToken } from '../../services/apiTokens.js';
@@ -24,7 +24,7 @@ export async function startPublicApi(): Promise<{ base: string; close: () => Pro
   };
 }
 
-export const ALL_SCOPES: ApiScope[] = ['workspaces:read', 'repositories:read', 'sessions:read', 'sessions:write'];
+export const ALL_SCOPES: ApiScope[] = [...API_SCOPES];
 
 /** Mint a token directly through the service. */
 export async function mintToken(

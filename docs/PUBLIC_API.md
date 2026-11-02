@@ -228,6 +228,26 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/chats/{id}/cancel` | `sessions:write` | Stop the running turn |
 | GET | `/chats/{id}/events` | `sessions:read` | Read a transcript page |
 | GET | `/chats/{id}/events/stream` | `sessions:read` | Stream a transcript |
+| GET | `/pull-requests` | `pull_requests:read` | List the pull requests Talyn tracks |
+| GET | `/pull-requests/{id}` | `pull_requests:read` | Get a pull request |
+| PATCH | `/pull-requests/{id}` | `pull_requests:write` | Turn auto-keep on or off |
+| GET | `/pull-requests/{id}/description` | `pull_requests:read` | Get the description of a pull request |
+| POST | `/pull-requests/{id}/refresh` | `pull_requests:write` | Read a pull request from GitHub again |
+| POST | `/pull-requests/{id}/sessions` | `sessions:write` | Start a session on a pull request |
+| GET | `/merge-queue` | `pull_requests:read` | List the merge queue of a workspace |
+| POST | `/pull-requests/{id}/merge-queue` | `pull_requests:write` | Add a pull request to the merge queue |
+| DELETE | `/pull-requests/{id}/merge-queue` | `pull_requests:write` | Remove a pull request from the merge queue |
+| POST | `/pull-requests/{id}/merge-queue/resubmit` | `pull_requests:write` | Re-submit a parked pull request |
+| GET | `/pull-requests/{id}/merge-queue/events` | `pull_requests:read` | List the merge-queue history of a pull request |
+| GET | `/pull-requests/{id}/code-reviews` | `code_reviews:read` | List the code reviews of a pull request |
+| POST | `/pull-requests/{id}/code-reviews` | `code_reviews:write` | Start a code review |
+| GET | `/code-reviews/{id}` | `code_reviews:read` | Get a code review with its findings |
+| POST | `/code-reviews/{id}/cancel` | `code_reviews:write` | Stop a running code review |
+| GET | `/code-reviews/{id}/events` | `code_reviews:read` | List the history of a code review |
+| GET | `/code-reviews/{id}/findings/{finding_id}` | `code_reviews:read` | Get a finding with its full text |
+| POST | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Dismiss a finding |
+| DELETE | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Undo a dismissal |
+| POST | `/code-reviews/{id}/post` | `code_reviews:write` | Post findings to the pull request on GitHub |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Local sessions
@@ -236,7 +256,7 @@ A session with `runtime: "local"` runs in the Talyn desktop app. The API lists t
 
 ## Plan limits
 
-A session that you start through the API counts against your plan in the same way as a session that you start in the app. A plan limit answers `402` with `type: "plan_limit_error"`. The error has the same `code` that the app shows, for example `task_limit_reached`. When the limit is known, the error also has `limit` and `in_use`.
+A session, a merge-queue entry or a code review that you start through the API counts against your plan in the same way as one that you start in the app. A plan limit answers `402` with `type: "plan_limit_error"`. The error has the same `code` that the app shows, for example `task_limit_reached`. When the limit is known, the error also has `limit` and `in_use`.
 
 ## Versioning
 
@@ -253,12 +273,13 @@ A session that you start through the API counts against your plan in the same wa
 - [Idempotency](api/idempotency.md): retry a create without a duplicate.
 - [Streaming](api/streaming.md): server-sent events, reconnect, polling.
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
+- [Pull requests](api/pull-requests.md): pull requests, the merge queue and code reviews.
 
 ## What is not in v1 yet
 
 - Tasks
-- Pull requests
-- Code review
+- Merging a pull request directly. Use the merge queue.
+- Code review fix runs
 - Webhooks
 - SDKs
 - Threads beyond `kind: "thread"` on `POST /sessions`

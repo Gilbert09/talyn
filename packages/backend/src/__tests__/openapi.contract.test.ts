@@ -59,19 +59,30 @@ describe('the /v1 contract', () => {
     }
   });
 
+  it('a route that calls GitHub documents the 502 GitHub answer, and a plan-limited one the 402', () => {
+    const doc = buildOpenApiDocument(PUBLIC_ROUTES) as { paths: Record<string, Record<string, { responses: Record<string, unknown> }>> };
+    for (const route of PUBLIC_ROUTES) {
+      const responses = doc.paths[route.path][route.method].responses;
+      expect('502' in responses, `${route.method} ${route.path}`).toBe(Boolean(route.github));
+      expect('402' in responses, `${route.method} ${route.path}`).toBe(Boolean(route.creates || route.planLimited));
+    }
+  });
+
   it('operation ids are unique', () => {
     const ids = PUBLIC_ROUTES.map((r) => r.operationId);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('only creates take an Idempotency-Key, and every create is a POST', () => {
-    for (const route of PUBLIC_ROUTES.filter((r) => r.creates)) expect(route.method).toBe('post');
+  it('only creates and idempotent writes take an Idempotency-Key, and each is a POST', () => {
+    for (const route of PUBLIC_ROUTES.filter((r) => r.creates || r.idempotent)) expect(route.method).toBe('post');
     const doc = buildOpenApiDocument(PUBLIC_ROUTES) as {
       paths: Record<string, Record<string, { parameters?: Array<{ name: string; in: string }> }>>;
     };
     for (const route of PUBLIC_ROUTES) {
       const params = doc.paths[route.path][route.method].parameters ?? [];
-      expect(params.some((p) => p.in === 'header' && p.name === 'Idempotency-Key'), route.path).toBe(Boolean(route.creates));
+      expect(params.some((p) => p.in === 'header' && p.name === 'Idempotency-Key'), route.path).toBe(
+        Boolean(route.creates || route.idempotent),
+      );
     }
   });
 });

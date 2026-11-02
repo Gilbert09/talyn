@@ -77,6 +77,9 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | 404 | `workspace_not_found` | The workspace does not exist, or the token cannot reach it. |
 | 404 | `session_not_found` | The session does not exist, or the token cannot reach it. |
 | 404 | `chat_not_found` | The chat does not exist, or the token cannot reach it. |
+| 404 | `pull_request_not_found` | The pull request does not exist, Talyn does not track it, or the token cannot reach it. |
+| 404 | `code_review_not_found` | The code review does not exist, or the token cannot reach it. |
+| 404 | `finding_not_found` | The finding is not in this code review. |
 | 404 | `route_not_found` | The method and path match no endpoint. |
 
 A resource that the token cannot reach gives the same `404` as a resource that does not exist.
@@ -92,6 +95,16 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `chat_closed` | The chat is closed. | Open a new chat. |
 | 409 | `archived` | The session is archived. | Call `POST /sessions/{id}/restore`. |
 | 409 | `not_failed` | A retry was sent for a session that did not fail. | Retry only when `status` is `error`. |
+| 409 | `pull_request_not_open` | The pull request is closed or merged. | Use an open pull request. |
+| 409 | `cannot_refresh` | GitHub did not return the pull request, or Talyn does not know its branch yet. | Retry after the next sync. |
+| 409 | `not_queued` | A re-submit was sent for a pull request that is not in the merge queue. | Add it to the queue. |
+| 409 | `not_parked` | The merge queue still works on the pull request. | Wait. Re-submit only a `blocked` entry. |
+| 409 | `no_external_queue` | The entry never went to an external merge queue. | Nothing to re-submit. |
+| 409 | `pr_closed` | A code review was asked for a pull request that is not open. | Use an open pull request. |
+| 409 | `no_reviewers` | The workspace turned off Talyn's reviewers and has none of its own for this repository. | Change the code review settings in the app. |
+| 409 | `busy` | The review changed while it started. | Retry. |
+| 409 | `code_review_post_not_ready` | The review is still running. | Wait until `phase` is `ready`. |
+| 409 | `code_review_post_nothing_to_post` | No open finding is left to post, or each one is too long for GitHub. | Nothing to do. |
 
 ### Plan limits
 
@@ -103,6 +116,7 @@ A plan limit answers `402` with `type: "plan_limit_error"`. The `code` is the sa
 | `merge_queue_limit_reached` | The plan allows no more merge queue pull requests. |
 | `workflow_limit_reached` | The plan allows no more workflows. |
 | `loop_limit_reached` | The plan allows no more loops. |
+| `code_review_limit_reached` | The plan allows no more code reviews at the same time. |
 
 Other plan codes can appear. Match on `type` for a general rule.
 
@@ -131,6 +145,8 @@ Other plan codes can appear. Match on `type` for a general rule.
 | Status | Code | Meaning | What to do |
 | --- | --- | --- | --- |
 | 500 | `internal_error` | A fault on the Talyn side. The message never has internal details. | Retry. If it continues, send the `request_id` to Talyn. |
+| 502 | `code_review_post_github_failed` | GitHub refused the review. The message has the answer from GitHub. | Read the message. Fix the cause, then retry. |
+| 503 | `github_rate_limited` | GitHub limits your account. | Wait `Retry-After` seconds. |
 | 503 | varies | A service that the request needs is not available. | Retry after a delay. |
 
 ## Handle errors

@@ -1,7 +1,10 @@
 import { chatRoutes } from './chats.js';
+import { codeReviewRoutes } from './codeReviews.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
+import { mergeQueueRoutes } from './mergeQueue.js';
 import { metaRoutes } from './meta.js';
 import { buildOpenApiDocument } from './openapi.js';
+import { pullRequestRoutes } from './pullRequests.js';
 import { sessionRoutes } from './sessions.js';
 import { workspaceRoutes } from './workspaces.js';
 
@@ -9,7 +12,15 @@ import { workspaceRoutes } from './workspaces.js';
  * Every `/v1` route, in the order the spec lists them. The router mounts
  * these and nothing else; the spec is generated from these and nothing else.
  */
-export const PUBLIC_ROUTES: PublicRoute[] = [...metaRoutes, ...workspaceRoutes, ...sessionRoutes, ...chatRoutes];
+export const PUBLIC_ROUTES: PublicRoute[] = [
+  ...metaRoutes,
+  ...workspaceRoutes,
+  ...sessionRoutes,
+  ...chatRoutes,
+  ...pullRequestRoutes,
+  ...mergeQueueRoutes,
+  ...codeReviewRoutes,
+];
 
 let cachedDocument: ReturnType<typeof buildOpenApiDocument> | null = null;
 
