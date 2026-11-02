@@ -101,7 +101,7 @@ export const users = pgTable(
     // Timestamp of the last-applied Polar event for this subscription —
     // out-of-order webhook deliveries older than this are ignored.
     subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
-    // The Polar product of the subscription (migration 0100), written by the
+    // The Polar product of the subscription (migration 0101), written by the
     // webhook. The usage tier follows it; null on a granting subscription
     // reads as Legacy Pro (it predates the Pro product).
     polarProductId: text('polar_product_id'),
@@ -169,7 +169,7 @@ export const teams = pgTable(
     currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
     cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
     subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
-    // The tier each seat gives (migration 0100): 'pro' | 'legacy_pro'. Teams
+    // The tier each seat gives (migration 0101): 'pro' | 'legacy_pro'. Teams
     // bought before usage billing keep Legacy Pro terms.
     tier: text('tier').notNull().default('legacy_pro'),
     polarProductId: text('polar_product_id'),
@@ -225,7 +225,7 @@ export const teamSeats = pgTable(
   })
 );
 
-// ---------- Usage billing (migration 0100) ----------
+// ---------- Usage billing (migration 0101) ----------
 //
 // The box-hour ledger and USD credits. Money is integer micro-dollars, usage
 // is integer weighted seconds (see packages/shared/src/pricing.ts). Every
