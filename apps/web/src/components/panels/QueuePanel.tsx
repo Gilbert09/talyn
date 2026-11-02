@@ -18,6 +18,7 @@ import {
   Wand2,
   UserRoundCheck,
   ArrowRightLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -366,6 +367,41 @@ interface TaskDetailProps {
   taskId: string;
 }
 
+function isPersonTypedPrompt(task: Task): boolean {
+  const metadata = task.metadata;
+  return task.type === 'code_writing' && metadata?.source === 'user' &&
+    !metadata.skill && !metadata.workflow &&
+    !metadata.loop && !metadata.codeReview;
+}
+
+function TaskPrompt({ task, expanded, onToggle }: {
+  task: Task;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  if (!task.prompt) return null;
+  const promptId = `task-prompt-${task.id}`;
+  return (
+    <div className="px-4 py-2 border-b">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        aria-expanded={expanded}
+        aria-controls={expanded ? promptId : undefined}
+        onClick={onToggle}
+      >
+        <ChevronRight className={cn('w-3 h-3 transition-transform', expanded && 'rotate-90')} />
+        {expanded ? 'Hide prompt' : 'Show prompt'}
+      </button>
+      {expanded && (
+        <pre id={promptId} className="mt-2 text-sm bg-secondary p-3 rounded-lg whitespace-pre-wrap break-words max-h-32 overflow-auto">
+          {task.prompt}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function TaskDetail({ taskId }: TaskDetailProps) {
   const { tasks, environments, repositories } = useWorkspaceStore();
   const {
@@ -384,6 +420,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const actionInFlight = activeAction !== null;
   const isLoadingFor = (action: typeof activeAction): boolean => activeAction === action;
   const [actionError, setActionError] = useState<string | null>(null);
+  const [promptExpandedByTask, setPromptExpandedByTask] = useState<Record<string, boolean>>({});
   const task = tasks.find((t) => t.id === taskId);
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
   const provider = task ? taskCloudProvider(task, environments) : null;
@@ -401,6 +438,14 @@ function TaskDetail({ taskId }: TaskDetailProps) {
       </div>
     );
   }
+
+  // A finished run starts collapsed, so its log stays above the fold.
+  const promptOpenByDefault = isPersonTypedPrompt(task) && !TERMINAL_TASK_STATUSES.includes(task.status);
+  const promptExpanded = promptExpandedByTask[task.id] ?? promptOpenByDefault;
+  const togglePrompt = () => setPromptExpandedByTask((current) => ({
+    ...current,
+    [task.id]: !(current[task.id] ?? promptOpenByDefault),
+  }));
 
   const isRunning = task.status === 'in_progress';
   const isAgent = isAgentTask(task.type);
@@ -508,6 +553,8 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
         </div>
 
+
+        <TaskPrompt task={task} expanded={promptExpanded} onToggle={togglePrompt} />
 
         {/* Cloud tasks have no local Files/Git data — the agent log is the
             whole story. */}
@@ -677,27 +724,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         })()}
       </div>
 
-      {/* Prompt — shown only while the run is still going, above the log.
-          Once it is over the prompt is the least interesting thing on the
-          screen: what you came back for is what the run DID, and on a long
-          prompt the transcript and the failure banner start below the fold.
-          It is still what you read while a task is pending or in flight,
-          because then there is nothing else to read. TERMINAL_TASK_STATUSES,
-          not `=== 'completed'`: a failed or stood-down run is equally over,
-          and deriving it is what makes a new status land in the right half.
-          Description dropped when it just duplicates the prompt (common
-          case). */}
-      {!TERMINAL_TASK_STATUSES.includes(task.status) &&
-        (task.prompt ||
-          (task.description && task.description.trim() !== (task.prompt ?? '').trim())) && (
+      <TaskPrompt task={task} expanded={promptExpanded} onToggle={togglePrompt} />
+      {!task.prompt && !TERMINAL_TASK_STATUSES.includes(task.status) && task.description && (
         <div className="px-4 pt-3 pb-2 border-b">
-          {task.prompt ? (
-            <pre className="text-sm bg-secondary p-3 rounded-lg whitespace-pre-wrap break-words max-h-32 overflow-auto">
-              {task.prompt}
-            </pre>
-          ) : (
-            <p className="text-sm text-muted-foreground break-words">{task.description}</p>
-          )}
+          <p className="text-sm text-muted-foreground break-words">{task.description}</p>
         </div>
       )}
 
