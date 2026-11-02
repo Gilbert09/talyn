@@ -7,6 +7,7 @@ import {
   type WorkbenchDiffStat,
   type WorkbenchDiffScope,
 } from '@talyn/shared';
+import { writeChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { FleetHttpError } from '../selfHosted/client.js';
 import { WorkbenchError } from './errors.js';
@@ -64,13 +65,16 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
   ].join(' ');
 }
 
+/** A list read from the box: every field set, and never a stored copy. */
+type LiveChanges = Required<Omit<WorkbenchChanges, 'snapshotAt'>>;
+
 /** A thread's changes: none. It has no repository. */
-export function emptyChanges(): Required<WorkbenchChanges> {
+export function emptyChanges(): LiveChanges {
   const zero = { added: 0, removed: 0, files: 0 };
   return { files: [], uncommitted: [], committed: [], uncommittedStats: zero, committedStats: { ...zero }, base: '', headSha: '' };
 }
 
-export async function getChanges(row: WorkbenchRow): Promise<Required<WorkbenchChanges>> {
+export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
   if (row.kind === 'thread') return emptyChanges();
   const script = [
     'set -e -o pipefail',
@@ -230,11 +234,12 @@ function sameStat(a: WorkbenchDiffStat | null, b: WorkbenchDiffStat): boolean {
  * Store the stat a read of the box just produced and, when it moved, tell the
  * clients. The sidebar shows this number, so the Changes panel and the sidebar
  * cannot disagree for longer than one read.
+ *
+ * The whole list also goes to storage, without waiting, so the Changes tab can
+ * show it while the box sleeps (see `changesSnapshot.ts`).
  */
-export async function storeDiffStat(
-  row: WorkbenchRow,
-  changes: Pick<WorkbenchChanges, 'uncommittedStats' | 'committedStats'>,
-): Promise<WorkbenchRow> {
+export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges): Promise<WorkbenchRow> {
+  void writeChangesSnapshot(row, changes);
   const uncommittedStats = changes.uncommittedStats ?? { added: 0, removed: 0, files: 0 };
   const committedStats = changes.committedStats ?? { added: 0, removed: 0, files: 0 };
   if (sameStat(row.diffStat ?? null, uncommittedStats)

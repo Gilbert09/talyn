@@ -37,6 +37,7 @@ import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middle
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { emptyChanges, getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from '../services/workbenches/changes.js';
+import { readChangesSnapshot } from '../services/workbenches/changesSnapshot.js';
 import { noteDiffStatFresh } from '../services/workbenches/workCheckpoint.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
@@ -854,6 +855,13 @@ export function workbenchRoutes(): Router {
     // A thread has no repository: nothing changed, and no box needs to wake to say so.
     if (isThread(row)) return ok(res, emptyChanges());
     try {
+      // A box that is not running cannot have changed since the last read, so
+      // its stored list answers at once. Only `?live=1` (a person's refresh) wakes it.
+      const live = req.query.live === '1' || req.query.live === 'true';
+      if (!live && row.runtime === 'sandbox' && !row.archivedAt && row.sandboxState !== 'running') {
+        const snapshot = await readChangesSnapshot(row);
+        if (snapshot) return ok(res, snapshot);
+      }
       await requireReadySandbox(row, true);
       const changes = await getChanges(row);
       ok(res, changes);

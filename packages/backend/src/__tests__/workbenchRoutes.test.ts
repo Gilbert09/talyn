@@ -59,6 +59,7 @@ const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { githubService } = await import('../services/github.js');
 const { refreshDiffStat } = await import('../services/workbenches/changes.js');
+const { changesSnapshotKey, resetChangesSnapshotsForTests } = await import('../services/workbenches/changesSnapshot.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
@@ -1408,6 +1409,155 @@ describe('workbench routes', () => {
       await updateWorkbench(wb.id, { status: 'provisioning' });
       const res = await call('GET', `/workbenches/${wb.id}/changes`);
       expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
+    });
+  });
+
+  describe('the changes of a sleeping box', () => {
+    const b64 = (text: string) => Buffer.from(text).toString('base64');
+    /** A box whose branch changed `path` by `added` lines. */
+    const changesReply = (path: string, added: number): ExecReply => ({
+      stdout: [
+        `MB ${b64('a'.repeat(40))}`,
+        `HEAD ${b64('b'.repeat(40))}`,
+        `NUMSTAT ${b64(`${added}\t0\t${path}\0`)}`,
+        `NAMES ${b64(`M\0${path}\0`)}`,
+        `UNCOMMITTED_NUMSTAT ${b64(`${added}\t0\t${path}\0`)}`,
+        `UNCOMMITTED_NAMES ${b64(`M\0${path}\0`)}`,
+        `COMMITTED_NUMSTAT ${b64('')}`,
+        `COMMITTED_NAMES ${b64('')}`,
+        `UNTRACKED ${b64('')}`,
+        `COUNTS ${b64('')}`,
+      ].join('\n'),
+    });
+    const isChangesRead = (script: string) => script.includes('--numstat');
+    const changesReads = () => fleet.scripts.filter(isChangesRead).length;
+    let store: ReturnType<typeof memoryWorkObjectStore>;
+
+    const storedSnapshot = (wb: Loose) => {
+      const raw = store.objects.get(changesSnapshotKey({ workspaceId: wb.workspaceId, id: wb.id }));
+      return raw ? JSON.parse(raw.toString('utf8')) : null;
+    };
+
+    /** A running box read once (so a snapshot of `src/a.ts` is stored), then put to sleep in `state`. */
+    async function sleepingWorkbench(state = 'suspended'): Promise<Loose> {
+      let added = 1;
+      scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/a.ts', added) : null));
+      const wb = await createSandboxWorkbench();
+      // Provisioning reads the changes once; wait for its write so it cannot land later.
+      await vi.waitFor(() => expect(storedSnapshot(wb)?.changes.files).toHaveLength(1));
+      added = 3;
+      const live = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(live.body.data.snapshotAt).toBeUndefined();
+      await vi.waitFor(() => expect(storedSnapshot(wb)?.changes.files[0].added).toBe(3));
+      await updateWorkbench(wb.id, { sandboxState: state });
+      fleet.sandboxStatus = 'suspended';
+      vi.mocked(startStaleGoldenMove).mockClear();
+      return wb;
+    }
+
+    beforeEach(() => {
+      resetChangesSnapshotsForTests();
+      store = memoryWorkObjectStore();
+      setWorkObjectStoreForTests(store);
+    });
+
+    it('stores the whole list a live read of a running box produced', async () => {
+      const wb = await sleepingWorkbench();
+      const stored = storedSnapshot(wb);
+      expect(stored).toMatchObject({
+        version: 1,
+        changes: {
+          base: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          files: [{ path: 'src/a.ts', status: 'modified', added: 3, removed: 0, binary: false }],
+          uncommittedStats: { added: 3, removed: 0, files: 1 },
+        },
+      });
+      expect(Number.isNaN(Date.parse(stored.takenAt))).toBe(false);
+    });
+
+    it.each(['suspended', 'lost', 'none', 'creating', 'error'])(
+      'answers a %s box from the stored list and never touches the box',
+      async (state) => {
+        const wb = await sleepingWorkbench(state);
+        const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
+        const res = await call('GET', `/workbenches/${wb.id}/changes`);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({
+          files: [{ path: 'src/a.ts', added: 3 }],
+          snapshotAt: storedSnapshot(wb).takenAt,
+        });
+        expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
+        expect(startStaleGoldenMove).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['the client asks for live (live=1)', '?live=1', () => undefined],
+      ['the client asks for live (live=true)', '?live=true', () => undefined],
+      ['no list is stored', '', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
+      ['storage is not configured', '', () => setWorkObjectStoreForTests(null)],
+      ['the stored list is not readable', '', (wb: Loose) => store.objects.set(changesSnapshotKey(wb), Buffer.from('{oops'))],
+    ])('reads the box as before when %s', async (_name, query, arrange) => {
+      const wb = await sleepingWorkbench();
+      arrange(wb);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const before = changesReads();
+      const res = await call('GET', `/workbenches/${wb.id}/changes${query}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.snapshotAt).toBeUndefined();
+      expect(res.body.data.files).toEqual([{ path: 'src/a.ts', status: 'modified', added: 3, removed: 0, binary: false }]);
+      expect(changesReads()).toBe(before + 1);
+      expect(startStaleGoldenMove).toHaveBeenCalled();
+    });
+
+    it('reads a running box live even when a list is stored', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      const before = changesReads();
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.body.data.snapshotAt).toBeUndefined();
+      expect(changesReads()).toBe(before + 1);
+    });
+
+    it('keeps refusing an archived session rather than answering from the stored list', async () => {
+      const wb = await sleepingWorkbench('deleted');
+      await updateWorkbench(wb.id, { archivedAt: new Date() });
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
+    });
+
+    it('does not upload an unchanged list again, and uploads a changed one', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      const put = vi.spyOn(store, 'put');
+      const snapshotPuts = () => put.mock.calls.filter(([key]) => key === changesSnapshotKey(wb)).length;
+      await call('GET', `/workbenches/${wb.id}/changes`);
+      await call('GET', `/workbenches/${wb.id}/changes`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(snapshotPuts()).toBe(0);
+      scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/b.ts', 7) : null));
+      await call('GET', `/workbenches/${wb.id}/changes`);
+      await vi.waitFor(() => expect(snapshotPuts()).toBe(1));
+      expect(storedSnapshot(wb).changes.files).toEqual([{ path: 'src/b.ts', status: 'modified', added: 7, removed: 0, binary: false }]);
+    });
+
+    it('answers a live read even when storing the list fails', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      vi.spyOn(store, 'put').mockRejectedValue(new Error('storage down'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/c.ts', 2) : null));
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.files[0].path).toBe('src/c.ts');
+      await vi.waitFor(() => expect(warn.mock.calls.some(([msg]) => String(msg).includes('changes snapshot'))).toBe(true));
+    });
+
+    it('deletes the stored list with the session', async () => {
+      const wb = await sleepingWorkbench();
+      expect((await call('DELETE', `/workbenches/${wb.id}`)).status).toBe(200);
+      expect(storedSnapshot(wb)).toBeNull();
     });
   });
 

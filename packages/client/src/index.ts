@@ -2958,10 +2958,14 @@ export const workbenches = {
   },
 
   // ---- Files and diff ----
-  changes: (id: string) =>
+  /**
+   * A sleeping box answers with its stored list (`snapshotAt` set) and is not
+   * woken. `live: true` wakes it and reads the box.
+   */
+  changes: (id: string, opts: { live?: boolean } = {}) =>
     request<WorkbenchChanges>(
       'GET',
-      `/workbenches/${enc(id)}/changes`
+      `/workbenches/${enc(id)}/changes${opts.live ? '?live=1' : ''}`
     ),
   diff: (id: string, path?: string, scope?: WorkbenchDiffScope) => {
     const qs = new URLSearchParams();
