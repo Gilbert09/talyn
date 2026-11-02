@@ -41,9 +41,12 @@ You can revoke a token in the same screen at any time.
 | Scope | Gives access to |
 | --- | --- |
 | `workspaces:read` | `GET /workspaces`, `GET /workspaces/{id}` |
-| `repositories:read` | `GET /repositories` |
-| `sessions:read` | Read sessions, chats and events. Open the streams. |
-| `sessions:write` | Start, archive, restore and retry sessions. Open chats. Send messages. Stop turns. Also includes `sessions:read`. |
+| `repositories:read` | List and get repositories. Read repository settings, instructions and the setup recipe. |
+| `repositories:write` | Change repository settings. Write and delete repository instructions. Revert setup steps. Also includes `repositories:read`. |
+| `sessions:read` | Read sessions, chats and events. Open the streams. Read changes, diffs, files, scripts, previews, queues, checkpoints and timing. |
+| `sessions:write` | Start, archive, restore and retry sessions. Open, change and close chats. Send messages. Stop turns. Run scripts, make preview links, open and merge pull requests, resize sessions. Also includes `sessions:read`. |
+| `memory:read` | List and get workspace memory entries. |
+| `memory:write` | Save, change, forget and restore memory entries. Also includes `memory:read`. |
 
 A write scope includes its read scope. A token with `sessions:write` can call all `sessions:read` endpoints.
 

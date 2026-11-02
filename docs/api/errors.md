@@ -66,6 +66,9 @@ New codes can appear in `v1`. Handle a code that you do not know by its `type` o
 | 400 | `invalid_cursor` | The `cursor` is not a `next_cursor` of this API. | Use a `next_cursor` unchanged. |
 | 400 | `invalid_idempotency_key` | The `Idempotency-Key` is not valid. | Use 1 to 255 printable ASCII characters with no spaces. |
 | 413 | `body_too_large` | The body is more than 1 MB. | Send a smaller body. |
+| 413 | `file_too_large` | The file is more than 4 MiB. | Read it in the sandbox with an agent. |
+| 413 | `memory_too_large` | The memory body is more than 8 KiB. | Make the note shorter. |
+| 413 | `repository_instructions_too_large` | The instructions are more than 64 KiB. | Make the text shorter. |
 | 415 | `unsupported_encoding` | The body encoding is not supported. | Send plain UTF-8 JSON. |
 
 Request bodies are strict. A field that the API does not know gives `400` `invalid_parameter`. The `param` field names the unknown field.
@@ -77,6 +80,15 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | 404 | `workspace_not_found` | The workspace does not exist, or the token cannot reach it. |
 | 404 | `session_not_found` | The session does not exist, or the token cannot reach it. |
 | 404 | `chat_not_found` | The chat does not exist, or the token cannot reach it. |
+| 404 | `repository_not_found` | The repository does not exist, or the token cannot reach it. |
+| 404 | `memory_not_found` | The memory entry does not exist, or the token cannot reach it. |
+| 404 | `repository_instructions_not_found` | The repository has no instructions. |
+| 404 | `setup_step_not_found` | The repository has no setup step with this id. |
+| 404 | `queued_message_not_found` | The message is not in the queue. It started already, or it was removed. |
+| 404 | `checkpoint_not_found` | The chat has no checkpoint for this turn. |
+| 404 | `file_not_found` | The file does not exist in the sandbox. |
+| 404 | `script_not_found` | The session config defines no script with this name. |
+| 404 | `preview_links_unavailable` | This deployment has no preview domain, so it cannot make preview links. |
 | 404 | `route_not_found` | The method and path match no endpoint. |
 
 A resource that the token cannot reach gives the same `404` as a resource that does not exist.
@@ -92,6 +104,19 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `chat_closed` | The chat is closed. | Open a new chat. |
 | 409 | `archived` | The session is archived. | Call `POST /sessions/{id}/restore`. |
 | 409 | `not_failed` | A retry was sent for a session that did not fail. | Retry only when `status` is `error`. |
+| 409 | `snapshot_unavailable` | The sandbox sleeps and Talyn has no stored list of its changes. | Send `live=true` to wake the sandbox. |
+| 409 | `script_running` | The script already runs. | Stop it first, or read its output. |
+| 409 | `thread_no_repository` | The action needs a repository, and a thread has none. | Use one of the thread's sessions. |
+| 409 | `not_thread` | The session is not a thread. | Use the id of a thread. |
+| 409 | `no_pull_request` | The session has no linked pull request to merge. | Open one with `POST /sessions/{id}/pull_request`. |
+| 409 | `merge_failed` | GitHub did not merge the pull request. The message has the reason. | Fix the reason, then retry. |
+| 409 | `task_active` | A cloud task already works on this pull request. | Wait for the task to finish. |
+| 409 | `nothing_to_open` | The branch has no commits that the base branch does not have. | Make changes first. |
+| 409 | `chat_running` | A turn runs, and the action needs the chat to be idle. | Stop the turn, or wait. |
+| 409 | `thread_resize` | A thread runs only the agent and cannot be resized. | Resize one of its sessions. |
+| 409 | `memory_forgotten` | The memory entry is forgotten. | Restore it first. |
+| 409 | `memory_name_taken` | A live entry in the same scope has the name. | Choose another name, or forget the other entry. |
+| 409 | `memory_limit_reached` | The workspace has 500 live memory entries. | Forget some entries. |
 
 ### Plan limits
 

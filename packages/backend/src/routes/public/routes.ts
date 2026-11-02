@@ -1,15 +1,28 @@
 import { chatRoutes } from './chats.js';
+import { chatWorkRoutes } from './chatWork.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
+import { memoryRoutes } from './memory.js';
 import { metaRoutes } from './meta.js';
 import { buildOpenApiDocument } from './openapi.js';
+import { repositorySettingsRoutes } from './repositorySettings.js';
 import { sessionRoutes } from './sessions.js';
+import { sessionWorkRoutes } from './sessionWork.js';
 import { workspaceRoutes } from './workspaces.js';
 
 /**
  * Every `/v1` route, in the order the spec lists them. The router mounts
  * these and nothing else; the spec is generated from these and nothing else.
  */
-export const PUBLIC_ROUTES: PublicRoute[] = [...metaRoutes, ...workspaceRoutes, ...sessionRoutes, ...chatRoutes];
+export const PUBLIC_ROUTES: PublicRoute[] = [
+  ...metaRoutes,
+  ...workspaceRoutes,
+  ...sessionRoutes,
+  ...chatRoutes,
+  ...sessionWorkRoutes,
+  ...chatWorkRoutes,
+  ...memoryRoutes,
+  ...repositorySettingsRoutes,
+];
 
 let cachedDocument: ReturnType<typeof buildOpenApiDocument> | null = null;
 

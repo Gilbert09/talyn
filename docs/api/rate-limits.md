@@ -7,11 +7,15 @@ The API limits how many requests a caller can send. A request over the limit ans
 | Limit | Counted per | Window | Maximum |
 | --- | --- | --- | --- |
 | All requests | Token | 1 minute | 600 |
-| Creates: `POST /sessions`, `POST /sessions/{id}/chats`, `POST /chats/{id}/messages` | Token | 1 minute | 60 |
+| Creates and actions: each endpoint that accepts `Idempotency-Key` (see below) | Token | 1 minute | 60 |
 | Failed authentications (401) | IP address | 1 minute | 300 |
 | Open streams | Token | At one time | 20 |
 
 A create counts against the 60 create limit and the 600 limit.
+
+These endpoints count as creates: `POST /sessions`, `POST /sessions/{id}/chats`, `POST /chats/{id}/messages`, `POST /sessions/{id}/thread`, `POST /sessions/{id}/pull_request`, `POST /sessions/{id}/fix_checks`, `POST /sessions/{id}/resolve_conflicts`, `POST /sessions/{id}/merge`, `POST /sessions/{id}/resize`, `POST /sessions/{id}/previews`, `POST /sessions/{id}/scripts/{name}/start`, `POST /chats/{id}/checkpoints/{turn}/restore` and `POST /memories`.
+
+`POST /sessions/{id}/pull_request` and `POST /sessions/{id}/merge` also use the GitHub rate limit of the token owner. GitHub sets that limit, not Talyn.
 
 The IP limit counts only failed authentications. A request with a valid token costs this budget nothing. Each token check needs a database read, so the API limits repeated failures from one address. An IP over the budget gets `429` `rate_limited` with `Retry-After`.
 

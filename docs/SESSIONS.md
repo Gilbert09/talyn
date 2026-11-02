@@ -2,6 +2,25 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Public API, phase 2: session work, memory and repository settings (2026-11-02)
+
+Part 1 of phase 2 adds 40 `/v1` endpoints in four new route files under `routes/public/`: `sessionWork.ts`, `chatWork.ts`, `memory.ts` and `repositorySettings.ts`. The guide is `docs/api/session-work.md`. Three new scopes: `repositories:write`, `memory:read` and `memory:write`. No migration.
+
+What shipped:
+- Session work: changes, diff, files and file content, scripts (list, start, stop, output), previews (list, one-time link), Create PR, fix checks, resolve conflicts, merge, a thread's sessions, continue as a thread, timing, resize, and `GET /workspaces/{id}/readiness`.
+- Chats: `PATCH`, close, the queue (list, remove one, clear) and checkpoints (list, restore).
+- Memory: list (paged), save (upsert by name, 201 or 200), get, update, forget (soft delete), restore.
+- Repositories: get, settings (sandbox size, preview, setup learning), instructions (get, put, delete) and the setup recipe (get, revert a step).
+
+The handlers call the app's services. Logic that sat in `routes/workbenches.ts` handlers moved to `services/workbenches/sessionOps.ts`, and the app's routes now call it too: `requireReadySandbox`, the changes read with its stored copy, diff, files, config, script start and stop, chat patch and close, the queue removal, resize with `continueWith`, and the preview link. `memory.ts` exposes `memoryListWhere`, so the paged public list and the app's list filter the same way.
+
+Things that did not go as first planned:
+- The app's changes route wakes a sleeping box when no stored copy exists. The public route must not wake a box unless asked, so it answers `409` `snapshot_unavailable` and the caller sends `live=true`. `readSessionChanges` takes `wakeWithoutSnapshot` for the difference.
+- The script list does not read the config by default: the config lives in the box. Without `live=true` the list has only the scripts that ran, with `command: null`.
+- The diff and the file list have no size cap, because the app's routes have none. A huge repository gives a large `file_list`. Paging it would mean one box read per page.
+- The GitHub-spending actions (Create PR, merge) count in the create limiter. There is no separate GitHub tier yet.
+- Repository settings reads answer from stored settings only. The app's GET runs a detection that reads GitHub when nothing is stored; the API does not, so a settings read never spends the caller's GitHub budget.
+
 ## Public API, phase 1 (2026-11-02)
 
 The public API is a separate mount at `/v1`, served to customers as `api.talyn.dev/v1`. It shares the services with `/api/v1` and nothing else. The design is in `docs/PUBLIC_API.md` and the guides in `docs/api/`.

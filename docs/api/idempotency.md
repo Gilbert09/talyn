@@ -9,8 +9,17 @@ Send the header on the endpoints that start work:
 - `POST /sessions`
 - `POST /sessions/{id}/chats`
 - `POST /chats/{id}/messages`
+- `POST /sessions/{id}/thread`
+- `POST /sessions/{id}/pull_request`
+- `POST /sessions/{id}/fix_checks` and `POST /sessions/{id}/resolve_conflicts`
+- `POST /sessions/{id}/merge`
+- `POST /sessions/{id}/resize`
+- `POST /sessions/{id}/previews`
+- `POST /sessions/{id}/scripts/{name}/start`
+- `POST /chats/{id}/checkpoints/{turn}/restore`
+- `POST /memories`
 
-Other endpoints ignore the header.
+The OpenAPI document lists the header on each of these endpoints. Other endpoints ignore the header.
 
 ## The key
 

@@ -14,19 +14,30 @@ export const API_TOKEN_PREFIX = 'talyn_pat_';
 /**
  * What a token may do. A write scope includes its read scope.
  *
- * Phase 1 has these four. Later phases add scopes for tasks, pull requests and
- * the rest; an old token never gets a new scope by itself.
+ * Later phases add scopes for pull requests and the rest. An old token never
+ * gets a new scope by itself.
  */
-export const API_SCOPES = ['workspaces:read', 'repositories:read', 'sessions:read', 'sessions:write'] as const;
+export const API_SCOPES = [
+  'workspaces:read',
+  'repositories:read',
+  'repositories:write',
+  'sessions:read',
+  'sessions:write',
+  'memory:read',
+  'memory:write',
+] as const;
 
 export type ApiScope = (typeof API_SCOPES)[number];
 
 /** What each scope allows, in words for the token form. */
 export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'workspaces:read': 'Read workspaces',
-  'repositories:read': 'Read repositories',
+  'repositories:read': 'Read repositories and their settings',
+  'repositories:write': 'Change repository settings and instructions',
   'sessions:read': 'Read sessions, chats and transcripts',
   'sessions:write': 'Start sessions and send messages',
+  'memory:read': 'Read workspace memory',
+  'memory:write': 'Write and forget workspace memory',
 };
 
 export function isApiScope(value: unknown): value is ApiScope {
