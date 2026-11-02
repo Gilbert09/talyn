@@ -7,11 +7,7 @@ import {
   AlertCircle,
   Loader2,
   RotateCw,
-  MessageSquare,
   GitBranch,
-  Sparkles,
-  Eye,
-  Hand,
   Trash2,
   ExternalLink,
   GitPullRequest,
@@ -46,15 +42,8 @@ import {
   taskNeedsHumanOpen,
 } from '@talyn/shared';
 import type { TaskScheduleError } from '@talyn/shared';
-import type { Task, TaskStatus, TaskType, TaskPriority } from '@talyn/shared';
+import type { Task, TaskStatus, TaskPriority } from '@talyn/shared';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
-
-const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {
-  code_writing: { label: 'Code', icon: Sparkles },
-  pr_response: { label: 'PR Response', icon: MessageSquare },
-  pr_review: { label: 'PR Review', icon: Eye },
-  manual: { label: 'Manual', icon: Hand },
-};
 
 const statusConfig: Record<
   TaskStatus,
@@ -346,15 +335,6 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
               <Badge variant="secondary" className="text-xs">
                 {runningStatus.label}
               </Badge>
-            )}
-            {!isRunning && (
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                {(() => {
-                  const TypeIcon = taskTypeConfig[task.type]?.icon ?? Hand;
-                  return <TypeIcon className="w-3 h-3" />;
-                })()}
-                {taskTypeConfig[task.type]?.label ?? task.type}
-              </span>
             )}
           </div>
         </div>
