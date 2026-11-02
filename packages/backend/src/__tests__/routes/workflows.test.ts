@@ -232,6 +232,7 @@ describe('workflow routes', () => {
         trunkMergeEta: false,
         codeReview: true,
         previewLinks: false,
+        publicApi: false,
       });
     });
 
@@ -258,6 +259,7 @@ describe('workflow routes', () => {
         trunkMergeEta: false,
         codeReview: true,
         previewLinks: false,
+        publicApi: false,
       });
     });
   });
