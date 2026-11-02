@@ -111,6 +111,9 @@ export * from './transcript.js';
 // browser that reads the proxied stream.
 export * from './sse.js';
 
+// The public API (`/v1`): token scopes and the token management shapes.
+export * from './publicApi.js';
+
 // Workbenches — a branch, an agent chat, a diff and a terminal, in a sandbox or
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
