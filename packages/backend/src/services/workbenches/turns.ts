@@ -45,7 +45,7 @@ import {
 } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
-import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
+import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { syncSkillPack } from './skillPack.js';
@@ -783,7 +783,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
     }
     if (agentMayBeRunning) return handoffOutcome('the agent may be running and its log could not be followed', err);
-    const why = err instanceof Error ? err.message : String(err);
+    // userFacingError, so a fleet answer such as hibernation_fetch_failed reads
+    // as plain words and not as the fleet's raw refusal.
+    const why = userFacingError(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
     events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
     await events.flush();
