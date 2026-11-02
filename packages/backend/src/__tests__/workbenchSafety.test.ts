@@ -130,6 +130,15 @@ describe('session identity and cleanup', () => {
     expect(deleteSandbox.mock.calls.map((args) => args[0])).toEqual(dryRun ? [] : entries.slice(0, 4).map(([id]) => id));
   });
 
+  it('keeps an old box whose hibernated copy was lost, and reaps the one next to it', async () => {
+    await session('kept', { sandboxId: 'talyn-wb-kept-r2', runtime: 'sandbox', settings: { keptSandboxIds: ['talyn-wb-kept'] } });
+    const sandboxes = ['talyn-wb-kept', 'talyn-wb-kept-r1'].map((id) => ({ id, createdAt: at(-40).toISOString(), status: 'suspended' as const }));
+    const deleteSandbox = vi.fn().mockResolvedValue(undefined);
+    const client = { listSandboxes: vi.fn().mockResolvedValue({ sandboxes }), deleteSandbox } as unknown as FleetClient;
+    await reapWorkbenchSandboxes(async () => [{ client, gateway: false }]);
+    expect(deleteSandbox.mock.calls.map((args) => args[0])).toEqual(['talyn-wb-kept-r1']);
+  });
+
   it('lists gateway tenant boxes and checks their host records', async () => {
     const box: FleetSandbox = { id: 'talyn-wb-adopted--suffix', status: 'idle', createdAt: at(-1500).toISOString(), adopted: true };
     const deleteSandbox = vi.fn().mockResolvedValue(undefined);
@@ -163,5 +172,31 @@ describe('session identity and cleanup', () => {
 
   it('keeps boxes without reliable age data', () => {
     expect(orphanReason({ id: 'talyn-wb-unknown' }, [])).toBeNull();
+  });
+
+  describe('a box whose hibernated copy was lost', () => {
+    const nowMs = Date.parse('2099-01-02T00:00:00Z');
+    const box = { id: 'talyn-wb-aaaabbbbccccddddeeeeffff', createdAt: '2099-01-01T00:00:00Z' };
+    const owner = (overrides: Record<string, unknown> = {}) => ({
+      id: 'aaaabbbb-cccc-dddd-eeee-ffff00001111', sandboxId: `${box.id}-r1`, archivedAt: null, archivePendingAt: null,
+      status: 'ready', moveSandboxId: null, fleetSandboxId: null, ...overrides,
+    });
+
+    it('is an old generation the reaper deletes, without the mark', () => {
+      expect(orphanReason(box, [owner()], nowMs)).toBe('old generation after a move');
+    });
+
+    it.each([
+      ['the sandbox id', { keptSandboxIds: [box.id] }],
+      ['one id among several', { keptSandboxIds: ['fleet-abc', box.id] }],
+      ['an archived session', { keptSandboxIds: [box.id], archivedAt: new Date(nowMs) }],
+    ])('is kept when the session marks %s', (_label, overrides) => {
+      expect(orphanReason(box, [owner(overrides)], nowMs)).toBeNull();
+    });
+
+    it('does not keep a later generation for the mark of an earlier one', () => {
+      const later = { ...box, id: `${box.id}-r2` };
+      expect(orphanReason(later, [owner({ sandboxId: `${box.id}-r3`, keptSandboxIds: [box.id] })], nowMs)).toBe('old generation after a move');
+    });
   });
 });

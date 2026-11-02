@@ -5,6 +5,7 @@ import {
   FleetHttpError,
   FleetRunNotFoundError,
   FleetThrottleError,
+  HIBERNATION_FETCH_FAILED,
 } from '../selfHosted/client.js';
 import {
   fleetApiToken,
@@ -13,6 +14,16 @@ import {
   fleetPinnedEndpoint,
 } from '../selfHosted/credentials.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
+
+export const SANDBOX_WAKING_MESSAGE = 'Waking this session is taking longer than usual. Talyn will try again shortly.';
+
+/**
+ * The fleet could not fetch the hibernated copy right now (503). The copy is
+ * intact, so this is never a lost box: the next wake tries again.
+ */
+export function isHibernationFetchFailed(err: unknown): boolean {
+  return (err instanceof FleetCapacityError || err instanceof FleetHttpError) && err.code === HIBERNATION_FETCH_FAILED;
+}
 
 /**
  * A refusal the routes turn into a status and a machine code. Thrown by the
@@ -95,6 +106,7 @@ export function fleetNotDeployedMessage(): string {
 export function userFacingError(err: unknown): string {
   if (err instanceof WorkbenchError) return err.message;
   if (err instanceof FleetNotDeployedError) return fleetNotDeployedMessage();
+  if (isHibernationFetchFailed(err)) return SANDBOX_WAKING_MESSAGE;
   if (err instanceof FleetCapacityError) {
     return err.reason === 'unreachable'
       ? 'The sandbox runners are not reachable right now. Try again shortly.'
@@ -116,6 +128,7 @@ export function fleetErrorAsRefusal(err: unknown): WorkbenchError | null {
   if (err instanceof WorkbenchError) return err;
   if (err instanceof FleetNotDeployedError) return new WorkbenchError(userFacingError(err), 503, 'fleet_not_deployed');
   if (err instanceof FleetRunNotFoundError) return new WorkbenchError(userFacingError(err), 409, 'sandbox_gone');
+  if (isHibernationFetchFailed(err)) return new WorkbenchError(userFacingError(err), 503, 'sandbox_waking');
   if (
     err instanceof FleetCapacityError ||
     err instanceof FleetThrottleError ||

@@ -70,6 +70,7 @@ import {
   resumeOnce,
   saveDetectedConfig,
 } from '../services/workbenches/sandboxRuntime.js';
+import { recoverLostSandbox } from '../services/workbenches/recovery.js';
 import { continueAsThread, notifyThread } from '../services/workbenches/threads.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
@@ -665,6 +666,8 @@ export function workbenchRoutes(): Router {
         // Also server-only: the id the fleet gave the box, which its credential pull carries.
         ...(row.settings?.fleetSandboxId ? { fleetSandboxId: row.settings.fleetSandboxId } : {}),
         ...((row.settings as Record<string, unknown> | null)?.archiveCredentialsRearmed ? { archiveCredentialsRearmed: true } : {}),
+        // Server-only: old boxes the reaper must keep.
+        ...(row.settings?.keptSandboxIds ? { keptSandboxIds: row.settings.keptSandboxIds } : {}),
         // A move's target, lease and backoff: server-only, and a later box must not reuse the target's generation.
         ...Object.fromEntries(
           MOVE_SETTINGS_KEYS.flatMap((key) => {
@@ -766,7 +769,10 @@ export function workbenchRoutes(): Router {
         const { sandbox } = await client.getSandbox(row.sandboxId);
         if (sandbox.status === 'suspended') {
           status = 'resuming';
-          resumeOnce(client, row.sandboxId).catch(() => undefined);
+          // The fleet may answer that the box is lost, e.g. its hibernated copy cannot be restored.
+          resumeOnce(client, row.sandboxId)
+            .catch((err: unknown) => recoverLostSandbox(row, err))
+            .catch(() => undefined);
         }
       }
       lastWake.set(row.id, { at: Date.now(), status });

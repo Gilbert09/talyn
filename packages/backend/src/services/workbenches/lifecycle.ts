@@ -22,7 +22,7 @@ import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, SandboxSizeRefusedError, userFacingError, WorkbenchError } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
-import { recordRecoveredTranscript } from './recovery.js';
+import { isHibernationLost, keptSandboxIdsFor, recordRecoveredTranscript } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
 import { effectiveRepositoryBake } from './setupRecipe.js';
 import {
@@ -56,6 +56,7 @@ import {
   failQueued,
   getWorkbench,
   isThread,
+  keepSandboxes,
   listChats,
   liveWorkbenchNames,
   provisioningWorkbenchIds,
@@ -424,6 +425,8 @@ export async function processArchive(workbenchId: string): Promise<void> {
     if (isWorkbenchDraining()) return;
     if (!lost) {
       const gone = err instanceof FleetRunNotFoundError;
+      // The archive ends as for a lost box, but the reaper must not delete it.
+      if (isHibernationLost(err)) await keepSandboxes(row.id, keptSandboxIdsFor(row));
       const updated = await finishArchive(row, gone ? undefined : userFacingError(err));
       if (updated) await emitWorkbenchUpdated(await publicWorkbench(updated));
       if (!gone) {

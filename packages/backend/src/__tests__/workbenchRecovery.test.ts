@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { repositories, workspaces } from '../db/schema.js';
-import { FleetRunNotFoundError, type FleetClient } from '../services/selfHosted/client.js';
+import {
+  FleetCapacityError,
+  FleetClient,
+  FleetHibernationLostError,
+  FleetHttpError,
+  FleetRunNotFoundError,
+  resetFleetOptionalSupport,
+} from '../services/selfHosted/client.js';
+import { SANDBOX_WAKING_MESSAGE, userFacingError } from '../services/workbenches/errors.js';
 import { AGENT_MEMORY_RECAP_NOTE, SANDBOX_LOST_MESSAGE, SANDBOX_RESTORED_NOTE, recordRecoveredTranscript, resetLostRecoveryForTests } from '../services/workbenches/recovery.js';
 import { NO_CHECKPOINT_NOTE } from '../services/workbenches/workCheckpointScripts.js';
 import { runCapture, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
@@ -96,6 +104,85 @@ describe('lost workbench recovery', () => {
     const old = (await getWorkbench('wb-recovery'))!;
     await expect(runCapture(old, 'true', { quiet: true })).rejects.toBeInstanceOf(FleetRunNotFoundError);
     expect(scheduleProvision).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a hibernated copy the fleet cannot restore', () => {
+    const json = (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const RAW = "this sandbox's hibernated copy cannot be restored: rootfs.img.data is truncated";
+    let paths: string[];
+
+    /** A real client: `answer` is what the fleet says to the exec (`via: exec`) or to the resume it asks for. */
+    function fleetAnswers(via: 'exec' | 'resume', answer: () => Response): void {
+      paths = [];
+      resetFleetOptionalSupport();
+      setWorkbenchFleetClientForTests(async () => new FleetClient('https://fleet.test', 'tok'));
+      vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+        const path = url.replace('https://fleet.test', '');
+        paths.push(`${init?.method ?? 'GET'} ${path}`);
+        if (path.endsWith('/resume')) return answer();
+        if (via === 'exec') return answer();
+        return json({ error: 'remote_resume_required', message: "this sandbox's only copy is in object storage" }, 409);
+      });
+    }
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      ['exec', '409 hibernation_unusable', () => json({ error: 'hibernation_unusable', message: RAW, localCopy: false }, 409)],
+      ['resume', '409 hibernation_unusable', () => json({ error: 'hibernation_unusable', message: RAW, localCopy: false }, 409)],
+      ['exec', 'hibernation_lost', () => json({ error: 'hibernation_lost', message: 'the copy is gone' }, 409)],
+      ['resume', 'hibernation_lost', () => json({ error: 'hibernation_lost', message: 'the copy is gone' }, 409)],
+      ['exec', 'the message only', () => json({ message: RAW }, 500)],
+      ['resume', 'the message only', () => json({ message: RAW }, 500)],
+    ] as const)('treats the box as lost and keeps it (via %s, %s)', async (via, _label, answer) => {
+      fleetAnswers(via, answer);
+      const old = (await getWorkbench('wb-recovery'))!;
+      const err = await runCapture(old, 'true', { quiet: true }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FleetHibernationLostError);
+      expect(userFacingError(err)).toBe(SANDBOX_LOST_MESSAGE);
+      const lost = (await getWorkbench(old.id))!;
+      expect(lost).toMatchObject({
+        status: 'provisioning', sandboxState: 'lost', statusMessage: SANDBOX_LOST_MESSAGE,
+        memoryRestorePending: 'lost', sandboxId: 'talyn-wb-wbrecovery-r1',
+      });
+      // Kept for an operator: the reaper reads this list.
+      expect(lost.settings.keptSandboxIds).toEqual(['talyn-wb-wbrecovery']);
+      expect(scheduleProvision).toHaveBeenCalledTimes(1);
+      // No second resume: it would fetch the copy again. No delete either.
+      expect(paths.filter((p) => p.endsWith('/resume'))).toHaveLength(via === 'resume' ? 1 : 0);
+      expect(paths).not.toContain('GET /v1/sandboxes/talyn-wb-wbrecovery');
+      expect(paths.some((p) => p.startsWith('DELETE'))).toBe(false);
+    });
+
+    it('keeps the fleet id of the old box as well', async () => {
+      await updateWorkbench('wb-recovery', { settings: { fleetSandboxId: 'fleet-abc', internetAccess: false } });
+      fleetAnswers('resume', () => json({ error: 'hibernation_unusable', message: RAW }, 409));
+      await runCapture((await getWorkbench('wb-recovery'))!, 'true', { quiet: true }).catch(() => undefined);
+      expect((await getWorkbench('wb-recovery'))!.settings).toMatchObject({
+        keptSandboxIds: ['talyn-wb-wbrecovery', 'fleet-abc'], internetAccess: false,
+      });
+    });
+
+    it.each(['exec', 'resume'] as const)('does not recover on a failed fetch (via %s), and says Talyn will try again', async (via) => {
+      fleetAnswers(via, () => json({ error: 'hibernation_fetch_failed', message: RAW, retryable: true }, 503));
+      const old = (await getWorkbench('wb-recovery'))!;
+      const err = await runCapture(old, 'true', { quiet: true }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FleetCapacityError);
+      expect(userFacingError(err)).toBe(SANDBOX_WAKING_MESSAGE);
+      expect(await getWorkbench(old.id)).toMatchObject({ status: 'ready', sandboxState: 'running', sandboxId: 'talyn-wb-wbrecovery' });
+      expect(scheduleProvision).not.toHaveBeenCalled();
+    });
+
+    it('does not recover on an unrelated refusal', async () => {
+      fleetAnswers('exec', () => json({ error: 'guest_too_old', message: 'too old' }, 409));
+      const old = (await getWorkbench('wb-recovery'))!;
+      const err = await runCapture(old, 'true', { quiet: true }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FleetHttpError);
+      expect(userFacingError(err)).toBe('Talyn Fleet refused the request: too old');
+      expect(await getWorkbench(old.id)).toMatchObject({ status: 'ready', sandboxId: 'talyn-wb-wbrecovery' });
+      expect(scheduleProvision).not.toHaveBeenCalled();
+    });
   });
 
   it('records the data loss note after the replacement is ready', async () => {

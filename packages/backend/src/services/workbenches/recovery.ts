@@ -1,6 +1,6 @@
 import { stopSandboxScripts } from './scriptStore.js';
 import { runWithoutScope } from '../../db/client.js';
-import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { FleetHibernationLostError, FleetRunNotFoundError } from '../selfHosted/client.js';
 import { restoreAgentSession } from './agentBackups.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
@@ -44,14 +44,31 @@ async function resumeIfSuspended(row: WorkbenchRow & { sandboxId: string }): Pro
   }
 }
 
-/** Start one replacement for the sandbox that answered as lost. */
+/** Whether the fleet cannot restore the box's hibernated copy. Recovery treats it as a lost box. */
+export function isHibernationLost(err: unknown): err is FleetHibernationLostError {
+  return err instanceof FleetHibernationLostError;
+}
+
+/** The ids of a box to keep after its hibernated copy is lost: Talyn's id and the fleet's own. */
+export function keptSandboxIdsFor(row: Pick<WorkbenchRow, 'sandboxId' | 'settings'>): string[] {
+  return [row.sandboxId, row.settings?.fleetSandboxId].filter((id): id is string => !!id);
+}
+
+/**
+ * Start one replacement for the sandbox that answered as lost. A box whose
+ * hibernated copy cannot be restored is replaced the same way, but Talyn keeps
+ * the old box: an operator can sometimes recover the copy, and an older fleet
+ * build sends the same answer for a transient failure.
+ */
 export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promise<void> {
   if (!(err instanceof FleetRunNotFoundError) || !row.sandboxId) return;
   const pending = recovering.get(row.id);
   if (pending) return pending;
   const sandboxId = row.sandboxId;
+  const hibernationLost = isHibernationLost(err);
   const work = runWithoutScope(async () => {
-    if (await resumeIfSuspended({ ...row, sandboxId })) {
+    // The resume just failed; another one would download the copy again.
+    if (!hibernationLost && await resumeIfSuspended({ ...row, sandboxId })) {
       recordWorkbenchEvent(row, 'sandbox_resumed', `sandbox ${sandboxId} was suspended, not lost; resumed it`);
       return;
     }
@@ -66,11 +83,16 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
       return;
     }
     const replacementId = nextSandboxId(row);
-    const claimed = await claimLostWorkbench(row.id, row.sandboxId!, replacementId, SANDBOX_LOST_MESSAGE);
+    const claimed = await claimLostWorkbench(row.id, sandboxId, replacementId, SANDBOX_LOST_MESSAGE, {
+      keepSandboxIds: hibernationLost ? keptSandboxIdsFor(row) : undefined,
+    });
     if (!claimed) return;
     attempts.set(row.id, now);
     try {
-      recordWorkbenchEvent(claimed, 'sandbox_lost', `sandbox ${row.sandboxId} was lost`, false);
+      const detail = hibernationLost
+        ? `sandbox ${sandboxId} could not be restored from its hibernated copy; kept it for an operator`
+        : `sandbox ${sandboxId} was lost`;
+      recordWorkbenchEvent(claimed, 'sandbox_lost', detail, false, hibernationLost ? err : undefined);
       await emitWorkbenchUpdated(await publicWorkbench(claimed));
     } finally {
       const { scheduleProvision } = await import('./lifecycle.js');

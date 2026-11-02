@@ -12,7 +12,9 @@ import * as title from '../services/workbenches/title.js';
 import { LAUNCH_FAILED_MESSAGE, sendMessage, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import * as turns from '../services/workbenches/turns.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
-import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
+import { FleetRunNotFoundError, lostSandboxError } from '../services/selfHosted/client.js';
+import { NO_CHECKPOINT_NOTE } from '../services/workbenches/workCheckpointScripts.js';
+import { memoryWorkObjectStore, setWorkObjectStoreForTests } from '../services/workbenches/workStorage.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
 import * as scriptRunner from '../services/workbenches/scripts.js';
 import { provisionWorkbench, restoreWorkbench } from '../services/workbenches/lifecycle.js';
@@ -25,7 +27,7 @@ import {
 } from '../services/workbenches/agentBackups.js';
 import { clearRecoveryRecap, MAX_RECAP_BYTES, recoveryRecap } from '../services/workbenches/agentRecap.js';
 import { MAX_IMPORTED_SESSION_BYTES, boxSessionPath } from '../services/workbenches/claudeImport.js';
-import { AGENT_MEMORY_RECAP_NOTE, AGENT_MEMORY_RESTORED_NOTE, recordRecoveredTranscript, recoverLostSandbox } from '../services/workbenches/recovery.js';
+import { AGENT_MEMORY_RECAP_NOTE, AGENT_MEMORY_RESTORED_NOTE, recordRecoveredTranscript, recoverLostSandbox, resetLostRecoveryForTests } from '../services/workbenches/recovery.js';
 import * as durable from '../services/workbenches/durableExec.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateChat, updateWorkbench } from '../services/workbenches/store.js';
@@ -324,6 +326,46 @@ describe('agent memory backups', () => {
     });
     expect((await getWorkbench('wb'))?.memoryRestorePending).toBeNull();
     expect((await getChat('chat'))?.agentSessionId).toBe(SESSION);
+  });
+
+  it.each([
+    ['409 hibernation_unusable', 409, "this sandbox's hibernated copy cannot be restored", 'hibernation_unusable'],
+    ['hibernation_lost', 409, 'the copy is gone', 'hibernation_lost'],
+    ['the message only', 500, "this sandbox's hibernated copy cannot be restored: rootfs.img.data is truncated", undefined],
+  ])('recovers a session whose hibernated copy is lost (%s)', async (_label, status, text, code) => {
+    await backupAgentSession('chat');
+    await updateChat('chat', { queuedMessages: [{ id: 'queued', text: 'continue', queuedAt: new Date().toISOString() }] });
+    const fleet = new FakeFleet();
+    vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
+    vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
+    vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
+    vi.spyOn(runtime, 'loadWorkbenchConfig').mockResolvedValue(null);
+    vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
+    vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
+    const start = vi.spyOn(turns, 'startQueuedIfIdle').mockResolvedValue(true);
+    resetLostRecoveryForTests();
+    setWorkObjectStoreForTests(memoryWorkObjectStore());
+    const err = lostSandboxError(status, text, code);
+    expect(err).toBeInstanceOf(FleetRunNotFoundError);
+    try {
+      await recoverLostSandbox((await getWorkbench('wb'))!, err);
+      await vi.waitFor(async () => {
+        expect((await getWorkbench('wb'))?.status).toBe('ready');
+        expect(start).toHaveBeenCalledOnce();
+      });
+    } finally {
+      setWorkObjectStoreForTests(null);
+    }
+    const row = (await getWorkbench('wb'))!;
+    expect(row).toMatchObject({ sandboxId: 'talyn-wb-wb-r1', sandboxState: 'running', memoryRestorePending: null });
+    expect(row.settings.keptSandboxIds).toEqual(['box']);
+    // A new box with the session's branch checked out from GitHub.
+    expect(scripts.some((script) => script.includes('git clone') && script.includes('test'))).toBe(true);
+    expect(Buffer.concat(restored)).toEqual(source);
+    expect((await getChat('chat'))?.agentSessionId).toBe(SESSION);
+    const note = (await listEvents('chat', 0, 10)).events[0].event;
+    expect(note).toMatchObject({ type: 'system', subtype: 'sandbox_recovered', text: `${NO_CHECKPOINT_NOTE} ${AGENT_MEMORY_RESTORED_NOTE}` });
   });
 
   it('adds the memory outcome for an archived session', async () => {
