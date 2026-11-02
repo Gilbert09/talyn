@@ -4,22 +4,33 @@ A network fault can hide the answer to a create. Without protection, a retry sta
 
 ## Where to use it
 
-Send the header on the endpoints that start work:
+Send the header on these endpoints:
 
 - `POST /sessions`
 - `POST /sessions/{id}/chats`
 - `POST /chats/{id}/messages`
+- `POST /sessions/{id}/thread`
+- `POST /sessions/{id}/pull_request`
+- `POST /sessions/{id}/fix_checks`
+- `POST /sessions/{id}/resolve_conflicts`
+- `POST /sessions/{id}/merge`
+- `POST /sessions/{id}/resize`
+- `POST /sessions/{id}/previews`
+- `POST /sessions/{id}/scripts/{name}/start`
+- `POST /chats/{id}/checkpoints/{turn}/restore`
+- `POST /memories`
 - `POST /pull-requests/{id}/sessions`
 - `POST /pull-requests/{id}/code-reviews`
-
-These endpoints change something without starting work. They also accept the header:
-
+- `POST /webhooks`
+- `POST /webhooks/{id}/rotate-secret`
+- `POST /webhooks/{id}/test`
+- `POST /webhook-deliveries/{id}/redeliver`
 - `POST /pull-requests/{id}/merge-queue`
 - `POST /pull-requests/{id}/merge-queue/resubmit`
 - `POST /code-reviews/{id}/findings/{finding_id}/dismiss`
 - `POST /code-reviews/{id}/post`
 
-Other endpoints ignore the header.
+The OpenAPI document lists the header on each of these endpoints. Other endpoints ignore the header.
 
 ## The key
 

@@ -228,7 +228,6 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/chats/{id}/cancel` | `sessions:write` | Stop the running turn |
 | GET | `/chats/{id}/events` | `sessions:read` | Read a transcript page |
 | GET | `/chats/{id}/events/stream` | `sessions:read` | Stream a transcript |
-<<<<<<< HEAD
 | GET | `/pull-requests` | `pull_requests:read` | List the pull requests Talyn tracks |
 | GET | `/pull-requests/{id}` | `pull_requests:read` | Get a pull request |
 | PATCH | `/pull-requests/{id}` | `pull_requests:write` | Turn auto-keep on or off |
@@ -249,7 +248,6 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Dismiss a finding |
 | DELETE | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Undo a dismissal |
 | POST | `/code-reviews/{id}/post` | `code_reviews:write` | Post findings to the pull request on GitHub |
-=======
 | GET | `/webhooks` | `webhooks:read` | List webhook endpoints |
 | POST | `/webhooks` | `webhooks:write` | Create a webhook endpoint |
 | GET | `/webhooks/{id}` | `webhooks:read` | Get a webhook endpoint |
@@ -261,7 +259,46 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | GET | `/webhook-deliveries/{id}` | `webhooks:read` | Get a delivery and its payload |
 | POST | `/webhook-deliveries/{id}/redeliver` | `webhooks:write` | Send a delivery again |
 | GET | `/webhook-event-types` | `webhooks:read` | List the event types |
->>>>>>> tom/api2-webhooks
+| GET | `/sessions/{id}/changes` | `sessions:read` | List changed files (a sleeping sandbox answers from its stored copy) |
+| GET | `/sessions/{id}/diff` | `sessions:read` | Read the diff, whole or for one `path` |
+| GET | `/sessions/{id}/files` | `sessions:read` | List files |
+| GET | `/sessions/{id}/files/content` | `sessions:read` | Read a file |
+| GET | `/sessions/{id}/scripts` | `sessions:read` | List scripts and their state |
+| POST | `/sessions/{id}/scripts/{name}/start` | `sessions:write` | Start a script |
+| POST | `/sessions/{id}/scripts/{name}/stop` | `sessions:write` | Stop a script |
+| GET | `/sessions/{id}/scripts/{name}/output` | `sessions:read` | Read the output of a script |
+| GET | `/sessions/{id}/previews` | `sessions:read` | List preview ports |
+| POST | `/sessions/{id}/previews` | `sessions:write` | Make a one-time preview link |
+| POST | `/sessions/{id}/pull_request` | `sessions:write` | Commit, push and open a pull request |
+| POST | `/sessions/{id}/fix_checks` | `sessions:write` | Ask the agent to fix failing checks |
+| POST | `/sessions/{id}/resolve_conflicts` | `sessions:write` | Ask the agent to resolve conflicts |
+| POST | `/sessions/{id}/merge` | `sessions:write` | Merge the linked pull request |
+| GET | `/sessions/{id}/sessions` | `sessions:read` | List the sessions of a thread |
+| POST | `/sessions/{id}/thread` | `sessions:write` | Continue a session as a thread |
+| GET | `/sessions/{id}/timing` | `sessions:read` | Get where the time of the turns went |
+| POST | `/sessions/{id}/resize` | `sessions:write` | Move a session to another sandbox size |
+| GET | `/workspaces/{id}/readiness` | `sessions:read` | Check whether sessions can start |
+| PATCH | `/chats/{id}` | `sessions:write` | Rename a chat, or change its model, effort or plan mode |
+| POST | `/chats/{id}/close` | `sessions:write` | Close a chat |
+| GET | `/chats/{id}/queue` | `sessions:read` | List queued messages |
+| DELETE | `/chats/{id}/queue` | `sessions:write` | Clear the queue |
+| DELETE | `/chats/{id}/queue/{message_id}` | `sessions:write` | Remove a queued message |
+| GET | `/chats/{id}/checkpoints` | `sessions:read` | List checkpoints |
+| POST | `/chats/{id}/checkpoints/{turn}/restore` | `sessions:write` | Restore the files of a checkpoint |
+| GET | `/memories` | `memory:read` | List memory entries |
+| POST | `/memories` | `memory:write` | Save a memory entry |
+| GET | `/memories/{id}` | `memory:read` | Get a memory entry |
+| PATCH | `/memories/{id}` | `memory:write` | Update a memory entry |
+| DELETE | `/memories/{id}` | `memory:write` | Forget a memory entry |
+| POST | `/memories/{id}/restore` | `memory:write` | Restore a forgotten entry |
+| GET | `/repositories/{id}` | `repositories:read` | Get a repository |
+| GET | `/repositories/{id}/settings` | `repositories:read` | Get repository settings |
+| PATCH | `/repositories/{id}/settings` | `repositories:write` | Change the sandbox size, the preview or setup learning |
+| GET | `/repositories/{id}/instructions` | `repositories:read` | Get repository instructions |
+| PUT | `/repositories/{id}/instructions` | `repositories:write` | Write repository instructions |
+| DELETE | `/repositories/{id}/instructions` | `repositories:write` | Delete repository instructions |
+| GET | `/repositories/{id}/setup_recipe` | `repositories:read` | Get the learned setup recipe |
+| POST | `/repositories/{id}/setup_recipe/steps/{step_id}/revert` | `repositories:write` | Revert a setup step |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Local sessions
@@ -287,22 +324,13 @@ A session, a merge-queue entry or a code review that you start through the API c
 - [Idempotency](api/idempotency.md): retry a create without a duplicate.
 - [Streaming](api/streaming.md): server-sent events, reconnect, polling.
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
-<<<<<<< HEAD
 - [Pull requests](api/pull-requests.md): pull requests, the merge queue and code reviews.
-=======
 - [Webhooks](api/webhooks.md): events, signatures, retries and delivery logs.
->>>>>>> tom/api2-webhooks
+- [Session work](api/session-work.md): changes, files, scripts, previews, pull requests, threads, memory and repository settings.
 
 ## What is not in v1 yet
 
 - Tasks
-<<<<<<< HEAD
-- Merging a pull request directly. Use the merge queue.
+- Merging a pull request that has no session directly. Use the merge queue.
 - Code review fix runs
-- Webhooks
-=======
-- Pull requests
-- Code review
->>>>>>> tom/api2-webhooks
 - SDKs
-- Threads beyond `kind: "thread"` on `POST /sessions`

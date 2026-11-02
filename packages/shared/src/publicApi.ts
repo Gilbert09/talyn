@@ -19,8 +19,11 @@ export const API_TOKEN_PREFIX = 'talyn_pat_';
 export const API_SCOPES = [
   'workspaces:read',
   'repositories:read',
+  'repositories:write',
   'sessions:read',
   'sessions:write',
+  'memory:read',
+  'memory:write',
   'pull_requests:read',
   'pull_requests:write',
   'code_reviews:read',
@@ -34,7 +37,8 @@ export type ApiScope = (typeof API_SCOPES)[number];
 /** What each scope allows, in words for the token form. */
 export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'workspaces:read': 'Read workspaces',
-  'repositories:read': 'Read repositories',
+  'repositories:read': 'Read repositories and their settings',
+  'repositories:write': 'Change repository settings and instructions',
   'sessions:read': 'Read sessions, chats and transcripts',
   'sessions:write': 'Start sessions and send messages',
   'pull_requests:read': 'Read pull requests and the merge queue',
@@ -43,6 +47,8 @@ export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'code_reviews:write': 'Start code reviews, dismiss findings and post them to GitHub',
   'webhooks:read': 'Read webhook endpoints and deliveries',
   'webhooks:write': 'Create, change and test webhook endpoints',
+  'memory:read': 'Read workspace memory',
+  'memory:write': 'Write and forget workspace memory',
 };
 
 export function isApiScope(value: unknown): value is ApiScope {

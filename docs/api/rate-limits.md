@@ -7,14 +7,43 @@ The API limits how many requests a caller can send. A request over the limit ans
 | Limit | Counted per | Window | Maximum |
 | --- | --- | --- | --- |
 | All requests | Token | 1 minute | 600 |
-| Creates: `POST /sessions`, `POST /sessions/{id}/chats`, `POST /chats/{id}/messages`, `POST /pull-requests/{id}/sessions`, `POST /pull-requests/{id}/code-reviews` | Token | 1 minute | 60 |
-| GitHub calls: `POST /pull-requests/{id}/refresh`, `POST /code-reviews/{id}/post` | Token | 1 minute | 30 |
+| Creates and actions: each endpoint in the first list below | Token | 1 minute | 60 |
+| GitHub calls: each endpoint in the second list below | Token | 1 minute | 30 |
 | Failed authentications (401) | IP address | 1 minute | 300 |
 | Open streams | Token | At one time | 20 |
 
 A create counts against the 60 create limit and the 600 limit.
 
-A GitHub call counts against the 30 GitHub limit and the 600 limit. These requests use your own GitHub rate limit. GitHub gives a person about 5,000 requests each hour, and the Talyn app uses the same budget. At 30 each minute, a script can use 1,800 each hour at most. If GitHub limits your account, the API answers `503` `github_rate_limited` with `Retry-After`.
+These endpoints count as creates and actions:
+
+- `POST /sessions`
+- `POST /sessions/{id}/chats`
+- `POST /chats/{id}/messages`
+- `POST /sessions/{id}/thread`
+- `POST /sessions/{id}/pull_request`
+- `POST /sessions/{id}/fix_checks`
+- `POST /sessions/{id}/resolve_conflicts`
+- `POST /sessions/{id}/merge`
+- `POST /sessions/{id}/resize`
+- `POST /sessions/{id}/previews`
+- `POST /sessions/{id}/scripts/{name}/start`
+- `POST /chats/{id}/checkpoints/{turn}/restore`
+- `POST /memories`
+- `POST /pull-requests/{id}/sessions`
+- `POST /pull-requests/{id}/code-reviews`
+- `POST /webhooks`
+- `POST /webhooks/{id}/rotate-secret`
+- `POST /webhooks/{id}/test`
+- `POST /webhook-deliveries/{id}/redeliver`
+
+These endpoints call GitHub with the token owner's GitHub account:
+
+- `POST /pull-requests/{id}/refresh`
+- `POST /code-reviews/{id}/post`
+- `POST /sessions/{id}/pull_request`
+- `POST /sessions/{id}/merge`
+
+A GitHub call counts against the 30 GitHub limit and the 600 limit. A GitHub call that is also an action counts against the 60 limit too. These requests use your own GitHub rate limit. GitHub gives a person about 5,000 requests each hour, and the Talyn app uses the same budget. At 30 each minute, a script can use 1,800 each hour at most. If GitHub limits your account, the API answers `503` `github_rate_limited` with `Retry-After`.
 
 The IP limit counts only failed authentications. A request with a valid token costs this budget nothing. Each token check needs a database read, so the API limits repeated failures from one address. An IP over the budget gets `429` `rate_limited` with `Retry-After`.
 

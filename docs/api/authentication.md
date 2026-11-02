@@ -50,6 +50,12 @@ You can revoke a token in the same screen at any time.
 | `code_reviews:write` | Start and stop code reviews. Dismiss findings and undo a dismissal. Post findings to GitHub. Also includes `code_reviews:read`. |
 | `webhooks:read` | List and read webhook endpoints, their deliveries and the event types. |
 | `webhooks:write` | Create, change, delete and test webhook endpoints. Rotate secrets. Redeliver. Also includes `webhooks:read`. |
+| `repositories:read` | List and get repositories. Read repository settings, instructions and the setup recipe. |
+| `repositories:write` | Change repository settings. Write and delete repository instructions. Revert setup steps. Also includes `repositories:read`. |
+| `sessions:read` | Read sessions, chats and events. Open the streams. Read changes, diffs, files, scripts, previews, queues, checkpoints and timing. |
+| `sessions:write` | Start, archive, restore and retry sessions. Open, change and close chats. Send messages. Stop turns. Run scripts, make preview links, open and merge pull requests, resize sessions. Also includes `sessions:read`. |
+| `memory:read` | List and get workspace memory entries. |
+| `memory:write` | Save, change, forget and restore memory entries. Also includes `memory:read`. |
 
 A write scope includes its read scope. A token with `sessions:write` can call all `sessions:read` endpoints.
 

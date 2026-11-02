@@ -22,6 +22,7 @@ What did not go as planned:
 - A review is one row per pull request with a `cycle` counter. Past cycles are not stored as rows, so `GET /pull-requests/{id}/code-reviews` lists one review, not one item per cycle.
 - Post to PR is at `POST /code-reviews/{id}/post`, not under the pull request, so that it sits with the other actions on a review.
 - Not built: merging directly (the queue is the merge path, as for workflows), the stack enqueue, the review-hidden flag, code review fix runs (tasks).
+
 ## Public API, phase 2: webhooks (2026-11-02)
 
 Outbound webhooks for `/v1`. A customer registers an https URL, and Talyn sends signed `POST`s to it for session, chat, pull request, merge queue and code review events. The guide is `docs/api/webhooks.md`.
@@ -46,6 +47,25 @@ Things that did not go as first planned:
 - `session.updated` follows the public status only, not the sandbox state. The public session shape has no sandbox state, so a sleep or a wake would be an event with no visible change.
 - No `merge_queue.merged` event: nothing internal says "the queue merged this". `pull_request.merged` covers the merge.
 - The first sight of a pull request records a baseline and sends nothing, to avoid a burst of one event per tracked pull request when an endpoint is added. The first sight of a session sends `session.updated`.
+
+## Public API, phase 2: session work, memory and repository settings (2026-11-02)
+
+Part 1 of phase 2 adds 40 `/v1` endpoints in four new route files under `routes/public/`: `sessionWork.ts`, `chatWork.ts`, `memory.ts` and `repositorySettings.ts`. The guide is `docs/api/session-work.md`. Three new scopes: `repositories:write`, `memory:read` and `memory:write`. No migration.
+
+What shipped:
+- Session work: changes, diff, files and file content, scripts (list, start, stop, output), previews (list, one-time link), Create PR, fix checks, resolve conflicts, merge, a thread's sessions, continue as a thread, timing, resize, and `GET /workspaces/{id}/readiness`.
+- Chats: `PATCH`, close, the queue (list, remove one, clear) and checkpoints (list, restore).
+- Memory: list (paged), save (upsert by name, 201 or 200), get, update, forget (soft delete), restore.
+- Repositories: get, settings (sandbox size, preview, setup learning), instructions (get, put, delete) and the setup recipe (get, revert a step).
+
+The handlers call the app's services. Logic that sat in `routes/workbenches.ts` handlers moved to `services/workbenches/sessionOps.ts`, and the app's routes now call it too: `requireReadySandbox`, the changes read with its stored copy, diff, files, config, script start and stop, chat patch and close, the queue removal, resize with `continueWith`, and the preview link. `memory.ts` exposes `memoryListWhere`, so the paged public list and the app's list filter the same way.
+
+Things that did not go as first planned:
+- The app's changes route wakes a sleeping box when no stored copy exists. The public route must not wake a box unless asked, so it answers `409` `snapshot_unavailable` and the caller sends `live=true`. `readSessionChanges` takes `wakeWithoutSnapshot` for the difference.
+- The script list does not read the config by default: the config lives in the box. Without `live=true` the list has only the scripts that ran, with `command: null`.
+- The diff and the file list have no size cap, because the app's routes have none. A huge repository gives a large `file_list`. Paging it would mean one box read per page.
+- The GitHub-spending actions (Create PR, merge) count in the create limiter. There is no separate GitHub tier yet.
+- Repository settings reads answer from stored settings only. The app's GET runs a detection that reads GitHub when nothing is stored; the API does not, so a settings read never spends the caller's GitHub budget.
 
 ## Public API, phase 1 (2026-11-02)
 

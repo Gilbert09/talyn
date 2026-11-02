@@ -2,6 +2,11 @@
 
 The API has two server-sent event (SSE) streams. Both need the scope `sessions:read`.
 
+- Use the **transcript stream** to watch what the agent says and does in one chat: each message, tool call and tool result.
+- Use the **session stream** to learn when the session itself changes: its status, a new chat, a turn that starts or ends, or a linked pull request. It does not send the agent's output.
+
+To be told about changes without an open connection, use [webhooks](webhooks.md).
+
 | Stream | Path | Use |
 | --- | --- | --- |
 | Transcript | `GET /chats/{id}/events/stream` | Follow what the agent does in one chat. |

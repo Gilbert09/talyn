@@ -1,10 +1,14 @@
+import { chatWorkRoutes } from './chatWork.js';
 import { chatRoutes } from './chats.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
+import { memoryRoutes } from './memory.js';
 import { mergeQueueRoutes } from './mergeQueue.js';
 import { metaRoutes } from './meta.js';
 import { buildOpenApiDocument } from './openapi.js';
 import { pullRequestRoutes } from './pullRequests.js';
+import { repositorySettingsRoutes } from './repositorySettings.js';
+import { sessionWorkRoutes } from './sessionWork.js';
 import { sessionRoutes } from './sessions.js';
 import { webhookRoutes } from './webhooks.js';
 import { workspaceRoutes } from './workspaces.js';
@@ -22,6 +26,10 @@ export const PUBLIC_ROUTES: PublicRoute[] = [
   ...mergeQueueRoutes,
   ...codeReviewRoutes,
   ...webhookRoutes,
+  ...sessionWorkRoutes,
+  ...chatWorkRoutes,
+  ...memoryRoutes,
+  ...repositorySettingsRoutes,
 ];
 
 let cachedDocument: ReturnType<typeof buildOpenApiDocument> | null = null;
