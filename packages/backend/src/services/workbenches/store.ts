@@ -267,11 +267,35 @@ export async function clearWorkCheckpoint(id: string, sandboxId?: string): Promi
     .where(sandboxId ? and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)) : eq(workbenchesTable.id, id));
 }
 
-/** Claim a lost box once. The old sandbox id keeps late calls from replacing its new box. */
-export async function claimLostWorkbench(id: string, sandboxId: string, replacementId: string, message: string): Promise<WorkbenchRow | null> {
+/** `settings` with `ids` added to `keptSandboxIds`. */
+function withKeptSandboxIds(ids: string[]) {
+  const settings = workbenchesTable.settings;
+  return sql`COALESCE(${settings}, '{}'::jsonb) || jsonb_build_object('keptSandboxIds',
+    COALESCE(${settings} -> 'keptSandboxIds', '[]'::jsonb) || ${JSON.stringify(ids)}::jsonb)`;
+}
+
+/** Mark old boxes of a workbench as kept, so the reaper does not delete them. */
+export async function keepSandboxes(id: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db().update(workbenchesTable).set({ settings: withKeptSandboxIds(ids) }).where(eq(workbenchesTable.id, id));
+}
+
+/**
+ * Claim a lost box once. The old sandbox id keeps late calls from replacing its
+ * new box. `keepSandboxIds` go on `settings.keptSandboxIds`, so the reaper
+ * does not delete those boxes.
+ */
+export async function claimLostWorkbench(
+  id: string,
+  sandboxId: string,
+  replacementId: string,
+  message: string,
+  opts: { keepSandboxIds?: string[] } = {},
+): Promise<WorkbenchRow | null> {
   const [row] = await db()
     .update(workbenchesTable)
     .set({
+      ...(opts.keepSandboxIds?.length ? { settings: withKeptSandboxIds(opts.keepSandboxIds) } : {}),
       status: 'provisioning',
       statusMessage: message,
       sandboxState: 'lost',

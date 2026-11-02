@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet, isWorkSaveScript } from './helpers/fakeFleet.js';
 import { repositories, workspaces } from '../db/schema.js';
-import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
+import { FleetHibernationLostError, FleetRunNotFoundError } from '../services/selfHosted/client.js';
 import { debugBus } from '../services/debugBus.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import { archiveWorkbench, deleteWorkbench, processArchive, restoreWorkbench, settleArchivesForTests, sweepPendingArchives } from '../services/workbenches/lifecycle.js';
@@ -193,11 +193,16 @@ describe('durable session archives', () => {
     expect(await renewArchive(second!)).toBe(true);
   });
 
-  it('clears a pending archive when the sandbox is already gone', async () => {
-    fleet.handler = () => { throw new FleetRunNotFoundError('box'); };
+  it.each([
+    ['gone', () => new FleetRunNotFoundError('box'), undefined],
+    ['a lost hibernated copy', () => new FleetHibernationLostError('hibernated copy cannot be restored'), ['box']],
+  ])('clears a pending archive when the sandbox is %s', async (_label, error, kept) => {
+    fleet.handler = () => { throw error(); };
     await markArchive(WB);
     await processArchive(WB);
-    expect(await row()).toMatchObject({ archivePendingAt: null, sandboxState: 'deleted' });
+    const archived = await row();
+    expect(archived).toMatchObject({ archivePendingAt: null, sandboxState: 'deleted' });
+    expect(archived.settings.keptSandboxIds).toEqual(kept);
     expect(fleet.deleted).toEqual([]);
   });
 

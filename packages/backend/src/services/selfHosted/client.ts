@@ -481,6 +481,8 @@ export class FleetCapacityError extends Error {
      * business in a customer-facing banner.
      */
     readonly reason: 'no_capacity' | 'unreachable' = 'no_capacity',
+    /** The fleet's machine code (`error` in its JSON body), when it sent one. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'FleetCapacityError';
@@ -511,6 +513,38 @@ export class FleetRunNotFoundError extends Error {
     super(message);
     this.name = 'FleetRunNotFoundError';
   }
+}
+
+/**
+ * The fleet cannot restore the sandbox's hibernated copy: the copy in object
+ * storage is corrupt or missing, and no retry helps. Talyn treats the box as
+ * lost, but keeps it, because an operator can sometimes recover the copy.
+ * An older fleet build sends the same code for a transient failure too.
+ */
+export class FleetHibernationLostError extends FleetRunNotFoundError {
+  readonly isHibernationLost = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'FleetHibernationLostError';
+  }
+}
+
+const HIBERNATION_LOST_CODES = new Set(['hibernation_unusable', 'hibernation_lost']);
+
+/** Whether a non-503 fleet answer says the hibernated copy cannot be restored. */
+export function isHibernationLostResponse(status: number, message: string, code?: string): boolean {
+  if (status === 503) return false;
+  return (code !== undefined && HIBERNATION_LOST_CODES.has(code)) || /hibernated copy cannot be restored/i.test(message);
+}
+
+/** The fleet could not fetch a hibernated copy now (503). The copy is intact; try again later. */
+export const HIBERNATION_FETCH_FAILED = 'hibernation_fetch_failed';
+
+/** The terminal error for a refusal that means the box is gone, or null. */
+export function lostSandboxError(status: number, message: string, code?: string): FleetRunNotFoundError | null {
+  if (isHibernationLostResponse(status, message, code)) return new FleetHibernationLostError(message);
+  if (isRunNotFoundResponse(status, message, code)) return new FleetRunNotFoundError(message);
+  return null;
 }
 
 /** Whether a fleet error means "no such sandbox". Check the 409 code first;
@@ -766,10 +800,8 @@ export class FleetClient {
     this.recordHttp(method, path, resp.status, started, resp.ok);
 
     if (resp.status === 503) {
-      throw new FleetCapacityError(
-        await errorMessage(resp, 'the fleet has no capacity'),
-        parseRetryAfterMs(resp),
-      );
+      const { message, code } = await errorBody(resp, 'the fleet has no capacity');
+      throw new FleetCapacityError(message, parseRetryAfterMs(resp), 'no_capacity', code);
     }
     if (resp.status === 429) {
       throw new FleetThrottleError(await errorMessage(resp, 'rate limited'), parseRetryAfterMs(resp));
@@ -784,9 +816,8 @@ export class FleetClient {
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
-      if (isRunNotFoundResponse(resp.status, message, code)) {
-        throw new FleetRunNotFoundError(message);
-      }
+      const lost = lostSandboxError(resp.status, message, code);
+      if (lost) throw lost;
       throw new FleetHttpError(message, resp.status, code);
     }
     // The gateway names the host that took a create, because Talyn has to bound
@@ -1138,8 +1169,9 @@ export class FleetClient {
     this.recordHttp('POST', path, resp.status, started, resp.ok);
     if (!resp.ok || !resp.body) {
       const { message, code } = await errorBody(resp, `exec ${id}: ${resp.status} ${resp.statusText}`);
-      if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
-      if (isRunNotFoundResponse(resp.status, message, code)) throw new FleetRunNotFoundError(message);
+      if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp), 'no_capacity', code);
+      const lost = lostSandboxError(resp.status, message, code);
+      if (lost) throw lost;
       throw new FleetHttpError(message, resp.status, code);
     }
     const reader = resp.body.getReader();
@@ -1185,8 +1217,9 @@ export class FleetClient {
         { timeoutMs: execWaitMs(req) },
       );
     } catch (err) {
-      const status =
-        err instanceof FleetHttpError ? err.status : err instanceof FleetRunNotFoundError ? 404 : 0;
+      // A lost hibernated copy is about the box, not the route: asking again would fetch the copy again.
+      const status = err instanceof FleetHttpError ? err.status
+        : err instanceof FleetRunNotFoundError && !(err instanceof FleetHibernationLostError) ? 404 : 0;
       if (status !== 400 && status !== 404) throw err;
       const outcome = await plain();
       optionalSupport.set(key, false);
@@ -1314,10 +1347,10 @@ export class FleetClient {
           } catch {
             /* plain text */
           }
-          if (status === 503) reject(new FleetCapacityError(message));
-          else if (isRunNotFoundResponse(status, message, code)) {
-            reject(new FleetRunNotFoundError(message));
-          } else reject(new FleetHttpError(`${path.split('?')[0]}: ${status} ${message}`, status, code));
+          const lost = lostSandboxError(status, message, code);
+          if (status === 503) reject(new FleetCapacityError(message, undefined, 'no_capacity', code));
+          else if (lost) reject(lost);
+          else reject(new FleetHttpError(`${path.split('?')[0]}: ${status} ${message}`, status, code));
         });
       });
       req.on('timeout', () => req.destroy(new Error(`${path.split('?')[0]}: timed out after ${timeoutMs}ms`)));
@@ -1428,8 +1461,9 @@ export class FleetClient {
         { timeoutMs: 5 * 60_000 },
       );
     } catch (err) {
-      const status =
-        err instanceof FleetHttpError ? err.status : err instanceof FleetRunNotFoundError ? 404 : 0;
+      // A lost hibernated copy is about the box, not the route.
+      const status = err instanceof FleetHttpError ? err.status
+        : err instanceof FleetRunNotFoundError && !(err instanceof FleetHibernationLostError) ? 404 : 0;
       if (status === 404 || status === 405 || status === 501) {
         optionalSupport.set(key, false);
         return 'unsupported';
@@ -1511,10 +1545,11 @@ export class FleetClient {
       return { supported: false };
     }
     const message = fleetError?.message || fleetError?.error || `fleet returned ${resp.status}`;
-    if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
+    if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp), 'no_capacity', fleetError?.error);
     // A 404 about the THING asked for (a missing file) is not a missing sandbox.
     if (resp.status === 404 && fleetError?.error === 'no_such_file') throw new FleetHttpError(message, 404, 'no_such_file');
-    if (isRunNotFoundResponse(resp.status, message, fleetError?.error)) throw new FleetRunNotFoundError(message);
+    const lost = lostSandboxError(resp.status, message, fleetError?.error);
+    if (lost) throw lost;
     throw new FleetHttpError(message, resp.status, fleetError?.error);
   }
 }

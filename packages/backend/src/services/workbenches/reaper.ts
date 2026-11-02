@@ -15,9 +15,10 @@ const COLUMNS = {
   archivePendingAt: workbenches.archivePendingAt, status: workbenches.status,
   moveSandboxId: sql<string | null>`${workbenches.settings} ->> 'moveSandboxId'`,
   fleetSandboxId: sql<string | null>`${workbenches.settings} ->> 'fleetSandboxId'`,
+  keptSandboxIds: sql<string[] | null>`${workbenches.settings} -> 'keptSandboxIds'`,
 } as const;
 type Session = Pick<typeof workbenches.$inferSelect, 'id' | 'sandboxId' | 'archivedAt' | 'archivePendingAt' | 'status'>
-  & { moveSandboxId: string | null; fleetSandboxId: string | null };
+  & { moveSandboxId: string | null; fleetSandboxId: string | null; keptSandboxIds?: string[] | null };
 type Box = Pick<FleetSandbox, 'id' | 'createdAt' | 'lastActivity'>;
 const logicalId = (id: string) => id.split('--')[0];
 
@@ -27,6 +28,8 @@ export function orphanReason(box: Box, sessions: Session[], now = Date.now()): s
   const age = now - Date.parse(box.createdAt || box.lastActivity || '');
   if (!Number.isFinite(age) || age < HOUR / 2) return null;
   const id = logicalId(box.id);
+  // Its hibernated copy could not be restored; an operator may still recover it.
+  if (sessions.some((row) => row.keptSandboxIds?.some((kept) => kept === box.id || logicalId(kept) === id))) return null;
   if (sessions.some((row) => (!row.archivedAt && (logicalId(row.sandboxId ?? '') === id || row.fleetSandboxId === box.id))
     || (row.status === 'moving' && logicalId(row.moveSandboxId ?? '') === id))) return null;
   const owners = sessions.filter((row) => sandboxIdFor(row.id) === id.replace(/-r\d+$/, '')
