@@ -17,6 +17,7 @@ import {
   withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
+import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, SandboxSizeRefusedError, userFacingError, WorkbenchError } from './errors.js';
@@ -587,6 +588,9 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
   // Before the row: a failure leaves objects behind, never a row that names nothing.
   await deleteSavedWork(row).catch((err) =>
     console.warn(`[workbench] deleting the saved work of ${row.id} failed; removing the workbench anyway:`, err),
+  );
+  await deleteChangesSnapshot(row).catch((err) =>
+    console.warn(`[workbench] deleting the changes snapshot of ${row.id} failed; removing the workbench anyway:`, err),
   );
   await deleteWorkbenchRow(row.id);
   emitWorkbenchDeleted(row.workspaceId, row.id);

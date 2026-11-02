@@ -341,6 +341,11 @@ export interface WorkbenchChanges {
   /** The merge-base sha the diff was taken against. */
   base: string;
   headSha: string;
+  /**
+   * Set when the list came from Talyn's stored copy because the box was
+   * asleep: the ISO time the copy was taken. Absent on a live read.
+   */
+  snapshotAt?: string;
 }
 
 /** The agent's to-do list, from Claude's `TodoWrite` or Codex's `todo_list` item. */
