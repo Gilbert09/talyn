@@ -67,6 +67,7 @@ New codes can appear in `v1`. Handle a code that you do not know by its `type` o
 | 400 | `invalid_idempotency_key` | The `Idempotency-Key` is not valid. | Use 1 to 255 printable ASCII characters with no spaces. |
 | 413 | `body_too_large` | The body is more than 1 MB. | Send a smaller body. |
 | 415 | `unsupported_encoding` | The body encoding is not supported. | Send plain UTF-8 JSON. |
+| 400 | `invalid_webhook_url` | The webhook URL is not allowed: not https, has a user name, or points to a private, loopback or reserved address. `param` is `url`. | Use a public https URL. See [webhooks](webhooks.md#which-urls-are-allowed). |
 
 Request bodies are strict. A field that the API does not know gives `400` `invalid_parameter`. The `param` field names the unknown field.
 
@@ -80,6 +81,8 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | 404 | `pull_request_not_found` | The pull request does not exist, Talyn does not track it, or the token cannot reach it. |
 | 404 | `code_review_not_found` | The code review does not exist, or the token cannot reach it. |
 | 404 | `finding_not_found` | The finding is not in this code review. |
+| 404 | `webhook_endpoint_not_found` | The webhook endpoint does not exist, or the token cannot reach it. |
+| 404 | `webhook_delivery_not_found` | The webhook delivery does not exist, or the token cannot reach it. |
 | 404 | `route_not_found` | The method and path match no endpoint. |
 
 A resource that the token cannot reach gives the same `404` as a resource that does not exist.
@@ -105,6 +108,9 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `busy` | The review changed while it started. | Retry. |
 | 409 | `code_review_post_not_ready` | The review is still running. | Wait until `phase` is `ready`. |
 | 409 | `code_review_post_nothing_to_post` | No open finding is left to post, or each one is too long for GitHub. | Nothing to do. |
+| 409 | `webhook_endpoint_limit_reached` | The account has 20 webhook endpoints. The body has `limit`. | Delete an endpoint. |
+| 409 | `webhook_endpoint_disabled` | A test or a redelivery was sent to a disabled endpoint. | Enable it with `PATCH /webhooks/{id}`. |
+| 409 | `delivery_pending` | A redelivery was sent for a delivery that is still pending. | Wait until it is no longer `pending`. |
 
 ### Plan limits
 

@@ -48,6 +48,8 @@ You can revoke a token in the same screen at any time.
 | `pull_requests:write` | Refresh pull requests from GitHub. Turn auto-keep on or off. Add, remove and re-submit merge-queue entries. Also includes `pull_requests:read`. |
 | `code_reviews:read` | Read code reviews, their findings and their history. |
 | `code_reviews:write` | Start and stop code reviews. Dismiss findings and undo a dismissal. Post findings to GitHub. Also includes `code_reviews:read`. |
+| `webhooks:read` | List and read webhook endpoints, their deliveries and the event types. |
+| `webhooks:write` | Create, change, delete and test webhook endpoints. Rotate secrets. Redeliver. Also includes `webhooks:read`. |
 
 A write scope includes its read scope. A token with `sessions:write` can call all `sessions:read` endpoints.
 

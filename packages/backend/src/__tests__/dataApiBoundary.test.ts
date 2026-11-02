@@ -182,6 +182,8 @@ describe('Data API database boundary', () => {
       'workbench_turn_timings', 'repository_setup_steps',
       // Public API tokens and idempotency keys (0100): `/v1` carries no JWT.
       'api_tokens', 'api_idempotency_keys',
+      // Public API webhooks (0101): encrypted signing secrets, and a worker with no request to scope by.
+      'api_webhook_endpoints', 'api_webhook_deliveries', 'api_webhook_object_states',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

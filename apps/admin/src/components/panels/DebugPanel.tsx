@@ -59,6 +59,8 @@ const CATEGORY_INFO: Record<DebugCategory, string> = {
 // the backend registry; these cover the services that show up in HTTP/event
 // rows. Keep this in sync when a new outbound integration or emitter lands.
 const SERVICE_INFO: Record<string, string> = {
+  api_webhooks:
+    'Public API webhooks: signed POSTs to the URLs customers registered. The log shows the origin only, never the path.',
   github: 'GitHub REST + GraphQL API — PR data, checks, reviews, merges, and OAuth.',
   supabase_storage:
     'Supabase Storage, private bucket `workbench-work` — session checkpoints and archives, written and read 2 MiB at a time by the backend only.',

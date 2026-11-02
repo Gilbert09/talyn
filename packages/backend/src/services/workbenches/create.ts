@@ -22,6 +22,7 @@ import { scheduleProvision } from './lifecycle.js';
 import { publicWorkbench } from './prLink.js';
 import { sandboxRefusal, workbenchReadiness, type ReadinessUser } from './readiness.js';
 import { sandboxIdFor } from './sandboxRuntime.js';
+import { sendWebhookSignal } from '../apiWebhooks/signals.js';
 import { conversationRecap } from './agentRecap.js';
 import {
   getWorkbench,
@@ -245,6 +246,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
     queuedMessages: firstMessage ? [firstMessage] : [],
   });
   const data = await publicWorkbench(row);
+  sendWebhookSignal({ kind: 'session_created', workspaceId, sessionId: row.id });
   await emitWorkbenchUpdated(data);
   if (row.runtime === 'sandbox') scheduleProvision(row.id);
   return data;
@@ -345,6 +347,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
     if (linked) await emitWorkbenchUpdated(await publicWorkbench(linked));
   }
   const data = await publicWorkbench(row);
+  sendWebhookSignal({ kind: 'session_created', workspaceId, sessionId: row.id });
   await emitWorkbenchUpdated(data);
   scheduleProvision(row.id);
   return data;

@@ -55,6 +55,13 @@ interface RouteFields {
   planLimited?: boolean;
   /** Reads or changes sessions: also needs the `workbenches` flag for the token owner. */
   sessions?: boolean;
+  /**
+   * For a create whose answer holds a secret: what the idempotency record
+   * stores instead of the answer, and how a replay rebuilds the answer from
+   * it. The idempotency table must never hold a plaintext secret.
+   */
+  idempotentBody?: (body: unknown) => unknown;
+  replayBody?: (stored: unknown, token: ApiTokenPrincipal) => Promise<unknown>;
   /** Success responses. Error responses are added to the spec for every route. */
   responses: Record<number, PublicResponseSpec>;
 }

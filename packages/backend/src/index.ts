@@ -21,6 +21,7 @@ import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
 import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
 import { registerSlackStatusReactions } from './services/slack/statusReactions.js';
+import { startApiWebhooks, stopApiWebhooks } from './services/apiWebhooks/register.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv, retiredEnvWarnings } from './services/validateEnv.js';
@@ -265,6 +266,9 @@ async function main() {
   startIdempotencySweep();
   // Slack sessions show their state as a reaction on the triggering message.
   registerSlackStatusReactions();
+  // Public API webhooks: session emits become events, and the delivery worker
+  // sends what is due. Cheap with no endpoints: a partial-index lookup every 5 s.
+  startApiWebhooks();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
@@ -509,6 +513,7 @@ async function main() {
 codeReviewPoller.stop();
 codeReviewReconciler.stop();
     slackEventSweep.stop();
+    stopApiWebhooks();
     // posthog-node batches the `$feature_flag_called` events that make a flag's
     // rollout visible in PostHog. Without this flush they are lost on every
     // deploy — and a deploy is when a rollout is most interesting to look at.

@@ -25,6 +25,8 @@ export const API_SCOPES = [
   'pull_requests:write',
   'code_reviews:read',
   'code_reviews:write',
+  'webhooks:read',
+  'webhooks:write',
 ] as const;
 
 export type ApiScope = (typeof API_SCOPES)[number];
@@ -39,6 +41,8 @@ export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'pull_requests:write': 'Refresh pull requests, change auto-keep and the merge queue',
   'code_reviews:read': 'Read code reviews and their findings',
   'code_reviews:write': 'Start code reviews, dismiss findings and post them to GitHub',
+  'webhooks:read': 'Read webhook endpoints and deliveries',
+  'webhooks:write': 'Create, change and test webhook endpoints',
 };
 
 export function isApiScope(value: unknown): value is ApiScope {

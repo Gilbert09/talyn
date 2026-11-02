@@ -228,6 +228,7 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/chats/{id}/cancel` | `sessions:write` | Stop the running turn |
 | GET | `/chats/{id}/events` | `sessions:read` | Read a transcript page |
 | GET | `/chats/{id}/events/stream` | `sessions:read` | Stream a transcript |
+<<<<<<< HEAD
 | GET | `/pull-requests` | `pull_requests:read` | List the pull requests Talyn tracks |
 | GET | `/pull-requests/{id}` | `pull_requests:read` | Get a pull request |
 | PATCH | `/pull-requests/{id}` | `pull_requests:write` | Turn auto-keep on or off |
@@ -248,6 +249,19 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Dismiss a finding |
 | DELETE | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Undo a dismissal |
 | POST | `/code-reviews/{id}/post` | `code_reviews:write` | Post findings to the pull request on GitHub |
+=======
+| GET | `/webhooks` | `webhooks:read` | List webhook endpoints |
+| POST | `/webhooks` | `webhooks:write` | Create a webhook endpoint |
+| GET | `/webhooks/{id}` | `webhooks:read` | Get a webhook endpoint |
+| PATCH | `/webhooks/{id}` | `webhooks:write` | Change, disable or enable a webhook endpoint |
+| DELETE | `/webhooks/{id}` | `webhooks:write` | Delete a webhook endpoint |
+| POST | `/webhooks/{id}/rotate-secret` | `webhooks:write` | Rotate the signing secret |
+| POST | `/webhooks/{id}/test` | `webhooks:write` | Send a `ping` event |
+| GET | `/webhooks/{id}/deliveries` | `webhooks:read` | List the deliveries of an endpoint |
+| GET | `/webhook-deliveries/{id}` | `webhooks:read` | Get a delivery and its payload |
+| POST | `/webhook-deliveries/{id}/redeliver` | `webhooks:write` | Send a delivery again |
+| GET | `/webhook-event-types` | `webhooks:read` | List the event types |
+>>>>>>> tom/api2-webhooks
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Local sessions
@@ -273,13 +287,22 @@ A session, a merge-queue entry or a code review that you start through the API c
 - [Idempotency](api/idempotency.md): retry a create without a duplicate.
 - [Streaming](api/streaming.md): server-sent events, reconnect, polling.
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
+<<<<<<< HEAD
 - [Pull requests](api/pull-requests.md): pull requests, the merge queue and code reviews.
+=======
+- [Webhooks](api/webhooks.md): events, signatures, retries and delivery logs.
+>>>>>>> tom/api2-webhooks
 
 ## What is not in v1 yet
 
 - Tasks
+<<<<<<< HEAD
 - Merging a pull request directly. Use the merge queue.
 - Code review fix runs
 - Webhooks
+=======
+- Pull requests
+- Code review
+>>>>>>> tom/api2-webhooks
 - SDKs
 - Threads beyond `kind: "thread"` on `POST /sessions`
