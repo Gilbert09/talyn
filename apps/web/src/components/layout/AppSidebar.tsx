@@ -30,7 +30,7 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { SidebarThreadList } from './SidebarThreadList';
 import { SidebarSlackPending } from './SidebarSlackPending';
-import { CloudProviderStatus } from './CloudProviderStatus';
+import { SidebarUsageSlot } from './UsageGauge';
 import { UserChip } from './UserChip';
 
 export function AppSidebar() {
@@ -177,7 +177,7 @@ export function AppSidebar() {
         </div>
 
         <div className="border-t p-2">
-          <CloudProviderStatus collapsed={collapsed} />
+          <SidebarUsageSlot collapsed={collapsed} />
           <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
             <IconButton label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} keys="mod+b" onClick={toggleSidebar}>
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}

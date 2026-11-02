@@ -4,6 +4,7 @@ import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
+import { maybeHandleBillingLimit } from '../../../stores/billing';
 
 export interface NewWorkbenchSpec {
   workspaceId: string;
@@ -53,11 +54,14 @@ export function useCreateWorkbench(): CreateWorkbenchState {
             model: spec.model, effort: spec.effort, planMode: spec.planMode,
           });
         } catch (err) {
+          if (maybeHandleBillingLimit(err, 'session_first_message')) return wb;
           toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
         }
       }
       return wb;
     } catch (err) {
+      // A box refusal keeps its sentence on the page and opens the modal with the action.
+      maybeHandleBillingLimit(err, spec.kind === 'thread' ? 'thread_create' : 'session_create');
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {

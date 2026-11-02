@@ -8,6 +8,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
 import { toast } from '../../stores/toast';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /**
  * A chat's transcript: each turn is the user's message, then the agent's
@@ -301,6 +302,7 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
     try {
       await ops.send(chat, { text: `Continue from where you stopped. The last turn ended with an error: ${reason.trim().slice(0, 300)}.` });
     } catch (err) {
+      if (maybeHandleBillingLimit(err, 'session_turn_retry')) return;
       toast.error('Could not retry the turn', err instanceof Error ? err.message : undefined);
     } finally {
       setSending(false);
