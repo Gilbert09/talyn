@@ -16,9 +16,11 @@
     "test:coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "openapi:generate": "tsx scripts/generate-openapi.ts"
   },
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^7.3.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@polar-sh/sdk": "^0.48.1",
     "@supabase/supabase-js": "^2.103.3",

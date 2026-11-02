@@ -26,6 +26,7 @@ import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
+import { apiTokenRoutes } from './apiTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
 import { mcpRoutes } from '../mcp/transport.js';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
@@ -228,6 +229,11 @@ export function setupRoutes(app: Express): void {
   // for that round trip. Every handler scopes to req.user.id itself. See
   // routes/developer.ts.
   app.use(`${api}/developer`, mount(developerRoutes()));
+
+  // Personal access tokens for the public API (`/v1`), managed from Settings →
+  // Developer. Pre-ownerScope: `api_tokens` is a backend-pool-only table, so
+  // every handler passes req.user.id itself. See routes/apiTokens.ts.
+  app.use(`${api}/api-tokens`, mount(apiTokenRoutes()));
 
   // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
   // Pre-ownerScope for the billing reason, and more so: most handlers wait on
