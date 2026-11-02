@@ -678,6 +678,58 @@ export const mcpTokens = pgTable(
   })
 );
 
+// ---------- Public API tokens (migration 0101) ----------
+//
+// Personal access tokens for `/v1`. The SHA-256 of the token is stored, never
+// the plaintext. Backend-pool-only (RLS on, no policy): the `/v1` requests have
+// no JWT, and the management routes scope every query to the caller.
+
+export const apiTokens = pgTable(
+  'api_tokens',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    tokenPrefix: text('token_prefix').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    scopes: text('scopes').array().notNull(),
+    // NULL: every workspace of the owner.
+    workspaceIds: text('workspace_ids').array(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdByIp: text('created_by_ip'),
+  },
+  (t) => ({
+    tokenHashUq: uniqueIndex('uq_api_tokens_token_hash').on(t.tokenHash),
+    ownerIdx: index('idx_api_tokens_owner').on(t.ownerId),
+  })
+);
+
+// One row per `Idempotency-Key` a token sent on a create. Expires after 24 h.
+export const apiIdempotencyKeys = pgTable(
+  'api_idempotency_keys',
+  {
+    tokenId: text('token_id')
+      .notNull()
+      .references(() => apiTokens.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    // 'in_progress' | 'completed'
+    status: text('status').notNull(),
+    responseStatus: integer('response_status'),
+    responseBody: jsonb('response_body'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.tokenId, t.key], name: 'api_idempotency_keys_pkey' }),
+    createdIdx: index('idx_api_idempotency_keys_created').on(t.createdAt),
+  })
+);
+
 // ---------- Global settings (key/value) ----------
 
 export const settings = pgTable('settings', {
