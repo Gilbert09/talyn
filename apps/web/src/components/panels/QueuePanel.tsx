@@ -28,6 +28,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions, loadMoreTasks } from '../../hooks/useApi';
 import { api } from '../../lib/api';
 import { TaskTerminal } from './TaskTerminal';
+import { taskDisplayStatus } from '../../lib/taskDisplayStatus';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import type { PRSummaryShape, PRState } from '../../lib/api';
@@ -41,6 +42,7 @@ import {
   isAgentTask,
   readDispatchedModel,
   TERMINAL_TASK_STATUSES,
+  taskNeedsHumanOpen,
 } from '@talyn/shared';
 import type { TaskScheduleError } from '@talyn/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority } from '@talyn/shared';
@@ -297,8 +299,9 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
   const provider = taskCloudProvider(task, environments);
   const isRunning = task.status === 'in_progress';
 
-  const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
-  const statusColor = isRunning ? runningStatus.color : statusConfig[task.status].color;
+  const status = statusConfig[taskDisplayStatus(task)];
+  const StatusIcon = isRunning ? runningStatus.icon : status.icon;
+  const statusColor = isRunning ? runningStatus.color : status.color;
 
   return (
     <Card
@@ -445,7 +448,8 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     }
   };
 
-  const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
+  const status = statusConfig[taskDisplayStatus(task)];
+  const StatusIcon = isRunning ? runningStatus.icon : status.icon;
 
   // If task is running, show terminal
   if (isRunning) {
@@ -527,7 +531,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             <div
               className={cn(
                 'w-10 h-10 rounded-lg flex items-center justify-center bg-secondary shrink-0',
-                statusConfig[task.status].color
+                status.color
               )}
             >
               <StatusIcon className="w-5 h-5" />
@@ -535,7 +539,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             <div className="min-w-0 flex-1">
               <h2 className="text-lg font-semibold break-words">{task.title}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-                <Badge variant="outline">{statusConfig[task.status].label}</Badge>
+                <Badge variant="outline">{status.label}</Badge>
                 {provider && (
                   <Badge variant="outline" className="gap-1">
                     <ProviderIcon provider={provider} className="h-3 w-3" />
@@ -585,7 +589,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             {/* PR pill + open-on-GitHub link on any task with a PR linked
                 (started-from-a-PR, or linked once the cloud run opened one). */}
             <TaskPRControls task={task} onOpen={setPRSheetId} />
-            {(task.status === 'failed' || task.status === 'needs_human') && (
+            {(task.status === 'failed' || taskNeedsHumanOpen(task)) && (
               <>
                 <Button size="sm" data-attr="task-retry" onClick={handleRetryTask} disabled={actionInFlight}>
                   {isLoadingFor('retry') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RotateCw className="w-4 h-4 mr-1" />}
@@ -697,12 +701,18 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         </div>
       )}
 
+      {task.status === 'needs_human' && !taskNeedsHumanOpen(task) && (
+        <p className="px-4 py-2 border-b text-xs text-muted-foreground">
+          Resolved: the merge queue moved on.
+        </p>
+      )}
+
       {/* Needs-a-human banner. Deliberately AMBER and separate from the red
           failure banner below: the run did not break, it asked a question and
           stopped. Rendering that in red is the exact mistake this state was
           added to stop making. Retry is offered because the person reading it
           is usually the one who just unblocked the thing. */}
-      {task.status === 'needs_human' && (
+      {taskNeedsHumanOpen(task) && (
         <div className="px-4 py-3 border-b bg-amber-500/10 text-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2 min-w-0 flex-1">

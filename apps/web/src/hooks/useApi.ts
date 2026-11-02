@@ -18,6 +18,7 @@ import type {
   TaskEventBroadcast,
   TaskCreatedEvent,
   MergeQueueBlockedEvent,
+  MergeQueueReviewWaitEvent,
   AutoKeepNeedsHumanEvent,
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
@@ -26,6 +27,7 @@ import type {
 import { workbenchesOffered, type SlackNoticeEvent, type WorkbenchWsPayloads } from '@talyn/shared';
 import { handleSlackNotice, loadSlackPending } from '../lib/slackNotices';
 import { toast } from '../stores/toast';
+import { notifyMergeQueueReviewWait } from '../lib/mergeQueueReviewWait';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
@@ -433,6 +435,12 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<MergeQueueBlockedEvent>('merge_queue:blocked', (payload) => {
         notifyMergeQueueBlocked(payload);
+      })
+    );
+
+    unsubscribers.push(
+      wsClient.on<MergeQueueReviewWaitEvent>('merge_queue:review_wait', (payload) => {
+        notifyMergeQueueReviewWait(payload, getMergeBlockedNotifyEnabled());
       })
     );
 

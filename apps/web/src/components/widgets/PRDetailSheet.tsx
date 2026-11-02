@@ -57,6 +57,7 @@ import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
 import { PollingOnlyBadge } from './PollingOnlyBadge';
 import { toast } from '../../stores/toast';
+import { canResubmitMergeQueue, resubmitMergeQueue } from '../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../lib/analytics';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -1103,6 +1104,7 @@ export function MergeQueueSection({ row }: { row: PRRow }) {
   const [events, setEvents] = useState<MergeQueueTimelineEvent[] | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [requeueing, setRequeueing] = useState(false);
+  const [resubmitting, setResubmitting] = useState(false);
   const queued = row.mergeQueued || Boolean(v2);
 
   useEffect(() => {
@@ -1170,7 +1172,25 @@ export function MergeQueueSection({ row }: { row: PRRow }) {
             {statusLabel}
             {v2?.autoMerge?.armed && v2.status !== 'automerge_armed' ? ' · auto-merge armed' : ''}
           </span>
-          {blocked && (
+          {canResubmitMergeQueue(v2) && (
+            <Button
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              disabled={resubmitting}
+              onClick={async () => {
+                setResubmitting(true);
+                try {
+                  await resubmitMergeQueue(row.id);
+                } finally {
+                  setResubmitting(false);
+                }
+              }}
+            >
+              {resubmitting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+              Re-submit to Trunk
+            </Button>
+          )}
+          {blocked && !canResubmitMergeQueue(v2) && (
             <Button
               variant="outline"
               className="h-6 px-2 text-[11px]"

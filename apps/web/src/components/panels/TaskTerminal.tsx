@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
 import { readCloudTaskMeta } from '@talyn/shared';
+import { taskDisplayStatus } from '../../lib/taskDisplayStatus';
 import type { Task } from '@talyn/shared';
 
 interface TaskTerminalProps {
@@ -125,7 +126,7 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
     return () => window.clearInterval(timer);
   }, [task.id, task.status, hasCloudRun]);
 
-  const runState = runStateFor(task.status);
+  const runState = runStateFor(taskDisplayStatus(task));
 
   const handleStopTask = useCallback(async () => {
     setIsStopping(true);

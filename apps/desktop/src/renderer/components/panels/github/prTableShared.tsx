@@ -29,6 +29,7 @@ import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
 import { buildStackIndex, stackSelection, type StackMeta } from './stacks';
 import {
   type TaskStatus,
+  taskNeedsHumanOpen,
   type AnyCloudProviderType,
   type SkillSummary,
   externalQueueProviderLabel,
@@ -55,6 +56,7 @@ import { TrunkMergeEtaChip } from '../../widgets/TrunkMergeEta';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
+import { canResubmitMergeQueue, resubmitMergeQueue } from '../../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
 import { deferralNotice } from '../../../hooks/useDeferredRuns';
@@ -508,10 +510,12 @@ const PRTableRow = React.memo(function PRTableRow({
   const taskFailed = taskStatus === 'failed' || taskStopped;
   // Stopped for a person. Actionable like a failure — the badge must show —
   // but styled and worded as a question, not a breakage.
-  const taskNeedsHuman = taskStatus === 'needs_human';
-  const taskReason = useWorkspaceStore((s) =>
-    s.tasks?.find((task) => task.id === row.taskId)?.result?.needsHuman?.reason
-  );
+  const linkedTask = useWorkspaceStore((s) => s.tasks?.find((task) => task.id === row.taskId));
+  const taskNeedsHuman = linkedTask?.status
+    ? taskNeedsHumanOpen(linkedTask)
+    : taskStatus === 'needs_human';
+  const taskResolved = linkedTask?.status === 'needs_human' && !taskNeedsHumanOpen(linkedTask);
+  const taskReason = linkedTask?.result?.needsHuman?.reason;
   const shortTaskReason =
     typeof taskReason === 'string' && taskReason.trim()
       ? taskReason.replace(/\s+/g, ' ').trim().slice(0, 160)
@@ -825,7 +829,7 @@ const PRTableRow = React.memo(function PRTableRow({
               {/* Linked-task indicator — "Working" (spinner) while running,
                   "Failed" if it errored/was cancelled. Hidden once the task
                   completes cleanly. Deep-links to the run. */}
-              {row.taskId && (taskRunning || taskFailed || (taskNeedsHuman && !prNeedsHuman)) && (
+              {row.taskId && (taskRunning || taskFailed || taskResolved || (taskNeedsHuman && !prNeedsHuman)) && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -854,6 +858,8 @@ const PRTableRow = React.memo(function PRTableRow({
                       ? 'A task is working this PR — click to open it'
                       : taskNeedsHuman
                       ? `${taskNeedsHumanTitle} — click to open it`
+                      : taskResolved
+                      ? 'Resolved: the merge queue moved on. Click to open the task.'
                       : taskStopped
                       ? 'The linked task was stopped — click to open it'
                       : 'The linked task failed — click to open it'
@@ -867,6 +873,8 @@ const PRTableRow = React.memo(function PRTableRow({
                     </>
                   ) : taskNeedsHuman ? (
                     'Needs you'
+                  ) : taskResolved ? (
+                    'Done'
                   ) : taskStopped ? (
                     'Stopped'
                   ) : (
@@ -1561,6 +1569,7 @@ function QueueCell({
 }) {
   const v2 = row.mergeQueue;
   const pos = v2?.position ?? 0;
+  const [resubmitting, setResubmitting] = useState(false);
   const chip = (() => {
     if (v2) {
       const budgets = v2.budgets;
@@ -1644,7 +1653,7 @@ function QueueCell({
               }
             >
               <Eye className="h-3 w-3" />
-              {restacked ? 'Waiting for review (re-approve)' : 'Waiting for review'}
+              Waiting for a required review
             </span>
           );
         }
@@ -1773,6 +1782,20 @@ function QueueCell({
       <div className="flex items-center gap-1.5">
         <span className="font-medium text-foreground">{pos > 0 ? `#${pos}` : '—'}</span>
         {chip}
+        {canResubmitMergeQueue(v2) && (
+          <button
+            type="button"
+            className="rounded border px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
+            disabled={resubmitting}
+            onClick={(event) => {
+              event.stopPropagation();
+              setResubmitting(true);
+              void resubmitMergeQueue(row.id).finally(() => setResubmitting(false));
+            }}
+          >
+            Re-submit to Trunk
+          </button>
+        )}
       </div>
     </td>
   );
