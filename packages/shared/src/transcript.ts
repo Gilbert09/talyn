@@ -381,7 +381,11 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         blocks.push({ kind: 'system', key: seqKey, text: String((event as { text?: unknown }).text ?? '') });
         continue;
       }
-      const show = ['stderr', 'spawn_error', 'truncated'].includes(String(event.subtype ?? ''));
+      // The box-refusal notes (usage billing) keep their subtype: the clients
+      // draw them as a notice with the plan's action, not as a log line.
+      const show = ['stderr', 'spawn_error', 'truncated', 'usage_exhausted', 'box_limit_reached', 'size_requires_pro'].includes(
+        String(event.subtype ?? ''),
+      );
       if (show) {
         blocks.push({
           kind: 'system',
