@@ -12,6 +12,7 @@ import {
   Keyboard,
   MessageSquare,
   Palette,
+  KeyRound,
   Plug,
   PlugZap,
   ScanSearch,
@@ -44,6 +45,7 @@ import { BillingSettings } from './sections/BillingSettings';
 import { DeveloperSettings } from './sections/DeveloperSettings';
 import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { MCPServerSettings } from './sections/McpSettings';
+import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
 import { SessionsSettings } from './sections/SessionsSettings';
@@ -120,6 +122,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   developer: DeveloperSettings,
   mcpServers: McpServersPage,
   mcp: MCPServerSettings,
+  apiTokens: ApiTokensSettings,
   about: AboutSettings,
 };
 
@@ -183,6 +186,11 @@ export function SettingsShell() {
         { id: 'appearance', icon: Palette, label: 'Appearance' },
         { id: 'developer', icon: Bug, label: 'Developer' },
         { id: 'mcp', icon: Plug, label: 'Talyn MCP server' },
+        // The body also lists existing tokens when the flag is off, but the nav
+        // entry follows the flag.
+        ...(features?.publicApi === true
+          ? [{ id: 'apiTokens' as const, icon: KeyRound, label: 'API tokens' }]
+          : []),
         { id: 'about', icon: Info, label: 'About' },
       ],
     },

@@ -121,6 +121,7 @@ export type SettingsSection =
   | 'developer'
   | 'mcpServers'
   | 'mcp'
+  | 'apiTokens'
   | 'about';
 
 // Simplified repository type for store (matches API response)
