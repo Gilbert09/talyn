@@ -14,7 +14,7 @@ Things that did not go as first planned:
 - The per-IP limit before authentication counts only FAILED authentications. A plain per-IP limit of 300 a minute sat below the per-token limit of 600, so one CI runner with a good token hit the IP limit first.
 - `last_used_at` is written in the request, not after it. A write left running after the response outlived the test database and hung the test run at full CPU.
 - Migration `0101`, not `0100`: `tom/workbenches` holds `0100_usage_billing`. The drizzle migrator skips a migration with an older timestamp than the newest applied one, so `0100` must reach production before or with `0101`.
-- Session creates go through `assertSessionPlanAllows` in `services/workbenches/create.ts`. It has no cap on `main`; on `tom/workbenches` the usage-billing box gate is the cap.
+- On `main`, session creates go through a seam, `assertSessionPlanAllows` in `services/workbenches/create.ts`, with no cap. On `tom/workbenches` the usage-billing box gate (`assertNewWorkbenchBox`) is the cap, and `/v1` maps its refusals to 402 with the notice in snake_case.
 - No Scalar page on the backend. Its "try it" form takes a token, and a page that loads a CDN script must not hold one. The spec is at `GET /v1/openapi.json`.
 ## Coder previews explain each failed check (2026-11-01)
 
