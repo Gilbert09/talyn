@@ -14,7 +14,7 @@ import { GitPanel } from '../components/workbench/GitPanel';
 import { PullRequestTab } from '../components/workbench/PullRequestTab';
 import { toast } from '../stores/toast';
 import { usePullRequestStore } from '../stores/pullRequests';
-import { ChangesTab } from '../components/workbench/ChangesTab';
+import { ChangesTab, CHANGES_REFRESH_MS } from '../components/workbench/ChangesTab';
 
 vi.mock('@pierre/diffs/react', () => ({
   PatchDiff: () => <div data-testid="patch-diff" />,
@@ -674,5 +674,81 @@ describe('Changes tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Send to agent/ }));
     await waitFor(() => expect(send).toHaveBeenCalled());
     expect(setComments).not.toHaveBeenCalled();
+  });
+
+  describe('a sleeping sandbox', () => {
+    const asleep = (agoMs: number): WorkbenchChanges => ({
+      ...changes([['a.ts', 1]]),
+      snapshotAt: new Date(Date.now() - agoMs).toISOString(),
+    });
+    const renderTab = (ops: WorkbenchOps) =>
+      render(<ChangesTab workbench={WB} chat={chat} ops={ops} visible turnsEnded={0} comments={[]} setComments={vi.fn()} />);
+
+    it.each([
+      [10_000, 'just now'],
+      [5 * 60_000, '5m ago'],
+      [3 * 3_600_000, '3h ago'],
+    ])('says the list is from %i ms ago as "%s"', async (agoMs, text) => {
+      renderTab(makeOps({ changes: vi.fn(async () => asleep(agoMs)) }));
+      expect(await screen.findByTestId('changes-asleep')).toHaveTextContent(
+        `Sandbox is asleep. Showing changes from ${text}.`,
+      );
+      expect(screen.getByRole('button', { name: /a\.ts/ })).toBeInTheDocument();
+    });
+
+    it('shows no asleep line for a live list', async () => {
+      renderTab(makeOps());
+      await screen.findByRole('button', { name: /a\.ts/ });
+      expect(screen.queryByTestId('changes-asleep')).not.toBeInTheDocument();
+    });
+
+    it('never asks for live on the first load or a poll', async () => {
+      vi.useFakeTimers();
+      try {
+        const changesFn = vi.fn(async () => asleep(60_000));
+        renderTab(makeOps({ changes: changesFn }));
+        for (let i = 0; i < 3; i++) {
+          await act(async () => {
+            vi.advanceTimersByTime(CHANGES_REFRESH_MS);
+          });
+        }
+        expect(changesFn.mock.calls.length).toBeGreaterThan(1);
+        for (const args of changesFn.mock.calls as unknown[][]) expect(args[0]).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('the refresh button wakes the box, spins while it runs, then shows the live list', async () => {
+      let finish: (value: WorkbenchChanges) => void = () => {};
+      const changesFn = vi
+        .fn()
+        .mockResolvedValueOnce(asleep(60_000))
+        .mockImplementationOnce(() => new Promise<WorkbenchChanges>((resolve) => { finish = resolve; }));
+      renderTab(makeOps({ changes: changesFn }));
+      await screen.findByTestId('changes-asleep');
+      const refresh = screen.getByRole('button', { name: 'Refresh the changes' });
+      fireEvent.click(refresh);
+      expect(changesFn).toHaveBeenLastCalledWith({ live: true });
+      await waitFor(() => expect(refresh.querySelector('svg')).toHaveClass('animate-spin'));
+      await act(async () => finish(changes([['b.ts', 4]])));
+      expect(await screen.findByRole('button', { name: /b\.ts/ })).toBeInTheDocument();
+      expect(screen.queryByTestId('changes-asleep')).not.toBeInTheDocument();
+      expect(refresh.querySelector('svg')).not.toHaveClass('animate-spin');
+    });
+
+    it.each([
+      ['a stored list', true, 'Waking the sandbox to load the diff…'],
+      ['a live list', false, 'Loading diff…'],
+    ])('loading a diff of %s says what it waits for', async (_name, stored, text) => {
+      const ops = makeOps({
+        changes: vi.fn(async () => (stored ? asleep(60_000) : changes([['a.ts', 1]]))),
+        diff: vi.fn(() => new Promise<string>(() => {})),
+      });
+      renderTab(ops);
+      fireEvent.click(await screen.findByRole('button', { name: /a\.ts/ }));
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(ops.diff).toHaveBeenCalledWith('a.ts', 'combined');
+    });
   });
 });

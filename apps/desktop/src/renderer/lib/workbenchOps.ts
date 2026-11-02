@@ -58,7 +58,8 @@ export interface WorkbenchOps {
   send(chat: WorkbenchChat, input: SendWorkbenchMessageInput): Promise<{ queued: boolean }>;
   cancel(chatId: string): Promise<void>;
   removeQueued(chatId: string, messageId: string): void;
-  changes(): Promise<WorkbenchChanges>;
+  /** A sleeping sandbox answers with its stored list (`snapshotAt` set); `live` wakes it and reads it. */
+  changes(opts?: { live?: boolean }): Promise<WorkbenchChanges>;
   /** Unified diff text for one file, or the whole branch. */
   diff(path?: string, scope?: WorkbenchDiffScope): Promise<string>;
   listFiles(): Promise<string[]>;
@@ -104,7 +105,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
         .then((chat) => useWorkbenchStore.getState().upsertChat(chat))
         .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
     },
-    changes: () => api.workbenches.changes(id),
+    changes: (opts) => api.workbenches.changes(id, opts),
     diff: async (path, scope) => (await api.workbenches.diff(id, path, scope)).patch,
     listFiles: async () => (await api.workbenches.files(id)).paths,
     readFile: (path) => api.workbenches.file(id, path),

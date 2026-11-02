@@ -20,6 +20,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
 import { createChatTab } from './ChatTabs';
+import { timeAgo } from './new/RecentWorkbenches';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /** How often the list refreshes while it is on screen. */
@@ -70,12 +71,13 @@ export function ChangesTab({
   const merged = workbench.pr?.state === 'merged';
   const showChanges = !merged || showMergedDiff;
 
-  const refresh = useCallback(async () => {
+  // Only a person's refresh passes `live`: polls take the stored list of a sleeping box and never wake it.
+  const refresh = useCallback(async (live = false) => {
     if (ops.unavailable || loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     try {
-      const next = await ops.changes();
+      const next = await ops.changes(live ? { live: true } : undefined);
       setChanges(next);
       setError(null);
     } catch (err) {
@@ -133,9 +135,9 @@ export function ChangesTab({
         <span>Changes</span>
         <button
           type="button"
-          onClick={() => void refresh()}
+          onClick={() => void refresh(true)}
           className="rounded p-1 hover:bg-accent hover:text-foreground"
-          title="Refresh"
+          title={changes?.snapshotAt ? 'Wake the sandbox and refresh' : 'Refresh'}
           aria-label="Refresh the changes"
         >
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
@@ -146,6 +148,11 @@ export function ChangesTab({
         <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading changes…
         </div>
+      )}
+      {changes?.snapshotAt && (
+        <p className="border-b px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="changes-asleep">
+          Sandbox is asleep. Showing changes from {agoText(changes.snapshotAt)}.
+        </p>
       )}
       {changes && (
         <div className="max-h-[40%] shrink-0 overflow-y-auto border-b">
@@ -192,6 +199,7 @@ export function ChangesTab({
             scope={selection.scope}
             ops={ops}
             refreshKey={turnsEnded}
+            asleep={Boolean(changes?.snapshotAt)}
             onComment={(c) => setComments([...comments, c])}
           />
         )}
@@ -199,6 +207,11 @@ export function ChangesTab({
       <CommentBar workbench={workbench} chat={chat} ops={ops} comments={comments} setComments={setComments} />
     </div>
   );
+}
+
+function agoText(iso: string): string {
+  const ago = timeAgo(iso);
+  return ago === 'now' ? 'just now' : `${ago} ago`;
 }
 
 function FileRow({ file, active, onClick }: { file: WorkbenchChangedFile; active: boolean; onClick: () => void }) {
@@ -242,12 +255,15 @@ function FileDiffView({
   scope,
   ops,
   refreshKey,
+  asleep,
   onComment,
 }: {
   file: WorkbenchChangedFile;
   scope: WorkbenchDiffScope;
   ops: WorkbenchOps;
   refreshKey: number;
+  /** The list came from the stored copy: loading the diff wakes the box first. */
+  asleep: boolean;
   onComment: (comment: DiffComment) => void;
 }) {
   const [patch, setPatch] = useState<string | null>(null);
@@ -295,7 +311,7 @@ function FileDiffView({
   if (patch === null) {
     return (
       <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading diff…
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {asleep ? 'Waking the sandbox to load the diff…' : 'Loading diff…'}
       </div>
     );
   }
