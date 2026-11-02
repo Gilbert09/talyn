@@ -257,6 +257,18 @@ at the call site.
 | `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** | general |
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
+| `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | gated |
+
+#### Public API (`/v1`)
+
+The backend serves the public API at `/v1` on its normal host. Customers use
+`https://api.talyn.dev/v1`: add `api.talyn.dev` as a Railway custom domain on
+the backend service and point a CNAME at it. No path rewrite is needed.
+Evaluate the `public-api` flag against the token OWNER (the Supabase user id,
+with the email as a person property). Set `PUBLIC_API_ENABLED=true` to use the
+API locally with no PostHog project. Rate limits use `REDIS_URL` when it is
+set, and count in each process when it is not. See
+[`PUBLIC_API.md`](./PUBLIC_API.md).
 
 `availability` is a separate question from `fallback`: it says whether the
 "What's new" modal may describe the feature yet. `general` does NOT mean
