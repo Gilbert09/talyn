@@ -1,12 +1,19 @@
 import { Router } from 'express';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
+import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { upsertFromBatchResult } from '../services/prCache.js';
+import { publicAutoMergeState, setAutoKeepMergeable } from '../services/prAutoKeep.js';
 import {
-  pullRequests as pullRequestsTable,
-  mergeQueueEntries as mergeQueueEntriesTable,
-  mergeQueueEvents as mergeQueueEventsTable,
-} from '../db/schema.js';
-import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
+  reconcileTerminalState as reconcilePrTerminalState,
+  refreshPullRequest,
+} from '../services/prRefresh.js';
+import { mergeQueueTimelineForPr } from '../services/mergeQueue/timeline.js';
+import {
+  dismissFinding,
+  postReviewFindings,
+  undismissFinding,
+} from '../services/codeReview/actions.js';
 import { startPrMergeableRun } from '../services/prCloudFix.js';
 import { rowToTask } from '../services/taskSerialize.js';
 import {
@@ -19,7 +26,6 @@ import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import {
   setFocused,
   clearFocused,
-  markRefreshed,
   setActiveView,
   type ActiveView,
 } from '../services/prFocus.js';
@@ -56,11 +62,9 @@ import {
   workspacePreset,
 } from '../services/codeReview/cycle.js';
 import { startFixRun } from '../services/codeReview/fix.js';
-import { postFindingsToPr } from '../services/codeReview/postToPr.js';
 import {
   getFinding,
   listFindings,
-  setDisposition,
 } from '../services/codeReview/findings.js';
 import { getPrForReview, getReviewForPr, listReviewEvents } from '../services/codeReview/store.js';
 import {
@@ -75,7 +79,6 @@ import { getExternalMergeGate, markExternalMergeGate } from '../services/repoMer
 import { submitToExternalQueue } from '../services/externalQueueSubmit.js';
 import { isExternalMergeGateError } from '../services/mergeQueue/decide.js';
 import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
-import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import {
   applyQueueMembership,
   broadcastPositionsAfterQueueWrite,
@@ -84,7 +87,6 @@ import {
   resubmitQueueEntry,
   setQueueMembership,
 } from '../services/mergeQueue/membership.js';
-import { QUEUE_RESET_COLUMNS } from '../services/mergeQueueBroadcast.js';
 import {
   ancestorsOf,
   descendantsOf,
@@ -829,37 +831,19 @@ export function pullRequestRoutes(): Router {
       return handleAccessError(err, res);
     }
 
-    const result = await forceFetchAndUpsert({
-      workspaceId: row.workspaceId,
-      repositoryId: row.repositoryId,
-      taskId: row.taskId,
-      owner: row.owner,
-      repo: row.repo,
-      number: row.number,
-    });
-    if (!result) {
-      // GraphQL returned nothing → the PR isn't open. Reconcile its
-      // terminal state via REST so a manual refresh can recover a row
-      // that's stuck (e.g. a merged PR still showing as closed/open).
-      const reconciled = await reconcileTerminalState(row);
-      if (reconciled) {
-        return res.json({
-          success: true,
-          data: await publicPrRow(reconciled, db),
-        });
-      }
+    // A PR GraphQL no longer returns is not open: the service reconciles its
+    // terminal state via REST so a manual refresh can recover a stuck row
+    // (e.g. a merged PR still showing as closed/open).
+    const outcome = await refreshPullRequest(row);
+    if (outcome.kind === 'not_found') {
       return res
         .status(404)
         .json({ success: false, error: 'PR not found on GitHub or has no head branch in cache' });
     }
-    // Cooldown: the next 5 s of poll-driven refetches skip this PR
-    // so a manual refresh doesn't get stomped by a racing tick.
-    markRefreshed(row.workspaceId, result.rowId);
-
     const fresh = await db
       .select(DETAIL_COLUMNS)
       .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, result.rowId))
+      .where(eq(pullRequestsTable.id, outcome.kind === 'refreshed' ? outcome.rowId : row.id))
       .limit(1);
     res.json({
       success: true,
@@ -989,30 +973,7 @@ export function pullRequestRoutes(): Router {
     }
 
     const enabled = (req.body as { enabled?: boolean }).enabled === true;
-    // Enabling: arm a fresh guard so the next watcher tick fires immediately if
-    // the PR already needs work. Disabling: clear all watcher bookkeeping.
-    const nextState = enabled ? { attempts: 0, accounted: true } : null;
-    await db
-      .update(pullRequestsTable)
-      .set({
-        autoKeepMergeable: enabled,
-        autoMergeState: nextState,
-        updatedAt: new Date(),
-      })
-      .where(eq(pullRequestsTable.id, row.id));
-
-    emitPullRequestUpdated(row.workspaceId, {
-      id: row.id,
-      taskId: row.taskId,
-      repositoryId: row.repositoryId,
-      owner: row.owner,
-      repo: row.repo,
-      number: row.number,
-      state: row.state,
-      lastSummary: row.lastSummary as Record<string, unknown>,
-      autoKeepMergeable: enabled,
-      autoMergeState: publicAutoMergeState(nextState),
-    });
+    await setAutoKeepMergeable(row, enabled);
 
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
@@ -1280,35 +1241,7 @@ export function pullRequestRoutes(): Router {
     } catch (err) {
       return handleAccessError(err, res);
     }
-    const entryRows = await db
-      .select({
-        id: mergeQueueEntriesTable.id,
-        status: mergeQueueEntriesTable.status,
-        enqueuedAt: mergeQueueEntriesTable.enqueuedAt,
-      })
-      .from(mergeQueueEntriesTable)
-      .where(eq(mergeQueueEntriesTable.pullRequestId, req.params.id))
-      .orderBy(desc(mergeQueueEntriesTable.enqueuedAt))
-      .limit(5);
-    const entry =
-      entryRows.find((e) => e.status !== 'merged' && e.status !== 'removed') ?? entryRows[0];
-    if (!entry) {
-      return res.json({ success: true, data: { events: [] } });
-    }
-    const events = await db
-      .select({
-        at: mergeQueueEventsTable.at,
-        fromStatus: mergeQueueEventsTable.fromStatus,
-        toStatus: mergeQueueEventsTable.toStatus,
-        trigger: mergeQueueEventsTable.trigger,
-        code: mergeQueueEventsTable.code,
-        message: mergeQueueEventsTable.message,
-        detail: mergeQueueEventsTable.detail,
-      })
-      .from(mergeQueueEventsTable)
-      .where(eq(mergeQueueEventsTable.entryId, entry.id))
-      .orderBy(desc(mergeQueueEventsTable.at))
-      .limit(100);
+    const events = await mergeQueueTimelineForPr(req.params.id);
     res.json({
       success: true,
       data: {
@@ -1496,7 +1429,7 @@ export function pullRequestRoutes(): Router {
       : [];
 
     const user = assertUser(req);
-    const outcome = await postFindingsToPr(review.id, findingIds, user.id);
+    const outcome = await postReviewFindings({ review, findingIds, userId: user.id });
     if (!outcome.ok) {
       // GitHub's own refusal is a 502: the request was fine and the upstream
       // said no. Its message goes to the user, who is the one who can act on it.
@@ -1506,15 +1439,6 @@ export function pullRequestRoutes(): Router {
         code: `code_review_post_${outcome.code}`,
       });
     }
-    // The ONE emit for a post, for the reason the dismiss route gives.
-    void captureWorkspaceEvent(workspaceId, 'code_review_posted_to_pr', {
-      posted: outcome.posted,
-      inline: outcome.inline,
-      in_summary: outcome.inSummary,
-      selected_count: findingIds.length,
-      preset: review.preset,
-      cycle: review.cycle,
-    });
     res.json({
       success: true,
       data: {
@@ -1576,34 +1500,7 @@ export function pullRequestRoutes(): Router {
     }
     const reason = isCodeReviewDismissReason(req.body?.reason) ? req.body.reason : null;
     const user = assertUser(req);
-    await setDisposition(finding.id, 'dismissed', { reason, userId: user.id });
-    // The ONE emit for a dismissal. Both front ends used to send this as well,
-    // with richer properties and a different shape for a missing reason (`null`
-    // against `'unspecified'`), so every dismissal counted twice and its reason
-    // breakdown split down the middle. This is the authoritative side — a
-    // dismissal is an API call, and a client event can be blocked — so the
-    // properties moved here rather than the emit moving there.
-    void captureWorkspaceEvent(workspaceId, 'code_review_finding_dismissed', {
-      severity: finding.severity,
-      // Absent when somebody dismissed without picking one. The reasons are
-      // skippable, so no reason is a real answer about the prompt, not a gap.
-      reason,
-      // How many reviewers raised it. Dismissing something two lenses agreed on
-      // is a different signal from dismissing something one of them guessed at.
-      lenses: ((finding.lenses as string[]) ?? []).length,
-      // The first real review's one surviving finding quoted code that was not
-      // where it said. If unverified anchors drive dismissals, this is where it
-      // shows.
-      anchor_verified: finding.anchorVerified,
-      verdict: finding.verdict,
-      seen_count: finding.seenCount,
-      cycle: review.cycle,
-    });
-    // Dismissing a blocker is one of the two ways a parked merge-queue entry gets
-    // released, so tell the queue rather than making it wait for a poll. Not
-    // awaited, and scope-escaped inside, for the reason the enqueue route does the
-    // same: it must not inherit this request's transaction.
-    void onQueueMembershipChanged(req.params.id, 'code_review:dismissed');
+    await dismissFinding({ review, finding, reason, userId: user.id });
     res.json({ success: true, data: await publicReviewById(review.id) });
   });
 
@@ -1616,9 +1513,8 @@ export function pullRequestRoutes(): Router {
     if (!finding || !review || finding.reviewId !== review.id) {
       return res.status(404).json({ success: false, error: 'Finding not found' });
     }
-    await setDisposition(finding.id, 'open');
-    // And un-dismissing can re-park it, so the queue needs to hear about that too.
-    void onQueueMembershipChanged(req.params.id, 'code_review:undismissed');
+    // Un-dismissing can re-park a merge-queue entry; the service tells the queue.
+    await undismissFinding({ review, findingId: finding.id });
     res.json({ success: true, data: await publicReviewById(review.id) });
   });
 
@@ -1984,13 +1880,8 @@ interface PullRequestRow {
 }
 
 /**
- * Reconcile a PR's lifecycle state against GitHub via REST. The GraphQL
- * batch query only returns OPEN PRs, so once a PR is merged/closed our
- * normal fetch paths can't tell merged from closed — and a row that was
- * mis-classified (e.g. a transient sweep failure marking a merged PR
- * "closed") never gets re-checked. This hits the authoritative per-PR
- * REST endpoint and corrects state + mergedAt. Returns the updated row,
- * or null if nothing changed / the lookup failed.
+ * Reconcile a PR's lifecycle state against GitHub (see `services/prRefresh.ts`)
+ * and return the corrected row, or null if nothing changed / the lookup failed.
  */
 async function reconcileTerminalState(
   row: Pick<
@@ -1998,82 +1889,14 @@ async function reconcileTerminalState(
     'id' | 'workspaceId' | 'owner' | 'repo' | 'number' | 'state' | 'mergeQueued'
   >
 ): Promise<PullRequestRow | null> {
-  let pr: Awaited<ReturnType<typeof githubService.getPullRequest>>;
-  try {
-    pr = await githubService.getPullRequest(row.workspaceId, row.owner, row.repo, row.number);
-  } catch (err) {
-    console.warn(`[pull-requests] terminal reconcile failed for ${row.id}:`, err);
-    return null;
-  }
-  let nextState: 'open' | 'closed' | 'merged';
-  let mergedAt: Date | null = null;
-  if (pr.merged_at || pr.merged) {
-    nextState = 'merged';
-    mergedAt = pr.merged_at ? new Date(pr.merged_at) : new Date();
-  } else if (pr.state === 'closed') {
-    nextState = 'closed';
-  } else {
-    nextState = 'open';
-  }
-  if (nextState === row.state) return null;
-
-  const db = getDbClient();
-  // A PR that left 'open' can't be merged by the queue — drop it off so it
-  // never blocks its (repo, base) group.
-  const dropFromQueue = nextState !== 'open' && row.mergeQueued;
-  const queueReset = dropFromQueue ? QUEUE_RESET_COLUMNS : {};
-  await db
-    .update(pullRequestsTable)
-    .set({ state: nextState, mergedAt, updatedAt: new Date(), ...queueReset })
-    .where(eq(pullRequestsTable.id, row.id));
-  const fresh = await db
+  if (!(await reconcilePrTerminalState(row))) return null;
+  const fresh = await getDbClient()
     .select(DETAIL_COLUMNS)
     .from(pullRequestsTable)
     .where(eq(pullRequestsTable.id, row.id))
     .limit(1);
-  const updated = (fresh[0] as PullRequestRow | undefined) ?? null;
-  // Tell every client, not just the caller. The reconcile is usually triggered
-  // by ONE surface (a detail sheet opening, a merge that GitHub refused), but
-  // the row it corrects is on the open-only list of every connected client —
-  // and that list is exactly where a merged PR was still showing "Ready".
-  if (updated) {
-    emitPullRequestUpdated(updated.workspaceId, {
-      id: updated.id,
-      taskId: updated.taskId,
-      repositoryId: updated.repositoryId,
-      owner: updated.owner,
-      repo: updated.repo,
-      number: updated.number,
-      state: updated.state,
-      lastSummary: (updated.lastSummary as Record<string, unknown> | null) ?? {},
-      ...(dropFromQueue ? { mergeQueued: false } : {}),
-    });
-  }
-  return updated;
+  return (fresh[0] as PullRequestRow | undefined) ?? null;
 }
-
-/**
- * The compact watcher state the desktop renders (toggle + badge).
- *
- * Must stay in step with `publicState` in prAutoMergeWatcher — the WS push and
- * this REST read are the same field arriving by two routes, and a client that
- * saw `deferredSince` only over the socket would show the chip on a live
- * update and lose it on every refresh.
- */
-function publicAutoMergeState(
-  raw: unknown
-): { attempts: number; paused: boolean; deferredSince: string | null } | null {
-  const s = raw as
-    | { attempts?: number; pausedAt?: string; deferredSince?: string }
-    | null;
-  if (!s) return null;
-  return {
-    attempts: s.attempts ?? 0,
-    paused: !!s.pausedAt,
-    deferredSince: s.deferredSince ?? null,
-  };
-}
-
 
 /**
  * Whether a freshly-fetched summary differs from the cached row in a way worth
