@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Loader2, Zap, Check } from 'lucide-react';
 import {
   FREE_PLAN_ACTIVE_TASK_LIMIT,
@@ -19,17 +19,36 @@ import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { usageBillingOf } from '../../lib/usageBilling';
+import { UsageUpgradeModal } from './UsageUpgradeModal';
 
 type Period = 'monthly' | 'annual';
 
 /**
- * The upgrade pitch. Opens when a free user hits the active-task limit (see
+ * The upgrade and credits modal. A backend with usage billing gets the Pro /
+ * credits version; an older backend gets the Unlimited pitch below.
+ */
+export function UpgradeModal({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const status = useBillingStore((s) => s.status);
+  const view = useMemo(() => usageBillingOf(status), [status]);
+  if (view) return <UsageUpgradeModal open={open} onOpenChange={onOpenChange} view={view} />;
+  return <LegacyUpgradeModal open={open} onOpenChange={onOpenChange} />;
+}
+
+/**
+ * The old upgrade pitch. Opens when a free user hits the active-task limit (see
  * maybeHandleTaskLimit) or from Settings → Billing. Checkout happens in the
  * system browser; completion arrives via the subscription:updated WS push
  * backed by the store's poll burst — the modal flips to a success state on
  * its own when the plan changes.
  */
-export function UpgradeModal({
+function LegacyUpgradeModal({
   open,
   onOpenChange,
 }: {

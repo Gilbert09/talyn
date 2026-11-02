@@ -1,6 +1,7 @@
 import { openExternal } from '../../lib/openExternal';
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, GitPullRequest, Shield } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
+import { useBillingStore } from '../../stores/billing';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
@@ -431,6 +432,7 @@ function SystemBlock({ text, subtype }: { text: string; subtype?: string }) {
   if (subtype === 'talyn_interruption') {
     return <div className="text-xs text-muted-foreground">Interrupted</div>;
   }
+  if (subtype && BOX_REFUSAL_SUBTYPES.has(subtype)) return <BoxRefusalNote text={text} subtype={subtype} />;
   return (
     <div className="text-xs text-muted-foreground italic border-l-2 border-border pl-2">
       {subtype ? <span className="uppercase tracking-wide mr-1">{subtype}</span> : null}
@@ -686,4 +688,43 @@ function shortenPath(p: string): string {
     if (after !== -1) return '~' + p.slice(after);
   }
   return p;
+}
+
+
+/** The plan refused a box for this chat. `buildBlocks` keeps these with their subtype. */
+const BOX_REFUSAL_SUBTYPES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit_reached', 'size_requires_pro']);
+
+const BOX_REFUSAL_HEADINGS: Record<string, string> = {
+  usage_exhausted: 'Out of hours',
+  box_limit_reached: 'All your boxes are busy',
+  size_requires_pro: 'This size needs Pro',
+};
+
+/**
+ * A clear notice in place of the plain system line. The backend's text says
+ * what happened and, for a held turn, that the message stays queued.
+ */
+function BoxRefusalNote({ text, subtype }: { text: string; subtype: string }) {
+  const openUpgrade = useBillingStore((s) => s.setUpgradeModalOpen);
+  const reason =
+    subtype === 'usage_exhausted' ? 'usage_exhausted' : subtype === 'box_limit_reached' ? 'concurrent_box_limit' : 'size_requires_pro';
+  return (
+    <div
+      data-attr="box-refusal-note"
+      className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs"
+    >
+      <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{BOX_REFUSAL_HEADINGS[subtype]}</p>
+        <p className="whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{text}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => openUpgrade(true, reason)}
+        className="shrink-0 rounded px-2 py-0.5 font-medium text-primary hover:bg-primary/10"
+      >
+        See options
+      </button>
+    </div>
+  );
 }

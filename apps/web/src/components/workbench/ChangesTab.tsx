@@ -20,6 +20,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
 import { createChatTab } from './ChatTabs';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 
 /** How often the list refreshes while it is on screen. */
 export const CHANGES_REFRESH_MS = 10_000;
@@ -408,6 +409,7 @@ function CommentBar({
       setOpen(false);
       if (res.queued) toast.info('Queued', 'It runs when the current turn ends.');
     } catch (err) {
+      if (maybeHandleBillingLimit(err, 'session_comments')) return;
       toast.error('Could not send the comments', err instanceof Error ? err.message : undefined);
     } finally {
       setSending(false);

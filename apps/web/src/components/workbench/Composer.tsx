@@ -24,6 +24,8 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
+import { maybeHandleBillingLimit } from '../../stores/billing';
+import { SessionUsageNotice } from './SessionUsageNotice';
 
 export function Composer({
   workbench,
@@ -195,6 +197,9 @@ export function Composer({
       }
     } catch (err) {
       setDraft(draftKey, text);
+      // A box refusal (out of hours, every box busy) opens the plan modal with
+      // its own sentence and action; the text stays in the composer.
+      if (maybeHandleBillingLimit(err, 'session_message')) return;
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {
@@ -278,6 +283,7 @@ export function Composer({
           ))}
         </ul>
       )}
+      <SessionUsageNotice workbenchId={workbench.id} />
       <div
         className={cn(
           'relative rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring',

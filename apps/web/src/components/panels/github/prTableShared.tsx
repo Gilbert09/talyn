@@ -55,6 +55,7 @@ import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
+import { deferralNotice, deferralTitle, upgradeReasonForCode, usageBillingOf } from '../../../lib/usageBilling';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { PrSessionChip } from '../../widgets/session/PrSessionChip';
 import { OpenInWorkbenchButton } from '../../widgets/session/OpenInWorkbenchButton';
@@ -443,7 +444,7 @@ const PRTableRow = React.memo(function PRTableRow({
     billingStatus?.billingEnabled === true &&
     billingStatus.plan === 'free' &&
     billingStatus.activeTaskLimit != null &&
-    billingStatus.activeTasks >= billingStatus.activeTaskLimit;
+    (billingStatus.activeTasks >= billingStatus.activeTaskLimit || billingStatus.usage?.exhausted === true);
   // What this row's button queues, and the branch it lands on. See stackSelection.
   const {
     size: stackSize,
@@ -930,10 +931,20 @@ const PRTableRow = React.memo(function PRTableRow({
                     data-attr="pr-row-run-deferred"
                     onClick={(e) => {
                       e.stopPropagation();
-                      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+                      const notice = deferralNotice(row.autoMergeState);
+                      useBillingStore
+                        .getState()
+                        .setUpgradeModalOpen(true, notice ? upgradeReasonForCode(notice.code) : 'task_deferred', notice);
                     }}
                     className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
-                    title={`Waiting for a free task slot — a fix run for this PR was skipped because all ${FREE_PLAN_ACTIVE_TASK_LIMIT} free-plan slots were busy. Click to see why.`}
+                    title={(() => {
+                      // A backend with usage billing says why; an older one
+                      // only knows the free plan's task slots.
+                      const notice = deferralNotice(row.autoMergeState);
+                      return notice
+                        ? `A fix run for this PR is waiting. ${deferralTitle(notice)} Click to see why.`
+                        : `Waiting for a free task slot — a fix run for this PR was skipped because all ${FREE_PLAN_ACTIVE_TASK_LIMIT} free-plan slots were busy. Click to see why.`;
+                    })()}
                   >
                     <PauseCircle className="h-2.5 w-2.5" />
                     Waiting
@@ -1405,7 +1416,11 @@ const PRTableRow = React.memo(function PRTableRow({
                       : fixBlocked
                       ? fixBlockedMessage(fixBlocked)
                       : atTaskLimit
-                      ? `Free plan limit reached (${billingStatus.activeTasks}/${billingStatus.activeTaskLimit} active tasks) — upgrade for unlimited`
+                      ? usageBillingOf(billingStatus)
+                        ? usageBillingOf(billingStatus)?.usage.exhausted
+                          ? 'Out of hours: new boxes are paused. Upgrade or add credits to start one.'
+                          : `All ${billingStatus.activeTaskLimit} boxes your plan runs at once are busy. A new one can start when one stops.`
+                        : `Free plan limit reached (${billingStatus.activeTasks}/${billingStatus.activeTaskLimit} active tasks) — upgrade for unlimited`
                       : taskMenuEnabled
                       ? 'Get this PR mergeable — choose a cloud provider'
                       : `Get this PR mergeable with a cloud agent (resolve comments, fix CI, resolve conflicts)${
