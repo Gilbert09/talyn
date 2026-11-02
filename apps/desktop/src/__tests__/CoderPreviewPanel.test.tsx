@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Features, RepositoryPreviewResponse, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { CoderPreviewPanel } from '../renderer/components/workbench/CoderPreviewPanel';
 import { SessionPreviewChips } from '../renderer/components/workbench/SessionPreviewChips';
@@ -249,4 +249,19 @@ it('continues past a stopped workspace, because prepare starts it', async () => 
   render(<CoderPreviewPanel workbench={item} config={config} />);
   fireEvent.click(screen.getByRole('button', { name: 'Preview in Coder' }));
   await waitFor(() => expect(bridge.open).toHaveBeenCalledWith(item.id));
+});
+
+it('shows a stopped workspace calmly, with Start now, and no error', async () => {
+  const item = session();
+  const stopped = { ...base, workspaceStopped: true, workspaceRunning: false, workspace: 'dev', stepDetail: 'dev is stopped. Preview in Coder starts it, usually in a minute or two.' };
+  bridge.state.mockResolvedValue(stopped);
+  bridge.check.mockResolvedValue(stopped);
+  render(<CoderPreviewPanel workbench={item} config={config} />);
+  const note = await screen.findByTestId('coder-workspace-stopped');
+  expect(note).toHaveTextContent('Preview in Coder starts it');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(document.querySelector('[data-step="workspace"]')).toHaveAttribute('data-state', 'pending');
+  expect(screen.getByText('Workspace stopped')).toBeInTheDocument();
+  fireEvent.click(within(note).getByRole('button', { name: 'Start now' }));
+  await waitFor(() => expect(bridge.startWorkspace).toHaveBeenCalled());
 });

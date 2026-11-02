@@ -185,12 +185,12 @@ it('says the deployment is unreachable, not that the sign-in failed', async () =
   expect(state.problem?.message).toContain('cannot reach https://coder.example');
   expect(state.problem?.detail).toBe('no such host');
 });
-it('reports a stopped workspace and offers to start it without starting it', async () => {
+it('notes a stopped workspace as a normal state, not a problem, and does not start it', async () => {
   const { cli, previews } = setup();
   const state = await previews.check(checkInput);
-  expect(state).toMatchObject({ cliReady: true, signedIn: true, workspaceRunning: false, workspace: 'dev' });
-  expect(state.problem).toMatchObject({ code: 'workspace_stopped', step: 'workspace', action: 'start_workspace' });
-  expect(commands(state)).toEqual(['coder start dev']);
+  expect(state).toMatchObject({ cliReady: true, signedIn: true, workspaceRunning: false, workspaceStopped: true, workspace: 'dev' });
+  expect(state.problem).toBeUndefined();
+  expect(state.stepDetail).toContain('Preview in Coder starts it');
   expect(cli.start).not.toHaveBeenCalled();
 });
 it('starts the workspace on request and shows its status while it starts', async () => {

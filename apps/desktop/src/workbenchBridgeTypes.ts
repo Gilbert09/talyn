@@ -63,6 +63,8 @@ export interface CoderPreviewState {
   /** The CLI is signed in to this deployment. */
   signedIn: boolean;
   workspaceRunning: boolean;
+  /** The checks found the workspace stopped. Not a problem: Preview in Coder starts it. */
+  workspaceStopped?: boolean;
   worktreeReady: boolean;
   active: boolean;
   running: boolean;

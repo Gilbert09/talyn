@@ -135,7 +135,7 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
   const steps: Array<[CoderStep, string, boolean | undefined]> = [
     ['cli', 'CLI installed', state?.cliReady],
     ['login', 'Signed in', state?.signedIn],
-    ['workspace', 'Workspace running', state?.workspaceRunning],
+    ['workspace', state?.workspaceStopped && !state.workspaceRunning ? 'Workspace stopped' : 'Workspace running', state?.workspaceRunning],
     ['worktree', 'Worktree ready', state?.worktreeReady],
     ['sync', state?.turn === undefined ? 'Synced' : `Synced after turn ${state.turn}`, Boolean(state?.syncedAt)],
     ['run', 'Running', state?.running],
@@ -157,6 +157,12 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
         })}
       </ol>
       {busy && <p aria-live="polite" className="text-muted-foreground">{detail || 'Working…'}</p>}
+      {!busy && !problem && state?.workspaceStopped && !state.workspaceRunning && (
+        <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/40 px-2 py-1.5 text-muted-foreground" data-testid="coder-workspace-stopped">
+          <span className="min-w-0 flex-1">{state.stepDetail}</span>
+          <button className={buttonClass} onClick={() => act(() => startCoderWorkspace(workbench.id))}>Start now</button>
+        </div>
+      )}
       {problem && !busy && <ProblemView
         problem={problem} busy={busy} onStart={() => act(() => startCoderWorkspace(workbench.id))}
         token={token} onToken={setToken} signInError={signInError}

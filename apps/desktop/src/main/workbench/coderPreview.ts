@@ -227,6 +227,7 @@ export class CoderPreviews {
     const workspace = pickWorkspace(available, { ...coder, workspace: preview.state.workspace || coder.workspace }, usesHogli(preview.input.config));
     preview.state.workspace = workspace.name;
     preview.state.workspaceRunning = workspace.status === 'running';
+    preview.state.workspaceStopped = false;
     const onStatus = (value: string) => this.step(preview, 'workspace', `Starting ${workspace.name}. Status: ${value}`);
     const start = { command: `coder start ${workspace.name}` };
     switch (workspace.status) {
@@ -238,14 +239,21 @@ export class CoderPreviews {
         await this.cli.waitUntilRunning(workspace.name, Date.now() + WORKSPACE_START_MS, onStatus);
         break;
       case 'stopped':
+        // A workspace stops when idle. That is normal, not a problem:
+        // Preview in Coder starts it, so the checks only say so.
+        if (!startStopped) {
+          preview.state.workspaceStopped = true;
+          this.step(preview, 'workspace', `${workspace.name} is stopped. Preview in Coder starts it, usually in a minute or two.`);
+          return;
+        }
+        await this.cli.start(workspace.name, onStatus);
+        break;
       case 'failed':
       case 'canceled':
         if (!startStopped) {
           throw new CoderProblemError({
-            step: 'workspace', code: workspace.status === 'stopped' ? 'workspace_stopped' : 'workspace_failed',
-            message: workspace.status === 'stopped'
-              ? `The workspace ${workspace.name} is stopped. Start it, then select Preview in Coder.`
-              : `The last build of ${workspace.name} has the status ${workspace.status}. Start it again, then select Preview in Coder.`,
+            step: 'workspace', code: 'workspace_failed',
+            message: `The last build of ${workspace.name} has the status ${workspace.status}. Start it again, then select Preview in Coder.`,
             commands: [start],
             action: 'start_workspace',
           });
@@ -260,6 +268,7 @@ export class CoderPreviews {
         });
     }
     preview.state.workspaceRunning = true;
+    preview.state.workspaceStopped = false;
   }
 
   private async exec(preview: Preview, script: string, input?: string, timeout?: number): Promise<string> {
