@@ -12,6 +12,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { TerminalPanel } from '../components/workbench/terminal/TerminalPanel';
 import { CONSOLE_THEME, TALYN_COLOR } from '../components/workbench/terminal/consoleTheme';
 import { toast } from '../stores/toast';
+import { usePreviewStatusStore } from '../stores/previewStatus';
 
 vi.mock('../stores/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -51,6 +52,7 @@ beforeEach(() => {
   saveDetectedConfig.mockReset().mockResolvedValue(undefined);
   window.localStorage.clear();
   useWorkbenchStore.setState({ scriptOutput: {} });
+  usePreviewStatusStore.setState({ ports: {}, runStarting: {} });
   useWorkbenchStore.setState({
     terminalOpen: false,
     terminalTab: 'terminal',
@@ -62,6 +64,25 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('terminal dock', () => {
+  it('shows each Run tab status and its label', async () => {
+    await renderDock();
+    const tab = screen.getByRole('tab', { name: 'Run' });
+    expect(tab).toHaveAttribute('data-preview-status', 'idle');
+    expect(tab.querySelector('svg, span')).toBeNull();
+    act(() => usePreviewStatusStore.getState().set(WB.id, 3000, 'starting'));
+    expect(tab).toHaveAttribute('data-preview-status', 'starting');
+    expect(tab.querySelector('svg')).toHaveClass('animate-spin');
+    act(() => usePreviewStatusStore.getState().set(WB.id, 3000, 'live'));
+    expect(tab).toHaveAttribute('data-preview-status', 'running');
+    expect(tab.querySelector('span')).toHaveClass('bg-emerald-500');
+    act(() => {
+      usePreviewStatusStore.getState().set(WB.id, 3000, null);
+      useWorkbenchStore.setState({ scriptOutput: { [WB.id]: { run: { chunks: [], total: 0, running: false, exitCode: 2 } } } });
+    });
+    expect(tab).toHaveAttribute('data-preview-status', 'failed');
+    expect(tab).toHaveAttribute('title', 'Run script exited with code 2');
+    expect(tab.querySelector('span')).toHaveClass('bg-destructive');
+  });
   it('starts collapsed to a bar of tabs', async () => {
     await renderDock();
     const dock = screen.getByTestId('terminal-dock');

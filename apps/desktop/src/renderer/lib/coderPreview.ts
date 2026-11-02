@@ -5,11 +5,17 @@ import { getWorkbenchBridge } from './workbenchBridge';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore } from '../stores/workspace';
 import { toast } from '../stores/toast';
+import { useCoderPreviewStatusStore } from '../stores/coderPreviewStatus';
 
 const operations = new Map<string, Promise<unknown>>();
 const turns = new Map<string, number>();
-const errors = new Map<string, string>();
-const progress = new Map<string, { step: CoderStep; detail: string }>();
+const updateStatus = useCoderPreviewStatusStore.getState().update;
+
+export async function refreshCoderPreview(id: string): Promise<CoderPreviewState | null> {
+  const state = await coderPreviewBridge().state(id);
+  updateStatus(id, { state, refreshError: null });
+  return state;
+}
 
 export function coderPreviewBridge() {
   const bridge = getWorkbenchBridge()?.coderPreview;
@@ -29,28 +35,35 @@ export function errorText(error: unknown): string {
 
 /** What the renderer knows about a session's preview: an action runs, its step, and its last error. */
 export function coderProgress(id: string): { busy: boolean; step: CoderStep | null; detail: string | null; error: string | null } {
-  const current = progress.get(id);
-  return { busy: operations.has(id), step: current?.step ?? null, detail: current?.detail ?? null, error: errors.get(id) ?? null };
+  const { busy, step, detail, error } = useCoderPreviewStatusStore.getState().sessions[id]
+    ?? { busy: false, step: null, detail: null, error: null };
+  return { busy, step, detail, error };
 }
 
 function setProgress(id: string, step: CoderStep | null, detail = ''): void {
-  if (step) progress.set(id, { step, detail });
-  else progress.delete(id);
+  updateStatus(id, { step, detail: step ? detail : null });
   coderPreviewChanged();
 }
 
 /** Runs one action at a time per session, and keeps its error for the panel. */
 export function coderAction<T>(id: string, action: () => Promise<T>): Promise<T> {
   const next = (operations.get(id) ?? Promise.resolve()).catch(() => undefined).then(() => {
-    errors.delete(id);
+    updateStatus(id, { error: null });
     coderPreviewChanged();
     return action();
   });
   operations.set(id, next);
+  updateStatus(id, { busy: true, error: null });
   coderPreviewChanged();
-  void next.catch((error) => { errors.set(id, errorText(error)); }).finally(() => {
-    if (operations.get(id) === next) operations.delete(id);
-    progress.delete(id);
+  const poll = window.setInterval(() => { void refreshCoderPreview(id).catch(() => undefined); }, 1000);
+  void refreshCoderPreview(id).catch(() => undefined);
+  void next.catch((error) => { updateStatus(id, { error: errorText(error) }); }).finally(() => {
+    window.clearInterval(poll);
+    void refreshCoderPreview(id).catch(() => undefined);
+    if (operations.get(id) === next) {
+      operations.delete(id);
+      updateStatus(id, { busy: false, step: null, detail: null });
+    }
     coderPreviewChanged();
   });
   return next;

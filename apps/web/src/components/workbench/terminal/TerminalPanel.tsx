@@ -8,6 +8,8 @@ import type { WorkbenchOps } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useWorkbenchStore, type WorkbenchTerminalTab } from '../../../stores/workbenches';
 import { SessionPreviewLinks } from '../SessionPreviewLinks';
+import { usePreviewActivity } from '../../../hooks/usePreviewActivity';
+import { usePreviewStatusStore } from '../../../stores/previewStatus';
 import { ShellTerminal } from './ShellTerminal';
 import { parseAnsi } from './ansi';
 import { CONSOLE_FONT_FAMILY, CONSOLE_FONT_SIZE, CONSOLE_THEME } from './consoleTheme';
@@ -31,7 +33,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const storedTab = useWorkbenchStore((s) => s.terminalTab);
   const setTab = useWorkbenchStore((s) => s.setTerminalTab);
   const setOpen = useWorkbenchStore((s) => s.setTerminalOpen);
-  const runRunning = useWorkbenchStore((s) => s.scriptOutput[workbench.id]?.run?.running ?? false);
+  const activity = usePreviewActivity(workbench);
   const rootRef = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState<number | undefined>(undefined);
   const [loaded, setLoaded] = useState<{
@@ -137,6 +139,8 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
             key={t.id}
             type="button"
             role="tab"
+            data-preview-status={t.id === 'run' ? activity.status : undefined}
+            title={t.id === 'run' ? activity.label : undefined}
             aria-selected={open && tab === t.id}
             onClick={() => (open && tab === t.id ? setOpen(false) : setTab(t.id))}
             className={cn(
@@ -145,9 +149,11 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
             )}
           >
             {t.label}
-            {t.id === 'run' && runRunning && (
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-label="running" />
+            {t.id === 'run' && activity.status === 'starting' && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
+            {t.id === 'run' && activity.status === 'running' && (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
             )}
+            {t.id === 'run' && activity.status === 'failed' && <span className="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden />}
           </button>
         ))}
         <div className="flex-1" />
@@ -242,6 +248,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
   const [busy, setBusy] = useState(false);
   const act = async () => {
     setBusy(true);
+    if (name === 'run' && !running) usePreviewStatusStore.getState().setRunStarting(workbench.id, true);
     try {
       if (running) await ops.stopScript(name);
       else await ops.runScript(name);
@@ -251,6 +258,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
         err instanceof Error ? err.message : undefined,
       );
     } finally {
+      if (name === 'run') usePreviewStatusStore.getState().setRunStarting(workbench.id, false);
       setBusy(false);
     }
   };

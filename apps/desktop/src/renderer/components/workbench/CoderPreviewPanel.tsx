@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { workbenchesOffered, type EffectivePreview, type Workbench } from '@talyn/shared';
-import type { CoderPreviewState, CoderProblem, CoderStep } from '../../../workbenchBridgeTypes';
+import type { CoderProblem, CoderStep } from '../../../workbenchBridgeTypes';
 import {
-  checkCoderPreview, coderAction, coderPreviewBridge, coderProgress, errorText, startCoderPreview, startCoderWorkspace, syncCoderPreview,
+  checkCoderPreview, coderAction, coderPreviewBridge, coderProgress, errorText, refreshCoderPreview, startCoderPreview, startCoderWorkspace, syncCoderPreview,
 } from '../../lib/coderPreview';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { isArchivedWorkbench } from '../../lib/workbenchActions';
+import { emptyCoderPreviewStatus, useCoderPreviewStatusStore } from '../../stores/coderPreviewStatus';
 
 const buttonClass = 'rounded border bg-background px-2 py-1 text-xs text-foreground hover:bg-accent disabled:opacity-50';
 // Each session is checked once per app run when its panel first opens. "Check again" runs it after that.
@@ -78,35 +79,28 @@ function ProblemView({ problem, busy, onStart, token, onToken, onOpenSignIn, onF
 export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench; config: EffectivePreview }) {
   const enabled = useWorkspaceStore((s) => workbenchesOffered(s.features));
   const eligible = enabled && workbench.runtime === 'sandbox' && !isArchivedWorkbench(workbench) && config.target === 'coder';
-  const [state, setState] = useState<CoderPreviewState | null>(null);
-  const [local, setLocal] = useState(() => coderProgress(workbench.id));
-  const [error, setError] = useState<string | null>(null);
+  const local = useCoderPreviewStatusStore((s) => s.sessions[workbench.id] ?? emptyCoderPreviewStatus);
+  const state = local.state;
   const [token, setToken] = useState('');
   const [signInError, setSignInError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setState(null);
-    setError(null);
     setToken('');
     setSignInError(null);
     if (!eligible) return;
     const refresh = () => {
-      setLocal(coderProgress(workbench.id));
-      void Promise.resolve().then(() => coderPreviewBridge().state(workbench.id)).then((value) => {
+      void Promise.resolve().then(() => refreshCoderPreview(workbench.id)).then((value) => {
         if (cancelled) return;
-        setState(value);
-        setError(null);
         if (!value && !autoChecked.has(workbench.id) && !coderProgress(workbench.id).busy) {
           autoChecked.add(workbench.id);
           void checkCoderPreview(workbench, config).catch(() => undefined);
         }
-      }).catch((err) => { if (!cancelled) setError(errorText(err)); });
+      }).catch((err) => { if (!cancelled) useCoderPreviewStatusStore.getState().update(workbench.id, { refreshError: errorText(err) }); });
     };
     refresh();
-    window.addEventListener('coder-preview-changed', refresh);
     const timer = window.setInterval(refresh, 1000);
-    return () => { cancelled = true; clearInterval(timer); window.removeEventListener('coder-preview-changed', refresh); };
+    return () => { cancelled = true; window.clearInterval(timer); };
     // The automatic check uses the config of the first render. "Check again" uses the current one.
   }, [eligible, workbench.id]);
 
@@ -114,7 +108,7 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
   const busy = local.busy;
   const act = (action: () => Promise<unknown>) => {
     autoChecked.add(workbench.id);
-    setError(null);
+    useCoderPreviewStatusStore.getState().update(workbench.id, { error: null });
     setSignInError(null);
     // The lib keeps the error for the panel, and the panel reads it on the next refresh.
     void action().catch(() => undefined);
@@ -141,7 +135,7 @@ export function CoderPreviewPanel({ workbench, config }: { workbench: Workbench;
     ['run', 'Running', state?.running],
   ];
   // A problem carries the same message as the error, with the fix beside it.
-  const plainError = error || (!problem ? local.error || state?.error : null);
+  const plainError = !problem ? local.error || local.refreshError || state?.error : null;
   return (
     <section aria-label="Coder preview" className="h-full space-y-2 overflow-auto p-3 text-xs text-foreground">
       <p>{config.coder?.url || 'Set the Coder URL in Settings.'}</p>

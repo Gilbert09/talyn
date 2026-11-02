@@ -1,16 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { workbenchesOffered, type PreviewPort, type RepositoryPreviewResponse, type Workbench } from '@talyn/shared';
+import type { Workbench } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { previewPortAnswers } from '../../lib/previewProbe';
-import { isArchivedWorkbench } from '../../lib/workbenchActions';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
-import { useWorkspaceStore } from '../../stores/workspace';
+import { usePreviewStatusStore } from '../../stores/previewStatus';
+import { usePreviewActivity } from '../../hooks/usePreviewActivity';
 
 // The backend sets TALYN_PORT to 3000.
-const DEFAULT_PORTS: PreviewPort[] = [{ port: 3000 }];
 const PROBE_EVERY_MS = 1500;
 /** A first run installs dependencies before the dev server starts. */
 const START_TIMEOUT_MS = 10 * 60_000;
@@ -52,31 +51,10 @@ function showWaiting(tab: Window, port: number): void {
  * no preview domain. Coder previews are desktop only.
  */
 export function SessionPreviewLinks({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
-  const features = useWorkspaceStore((s) => s.features);
-  const enabled = Boolean(features?.previewLinks) && workbenchesOffered(features)
-    && workbench.runtime === 'sandbox' && !isArchivedWorkbench(workbench);
-  const [loaded, setLoaded] = useState<{ repositoryId: string; config: RepositoryPreviewResponse } | null>(null);
-  const [opening, setOpening] = useState<number | null>(null);
+  const { config, ports, portStatus } = usePreviewActivity(workbench);
   const busy = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(null);
-    const repositoryId = workbench.repositoryId;
-    const load = () => {
-      if (!enabled || !repositoryId) return;
-      void api.repositories.preview.get(repositoryId).then((config) => {
-        if (!cancelled) setLoaded({ repositoryId, config });
-      }).catch(() => undefined);
-    };
-    load();
-    window.addEventListener('repository-preview-changed', load);
-    return () => { cancelled = true; window.removeEventListener('repository-preview-changed', load); };
-  }, [enabled, workbench.repositoryId]);
-
-  const config = enabled && loaded?.repositoryId === workbench.repositoryId ? loaded.config : null;
+  const [opening, setOpening] = useState(false);
   if (!config || config.target === 'coder' || config.target === 'off') return null;
-  const ports = config.ports.length ? config.ports : DEFAULT_PORTS;
 
   const open = async (port: number) => {
     if (busy.current || ops.unavailable) return;
@@ -88,7 +66,8 @@ export function SessionPreviewLinks({ workbench, ops }: { workbench: Workbench; 
     }
     tab.opener = null;
     busy.current = true;
-    setOpening(port);
+    setOpening(true);
+    usePreviewStatusStore.getState().set(workbench.id, port, 'starting');
     try {
       if (!runScriptRunning(workbench.id)) {
         // Show the install and the dev server coming up.
@@ -98,15 +77,17 @@ export function SessionPreviewLinks({ workbench, ops }: { workbench: Workbench; 
         await ops.runScript('run');
       }
       await waitForPort(workbench.id, port);
+      usePreviewStatusStore.getState().set(workbench.id, port, 'live');
       const link = await api.workbenches.previewLink(workbench.id, port);
       if (tab.closed) return;
       tab.location.replace(link.url);
     } catch (error) {
+      usePreviewStatusStore.getState().set(workbench.id, port, null);
       tab.close();
       toast.error('Could not open the preview', error instanceof Error ? error.message : undefined);
     } finally {
       busy.current = false;
-      setOpening(null);
+      setOpening(false);
     }
   };
 
@@ -115,14 +96,18 @@ export function SessionPreviewLinks({ workbench, ops }: { workbench: Workbench; 
       key={port}
       type="button"
       className="inline-flex min-w-0 max-w-[15rem] shrink items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
-      disabled={opening !== null || Boolean(ops.unavailable)}
+      disabled={opening || Boolean(ops.unavailable)}
       onClick={() => void open(port)}
       data-attr="session-preview-link"
-      title="Start the run script if needed, then open the app in a new tab"
+      title={portStatus(port).label}
     >
-      {opening === port && <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />}
+      {portStatus(port).status === 'starting' && <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />}
+      {portStatus(port).status === 'running' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden />}
+      {portStatus(port).status === 'failed' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" aria-hidden />}
       <span className="truncate">
-        {opening === port ? `Starting port ${port}…` : `Open preview${ports.length > 1 || label ? ` (${label ?? port})` : ''}`}
+        {portStatus(port).status === 'starting' ? `Starting port ${port}…`
+          : portStatus(port).status === 'failed' ? `Preview failed :${port}`
+            : `Open preview${ports.length > 1 || label ? ` (${label ?? port})` : ''}`}
       </span>
     </button>
   ))}</>;

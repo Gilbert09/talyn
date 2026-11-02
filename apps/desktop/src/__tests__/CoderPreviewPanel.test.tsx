@@ -9,6 +9,7 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { syncCoderTurn } from '../renderer/lib/coderPreview';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import type { CoderPreviewState, CoderProblem } from '../workbenchBridgeTypes';
+import { useCoderPreviewStatusStore } from '../renderer/stores/coderPreviewStatus';
 
 const patch = jest.fn();
 const previewGet = jest.fn();
@@ -27,6 +28,7 @@ const config: RepositoryPreviewResponse = { target: 'coder', ports: [{ port: 801
 
 beforeEach(() => {
   jest.clearAllMocks();
+  useCoderPreviewStatusStore.setState({ sessions: {} });
   for (const method of Object.values(bridge)) method.mockReset().mockResolvedValue(undefined);
   bridge.state.mockResolvedValue(null);
   patch.mockResolvedValue({ base: 'a'.repeat(40), patch: 'binary patch' });
@@ -84,6 +86,41 @@ it('shows a compact header chip and opens the Run tab', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Preview in Coder' }));
   await waitFor(() => expect(bridge.open).toHaveBeenCalled());
   expect(useWorkbenchStore.getState()).toMatchObject({ terminalOpen: true, terminalTab: 'run' });
+});
+it('shows the Coder step in the header while the Run tab is closed', async () => {
+  const item = { ...wb, id: 'header-starting' };
+  render(<SessionPreviewChips workbench={item} ops={{ unavailable: null } as WorkbenchOps} />);
+  await screen.findByRole('button', { name: 'Preview in Coder' });
+  act(() => useCoderPreviewStatusStore.getState().update(item.id, { busy: true, step: 'workspace' }));
+  expect(screen.getByRole('button', { name: 'Starting dev…' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Starting dev…' }).querySelector('svg')).toHaveClass('animate-spin');
+});
+it('polls Coder steps while the Run tab is closed', async () => {
+  const item = { ...wb, id: 'header-polling' };
+  let finishPrepare!: (value: CoderPreviewState) => void;
+  bridge.prepare.mockImplementation(() => new Promise((resolve) => { finishPrepare = resolve; }));
+  render(<SessionPreviewChips workbench={item} ops={{ unavailable: null } as WorkbenchOps} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview in Coder' }));
+  await waitFor(() => expect(bridge.prepare).toHaveBeenCalled());
+  bridge.state.mockResolvedValue({ ...base, workspace: 'devbox-tom-eu', step: 'worktree' });
+  expect(await screen.findByRole('button', { name: 'Preparing worktree…' }, { timeout: 2500 })).toBeDisabled();
+  await act(async () => { finishPrepare({ ...base }); });
+  await waitFor(() => expect(bridge.open).toHaveBeenCalledWith(item.id));
+});
+it('opens an active Coder preview from the header', async () => {
+  const item = { ...wb, id: 'header-running' };
+  bridge.state.mockResolvedValue({ ...base, active: true, running: true });
+  render(<SessionPreviewChips workbench={item} ops={{ unavailable: null } as WorkbenchOps} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Coder preview' }));
+  await waitFor(() => expect(bridge.open).toHaveBeenCalledWith(item.id));
+});
+it('opens the Run tab when the Coder preview fails', async () => {
+  const item = { ...wb, id: 'header-failed' };
+  bridge.state.mockResolvedValue(withProblem({ step: 'login', code: 'not_logged_in', message: 'Sign in to Coder' }));
+  render(<SessionPreviewChips workbench={item} ops={{ unavailable: null } as WorkbenchOps} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Coder preview failed' }));
+  expect(useWorkbenchStore.getState()).toMatchObject({ terminalOpen: true, terminalTab: 'run' });
+  expect(bridge.open).not.toHaveBeenCalled();
 });
 it('syncs a background turn once without a mounted panel', async () => {
   bridge.state.mockResolvedValue({ active: true });

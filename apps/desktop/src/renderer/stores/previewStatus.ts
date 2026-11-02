@@ -6,6 +6,8 @@ export type PreviewPortState = 'starting' | 'live';
 interface PreviewStatusState {
   /** Keyed `${workbenchId}:${port}`. */
   ports: Record<string, PreviewPortState>;
+  runStarting: Record<string, boolean>;
+  setRunStarting: (workbenchId: string, starting: boolean) => void;
   set: (workbenchId: string, port: number, state: PreviewPortState | null) => void;
   clearWorkbench: (workbenchId: string) => void;
 }
@@ -14,6 +16,10 @@ export const previewKey = (workbenchId: string, port: number) => `${workbenchId}
 
 export const usePreviewStatusStore = create<PreviewStatusState>((set) => ({
   ports: {},
+  runStarting: {},
+  setRunStarting: (workbenchId, starting) => set((s) => ({
+    runStarting: { ...s.runStarting, [workbenchId]: starting },
+  })),
   set: (workbenchId, port, state) =>
     set((s) => {
       const key = previewKey(workbenchId, port);
