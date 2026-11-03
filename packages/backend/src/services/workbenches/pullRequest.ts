@@ -255,8 +255,8 @@ export async function createWorkbenchPullRequest(
 }
 
 /**
- * Put the PR in the workspace's list now rather than on the next poll, and
- * link it. Best effort: the PR is open either way, and the next GET or turn
+ * Hold the PR's row now rather than on the next poll, and link it. The row
+ * is not marked as tracked: the session shows the PR itself. Best effort: the PR is open either way, and the next GET or turn
  * links it by branch.
  */
 async function trackAndLink(row: WorkbenchRow, number: number, strict = false): Promise<WorkbenchRow> {
@@ -276,6 +276,7 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
       },
       number,
       allowClosed: strict,
+      markWatching: false,
     });
     if (watched.ok) {
       if (!strict) {

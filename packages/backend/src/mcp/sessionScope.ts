@@ -35,8 +35,8 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_set_merge_queue',
   'talyn_merge_pull_request',
   'talyn_fix_pull_request',
-  'talyn_track_pull_request',
-  'talyn_untrack_pull_request',
+  // track/untrack are a person's choice, so they are not here: a session's own
+  // PR is already shown by the session.
   'talyn_set_review_hidden',
   // Merge queue
   'talyn_set_merge_queue_stack',

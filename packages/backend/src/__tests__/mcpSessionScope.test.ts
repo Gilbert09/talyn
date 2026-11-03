@@ -92,6 +92,8 @@ const EXCLUDED = [
   'talyn_delete_mcp_server', 'talyn_connect_mcp_server', 'talyn_create_mcp_server',
   // Account
   'talyn_get_billing_status', 'talyn_list_cloud_providers', 'talyn_whats_new',
+  // A person's own choice of what to track
+  'talyn_track_pull_request', 'talyn_untrack_pull_request',
   // Workspace configuration
   'talyn_add_repository', 'talyn_remove_repository', 'talyn_revert_setup_step',
   'talyn_create_skill', 'talyn_update_skill', 'talyn_delete_skill',
