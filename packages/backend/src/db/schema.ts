@@ -730,6 +730,84 @@ export const apiIdempotencyKeys = pgTable(
   })
 );
 
+// ---------- Public API webhooks (migration 0101) ----------
+//
+// Outbound webhooks. Backend-pool-only like the token tables: the delivery
+// worker and the dispatcher have no request to scope by. See
+// services/apiWebhooks/.
+
+export const apiWebhookEndpoints = pgTable(
+  'api_webhook_endpoints',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // NULL: every workspace of the owner.
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    description: text('description'),
+    // Empty: every event type.
+    eventTypes: text('event_types').array().notNull().default(sql`'{}'::text[]`),
+    secretEnc: jsonb('secret_enc').$type<EncryptedEnvelope>().notNull(),
+    previousSecretEnc: jsonb('previous_secret_enc').$type<EncryptedEnvelope | null>(),
+    previousSecretExpiresAt: timestamp('previous_secret_expires_at', { withTimezone: true }),
+    enabled: boolean('enabled').notNull().default(true),
+    disabledReason: text('disabled_reason'),
+    disabledAt: timestamp('disabled_at', { withTimezone: true }),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    failingSince: timestamp('failing_since', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    ownerIdx: index('idx_api_webhook_endpoints_owner').on(t.ownerId),
+  })
+);
+
+export const apiWebhookDeliveries = pgTable(
+  'api_webhook_deliveries',
+  {
+    id: text('id').primaryKey(),
+    endpointId: text('endpoint_id')
+      .notNull()
+      .references(() => apiWebhookEndpoints.id, { onDelete: 'cascade' }),
+    eventId: text('event_id').notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    // 'pending' | 'succeeded' | 'failed' | 'abandoned'
+    status: text('status').notNull().default('pending'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    // The schedule AND the lease: a claim moves it 60 seconds ahead.
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    claimToken: text('claim_token'),
+    lastResponseStatus: integer('last_response_status'),
+    lastError: text('last_error'),
+    lastResponseMs: integer('last_response_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  },
+  (t) => ({
+    endpointEventUq: uniqueIndex('uq_api_webhook_deliveries_endpoint_event').on(t.endpointId, t.eventId),
+    dueIdx: index('idx_api_webhook_deliveries_due').on(t.nextAttemptAt).where(sql`${t.status} = 'pending'`),
+    endpointCreatedIdx: index('idx_api_webhook_deliveries_endpoint_created').on(t.endpointId, t.createdAt, t.id),
+    createdIdx: index('idx_api_webhook_deliveries_created').on(t.createdAt),
+  })
+);
+
+// The last state announced for a session or a pull request: `session:<id>` / `pull_request:<id>`.
+export const apiWebhookObjectStates = pgTable(
+  'api_webhook_object_states',
+  {
+    objectKey: text('object_key').primaryKey(),
+    fingerprint: text('fingerprint').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    updatedIdx: index('idx_api_webhook_object_states_updated').on(t.updatedAt),
+  })
+);
+
 // ---------- Global settings (key/value) ----------
 
 export const settings = pgTable('settings', {

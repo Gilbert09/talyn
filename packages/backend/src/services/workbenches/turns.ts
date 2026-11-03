@@ -78,6 +78,7 @@ import {
 } from './sandboxRuntime.js';
 import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import { checkpointWork, noteTurnActivity, settleTurnActivity } from './workCheckpoint.js';
+import { sendWebhookSignal } from '../apiWebhooks/signals.js';
 import { startTitleGeneration } from './title.js';
 import { meterWorkbenchAwake } from './usageMeter.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
@@ -291,7 +292,10 @@ export async function sendMessage(
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
-  if (claim.started) launchTurnLoop(chatId, claim.started);
+  if (claim.started) {
+    sendWebhookSignal({ kind: 'turn_started', workspaceId: chat.workspaceId, chatId, turn: claim.started.turn });
+    launchTurnLoop(chatId, claim.started);
+  }
   return { queued: claim.started?.message.id !== message.id };
 }
 
@@ -304,6 +308,7 @@ export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
     return false;
   }
   emitWorkbenchChat(claim.chat.workspaceId, rowToChat(claim.chat));
+  sendWebhookSignal({ kind: 'turn_started', workspaceId: claim.chat.workspaceId, chatId, turn: claim.started.turn });
   launchTurnLoop(chatId, claim.started);
   return true;
 }
@@ -404,6 +409,8 @@ async function runTurnLoopBody(
     adoptFailures.delete(chatId);
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+      sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: heldTurn, finalStatus: outcome.status });
+      if (fin.started) sendWebhookSignal({ kind: 'turn_started', workspaceId: fin.chat.workspaceId, chatId, turn: fin.started.turn });
       await archiveIdleSession(fin.chat.workbenchId);
       await suspendIfOutOfBudget(fin.chat.workbenchId);
     }
@@ -1065,6 +1072,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
     const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
+      sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: chat.turnCount, finalStatus: 'idle' });
       await archiveIdleSession(fin.chat.workbenchId);
       await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);

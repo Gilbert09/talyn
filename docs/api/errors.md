@@ -66,7 +66,11 @@ New codes can appear in `v1`. Handle a code that you do not know by its `type` o
 | 400 | `invalid_cursor` | The `cursor` is not a `next_cursor` of this API. | Use a `next_cursor` unchanged. |
 | 400 | `invalid_idempotency_key` | The `Idempotency-Key` is not valid. | Use 1 to 255 printable ASCII characters with no spaces. |
 | 413 | `body_too_large` | The body is more than 1 MB. | Send a smaller body. |
+| 413 | `file_too_large` | The file is more than 4 MiB. | Read it in the sandbox with an agent. |
+| 413 | `memory_too_large` | The memory body is more than 8 KiB. | Make the note shorter. |
+| 413 | `repository_instructions_too_large` | The instructions are more than 64 KiB. | Make the text shorter. |
 | 415 | `unsupported_encoding` | The body encoding is not supported. | Send plain UTF-8 JSON. |
+| 400 | `invalid_webhook_url` | The webhook URL is not allowed: not https, has a user name, or points to a private, loopback or reserved address. `param` is `url`. | Use a public https URL. See [webhooks](webhooks.md#which-urls-are-allowed). |
 
 Request bodies are strict. A field that the API does not know gives `400` `invalid_parameter`. The `param` field names the unknown field.
 
@@ -77,6 +81,20 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | 404 | `workspace_not_found` | The workspace does not exist, or the token cannot reach it. |
 | 404 | `session_not_found` | The session does not exist, or the token cannot reach it. |
 | 404 | `chat_not_found` | The chat does not exist, or the token cannot reach it. |
+| 404 | `pull_request_not_found` | The pull request does not exist, Talyn does not track it, or the token cannot reach it. |
+| 404 | `code_review_not_found` | The code review does not exist, or the token cannot reach it. |
+| 404 | `finding_not_found` | The finding is not in this code review. |
+| 404 | `webhook_endpoint_not_found` | The webhook endpoint does not exist, or the token cannot reach it. |
+| 404 | `webhook_delivery_not_found` | The webhook delivery does not exist, or the token cannot reach it. |
+| 404 | `repository_not_found` | The repository does not exist, or the token cannot reach it. |
+| 404 | `memory_not_found` | The memory entry does not exist, or the token cannot reach it. |
+| 404 | `repository_instructions_not_found` | The repository has no instructions. |
+| 404 | `setup_step_not_found` | The repository has no setup step with this id. |
+| 404 | `queued_message_not_found` | The message is not in the queue. It started already, or it was removed. |
+| 404 | `checkpoint_not_found` | The chat has no checkpoint for this turn. |
+| 404 | `file_not_found` | The file does not exist in the sandbox. |
+| 404 | `script_not_found` | The session config defines no script with this name. |
+| 404 | `preview_links_unavailable` | This deployment has no preview domain, so it cannot make preview links. |
 | 404 | `route_not_found` | The method and path match no endpoint. |
 
 A resource that the token cannot reach gives the same `404` as a resource that does not exist.
@@ -92,17 +110,44 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `chat_closed` | The chat is closed. | Open a new chat. |
 | 409 | `archived` | The session is archived. | Call `POST /sessions/{id}/restore`. |
 | 409 | `not_failed` | A retry was sent for a session that did not fail. | Retry only when `status` is `error`. |
+| 409 | `pull_request_not_open` | The pull request is closed or merged. | Use an open pull request. |
+| 409 | `cannot_refresh` | GitHub did not return the pull request, or Talyn does not know its branch yet. | Retry after the next sync. |
+| 409 | `not_queued` | A re-submit was sent for a pull request that is not in the merge queue. | Add it to the queue. |
+| 409 | `not_parked` | The merge queue still works on the pull request. | Wait. Re-submit only a `blocked` entry. |
+| 409 | `no_external_queue` | The entry never went to an external merge queue. | Nothing to re-submit. |
+| 409 | `pr_closed` | A code review was asked for a pull request that is not open. | Use an open pull request. |
+| 409 | `no_reviewers` | The workspace turned off Talyn's reviewers and has none of its own for this repository. | Change the code review settings in the app. |
+| 409 | `busy` | The review changed while it started. | Retry. |
+| 409 | `code_review_post_not_ready` | The review is still running. | Wait until `phase` is `ready`. |
+| 409 | `code_review_post_nothing_to_post` | No open finding is left to post, or each one is too long for GitHub. | Nothing to do. |
+| 409 | `webhook_endpoint_limit_reached` | The account has 20 webhook endpoints. The body has `limit`. | Delete an endpoint. |
+| 409 | `webhook_endpoint_disabled` | A test or a redelivery was sent to a disabled endpoint. | Enable it with `PATCH /webhooks/{id}`. |
+| 409 | `delivery_pending` | A redelivery was sent for a delivery that is still pending. | Wait until it is no longer `pending`. |
+| 409 | `snapshot_unavailable` | The sandbox sleeps and Talyn has no stored list of its changes. | Send `live=true` to wake the sandbox. |
+| 409 | `script_running` | The script already runs. | Stop it first, or read its output. |
+| 409 | `thread_no_repository` | The action needs a repository, and a thread has none. | Use one of the thread's sessions. |
+| 409 | `not_thread` | The session is not a thread. | Use the id of a thread. |
+| 409 | `no_pull_request` | The session has no linked pull request to merge. | Open one with `POST /sessions/{id}/pull_request`. |
+| 409 | `merge_failed` | GitHub did not merge the pull request. The message has the reason. | Fix the reason, then retry. |
+| 409 | `task_active` | A cloud task already works on this pull request. | Wait for the task to finish. |
+| 409 | `nothing_to_open` | The branch has no commits that the base branch does not have. | Make changes first. |
+| 409 | `chat_running` | A turn runs, and the action needs the chat to be idle. | Stop the turn, or wait. |
+| 409 | `thread_resize` | A thread runs only the agent and cannot be resized. | Resize one of its sessions. |
+| 409 | `memory_forgotten` | The memory entry is forgotten. | Restore it first. |
+| 409 | `memory_name_taken` | A live entry in the same scope has the name. | Choose another name, or forget the other entry. |
+| 409 | `memory_limit_reached` | The workspace has 500 live memory entries. | Forget some entries. |
 
 ### Plan limits
 
-A plan limit answers `402` with `type: "plan_limit_error"`. The `code` is the same code that the Talyn app uses. The body has `limit` and `in_use` when the numbers are known.
+A plan limit answers `402` with `type: "plan_limit_error"`. The `code` is the same code that the Talyn app uses. The body has `tier`, and the fields below when they apply.
 
-| Code | Meaning |
-| --- | --- |
-| `task_limit_reached` | The plan allows no more active tasks. |
-| `merge_queue_limit_reached` | The plan allows no more merge queue pull requests. |
-| `workflow_limit_reached` | The plan allows no more workflows. |
-| `loop_limit_reached` | The plan allows no more loops. |
+| Code | Meaning | More fields |
+| --- | --- | --- |
+| `usage_exhausted` | The plan's box hours for this period are used up. | `period_end`, `credits_allowed`, `retry_at` |
+| `concurrent_box_limit_reached` | The plan runs no more boxes at the same time. | `limit`, `in_use` |
+| `size_requires_pro` | The plan cannot start a box of this size. | `size`, `allowed_sizes` |
+| `auto_keep_default_requires_unlimited` | Keeping new pull requests green by default needs a paid plan. | |
+| `auto_review_requires_unlimited` | Automatic code review needs a paid plan. | |
 
 Other plan codes can appear. Match on `type` for a general rule.
 
@@ -110,8 +155,9 @@ Other plan codes can appear. Match on `type` for a general rule.
 {
   "error": {
     "type": "plan_limit_error",
-    "code": "task_limit_reached",
+    "code": "concurrent_box_limit_reached",
     "message": "...",
+    "tier": "free",
     "limit": 3,
     "in_use": 3,
     "request_id": "req_..."
@@ -131,6 +177,8 @@ Other plan codes can appear. Match on `type` for a general rule.
 | Status | Code | Meaning | What to do |
 | --- | --- | --- | --- |
 | 500 | `internal_error` | A fault on the Talyn side. The message never has internal details. | Retry. If it continues, send the `request_id` to Talyn. |
+| 502 | `code_review_post_github_failed` | GitHub refused the review. The message has the answer from GitHub. | Read the message. Fix the cause, then retry. |
+| 503 | `github_rate_limited` | GitHub limits your account. | Wait `Retry-After` seconds. |
 | 503 | varies | A service that the request needs is not available. | Retry after a delay. |
 
 ## Handle errors

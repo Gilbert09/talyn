@@ -265,6 +265,12 @@ export const PUBLIC_RATE_LIMITS = {
   perToken: { limit: 600, windowMs: 60_000 },
   /** Requests that start work (a session, a chat, a message), per token. */
   creates: { limit: 60, windowMs: 60_000 },
+  /**
+   * Requests that call GitHub as the token owner (refresh, post to PR), per
+   * token. GitHub allows a person 5,000 REST requests an hour; 30 a minute is
+   * 1,800 an hour at most, so a busy script leaves most of it for the app.
+   */
+  github: { limit: 30, windowMs: 60_000 },
   /** Failed authentications per IP: each attempt is a database lookup. The `/mcp` mount uses the same 300. */
   authFailuresPerIp: { limit: 300, windowMs: 60_000 },
 } as const;

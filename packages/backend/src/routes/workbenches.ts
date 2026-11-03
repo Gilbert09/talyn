@@ -2,7 +2,7 @@ import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
 import { forwardRequestHeaders, isSafePreviewPath, proxyBody, proxyPortRequest } from '../services/preview/portsHttp.js';
-import { mintPreviewTicket, PREVIEW_TICKET_RATE } from '../services/preview/previewLinks.js';
+import { PREVIEW_TICKET_RATE } from '../services/preview/previewLinks.js';
 import { previewBaseDomain } from '../services/preview/previewHost.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { v4 as uuid } from 'uuid';
@@ -32,18 +32,13 @@ import {
   type WorkbenchKind,
   type WorkbenchSettings,
   boxRefusalReason,
-  isSandboxSize,
 } from '@talyn/shared';
-import { runWithoutScope } from '../db/client.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { emptyChanges, getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from '../services/workbenches/changes.js';
-import { readChangesSnapshot } from '../services/workbenches/changesSnapshot.js';
-import { noteDiffStatFresh } from '../services/workbenches/workCheckpoint.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
-import { fleetErrorAsRefusal, localRuntimeError, notReadyError, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
@@ -61,7 +56,22 @@ import {
 import { confirmLocalBranchName, reserveLocalBranchName } from '../services/workbenches/localBranchName.js';
 import { claimLocalWorkbench } from '../services/workbenches/localTakeover.js';
 import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
-import { requestSessionResize, type ResizeInput, type SessionResizeResult } from '../services/workbenches/resize.js';
+import type { ResizeInput, SessionResizeResult } from '../services/workbenches/resize.js';
+import {
+  closeChat,
+  createSessionPreviewLink,
+  dropQueuedMessage,
+  listSessionFiles,
+  patchChat,
+  readSessionChanges,
+  readSessionConfig,
+  readSessionDiff,
+  readSessionFile,
+  requireReadySandbox,
+  resizeSession,
+  startSessionScript,
+  stopSessionScript,
+} from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
@@ -69,13 +79,11 @@ import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/read
 import {
   fleetClientFor,
   loadWorkbenchConfig,
-  loadWorkbenchConfigWithDetection,
   resumeOnce,
   saveDetectedConfig,
 } from '../services/workbenches/sandboxRuntime.js';
 import { recoverLostSandbox } from '../services/workbenches/recovery.js';
 import { continueAsThread, notifyThread } from '../services/workbenches/threads.js';
-import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
   getChat,
   getWorkbench,
@@ -87,7 +95,6 @@ import {
   listOlderEvents,
   listWorkbenches,
   liveWorkbenchNames,
-  removeQueuedMessage,
   rowToChat,
   setGeneratedTitle,
   storeNumberedEvents,
@@ -107,9 +114,7 @@ import {
   restoreMemory,
   updateMemory,
 } from '../services/workbenches/memory.js';
-import { billingEnabled, checkBoxGate } from '../services/billing/entitlements.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
-import { ownerOfWorkspace } from '../services/workflows/owner.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -211,23 +216,6 @@ export function workbenchRoutes(): Router {
     return (await gate(req, res, workbench.workspaceId)) ? { chat, workbench } : null;
   }
 
-  /** Reads wait for the current sandbox before they use its id. */
-  async function requireReadySandbox(row: WorkbenchRow, checkGolden = false): Promise<void> {
-    if (row.runtime === 'local') throw localRuntimeError();
-    if (row.archivedAt) throw notReadyError('archived');
-    if (checkGolden) await startStaleGoldenMove(row);
-    const deadline = Date.now() + 180_000;
-    let current = await getWorkbench(row.id);
-    while (current?.status === 'moving' && !current.archivedAt && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      current = await getWorkbench(row.id);
-    }
-    if (!current) throw new WorkbenchError('Session not found', 404, 'not_found');
-    Object.assign(row, current);
-    if (row.archivedAt) throw notReadyError('archived');
-    if (row.status !== 'ready' || !row.sandboxId) throw notReadyError(row.status);
-  }
-
   // ==========================================================================
   // Chats — declared first so `/chats/...` is never read as a workbench id.
   // ==========================================================================
@@ -253,33 +241,22 @@ export function workbenchRoutes(): Router {
       if (typeof body.planMode !== 'boolean') return bad(res, 400, 'planMode must be a boolean');
       patch.planMode = body.planMode;
     }
-    const row = (await updateChat(found.chat.id, patch)) ?? found.chat;
-    emitWorkbenchChat(row.workspaceId, rowToChat(row));
-    ok(res, rowToChat(row));
+    ok(res, rowToChat(await patchChat(found.chat, patch)));
   });
 
   /** Close a chat tab. A running turn is stopped first; the transcript stays. */
   router.delete('/chats/:chatId', async (req, res) => {
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
-    if (found.workbench.runtime === 'sandbox' && found.chat.status === 'running') {
-      await cancelTurn(found.chat.id).catch((err) => console.warn('[workbench] cancel on close failed:', err));
-    }
-    // A local turn runs on the desktop, which may be gone: a closed chat must not stay `running`.
-    const stale = found.workbench.runtime === 'local' && found.chat.status === 'running';
-    await updateChat(found.chat.id, { closedAt: new Date(), queuedMessages: [], ...(stale ? { status: 'idle' as const } : {}) });
-    // The embedded list is how a client learns a chat is gone.
-    const workbench = await getWorkbench(found.workbench.id);
-    if (workbench) await emitWorkbenchUpdated(await publicWorkbench(workbench));
+    await closeChat(found.chat, found.workbench);
     ok(res, null);
   });
 
   router.delete('/chats/:chatId/queue/:messageId', async (req, res) => {
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
-    const row = await removeQueuedMessage(found.chat.id, req.params.messageId);
+    const row = await dropQueuedMessage(found.chat.id, req.params.messageId);
     if (!row) return bad(res, 404, 'Chat not found');
-    emitWorkbenchChat(row.workspaceId, rowToChat(row));
     ok(res, rowToChat(row));
   });
 
@@ -603,23 +580,7 @@ export function workbenchRoutes(): Router {
     }
     const continueWith = typeof body.continueWith === 'string' ? body.continueWith.trim() : '';
     try {
-      // The plan may not start this size (Free: small and standard). A resize
-      // replaces the box, so only the size is checked.
-      if (billingEnabled() && isSandboxSize(body.size)) {
-        const ownerId = await ownerOfWorkspace(row.workspaceId);
-        if (ownerId) await checkBoxGate(ownerId, { size: body.size, replacesBox: true, workspaceId: row.workspaceId });
-      }
-      const result = await requestSessionResize(row, body, { startNow: !continueWith });
-      let continued = false;
-      if (continueWith && result.outcome !== 'unchanged') {
-        const chat = (await listChats(row.id)).find((c) => !c.closedAt);
-        if (chat) {
-          await sendMessage(chat.id, { text: continueWith }, { origin: 'talyn' });
-          continued = true;
-        }
-      }
-      await emitWorkbenchUpdated(await publicWorkbench((await getWorkbench(row.id)) ?? row));
-      const data: SessionResizeResult = { ...result, continued };
+      const data: SessionResizeResult = await resizeSession(row, body, continueWith);
       ok(res, data);
     } catch (err) {
       fail(res, err);
@@ -879,23 +840,10 @@ export function workbenchRoutes(): Router {
   router.get('/:id/changes', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
-    // A thread has no repository: nothing changed, and no box needs to wake to say so.
-    if (isThread(row)) return ok(res, emptyChanges());
     try {
-      // A box that is not running cannot have changed since the last read, so
-      // its stored list answers at once. Only `?live=1` (a person's refresh) wakes it.
+      // Only `?live=1` (a person's refresh) wakes a box that has a stored list.
       const live = req.query.live === '1' || req.query.live === 'true';
-      if (!live && row.runtime === 'sandbox' && !row.archivedAt && row.sandboxState !== 'running') {
-        const snapshot = await readChangesSnapshot(row);
-        if (snapshot) return ok(res, snapshot);
-      }
-      await requireReadySandbox(row, true);
-      const changes = await getChanges(row);
-      ok(res, changes);
-      noteDiffStatFresh(row.id);
-      void storeDiffStat(row, changes).catch((err) =>
-        console.warn(`[workbench] storing the diff stat for ${row.id} failed:`, err),
-      );
+      ok(res, await readSessionChanges(row, { live, wakeWithoutSnapshot: true }));
     } catch (err) {
       fail(res, err);
     }
@@ -906,12 +854,12 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     if (isThread(row)) return ok(res, { patch: '' });
     try {
-      await requireReadySandbox(row);
       const scope = req.query.scope;
       if (scope !== undefined && scope !== 'combined' && scope !== 'uncommitted' && scope !== 'committed') {
+        await requireReadySandbox(row);
         return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
       }
-      ok(res, await getPatch(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
+      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
     } catch (err) {
       fail(res, err);
     }
@@ -921,9 +869,11 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      await requireReadySandbox(row);
-      if (typeof req.query.path !== 'string' || !req.query.path) return bad(res, 400, 'path is required');
-      ok(res, await readRepoFile(row, req.query.path));
+      if (typeof req.query.path !== 'string' || !req.query.path) {
+        await requireReadySandbox(row);
+        return bad(res, 400, 'path is required');
+      }
+      ok(res, await readSessionFile(row, req.query.path));
     } catch (err) {
       fail(res, err);
     }
@@ -932,10 +882,8 @@ export function workbenchRoutes(): Router {
   router.get('/:id/files', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
-    if (isThread(row)) return ok(res, { paths: [] });
     try {
-      await requireReadySandbox(row, true);
-      ok(res, await listRepoFiles(row));
+      ok(res, await listSessionFiles(row));
     } catch (err) {
       fail(res, err);
     }
@@ -948,8 +896,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     if (isThread(row)) return ok(res, await loadWorkbenchConfig(row));
     try {
-      await requireReadySandbox(row, true);
-      ok(res, await loadWorkbenchConfigWithDetection(row));
+      ok(res, await readSessionConfig(row));
     } catch (err) {
       fail(res, err);
     }
@@ -978,11 +925,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      refuseThread(row);
-      await requireReadySandbox(row);
-      // Detached from the request: the script outlives it, and its follower
-      // must not inherit anything request-scoped.
-      await runWithoutScope(() => startScript(row, req.params.name));
+      await startSessionScript(row, req.params.name);
       ok(res, null);
     } catch (err) {
       fail(res, err);
@@ -993,8 +936,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      await requireReadySandbox(row);
-      await stopScript(row, req.params.name);
+      await stopSessionScript(row, req.params.name);
       ok(res, null);
     } catch (err) {
       fail(res, err);
@@ -1075,9 +1017,11 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
-    if (row.runtime !== 'sandbox') return bad(res, 400, 'Only sandbox sessions have hosted previews.', 'local_runtime');
-    if (row.archivedAt || row.status === 'archived') return bad(res, 409, 'This session is archived.', 'not_ready');
-    ok(res, await mintPreviewTicket({ workbenchId: row.id, port, userId: assertUser(req).id }, domain));
+    try {
+      ok(res, await createSessionPreviewLink(row, port, assertUser(req).id));
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   router.all('/:id/ports/:port/*', async (req, res) => {

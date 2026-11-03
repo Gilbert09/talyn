@@ -2,6 +2,71 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Public API, phase 2: pull requests, merge queue and code reviews (2026-11-02)
+
+Four new scopes: `pull_requests:read|write` and `code_reviews:read|write`. The merge-queue routes use the pull-request scopes. `POST /pull-requests/{id}/sessions` uses `sessions:write` and the `workbenches` gate, because it starts a session.
+
+What shipped:
+- Pull requests: list (filters `state`, `relationship`, `repository_id`, `merge_queued`), get, `PATCH` for auto-keep, the cached description, refresh, and a session on a pull request. The list pages on `(created_at, id)`, the time Talyn started to track the row. `last_polled_at` changes on each poll, so a cursor on it would skip and repeat rows.
+- `GET /pull-requests/{id}` reads the database only. The app's detail route makes a live GraphQL fetch on each open; the API leaves that to `POST .../refresh`, so a script that polls does not spend the user's GitHub budget.
+- Every GitHub fact is read out of `last_summary` in SQL (`->>`, `#>>`), never the blob. `body` is read only by the description route. The queue read has its own projection, without `seen_signatures` and the fix-run columns. The `.toSQL()` tests are in `publicPullRequests.test.ts`.
+- Merge queue: list for a workspace (one page), add, remove, re-submit, and the event history. All of them go through `setQueueMembership` / `resubmitQueueEntry`, so the plan gate (`merge_queue_limit_reached`) and the auto-merge disarm are the app's. The triggers are `user:api_*`: the evaluator treats a `user:` trigger as urgent, and a person waits on an API call too. Adding a closed pull request is refused (409 `pull_request_not_open`); the app route does not check this.
+- Code reviews: list (0 or 1 item), start, get with findings, cancel, events, one finding with its body, dismiss and undo, and Post to PR (always `COMMENT`). `fixTaskId` and every task id stay out. Findings with `disposition = 'discarded'` stay out too: a reset threw them away.
+
+Refactors so the app and the API call one function: `services/prRefresh.ts` (`refreshPullRequest`, `reconcileTerminalState`), `services/prAutoKeep.ts` (`setAutoKeepMergeable`, `publicAutoMergeState`), `services/mergeQueue/timeline.ts`, and `services/codeReview/actions.ts` (dismiss, undismiss and post, with their analytics events and the merge-queue notice). The app routes in `routes/pullRequests.ts` now call these. Their behaviour is the same.
+
+Router changes in `routes/public/`: a route can now be `idempotent` (accepts `Idempotency-Key` without the create budget), `github` (a new per-token tier of 30 a minute, and a 502 in the spec) and `planLimited` (a 402 in the spec). `GitHubRateLimitError` maps to 503 `github_rate_limited` with `Retry-After`.
+
+What did not go as planned:
+- There is no service that starts a "fix" session with a prompt Talyn writes. `buildMergeablePrompt` is for cloud tasks and has provider-specific git steps. `POST /pull-requests/{id}/sessions` therefore takes the caller's prompt.
+- A review is one row per pull request with a `cycle` counter. Past cycles are not stored as rows, so `GET /pull-requests/{id}/code-reviews` lists one review, not one item per cycle.
+- Post to PR is at `POST /code-reviews/{id}/post`, not under the pull request, so that it sits with the other actions on a review.
+- Not built: merging directly (the queue is the merge path, as for workflows), the stack enqueue, the review-hidden flag, code review fix runs (tasks).
+
+## Public API, phase 2: webhooks (2026-11-02)
+
+Outbound webhooks for `/v1`. A customer registers an https URL, and Talyn sends signed `POST`s to it for session, chat, pull request, merge queue and code review events. The guide is `docs/api/webhooks.md`.
+
+What shipped:
+- Migration `0101_api_webhooks` (`when` 1790900000021): `api_webhook_endpoints` (secret AES-GCM encrypted, previous secret kept for a rotation window, failure streak), `api_webhook_deliveries` (one row per event per endpoint, `UNIQUE (endpoint_id, event_id)`, partial index on pending `next_attempt_at`) and `api_webhook_object_states`. All backend-pool-only, like `api_tokens`.
+- 11 routes under `webhooks:read` / `webhooks:write` (new scopes in `packages/shared/src/publicApi.ts`). The secret is in the create and rotate answers only.
+- `services/apiWebhooks/`: `signing.ts` (Standard Webhooks, checked against the spec vector and the `standardwebhooks` package), `urlPolicy.ts` (SSRF rules), `dispatch.ts` (signals to delivery rows), `worker.ts` (the sender), `signals.ts` (the seam the emitters call).
+- Events: `session.created`, `session.updated`, `session.archived`, `session.pull_request_opened`, `chat.turn_started`, `chat.turn_completed`, `pull_request.updated`, `pull_request.merged`, `pull_request.closed`, `merge_queue.blocked`, `code_review.completed`, and `ping` from the test route.
+
+Design points:
+- Signals are sent where a change happens, not from `subscribeWorkspace`. That fan-out also gets frames relayed from other replicas, so a listener there would enqueue once per replica. Turns are hooked in `turns.ts` beside `claimOrEnqueue` / `finishTurn`, creation in `create.ts`, sessions through `onWorkbenchEmit`, pull requests and the merge queue in `websocket.ts`.
+- `signals.ts` is a leaf. Importing the dispatcher from `websocket.ts` made a cycle through `services/public/projections.ts` (`cursorTimeColumn is not a function` at import time). `startApiWebhooks()` connects the seam at boot.
+- Exactly once across replicas: a fact with a natural key (a turn number, a merge, a review cycle) gets a hashed event id and the unique key drops a repeat. A change of state uses one compare-and-set upsert on `api_webhook_object_states`.
+- The worker claims with a CTE `FOR UPDATE SKIP LOCKED` and uses `next_attempt_at` as a 60 s lease, with a claim token on every settle. No advisory lock. Retries: 5 s, 5 min, 30 min, 2 h, 5 h, 10 h, 10 h (8 attempts, about 28 hours). 410 disables at once; 3 days and 10 failed attempts in a row disables with a reason.
+- Delivery uses `node:http(s)` with a `lookup` that checks the address it connects to, so DNS rebinding cannot reach `169.254.169.254`. No redirects.
+- The idempotency table must not hold a plaintext secret. `define.ts` has two new optional hooks, `idempotentBody` and `replayBody`: create and rotate store their answer without the secret, and a replay reads the current secret again.
+- The dispatcher checks the `public-api` flag for the workspace owner (cached 30 s with the endpoint list). No new flag.
+
+Things that did not go as first planned:
+- `UPDATE ... WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` claimed more than `n` rows in pglite. The planner can run the subquery again. The claim is a CTE now.
+- `session.updated` follows the public status only, not the sandbox state. The public session shape has no sandbox state, so a sleep or a wake would be an event with no visible change.
+- No `merge_queue.merged` event: nothing internal says "the queue merged this". `pull_request.merged` covers the merge.
+- The first sight of a pull request records a baseline and sends nothing, to avoid a burst of one event per tracked pull request when an endpoint is added. The first sight of a session sends `session.updated`.
+
+## Public API, phase 2: session work, memory and repository settings (2026-11-02)
+
+Part 1 of phase 2 adds 40 `/v1` endpoints in four new route files under `routes/public/`: `sessionWork.ts`, `chatWork.ts`, `memory.ts` and `repositorySettings.ts`. The guide is `docs/api/session-work.md`. Three new scopes: `repositories:write`, `memory:read` and `memory:write`. No migration.
+
+What shipped:
+- Session work: changes, diff, files and file content, scripts (list, start, stop, output), previews (list, one-time link), Create PR, fix checks, resolve conflicts, merge, a thread's sessions, continue as a thread, timing, resize, and `GET /workspaces/{id}/readiness`.
+- Chats: `PATCH`, close, the queue (list, remove one, clear) and checkpoints (list, restore).
+- Memory: list (paged), save (upsert by name, 201 or 200), get, update, forget (soft delete), restore.
+- Repositories: get, settings (sandbox size, preview, setup learning), instructions (get, put, delete) and the setup recipe (get, revert a step).
+
+The handlers call the app's services. Logic that sat in `routes/workbenches.ts` handlers moved to `services/workbenches/sessionOps.ts`, and the app's routes now call it too: `requireReadySandbox`, the changes read with its stored copy, diff, files, config, script start and stop, chat patch and close, the queue removal, resize with `continueWith`, and the preview link. `memory.ts` exposes `memoryListWhere`, so the paged public list and the app's list filter the same way.
+
+Things that did not go as first planned:
+- The app's changes route wakes a sleeping box when no stored copy exists. The public route must not wake a box unless asked, so it answers `409` `snapshot_unavailable` and the caller sends `live=true`. `readSessionChanges` takes `wakeWithoutSnapshot` for the difference.
+- The script list does not read the config by default: the config lives in the box. Without `live=true` the list has only the scripts that ran, with `command: null`.
+- The diff and the file list have no size cap, because the app's routes have none. A huge repository gives a large `file_list`. Paging it would mean one box read per page.
+- The GitHub-spending actions (Create PR, merge) count in the create limiter. There is no separate GitHub tier yet.
+- Repository settings reads answer from stored settings only. The app's GET runs a detection that reads GitHub when nothing is stored; the API does not, so a settings read never spends the caller's GitHub budget.
+
 ## Public API, phase 1 (2026-11-02)
 
 The public API is a separate mount at `/v1`, served to customers as `api.talyn.dev/v1`. It shares the services with `/api/v1` and nothing else. The design is in `docs/PUBLIC_API.md` and the guides in `docs/api/`.

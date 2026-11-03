@@ -228,6 +228,77 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/chats/{id}/cancel` | `sessions:write` | Stop the running turn |
 | GET | `/chats/{id}/events` | `sessions:read` | Read a transcript page |
 | GET | `/chats/{id}/events/stream` | `sessions:read` | Stream a transcript |
+| GET | `/pull-requests` | `pull_requests:read` | List the pull requests Talyn tracks |
+| GET | `/pull-requests/{id}` | `pull_requests:read` | Get a pull request |
+| PATCH | `/pull-requests/{id}` | `pull_requests:write` | Turn auto-keep on or off |
+| GET | `/pull-requests/{id}/description` | `pull_requests:read` | Get the description of a pull request |
+| POST | `/pull-requests/{id}/refresh` | `pull_requests:write` | Read a pull request from GitHub again |
+| POST | `/pull-requests/{id}/sessions` | `sessions:write` | Start a session on a pull request |
+| GET | `/merge-queue` | `pull_requests:read` | List the merge queue of a workspace |
+| POST | `/pull-requests/{id}/merge-queue` | `pull_requests:write` | Add a pull request to the merge queue |
+| DELETE | `/pull-requests/{id}/merge-queue` | `pull_requests:write` | Remove a pull request from the merge queue |
+| POST | `/pull-requests/{id}/merge-queue/resubmit` | `pull_requests:write` | Re-submit a parked pull request |
+| GET | `/pull-requests/{id}/merge-queue/events` | `pull_requests:read` | List the merge-queue history of a pull request |
+| GET | `/pull-requests/{id}/code-reviews` | `code_reviews:read` | List the code reviews of a pull request |
+| POST | `/pull-requests/{id}/code-reviews` | `code_reviews:write` | Start a code review |
+| GET | `/code-reviews/{id}` | `code_reviews:read` | Get a code review with its findings |
+| POST | `/code-reviews/{id}/cancel` | `code_reviews:write` | Stop a running code review |
+| GET | `/code-reviews/{id}/events` | `code_reviews:read` | List the history of a code review |
+| GET | `/code-reviews/{id}/findings/{finding_id}` | `code_reviews:read` | Get a finding with its full text |
+| POST | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Dismiss a finding |
+| DELETE | `/code-reviews/{id}/findings/{finding_id}/dismiss` | `code_reviews:write` | Undo a dismissal |
+| POST | `/code-reviews/{id}/post` | `code_reviews:write` | Post findings to the pull request on GitHub |
+| GET | `/webhooks` | `webhooks:read` | List webhook endpoints |
+| POST | `/webhooks` | `webhooks:write` | Create a webhook endpoint |
+| GET | `/webhooks/{id}` | `webhooks:read` | Get a webhook endpoint |
+| PATCH | `/webhooks/{id}` | `webhooks:write` | Change, disable or enable a webhook endpoint |
+| DELETE | `/webhooks/{id}` | `webhooks:write` | Delete a webhook endpoint |
+| POST | `/webhooks/{id}/rotate-secret` | `webhooks:write` | Rotate the signing secret |
+| POST | `/webhooks/{id}/test` | `webhooks:write` | Send a `ping` event |
+| GET | `/webhooks/{id}/deliveries` | `webhooks:read` | List the deliveries of an endpoint |
+| GET | `/webhook-deliveries/{id}` | `webhooks:read` | Get a delivery and its payload |
+| POST | `/webhook-deliveries/{id}/redeliver` | `webhooks:write` | Send a delivery again |
+| GET | `/webhook-event-types` | `webhooks:read` | List the event types |
+| GET | `/sessions/{id}/changes` | `sessions:read` | List changed files (a sleeping sandbox answers from its stored copy) |
+| GET | `/sessions/{id}/diff` | `sessions:read` | Read the diff, whole or for one `path` |
+| GET | `/sessions/{id}/files` | `sessions:read` | List files |
+| GET | `/sessions/{id}/files/content` | `sessions:read` | Read a file |
+| GET | `/sessions/{id}/scripts` | `sessions:read` | List scripts and their state |
+| POST | `/sessions/{id}/scripts/{name}/start` | `sessions:write` | Start a script |
+| POST | `/sessions/{id}/scripts/{name}/stop` | `sessions:write` | Stop a script |
+| GET | `/sessions/{id}/scripts/{name}/output` | `sessions:read` | Read the output of a script |
+| GET | `/sessions/{id}/previews` | `sessions:read` | List preview ports |
+| POST | `/sessions/{id}/previews` | `sessions:write` | Make a one-time preview link |
+| POST | `/sessions/{id}/pull_request` | `sessions:write` | Commit, push and open a pull request |
+| POST | `/sessions/{id}/fix_checks` | `sessions:write` | Ask the agent to fix failing checks |
+| POST | `/sessions/{id}/resolve_conflicts` | `sessions:write` | Ask the agent to resolve conflicts |
+| POST | `/sessions/{id}/merge` | `sessions:write` | Merge the linked pull request |
+| GET | `/sessions/{id}/sessions` | `sessions:read` | List the sessions of a thread |
+| POST | `/sessions/{id}/thread` | `sessions:write` | Continue a session as a thread |
+| GET | `/sessions/{id}/timing` | `sessions:read` | Get where the time of the turns went |
+| POST | `/sessions/{id}/resize` | `sessions:write` | Move a session to another sandbox size |
+| GET | `/workspaces/{id}/readiness` | `sessions:read` | Check whether sessions can start |
+| PATCH | `/chats/{id}` | `sessions:write` | Rename a chat, or change its model, effort or plan mode |
+| POST | `/chats/{id}/close` | `sessions:write` | Close a chat |
+| GET | `/chats/{id}/queue` | `sessions:read` | List queued messages |
+| DELETE | `/chats/{id}/queue` | `sessions:write` | Clear the queue |
+| DELETE | `/chats/{id}/queue/{message_id}` | `sessions:write` | Remove a queued message |
+| GET | `/chats/{id}/checkpoints` | `sessions:read` | List checkpoints |
+| POST | `/chats/{id}/checkpoints/{turn}/restore` | `sessions:write` | Restore the files of a checkpoint |
+| GET | `/memories` | `memory:read` | List memory entries |
+| POST | `/memories` | `memory:write` | Save a memory entry |
+| GET | `/memories/{id}` | `memory:read` | Get a memory entry |
+| PATCH | `/memories/{id}` | `memory:write` | Update a memory entry |
+| DELETE | `/memories/{id}` | `memory:write` | Forget a memory entry |
+| POST | `/memories/{id}/restore` | `memory:write` | Restore a forgotten entry |
+| GET | `/repositories/{id}` | `repositories:read` | Get a repository |
+| GET | `/repositories/{id}/settings` | `repositories:read` | Get repository settings |
+| PATCH | `/repositories/{id}/settings` | `repositories:write` | Change the sandbox size, the preview or setup learning |
+| GET | `/repositories/{id}/instructions` | `repositories:read` | Get repository instructions |
+| PUT | `/repositories/{id}/instructions` | `repositories:write` | Write repository instructions |
+| DELETE | `/repositories/{id}/instructions` | `repositories:write` | Delete repository instructions |
+| GET | `/repositories/{id}/setup_recipe` | `repositories:read` | Get the learned setup recipe |
+| POST | `/repositories/{id}/setup_recipe/steps/{step_id}/revert` | `repositories:write` | Revert a setup step |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Local sessions
@@ -236,7 +307,7 @@ A session with `runtime: "local"` runs in the Talyn desktop app. The API lists t
 
 ## Plan limits
 
-A session that you start through the API counts against your plan in the same way as a session that you start in the app. A plan limit answers `402` with `type: "plan_limit_error"`. The error has the same `code` that the app shows, for example `task_limit_reached`. When the limit is known, the error also has `limit` and `in_use`.
+A box that you start through the API counts against your plan in the same way as one that you start in the app. A plan limit answers `402` with `type: "plan_limit_error"`. The error has the same `code` that the app shows, for example `concurrent_box_limit_reached`. The error also has the numbers that apply, such as `limit` and `in_use`. See [Errors](api/errors.md#plan-limits).
 
 ## Versioning
 
@@ -253,12 +324,13 @@ A session that you start through the API counts against your plan in the same wa
 - [Idempotency](api/idempotency.md): retry a create without a duplicate.
 - [Streaming](api/streaming.md): server-sent events, reconnect, polling.
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
+- [Pull requests](api/pull-requests.md): pull requests, the merge queue and code reviews.
+- [Webhooks](api/webhooks.md): events, signatures, retries and delivery logs.
+- [Session work](api/session-work.md): changes, files, scripts, previews, pull requests, threads, memory and repository settings.
 
 ## What is not in v1 yet
 
 - Tasks
-- Pull requests
-- Code review
-- Webhooks
+- Merging a pull request that has no session directly. Use the merge queue.
+- Code review fix runs
 - SDKs
-- Threads beyond `kind: "thread"` on `POST /sessions`
