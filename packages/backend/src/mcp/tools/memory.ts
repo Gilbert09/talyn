@@ -8,7 +8,7 @@ import {
 } from '@talyn/shared';
 import { announceMemoryChange, sessionMemoryEnabled } from '../../services/workbenches/memory.js';
 import { getWorkbench } from '../../services/workbenches/store.js';
-import { callApi } from '../api.js';
+import { callApi, McpApiError } from '../api.js';
 import { defineTool, linesOrNone, requireId, resolveWorkspace, str, workspaceSchema } from './helpers.js';
 import type { McpCallContext } from './index.js';
 
@@ -99,10 +99,63 @@ function listQuery(context: MemoryContext, extra: Record<string, string>): strin
   return params.toString();
 }
 
-async function loadVisible(ownerId: string, context: MemoryContext, id: string): Promise<MemoryEntry> {
-  const entry = await callApi<MemoryEntry | null>(ownerId, 'GET', `/workbenches/memory/${encodeURIComponent(id)}`);
-  if (!entry || !visibleTo(context, entry)) throw new Error(NOT_VISIBLE);
-  return entry;
+/** Thread entries first, then repository, then workspace: the most specific scope wins a name. */
+const SPECIFICITY: Record<MemoryScope, number> = { thread: 2, repository: 1, workspace: 0 };
+
+/** The entry with this id, when one exists. A 404 is null; another failure throws. */
+async function entryById(ownerId: string, id: string): Promise<MemoryEntry | null> {
+  try {
+    return await callApi<MemoryEntry | null>(ownerId, 'GET', `/workbenches/memory/${encodeURIComponent(id)}`);
+  } catch (err) {
+    if (err instanceof McpApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** The live entries with this name that the caller can see, the most specific scope first. */
+async function entriesByName(ownerId: string, context: MemoryContext, name: string): Promise<MemoryEntrySummary[]> {
+  const rows = await callApi<MemoryEntrySummary[]>(
+    ownerId,
+    'GET',
+    `/workbenches/memory?${listQuery(context, { name })}`,
+  );
+  return rows
+    .filter((row) => !row.forgottenAt && visibleTo(context, row))
+    .sort((a, b) => SPECIFICITY[b.scope] - SPECIFICITY[a.scope]);
+}
+
+const matchLines = (rows: MemoryEntrySummary[]) => rows.map((row) => `  ${entryLine(row)}`).join('\n');
+
+/**
+ * An entry by its id or by its name, as the memory index shows it. An id is
+ * tried first. A name matches live entries only, in the scopes the caller can
+ * see. With `unique`, a name that matches more than one entry is refused;
+ * without it, the most specific scope wins, and a tie there is refused.
+ */
+async function resolveEntry(
+  ownerId: string,
+  context: MemoryContext,
+  ref: string,
+  opts: { unique: boolean },
+): Promise<{ entry: MemoryEntrySummary; others: MemoryEntrySummary[] }> {
+  const byId = await entryById(ownerId, ref);
+  if (byId) {
+    if (!visibleTo(context, byId)) throw new Error(NOT_VISIBLE);
+    return { entry: byId, others: [] };
+  }
+  const matches = await entriesByName(ownerId, context, ref);
+  if (matches.length === 0) {
+    throw new Error(
+      `${NOT_VISIBLE} No entry you can see has the id or name "${ref}". Find it with talyn_memory_search or talyn_memory_list.`,
+    );
+  }
+  const tied = matches.filter((row) => row.scope === matches[0].scope);
+  if (tied.length > 1 || (opts.unique && matches.length > 1)) {
+    throw new Error(
+      `More than one memory entry is named "${ref}". Send the id of the one you mean:\n${matchLines(matches)}`,
+    );
+  }
+  return { entry: matches[0], others: matches.slice(1) };
 }
 
 function readScope(args: Record<string, unknown>, context: MemoryContext): MemoryScope {
@@ -118,7 +171,12 @@ function readScope(args: Record<string, unknown>, context: MemoryContext): Memor
   return scope;
 }
 
-const memoryIdSchema = { memory_id: { type: 'string', description: 'The entry id, from talyn_memory_list or talyn_memory_search.' } };
+const memoryIdSchema = {
+  memory_id: {
+    type: 'string',
+    description: 'The entry id, or its name as the memory index shows it. From talyn_memory_list or talyn_memory_search.',
+  },
+};
 const repositorySchema = {
   repository_id: {
     type: 'string',
@@ -205,26 +263,32 @@ export const MEMORY = [
   ),
   defineTool(
     'memory_read',
-    'Read one memory entry with its body. Read an entry before you rely on it.',
-    { ...workspaceSchema, ...memoryIdSchema },
+    'Read one memory entry with its body, by id or by name. Read an entry before you rely on it.',
+    { ...workspaceSchema, ...repositorySchema, ...memoryIdSchema },
     ['memory_id'],
     { readOnlyHint: true },
     async (ownerId, args, ctx) => {
+      const ref = requireId(args, 'memory_id');
       const context = await resolveContext(ownerId, args, ctx);
-      const entry = await loadVisible(ownerId, context, requireId(args, 'memory_id'));
-      return [entryLine(entry), `updated: ${entry.updatedAt}`, '', entry.body].join('\n');
+      const { entry: found, others } = await resolveEntry(ownerId, context, ref, { unique: false });
+      const entry = 'body' in found ? (found as MemoryEntry) : await entryById(ownerId, found.id);
+      if (!entry || !visibleTo(context, entry)) throw new Error(NOT_VISIBLE);
+      const lines = [entryLine(entry), `updated: ${entry.updatedAt}`];
+      if (others.length > 0) lines.push(`Other entries with this name, in wider scopes:\n${matchLines(others)}`);
+      return [...lines, '', entry.body].join('\n');
     },
     FEATURE,
   ),
   defineTool(
     'memory_forget',
-    'Forget a memory entry that is wrong or out of date. A person can restore it in the app.',
-    { ...workspaceSchema, ...memoryIdSchema },
+    'Forget a memory entry that is wrong or out of date, by id or by name. A name that more than one entry has is refused. A person can restore an entry in the app.',
+    { ...workspaceSchema, ...repositorySchema, ...memoryIdSchema },
     ['memory_id'],
     { destructiveHint: true, idempotentHint: true },
     async (ownerId, args, ctx) => {
+      const ref = requireId(args, 'memory_id');
       const context = await resolveContext(ownerId, args, ctx);
-      const entry = await loadVisible(ownerId, context, requireId(args, 'memory_id'));
+      const { entry } = await resolveEntry(ownerId, context, ref, { unique: true });
       if (entry.forgottenAt) return `Already forgotten:\n${entryLine(entry)}`;
       const forgotten = await callApi<MemoryEntrySummary>(
         ownerId,

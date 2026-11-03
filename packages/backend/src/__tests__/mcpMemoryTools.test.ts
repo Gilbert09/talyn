@@ -287,3 +287,112 @@ describe('memory_read and memory_forget', () => {
     expect(getWorkbench).toHaveBeenCalledWith('s1');
   });
 });
+
+describe('memory_read and memory_forget by name', () => {
+  const NAME = 'sandbox-docker-and-test-db-setup';
+  const summary = (overrides: Record<string, unknown> = {}) => {
+    const { body: _body, ...rest } = memory({ name: NAME, ...overrides });
+    return rest;
+  };
+
+  /** No entry has the name as its id; the list answers `rows`; an id read answers from `byId`. */
+  function mockNames(rows: Record<string, unknown>[], byId: Record<string, Record<string, unknown>> = {}) {
+    const calls: { method: string; url: URL }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string, init: RequestInit = {}) => {
+        const url = new URL(input);
+        const method = (init.method ?? 'GET').toUpperCase();
+        calls.push({ method, url });
+        const respond = (status: number, payload: unknown) => ({ ok: status < 300, status, json: async () => payload }) as Response;
+        if (method === 'GET' && url.pathname === '/api/v1/workbenches/memory') return respond(200, { success: true, data: rows });
+        const id = decodeURIComponent(url.pathname.replace('/api/v1/workbenches/memory/', ''));
+        const found = byId[id];
+        if (!found) return respond(404, { success: false, error: 'Memory entry not found', code: 'memory_not_found' });
+        if (method === 'DELETE') return respond(200, { success: true, data: { ...found, forgottenAt: '2026-11-03T10:00:00Z' } });
+        return respond(200, { success: true, data: found });
+      }),
+    );
+    return { calls };
+  }
+
+  it('reads by id without a name lookup', async () => {
+    const { calls } = mockNames([], { m1: memory() });
+    expect(await tool('memory_read').handler(OWNER, { memory_id: 'm1' }, SELF)).toMatch(/\n\nnpm run build$/);
+    expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/memory/m1']);
+  });
+
+  it('reads by the name the index shows, in the scopes the session sees', async () => {
+    const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
+    const text = await tool('memory_read').handler(OWNER, { memory_id: NAME }, SELF);
+    expect(text).toMatch(new RegExp(`^m1  ${NAME}  \\(project, repository r1\\)`));
+    expect(text).toMatch(/\n\nnpm run build$/);
+    expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+      `GET /api/v1/workbenches/memory/${NAME}`,
+      'GET /api/v1/workbenches/memory',
+      'GET /api/v1/workbenches/memory/m1',
+    ]);
+    expect(Object.fromEntries(calls[1].url.searchParams)).toEqual({ workspaceId: 'ws1', repositoryId: 'r1', name: NAME });
+  });
+
+  it.each<[string, McpCallContext, Record<string, unknown>[], string]>([
+    ['the repository entry over the workspace one', SELF, [summary({ id: 'w1', scope: 'workspace', repositoryId: null }), summary()], 'm1'],
+    ['the thread entry over the repository one', CHILD, [summary(), summary({ id: 't9', scope: 'thread', repositoryId: null, threadId: 't1' })], 't9'],
+  ])('prefers %s, and names the other', async (_label, ctx, rows, expected) => {
+    const byId = Object.fromEntries(rows.map((row) => [row.id as string, { ...row, body: `body of ${row.id as string}` }]));
+    mockNames(rows, byId);
+    const text = await tool('memory_read').handler(OWNER, { memory_id: NAME }, ctx);
+    expect(text.split('\n')[0]).toMatch(new RegExp(`^${expected}  `));
+    expect(text).toMatch(new RegExp(`\\n\\nbody of ${expected}$`));
+    expect(text).toContain('Other entries with this name, in wider scopes:');
+  });
+
+  it('refuses a name two repositories have, for a user token, and lists both', async () => {
+    const { calls } = mockNames([summary(), summary({ id: 'm2', repositoryId: 'r2' })]);
+    const read = tool('memory_read').handler(OWNER, { workspace_id: 'ws1', memory_id: NAME }, USER);
+    await expect(read).rejects.toThrow(/More than one memory entry is named "sandbox-docker-and-test-db-setup"/);
+    await expect(tool('memory_read').handler(OWNER, { workspace_id: 'ws1', memory_id: NAME }, USER)).rejects.toThrow(
+      /m1 .*repository r1[\s\S]*m2 .*repository r2/,
+    );
+    expect(calls.some((c) => c.url.pathname.endsWith('/m1') || c.url.pathname.endsWith('/m2'))).toBe(false);
+  });
+
+  it('narrows a user token to the repository it names', async () => {
+    const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
+    await tool('memory_read').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', memory_id: NAME }, USER);
+    expect(calls[1].url.searchParams.get('repositoryId')).toBe('r1');
+  });
+
+  it.each<[string, Record<string, unknown>[]]>([
+    ['no entry has the name', []],
+    ['the only match is in another workspace', [summary({ workspaceId: 'ws2' })]],
+    ['the only match is another repository', [summary({ repositoryId: 'r2' })]],
+    ['the only match is forgotten', [summary({ forgottenAt: '2026-11-01T10:00:00Z' })]],
+  ])('answers not found when %s', async (_label, rows) => {
+    const { calls } = mockNames(rows, Object.fromEntries(rows.map((row) => [row.id as string, { ...row, body: 'b' }])));
+    await expect(tool('memory_read').handler(OWNER, { memory_id: NAME }, SELF)).rejects.toThrow(
+      `Memory entry not found. No entry you can see has the id or name "${NAME}". Find it with talyn_memory_search or talyn_memory_list.`,
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it('forgets by a name only one entry has', async () => {
+    const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
+    expect(await tool('memory_forget').handler(OWNER, { memory_id: NAME }, SELF)).toMatch(/^Forgot memory entry:\nm1 /);
+    expect(calls.map((c) => `${c.method} ${c.url.pathname}`).at(-1)).toBe('DELETE /api/v1/workbenches/memory/m1');
+    expect(announceMemoryChange).toHaveBeenCalledWith('s1', expect.objectContaining({ action: 'forgotten', memoryId: 'm1' }));
+  });
+
+  it.each<[string, McpCallContext, Record<string, unknown>, Record<string, unknown>[]]>([
+    ['a session that sees it in two scopes', SELF, {}, [summary(), summary({ id: 'w1', scope: 'workspace', repositoryId: null })]],
+    ['a user token that sees it in two repositories', USER, { workspace_id: 'ws1' }, [summary(), summary({ id: 'm2', repositoryId: 'r2' })]],
+  ])('refuses to forget a name that %s', async (_label, ctx, args, rows) => {
+    const byId = Object.fromEntries(rows.map((row) => [row.id as string, { ...row, body: 'b' }]));
+    const { calls } = mockNames(rows, byId);
+    await expect(tool('memory_forget').handler(OWNER, { ...args, memory_id: NAME }, ctx)).rejects.toThrow(
+      /More than one memory entry is named[\s\S]*Send the id/,
+    );
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(announceMemoryChange).not.toHaveBeenCalled();
+  });
+});

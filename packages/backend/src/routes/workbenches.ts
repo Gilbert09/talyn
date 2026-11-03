@@ -449,6 +449,7 @@ export function workbenchRoutes(): Router {
       repositoryId: query('repositoryId'),
       threadId: query('threadId'),
       q: query('q'),
+      name: query('name'),
       includeForgotten: query('includeForgotten') === 'true',
       includeBody: query('includeBody') === 'true',
     }));

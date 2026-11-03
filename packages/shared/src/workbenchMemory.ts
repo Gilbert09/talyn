@@ -245,7 +245,7 @@ const INDEX_HEADER = [
   '# Talyn memory',
   '',
   'Notes that earlier sessions and people in this workspace saved. This is an index only.',
-  'Read an entry with `talyn_memory_read` before you rely on it. Save new facts with `talyn_memory_write`.',
+  'Read an entry by its name with `talyn_memory_read` before you rely on it. Save new facts with `talyn_memory_write`.',
   '',
 ].join('\n');
 

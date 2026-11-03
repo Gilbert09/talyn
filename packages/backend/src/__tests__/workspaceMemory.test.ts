@@ -387,6 +387,12 @@ describe('workspace memory', () => {
       ['a search on the body', '&q=PNPM', ['repo note']],
       ['a search on the name', '&q=thread', ['thread note']],
       ['a search with a LIKE wildcard', '&q=%25', []],
+      ['one name, in another case', '&name=REPO%20NOTE', ['repo note']],
+      ['one name, trimmed', '&name=%20ws%20note%20', ['ws note']],
+      ['one name, not a part of one', '&name=repo', []],
+      ['one name, not a LIKE pattern', '&name=repo%25', []],
+      ['one name visible from another repository', '&name=repo%20note&repositoryId=repo-a2', []],
+      ['one name visible from its repository', '&name=repo%20note&repositoryId=repo-a', ['repo note']],
     ])('lists %s', async (_label, query, expected) => {
       const res = await call('GET', `/workbenches/memory?workspaceId=ws-a${query}`);
       expect(res.status).toBe(200);
@@ -415,6 +421,17 @@ describe('workspace memory', () => {
       const index = await memoryIndexFor({ workspaceId: 'ws-a', ...opts });
       expect(names(index)).toEqual(expected);
       for (const item of index) expect(Object.keys(item).sort()).toEqual(['description', 'id', 'name', 'scope', 'type']);
+    });
+
+    it('finds a name in this workspace only, and never a forgotten entry', async () => {
+      await create({ workspaceId: 'ws-b', name: 'shared name' }, 'owner-b');
+      const forgotten = await create({ name: 'gone note' });
+      await call('DELETE', `/workbenches/memory/${forgotten.body.data.entry.id}`);
+      expect(names(await listMemories('ws-a', { name: 'shared name' }))).toEqual([]);
+      expect(names(await listMemories('ws-b', { name: 'shared name' }))).toEqual(['shared name']);
+      expect(names(await listMemories('ws-a', { name: 'gone note' }))).toEqual([]);
+      const other = await call('GET', '/workbenches/memory?workspaceId=ws-b&name=shared%20name');
+      expect(other.status).not.toBe(200);
     });
 
     it('does not show another workspace in the index', async () => {
