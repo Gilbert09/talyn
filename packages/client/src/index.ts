@@ -9,8 +9,13 @@ import type {
   SandboxSizeSetting,
   RecordSetupStepInput,
   RecordSetupStepResult,
+  PutRepositorySetupInput,
+  PutWorkspaceSandboxSetupInput,
+  RepositorySetup,
+  SetupListStep,
   SetupRecipe,
   WorkbenchTiming,
+  WorkspaceSandboxSetup,
 } from '@talyn/shared';
 import {
   getApiRoot,
@@ -466,6 +471,15 @@ export const workspaces = {
   update: (id: string, data: Partial<Workspace>) =>
     request<Workspace>('PATCH', `/workspaces/${id}`, data),
   delete: (id: string) => request<void>('DELETE', `/workspaces/${id}`),
+  /** Settings → Sandbox setup: the dotfiles and the steps every repository's image gets. */
+  sandboxSetup: {
+    get: (id: string) => request<WorkspaceSandboxSetup>('GET', `/workspaces/${enc(id)}/sandbox-setup`),
+    put: (id: string, input: PutWorkspaceSandboxSetupInput) =>
+      request<WorkspaceSandboxSetup>('PUT', `/workspaces/${enc(id)}/sandbox-setup`, input),
+    /** Run a disabled step again, with a clean failure count. */
+    retryStep: (id: string, stepId: string) =>
+      request<SetupListStep>('POST', `/workspaces/${enc(id)}/sandbox-setup/steps/${enc(stepId)}/retry`),
+  },
   /**
    * The viewer's ranking model for the Reviews tab's Priority sort.
    *
@@ -1626,6 +1640,25 @@ export const repositories = {
     set: (id: string, sandboxSize: SandboxSizeSetting) =>
       request<RepositorySandboxSizeResponse>('PATCH', `/repositories/${enc(id)}/sandbox-size`, { sandboxSize }),
   },
+  /**
+   * The Setup list: the repository's own setup (row 0), then one ordered list
+   * of steps. Image steps go into the repository's image; box steps run on
+   * each new box. Learned steps are suggested until accepted.
+   */
+  setup: {
+    get: (id: string) => request<RepositorySetup>('GET', `/repositories/${enc(id)}/setup`),
+    /** The whole list in its new order, and the knobs. */
+    put: (id: string, input: PutRepositorySetupInput) => request<RepositorySetup>('PUT', `/repositories/${enc(id)}/setup`, input),
+    acceptStep: (id: string, stepId: string) =>
+      request<RepositorySetup>('POST', `/repositories/${enc(id)}/setup/steps/${enc(stepId)}/accept`),
+    /** A dismissed learned step is not suggested again. */
+    dismissStep: (id: string, stepId: string) =>
+      request<RepositorySetup>('POST', `/repositories/${enc(id)}/setup/steps/${enc(stepId)}/dismiss`),
+    /** Run a disabled step, or a step that failed in the image, again. */
+    retryStep: (id: string, stepId: string) =>
+      request<RepositorySetup>('POST', `/repositories/${enc(id)}/setup/steps/${enc(stepId)}/retry`),
+  },
+  /** @deprecated One release only. Use `setup`. */
   bake: {
     get: (id: string) => request<RepositoryBake | null>('GET', `/repositories/${enc(id)}/bake`),
     put: (id: string, bake: RepositoryBake) => request<RepositoryBake>('PUT', `/repositories/${enc(id)}/bake`, bake),
@@ -1634,6 +1667,7 @@ export const repositories = {
    * Setup steps that sessions learned on this repository. New boxes run them
    * after the repository's own setup, and settled install steps go into the bake.
    */
+  /** @deprecated One release only. Use `setup`. */
   setupRecipe: {
     get: (id: string) => request<SetupRecipe>('GET', `/repositories/${enc(id)}/setup-recipe`),
     /** Revert one step. It stays listed as reverted and is not learned again. */
