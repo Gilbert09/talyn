@@ -979,6 +979,16 @@ export class FleetClient {
     return this.request(`/v1/sandboxes/${encodeURIComponent(id)}`);
   }
 
+  /**
+   * The host the gateway says holds a sandbox now, from the `X-Fleet-Host` it
+   * puts on every sandbox answer. A sleeping box can move to another host when
+   * its own host is full, so this can differ from the host it was created on.
+   * Undefined when the answer names no host (a host answering directly).
+   */
+  async sandboxHost(id: string): Promise<string | undefined> {
+    return (await this.requestWithMeta<unknown>(`/v1/sandboxes/${encodeURIComponent(id)}`)).host;
+  }
+
   async getEvents(
     id: string,
     after: number,

@@ -802,6 +802,14 @@ export async function workbenchBySandboxId(sandboxId: string): Promise<Workbench
   return rows[0] ?? null;
 }
 
+/** Record the host that holds the session's box now: the fleet moved it. */
+export async function recordWorkbenchFleetHost(id: string, sandboxId: string, fleetHost: string): Promise<void> {
+  await db()
+    .update(workbenchesTable)
+    .set({ fleetHost, updatedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)));
+}
+
 /** Match only recorded IDs. A move target belongs to the session only during that move. */
 export async function workbenchForCredentials(sandboxId: string): Promise<WorkbenchRow | null> {
   const [row] = await db().select(WORKBENCH_COLUMNS).from(workbenchesTable).where(and(
