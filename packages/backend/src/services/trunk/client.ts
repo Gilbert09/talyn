@@ -177,14 +177,31 @@ export function resolveRepository(
   );
 }
 
-/** `GET /v2/pull-requests` for up to 50 PR numbers. Resolves to the raw page. */
+/** Trunk's cap on numbers in one `GET /v2/pull-requests` call. */
+export const MAX_PR_NUMBERS_PER_LOOKUP = 50;
+
+/**
+ * `GET /v2/pull-requests` for up to 50 PR numbers. Resolves to the raw page.
+ *
+ * Trunk takes the numbers as ONE comma-separated `number` value and answers a
+ * repeated `number` with 400 VALIDATION_FAILED. The page size defaults to 25,
+ * so `limit` must cover the batch, or the rows after the 25th are missing and
+ * read as "not queued". Each number matches at most one row, so one page holds
+ * the whole batch.
+ */
 export function resolvePullRequests(
   apiKey: string,
   ref: { repositoryId: string; numbers: number[] },
   opts: { workspaceId?: string } = {}
 ): Promise<unknown> {
-  const query = new URLSearchParams({ repositoryId: ref.repositoryId });
-  for (const number of ref.numbers) query.append('number', String(number));
+  if (ref.numbers.length === 0 || ref.numbers.length > MAX_PR_NUMBERS_PER_LOOKUP) {
+    throw new RangeError(`resolvePullRequests takes 1 to ${MAX_PR_NUMBERS_PER_LOOKUP} numbers`);
+  }
+  const query = new URLSearchParams({
+    repositoryId: ref.repositoryId,
+    number: ref.numbers.join(','),
+    limit: String(ref.numbers.length),
+  });
   return trunkGet(
     apiKey,
     '/v2/pull-requests',

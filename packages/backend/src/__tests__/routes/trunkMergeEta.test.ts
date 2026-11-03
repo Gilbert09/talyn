@@ -182,7 +182,11 @@ describe('Trunk merge ETAs', () => {
       const u = new URL(target);
       trunkCalls.push({ url: u, headers: (init?.headers ?? {}) as Record<string, string> });
       if (u.pathname === '/v2/repositories') return repositoryAnswer();
-      if (u.pathname === '/v2/pull-requests') return pullRequestAnswer(Number(u.searchParams.get('number')));
+      if (u.pathname === '/v2/pull-requests') {
+        // Trunk answers a repeated `number` with a 400.
+        if (u.searchParams.getAll('number').length !== 1) return json({ error: { code: 'VALIDATION_FAILED' } }, 400);
+        return pullRequestAnswer(Number(u.searchParams.get('number')));
+      }
       if (u.pathname.endsWith('/queue-entry-estimate')) return estimateAnswer();
       return new Response('unexpected', { status: 500 });
     });
@@ -347,7 +351,7 @@ describe('Trunk merge ETAs', () => {
       expect(body.data?.reason).toBeUndefined();
       expect(trunkCalls.map((c) => c.url.href)).toEqual([
         'https://api.trunk.io/v2/repositories?providerUrl=https%3A%2F%2Fgithub.com%2FPostHog%2Fposthog',
-        'https://api.trunk.io/v2/pull-requests?repositoryId=trunk-repo&number=4242',
+        'https://api.trunk.io/v2/pull-requests?repositoryId=trunk-repo&number=4242&limit=1',
         'https://api.trunk.io/v2/pull-requests/trunk-pr-4242/queue-entry-estimate',
       ]);
       for (const call of trunkCalls) {
