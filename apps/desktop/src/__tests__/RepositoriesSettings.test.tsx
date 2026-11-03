@@ -11,6 +11,7 @@ const sizeGet = jest.fn();
 const sizeSet = jest.fn();
 const bakeGet = jest.fn();
 const bakePut = jest.fn();
+const setupRecipeGet = jest.fn();
 const instructionsList = jest.fn();
 const removeRepo = jest.fn();
 const detect = jest.fn();
@@ -48,10 +49,11 @@ jest.mock('../renderer/components/widgets/PollingOnlyBadge', () => ({ PollingOnl
 jest.mock('../renderer/components/widgets/GithubInstallStatus', () => ({ GithubInstallStatus: () => null }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
-    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, bake: { get: (...args: unknown[]) => bakeGet(...args), put: (...args: unknown[]) => bakePut(...args) }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
+    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, bake: { get: (...args: unknown[]) => bakeGet(...args), put: (...args: unknown[]) => bakePut(...args) }, setupRecipe: { get: (...args: unknown[]) => setupRecipeGet(...args), revertStep: jest.fn(), disable: jest.fn(), enable: jest.fn() }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
     github: { getStatus: jest.fn().mockResolvedValue({ connected: false }) },
   },
 }));
+jest.mock('../renderer/stores/navigation', () => ({ useNavigationStore: { getState: () => ({ navigate: jest.fn() }) } }));
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: unknown) => unknown) => selector({
     features: { workbenches: previewsEnabled },
@@ -78,6 +80,7 @@ beforeEach(() => {
   sizeSet.mockResolvedValue({ setting: 'large', effective: 'large', detected: null });
   bakeGet.mockResolvedValue(null);
   bakePut.mockImplementation(async (_id, bake) => bake);
+  setupRecipeGet.mockResolvedValue({ repositoryId: 'r1', learningDisabled: false, maxSteps: 20, steps: [] });
   instructionsList.mockResolvedValue([{ repositoryId: 'r1' }]);
   removeRepo.mockResolvedValue(undefined);
 });
@@ -261,4 +264,43 @@ test('adds, validates, saves, and removes bake steps', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Remove step 1' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
   await waitFor(() => expect(bakePut).toHaveBeenLastCalledWith('r1', { steps: [] }));
+});
+
+const learnedStep = {
+  id: 's1', command: 'apt-get install -y libpq-dev', kind: 'apt', phase: 'install', why: 'pg_config was missing', source: 'learned',
+  sourceWorkbenchId: 'wb-123456789', firstSeenAt: '2026-11-01T10:00:00Z', lastSeenAt: '2026-11-02T10:00:00Z', seenCount: 2,
+  appliedAt: null, disabledAt: null, disabledReason: null, bakeDisabledAt: null, bakeDisabledReason: null,
+};
+
+test.each([
+  { name: 'a live step', steps: [learnedStep], learningDisabled: false, pill: 'Setup steps' },
+  { name: 'a live step with learning off', steps: [learnedStep], learningDisabled: true, pill: 'Setup steps (off)' },
+  { name: 'only reverted steps', steps: [{ ...learnedStep, disabledAt: '2026-11-02T11:00:00Z' }], learningDisabled: false, pill: null },
+  { name: 'no steps', steps: [], learningDisabled: false, pill: null },
+])('setup steps pill with $name', async ({ steps, learningDisabled, pill }) => {
+  previewsEnabled = true;
+  previewGet.mockResolvedValue({ ...previewConfig, target: 'off' });
+  setupRecipeGet.mockResolvedValue({ repositoryId: 'r1', learningDisabled, maxSteps: 20, steps });
+  const { container } = render(<RepositoriesSettings />);
+  await waitFor(() => expect(setupRecipeGet).toHaveBeenCalledWith('r1'));
+  if (pill) {
+    expect(await screen.findByText(pill, { selector: '[data-attr="settings-repo-setup-steps-pill"]' })).toBeInTheDocument();
+  } else {
+    await screen.findByText('Instructions', { selector: '[data-attr="settings-repo-instructions-pill"]' });
+    expect(container.querySelector('[data-attr="settings-repo-setup-steps-pill"]')).toBeNull();
+  }
+});
+
+test('shows the setup steps row only when sessions are on', async () => {
+  render(<RepositoriesSettings />);
+  fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
+  await screen.findByText(/Bake steps run once/);
+  expect(screen.queryByText('Setup steps')).toBeNull();
+  expect(setupRecipeGet).not.toHaveBeenCalled();
+  cleanup();
+  previewsEnabled = true;
+  previewGet.mockResolvedValue(previewConfig);
+  render(<RepositoriesSettings />);
+  fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
+  expect(await screen.findByText(/No learned steps yet/)).toBeInTheDocument();
 });
