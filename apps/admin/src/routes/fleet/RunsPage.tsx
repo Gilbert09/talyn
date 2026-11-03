@@ -263,7 +263,7 @@ export function RunsPage() {
             key: 'actions',
             header: '',
             cell: (r: AdminRunRow) =>
-              !isTerminal(r.status) && r.status != null ? (
+              canCancel(r) ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -416,6 +416,20 @@ export function RunsPage() {
       />
     </Page>
   );
+}
+
+/**
+ * Whether the row offers Cancel.
+ *
+ * Not for a session or thread's CURRENT box: cancelling it here would take the
+ * box from under a live session with none of the session's own steps (a
+ * checkpoint of unsaved work, the archive). A superseded or orphaned session
+ * box is cleanup, so it keeps the button.
+ */
+export function canCancel(run: AdminRunRow): boolean {
+  if (isTerminal(run.status) || run.status == null) return false;
+  const kind = runKind(run);
+  return !((kind === 'session' || kind === 'thread') && runClaim(run) === 'active');
 }
 
 /**

@@ -29,7 +29,7 @@ vi.mock('../components/auth/AdminGate', () => ({
   useCapability: () => false,
 }));
 
-const { RunsPage, runLink } = await import('../routes/fleet/RunsPage');
+const { RunsPage, runLink, canCancel } = await import('../routes/fleet/RunsPage');
 
 const NOW = Date.now();
 const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -178,5 +178,19 @@ describe('runLink', () => {
     ['an orphan with no host', { ...ORPHAN, host: null }, `/fleet/runs/${ORPHAN.runId}`],
   ])('opens %s', (_label, r, expected) => {
     expect(runLink(r)).toBe(expected);
+  });
+});
+
+describe('canCancel', () => {
+  it.each([
+    ['a running task', WEDGED_TASK, true],
+    ["a session's current box", { ...SESSION, sandboxStatus: 'idle', sleep: null }, false],
+    ["a thread's current box", { ...SESSION, kind: 'thread' as const }, false],
+    ['a superseded session box', SUPERSEDED, true],
+    ['an orphan', ORPHAN, true],
+    ['a finished task', { ...WEDGED_TASK, status: 'completed' as const }, false],
+    ['a task row with no status', { ...WEDGED_TASK, status: null }, false],
+  ])('for %s: %s', (_label, r, expected) => {
+    expect(canCancel(r)).toBe(expected);
   });
 });
