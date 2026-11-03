@@ -594,7 +594,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'record_setup_step',
-    "Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Use it after you install a tool or start a service that the work needed, for example `cargo install sqlx-cli`. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A person can revert any step.",
+    "Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Use it after you install a tool or start a service that the work needed, for example `cargo install sqlx-cli`. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A new step runs on new boxes only after a second session needs it too, and a step that fails on two boxes in a row stops. Docker starts on demand, so never record a Docker start. A person can revert any step.",
     {
       command: { type: 'string', description: 'One shell command, as you ran it. No secrets.' },
       why: { type: 'string', description: 'Why later sessions need this step.' },
