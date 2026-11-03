@@ -14,7 +14,7 @@ import { workbenchChats, workbenchTurnTimings as timings } from '../../db/schema
 import { createConcurrencyLimit } from '../concurrencyLimit.js';
 import { debugBus } from '../debugBus.js';
 import { fleetClientFor, repoDirFor } from './sandboxRuntime.js';
-import { hasBakedSteps, learningDisabled, noteBakeResults, recordSetupSteps, recordStepUses } from './setupRecipe.js';
+import { hasImageSteps, learningDisabled, noteImageResults, recordSetupSteps, recordStepUses } from './setupLayers.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -141,7 +141,8 @@ export async function storeTurnTiming(chatId: string, turn: number, workbenchId:
 async function readBakeStepsFromFleet(row: WorkbenchRow): Promise<BakeStepResult[] | undefined> {
   if (!row.sandboxId) return undefined;
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  return (await client.getSandbox(row.sandboxId)).sandbox.bakeSteps;
+  const { sandbox } = await client.getSandbox(row.sandboxId);
+  return sandbox.layerStepResults ?? sandbox.bakeSteps;
 }
 
 /** Take a learned step out of the bake when the bake says it failed. At most every ten minutes per repository. */
@@ -150,9 +151,9 @@ async function checkBakeResults(row: WorkbenchRow, deps: TurnInsightsDeps): Prom
   const now = deps.now?.() ?? Date.now();
   if (now - (lastBakeCheck.get(repositoryId) ?? 0) < BAKE_CHECK_INTERVAL_MS) return;
   lastBakeCheck.set(repositoryId, now);
-  if (!(await hasBakedSteps(repositoryId))) return;
+  if (!(await hasImageSteps(repositoryId))) return;
   const results = await (deps.readBakeSteps ?? readBakeStepsFromFleet)(row);
-  if (results?.length) await noteBakeResults(repositoryId, results, row.workspaceId);
+  if (results?.length) await noteImageResults(repositoryId, results, row.workspaceId);
 }
 
 /**

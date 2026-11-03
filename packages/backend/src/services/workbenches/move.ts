@@ -17,7 +17,7 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
-import { recordBoxSetupResults } from './setupRecipe.js';
+import { recordBoxSetupResults } from './setupLayers.js';
 import { runningScriptNames, startScript, stopAllScripts } from './scripts.js';
 import {
   appendEvents,
@@ -834,7 +834,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'create';
     await setMessage(claimed, 'Starting a fresh sandbox');
-    const { createWorkbenchSandbox } = await import('./lifecycle.js');
+    const { boxLayerOf, createWorkbenchSandbox } = await import('./lifecycle.js');
     // A resize wants exactly its size: a refusal fails the move rather than make a standard box.
     const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize' });
     if (!made.ok) throw new Error(made.error);
@@ -844,7 +844,10 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'clone';
-    const cloned = await runCapture(fresh, cloneScript(claimed), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
+    const cloned = await runCapture(fresh, cloneScript(claimed, { boxLayer: boxLayerOf(made), prebakedCheckout: made.record.prebakedCheckout }), {
+      cwd: '/',
+      timeoutMs: CLONE_TIMEOUT_MS,
+    });
     if (cloned.exitCode !== 0) throw new Error(`the clone failed: ${tail(cloned.stderr) || `exit ${cloned.exitCode}`}`);
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');

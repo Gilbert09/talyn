@@ -11,7 +11,7 @@ import { createHash, randomBytes } from 'crypto';
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
 import type { Duplex } from 'stream';
-import { createSseJsonParser, type BakeStepResult, type RepositoryBake } from '@talyn/shared';
+import { createSseJsonParser, type BakeStepResult, type CreateSandboxLayers, type LayerStepResult, type RepositoryBake } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 
 /**
@@ -100,6 +100,25 @@ export interface FleetSandbox {
   bakeError?: string;
   /** 'base' | 'repo' — which layer selection landed on. */
   goldenLayer?: string;
+  /**
+   * Layered images (plan §10.5). Every field is optional: a host that predates
+   * layers sends none, and Talyn keeps the old rules then.
+   * `layer`: the image the box booted, 'base' | 'legacy' | 'repo' | 'user'.
+   */
+  layer?: string;
+  /** The commit the booted repo layer holds. */
+  repoCommit?: string;
+  /** The user layer step ids the booted image holds. Absent: the host does not report it. */
+  appliedStepIds?: string[];
+  /** The fleet is building the user layer, or the repo layer, for this box's stack. */
+  userLayerPending?: boolean;
+  repoLayerPending?: boolean;
+  /** The repository's own setup failed in the repo layer build; the box runs it. */
+  repoSetupOk?: boolean;
+  /** The booted image holds the repository checked out at `/work/repo`. */
+  prebakedCheckout?: boolean;
+  /** The user layer build's results per step (was `bakeSteps`). */
+  layerStepResults?: LayerStepResult[];
   /** The rootfs this box was given. Absent or 0 means the golden's own size. */
   diskMib?: number;
   /**
@@ -329,6 +348,17 @@ export interface CreateSandboxInput {
    * the base image, which the workbench clone script handles as before.
    */
   baseBranch?: string;
+  /**
+   * The legacy tenant bake: the repository's image steps. Kept beside `layers`
+   * until every host takes `layers`; a host that takes both prefers `layers`.
+   */
+  bake?: RepositoryBake;
+  /**
+   * Layered images (plan §10.5): use the stack, and the user layer to build
+   * for this workspace and repository. `user: null`: boot the repo layer.
+   * Lenient decode: a host that predates the field ignores it.
+   */
+  layers?: CreateSandboxLayers;
   /** Who the box's commits are by. Written into the guest's ~/.gitconfig; not a secret. */
   gitAuthorName?: string;
   gitAuthorEmail?: string;

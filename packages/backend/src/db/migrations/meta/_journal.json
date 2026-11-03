@@ -736,6 +736,13 @@
       "when": 1790900000025,
       "tag": "0105_workbench_work_save_state",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790900000026,
+      "tag": "0106_setup_steps",
+      "breakpoints": true
     }
   ]
 }

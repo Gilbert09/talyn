@@ -131,6 +131,7 @@ export * from './workbenchSandboxStatus.js';
 export * from './bake.js';
 export * from './turnTiming.js';
 export * from './setupRecipe.js';
+export * from './setupLayers.js';
 export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';

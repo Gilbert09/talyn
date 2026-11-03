@@ -1,7 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import {
   applyWorkbenchScriptOverrides,
+  BOX_LAYER_FILE,
   detectWorkbenchScripts,
+  hasPrebakedCheckout,
+  parseBoxLayerContext,
+  type BoxLayerContext,
   detectedScriptsToToml,
   resolveWorkbenchConfig,
   shellQuote,
@@ -62,7 +66,7 @@ import {
 } from './execFailures.js';
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
-import { withLearnedSetup } from './setupRecipe.js';
+import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -706,7 +710,15 @@ export const MERGE_BASE_DEEPEN_BY = 500;
  * credential host-side; the token never enters the box. The fallback clone is
  * blobless, so a large repository is usable in seconds and blobs arrive as read.
  */
-export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>): string {
+export function cloneScript(
+  row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>,
+  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean } = {},
+): string {
+  // The image holds the repository (a repo, user or legacy layer): a fetch of
+  // the two branches and a checkout, not a clone. The clone stays as the
+  // fallback for an image whose checkout is not this repository.
+  const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
+  const depth = prebaked ? 50 : 200;
   const dir = shellQuote(repoDirFor(row));
   const golden = shellQuote(GOLDEN_REPO_DIR);
   const url = shellQuote(`https://github.com/${row.repoFullName}.git`);
@@ -754,7 +766,7 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
     'fi',
     'shallow=',
     'if [ "$(git rev-parse --is-shallow-repository)" = true ]; then shallow=1; fi',
-    `if [ -n "$shallow" ]; then git fetch --depth=200 origin "$@"; else git fetch origin "$@"; fi`,
+    `if [ -n "$shallow" ]; then git fetch --depth=${depth} origin "$@"; else git fetch origin "$@"; fi`,
     `if git show-ref --verify --quiet ${localRef}; then`,
     `  git checkout ${branch}`,
     'elif [ -n "$remote_branch" ]; then',
@@ -772,8 +784,21 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
     `  git fetch --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
     '  tries=$((tries + 1))',
     'done',
+    // What the box knows about its image, for the box setup (`BOX_LAYER_FILE`).
+    // Outside the work tree; the checkout commit is HEAD now.
+    ...(opts.boxLayer ? boxLayerFileLines(opts.boxLayer) : []),
     'git rev-parse HEAD',
   ].join('\n');
+}
+
+function boxLayerFileLines(ctx: BoxLayerContext): string[] {
+  const { checkoutCommit: _ignored, ...rest } = ctx;
+  void _ignored;
+  const head = JSON.stringify(rest).replace(/\}$/, '');
+  return [
+    `printf '%s' ${shellQuote(head)} > ${shellQuote(BOX_LAYER_FILE)} || true`,
+    `printf ',"checkoutCommit":"%s"}' "$(git rev-parse HEAD)" >> ${shellQuote(BOX_LAYER_FILE)} || true`,
+  ];
 }
 
 /**
@@ -792,6 +817,7 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
       { label: 'TALYN', command: 'cat .talyn/settings.toml' },
       { label: 'CJSON', command: 'cat conductor.json' },
       { label: 'CTOML', command: 'cat .conductor/settings.toml' },
+      { label: 'LAYER', command: `cat ${shellQuote(BOX_LAYER_FILE)}` },
     ]),
     // Reads only, so it may run again after a grow.
     { quiet: true, timeoutMs: 30_000, diskRecovery: true },
@@ -802,8 +828,20 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
     conductorJson: files.CJSON || null,
     conductorToml: files.CTOML || null,
   });
-  // The learned setup runs after the repository's own setup, never instead of it.
-  return withLearnedSetup(row, applyWorkbenchScriptOverrides(config, row.settings));
+  // Row 0 of the Setup list: what this box read of the repository's own setup.
+  if (row.repositoryId) {
+    void noteRepoSetupRead(row.repositoryId, config).catch((error) => debugBus.recordEvent({
+      service: 'setup_recipe',
+      action: 'repo_setup_note_failed',
+      summary: "Could not keep the repository's own setup command for the Setup list.",
+      ok: false,
+      error,
+      workspaceId: row.workspaceId,
+      meta: { repositoryId: row.repositoryId, workbenchId: row.id },
+    }));
+  }
+  // The Setup list runs after the repository's own setup, never instead of it.
+  return withBoxSetup(row, applyWorkbenchScriptOverrides(config, row.settings), parseBoxLayerContext(files.LAYER));
 }
 
 const configAbsentScript = [

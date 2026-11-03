@@ -2257,7 +2257,7 @@ export const workbenchTurnTimings = pgTable(
   })
 );
 
-/** A repository's setup recipe, one row per distinct step (migration 0099). */
+/** The setup recipe before the Setup list (migration 0099). Not written since 0106; dropped in a later migration. */
 export const repositorySetupSteps = pgTable(
   'repository_setup_steps',
   {
@@ -2306,13 +2306,68 @@ export const repositorySetupSteps = pgTable(
   })
 );
 
+/**
+ * The Setup list (migration 0106): one ordered list per repository, and one
+ * per workspace (`repositoryId` null). See `packages/shared/src/setupLayers.ts`.
+ */
+export const setupSteps = pgTable(
+  'setup_steps',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** sha256 of kind and command for a learned step; '' for a person's step. */
+    stepKey: text('step_key').notNull().default(''),
+    name: text('name').notNull(),
+    command: text('command').notNull(),
+    /** `SetupStepKind`. */
+    kind: text('kind').notNull(),
+    /** `SetupStepRunOn`. */
+    runOn: text('run_on').notNull(),
+    /** `SetupStepOrigin`. */
+    origin: text('origin').notNull(),
+    /** `SetupStepStatus`. */
+    status: text('status').notNull(),
+    statusReason: text('status_reason'),
+    statusChangedAt: timestamp('status_changed_at', { withTimezone: true }),
+    /** `SetupStepAcceptedBy`. */
+    acceptedBy: text('accepted_by'),
+    timeoutSec: integer('timeout_sec'),
+    why: text('why'),
+    sourceWorkbenchId: text('source_workbench_id'),
+    seenCount: integer('seen_count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    sessionCount: integer('session_count').notNull().default(0),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    /** When the step went into the image spec. A learned step waits `SETUP_RECIPE_SETTLE_MS`. */
+    imageAppliedAt: timestamp('image_applied_at', { withTimezone: true }),
+    imageFailedAt: timestamp('image_failed_at', { withTimezone: true }),
+    imageFailureReason: text('image_failure_reason'),
+    boxFailureCount: integer('box_failure_count').notNull().default(0),
+    boxLastFailure: text('box_last_failure'),
+    lastDurationMs: integer('last_duration_ms'),
+    typicalDurationMs: integer('typical_duration_ms'),
+    measuredBoxes: integer('measured_boxes').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    repositoryIdx: index('idx_setup_steps_repository').on(t.repositoryId, t.position),
+  })
+);
+
 /** One row per (step, session) that recorded the step, so a step counts each session once. */
 export const repositorySetupStepSessions = pgTable(
   'repository_setup_step_sessions',
   {
+    /** A `setup_steps` id since migration 0106 (the same ids as before). */
     stepId: text('step_id')
       .notNull()
-      .references(() => repositorySetupSteps.id, { onDelete: 'cascade' }),
+      .references(() => setupSteps.id, { onDelete: 'cascade' }),
     /** No foreign key: the count stays when the session is deleted. */
     workbenchId: text('workbench_id').notNull(),
     seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),

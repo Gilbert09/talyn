@@ -4,7 +4,7 @@ import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
 import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
-import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
+import { boxLayerContextFrom, pickWorkbenchName, SANDBOX_SIZES, withCheckoutCommit, type BoxLayerContext, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import {
@@ -45,7 +45,7 @@ import {
   SANDBOX_LOST_MESSAGE,
 } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
-import { effectiveRepositoryBake, recordBoxSetupResults } from './setupRecipe.js';
+import { imageSetupForCreate, noteImageResults, noteImageStatus, recordBoxSetupResults } from './setupLayers.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -221,7 +221,14 @@ const QUEUE_TIMEOUT_ERROR = 'waited';
 /** The states of a box that has booted. The synchronous create answers `idle`. */
 const BOOTED_STATUSES: ReadonlySet<string> = new Set(['idle', 'busy', 'suspended']);
 
-type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error'>;
+/** The fleet's record, with what it says about the box's image layers. */
+type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error' | (typeof LAYER_FIELDS)[number]>;
+const LAYER_FIELDS = [
+  'layer', 'goldenLayer', 'repoCommit', 'appliedStepIds', 'userLayerPending', 'repoLayerPending',
+  'repoSetupOk', 'prebakedCheckout', 'layerStepResults',
+] as const;
+const layerFieldsOf = (sandbox: Partial<FleetSandbox> | undefined): Partial<FleetRecord> =>
+  Object.fromEntries(LAYER_FIELDS.filter((k) => sandbox?.[k] !== undefined).map((k) => [k, sandbox![k]]));
 
 /** The fleet queued the box, or the queue already failed it. */
 function isQueueRecord(record: FleetRecord): boolean {
@@ -353,7 +360,8 @@ async function createWaitingForCapacity(
       });
       if (!(await pauseProvision(Math.min(PROVISION_CAPACITY_WAIT.queuePollMs, left), claim))) return null;
       if (claim.lost || !(await isProvisionOwned(row.id, ownSandboxId))) throw await stopWaiting();
-      record = (await readQueuedBox(client, sandboxId)) ?? record;
+      const polled = await readQueuedBox(client, sandboxId);
+      record = polled ? { ...polled, ...layerFieldsOf(polled) } : record;
     }
 
     // A fleetd restart lost the queued box. Nothing ran, so create it again on the next id.
@@ -438,7 +446,9 @@ export type CreatedWorkbenchSandbox =
     fleetSandboxId: string | null;
     size: SandboxSize;
     /** The fleet's record as the create answered it. A queued box says `queued`. */
-    record: Pick<FleetSandbox, 'status' | 'phase' | 'error'>;
+    record: FleetRecord;
+    /** The person's steps in the legacy bake: on a host that does not report layers, a box never runs them. */
+    legacyUserStepIds: string[];
     /** The client the create used. A queued box is polled and deleted through it. */
     client: FleetClient;
   }
@@ -487,13 +497,34 @@ export async function createWorkbenchSandbox(
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
-  // The repository's bake plus the learned install steps that have settled.
-  // A changed bake is what makes the fleet bake the repository again.
-  const bake = repository && repositoryId ? await effectiveRepositoryBake(repositoryId) : null;
+  // The image layers of the Setup list (`layers`), and the legacy `bake`
+  // beside them for a host that predates layers. A changed spec is what makes
+  // the fleet build the user layer again. Best effort: a box without them
+  // runs every step itself.
+  const image = repository && repositoryId
+    ? await imageSetupForCreate({
+      workspaceId: row.workspaceId,
+      repositoryId,
+      slug: row.repoFullName,
+      baseBranch: repository.defaultBranch,
+    }).catch((error) => {
+      debugBus.recordEvent({
+        service: 'setup_recipe',
+        action: 'image_spec_failed',
+        summary: 'Could not build the image layers for a box. The box runs every setup step itself.',
+        ok: false,
+        error,
+        workspaceId: row.workspaceId,
+        meta: { repositoryId, workbenchId: row.id },
+      });
+      return null;
+    })
+    : null;
   const target = await fleetCreateTarget(row.workspaceId);
   const withSize = (size: SandboxSize) => withGithubReadAllRepos({
     ...built.body,
-    ...(repository && bake ? { bake } : {}),
+    ...(image?.bake ? { bake: image.bake } : {}),
+    ...(image ? { layers: image.layers } : {}),
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
     ...(opts.queueWhenFull ? { queueWhenFull: true } : {}),
@@ -525,9 +556,53 @@ export async function createWorkbenchSandbox(
     fleetHost: target.host ?? created.host ?? null,
     fleetSandboxId,
     size,
-    record: { status: created.sandbox?.status, phase: created.sandbox?.phase, error: created.sandbox?.error },
+    record: {
+      status: created.sandbox?.status,
+      phase: created.sandbox?.phase,
+      error: created.sandbox?.error,
+      ...layerFieldsOf(created.sandbox),
+    },
+    legacyUserStepIds: image?.legacyUserStepIds ?? [],
     client: target.client,
   };
+}
+
+/**
+ * What the booted box says about its image, kept on the repository for the
+ * Setup list's footer, and the image build's step failures. Best effort.
+ */
+async function noteBoxImage(row: WorkbenchRow, record: FleetRecord, ctx: BoxLayerContext): Promise<void> {
+  if (!row.repositoryId) return;
+  try {
+    if (record.layer || record.appliedStepIds || record.userLayerPending !== undefined || record.repoLayerPending !== undefined) {
+      await noteImageStatus(row.repositoryId, {
+        layer: ctx.layer,
+        repoCommit: ctx.repoCommit,
+        repoLayerPending: record.repoLayerPending ?? null,
+        userLayerPending: record.userLayerPending ?? null,
+        repoSetupOk: ctx.repoSetupOk,
+        appliedStepIds: ctx.layerAware ? ctx.appliedStepIds : [],
+        checkedAt: new Date().toISOString(),
+        workbenchId: row.id,
+      });
+    }
+    if (record.layerStepResults?.length) await noteImageResults(row.repositoryId, record.layerStepResults, row.workspaceId);
+  } catch (error) {
+    debugBus.recordEvent({
+      service: 'setup_recipe',
+      action: 'image_status_failed',
+      summary: 'Could not keep the image status of a box.',
+      ok: false,
+      error,
+      workspaceId: row.workspaceId,
+      meta: { repositoryId: row.repositoryId, workbenchId: row.id },
+    });
+  }
+}
+
+/** The box's image context from the create answer, or the old rule when the host reports no layers. */
+export function boxLayerOf(created: Extract<CreatedWorkbenchSandbox, { ok: true }>): BoxLayerContext {
+  return boxLayerContextFrom(created.record, created.legacyUserStepIds);
 }
 
 /**
@@ -573,12 +648,15 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     };
 
     // 1. The box.
+    const createStartedAt = Date.now();
     const waited = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
     if (!waited) return;
     ownSandboxId = waited.ownSandboxId;
     const { created } = waited;
     if (!created.ok) return await fail(created.error);
     assertOwned(claim);
+    const boxReadyMs = Date.now() - createStartedAt;
+    let boxLayer = boxLayerOf(created);
     const sandboxId = created.sandboxId;
     const boxed = await recordProvisionedSandbox(row.id, ownSandboxId, {
       sandboxId,
@@ -597,14 +675,21 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
     if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
-    // 2. The repository and the branch.
-    const cloned = await runCapture(row, cloneScript(row), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
+    void noteBoxImage(row, created.record, boxLayer);
+    // 2. The repository and the branch: a checkout when the image holds the repository.
+    const checkoutStartedAt = Date.now();
+    const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout }), {
+      cwd: '/',
+      timeoutMs: CLONE_TIMEOUT_MS,
+    });
+    const checkoutMs = Date.now() - checkoutStartedAt;
     if (cloned.exitCode !== 0) {
       return await fail(
         `Could not clone ${row.repoFullName} and check out ${row.branch}: ` +
           (cloned.stderr.trim().split('\n').slice(-3).join(' ') || `git exited ${cloned.exitCode}`),
       );
     }
+    boxLayer = withCheckoutCommit(boxLayer, cloned.stdout);
     if (isWorkbenchDraining()) return;
     assertOwned(claim);
     // The saved work comes back from Talyn's storage before the setup script
@@ -637,11 +722,13 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       const { done } = await startScript(row, 'setup', { config, resume: true });
       const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
       if (!exited || isWorkbenchDraining()) return;
-      await recordBoxSetupResults(row);
+      await recordBoxSetupResults(row, { boxReadyMs, checkoutMs, layer: boxLayer.layer });
       const { code } = exited;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
       }
+    } else {
+      await recordBoxSetupResults(row, { boxReadyMs, checkoutMs, layer: boxLayer.layer }, { ranSetup: false });
     }
 
     if (isWorkbenchDraining()) return;

@@ -140,6 +140,16 @@ export interface SetupTiming {
   measuredAt: string;
   /** The session whose box it was. */
   workbenchId: string | null;
+  /** From the create call to a running box (`box_ready_ms`). Absent: not measured. */
+  boxReadyMs?: number | null;
+  /** The clone or the checkout of the session branch (`checkout_ms`). */
+  checkoutMs?: number | null;
+  /** The repository's own setup on the box (`setup_repository_ms`). Null: it did not run. */
+  setupRepositoryMs?: number | null;
+  /** The Setup list steps that ran on the box (`setup_box_steps_ms`). */
+  setupBoxStepsMs?: number | null;
+  /** The image layer the box booted (`SandboxImageLayer`). */
+  layer?: string | null;
 }
 
 /** `POST /repositories/:id/setup-recipe/steps`. */
@@ -323,6 +333,27 @@ export function setupStepRefusal(command: string, opts: { canonical?: boolean } 
     return 'The command runs a downloaded script. Only the official rustup, uv and pnpm installers are applied automatically.';
   }
   return null;
+}
+
+/**
+ * The check for a step a PERSON wrote in the Setup list. A person's own
+ * command may pipe a download into a shell or send data: it is their box. It
+ * must not hold a literal secret or destroy data. A step that reads a secret
+ * variable or a credential file can run only on the box, where the
+ * credentials are, and never in an image: `forceBox` says why.
+ */
+export function userSetupStepCheck(command: string): { refusal: string | null; forceBox: string | null } {
+  const bytes = new TextEncoder().encode(command).length;
+  if (!command.trim()) return { refusal: 'The command is empty.', forceBox: null };
+  if (bytes > 4096) return { refusal: `The command is ${bytes} bytes. A setup step can have at most 4096.`, forceBox: null };
+  if (command.includes('\0')) return { refusal: 'The command contains a NUL byte.', forceBox: null };
+  if (containsSecret(command)) {
+    return { refusal: 'The command looks like it contains a secret (a token, key or password). Use a variable that the box sets.', forceBox: null };
+  }
+  if (DANGEROUS.test(command)) return { refusal: 'The command can destroy data or push code.', forceBox: null };
+  if (SECRET_VARIABLE.test(command)) return { refusal: null, forceBox: 'The command reads a secret variable, so it runs on each box and never in an image.' };
+  if (CREDENTIAL_PATHS.test(command)) return { refusal: null, forceBox: 'The command reads a credential file, so it runs on each box and never in an image.' };
+  return { refusal: null, forceBox: null };
 }
 
 // ============================================================================
@@ -976,6 +1007,8 @@ export interface AppliedSetupStep {
   kind: SetupStepKind;
   phase: SetupStepPhase;
   sourceWorkbenchId?: string | null;
+  /** The box time limit. Absent: the limit of the kind ({@link SETUP_STEP_TIMEOUT_SEC}). */
+  timeoutSec?: number | null;
 }
 
 /** The line the box setup prints for each learned step, after all of them ran. */
@@ -1038,7 +1071,7 @@ const NOW_MS_FUNCTION = [
   '}',
 ];
 
-export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
+export function learnedSetupScript(steps: AppliedSetupStep[], opts: { keepOrder?: boolean } = {}): string | null {
   if (steps.length === 0) return null;
   const lines = [
     '# Setup that Talyn learned from earlier sessions on this repository.',
@@ -1070,8 +1103,8 @@ export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
     `  talyn_learned_results="$talyn_learned_results${LEARNED_STEP_RESULT_PREFIX}$1 exit $code ms $ms: $last"$'\\n'`,
     '}',
   ];
-  for (const step of orderSetupSteps(steps)) {
-    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${SETUP_STEP_TIMEOUT_SEC[step.kind] ?? SETUP_STEP_TIMEOUT_SEC.other} ${shellQuote(step.command)}`);
+  for (const step of opts.keepOrder ? steps : orderSetupSteps(steps)) {
+    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${step.timeoutSec ?? SETUP_STEP_TIMEOUT_SEC[step.kind] ?? SETUP_STEP_TIMEOUT_SEC.other} ${shellQuote(step.command)}`);
   }
   lines.push(`printf '%s' "$talyn_learned_results"`);
   lines.push('talyn_learned_ms="$(( $(talyn_now_ms) - talyn_learned_start ))"');
@@ -1128,8 +1161,8 @@ export function parseSetupTiming(output: string): Pick<SetupTiming, 'totalMs' | 
  * runs first and in a subshell, so an `exit` in it cannot skip the learned
  * steps, and the setup still ends with its exit code.
  */
-export function mergeLearnedSetup(config: WorkbenchConfig, steps: AppliedSetupStep[]): WorkbenchConfig {
-  const learned = learnedSetupScript(steps);
+export function mergeLearnedSetup(config: WorkbenchConfig, steps: AppliedSetupStep[], opts: { keepOrder?: boolean } = {}): WorkbenchConfig {
+  const learned = learnedSetupScript(steps, opts);
   if (!learned) return config;
   const own = config.setup?.command?.trim();
   const command = own

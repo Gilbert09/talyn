@@ -1,5 +1,5 @@
 import { runWithoutScope } from '../db/client.js';
-import { putRepositoryBake } from '../services/workbenches/bake.js';
+import { getRepositoryBake, putRepositoryBake } from '../services/workbenches/setupLayers.js';
 import { userMayUseWorkbenches } from '../services/workbenches/access.js';
 import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
 import {
@@ -13,7 +13,7 @@ import {
   recordSetupSteps,
   revertSetupStep,
   setSetupLearning,
-} from '../services/workbenches/setupRecipe.js';
+} from '../services/workbenches/setupLayers.js';
 import { getWorkbench } from '../services/workbenches/store.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
 import {
@@ -217,7 +217,7 @@ export function repositoryRoutes(): Router {
     if (!(await previewGate(req, res))) return;
     const row = await getSizeRepository(req.params.id);
     if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
-    res.json({ success: true, data: row.settings?.bake ?? null });
+    res.json({ success: true, data: await getRepositoryBake(req.params.id) });
   });
 
   router.put('/:id/bake', async (req, res) => {

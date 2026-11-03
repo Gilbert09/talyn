@@ -28,7 +28,7 @@ import {
   sandboxSizeResponse,
   validateSandboxSizeChoice,
 } from '../../services/workbenches/sandboxSize.js';
-import { getSetupRecipe, learningDisabled, revertSetupStep, setSetupLearning } from '../../services/workbenches/setupRecipe.js';
+import { getSetupRecipe, learningDisabled, revertSetupStep, setSetupLearning } from '../../services/workbenches/setupLayers.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
 
 /**

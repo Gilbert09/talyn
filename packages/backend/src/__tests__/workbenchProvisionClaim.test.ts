@@ -11,7 +11,7 @@ import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxSize from '../services/workbenches/sandboxSize.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import * as scripts from '../services/workbenches/scripts.js';
-import * as setupRecipe from '../services/workbenches/setupRecipe.js';
+import * as setupRecipe from '../services/workbenches/setupLayers.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
 import {
   PROVISION_SETUP_WATCH,
