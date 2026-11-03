@@ -8,6 +8,7 @@ import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
+import { userFacingError } from '../services/workbenches/errors.js';
 
 /**
  * The workbench routes, end to end against a fake fleet: the gate, tenancy,
@@ -1018,8 +1019,16 @@ describe('workbench routes', () => {
       expect(JSON.stringify(events)).toContain('add a readme');
     });
 
+    // An unreachable fleet no longer fails a start: the provision waits for a
+    // free sandbox (workbenchProvisionCapacityWait.test.ts). Its words still
+    // reach a person on every other path, and must never name the endpoint.
+    it('words an unreachable fleet for a person, never the private endpoint', () => {
+      const text = userFacingError(new FleetCapacityError('http://10.0.0.7:8080 refused', undefined, 'unreachable'));
+      expect(text).toBe('The sandbox runners are not reachable right now. Try again shortly.');
+      expect(text).not.toContain('10.0.0.7');
+    });
+
     it.each([
-      ['an unreachable fleet', new FleetCapacityError('http://10.0.0.7:8080 refused', undefined, 'unreachable'), 'The sandbox runners are not reachable right now. Try again shortly.'],
       ['a fleet refusal', new FleetHttpError('provider must be anthropic or openai', 400), 'Talyn Fleet refused the request: provider must be anthropic or openai'],
       ['a plain fault', new Error('boom'), 'boom'],
     ])('words %s for a person, never the private endpoint', async (_name, err, message) => {
