@@ -837,7 +837,9 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     const { boxLayerOf, createWorkbenchSandbox } = await import('./lifecycle.js');
     const createStartedAt = Date.now();
     // A resize wants exactly its size: a refusal fails the move rather than make a standard box.
-    const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize' });
+    // A disk move must not land on the same default disk, or the setup fills it again.
+    const diskMib = reason === 'low_disk' || reason === 'disk_full' ? await diskForMove(claimed) : undefined;
+    const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize', ...(diskMib ? { diskMib } : {}) });
     if (!made.ok) throw new Error(made.error);
     const boxReadyMs = Date.now() - createStartedAt;
     created = made;
@@ -1308,6 +1310,23 @@ async function growWithGuestRetry(
       size = charged ?? target;
     }
   }
+}
+
+/**
+ * The disk size, in MiB, for the box a disk move makes: the size a grow would
+ * pick for the old box, and never less than the old box has. Undefined when
+ * the old box's size is unknown. The probe and the record are best effort.
+ */
+export async function diskForMove(row: WorkbenchRow): Promise<number | undefined> {
+  if (!row.sandboxId) return undefined;
+  const current = await fleetClientFor(row.workspaceId, row.fleetHost)
+    .then((client) => client.getSandbox(row.sandboxId!))
+    .then((r) => r.sandbox.diskMib)
+    .catch(() => undefined);
+  const probe = await probeDisk(row).catch(() => null);
+  const grown = probe ? grownDiskMib(probe, current) : null;
+  const size = Math.max(grown ?? 0, current && current > 0 ? current : 0);
+  return size > 0 ? size : undefined;
 }
 
 /**

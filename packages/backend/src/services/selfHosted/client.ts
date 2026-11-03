@@ -428,6 +428,8 @@ export interface CreateSandboxInput {
   memMib?: number;
   /** The guest's CPU-time allowance in thousandths of a vCPU. Absent takes the tenant's default. */
   milliVcpu?: number;
+  /** The rootfs size in MiB. Absent takes the golden's own size. A session move for a full disk sets it. */
+  diskMib?: number;
   /**
    * A BARE create only: when the host is out of memory, join the fleet's queue
    * instead of a 503. The answer is then at once, with `status: 'queued'`, and

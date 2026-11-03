@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { repositories, workspaces } from '../db/schema.js';
-import { FleetHttpError, type FleetExecFrame, type FleetExecRequest, type FleetSandbox } from '../services/selfHosted/client.js';
+import { FleetHttpError, FleetThrottleError, type FleetExecFrame, type FleetExecRequest, type FleetSandbox } from '../services/selfHosted/client.js';
 
 /**
  * Moving a session to a fresh sandbox: the claim and its lease, the order of a
@@ -345,6 +345,54 @@ describe('moving a session to a fresh sandbox', () => {
       expect(await settings()).not.toHaveProperty('moveHeartbeatAt');
       expect(fleet.deleted).toEqual([NEW_BOX]);
       expect(fleet.has('drop', OLD_BOX)).toBe(true);
+    });
+  });
+
+  describe('the disk of the new box', () => {
+    const MIB = 1024 * 1024;
+    const FULL = { stderr: `TALYN_DISK ${22 * MIB} ${16 * GIB}` };
+
+    it.each([
+      // reason, old record diskMib, probe, expected diskMib on the create
+      ['disk_full', 24231, FULL, 24231 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['low_disk', 16384, FULL, 16384 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['disk_full', 24231, { stderr: `TALYN_DISK ${10 * GIB} ${16 * GIB}` }, 24231],
+      ['disk_full', undefined, FULL, 16384 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['disk_full', 24231, { stderr: '' }, 24231],
+    ] as const)('a %s move of a %s MiB box asks for a larger disk', async (reason, recorded, probe, expected) => {
+      fleet.sandbox = { status: 'idle', ...(recorded ? { diskMib: recorded } : {}) };
+      replies.probe = probe;
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), reason);
+      expect(result.moved).toBe(true);
+      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX, diskMib: expected });
+    });
+
+    it.each(['stale_golden', 'resize'] as const)('a %s move leaves the disk size to the fleet', async (reason) => {
+      fleet.sandbox = { status: 'idle', diskMib: 24231 };
+      replies.probe = FULL;
+      await move.moveWorkbenchToFreshSandbox(await row(), reason);
+      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX });
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
+    });
+
+    it('sends no disk size when the old box size and the probe are both unknown', async () => {
+      replies.probe = { stderr: '' };
+      await move.moveWorkbenchToFreshSandbox(await row(), 'disk_full');
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
+    });
+
+    it('asks again for the default disk when the fleet refuses the larger one', async () => {
+      fleet.sandbox = { status: 'idle', diskMib: 24231 };
+      replies.probe = FULL;
+      const spy = vi.spyOn(fleet, 'createSandbox').mockImplementationOnce(async (input) => {
+        fleet.log.push({ kind: 'create', box: input.id });
+        throw new FleetThrottleError('diskMib exceeds the 20000 MiB permitted');
+      });
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), 'disk_full');
+      expect(result.moved).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(fleet.created).toHaveLength(1);
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
     });
   });
 

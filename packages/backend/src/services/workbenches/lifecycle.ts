@@ -466,7 +466,7 @@ export type CreatedWorkbenchSandbox =
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
-  opts: { strictSize?: boolean; queueWhenFull?: boolean } = {},
+  opts: { strictSize?: boolean; queueWhenFull?: boolean; diskMib?: number } = {},
 ): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
@@ -524,20 +524,33 @@ export async function createWorkbenchSandbox(
     })
     : null;
   const target = await fleetCreateTarget(row.workspaceId);
-  const withSize = (size: SandboxSize) => withGithubReadAllRepos({
+  const withSize = (size: SandboxSize, diskMib?: number) => withGithubReadAllRepos({
     ...built.body,
     ...(image?.bake ? { bake: image.bake } : {}),
     ...(image ? { layers: image.layers } : {}),
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+    ...(diskMib ? { diskMib } : {}),
     ...(opts.queueWhenFull ? { queueWhenFull: true } : {}),
   });
+  // A larger disk is a request, not a need: when the fleet refuses it, ask once more for the default.
+  const createSized = async (size: SandboxSize) => {
+    if (!opts.diskMib) return createSandboxRetryingUncertain(target.client, withSize(size));
+    try {
+      return await createSandboxRetryingUncertain(target.client, withSize(size, opts.diskMib));
+    } catch (err) {
+      // An uncertain create may have made the box: the same request must be asked again, not a new one.
+      if (err instanceof FleetDispatchUncertainError) throw err;
+      console.warn(`[workbench] creating ${sandboxId} with a ${opts.diskMib} MiB disk failed; using the default size:`, err);
+      return createSandboxRetryingUncertain(target.client, withSize(size));
+    }
+  };
   const chosen = isThread(row) ? null : sessionSandboxSize(row);
   const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : chosen ?? await sizeForSession(row);
   let size = wanted;
   let created;
   try {
-    created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
+    created = await createSized(wanted);
   } catch (err) {
     // A resize asked for exactly this size: refuse, and the session keeps its box.
     if (opts.strictSize && isSizeRefusal(err)) throw new SandboxSizeRefusedError(wanted, sizeRefusalReason(err));
@@ -547,7 +560,7 @@ export async function createWorkbenchSandbox(
     recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
     await noteSizeFallback(row, text).catch(() => undefined);
     size = 'standard';
-    created = await createSandboxRetryingUncertain(target.client, withSize(size));
+    created = await createSized(size);
   }
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
