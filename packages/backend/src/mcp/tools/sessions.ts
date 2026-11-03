@@ -798,9 +798,10 @@ export const SESSIONS = [
           (f) =>
             `${f.path}  ${f.status}${f.oldPath ? ` (from ${f.oldPath})` : ''}  ${f.binary ? 'binary' : `+${f.added}/-${f.removed}`}`
         );
+        const asOf = changes.snapshotAt ? `As of ${changes.snapshotAt} (sandbox asleep; Talyn's stored copy).\n` : '';
         return lines.length
-          ? `${lines.join('\n')}\nhead: ${changes.headSha}  base: ${changes.base}`
-          : 'No changes.';
+          ? `${asOf}${lines.join('\n')}\nhead: ${changes.headSha}  base: ${changes.base}`
+          : `${asOf}No changes.`;
       }),
     FEATURE
   ),

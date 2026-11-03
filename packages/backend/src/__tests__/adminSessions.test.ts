@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
@@ -29,6 +30,9 @@ import { workspaceFeatures } from '../services/admin/queries.js';
 import { computeHostAlerts, OFFLINE_ALERT_WINDOW_MS } from '../services/admin/hostAlerts.js';
 import { hostHealthFromStats } from '../services/admin/fleetProxy.js';
 import type { FleetHostView } from '../services/fleetHosts.js';
+import type { FleetClient } from '../services/selfHosted/client.js';
+import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
+import { resetSandboxStatusCacheForTests } from '../services/workbenches/sandboxStatus.js';
 import type { AdminFleetAlerts, AdminPage, AdminSessionDetail, AdminSessionSummary } from '@talyn/shared';
 
 /**
@@ -244,6 +248,31 @@ describe('GET /sessions', () => {
   ])('filters on %s', async (query, ids) => {
     const { data } = await get<AdminPage<AdminSessionSummary>>(`/sessions?${query}`);
     expect(data.items.map((s) => s.id).sort()).toEqual([...ids].sort());
+  });
+
+  it.each([
+    ['suspended', true],
+    ['idle', false],
+    ['busy', false],
+  ])('the asleep filter asks the fleet for a running row whose box is %s', async (fleetStatus, listed) => {
+    await db.update(workbenchesTable).set({ sandboxState: 'running' }).where(eq(workbenchesTable.id, WB_ID));
+    setWorkbenchFleetClientForTests(async () => ({
+      getSandbox: async (id: string) => ({ sandbox: { id, status: fleetStatus }, terminal: false }),
+    }) as unknown as FleetClient);
+    try {
+      const { data } = await get<AdminPage<AdminSessionSummary>>('/sessions?state=asleep');
+      expect(data.items.map((s) => s.id)).toEqual(listed ? [WB_ID] : []);
+    } finally {
+      setWorkbenchFleetClientForTests(null);
+      resetSandboxStatusCacheForTests();
+    }
+  });
+
+  it('the asleep filter leaves out a running row when the fleet does not answer', async () => {
+    await db.update(workbenchesTable).set({ sandboxState: 'running' }).where(eq(workbenchesTable.id, WB_ID));
+    resetSandboxStatusCacheForTests();
+    const { data } = await get<AdminPage<AdminSessionSummary>>('/sessions?state=asleep');
+    expect(data.items).toEqual([]);
   });
 
   it('flags a session provisioning past the stuck window', async () => {

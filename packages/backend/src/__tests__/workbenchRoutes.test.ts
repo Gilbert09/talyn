@@ -63,6 +63,7 @@ const { refreshDiffStat } = await import('../services/workbenches/changes.js');
 const { changesSnapshotKey, resetChangesSnapshotsForTests } = await import('../services/workbenches/changesSnapshot.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
+const { resetSandboxStatusCacheForTests } = await import('../services/workbenches/sandboxStatus.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
@@ -1476,8 +1477,12 @@ describe('workbench routes', () => {
       return raw ? JSON.parse(raw.toString('utf8')) : null;
     };
 
-    /** A running box read once (so a snapshot of `src/a.ts` is stored), then put to sleep in `state`. */
-    async function sleepingWorkbench(state = 'suspended'): Promise<Loose> {
+    /**
+     * A running box read once (so a snapshot of `src/a.ts` is stored), then put
+     * to sleep the way production does it: only the fleet's record changes. The
+     * row keeps `sandboxState: 'running'`.
+     */
+    async function sleepingWorkbench(fleetStatus = 'suspended'): Promise<Loose> {
       let added = 1;
       scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/a.ts', added) : null));
       const wb = await createSandboxWorkbench();
@@ -1487,14 +1492,33 @@ describe('workbench routes', () => {
       const live = await call('GET', `/workbenches/${wb.id}/changes`);
       expect(live.body.data.snapshotAt).toBeUndefined();
       await vi.waitFor(() => expect(storedSnapshot(wb)?.changes.files[0].added).toBe(3));
-      await updateWorkbench(wb.id, { sandboxState: state });
-      fleet.sandboxStatus = 'suspended';
+      fleet.sandboxStatus = fleetStatus;
+      resetSandboxStatusCacheForTests();
       vi.mocked(startStaleGoldenMove).mockClear();
       return wb;
     }
 
+    /** The box wakes up: the fleet reports it idle again. */
+    const wakeUp = () => {
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+    };
+
+    const expectStoredWithoutTouchingTheBox = async (wb: Loose) => {
+      const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        files: [{ path: 'src/a.ts', added: 3 }],
+        snapshotAt: storedSnapshot(wb).takenAt,
+      });
+      expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
+      expect(startStaleGoldenMove).not.toHaveBeenCalled();
+    };
+
     beforeEach(() => {
       resetChangesSnapshotsForTests();
+      resetSandboxStatusCacheForTests();
       store = memoryWorkObjectStore();
       setWorkObjectStoreForTests(store);
     });
@@ -1514,21 +1538,47 @@ describe('workbench routes', () => {
       expect(Number.isNaN(Date.parse(stored.takenAt))).toBe(false);
     });
 
-    it.each(['suspended', 'lost', 'none', 'creating', 'error'])(
-      'answers a %s box from the stored list and never touches the box',
-      async (state) => {
-        const wb = await sleepingWorkbench(state);
-        const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
-        const res = await call('GET', `/workbenches/${wb.id}/changes`);
-        expect(res.status).toBe(200);
-        expect(res.body.data).toMatchObject({
-          files: [{ path: 'src/a.ts', added: 3 }],
-          snapshotAt: storedSnapshot(wb).takenAt,
-        });
-        expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
-        expect(startStaleGoldenMove).not.toHaveBeenCalled();
+    it.each(['suspended', 'queued', 'starting'])(
+      'answers from the stored list when the fleet reports the box %s, and never touches the box',
+      async (fleetStatus) => {
+        const wb = await sleepingWorkbench(fleetStatus);
+        await expectStoredWithoutTouchingTheBox(wb);
+        // A read never writes the sleep into the row.
+        expect((await getWorkbench(wb.id))?.sandboxState).toBe('running');
       },
     );
+
+    it.each(['lost', 'none', 'creating', 'error', 'suspended'])(
+      'answers from the stored list when the row says the box is %s, whatever the fleet says',
+      async (state) => {
+        const wb = await sleepingWorkbench('idle');
+        await updateWorkbench(wb.id, { sandboxState: state });
+        await expectStoredWithoutTouchingTheBox(wb);
+      },
+    );
+
+    it.each([
+      ['the fleet does not answer', () => { fleet.getSandbox = async () => { throw new Error('fleet down'); }; }],
+      ['the fleet no longer runs the box', () => { fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }); }],
+      ['the fleet reports the box stopped', () => { fleet.sandboxStatus = 'stopped'; }],
+    ])('answers from the stored list when %s', async (_name, arrange) => {
+      const wb = await sleepingWorkbench('idle');
+      arrange();
+      resetSandboxStatusCacheForTests();
+      await expectStoredWithoutTouchingTheBox(wb);
+    });
+
+    it('reads the box when the fleet does not answer and no list is stored', async () => {
+      const wb = await sleepingWorkbench('idle');
+      fleet.getSandbox = async () => { throw new Error('fleet down'); };
+      resetSandboxStatusCacheForTests();
+      store.objects.delete(changesSnapshotKey(wb));
+      const before = changesReads();
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.snapshotAt).toBeUndefined();
+      expect(changesReads()).toBe(before + 1);
+    });
 
     it.each([
       ['the client asks for live (live=1)', '?live=1', () => undefined],
@@ -1549,25 +1599,31 @@ describe('workbench routes', () => {
       expect(startStaleGoldenMove).toHaveBeenCalled();
     });
 
-    it('reads a running box live even when a list is stored', async () => {
-      const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+    it.each(['idle', 'busy'])('reads a %s box live even when a list is stored', async (fleetStatus) => {
+      const wb = await sleepingWorkbench(fleetStatus);
       const before = changesReads();
       const res = await call('GET', `/workbenches/${wb.id}/changes`);
       expect(res.body.data.snapshotAt).toBeUndefined();
       expect(changesReads()).toBe(before + 1);
     });
 
-    it('keeps refusing an archived session rather than answering from the stored list', async () => {
-      const wb = await sleepingWorkbench('deleted');
-      await updateWorkbench(wb.id, { archivedAt: new Date() });
+    it('answers an archived session from the stored list', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      await expectStoredWithoutTouchingTheBox(wb);
+    });
+
+    it('refuses an archived session with no stored list', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      store.objects.delete(changesSnapshotKey(wb));
       const res = await call('GET', `/workbenches/${wb.id}/changes`);
       expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
     });
 
     it('does not upload an unchanged list again, and uploads a changed one', async () => {
       const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      wakeUp();
       const put = vi.spyOn(store, 'put');
       const snapshotPuts = () => put.mock.calls.filter(([key]) => key === changesSnapshotKey(wb)).length;
       await call('GET', `/workbenches/${wb.id}/changes`);
@@ -1582,7 +1638,7 @@ describe('workbench routes', () => {
 
     it('answers a live read even when storing the list fails', async () => {
       const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      wakeUp();
       vi.spyOn(store, 'put').mockRejectedValue(new Error('storage down'));
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/c.ts', 2) : null));

@@ -7,6 +7,7 @@ import { readChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchChat, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, refuseThread, WorkbenchError } from './errors.js';
 import { startStaleGoldenMove } from './move.js';
+import { chooseReadSource } from './sandboxReadSource.js';
 import { publicWorkbench } from './prLink.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
@@ -53,10 +54,12 @@ export async function requireReadySandbox(row: WorkbenchRow, checkGolden = false
 
 /**
  * The changed files. A box that is not running cannot have changed since the
- * last read, so its stored list answers at once; only `live` wakes it. With
- * no stored list, `wakeWithoutSnapshot` decides: the app wakes the box, the
- * public API refuses with `snapshot_unavailable` so a caller never wakes a box
- * it did not ask to.
+ * last read, so its stored list answers at once; only `live` wakes it. The
+ * fleet's record decides whether the box runs (see `sandboxReadSource.ts`),
+ * because Talyn does not write `suspended` into the row. An archived session
+ * answers from its stored list too. With no stored list, `wakeWithoutSnapshot`
+ * decides: the app wakes the box, the public API refuses with
+ * `snapshot_unavailable` so a caller never wakes a box it did not ask to.
  */
 export async function readSessionChanges(
   row: WorkbenchRow,
@@ -64,15 +67,18 @@ export async function readSessionChanges(
 ): Promise<WorkbenchChanges> {
   // A thread has no repository: nothing changed, and no box needs to wake to say so.
   if (isThread(row)) return emptyChanges();
-  if (!opts.live && row.runtime === 'sandbox' && !row.archivedAt && row.sandboxState !== 'running') {
-    const snapshot = await readChangesSnapshot(row);
-    if (snapshot) return snapshot;
-    if (!opts.wakeWithoutSnapshot) {
-      throw new WorkbenchError(
-        'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
-        409,
-        'snapshot_unavailable',
-      );
+  if (!opts.live && row.runtime === 'sandbox') {
+    const source = await chooseReadSource(row);
+    if (!source.live) {
+      const snapshot = await readChangesSnapshot(row);
+      if (snapshot) return snapshot;
+      if (!opts.wakeWithoutSnapshot && source.reason !== 'archived') {
+        throw new WorkbenchError(
+          'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
+          409,
+          'snapshot_unavailable',
+        );
+      }
     }
   }
   await requireReadySandbox(row, true);

@@ -77,9 +77,13 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /** The fleet's record of the box. Never throws: a failure is `{ ok: false }`, cached like an answer. */
-export function readFleetRecord(row: Pick<WorkbenchRow, 'workspaceId' | 'fleetHost'> & { sandboxId: string }, now = Date.now()): Promise<FleetRead> {
+export function readFleetRecord(
+  row: Pick<WorkbenchRow, 'workspaceId' | 'fleetHost'> & { sandboxId: string },
+  now = Date.now(),
+  opts: { fresh?: boolean } = {},
+): Promise<FleetRead> {
   const cached = fleetCache.get(row.sandboxId);
-  if (cached && now - cached.at < FLEET_READ_TTL_MS) return cached.read;
+  if (cached && !opts.fresh && now - cached.at < FLEET_READ_TTL_MS) return cached.read;
   const read = (async (): Promise<FleetRead> => {
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);

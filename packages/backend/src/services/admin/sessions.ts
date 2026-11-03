@@ -25,6 +25,7 @@ import { clampLimit, decodeCursor, encodeCursor, searchTerm } from './queries.js
 import { readAdminSandbox } from './fleetProxy.js';
 import { adminRunFromFleet, applyClassification } from './runIndex.js';
 import { classifySandbox, loadSandboxClaims } from './sandboxClaims.js';
+import { readFleetRecord } from '../workbenches/sandboxStatus.js';
 
 /**
  * Sessions and threads (workbenches) across every account, for the operator
@@ -219,8 +220,13 @@ export function sessionListWhere(filters: AdminSessionFilters, now: number = Dat
       where.push(inArray(workbenchesTable.status, ['error', 'archiveError']));
       break;
     case 'asleep':
+      // Talyn does not write `suspended` into the row: an asleep ready box
+      // keeps `running`. The candidates are the ready boxes, and
+      // `listAdminSessions` keeps those the fleet reports as suspended.
       where.push(isNull(workbenchesTable.archivedAt));
-      where.push(eq(workbenchesTable.sandboxState, 'suspended'));
+      where.push(eq(workbenchesTable.runtime, 'sandbox'));
+      where.push(eq(workbenchesTable.status, 'ready'));
+      where.push(isNotNull(workbenchesTable.sandboxId));
       break;
     default:
       where.push(isNull(workbenchesTable.archivedAt));
@@ -292,8 +298,10 @@ export async function listAdminSessions(filters: AdminSessionFilters): Promise<A
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page[page.length - 1];
+  // The cursor follows the page that was read, so a page of the asleep filter can be short.
+  const shown = str(filters.state) === 'asleep' ? await keepAsleep(page) : page;
   return {
-    items: page.map((row) => toSessionSummary(row, now)),
+    items: shown.map((row) => toSessionSummary(row, now)),
     nextCursor: hasMore && last ? encodeCursor({ createdAt: new Date(last.createdAt), id: last.id }) : null,
   };
 }
@@ -467,6 +475,30 @@ async function loadSetup(repositoryId: string, workbenchId: string): Promise<Adm
       typicalDurationMs: s.typicalDurationMs ?? null,
     })),
   };
+}
+
+/** Fleet reads at once for the asleep filter. Each read is cached and times out after 5 s. */
+const ASLEEP_READ_CONCURRENCY = 8;
+
+/** The rows whose box the fleet reports as suspended. A row that says `suspended` itself counts too. */
+async function keepAsleep(rows: SessionListRow[]): Promise<SessionListRow[]> {
+  const asleep = new Array<boolean>(rows.length).fill(false);
+  let next = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const i = next++;
+      const row = rows[i];
+      if (row.sandboxState === 'suspended') {
+        asleep[i] = true;
+        continue;
+      }
+      if (!row.sandboxId) continue;
+      const read = await readFleetRecord({ workspaceId: row.workspaceId, fleetHost: row.fleetHost ?? null, sandboxId: row.sandboxId });
+      asleep[i] = read.ok && read.sandbox?.status === 'suspended';
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ASLEEP_READ_CONCURRENCY, rows.length) }, worker));
+  return rows.filter((_, i) => asleep[i]);
 }
 
 /** The session's box as the Runs page shows it. Never throws: a dead fleet is a reason, not a 500. */

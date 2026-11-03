@@ -60,6 +60,7 @@ const { changesSnapshotKey, resetChangesSnapshotsForTests } = await import('../s
 const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
+const { resetSandboxStatusCacheForTests } = await import('../services/workbenches/sandboxStatus.js');
 const { getChat, getWorkbench, updateWorkbench } = await import('../services/workbenches/store.js');
 const { startScript, stopScript } = await import('../services/workbenches/scripts.js');
 const { createWorkbenchPullRequest } = await import('../services/workbenches/pullRequest.js');
@@ -135,6 +136,7 @@ describe('/v1 session work', () => {
     vi.stubEnv('PREVIEW_BASE_DOMAIN', '');
     resetFeatureFlagsForTests();
     resetChangesSnapshotsForTests();
+    resetSandboxStatusCacheForTests();
     store = memoryWorkObjectStore();
     setWorkObjectStoreForTests(store);
     testDb = await createTestDb();
@@ -180,7 +182,6 @@ describe('/v1 session work', () => {
   describe('changes', () => {
     it('reads a running sandbox live, in the public shape', async () => {
       const session = await createReadySession();
-      await updateWorkbench(session.id, { sandboxState: 'running' });
       const res = await call('GET', `/sessions/${session.id}/changes`);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
@@ -211,7 +212,9 @@ describe('/v1 session work', () => {
 
       beforeEach(async () => {
         session = await createReadySession();
-        await updateWorkbench(session.id, { sandboxState: 'suspended' });
+        // Production never writes the sleep into the row: only the fleet knows.
+        fleet.sandboxStatus = 'suspended';
+        resetSandboxStatusCacheForTests();
         store.objects.set(
           changesSnapshotKey({ workspaceId: 'ws-a', id: session.id }),
           Buffer.from(JSON.stringify({ version: 1, takenAt: '2026-11-01T10:00:00.000Z', changes: stored })),

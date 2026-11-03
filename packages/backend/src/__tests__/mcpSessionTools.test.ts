@@ -376,6 +376,22 @@ describe('session tools', () => {
     expect(text).toContain('a.ts  modified  +3/-1');
     expect(text).toContain('b.png  added  binary');
     expect(text).toContain('head: def');
+    expect(text).not.toContain('As of');
+  });
+
+  it('get_session_changes says when the list is a stored copy of a sleeping sandbox', async () => {
+    mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'GET /api/v1/workbenches/s1/changes': () => ({
+        files: [{ path: 'a.ts', status: 'modified', added: 3, removed: 1, binary: false }],
+        base: 'abc',
+        headSha: 'def',
+        snapshotAt: '2026-11-01T10:00:00.000Z',
+      }),
+    });
+    const text = await tool('get_session_changes').handler(OWNER, { session_id: 's1' });
+    expect(text.split('\n')[0]).toBe("As of 2026-11-01T10:00:00.000Z (sandbox asleep; Talyn's stored copy).");
+    expect(text).toContain('a.ts  modified  +3/-1');
   });
 
   it.each([
