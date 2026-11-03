@@ -89,7 +89,14 @@ import { debugBus } from '../debugBus.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { decide } from './decide.js';
 import { codeReviewBlockerFor } from '../codeReview/queueGate.js';
-import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
+import { liveSessionActivityForPr } from '../workbenches/prSessions.js';
+import {
+  deliverToSession,
+  SESSION_FIX_SENT,
+  sessionFixMessage,
+  sessionFixRunState,
+  type SessionFixRunState,
+} from './sessionFix.js';
 import { githubHealthMonitor } from '../githubHealthMonitor.js';
 import { toPublicMergeQueue } from './legacy.js';
 import {
@@ -320,8 +327,20 @@ async function buildBaseContext(
   input: EvaluateEntryInput
 ): Promise<DecisionContext> {
   const accountKey = githubService.accountKeyFor(pr.workspaceId);
-  const [ourFix, otherFix, signingRequired, cloudEnv, liveSession] = await Promise.all([
+  const [ourFix, sessionFix, otherFix, signingRequired, cloudEnv, liveSession] = await Promise.all([
     entry.fixTaskId ? linkedTaskRun(entry.fixTaskId) : Promise.resolve(null),
+    // A fix the queue sent INTO a session: the session's turn is the run.
+    entry.fixKind === 'session' && !entry.fixTaskAccounted
+      ? sessionFixRunState(entry).catch(
+          (): SessionFixRunState => ({
+            // A failed read holds, like a run we cannot see the end of.
+            state: 'active',
+            startedAt: null,
+            lastActivityAt: null,
+            needsHumanReason: null,
+          })
+        )
+      : Promise.resolve(null),
     // "Is something OTHER than our own fix run working this PR?" — asked
     // tasks-by-PR rather than through `pull_requests.task_id`, which holds only
     // the most recently attached task and so hides any earlier active run.
@@ -330,8 +349,9 @@ async function buildBaseContext(
     // decide proceeds — the merge's 403 safety net catches a real requirement.
     requiresSignedCommits(pr.workspaceId, pr.owner, pr.repo, entry.baseBranch).catch(() => null),
     (input.walkReads?.cloudEnv ?? resolveCloudEnv)(pr.workspaceId),
-    // A live session works this PR: the queue must not fire a fix run of its own.
-    liveWorkbenchForPr(pr.workspaceId, pr.id),
+    // A live session on this PR, and whether it works it now: the queue must
+    // not fire a fix run of its own beside it.
+    liveSessionActivityForPr(pr.workspaceId, pr.id),
   ]);
   const graphqlGateBlocked = githubRateGate.isBlocked(accountKey, 'graphql');
   const graphqlBudgetLow = graphqlBudget.shouldDefer(accountKey);
@@ -438,12 +458,21 @@ async function buildBaseContext(
     nowIso: new Date().toISOString(),
     isHead: input.isHead,
     groupMergeInFlight: input.groupMergeInFlight,
-    fixTaskState:
-      ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix.status) ? 'active' : 'terminal',
-    fixTaskStartedAt: ourFix?.startedAt.toISOString() ?? null,
-    fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
-    fixTaskNeedsHumanReason:
-      ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
+    ...(sessionFix
+      ? {
+          fixTaskState: sessionFix.state,
+          fixTaskStartedAt: sessionFix.startedAt,
+          fixTaskLastActivityAt: sessionFix.lastActivityAt,
+          fixTaskNeedsHumanReason: sessionFix.needsHumanReason,
+        }
+      : {
+          fixTaskState:
+            ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix.status) ? 'active' : 'terminal',
+          fixTaskStartedAt: ourFix?.startedAt.toISOString() ?? null,
+          fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
+          fixTaskNeedsHumanReason:
+            ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
+        }),
     // Only an entry already waiting for a review can owe a reminder.
     ...(entry.status === 'awaiting_review'
       ? { reviewWait: await reviewWaitFor(entry.id).catch(() => null) }
@@ -456,7 +485,9 @@ async function buildBaseContext(
       ((pr.lastSummary ?? {}) as { headSha?: string }).headSha ?? null
     ),
     otherLinkedTaskActive: otherFix !== null,
-    liveSession: liveSession ? { id: liveSession.id, name: liveSession.name } : null,
+    liveSession: liveSession
+      ? { id: liveSession.id, name: liveSession.name, activity: liveSession.activity }
+      : null,
     signingRequired,
     autoMergeCapability,
     externalGate,
@@ -628,6 +659,11 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       const held = await providerHoldsBeforePush(ctx);
       if (held) return held;
       return fireFixRun(action.resign, ctx, action.queueFailure);
+    }
+    case 'send_fix_to_session': {
+      const held = await providerHoldsBeforePush(ctx);
+      if (held) return held;
+      return sendFixToSession(action.resign, ctx, action.queueFailure);
     }
     case 'record_merged': {
       await recordMerged(ctx.entry, ctx.pr);
@@ -1594,36 +1630,7 @@ async function fireFixRun(
         : resign
           ? `Merge queue: re-sign ${ref} ("${prTitle}") — the base requires signed commits — and take it to a clean, mergeable state.`
           : `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
-      prompt: buildMergeablePrompt({
-        owner: ctx.pr.owner,
-        repo: ctx.pr.repo,
-        number: ctx.pr.number,
-        summary,
-        provider: resolved.provider,
-        resignCommits: resign,
-        // Names the red jobs in the prompt. Without them the run is told only
-        // "N/M checks failing" and goes looking — and the first thing it finds
-        // is the PR's own comment history, which is how a stale verdict gets
-        // re-affirmed instead of re-derived against the current head.
-        failingChecks,
-        // Starts the run at the provider's failure output rather than the PR's
-        // own (green) checks — see queueFailureRule.
-        queueFailure,
-        // The squash escape hatch. This entry was retargeted after the PR it
-        // was stacked on merged, so its branch may still carry that PR's
-        // original commits — a plain base merge conflicts or re-shows them.
-        // Only an agent with a checkout can rebase them away.
-        ...(ctx.entry.retargetAttempts > 0 && ctx.entry.stackParentNumber !== null
-          ? {
-              retargetedOnto: {
-                base: summary.baseBranch,
-                parentNumber: ctx.entry.stackParentNumber,
-              },
-            }
-          : {}),
-        template: await workspacePromptTemplate(ctx.pr.workspaceId, 'mergeable'),
-        respondToHumanComments: await workspaceRespondToHumanComments(ctx.pr.workspaceId),
-      }),
+      prompt: await buildFixPrompt(ctx, resolved.provider, resign, failingChecks, queueFailure),
       repositoryId: ctx.pr.repositoryId,
       assignedEnvironmentId: resolved.envId,
       pullRequestId: ctx.pr.id,
@@ -1709,6 +1716,170 @@ async function fireFixRun(
     await cancelUndispatchedFixTask(created.id);
     return { casLost: true };
   }
+  await mirrorToPrRow(linked, ctx.pr, ctx.position);
+  return { entry: linked, versionDelta: 2 };
+}
+
+/** The fix run's prompt. A fix sent into a session gets the same text. */
+async function buildFixPrompt(
+  ctx: ActionContext,
+  provider: ResolvedCloudEnv['provider'],
+  resign: boolean,
+  failingChecks: Awaited<ReturnType<typeof readFailingChecks>>,
+  queueFailure?: { provider: string; evidence: string; failedChecks?: string[] }
+): Promise<string> {
+  const summary = ctx.prSnap.summary;
+  return buildMergeablePrompt({
+    owner: ctx.pr.owner,
+    repo: ctx.pr.repo,
+    number: ctx.pr.number,
+    summary,
+    provider,
+    resignCommits: resign,
+    // Names the red jobs in the prompt. Without them the run is told only
+    // "N/M checks failing" and goes looking — and the first thing it finds
+    // is the PR's own comment history, which is how a stale verdict gets
+    // re-affirmed instead of re-derived against the current head.
+    failingChecks,
+    // Starts the run at the provider's failure output rather than the PR's
+    // own (green) checks — see queueFailureRule.
+    queueFailure,
+    // The squash escape hatch. This entry was retargeted after the PR it
+    // was stacked on merged, so its branch may still carry that PR's
+    // original commits — a plain base merge conflicts or re-shows them.
+    // Only an agent with a checkout can rebase them away.
+    ...(ctx.entry.retargetAttempts > 0 && ctx.entry.stackParentNumber !== null
+      ? {
+          retargetedOnto: {
+            base: summary.baseBranch,
+            parentNumber: ctx.entry.stackParentNumber,
+          },
+        }
+      : {}),
+    template: await workspacePromptTemplate(ctx.pr.workspaceId, 'mergeable'),
+    respondToHumanComments: await workspaceRespondToHumanComments(ctx.pr.workspaceId),
+  });
+}
+
+/**
+ * Send the fix into the live, idle session on the PR instead of starting a
+ * cloud task beside it. The same claim-first shape as {@link fireFixRun}:
+ *
+ *   A. CLAIM (CAS → fixing, fixKind 'session', fixTaskAccounted unchanged).
+ *      Concurrent evaluations at the same version lose here and send nothing.
+ *   B. SEND the message through the session's ordinary send path.
+ *   C. LINK (CAS → fixTaskAccounted false, with the `session_fix_sent` event
+ *      that records the session, the chat and the time). From here the
+ *      session's turn is accounted like a fix run.
+ *
+ * A crash between A and C leaves fixing + session + accounted, which decide
+ * reads as "no fix in flight" and simply decides again, spending nothing. A
+ * send that fails rolls the claim back to queued and spends nothing.
+ */
+async function sendFixToSession(
+  resign: boolean,
+  ctx: ActionContext,
+  queueFailure?: { provider: string; evidence: string; failedChecks?: string[] }
+): Promise<ActionOutcome> {
+  const session = ctx.base.liveSession;
+  if (!session) return { redecide: true };
+  const claimed: EntrySnapshot = {
+    ...ctx.entry,
+    status: 'fixing',
+    blockedCode: null,
+    blockedReason: null,
+    fixTaskId: null,
+    fixKind: 'session',
+  };
+  const claimOk = await casTransition(
+    ctx.entry.id,
+    ctx.version,
+    {
+      status: 'fixing',
+      blockedCode: null,
+      blockedReason: null,
+      fixTaskId: null,
+      fixKind: 'session',
+      lastEvaluatedAt: new Date(),
+    },
+    {
+      trigger: ctx.trigger,
+      fromStatus: ctx.entry.status,
+      toStatus: 'fixing',
+      code: 'session_fix_claimed',
+      message: `Fix claimed for the session "${session.name}" — sending.`,
+      detail: { workbenchId: session.id },
+    }
+  );
+  if (!claimOk) return { casLost: true };
+  const claimedVersion = ctx.version + 1;
+
+  const ref = `${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number}`;
+  const sentAt = new Date().toISOString();
+  let chatId: string;
+  try {
+    const failingChecks = await readFailingChecks(
+      ctx.pr.workspaceId,
+      ctx.pr.owner,
+      ctx.pr.repo,
+      ctx.pr.number,
+      ctx.prSnap.summary
+    );
+    // The session runs on the fleet, so it gets the fleet's publishing rules.
+    const prompt = await buildFixPrompt(ctx, 'selfhosted', resign, failingChecks, queueFailure);
+    chatId = await deliverToSession(session.id, sessionFixMessage(ref, prompt));
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    const reverted: EntrySnapshot = { ...claimed, status: 'queued', fixKind: null };
+    const revertOk = await casTransition(
+      ctx.entry.id,
+      claimedVersion,
+      { status: 'queued', fixKind: null, lastEvaluatedAt: new Date() },
+      {
+        trigger: ctx.trigger,
+        fromStatus: 'fixing',
+        toStatus: 'queued',
+        code: 'session_fix_failed',
+        message: `Could not send the fix to the session "${session.name}": ${why}`,
+        detail: { workbenchId: session.id },
+      }
+    );
+    if (!revertOk) return { casLost: true };
+    await mirrorToPrRow(reverted, ctx.pr, ctx.position);
+    return { entry: reverted, versionDelta: 2 };
+  }
+
+  const linked: EntrySnapshot = {
+    ...claimed,
+    fixTaskAccounted: false,
+    ...(resign ? { resignAttempts: ctx.entry.resignAttempts + 1 } : {}),
+  };
+  const linkOk = await casTransition(
+    ctx.entry.id,
+    claimedVersion,
+    {
+      fixTaskAccounted: false,
+      ...(resign ? { resignAttempts: ctx.entry.resignAttempts + 1 } : {}),
+      lastEvaluatedAt: new Date(),
+    },
+    {
+      trigger: ctx.trigger,
+      fromStatus: 'fixing',
+      toStatus: 'fixing',
+      code: SESSION_FIX_SENT,
+      message: `Asked the session "${session.name}" to fix this pull request.`,
+      detail: {
+        workbenchId: session.id,
+        chatId,
+        sentAt,
+        ...(resign ? { resign: true } : {}),
+        ...(queueFailure ? { queueFailure: true } : {}),
+      },
+    }
+  );
+  // The message is already in the session and cannot be taken back. Whoever
+  // re-claimed the entry decides with the session busy, and parks.
+  if (!linkOk) return { casLost: true };
   await mirrorToPrRow(linked, ctx.pr, ctx.position);
   return { entry: linked, versionDelta: 2 };
 }

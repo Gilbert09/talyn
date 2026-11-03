@@ -1203,8 +1203,12 @@ export interface MergeQueuePublic {
   blockedCode?: string | null;
   /** Actionable reason when blocked/blocked_manual. */
   reason?: string;
-  /** Flavor of the in-flight fix run when status === 'fixing'. */
-  fixKind?: 'blockers' | 'resign';
+  /**
+   * Flavor of the in-flight fix run when status === 'fixing'. `session`: the
+   * queue sent the fix into the live session on the PR, as a message, and
+   * waits for the session's turn.
+   */
+  fixKind?: 'blockers' | 'resign' | 'queue_failure' | 'session';
   /** Short sha the retry budgets are scoped to (reset on every push). */
   headShaShort?: string;
   budgets?: {

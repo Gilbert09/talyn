@@ -764,9 +764,10 @@ export function coarseQueueStatus(status: QueueEntryStatus | string): CoarseQueu
  *     nobody has fixed or dismissed it. It qualifies for the same reason the two
  *     above do: the queue spent nothing on it, and it clears itself the moment
  *     the person acts, whichever way they act.
- *   - `session_active` — the person's own session is working the PR, so the
- *     queue starts no fix run beside it. Nothing was attempted, and it carries
- *     on by itself once the session makes the PR clean or is archived.
+ *
+ * NOT `session_active`. The session's own agent is working the PR, so the
+ * person has nothing to do: the queue waits for the turn to end and carries on
+ * by itself. It has its own neutral badge, see {@link queueSessionBadge}.
  *
  * Deliberately NOT every cause a human could help with. `external_gate`,
  * `app_refused_hard` and `stack_cycle` also need somebody, but none of them
@@ -783,7 +784,56 @@ export function queueBlockNeedsHuman(blockedCode: string | null | undefined): bo
   return (
     blockedCode === 'awaiting_human_check' ||
     blockedCode === 'agent_needs_human' ||
-    blockedCode === 'code_review_blocker' ||
-    blockedCode === 'session_active'
+    blockedCode === 'code_review_blocker'
   );
+}
+
+/** What a session does for a queued PR, as a badge. */
+export type QueueSessionBadge = 'working' | 'fixing';
+
+/**
+ * The session badge for a queued PR, or null when no session is involved.
+ *
+ * - `working` — the entry is parked on `session_active`: the session's own
+ *   turn runs on the PR, and the queue waits for it to end.
+ * - `fixing` — the queue sent its fix INTO the session (`fixKind: 'session'`)
+ *   and waits for the session's turn.
+ *
+ * Neither is "Needs you": the person has nothing to do in either. Takes plain
+ * strings so a front end degrades on a value from a newer backend.
+ */
+export function queueSessionBadge(
+  mq:
+    | { status?: string | null; blockedCode?: string | null; fixKind?: string | null }
+    | null
+    | undefined
+): QueueSessionBadge | null {
+  if (!mq) return null;
+  if (mq.status === 'fixing' && mq.fixKind === 'session') return 'fixing';
+  if ((mq.status === 'blocked' || mq.status === 'blocked_manual') && mq.blockedCode === 'session_active') {
+    return 'working';
+  }
+  return null;
+}
+
+export const QUEUE_SESSION_BADGE_LABEL: Record<QueueSessionBadge, string> = {
+  working: 'Session working',
+  fixing: 'Session fixing',
+};
+
+/**
+ * The tooltip for a session badge. A `working` park carries the backend's own
+ * reason; a `fixing` entry carries none (only a blocked entry has a reason),
+ * so the sentence is made here, with the session's name when the row has it.
+ */
+export function queueSessionBadgeTooltip(
+  badge: QueueSessionBadge,
+  reason?: string | null,
+  sessionName?: string | null
+): string {
+  const session = sessionName ? `the session "${sessionName}"` : 'the session';
+  if (badge === 'working') {
+    return reason || `${session[0]!.toUpperCase()}${session.slice(1)} is working on this pull request now. The merge queue waits for its turn to end.`;
+  }
+  return `The merge queue asked ${session} to fix this pull request. It waits for the session's turn to end.`;
 }

@@ -47,11 +47,39 @@ import type {
 } from './types.js';
 import type { StackParent } from './stack.js';
 
+/** The reason on a `session_active` park while the session's turn runs. */
 export function sessionActiveBlockReason(name: string): string {
   return (
-    `The session "${name}" is working on this pull request, so the merge queue starts no fix run. ` +
-    'It merges the pull request once it is clean, or fixes it itself after the session is archived.'
+    `The session "${name}" is working on this pull request now. ` +
+    'The merge queue waits for its turn to end.'
   );
+}
+
+/** The reason on a `session_active` park for a session on the person's computer. */
+export function localSessionBlockReason(name: string): string {
+  return (
+    `The session "${name}" runs on your computer and works on this pull request, ` +
+    'so the merge queue starts no fix run. Archive the session to hand the pull request back.'
+  );
+}
+
+/**
+ * Is the queue's last fix still to be accounted? A cloud fix run carries its
+ * task id; a fix sent into a session carries none, only `fixKind: 'session'`.
+ */
+export function fixUnaccounted(entry: EntrySnapshot): boolean {
+  return !entry.fixTaskAccounted && (entry.fixTaskId !== null || entry.fixKind === 'session');
+}
+
+/** Who did the fix, for the timeline. */
+function fixActor(entry: EntrySnapshot): string {
+  return entry.fixKind === 'session' ? "The session's fix turn" : 'Fix run';
+}
+
+/** The live session holds the PR back only while it works (or when we cannot see it). */
+function sessionHolds(ctx: DecisionContext): boolean {
+  const activity = ctx.liveSession?.activity ?? 'working';
+  return Boolean(ctx.liveSession) && (activity === 'working' || activity === 'local');
 }
 
 export const DRAFT_BLOCK_REASON =
@@ -492,7 +520,7 @@ function decideAwaitingReview(
   ctx: DecisionContext,
   runActive: boolean
 ): Decision {
-  const unaccounted = !!d.entry.fixTaskId && !d.entry.fixTaskAccounted && !runActive;
+  const unaccounted = fixUnaccounted(d.entry) && !runActive;
   if (d.entry.status !== 'awaiting_review' || unaccounted) {
     const said =
       unaccounted && typeof ctx.fixTaskNeedsHumanReason === 'string' && ctx.fixTaskNeedsHumanReason
@@ -688,7 +716,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     // fired-but-unaccounted fix run is in flight, attribute the new head to
     // THAT run: advance the pointer but keep the budget so R8 still counts the
     // attempt. A genuine external push (no unaccounted run) still resets.
-    const causedByOurFixRun = entry.fixTaskId !== null && !entry.fixTaskAccounted;
+    const causedByOurFixRun = fixUnaccounted(entry);
     if (causedByOurFixRun) {
       d.adoptHead(pr.headSha);
     } else {
@@ -1273,7 +1301,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // resetting on that transient lie is exactly what let v1 blow past
   // MAX_ATTEMPTS and fire fix runs forever. A genuinely-fixed PR merges below
   // and leaves the queue; budgets reset ONLY on a new head (R2) or requeue.
-  if (d.entry.fixTaskId && !d.entry.fixTaskAccounted && !runActive) {
+  if (fixUnaccounted(d.entry) && !runActive) {
     const wasBlocked = d.entry.status === 'blocked';
     const stillBlocked = queueBlockedFor(pr, ctx);
     const signature = blockerSignature(pr);
@@ -1323,7 +1351,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
         },
         event: {
           code: 'fix_run_needs_human',
-          message: `Fix run stopped for a human: ${reason}`,
+          message: `${fixActor(d.entry)} stopped for a human: ${reason}`,
           detail: { taskId: d.entry.fixTaskId, signature },
         },
       });
@@ -1360,10 +1388,10 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
         event: {
           code: 'fix_run_accounted',
           message: !stillBlocked
-            ? 'Fix run finished; PR reads clean.'
+            ? `${fixActor(d.entry)} finished; PR reads clean.`
             : recurred
-              ? `Fix run finished and the PR is blocked by the same thing as before (${blockerReason(pr)}) — no progress, stopping.`
-              : `Fix run finished; the PR is still blocked but by a different problem (${blockerReason(pr)}) — continuing.`,
+              ? `${fixActor(d.entry)} finished and the PR is blocked by the same thing as before (${blockerReason(pr)}) — no progress, stopping.`
+              : `${fixActor(d.entry)} finished; the PR is still blocked but by a different problem (${blockerReason(pr)}) — continuing.`,
           detail: { taskId: d.entry.fixTaskId, attempt: attempts, signature },
         },
       });
@@ -1525,14 +1553,18 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // would just re-conflict it. No connected provider / task limit defer
   // WITHOUT burning an attempt (executor contract on fire_fix_run) — and
   // can't advance either: same-workspace siblings can't dispatch either.
-  if (!ctx.cloudEnvAvailable) {
+  //
+  // A session that works the PR now parks it before anything else, a re-run
+  // included. An idle session needs no cloud provider: the fix goes to it.
+  if (sessionHolds(ctx)) return routeFixToSession(d, ctx, { resign: false }, 'hold')!;
+  if (!ctx.cloudEnvAvailable && ctx.liveSession?.activity !== 'idle') {
     d.ensure('queued');
     return d.done('hold');
   }
-  const sessionPark = parkForSession(d, ctx);
-  if (sessionPark) return sessionPark;
   const rerunFirst = decideRerunBeforeFix(d, pr, ctx);
   if (rerunFirst) return rerunFirst;
+  const viaSession = routeFixToSession(d, ctx, { resign: false }, 'hold');
+  if (viaSession) return viaSession;
   d.act({ kind: 'fire_fix_run', resign: false });
   return d.done('hold');
 }
@@ -1657,16 +1689,41 @@ function waitForRerun(d: DecisionBuilder): Decision {
 }
 
 /**
- * A live session is working this PR, so the queue starts no fix run of its own:
- * two agents pushing to one branch is the collision `activePrTaskId` prevents
- * between tasks. Park, spend no attempt, send no notification, and END THE WALK
- * (the caller returns this) so nothing later fires the run on the same pass.
+ * A live session owns this PR, so the queue starts no fix run of its own: two
+ * agents pushing to one branch is the collision `activePrTaskId` prevents
+ * between tasks. Returns null when no session stands in the way (none, or one
+ * in error that cannot take a message), and the caller fires its run.
+ *
+ * - The session works now (a turn runs, messages wait, it is provisioning or
+ *   moving): park on `session_active`, spend no attempt, send no
+ *   notification. The end of the turn re-evaluates (`pr:session`).
+ * - The session is idle: send it the fix as a message (`send_fix_to_session`).
+ *   It is accounted like a fix run when the session's turn ends.
+ *
+ * Either way END THE WALK (the caller returns this) so nothing later fires a
+ * run on the same pass.
  */
-function parkForSession(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
+function routeFixToSession(
+  d: DecisionBuilder,
+  ctx: DecisionContext,
+  fix: Omit<Extract<Action, { kind: 'send_fix_to_session' }>, 'kind'>,
+  verdict: 'hold' | 'advance'
+): Decision | null {
   const session = ctx.liveSession;
   if (!session) return null;
-  if (d.entry.status !== 'blocked' || d.entry.blockedCode !== 'session_active') {
-    const reason = sessionActiveBlockReason(session.name);
+  const activity = session.activity ?? 'working';
+  if (activity === 'unavailable') return null;
+  if (activity === 'idle') {
+    d.act({ kind: 'send_fix_to_session', ...fix });
+    return d.done(verdict);
+  }
+  const reason =
+    activity === 'local' ? localSessionBlockReason(session.name) : sessionActiveBlockReason(session.name);
+  if (
+    d.entry.status !== 'blocked' ||
+    d.entry.blockedCode !== 'session_active' ||
+    d.entry.blockedReason !== reason
+  ) {
     d.transition('blocked', {
       blockedCode: 'session_active',
       blockedReason: reason,
@@ -2158,9 +2215,9 @@ function decideExternalEjection(
     !signatureSeen(d.entry, blockerSignature(pr)) &&
     ctx.cloudEnvAvailable
   ) {
-    if (ctx.liveSession) {
-      // The session gets the failure instead. Drop the submission so the PR
-      // goes through the ordinary rules once the session lets go of it.
+    if (ctx.liveSession && sessionHolds(ctx)) {
+      // The session is working: it gets the failure when its turn ends. Drop
+      // the submission so the PR goes through the ordinary rules then.
       d.transition('blocked', {
         blockedCode: 'session_active',
         blockedReason: sessionActiveBlockReason(ctx.liveSession.name),
@@ -2196,11 +2253,10 @@ function decideExternalEjection(
       },
     });
     d.act({ kind: 'disarm_automerge' });
-    d.act({
-      kind: 'fire_fix_run',
-      resign: false,
-      queueFailure: { provider, evidence: ext.evidence, failedChecks: ext.failedChecks },
-    });
+    const queueFailure = { provider, evidence: ext.evidence, failedChecks: ext.failedChecks };
+    const viaSession = routeFixToSession(d, ctx, { resign: false, queueFailure }, 'hold');
+    if (viaSession) return viaSession;
+    d.act({ kind: 'fire_fix_run', resign: false, queueFailure });
     return d.done('hold');
   }
   if (ext.state === 'cancelled' || recurred) {
@@ -2596,19 +2652,26 @@ function decideBlockedGate(
   }
 
   if (code === 'session_active') {
-    // Waiting on a session. Clean now → merge what it fixed. Session gone →
-    // back in line, and the ordinary rules decide whether a run is needed.
+    // Waiting on a session's turn. Clean now → merge what it fixed. The turn
+    // ended, or the session is gone → back in line, and the ordinary rules
+    // decide whether a fix is needed (an idle session gets it as a message).
     // After an external queue FAILED this commit the PR reads clean on its own
-    // branch, so only a new push (R2) or the session's end releases it.
-    if (ctx.liveSession && d.entry.externalState === 'failed') return d.done('advance');
+    // branch, so only a new push (R2) or the end of the turn releases it.
+    const holds = sessionHolds(ctx);
+    if (holds && d.entry.externalState === 'failed') return d.done('advance');
     if (!queueBlockedFor(pr, ctx)) return null;
-    if (ctx.liveSession) return d.done('advance');
+    if (holds) {
+      // Keep the reason true: an entry parked with older words gets the new ones.
+      return routeFixToSession(d, ctx, { resign: false }, 'advance') ?? d.done('advance');
+    }
     d.transition('queued', {
       blockedCode: null,
       blockedReason: null,
       event: {
         code: 'session_released',
-        message: 'No session is working this PR any more — back in line.',
+        message: ctx.liveSession
+          ? `The session "${ctx.liveSession.name}" is not working on this pull request now — back in line.`
+          : 'No session is working this PR any more — back in line.',
       },
     });
     return null;
@@ -2729,8 +2792,8 @@ function dispatchResign(d: DecisionBuilder, ctx: DecisionContext, runActive: boo
     return d.done('advance');
   }
   if (d.entry.resignAttempts < ctx.maxAttempts) {
-    const sessionPark = parkForSession(d, ctx);
-    if (sessionPark) return sessionPark;
+    const viaSession = routeFixToSession(d, ctx, { resign: true }, 'advance');
+    if (viaSession) return viaSession;
     d.act({ kind: 'fire_fix_run', resign: true });
     return d.done('advance');
   }

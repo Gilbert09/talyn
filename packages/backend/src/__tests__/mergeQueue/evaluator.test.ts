@@ -27,7 +27,10 @@ import {
   mergeQueueEntries,
   mergeQueueEvents,
   workbenches as workbenchesTable,
+  workbenchChats as workbenchChatsTable,
+  workbenchEvents as workbenchEventsTable,
 } from '../../db/schema.js';
+import * as turnsModule from '../../services/workbenches/turns.js';
 import { registerCloudProvider } from '../../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../../services/cloudProviders/posthog/provider.js';
 import * as taskCreateModule from '../../services/taskCreate.js';
@@ -216,6 +219,7 @@ async function insertQueuedPr(
       fixAttempts: number;
       fixTaskId: string | null;
       fixTaskAccounted: boolean;
+      fixKind: string | null;
       mergeStartedAt: Date | null;
       lastEvaluatedAt: Date | null;
     }>;
@@ -1509,19 +1513,257 @@ describe('mergeQueue v2 pipeline', () => {
       });
     }
 
-    it('parks on session_active and starts no fix run', async () => {
+    async function insertChat(
+      o: { status?: string; queuedMessages?: unknown[]; id?: string } = {}
+    ): Promise<string> {
+      const id = o.id ?? 'chat1';
+      await db.insert(workbenchChatsTable).values({
+        id,
+        workbenchId: 'wb1',
+        workspaceId: 'ws1',
+        title: 'Chat',
+        agent: 'claude',
+        status: o.status ?? 'idle',
+        queuedMessages: (o.queuedMessages ?? []) as never,
+      });
+      return id;
+    }
+
+    function stubSend() {
+      return vi.spyOn(turnsModule, 'sendMessage').mockResolvedValue({ queued: false });
+    }
+
+    it('parks on session_active and starts no fix run while a turn runs', async () => {
       const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
       await insertSession(prId);
+      await insertChat({ status: 'running' });
       const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const send = stubSend();
 
       await evaluateGroupNow('repo1', 'main', 'test');
 
       expect(fixRun).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
       const entry = await entryOf(db, prId);
       expect(entry?.status).toBe('blocked');
       expect(entry?.blockedCode).toBe('session_active');
-      expect(entry?.blockedReason).toContain('"paris"');
+      expect(entry?.blockedReason).toBe(
+        'The session "paris" is working on this pull request now. The merge queue waits for its turn to end.'
+      );
       expect(entry?.fixAttempts).toBe(0);
+    });
+
+    it.each([
+      ['has queued messages', { chat: { queuedMessages: [{ id: 'm1', text: 'next', queuedAt: '2026-11-03T00:00:00Z' }] } }],
+      [
+        'waits for a sandbox',
+        {
+          chat: {
+            queuedMessages: [
+              { id: 'm1', text: 'next', queuedAt: '2026-11-03T00:00:00Z', capacityWait: { turn: 2, retryAt: '2099-01-01T00:00:00Z' } },
+            ],
+          },
+        },
+      ],
+      ['is provisioning', { status: 'provisioning' }],
+      ['is moving', { status: 'moving' }],
+    ])('holds the queue while the session %s', async (_label, o: { chat?: { queuedMessages: unknown[] }; status?: string }) => {
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      if (o.status) {
+        await db.update(workbenchesTable).set({ status: o.status }).where(eq(workbenchesTable.id, 'wb1'));
+      }
+      if (o.chat) await insertChat(o.chat);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const send = stubSend();
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect((await entryOf(db, prId))?.blockedCode).toBe('session_active');
+    });
+
+    it('sends the fix into an idle session as a message, not as a second agent', async () => {
+      const { prId, entryId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      await insertChat();
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const send = stubSend();
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+      const [chatId, input, opts] = send.mock.calls[0]!;
+      expect(chatId).toBe('chat1');
+      expect(input.text).toMatch(/^The merge queue needs this pull request fixed: a\/b#1\./);
+      expect(input.text).toContain('TALYN_NEEDS_HUMAN:');
+      expect(opts).toEqual({ origin: 'talyn' });
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('fixing');
+      expect(entry?.fixKind).toBe('session');
+      expect(entry?.fixTaskId).toBeNull();
+      expect(entry?.fixTaskAccounted).toBe(false);
+      expect(entry?.fixAttempts).toBe(0);
+      const sentEvent = (await eventsOf(db, entryId)).find((e) => e.code === 'session_fix_sent');
+      expect(sentEvent?.detail).toMatchObject({ workbenchId: 'wb1', chatId: 'chat1' });
+
+      // Its turn is now running: the next pass holds and sends nothing more.
+      await db.update(workbenchChatsTable).set({ status: 'running' }).where(eq(workbenchChatsTable.id, 'chat1'));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(send).toHaveBeenCalledTimes(1);
+      expect((await entryOf(db, prId))?.status).toBe('fixing');
+    });
+
+    it('opens a chat in a session that has none open', async () => {
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      const send = stubSend();
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const chats = await db.select({ id: workbenchChatsTable.id }).from(workbenchChatsTable);
+      expect(chats).toHaveLength(1);
+      expect(send.mock.calls[0]![0]).toBe(chats[0]!.id);
+    });
+
+    it('rolls back and spends nothing when the session refuses the message', async () => {
+      const { prId, entryId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      await insertChat();
+      vi.spyOn(turnsModule, 'sendMessage').mockRejectedValue(new Error('Session not ready'));
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('queued');
+      expect(entry?.fixKind).toBeNull();
+      expect(entry?.fixTaskAccounted).toBe(true);
+      expect(entry?.fixAttempts).toBe(0);
+      expect((await eventsOf(db, entryId)).map((e) => e.code)).toContain('session_fix_failed');
+    });
+
+    it('fires a separate fix run, as before, once the session is archived', async () => {
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+      await insertSession(prId);
+      await db.update(workbenchesTable).set({ archivedAt: new Date(), status: 'archived' }).where(eq(workbenchesTable.id, 'wb1'));
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const send = stubSend();
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(send).not.toHaveBeenCalled();
+      expect(fixRun).toHaveBeenCalledTimes(1);
+      expect((await entryOf(db, prId))?.fixKind).toBe('blockers');
+    });
+
+    describe("accounting the session's fix turn", () => {
+      const SENT_AT = new Date(Date.now() - 10 * 60_000);
+
+      async function seedSentFix(resultText: string | null) {
+        const { prId, entryId } = await insertQueuedPr(db, {
+          summary: conflictSummary(),
+          entry: { status: 'fixing', fixKind: 'session', fixTaskId: null, fixTaskAccounted: false },
+        });
+        await insertSession(prId);
+        await insertChat();
+        await db.insert(mergeQueueEvents).values({
+          entryId,
+          fromStatus: 'fixing',
+          toStatus: 'fixing',
+          trigger: 'test',
+          code: 'session_fix_sent',
+          message: 'sent',
+          detail: { workbenchId: 'wb1', chatId: 'chat1', sentAt: SENT_AT.toISOString() },
+        });
+        if (resultText !== null) {
+          // An older turn that ended before the fix was sent must not count.
+          await db.insert(workbenchEventsTable).values({
+            chatId: 'chat1',
+            seq: 1,
+            turn: 1,
+            event: { type: 'result', result: 'TALYN_NEEDS_HUMAN: an old, unrelated stop' },
+            createdAt: new Date(SENT_AT.getTime() - 60_000),
+          });
+          await db.insert(workbenchEventsTable).values({
+            chatId: 'chat1',
+            seq: 2,
+            turn: 2,
+            event: { type: 'result', result: resultText },
+            createdAt: new Date(SENT_AT.getTime() + 60_000),
+          });
+        }
+        return { prId, entryId };
+      }
+
+      it("stands down when the session's turn ends on the needs-human sentinel", async () => {
+        const { prId } = await seedSentFix(
+          'I could not finish.\nTALYN_NEEDS_HUMAN: A maintainer must approve the migration.'
+        );
+        const send = stubSend();
+        const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        const entry = await entryOf(db, prId);
+        expect(entry?.status).toBe('blocked');
+        expect(entry?.blockedCode).toBe('agent_needs_human');
+        expect(entry?.blockedReason).toBe('A maintainer must approve the migration.');
+        expect(entry?.fixAttempts).toBe(0);
+        expect(entry?.fixTaskAccounted).toBe(true);
+        expect(send).not.toHaveBeenCalled();
+        expect(fixRun).not.toHaveBeenCalled();
+      });
+
+      it('counts a finished turn as one attempt, then asks the session again', async () => {
+        const { prId, entryId } = await seedSentFix('Merged the base in and pushed.');
+        const send = stubSend();
+
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        const entry = await entryOf(db, prId);
+        expect(entry?.fixAttempts).toBe(1);
+        expect(entry?.seenSignatures).toHaveLength(1);
+        expect((await eventsOf(db, entryId)).map((e) => e.code)).toContain('fix_run_accounted');
+        expect(send).toHaveBeenCalledTimes(1);
+      });
+
+      it('holds while the session still works on the fix', async () => {
+        const { prId } = await seedSentFix(null);
+        await db.update(workbenchChatsTable).set({ status: 'running' }).where(eq(workbenchChatsTable.id, 'chat1'));
+        const send = stubSend();
+
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        const entry = await entryOf(db, prId);
+        expect(entry?.status).toBe('fixing');
+        expect(entry?.fixTaskAccounted).toBe(false);
+        expect(entry?.fixAttempts).toBe(0);
+        expect(send).not.toHaveBeenCalled();
+      });
+    });
+
+    it('re-evaluates when the turn ends: the idle session gets the fix', async () => {
+      initMergeQueueTriggers();
+      const { prId } = await insertQueuedPr(db, {
+        summary: conflictSummary(),
+        entry: {
+          status: 'blocked',
+          blockedCode: 'session_active',
+          blockedReason:
+            'The session "paris" is working on this pull request now. The merge queue waits for its turn to end.',
+        },
+      });
+      await insertSession(prId);
+      await insertChat();
+      const send = stubSend();
+
+      domainEvents.emit('pr:session', { workspaceId: 'ws1', prId, trigger: 'session:turn_end' });
+
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      await vi.waitFor(async () => expect((await entryOf(db, prId))?.fixKind).toBe('session'));
     });
 
     it('a pr:session event merges what the session made clean', async () => {
