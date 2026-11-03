@@ -1,7 +1,16 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { SETUP_LIST_LIMITS, type RepositorySetup, type SetupListStep } from '@talyn/shared';
 import { RepositoriesSettings } from '../renderer/components/settings/sections/RepositoriesSettings';
+
+function repoSetup(steps: SetupListStep[]): RepositorySetup {
+  return {
+    repositoryId: 'r1', learningDisabled: false, windowDays: 14, maxLearnedSteps: 20, limits: SETUP_LIST_LIMITS,
+    repoSetup: { command: null, source: null, readAt: null, runOnBox: 'always' }, steps, hosts: [], image: null,
+    lastSetupTiming: null, timingHistory: [],
+  };
+}
 
 let previewsEnabled = false;
 const previewGet = jest.fn();
@@ -9,9 +18,7 @@ const previewPatch = jest.fn();
 const previewDetect = jest.fn();
 const sizeGet = jest.fn();
 const sizeSet = jest.fn();
-const bakeGet = jest.fn();
-const bakePut = jest.fn();
-const setupRecipeGet = jest.fn();
+const setupGet = jest.fn();
 const instructionsList = jest.fn();
 const removeRepo = jest.fn();
 const detect = jest.fn();
@@ -49,7 +56,7 @@ jest.mock('../renderer/components/widgets/PollingOnlyBadge', () => ({ PollingOnl
 jest.mock('../renderer/components/widgets/GithubInstallStatus', () => ({ GithubInstallStatus: () => null }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
-    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, bake: { get: (...args: unknown[]) => bakeGet(...args), put: (...args: unknown[]) => bakePut(...args) }, setupRecipe: { get: (...args: unknown[]) => setupRecipeGet(...args), revertStep: jest.fn(), disable: jest.fn(), enable: jest.fn() }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
+    repositories: { preview: { get: (...args: unknown[]) => previewGet(...args), patch: (...args: unknown[]) => previewPatch(...args), detect: (...args: unknown[]) => previewDetect(...args) }, sandboxSize: { get: (...args: unknown[]) => sizeGet(...args), set: (...args: unknown[]) => sizeSet(...args) }, setup: { get: (...args: unknown[]) => setupGet(...args), put: jest.fn(), acceptStep: jest.fn(), dismissStep: jest.fn(), retryStep: jest.fn() }, instructions: { list: (...args: unknown[]) => instructionsList(...args) }, remove: (...args: unknown[]) => removeRepo(...args), list: jest.fn().mockResolvedValue([]), forcePoll: jest.fn().mockResolvedValue(undefined) },
     github: { getStatus: jest.fn().mockResolvedValue({ connected: false }) },
   },
 }));
@@ -78,9 +85,7 @@ beforeEach(() => {
   removeScanRoot.mockResolvedValue([]);
   sizeGet.mockResolvedValue({ setting: 'auto', effective: 'standard', detected: null });
   sizeSet.mockResolvedValue({ setting: 'large', effective: 'large', detected: null });
-  bakeGet.mockResolvedValue(null);
-  bakePut.mockImplementation(async (_id, bake) => bake);
-  setupRecipeGet.mockResolvedValue({ repositoryId: 'r1', learningDisabled: false, maxSteps: 20, steps: [] });
+  setupGet.mockResolvedValue(repoSetup([]));
   instructionsList.mockResolvedValue([{ repositoryId: 'r1' }]);
   removeRepo.mockResolvedValue(undefined);
 });
@@ -222,7 +227,7 @@ test('shows summary pills and opens one detail panel', async () => {
   fireEvent.click(row);
   expect(row).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByText('Local checkout')).toBeInTheDocument();
-  expect(screen.getByText(/Bake steps run once, when Talyn builds/)).toBeInTheDocument();
+  expect(await screen.findByText(/Each new box runs this list in order/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Add host' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit instructions' })).toBeInTheDocument();
 });
@@ -231,12 +236,6 @@ test('shows the selected size in the row', async () => {
   sizeGet.mockResolvedValue({ setting: 'xlarge', effective: 'xlarge', detected: null });
   render(<RepositoriesSettings />);
   expect(await screen.findByText('X-Large · 16 GB')).toBeInTheDocument();
-});
-
-test('shows a bake pill before the detail opens', async () => {
-  bakeGet.mockResolvedValue({ steps: [{ name: 'Install', run: 'echo ok' }] });
-  render(<RepositoriesSettings />);
-  expect(await screen.findByText('Bake steps', { selector: '[data-attr="settings-repo-bake-pill"]' })).toBeInTheDocument();
 });
 
 test('changes size and confirms removal inline', async () => {
@@ -251,56 +250,47 @@ test('changes size and confirms removal inline', async () => {
   await waitFor(() => expect(removeRepo).toHaveBeenCalledWith('r1'));
 });
 
-test('adds, validates, saves, and removes bake steps', async () => {
-  render(<RepositoriesSettings />);
-  fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
-  fireEvent.click(await screen.findByRole('button', { name: 'Add step' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
-  expect(screen.getByRole('alert')).toHaveTextContent('Step 1 name');
-  fireEvent.change(screen.getByLabelText('Step 1 name'), { target: { value: 'Install database' } });
-  fireEvent.change(screen.getByLabelText('Step 1 command'), { target: { value: 'echo ready' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
-  await waitFor(() => expect(bakePut).toHaveBeenCalledWith('r1', { steps: [{ name: 'Install database', run: 'echo ready', timeoutSec: 300 }], hosts: [] }));
-  fireEvent.click(screen.getByRole('button', { name: 'Remove step 1' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save bake steps' }));
-  await waitFor(() => expect(bakePut).toHaveBeenLastCalledWith('r1', { steps: [] }));
-});
-
-const learnedStep = {
-  id: 's1', command: 'apt-get install -y libpq-dev', kind: 'apt', phase: 'install', why: 'pg_config was missing', source: 'learned',
-  sourceWorkbenchId: 'wb-123456789', firstSeenAt: '2026-11-01T10:00:00Z', lastSeenAt: '2026-11-02T10:00:00Z', seenCount: 2,
-  appliedAt: null, disabledAt: null, disabledReason: null, bakeDisabledAt: null, bakeDisabledReason: null,
-};
+function setupStep(patch: Partial<SetupListStep> = {}): SetupListStep {
+  return {
+    id: 's1', repositoryId: 'r1', position: 0, name: 'apt-get install -y libpq-dev', command: 'apt-get install -y libpq-dev', kind: 'apt',
+    runOn: 'image', origin: 'learned', status: 'active', statusReason: null, statusChangedAt: null, acceptedBy: 'talyn', timeoutSec: null,
+    boxOnlyReason: null, why: 'pg_config was missing', sourceWorkbenchId: 'wb-123456789', seenCount: 2, sessionCount: 2,
+    firstSeenAt: '2026-11-01T10:00:00Z', lastSeenAt: '2026-11-02T10:00:00Z', confirmedAt: null, imageAppliedAt: null, imageFailedAt: null,
+    imageFailureReason: null, boxFailureCount: 0, boxLastFailure: null, lastDurationMs: null, typicalDurationMs: null, measuredBoxes: 0,
+    createdAt: '2026-11-01T10:00:00Z', updatedAt: '2026-11-01T10:00:00Z', ...patch,
+  };
+}
 
 test.each([
-  { name: 'a live step', steps: [learnedStep], learningDisabled: false, pill: 'Setup steps' },
-  { name: 'a live step with learning off', steps: [learnedStep], learningDisabled: true, pill: 'Setup steps (off)' },
-  { name: 'only reverted steps', steps: [{ ...learnedStep, disabledAt: '2026-11-02T11:00:00Z' }], learningDisabled: false, pill: null },
-  { name: 'no steps', steps: [], learningDisabled: false, pill: null },
-])('setup steps pill with $name', async ({ steps, learningDisabled, pill }) => {
+  { name: 'an active step', steps: [setupStep()], pill: true },
+  { name: 'only a suggested step', steps: [setupStep({ status: 'suggested' })], pill: false },
+  { name: 'only a dismissed step', steps: [setupStep({ status: 'dismissed' })], pill: false },
+  { name: 'only a disabled step', steps: [setupStep({ status: 'disabled' })], pill: false },
+  { name: 'no steps', steps: [], pill: false },
+])('setup pill with $name', async ({ steps, pill }) => {
   previewsEnabled = true;
   previewGet.mockResolvedValue({ ...previewConfig, target: 'off' });
-  setupRecipeGet.mockResolvedValue({ repositoryId: 'r1', learningDisabled, maxSteps: 20, steps });
+  setupGet.mockResolvedValue(repoSetup(steps));
   const { container } = render(<RepositoriesSettings />);
-  await waitFor(() => expect(setupRecipeGet).toHaveBeenCalledWith('r1'));
+  await waitFor(() => expect(setupGet).toHaveBeenCalledWith('r1'));
   if (pill) {
-    expect(await screen.findByText(pill, { selector: '[data-attr="settings-repo-setup-steps-pill"]' })).toBeInTheDocument();
+    expect(await screen.findByText('Setup steps', { selector: '[data-attr="settings-repo-setup-pill"]' })).toBeInTheDocument();
   } else {
     await screen.findByText('Instructions', { selector: '[data-attr="settings-repo-instructions-pill"]' });
-    expect(container.querySelector('[data-attr="settings-repo-setup-steps-pill"]')).toBeNull();
+    expect(container.querySelector('[data-attr="settings-repo-setup-pill"]')).toBeNull();
   }
 });
 
-test('shows the setup steps row only when sessions are on', async () => {
+test('shows the setup row only when sessions are on', async () => {
   render(<RepositoriesSettings />);
   fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
-  await screen.findByText(/Bake steps run once/);
-  expect(screen.queryByText('Setup steps')).toBeNull();
-  expect(setupRecipeGet).not.toHaveBeenCalled();
+  await screen.findByLabelText('Sandbox size');
+  expect(screen.queryByText('Setup')).toBeNull();
+  expect(setupGet).not.toHaveBeenCalled();
   cleanup();
   previewsEnabled = true;
   previewGet.mockResolvedValue(previewConfig);
   render(<RepositoriesSettings />);
   fireEvent.click(screen.getByRole('button', { name: /PostHog\/posthog/ }));
-  expect(await screen.findByText(/No learned steps yet/)).toBeInTheDocument();
+  expect(await screen.findByText(/No steps yet/)).toBeInTheDocument();
 });
