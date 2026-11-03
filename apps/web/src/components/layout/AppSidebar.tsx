@@ -108,6 +108,8 @@ export function AppSidebar() {
           {offered && !collapsed && <SidebarSlackPending />}
           {offered && !collapsed && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
+          {/* Fades the last rows, so the list reads as one that scrolls on under the pages below. */}
+          <div aria-hidden className="pointer-events-none sticky bottom-0 -mx-1.5 h-5 bg-gradient-to-t from-card to-transparent" />
         </nav>
 
         {collapsed && (
@@ -132,7 +134,8 @@ export function AppSidebar() {
           </div>
         )}
 
-        <div className="space-y-0.5 border-t px-1.5 py-1.5">
+        {/* Its own shade, so the app pages read apart from the session list above. */}
+        <div className="space-y-0.5 border-t bg-muted/60 px-1.5 py-2" data-attr="sidebar-app-nav">
           <SidebarItem
             icon={GitPullRequest}
             label="Pull requests"
