@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   coarseQueueStatus,
   queueBlockNeedsHuman,
+  queueSessionBadge,
+  queueSessionBadgeTooltip,
+  QUEUE_SESSION_BADGE_LABEL,
   fixBlockedReason,
   fixBlockedMessage,
   TASK_STATUS_TERMINAL,
@@ -706,7 +709,9 @@ export function PRDetailSheet({
                 disabled={togglingQueue}
                 title={
                   view.row.mergeQueued
-                    ? coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued') === 'blocked'
+                    ? queueSessionBadge(view.row.mergeQueue)
+                      ? `${queueSessionBadgeTooltip(queueSessionBadge(view.row.mergeQueue)!, view.row.mergeQueue?.reason, view.row.session?.name)} Click to remove.`
+                      : coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued') === 'blocked'
                       ? queueBlockNeedsHuman(view.row.mergeQueue?.blockedCode)
                         ? 'The merge queue is waiting on you — click to remove'
                         : 'Merge queue gave up — click to remove'
@@ -717,6 +722,7 @@ export function PRDetailSheet({
                 {togglingQueue ? (
                   <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 ) : view.row.mergeQueued &&
+                  !queueSessionBadge(view.row.mergeQueue) &&
                   coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued') === 'blocked' ? (
                   <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                 ) : (
@@ -724,6 +730,8 @@ export function PRDetailSheet({
                 )}
                 {view.row.mergeQueued
                   ? (() => {
+                      const sessionBadge = queueSessionBadge(view.row.mergeQueue);
+                      if (sessionBadge) return QUEUE_SESSION_BADGE_LABEL[sessionBadge];
                       const coarse = coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued');
                       if (coarse === 'blocked') {
                         return queueBlockNeedsHuman(view.row.mergeQueue?.blockedCode)
@@ -1130,8 +1138,12 @@ export function MergeQueueSection({ row }: { row: PRRow }) {
   // `QUEUE_STATUS_LABEL` cannot tell them apart: it is keyed on the status, and
   // both causes land on `blocked`. The distinction is in `blockedCode`.
   const needsHuman = blocked && queueBlockNeedsHuman(v2?.blockedCode);
+  // A session works the PR: a wait, not a block and not a request.
+  const sessionBadge = queueSessionBadge(v2);
   const statusLabel = v2
-    ? // Riding another rung's submission: the queue has this PR right now and
+    ? sessionBadge
+      ? queueSessionBadgeTooltip(sessionBadge, v2.reason, row.session?.name)
+      : // Riding another rung's submission: the queue has this PR right now and
       // is testing the whole stack as one unit. "Waiting for #N to merge" would
       // read as parked, which is the opposite of what is happening.
       v2.status === 'awaiting_stack' && v2.stackCoveredBy != null
@@ -1167,7 +1179,7 @@ export function MergeQueueSection({ row }: { row: PRRow }) {
       </h3>
       <div className="space-y-2 rounded-md border p-3 text-xs">
         <div className="flex items-center justify-between gap-2">
-          <span className={blocked ? 'font-medium text-amber-700 dark:text-amber-400' : ''}>
+          <span className={blocked && !sessionBadge ? 'font-medium text-amber-700 dark:text-amber-400' : ''}>
             {v2?.position ? `#${v2.position} — ` : ''}
             {statusLabel}
             {v2?.autoMerge?.armed && v2.status !== 'automerge_armed' ? ' · auto-merge armed' : ''}

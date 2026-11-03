@@ -22,6 +22,7 @@ import {
   Clock,
   Layers,
   Square,
+  SquareTerminal,
   PauseCircle,
 } from 'lucide-react';
 import type { PRHumanGate, PRRow, PRSummaryShape } from '../../../lib/api';
@@ -40,6 +41,9 @@ import {
   fixBlockedMessage,
   coarseQueueStatus,
   queueBlockNeedsHuman,
+  queueSessionBadge,
+  queueSessionBadgeTooltip,
+  QUEUE_SESSION_BADGE_LABEL,
   describePRPriorityReason,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   type PRPriorityVerdict,
@@ -1022,6 +1026,10 @@ const PRTableRow = React.memo(function PRTableRow({
                   // snapshots was reported as one that had been given up on
                   // after three failed attempts. See queueBlockNeedsHuman.
                   const needsHuman = queueBlockNeedsHuman(row.mergeQueue?.blockedCode);
+                  // A session works the PR (its own turn, or the fix the queue
+                  // sent it). Nothing for the reader to do, so it is neither
+                  // "Needs you" nor "Blocked".
+                  const sessionBadge = queueSessionBadge(row.mergeQueue);
                   // The Needs human chip above already says this, and says
                   // where to go. One chip per fact.
                   const gateChipSaysIt =
@@ -1045,8 +1053,19 @@ const PRTableRow = React.memo(function PRTableRow({
                           Merging
                         </span>
                       )}
+                      {sessionBadge && (
+                        <span
+                          data-attr="pr-row-queue-session"
+                          className="inline-flex items-center gap-1 rounded bg-slate-200 px-1 py-0.5 text-[10px] uppercase text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                          title={queueSessionBadgeTooltip(sessionBadge, reason, row.session?.name)}
+                        >
+                          <SquareTerminal className="h-2.5 w-2.5" />
+                          {QUEUE_SESSION_BADGE_LABEL[sessionBadge]}
+                        </span>
+                      )}
                       {qs === 'blocked' &&
                         !gateChipSaysIt &&
+                        !sessionBadge &&
                         (needsHuman ? (
                           // Amber and worded as a request. Nothing was tried and
                           // nothing failed; the queue picks this PR back up by
@@ -1708,6 +1727,19 @@ function QueueCell({
           // ends without fixing the PR), so show the in-progress attempt as
           // spent+1 — "Fixing (1/3)" during the first run, not (0/3).
           // Re-sign runs already count at dispatch; show their budget as-is.
+          if (v2.fixKind === 'session') {
+            // The fix went into the session on the PR. Same budget as a run.
+            const [used, max] = budgets?.fixRuns ?? [0, 3];
+            return (
+              <span
+                className="inline-flex items-center gap-1 text-slate-700 dark:text-slate-300"
+                title={`${queueSessionBadgeTooltip('fixing', null, row.session?.name)} Attempt ${Math.min(used + 1, max)} of ${max} on the current head.`}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {QUEUE_SESSION_BADGE_LABEL.fixing} ({Math.min(used + 1, max)}/{max})
+              </span>
+            );
+          }
           const resign = v2.fixKind === 'resign';
           const [used, max] = resign
             ? (budgets?.resigns ?? [0, 3])
@@ -1731,6 +1763,18 @@ function QueueCell({
             </span>
           );
         case 'blocked':
+          // The session's own turn works the PR: a wait, not a request.
+          if (queueSessionBadge(v2) === 'working') {
+            return (
+              <span
+                className="inline-flex items-center gap-1 text-slate-700 dark:text-slate-300"
+                title={queueSessionBadgeTooltip('working', v2.reason, row.session?.name)}
+              >
+                <SquareTerminal className="h-3 w-3" />
+                {QUEUE_SESSION_BADGE_LABEL.working}
+              </span>
+            );
+          }
           // A park on a gate only a person can clear is a request, not a
           // failure — and "self-heals on a new push" is false for it: a push
           // re-runs CI and raises the same gate again.
