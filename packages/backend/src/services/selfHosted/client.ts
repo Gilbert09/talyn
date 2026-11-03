@@ -773,6 +773,18 @@ export class FleetClient {
         await errorMessage(resp, 'the fleet lost the answer to this request'),
       );
     }
+    if (resp.status === 502) {
+      // A 502 is the edge in front of the control plane ("Application failed
+      // to respond" while it redeploys or restarts), or a host the gateway
+      // could not reach. Both clear by waiting, so it is an unreachable fleet,
+      // not a refusal. A retry with the same sandbox id is safe: the create is
+      // idempotent on the id. On 2026-11-03 three session starts failed for
+      // good this way during one control-plane deploy.
+      const { message, code } = await errorBody(resp, 'the fleet did not respond');
+      const lost = lostSandboxError(resp.status, message, code);
+      if (lost) throw lost;
+      throw new FleetCapacityError(`Fleet unreachable (502): ${message}`, parseRetryAfterMs(resp), 'unreachable', code);
+    }
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
