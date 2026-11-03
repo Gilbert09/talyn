@@ -6120,8 +6120,8 @@
     "/sessions/{id}/retry": {
       "post": {
         "operationId": "retrySession",
-        "summary": "Retry a session that failed to start",
-        "description": "Provisions again after `status: \"error\"`. Refused while the account still cannot run a sandbox.\n\nScope: `sessions:write`.",
+        "summary": "Retry a session that failed or is stuck while it starts",
+        "description": "Provisions again on a new sandbox after `status: \"error\"`, or while `status` is `provisioning` and the start is stuck. Refused while the account still cannot run a sandbox.\n\nScope: `sessions:write`.",
         "tags": [
           "Sessions"
         ],

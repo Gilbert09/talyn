@@ -182,7 +182,8 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_run_session_script` | Start a named script in the sandbox. |
 | `talyn_stop_session_script` | Stop a running script. |
 | `talyn_archive_session` | Archive a session. |
-| `talyn_restore_session` | Restore an archived session, or retry a failed start. |
+| `talyn_restore_session` | Restore an archived session. |
+| `talyn_retry_session` | Restart a session that failed, or one that is stuck while it starts, on a new sandbox. The old sandbox is deleted. A ready or archived session is refused. |
 
 ### Workspace memory
 
@@ -276,8 +277,8 @@ refused until somebody adds it.
 - `talyn_archive_session` on itself is done after the current reply ends.
   Archiving at once would cancel the turn that asked. No new turn starts while
   the request waits (`settings.archiveAfterTurn`).
-- `talyn_cancel_session_turn`, `talyn_send_session_message` and
-  `talyn_restore_session` on itself are refused.
+- `talyn_cancel_session_turn`, `talyn_send_session_message`,
+  `talyn_restore_session` and `talyn_retry_session` on itself are refused.
 - Calls on other sessions work as they do for a personal token.
 
 **Sessions that start sessions.** A session started through a session token

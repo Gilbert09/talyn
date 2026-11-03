@@ -164,8 +164,8 @@ export const sessionRoutes: PublicRoute[] = [
     method: 'post',
     path: '/sessions/{id}/retry',
     operationId: 'retrySession',
-    summary: 'Retry a session that failed to start',
-    description: 'Provisions again after `status: "error"`. Refused while the account still cannot run a sandbox.',
+    summary: 'Retry a session that failed or is stuck while it starts',
+    description: 'Provisions again on a new sandbox after `status: "error"`, or while `status` is `provisioning` and the start is stuck. Refused while the account still cannot run a sandbox.',
     tag: 'Sessions',
     scope: 'sessions:write',
     sessions: true,
@@ -174,7 +174,7 @@ export const sessionRoutes: PublicRoute[] = [
     async handler({ params, token }) {
       const row = await authorizedSession(token, params.id);
       refuseLocalRuntime(row);
-      if (row.status === 'error' && !row.archivedAt) {
+      if ((row.status === 'error' || row.status === 'provisioning') && !row.archivedAt) {
         const refusal = sandboxRefusal(
           await workbenchReadiness(row.workspaceId, { id: token.ownerId, email: token.email }),
           row.agent as WorkbenchAgent,

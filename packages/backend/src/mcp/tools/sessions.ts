@@ -156,6 +156,7 @@ const SELF_MESSAGE =
   'This is your own session. A message to it would start another turn of yourself after this one. Answer in this reply instead.';
 const SELF_CANCEL = 'That would stop the reply you are writing now. To stop, end your reply.';
 const SELF_RESTORE = 'This is your own session, and it is running. There is nothing to restore.';
+const SELF_RETRY = 'This is your own session, and it is running. There is nothing to retry.';
 const SELF_ARCHIVE_DEFERRED =
   'This session will be archived when this reply ends. Finish the reply now, and do not start more work.';
 
@@ -815,7 +816,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'restore_session',
-    'Restore an archived session, or retry one that failed to start.',
+    'Restore an archived session. To start a failed session again, use talyn_retry_session.',
     sessionIdSchema,
     ['session_id'],
     { idempotentHint: true, openWorldHint: true },
@@ -827,6 +828,25 @@ export const SESSIONS = [
             ownerId,
             'POST',
             `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/restore`
+          )
+        );
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'retry_session',
+    'Restart a session that failed, or one that is stuck while it starts, on a new sandbox. The old sandbox is deleted. A session that is ready or archived is refused.',
+    sessionIdSchema,
+    ['session_id'],
+    { destructiveHint: true, openWorldHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        if (await targetsSelf(ctx, args)) throw new Error(SELF_RETRY);
+        return sessionLine(
+          await callApi<Workbench>(
+            ownerId,
+            'POST',
+            `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/retry`
           )
         );
       }),

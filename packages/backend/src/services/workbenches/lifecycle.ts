@@ -152,6 +152,54 @@ export const PROVISION_CAPACITY_WAIT = {
   queuePollMs: 5_000,
 };
 
+/**
+ * How a provision waits for its setup script. The script has no time limit,
+ * and a box with a failed disk can hang it forever. So the wait also watches
+ * for a drain, a lost claim, and a Retry or an archive that moves the row away
+ * from this run. Fields, not constants, so tests can shorten them.
+ */
+export const PROVISION_SETUP_WATCH = {
+  /** How often the wait checks for a drain or a lost claim. */
+  checkMs: 1_000,
+  /** How often the wait reads the row. */
+  ownershipCheckMs: 5_000,
+};
+
+/**
+ * Wait for the setup script to exit. Null at a drain: the resume sweep comes
+ * back to the script after the deploy. A lost claim or a row that moved on
+ * ends the wait with a superseded error, and the claim goes to the next run.
+ * The script itself is left alone.
+ */
+async function awaitSetupScript(
+  done: Promise<number | null>,
+  workbenchId: string,
+  sandboxId: string,
+  claim: ProvisionClaim,
+): Promise<{ code: number | null } | null> {
+  const exited = done.then((code) => ({ code }));
+  // A failure after the wait ended has nobody to report to.
+  exited.catch(() => undefined);
+  let checkedAt = Date.now();
+  for (;;) {
+    let timer: NodeJS.Timeout | undefined;
+    const tick = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), PROVISION_SETUP_WATCH.checkMs); });
+    try {
+      const result = await Promise.race([exited, tick]);
+      if (result) return result;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (isWorkbenchDraining()) return null;
+    assertOwned(claim);
+    if (Date.now() - checkedAt < PROVISION_SETUP_WATCH.ownershipCheckMs) continue;
+    checkedAt = Date.now();
+    if (!(await isProvisionOwned(workbenchId, sandboxId))) {
+      throw new ProvisionSupersededError(`the session moved on from sandbox ${sandboxId} while its setup script ran`);
+    }
+  }
+}
+
 export const WAITING_FOR_SANDBOX_MESSAGE = 'Waiting for a free sandbox';
 export const NO_FREE_SANDBOX_MESSAGE = 'No sandbox became free in 30 minutes. Retry when the fleet has room.';
 
@@ -571,8 +619,9 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       assertOwned(claim);
       row = await setProvisioningRow(row, sandboxId, { statusMessage: 'Running the setup script' });
       const { done } = await startScript(row, 'setup', { config, resume: true });
-      const code = await done;
-      if (isWorkbenchDraining()) return;
+      const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
+      if (!exited || isWorkbenchDraining()) return;
+      const { code } = exited;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
       }
@@ -741,28 +790,39 @@ export async function sweepPendingArchives(): Promise<void> {
  * Provision again after a failed start. A half-made box is deleted first, and
  * the new one takes the next sandbox id, because the fleet answers a deleted
  * id from its tombstone. Chats the failure left in `error` go back to `idle`.
+ *
+ * A session still at `provisioning` can be retried too: its start can hang,
+ * for example in a setup script on a box whose disk failed. The old box is
+ * deleted best effort, because the host that holds it can be the broken part.
+ * The old run sees that the row moved on and ends, and the resume sweep then
+ * starts the new provision.
  */
 export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (row.runtime !== 'sandbox') throw localRuntimeError();
   if (row.archivedAt) throw notReadyError('archived');
-  if (row.status !== 'error') {
-    throw new WorkbenchError('This session has not failed, so there is nothing to retry.', 409, 'not_failed');
+  if (row.status !== 'error' && row.status !== 'provisioning') {
+    throw new WorkbenchError('This session has not failed and is not starting, so there is nothing to retry.', 409, 'not_failed');
   }
-  if (row.sandboxId && row.sandboxState !== 'deleted') {
+  const stuck = row.status === 'provisioning';
+  // A stuck run with no recorded box can still be creating the first id.
+  const oldBox = row.sandboxId ?? (stuck ? sandboxIdFor(row.id) : null);
+  if (oldBox && row.sandboxState !== 'deleted') {
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-      await client.deleteSandbox(row.sandboxId);
+      await client.deleteSandbox(oldBox);
     } catch (err) {
-      if (!fleetHoldsNoBox(err)) throw err;
+      if (!stuck && !fleetHoldsNoBox(err)) throw err;
+      if (stuck) console.warn(`[workbench] deleting sandbox ${oldBox} of stuck ${row.id} failed; retrying anyway:`, err);
     }
   }
   row = await setRow(row, {
     status: 'provisioning',
     statusMessage: 'Creating the sandbox',
-    sandboxId: row.sandboxId ? nextSandboxId(row) : sandboxIdFor(row.id),
-    sandboxState: 'creating',
+    sandboxId: oldBox ? nextSandboxId({ ...row, sandboxId: oldBox }) : sandboxIdFor(row.id),
+    // A stuck recovery of a lost box stays one, so the new box gets the checkpoint back.
+    sandboxState: stuck && row.sandboxState === 'lost' ? 'lost' : 'creating',
     sandboxGeneration: null,
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),

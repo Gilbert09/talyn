@@ -52,7 +52,7 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
   reconcileDefaultBranch: async (input: { stored: string }) => input.stored || 'main',
 }));
 
-const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
+const { settleArchivesForTests, sweepStrandedProvisions } = await import('../services/workbenches/lifecycle.js');
 const { memoryWorkObjectStore, setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
@@ -1072,6 +1072,29 @@ describe('workbench routes', () => {
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
       expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id, 1)}`]);
       expect((await getChat(await chatIdOf(wb.id)))?.status).toBe('idle');
+    });
+
+    it('retries a workbench stuck while it starts onto a new sandbox id', async () => {
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      scriptedFleet(async (script) => {
+        if (script.includes('git clone')) await held;
+        return null;
+      });
+      const created = await call('POST', '/workbenches', { workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude' });
+      const id = created.body.data.id;
+      await vi.waitFor(async () => expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(id)}`]));
+      const res = await call('POST', `/workbenches/${id}/retry`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ status: 'provisioning', sandboxState: 'creating', sandboxId: `${sandboxIdFor(id, 1)}` });
+      expect(fleet.deleted).toEqual([`${sandboxIdFor(id)}`]);
+      release();
+      await vi.waitFor(async () => {
+        await sweepStrandedProvisions();
+        expect((await getWorkbench(id))?.status).toBe('ready');
+      }, { timeout: 5000 });
+      expect(await getWorkbench(id)).toMatchObject({ sandboxId: `${sandboxIdFor(id, 1)}` });
+      expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(id)}`, `${sandboxIdFor(id, 1)}`]);
     });
 
     it('retries past a half-made box the fleet cannot be holding', async () => {

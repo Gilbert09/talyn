@@ -8,11 +8,14 @@ import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxSize from '../services/workbenches/sandboxSize.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import * as scripts from '../services/workbenches/scripts.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
 import {
+  PROVISION_SETUP_WATCH,
   processArchive,
   provisionClaimName,
   provisionWorkbench,
+  retryWorkbench,
   sweepStrandedProvisions,
 } from '../services/workbenches/lifecycle.js';
 import { getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateWorkbench } from '../services/workbenches/store.js';
@@ -253,6 +256,138 @@ describe('one provision per session across instances', () => {
       await processArchive(WB);
       expect(fleetClient).not.toHaveBeenCalled();
       expect(await getWorkbench(WB)).toMatchObject({ archiveLeaseUntil: null, sandboxState: 'running' });
+    });
+  });
+
+  describe('a Retry of a session stuck while it starts', () => {
+    const SETUP_CONFIG = { setup: { command: 'docker compose up -d' }, run: [], runMode: 'concurrent', filesToCopy: [], source: 'talyn', errors: [] };
+    const watch = { ...PROVISION_SETUP_WATCH };
+    /** Resolves when a provision reaches its setup script. */
+    let inSetup: Promise<void>;
+    let setupRuns: number;
+
+    beforeEach(() => {
+      PROVISION_SETUP_WATCH.checkMs = 10;
+      PROVISION_SETUP_WATCH.ownershipCheckMs = 30;
+      setupRuns = 0;
+      vi.spyOn(runtime, 'loadWorkbenchConfig').mockResolvedValue(SETUP_CONFIG as never);
+      vi.spyOn(runtime, 'fleetClientFor').mockResolvedValue(fleet.asClient());
+      let entered!: () => void;
+      inSetup = new Promise<void>((resolve) => { entered = resolve; });
+      // The first setup run hangs, as on a box whose disk failed. A later run exits 0.
+      vi.spyOn(scripts, 'startScript').mockImplementation(async () => {
+        setupRuns += 1;
+        entered();
+        return { done: setupRuns === 1 ? new Promise<number | null>(() => undefined) : Promise.resolve(0) };
+      });
+    });
+
+    afterEach(() => {
+      Object.assign(PROVISION_SETUP_WATCH, watch);
+    });
+
+    it('moves a stuck session to the next sandbox id and deletes the old box', async () => {
+      await updateWorkbench(WB, { sandboxId: OLD_BOX, sandboxState: 'running', fleetHost: 'host-1', statusMessage: 'Running the setup script' });
+      await holdClaim(2);
+      const row = await retryWorkbench(WB);
+      expect(row).toMatchObject({ status: 'provisioning', sandboxId: NEW_BOX, sandboxState: 'creating', fleetHost: null, statusMessage: 'Creating the sandbox' });
+      expect(fleet.deleted).toEqual([OLD_BOX]);
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'provisioning', sandboxId: NEW_BOX });
+    });
+
+    it('deletes the first box id when the stuck run has not recorded one yet', async () => {
+      await holdClaim(2);
+      const row = await retryWorkbench(WB);
+      expect(fleet.deleted).toEqual([OLD_BOX]);
+      expect(row.sandboxId).toBe(NEW_BOX);
+    });
+
+    it('keeps a stuck recovery of a lost box a recovery', async () => {
+      await updateWorkbench(WB, { sandboxId: OLD_BOX, sandboxState: 'lost', memoryRestorePending: 'lost' });
+      await holdClaim(2);
+      const row = await retryWorkbench(WB);
+      expect(row).toMatchObject({ sandboxId: NEW_BOX, sandboxState: 'lost', memoryRestorePending: 'lost' });
+    });
+
+    it('goes on when the sick host cannot delete the old box', async () => {
+      await updateWorkbench(WB, { sandboxId: OLD_BOX, sandboxState: 'running' });
+      await holdClaim(2);
+      vi.spyOn(fleet, 'deleteSandbox').mockRejectedValue(new Error('fleet host timed out'));
+      expect((await retryWorkbench(WB)).sandboxId).toBe(NEW_BOX);
+    });
+
+    it('still stops a failed session whose old box the fleet could not delete', async () => {
+      await updateWorkbench(WB, { status: 'error', sandboxId: OLD_BOX, sandboxState: 'error', statusMessage: 'boom' });
+      vi.spyOn(fleet, 'deleteSandbox').mockRejectedValue(new Error('fleet host timed out'));
+      await expect(retryWorkbench(WB)).rejects.toThrow('fleet host timed out');
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'error', sandboxId: OLD_BOX });
+    });
+
+    it.each([
+      ['a ready session', 409, 'not_failed', { status: 'ready', sandboxId: OLD_BOX, sandboxState: 'running', statusMessage: null }],
+      ['a moving session', 409, 'not_failed', { status: 'moving', sandboxId: OLD_BOX, sandboxState: 'running' }],
+      ['an archived session', 409, 'not_ready', { status: 'archived', sandboxId: OLD_BOX, sandboxState: 'deleted', archivedAt: new Date() }],
+      ['an archived session still provisioning', 409, 'not_ready', { sandboxId: OLD_BOX, archivedAt: new Date() }],
+      ['a local session', 409, 'local_runtime', { runtime: 'local' }],
+    ] as const)('refuses %s and changes nothing', async (_name, status, code, patch) => {
+      await updateWorkbench(WB, patch as never);
+      const before = await getWorkbench(WB);
+      await expect(retryWorkbench(WB)).rejects.toMatchObject({ status, code });
+      expect(fleet.deleted).toEqual([]);
+      expect(await getWorkbench(WB)).toEqual(before);
+    });
+
+    it('a provision hung in its setup script stops when a Retry moves the row, and the new provision runs to ready', async () => {
+      const first = provisionWorkbench(WB);
+      await inSetup;
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'provisioning', sandboxId: OLD_BOX, statusMessage: 'Running the setup script' });
+
+      await retryWorkbench(WB);
+      expect(fleet.deleted).toEqual([OLD_BOX]);
+      // The hung run ends on its own, and lets the claim go.
+      await first;
+      expect(await claims()).toEqual([]);
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'provisioning', sandboxId: NEW_BOX });
+
+      await sweepStrandedProvisions();
+      await vi.waitFor(async () => expect(await getWorkbench(WB)).toMatchObject({ status: 'ready', sandboxId: NEW_BOX, statusMessage: null }));
+      expect(fleet.created.map((c) => c.id)).toEqual([OLD_BOX, NEW_BOX]);
+      expect(setupRuns).toBe(2);
+      expect(await failureEvents()).toEqual([]);
+      await vi.waitFor(async () => expect(await claims()).toEqual([]));
+    });
+
+    it('a hung setup run stops on drain and writes no failure', async () => {
+      await testDb.db.update(workbenchChats).set({ queuedMessages: [{ id: 'm1', text: 'first prompt' }] as never });
+      const first = provisionWorkbench(WB);
+      await inSetup;
+      beginWorkbenchDrain();
+      await first;
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'provisioning', sandboxId: OLD_BOX, statusMessage: 'Running the setup script' });
+      expect((await getChat('chat'))?.status).not.toBe('error');
+      expect(await failureEvents()).toEqual([]);
+      expect(await claims()).toEqual([]);
+    });
+
+    it('a hung setup run stops when its claim is lost, and writes no failure', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      const first = provisionWorkbench(WB);
+      await inSetup;
+      await testDb.db.execute(sql`UPDATE workbench_maintenance_claims SET token = 'other-instance' WHERE name = ${CLAIM}`);
+      vi.advanceTimersByTime(20_000);
+      await first;
+      expect(await getWorkbench(WB)).toMatchObject({ status: 'provisioning', sandboxId: OLD_BOX });
+      expect(await failureEvents()).toEqual([]);
+      expect(await claims()).toEqual([{ name: CLAIM, token: 'other-instance' }]);
+    });
+
+    it('a setup script that exits still makes the session ready', async () => {
+      vi.spyOn(scripts, 'startScript').mockResolvedValue({ done: Promise.resolve(3) });
+      await provisionWorkbench(WB);
+      expect(await getWorkbench(WB)).toMatchObject({
+        status: 'ready',
+        statusMessage: 'The setup script exited with 3. Its output is in the Scripts panel.',
+      });
     });
   });
 });

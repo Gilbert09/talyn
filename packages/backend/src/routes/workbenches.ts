@@ -685,12 +685,12 @@ export function workbenchRoutes(): Router {
     }
   });
 
-  /** Provision again after a failed start. Refused, unchanged, while the fleet still cannot run it. */
+  /** Provision again after a failed or stuck start. Refused, unchanged, while the fleet still cannot run it. */
   router.post('/:id/retry', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      if (row.runtime === 'sandbox' && row.status === 'error' && !row.archivedAt) {
+      if (row.runtime === 'sandbox' && (row.status === 'error' || row.status === 'provisioning') && !row.archivedAt) {
         const user = assertUser(req);
         const refusal = sandboxRefusal(
           await workbenchReadiness(row.workspaceId, { id: user.id, email: user.email }),

@@ -115,7 +115,7 @@ describe('session token tool scope', () => {
   });
 
   it.each([
-    'talyn_archive_session', 'talyn_create_session', 'talyn_list_sessions', 'talyn_set_merge_queue',
+    'talyn_archive_session', 'talyn_retry_session', 'talyn_create_session', 'talyn_list_sessions', 'talyn_set_merge_queue',
     'talyn_get_merge_queue_timeline', 'talyn_set_merge_queue_stack', 'talyn_list_pull_requests',
     'talyn_create_task', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
@@ -195,6 +195,7 @@ describe('session self-calls', () => {
     ['send_session_message', { session_id: 's1', text: 'hi' }, 'This is your own session'],
     ['send_session_message', { chat_id: 'self-other-chat', text: 'hi' }, 'This is your own session'],
     ['restore_session', { session_id: 's1' }, 'There is nothing to restore'],
+    ['retry_session', { session_id: 's1' }, 'There is nothing to retry'],
   ])('refuses %s %j on itself', async (name, args, message) => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches/s1': () => session() });
     await expect(tool(name).handler(OWNER, args, SELF)).rejects.toThrow(message);
@@ -205,9 +206,10 @@ describe('session self-calls', () => {
     ['cancel_session_turn', { chat_id: 'other-chat' }, 'POST /api/v1/workbenches/chats/other-chat/cancel'],
     ['send_session_message', { chat_id: 'other-chat', text: 'hi' }, 'POST /api/v1/workbenches/chats/other-chat/messages'],
     ['restore_session', { session_id: 's2' }, 'POST /api/v1/workbenches/s2/restore'],
+    ['retry_session', { session_id: 's2' }, 'POST /api/v1/workbenches/s2/retry'],
   ])('lets %s %j act on another session', async (name, args, route) => {
     const { calls } = mockApi({
-      [route]: () => (name === 'restore_session' ? session({ id: 's2' }) : { queued: false }),
+      [route]: () => (['restore_session', 'retry_session'].includes(name) ? session({ id: 's2' }) : { queued: false }),
       'GET /api/v1/workbenches/s2': () => session({ id: 's2' }),
     });
     await tool(name).handler(OWNER, args, SELF);
