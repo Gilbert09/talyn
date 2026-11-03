@@ -45,6 +45,14 @@ import {
 } from './helpers.js';
 import type { McpCallContext } from './index.js';
 
+/** The old step states that `POST /repositories/:id/setup-recipe/steps` answers, as Setup list statuses. */
+const RECORDED_STATUS: Record<RecordSetupStepResult['steps'][number]['state'], string> = {
+  waiting: 'suggested',
+  live: 'active',
+  reverted: 'dismissed',
+  failing: 'disabled',
+};
+
 const FEATURE = 'workbenches' as const;
 const LOCAL_MESSAGE =
   "This session runs on the user's own machine in the Talyn desktop app; open it there.";
@@ -638,7 +646,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'record_setup_step',
-    `Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Record only a step that every session on this repository needs: the dependency install, or a toolchain or CLI that the normal build, test or lint uses, for example \`cargo install sqlx-cli\` in a repository with sqlx migrations. Never record a step for one task, such as a browser for one test, a database or service for one script, or a one-off tool. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A step runs on new boxes only when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${Math.round(SETUP_STEP_LIVE_SHARE * 100)}% of the repository's sessions of the last ${SETUP_STEP_WINDOW_DAYS} days need it. A step that fails on two boxes in a row stops. Docker starts on demand, so never record a Docker start. A person can revert any step.`,
+    `Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Record only a step that every session on this repository needs: the dependency install, or a toolchain or CLI that the normal build, test or lint uses, for example \`cargo install sqlx-cli\` in a repository with sqlx migrations. Never record a step for one task, such as a browser for one test, a database or service for one script, or a one-off tool. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A new step is suggested in the repository's Setup list. It runs on new boxes only when a person accepts it, or when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${Math.round(SETUP_STEP_LIVE_SHARE * 100)}% of the repository's sessions of the last ${SETUP_STEP_WINDOW_DAYS} days need it. An install step goes into the image. A step that fails on two boxes in a row stops. Docker starts on demand, so never record a Docker start. A person can dismiss any learned step.`,
     {
       command: { type: 'string', description: 'One shell command, as you ran it. No secrets.' },
       why: { type: 'string', description: 'Why later sessions need this step.' },
@@ -662,9 +670,9 @@ export const SESSIONS = [
           { command, why, sessionId: wb.id }
         );
         const lines = result.steps.map(
-          (s) => `  ${s.id}  [${s.kind}, ${s.phase === 'install' ? 'box setup and bake' : 'box setup'}]  ${s.command}${s.stateReason ? `\n    ${s.stateReason}` : ''}`
+          (s) => `  ${s.id}  ${RECORDED_STATUS[s.state]}  [${s.kind}, ${s.phase === 'install' ? 'image' : 'box'}]  ${s.command}${s.stateReason ? `\n    ${s.stateReason}` : ''}`
         );
-        return [`Added to the setup of ${wb.repoFullName}. A live step runs on new boxes after the repository's own setup:`, ...lines].join('\n');
+        return [`Added to the Setup list of ${wb.repoFullName}. An active step runs on new boxes after the repository's own setup:`, ...lines].join('\n');
       }),
     FEATURE
   ),

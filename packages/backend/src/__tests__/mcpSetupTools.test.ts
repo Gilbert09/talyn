@@ -177,7 +177,7 @@ describe('session setup and timing tools', () => {
   });
 
   describe('record_setup_step', () => {
-    const recorded = { steps: [{ id: 'st_1', command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install' }] };
+    const recorded = { steps: [{ id: 'st_1', command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install', state: 'waiting' }] };
 
     it("adds the step to the calling session's repository", async () => {
       const { calls } = mockApi({
@@ -186,8 +186,23 @@ describe('session setup and timing tools', () => {
       });
       const text = await tool('record_setup_step').handler(OWNER, { command: 'cargo install sqlx-cli', why: 'migrations need sqlx' }, SELF);
       expect(calls[1].body).toEqual({ command: 'cargo install sqlx-cli', why: 'migrations need sqlx', sessionId: 's1' });
-      expect(text).toContain('Added to the setup of posthog/posthog');
-      expect(text).toContain('st_1  [cargo, box setup and bake]  cargo install sqlx-cli');
+      expect(text).toContain('Added to the Setup list of posthog/posthog');
+      expect(text).toContain('st_1  suggested  [cargo, image]  cargo install sqlx-cli');
+    });
+
+    it.each([
+      ['waiting', 'install', 'suggested  [cargo, image]'],
+      ['live', 'install', 'active  [cargo, image]'],
+      ['live', 'start', 'active  [cargo, box]'],
+      ['reverted', 'install', 'dismissed  [cargo, image]'],
+      ['failing', 'start', 'disabled  [cargo, box]'],
+    ])('shows a %s %s step in Setup list words', async (state, phase, words) => {
+      mockApi({
+        'GET /api/v1/workbenches/s1': () => wb(),
+        'POST /api/v1/repositories/repo1/setup-recipe/steps': () => ({ steps: [{ ...recorded.steps[0], state, phase }] }),
+      });
+      const text = await tool('record_setup_step').handler(OWNER, { command: 'cargo install sqlx-cli', why: 'y' }, SELF);
+      expect(text).toContain(`st_1  ${words}  cargo install sqlx-cli`);
     });
 
     it('says why a recorded step waits, and tells the agent to record only what every session needs', async () => {
@@ -203,6 +218,8 @@ describe('session setup and timing tools', () => {
       expect(description).toContain('Record only a step that every session on this repository needs');
       expect(description).toContain('a browser for one test');
       expect(description).toContain('at least 3 sessions and 30%');
+      expect(description).toContain('A new step is suggested');
+      expect(description).not.toContain('revert');
     });
 
     it("passes on the backend's refusal", async () => {
@@ -238,95 +255,121 @@ describe('session setup and timing tools', () => {
     });
   });
 
-  describe('setup step list and revert', () => {
+  describe('setup step list and dismiss', () => {
     const step = (overrides: Record<string, unknown> = {}) => ({
-      id: 'st_1', command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install', why: null, source: 'learned',
-      sourceWorkbenchId: 's1', firstSeenAt: '2026-10-30T10:00:00.000Z', lastSeenAt: '2026-10-31T10:00:00.000Z', seenCount: 2,
-      appliedAt: null, disabledAt: null, disabledReason: null, bakeDisabledAt: null, bakeDisabledReason: null, ...overrides,
+      id: 'st_1', repositoryId: 'repo1', position: 0, name: 'cargo install sqlx-cli', command: 'cargo install sqlx-cli',
+      kind: 'cargo', runOn: 'image', origin: 'learned', status: 'suggested', statusReason: null, statusChangedAt: null,
+      acceptedBy: null, timeoutSec: null, boxOnlyReason: null, why: null, sourceWorkbenchId: 's1', seenCount: 2, sessionCount: 2,
+      firstSeenAt: '2026-10-30T10:00:00.000Z', lastSeenAt: '2026-10-31T10:00:00.000Z', confirmedAt: null, imageAppliedAt: null,
+      imageFailedAt: null, imageFailureReason: null, boxFailureCount: 0, boxLastFailure: null, lastDurationMs: null,
+      typicalDurationMs: null, measuredBoxes: 0, createdAt: '2026-10-30T10:00:00.000Z', updatedAt: '2026-10-30T10:00:00.000Z',
+      ...overrides,
     });
-    const recipe = (steps: unknown[], learningDisabled = false) => ({ repositoryId: 'repo1', learningDisabled, maxSteps: 20, steps });
-    const RECIPE = '/api/v1/repositories/repo1/setup-recipe';
+    const setup = (steps: unknown[], overrides: Record<string, unknown> = {}) => ({
+      repositoryId: 'repo1', learningDisabled: false, windowDays: 14, maxLearnedSteps: 20,
+      limits: { imageMaxSteps: 20, imageTotalSec: 3600, maxHosts: 10, maxUserSteps: 40, stepMaxSec: 3600 },
+      repoSetup: { command: null, source: null, readAt: null, runOnBox: 'always' },
+      steps, hosts: [], image: null, lastSetupTiming: null, timingHistory: [], ...overrides,
+    });
+    const SETUP = '/api/v1/repositories/repo1/setup';
 
-    it('are scoped: list for a session token, revert for a user token only', () => {
+    it('are scoped: list for a session token, dismiss for a user token only', () => {
       expect(SESSION_TOKEN_TOOLS.has('talyn_list_setup_steps')).toBe(true);
       expect(SESSION_TOKEN_TOOLS.has('talyn_revert_setup_step')).toBe(false);
       expect(tool('list_setup_steps').annotations.readOnlyHint).toBe(true);
       expect(tool('revert_setup_step').annotations.destructiveHint).toBe(true);
     });
 
-    it('lists each step with its state and whether learning is on', async () => {
+    it('lists each step with its status, place, origin and name, and whether learning is on', async () => {
       const { calls } = mockApi({
-        [`GET ${RECIPE}`]: () => recipe([
+        [`GET ${SETUP}`]: () => setup([
           step(),
-          step({ id: 'st_2', command: 'apt-get install -y jq', appliedAt: '2026-11-01T00:00:00.000Z', sourceWorkbenchId: null, source: 'agent' }),
-          step({ id: 'st_3', command: 'brew install x', disabledAt: '2026-11-02T09:00:00.000Z', disabledReason: 'not needed' }),
-        ], true),
+          step({ id: 'st_2', name: 'Install jq', command: 'apt-get install -y jq', status: 'active', origin: 'agent', acceptedBy: 'talyn' }),
+          step({ id: 'st_3', name: 'Start redis', command: 'redis-server --daemonize yes', runOn: 'box', origin: 'user', status: 'active' }),
+          step({ id: 'st_4', status: 'dismissed', statusReason: 'Dismissed by a person.' }),
+          step({ id: 'st_5', status: 'disabled', runOn: 'both', statusReason: 'Failed on 2 boxes in a row. Last: exit 1' }),
+        ], { learningDisabled: true, repoSetup: { command: 'npm ci', source: 'talyn', readAt: null, runOnBox: 'moved' } }),
       });
       const text = await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' });
-      expect(calls).toHaveLength(1);
-      expect(text).toContain('Learning is off. 2 of 20 live.');
-      expect(text).toContain('st_1  cargo install sqlx-cli  [cargo, install]  session s1, learned, 2026-10-30  box setup only');
-      expect(text).toContain('st_2  apt-get install -y jq  [cargo, install]  no session, agent, 2026-10-30  settled into the bake');
-      expect(text).toContain('st_3  brew install x  [cargo, install]  session s1, learned, 2026-10-30  reverted 2026-11-02 (not needed)');
+      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([`GET ${SETUP}`]);
+      for (const part of [
+        'Setup list of repo1. Learning is off. 2 active, 1 suggested, 1 disabled, 1 dismissed.',
+        'Repository setup: npm ci (on each box: moved).',
+        '  st_1  suggested  [image, learned]  cargo install sqlx-cli\n',
+        '  st_2  active  [image, agent]  Install jq\n    Command: apt-get install -y jq',
+        '  st_3  active  [box, user]  Start redis\n    Command: redis-server --daemonize yes',
+        '  st_4  dismissed  [image, learned]  cargo install sqlx-cli\n    Dismissed by a person.',
+        '  st_5  disabled  [both, learned]  cargo install sqlx-cli\n    Failed on 2 boxes in a row. Last: exit 1',
+      ]) expect(text).toContain(part);
     });
 
-    it('shows how long each step and the last setup took, and why a step is in its state', async () => {
+    it('shows how long each step and the last setup took, and why a step has its status', async () => {
       mockApi({
-        [`GET ${RECIPE}`]: () => ({
-          ...recipe([
-            step({ lastDurationMs: 192_000, typicalDurationMs: 170_000, measuredBoxes: 4, stateReason: 'Live: needed by 9 of 30 sessions in the last 14 days (30%).' }),
-            step({ id: 'st_2', lastDurationMs: 5_000, typicalDurationMs: 5_000, measuredBoxes: 1 }),
-            step({ id: 'st_3', stateReason: 'Waiting: needed by 2 of 31 sessions in the last 14 days.' }),
-          ]),
-          lastSetupTiming: { totalMs: 580_000, repositoryMs: 125_000, learnedMs: 455_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: 's1' },
+        [`GET ${SETUP}`]: () => setup([
+          step({ lastDurationMs: 192_000, typicalDurationMs: 170_000, measuredBoxes: 4, verdictReason: 'Live: needed by 9 of 30 sessions in the last 14 days (30%).' }),
+          step({ id: 'st_2', lastDurationMs: 5_000, typicalDurationMs: 5_000, measuredBoxes: 1 }),
+          step({ id: 'st_3', status: 'suggested', statusReason: 'Talyn removed this step on 2026-11-02: needed by 2 of 31 sessions.', verdictReason: 'ignored' }),
+          step({ id: 'st_4', status: 'active', imageFailureReason: 'The step failed in the image build with exit 2.' }),
+        ], {
+          lastSetupTiming: {
+            totalMs: 580_000, repositoryMs: 125_000, learnedMs: 455_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: 's1',
+            setupBoxStepsMs: 400_000,
+          },
         }),
       });
       const text = await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' });
-      expect(text).toContain('Last setup took 9m 40s: repository setup 2m 5s, learned steps 7m 35s.');
-      expect(text).toContain('box setup only\n    took 3m 12s (typical 2m 50s). Live: needed by 9 of 30 sessions in the last 14 days (30%).');
+      expect(text).toContain('Last setup took 9m 40s: repository setup 2m 5s, setup steps 6m 40s.');
+      expect(text).toContain('sqlx-cli\n    Took 3m 12s (typical 2m 50s).\n    Live: needed by 9 of 30 sessions in the last 14 days (30%).');
       // One box: no typical time yet.
-      expect(text).toContain('box setup only\n    took 5s\n');
-      expect(text).toContain('box setup only\n    Waiting: needed by 2 of 31 sessions in the last 14 days.');
+      expect(text).toContain('sqlx-cli\n    Took 5s.\n');
+      expect(text).toContain('Talyn removed this step on 2026-11-02: needed by 2 of 31 sessions.');
+      expect(text).not.toContain('ignored');
+      expect(text).toContain('    Image build: The step failed in the image build with exit 2.');
     });
 
-    it('says only learned steps when the repository has no setup of its own', async () => {
-      mockApi({
-        [`GET ${RECIPE}`]: () => ({ ...recipe([]), lastSetupTiming: { totalMs: 9_000, repositoryMs: null, learnedMs: 9_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: null } }),
-      });
-      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('Last setup took 9s: learned steps 9s.');
+    it.each([
+      [{ totalMs: 9_000, repositoryMs: null, learnedMs: 9_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: null }, 'Last setup took 9s: setup steps 9s.'],
+      [{ totalMs: 9_000, repositoryMs: 4_000, learnedMs: 5_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: null, setupBoxStepsMs: null }, 'Last setup took 9s: repository setup 4s, setup steps 5s.'],
+    ])('reads the old and the new timing fields', async (lastSetupTiming, line) => {
+      mockApi({ [`GET ${SETUP}`]: () => setup([], { lastSetupTiming }) });
+      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain(line);
     });
 
-    it('says when there are no steps', async () => {
-      mockApi({ [`GET ${RECIPE}`]: () => recipe([]) });
-      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('No steps.');
+    it('says when there are no steps, and when the repository has no setup command', async () => {
+      mockApi({ [`GET ${SETUP}`]: () => setup([]) });
+      const text = await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' });
+      expect(text).toContain('No steps.');
+      expect(text).toContain('The repository has no setup command of its own.');
     });
 
-    it('reverts a step, and a second list shows it reverted', async () => {
-      let reverted = false;
+    it('dismisses a step, and shows the list after it', async () => {
       const { calls } = mockApi({
-        [`DELETE ${RECIPE}/steps/st_1`]: () => {
-          reverted = true;
-          return recipe([step({ disabledAt: '2026-11-03T00:00:00.000Z' })]);
-        },
-        [`GET ${RECIPE}`]: () => recipe([reverted ? step({ disabledAt: '2026-11-03T00:00:00.000Z' }) : step()]),
+        [`POST ${SETUP}/steps/st_1/dismiss`]: () => setup([step({ status: 'dismissed', statusReason: 'Dismissed by a person.' })]),
       });
       const text = await tool('revert_setup_step').handler(OWNER, { repository_id: 'repo1', step_id: 'st_1' });
-      expect(calls[0].method).toBe('DELETE');
-      expect(text).toContain('Reverted st_1.');
-      expect(text).toContain('0 of 20 live.');
-      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('reverted 2026-11-03');
+      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([`POST ${SETUP}/steps/st_1/dismiss`]);
+      expect(text).toContain('Dismissed st_1.');
+      expect(text).toContain('0 active, 0 suggested, 0 disabled, 1 dismissed.');
+    });
+
+    it("passes on the refusal to dismiss a person's own step", async () => {
+      mockApi({}, {
+        [`POST ${SETUP}/steps/st_1/dismiss`]: { status: 409, error: 'This is your own step. Remove it from the list instead.', code: 'not_learned' },
+      });
+      await expect(tool('revert_setup_step').handler(OWNER, { repository_id: 'repo1', step_id: 'st_1' }))
+        .rejects.toThrow('This is your own step. Remove it from the list instead.');
     });
 
     it.each(['list_setup_steps', 'revert_setup_step'])('answers not found for a repository of another workspace in %s', async (name) => {
       mockApi({}, {
-        [`GET ${RECIPE}`]: { status: 404, error: 'Repository not found.' },
-        [`DELETE ${RECIPE}/steps/st_1`]: { status: 404, error: 'Repository not found.' },
+        [`GET ${SETUP}`]: { status: 404, error: 'Repository not found.' },
+        [`POST ${SETUP}/steps/st_1/dismiss`]: { status: 404, error: 'Repository not found.' },
       });
       await expect(tool(name).handler(OWNER, { repository_id: 'repo1', step_id: 'st_1' })).rejects.toThrow(/not found/i);
     });
 
     it('answers not found for an unknown step', async () => {
-      mockApi({}, { [`DELETE ${RECIPE}/steps/nope`]: { status: 404, error: 'This repository has no such setup step.' } });
+      mockApi({}, { [`POST ${SETUP}/steps/nope/dismiss`]: { status: 404, error: 'This repository has no such setup step.' } });
       await expect(tool('revert_setup_step').handler(OWNER, { repository_id: 'repo1', step_id: 'nope' })).rejects.toThrow(/no such setup step/);
     });
 

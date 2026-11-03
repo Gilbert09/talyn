@@ -77,8 +77,8 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_list_github_repos` | Find accessible GitHub repositories. Use `search` to narrow the first 100 matches. |
 | `talyn_add_repository` | Watch a repository. Accept `owner/name` or separate owner and repository fields. |
 | `talyn_remove_repository` | Stop watching a repository. |
-| `talyn_list_setup_steps` | List the setup steps that sessions learned for a repository: id, command, recording session, date, and whether the step is reverted, settled into the bake, or box setup only. Also shows whether learning is on. Allowed for session tokens. |
-| `talyn_revert_setup_step` | Revert one learned setup step. It stops running on new boxes, stays listed as reverted, and Talyn does not learn it again. Not allowed for session tokens. |
+| `talyn_list_setup_steps` | List the Setup list of a repository, in order. Each step shows its id, its status (`active`, `suggested`, `dismissed` or `disabled`), where it runs (`image`, `box` or `both`), who added it (`user`, `learned` or `agent`), its name, its command, and why it has its status. The first lines show if learning is on, the repository's own setup command and the time of the last setup. Allowed for session tokens. |
+| `talyn_revert_setup_step` | Dismiss one learned setup step. It stops running on new boxes, leaves the image and stays in the list as dismissed, so Talyn does not suggest it again. Talyn refuses to dismiss a person's own step. Not allowed for session tokens. |
 
 ### Pull requests
 
@@ -175,6 +175,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
 | `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
 | `talyn_session_sandbox_status` | Read the state of a session's sandbox in plain words: starting, running, idle (with the time it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. It also shows the fleet host and size, what runs now, when the work was last saved, what is not pushed, failed saves and the last problem. Read-only. The fleet's record is cached for 10 seconds; when the fleet does not answer, that part is unknown. From a session token: the session itself, or a session in its thread. |
+| `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |

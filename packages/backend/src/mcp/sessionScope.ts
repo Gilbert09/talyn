@@ -84,11 +84,13 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_session_sandbox_status',
   // Repository setup that outlives the session, allowed on purpose: the
   // backend refuses secrets, downloaded scripts piped into a shell and data
-  // egress, logs each step with its session, and a person can revert it.
+  // egress, logs each step with its session, and the step is only suggested
+  // until a person or the frequency rule accepts it.
   'talyn_record_setup_step',
-  // Reading the steps is safe. Reverting is not here: it undoes setup that a
-  // person or another session chose, and an agent that reads untrusted text
-  // should not remove it. A person reverts steps in the app or with a user token.
+  // Reading the Setup list is safe. Dismissing (`talyn_revert_setup_step`) is
+  // not here: it undoes setup that a person or another session chose, and an
+  // agent that reads untrusted text should not remove it. A person dismisses
+  // steps in the app or with a user token.
   'talyn_list_setup_steps',
   // Workspace memory
   'talyn_memory_write',
