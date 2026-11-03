@@ -78,6 +78,8 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
       return <Loader2 className={cn(icon, 'animate-spin text-warning')} aria-label={label} />;
     case 'needs_reply':
       return <span className={cn(dot, 'bg-info')} aria-label={label} />;
+    case 'pr_opened':
+      return <GitPullRequest className={cn(icon, 'text-success')} aria-label={label} data-attr="sidebar-workbench-pr-opened" />;
     case 'pr_attention':
       return <AlertTriangle className={cn(icon, 'text-warning')} aria-label={label} />;
     case 'ready_to_merge':

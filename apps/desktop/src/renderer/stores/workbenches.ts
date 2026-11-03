@@ -82,6 +82,29 @@ export interface ScriptOutputState {
 }
 
 /** Keeps the newest output of a script. A dev server can print for hours. */
+/** What a workbench has that the user has not seen yet. */
+export interface UnseenUpdates {
+  /** Turns that finished while nobody looked. */
+  turns: number;
+  /** A pull request was linked while nobody looked. */
+  prOpened: boolean;
+}
+
+const NO_UNSEEN: UnseenUpdates = { turns: 0, prOpened: false };
+
+function hasLinkedPr(workbench: Pick<Workbench, 'pullRequestId' | 'pr'>): boolean {
+  return !!workbench.pullRequestId || !!workbench.pr;
+}
+
+/**
+ * True when a new pull request is the only unseen news. The turn that opened
+ * the PR also finishes, so one finished turn counts as the same news. A second
+ * finished turn is other news and brings the blue dot back.
+ */
+export function isPrOnlyUnseen(unseen: UnseenUpdates | undefined): boolean {
+  return !!unseen && unseen.prOpened && unseen.turns <= 1;
+}
+
 export const SCRIPT_OUTPUT_MAX_CHUNKS = 5000;
 
 export const TERMINAL_MIN_HEIGHT = DOCK_MIN_HEIGHT;
@@ -182,6 +205,12 @@ interface WorkbenchState {
   drafts: Record<string, string>;
   /** Chats that finished while nobody was looking. */
   unread: Record<string, true>;
+  /**
+   * Per workbench, what the user has not seen: how many turns finished and
+   * whether a pull request was opened. A row shows the PR icon instead of the
+   * blue dot when the PR opening is the only news (see `isPrOnlyUnseen`).
+   */
+  unseen: Record<string, UnseenUpdates>;
   /** Local runtime only: messages sent while a turn ran. The sandbox queue lives on the chat row. */
   localQueues: Record<string, WorkbenchQueuedMessage[]>;
   /** Script output per workbench, per script name. */
@@ -250,6 +279,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   terminalTab: 'terminal',
   drafts: {},
   unread: {},
+  unseen: {},
   localQueues: {},
   scriptOutput: {},
   newWorkbench: { seq: 0, prefill: null },
@@ -275,7 +305,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   upsertWorkbench: (workbench) =>
     set((s) => {
       if (s.workspaceId && workbench.workspaceId !== s.workspaceId) return s;
-      return { workbenches: { ...s.workbenches, [workbench.id]: workbench } };
+      const prev = s.workbenches[workbench.id];
+      const opened = !!prev && !hasLinkedPr(prev) && hasLinkedPr(workbench);
+      const looking = s.selectedWorkbenchId === workbench.id && (typeof document === 'undefined' || document.hasFocus());
+      const workbenches = { ...s.workbenches, [workbench.id]: workbench };
+      if (!opened || looking) return { workbenches };
+      const cur = s.unseen[workbench.id] ?? NO_UNSEEN;
+      return { workbenches, unseen: { ...s.unseen, [workbench.id]: { ...cur, prOpened: true } } };
     }),
 
   removeWorkbench: (id) =>
@@ -306,7 +342,15 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         s.selectedWorkbenchId === chat.workbenchId &&
         s.selectedChatByWorkbench[chat.workbenchId] === chat.id &&
         (typeof document === 'undefined' || document.hasFocus());
-      if (!looking) set((cur) => ({ unread: { ...cur.unread, [chat.id]: true } }));
+      if (!looking) {
+        set((cur) => {
+          const unseen = cur.unseen[chat.workbenchId] ?? NO_UNSEEN;
+          return {
+            unread: { ...cur.unread, [chat.id]: true },
+            unseen: { ...cur.unseen, [chat.workbenchId]: { ...unseen, turns: unseen.turns + 1 } },
+          };
+        });
+      }
       chatFinishedListener?.(chat, s.workbenches[chat.workbenchId]);
     }
   },
@@ -353,13 +397,21 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { chatEvents: { ...s.chatEvents, [chatId]: next } };
     }),
 
-  selectWorkbench: (id) => set({ selectedWorkbenchId: id }),
+  selectWorkbench: (id) =>
+    set((s) => {
+      if (!id || !s.unseen[id]) return { selectedWorkbenchId: id };
+      const unseen = { ...s.unseen };
+      delete unseen[id];
+      return { selectedWorkbenchId: id, unseen };
+    }),
 
   selectChat: (workbenchId, chatId) =>
     set((s) => {
       const unread = { ...s.unread };
       delete unread[chatId];
-      return { selectedChatByWorkbench: { ...s.selectedChatByWorkbench, [workbenchId]: chatId }, unread };
+      const unseen = { ...s.unseen };
+      delete unseen[workbenchId];
+      return { selectedChatByWorkbench: { ...s.selectedChatByWorkbench, [workbenchId]: chatId }, unread, unseen };
     }),
 
   hideChat: (workbenchId, chatId) =>
@@ -420,7 +472,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       if (!s.unread[chatId]) return s;
       const unread = { ...s.unread };
       delete unread[chatId];
-      return { unread };
+      const unseen = { ...s.unseen };
+      for (const [workbenchId, list] of Object.entries(s.chats)) {
+        if (list.some((c) => c.id === chatId)) delete unseen[workbenchId];
+      }
+      return { unread, unseen };
     }),
 
   enqueueLocal: (chatId, message) =>

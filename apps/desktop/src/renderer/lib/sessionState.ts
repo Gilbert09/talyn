@@ -23,7 +23,8 @@ export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | nu
 /**
  * One answer to "what is this session doing, and does it need me?", for the
  * sidebar row. In priority order: a failure, then live work, then a reply
- * that waits for you, then the pull request's state.
+ * that waits for you, then the pull request's state. A new pull request that
+ * is the only unseen news (`prOnlyUnseen`) shows the PR mark, not the dot.
  *
  * The PR part reuses the header's next action, so the row and the header
  * always agree: conflicts and failing checks need you, a green PR is ready to
@@ -34,6 +35,7 @@ export type SessionStateKind =
   | 'starting'
   | 'working'
   | 'needs_reply'
+  | 'pr_opened'
   | 'pr_attention'
   | 'ready_to_merge'
   | 'pr_waiting'
@@ -53,7 +55,8 @@ export function sessionState(
   workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>,
   chats: Pick<WorkbenchChat, 'id' | 'status'>[],
   unread: Record<string, true>,
-  pr: SessionPr | null
+  pr: SessionPr | null,
+  prOnlyUnseen = false
 ): SessionState {
   if (workbench.status === 'error' || workbench.sandboxState === 'error') {
     return { kind: 'failed', label: 'Failed to start' };
@@ -66,7 +69,12 @@ export function sessionState(
   if (chats.some((c) => c.status === 'awaiting_input')) {
     return { kind: 'needs_reply', label: 'Waiting for your answer' };
   }
-  if (chats.some((c) => unread[c.id])) return { kind: 'needs_reply', label: 'New reply' };
+  if (chats.some((c) => unread[c.id])) {
+    if (prOnlyUnseen && pr && pr.state === 'open') {
+      return { kind: 'pr_opened', label: `Pull request opened: #${pr.number}` };
+    }
+    return { kind: 'needs_reply', label: 'New reply' };
+  }
 
   if (pr) {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };

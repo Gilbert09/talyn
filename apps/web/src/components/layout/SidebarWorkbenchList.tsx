@@ -14,7 +14,7 @@ import {
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { useWorkbenchStore } from '../../stores/workbenches';
+import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { ThreadTag } from '../threads/ThreadChip';
@@ -70,12 +70,13 @@ function WorkbenchRow({
 }) {
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const unread = useWorkbenchStore((s) => s.unread);
+  const prOnlyUnseen = useWorkbenchStore((s) => isPrOnlyUnseen(s.unseen[workbench.id]));
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
   const pullRequest = sessionPr(workbench, pr);
-  const state = sessionState(workbench, chats ?? [], unread, pullRequest);
-  const isUnread = state.kind === 'needs_reply';
+  const state = sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen);
+  const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
