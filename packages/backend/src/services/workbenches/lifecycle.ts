@@ -247,12 +247,15 @@ async function createWaitingForCapacity(
     try {
       created = await createWorkbenchSandbox(row, sandboxId, { queueWhenFull: true });
     } catch (err) {
-      if (!(err instanceof FleetCapacityError) || isHibernationFetchFailed(err)) throw err;
+      // A 429 waits too: the fleet's per-tenant queue cap (queue_depth) and its
+      // rate limit both clear with time, and the same bound applies.
+      const throttled = err instanceof FleetThrottleError;
+      if (!(err instanceof FleetCapacityError || throttled) || isHibernationFetchFailed(err)) throw err;
       const left = timeLeft();
       if (left <= 0) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
       if (isWorkbenchDraining()) return null;
       assertOwned(claim);
-      await noteWait(err.reason);
+      await noteWait(throttled ? 'throttled' : err.reason);
       if (!(await pauseProvision(Math.min(capacityWaitDelayMs(attempt++, err.retryAfterMs), left), claim))) return null;
       assertOwned(claim);
       if (!(await isProvisionOwned(row.id, ownSandboxId))) throw superseded();

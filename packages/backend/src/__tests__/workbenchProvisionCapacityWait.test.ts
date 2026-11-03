@@ -124,6 +124,15 @@ describe('a provision waits for a free sandbox', () => {
     expect(await claims()).toEqual([]);
   });
 
+  it('waits through a 429 (the fleet queue cap or its rate limit) and ends ready', async () => {
+    const create = fleetAnswers(new FleetThrottleError('queue_depth: this tenant has too many queued sandboxes'));
+    await provisionWorkbench(WB);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(await getWorkbench(WB)).toMatchObject({ status: 'ready', sandboxId: BOX });
+    expect(messages).toContain(WAITING_FOR_SANDBOX_MESSAGE);
+    expect(await failureEvents()).toEqual([]);
+  });
+
   it('shows the waiting message on the row while it waits', async () => {
     let seen: string | null | undefined;
     fleetAnswers(busy(), async () => { seen = (await getWorkbench(WB))?.statusMessage; });
