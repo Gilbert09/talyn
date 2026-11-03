@@ -130,6 +130,15 @@ describe('sidebar session context menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Copy branch name' })).toBeInTheDocument();
   });
 
+  it('Copy session ID copies the session id', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
+    rightClick(/oslo/);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy session ID' }));
+    expect(writeText).toHaveBeenCalledWith('oslo');
+  });
+
   it('Open navigates to the session', async () => {
     render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
     rightClick(/oslo/);

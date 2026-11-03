@@ -95,6 +95,9 @@ function WorkbenchRow({
   const copyBranch = () => {
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
   };
+  const copySessionId = () => {
+    navigator.clipboard.writeText(workbench.id).catch(() => toast.error('Could not copy to clipboard'));
+  };
 
   const archive = async (opts: ArchiveOptions) => {
     setArchiving(true);
@@ -155,6 +158,10 @@ function WorkbenchRow({
               Copy branch name
             </ContextMenuItem>
           )}
+          <ContextMenuItem onSelect={copySessionId}>
+            <Copy className="h-3.5 w-3.5" />
+            Copy session ID
+          </ContextMenuItem>
           {prUrl && (
             <ContextMenuItem onSelect={() => void openExternal(prUrl)}>
               <ExternalLink className="h-3.5 w-3.5" />
