@@ -1,4 +1,6 @@
 import { sql } from 'drizzle-orm';
+import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
+import { SANDBOX_LOST_FAILED_MESSAGE } from '../services/workbenches/recovery.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeFleet } from './helpers/fakeFleet.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
@@ -137,6 +139,14 @@ describe('one provision per session across instances', () => {
     expect(fleet.created).toHaveLength(0);
     expect(runtime.runCapture).not.toHaveBeenCalled();
     expect(await getWorkbench(WB)).toEqual(before);
+  });
+
+  it('a box found lost while provisioning ends in error with a message that asks for a Retry', async () => {
+    onClone = () => { throw new FleetRunNotFoundError('gone'); };
+    await provisionWorkbench(WB);
+    const row = await getWorkbench(WB);
+    expect(row).toMatchObject({ status: 'error', sandboxState: 'error', statusMessage: SANDBOX_LOST_FAILED_MESSAGE });
+    expect(row?.statusMessage).not.toContain('is starting');
   });
 
   it('a stale run after a Retry cannot fail the new generation', async () => {

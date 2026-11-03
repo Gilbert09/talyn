@@ -11,6 +11,7 @@ import { writeChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { FleetHttpError } from '../selfHosted/client.js';
 import { WorkbenchError } from './errors.js';
+import { describeExecFailure } from './execFailures.js';
 import { parseSections, sectionsScript } from './execFraming.js';
 import { publicWorkbench } from './prLink.js';
 import { fleetClientFor, MERGE_BASE_DEEPEN_BY, repoDirFor, runCapture } from './sandboxRuntime.js';
@@ -29,6 +30,21 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 /** Untracked files whose lines are counted for the diff stat. Beyond it they count 0 — a cosmetic number, not worth a slow diff. */
 const MAX_COUNTED_UNTRACKED = 1000;
+
+/**
+ * The fleet's own error text for a box whose exec ran nothing (exit -1, no
+ * output). Best effort: a failed look gives no reason, never a new error.
+ */
+async function fleetReasonFor(row: WorkbenchRow, r: { exitCode: number; stderr: string }): Promise<string | null> {
+  if (r.exitCode !== -1 || r.stderr.trim() || !row.sandboxId) return null;
+  try {
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const { sandbox } = await client.getSandbox(row.sandboxId);
+    return sandbox?.error ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** A path the user or the agent named, refused unless it stays inside the repository. */
 export function assertRepoPath(path: string): string {
@@ -100,7 +116,7 @@ export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
-    throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
+    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
   }
   const s = parseSections(r.stdout);
   const counts: Record<string, number> = {};
@@ -165,7 +181,7 @@ export async function getPatch(row: WorkbenchRow, path?: string, scope: Workbenc
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
-    throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
+    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
   }
   return { patch: r.stdout };
 }

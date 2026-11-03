@@ -37,7 +37,13 @@ import {
 } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
-import { isHibernationLost, keptSandboxIdsFor, recordRecoveredTranscript } from './recovery.js';
+import {
+  isHibernationLost,
+  keptSandboxIdsFor,
+  recordRecoveredTranscript,
+  SANDBOX_LOST_FAILED_MESSAGE,
+  SANDBOX_LOST_MESSAGE,
+} from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
 import { effectiveRepositoryBake, recordBoxSetupResults } from './setupRecipe.js';
 import {
@@ -382,8 +388,10 @@ function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['setting
  * retry. A workbench archived, retried or restored while this ran is left
  * alone: the write names the sandbox id this run used.
  */
-async function failProvision(workbenchId: string, sandboxId: string | null, message: string): Promise<void> {
+async function failProvision(workbenchId: string, sandboxId: string | null, rawMessage: string): Promise<void> {
   if (isWorkbenchDraining()) return;
+  // A lost box found while provisioning ends in `error`: nothing is starting a new one.
+  const message = rawMessage === SANDBOX_LOST_MESSAGE ? SANDBOX_LOST_FAILED_MESSAGE : rawMessage;
   const row = await failProvisioningWorkbench(workbenchId, sandboxId, message);
   if (!row) {
     console.warn(`[workbench] not failing ${workbenchId}: it moved on from sandbox ${sandboxId ?? '(none)'} (${message})`);

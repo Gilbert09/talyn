@@ -107,3 +107,28 @@ export function grownDiskMib(probe: DiskProbe, currentDiskMib?: number | null): 
   const current = Math.max(currentDiskMib && currentDiskMib > 0 ? currentDiskMib : 0, Math.ceil(probe.sizeBytes / (1024 * 1024)));
   return current + Math.ceil(need / (1024 * 1024));
 }
+
+// ============================================================================
+// Failed exec, in words
+// ============================================================================
+
+export const SANDBOX_DISK_TROUBLE_MESSAGE = "The sandbox's disk is full or failing. Move the session to a new sandbox.";
+
+/**
+ * A failed exec as one sentence for the person. A full disk gets its own
+ * words. An exec with no exit code and no output never ran its command, so
+ * `fleetReason` (the fleet's own error text, when it gave one) says why.
+ */
+export function describeExecFailure(
+  what: string,
+  r: { exitCode: number; stdout?: string; stderr: string },
+  fleetReason?: string | null,
+): string {
+  const reason = fleetReason?.trim().slice(0, 300) || '';
+  if (isDiskFullText(r.stderr) || isDiskFullText(r.stdout) || isDiskFullText(reason)) return SANDBOX_DISK_TROUBLE_MESSAGE;
+  const stderr = r.stderr.trim();
+  if (r.exitCode === -1 && !stderr) {
+    return `Talyn could not run ${what} in the sandbox.${reason ? ` The fleet said: ${reason}` : ' The fleet gave no reason.'}`;
+  }
+  return `${what} failed in the sandbox (exit ${r.exitCode}): ${stderr.slice(-500)}`;
+}

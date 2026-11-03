@@ -9,6 +9,8 @@ import { NO_CHECKPOINT_NOTE } from './workCheckpointScripts.js';
 import { appendEvents, claimLostWorkbench, failLostWorkbench, listChats, rowToChat, updateChat, type WorkbenchRow } from './store.js';
 
 export const SANDBOX_LOST_MESSAGE = 'The sandbox was lost. Talyn is starting a new one.';
+/** The message when the session ends in `error` after a loss and no replacement is starting. */
+export const SANDBOX_LOST_FAILED_MESSAGE = 'The sandbox was lost. Retry to start a new one.';
 /** The note when no checkpoint of the work exists. `recoveryWorkNote` writes the others. */
 export const SANDBOX_RESTORED_NOTE = NO_CHECKPOINT_NOTE;
 
