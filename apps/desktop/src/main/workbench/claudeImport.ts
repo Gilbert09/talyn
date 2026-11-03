@@ -308,6 +308,8 @@ async function runGit(cwd: string, args: string[], sink?: (chunk: Buffer) => Pro
     }
   } catch (err) {
     child.kill();
+    // On Windows a running git holds its cwd, so the caller cannot remove the folder until it exits.
+    await exited.catch(() => undefined);
     throw err;
   }
   return { code: await exited, stdout: Buffer.concat(out), stderr };
@@ -379,7 +381,9 @@ export async function prepareClaudeImport(
   if (!file) throw new Error('Could not find that conversation on this machine.');
   const checkout = await checkoutRoot(input.cwd);
   if (!checkout) throw new Error(`${input.cwd} is not a Git checkout.`);
-  const root = (await gitText(checkout.root, 'rev-parse', '--show-toplevel')) ?? checkout.root;
+  const toplevel = await gitText(checkout.root, 'rev-parse', '--show-toplevel');
+  // Git prints forward slashes on Windows; resolve to the native form.
+  const root = toplevel ? path.resolve(toplevel) : checkout.root;
 
   const baseRef = await remoteBaseRef(root);
   if (!baseRef) throw new Error('Could not find the remote default branch. Run git fetch, then try again.');

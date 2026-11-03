@@ -310,7 +310,7 @@ async function checkedOutAt(
   if (list.exitCode !== 0) return null;
   let current: string | null = null;
   for (const line of list.stdout.split('\0')) {
-    if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
+    if (line.startsWith('worktree ')) current = path.resolve(line.slice('worktree '.length));
     else if (line === `branch refs/heads/${branch}`) return current;
   }
   return null;
