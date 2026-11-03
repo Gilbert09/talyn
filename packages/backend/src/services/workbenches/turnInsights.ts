@@ -14,7 +14,7 @@ import { workbenchChats, workbenchTurnTimings as timings } from '../../db/schema
 import { createConcurrencyLimit } from '../concurrencyLimit.js';
 import { debugBus } from '../debugBus.js';
 import { fleetClientFor, repoDirFor } from './sandboxRuntime.js';
-import { hasBakedSteps, learningDisabled, noteBakeResults, recordSetupSteps } from './setupRecipe.js';
+import { hasBakedSteps, learningDisabled, noteBakeResults, recordSetupSteps, recordStepUses } from './setupRecipe.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -190,6 +190,7 @@ export async function analyseTurn(chatId: string, turn: number, deps: TurnInsigh
       candidates: extraction.steps,
     });
   }
+  await recordStepUses({ repositoryId: row.repositoryId, workbenchId: row.id, calls: loaded.calls });
   await checkBakeResults(row, deps).catch((error) => {
     debugBus.recordEvent({
       service: 'setup_recipe',

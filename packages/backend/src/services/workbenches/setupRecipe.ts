@@ -1,18 +1,24 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, count, eq, gt, isNotNull, isNull, lte, max, ne, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, isNotNull, isNull, lte, max, or, sql } from 'drizzle-orm';
 import {
   bakeWithLearnedSteps,
+  isHeavySetupStep,
   learnedBakeStepId,
   LEGACY_DOCKER_START_COMMAND,
   mergeLearnedSetup,
   parseLearnedStepResults,
+  parseSetupTiming,
   redactSecrets,
   setupStepIdentity,
   SETUP_RECIPE_MAX_STEPS,
   SETUP_RECIPE_SETTLE_MS,
   SETUP_STEP_MAX_BOX_FAILURES,
-  SETUP_STEP_MIN_SESSIONS,
   SETUP_STEP_TIMEOUT_SEC,
+  SETUP_STEP_TYPICAL_WEIGHT,
+  SETUP_STEP_WINDOW_DAYS,
+  setupStepUsed,
+  setupStepVerdict,
+  turnCommandWords,
   type AppliedSetupStep,
   type BakeStepResult,
   type LearnedStepResult,
@@ -23,11 +29,18 @@ import {
   type SetupStepKind,
   type SetupStepPhase,
   type SetupStepSource,
+  type SetupTiming,
+  type TurnToolCall,
   type WorkbenchConfig,
   type WorkbenchSettings,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { repositories, repositorySetupStepSessions as stepSessions, repositorySetupSteps as steps } from '../../db/schema.js';
+import {
+  repositories,
+  repositorySetupStepSessions as stepSessions,
+  repositorySetupSteps as steps,
+  workbenches,
+} from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { scriptOutput } from './scriptStore.js';
 
@@ -35,6 +48,14 @@ import { scriptOutput } from './scriptStore.js';
  * The setup recipe of a repository: storage, the box setup, and the bake.
  * The rules that find steps and the shapes they are applied in are in
  * `packages/shared/src/setupRecipe.ts`.
+ *
+ * A step runs on new boxes (`confirmed_at` set) only while enough of the
+ * repository's recent sessions need it: see `setupStepVerdict`. A session
+ * needs a step when it ran the step, or, for a live step, when it used what
+ * the step installs (`recordStepUses`). `repository_setup_step_sessions` holds
+ * both, one row per (step, session). {@link reconcileSetupSteps} applies the
+ * verdict when a box is set up, when a step is recorded and when the recipe
+ * is read.
  *
  * No lock anywhere. The unique (repository, step key) index makes a step that
  * two sessions learn at once one row, and every change is one statement.
@@ -64,13 +85,16 @@ export const STEP_COLUMNS = {
   boxLastFailure: steps.boxLastFailure,
   boxDisabledAt: steps.boxDisabledAt,
   boxDisabledReason: steps.boxDisabledReason,
+  lastDurationMs: steps.lastDurationMs,
+  typicalDurationMs: steps.typicalDurationMs,
+  measuredBoxes: steps.measuredBoxes,
 } as const;
 
 type StepRow = Pick<typeof steps.$inferSelect, keyof typeof STEP_COLUMNS>;
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
-export function rowToStep(row: StepRow): SetupRecipeStep {
+export function rowToStep(row: StepRow, usage?: StepUsage): SetupRecipeStep {
   return {
     id: row.id,
     command: row.command,
@@ -94,7 +118,26 @@ export function rowToStep(row: StepRow): SetupRecipeStep {
     boxLastFailure: row.boxLastFailure,
     boxDisabledAt: iso(row.boxDisabledAt),
     boxDisabledReason: row.boxDisabledReason,
+    lastDurationMs: row.lastDurationMs,
+    typicalDurationMs: row.typicalDurationMs,
+    measuredBoxes: row.measuredBoxes,
+    ...(usage
+      ? {
+          recentNeededSessions: usage.neededBy,
+          recentSessions: usage.sessions,
+          share: usage.sessions > 0 ? usage.neededBy / usage.sessions : null,
+          heavy: usage.heavy,
+          ...(usage.reason ? { stateReason: usage.reason } : {}),
+        }
+      : {}),
   };
+}
+
+interface StepUsage {
+  neededBy: number;
+  sessions: number;
+  heavy: boolean;
+  reason: string | null;
 }
 
 /** The dedupe key. Keyed on {@link setupStepIdentity}, which is the command for every kind but cargo. */
@@ -102,36 +145,164 @@ export function stepKey(kind: SetupStepKind, command: string): string {
   return createHash('sha256').update(`${kind}\0${setupStepIdentity(kind, command)}`).digest('hex');
 }
 
-/** Only the flag and the bake: `repositories.settings` also holds the preview detection. */
-async function repositorySetupSettings(repositoryId: string): Promise<{ exists: boolean; disabled: boolean; bake: RepositoryBake | null }> {
+interface SetupSettings {
+  exists: boolean;
+  disabled: boolean;
+  bake: RepositoryBake | null;
+  /** When Talyn first counted uses of live steps for this repository (`recordStepUses`). */
+  usageSince: Date | null;
+  timing: SetupTiming | null;
+}
+
+/** Only the flag, the bake and the usage mark: `repositories.settings` also holds the preview detection. */
+async function repositorySetupSettings(repositoryId: string): Promise<SetupSettings> {
   const [row] = await db()
     .select({
       disabled: sql<boolean>`coalesce((${repositories.settings} -> 'setupLearning' ->> 'disabled')::boolean, false)`,
       bake: sql<RepositoryBake | null>`${repositories.settings} -> 'bake'`,
+      usageSince: sql<string | null>`${repositories.settings} ->> 'setupUsageSince'`,
+      timing: sql<SetupTiming | null>`${repositories.settings} -> 'setupTiming'`,
     })
     .from(repositories)
     .where(eq(repositories.id, repositoryId))
     .limit(1);
-  if (!row) return { exists: false, disabled: false, bake: null };
+  if (!row) return { exists: false, disabled: false, bake: null, usageSince: null, timing: null };
   const bake = typeof row.bake === 'string' ? (JSON.parse(row.bake) as RepositoryBake | null) : row.bake;
-  return { exists: true, disabled: row.disabled === true || (row.disabled as unknown) === 't', bake: bake ?? null };
+  const usageSince = row.usageSince ? new Date(row.usageSince) : null;
+  return {
+    exists: true,
+    disabled: row.disabled === true || (row.disabled as unknown) === 't',
+    bake: bake ?? null,
+    usageSince: usageSince && !Number.isNaN(usageSince.getTime()) ? usageSince : null,
+    timing: (typeof row.timing === 'string' ? (JSON.parse(row.timing) as SetupTiming | null) : row.timing) ?? null,
+  };
 }
 
 export async function learningDisabled(repositoryId: string): Promise<boolean> {
   return (await repositorySetupSettings(repositoryId)).disabled;
 }
 
-export async function getSetupRecipe(repositoryId: string): Promise<SetupRecipe> {
-  const [settings, rows] = await Promise.all([
-    repositorySetupSettings(repositoryId),
-    db().select(STEP_COLUMNS).from(steps).where(eq(steps.repositoryId, repositoryId)).orderBy(asc(steps.ordinal)),
-  ]);
+export async function getSetupRecipe(repositoryId: string, now = new Date()): Promise<SetupRecipe> {
+  const settings = await repositorySetupSettings(repositoryId);
   return {
     repositoryId,
     learningDisabled: settings.disabled,
     maxSteps: SETUP_RECIPE_MAX_STEPS,
-    steps: rows.map(rowToStep),
+    windowDays: SETUP_STEP_WINDOW_DAYS,
+    lastSetupTiming: settings.timing,
+    steps: await reconcileSetupSteps(repositoryId, { now, settings }),
   };
+}
+
+const WINDOW_MS = SETUP_STEP_WINDOW_DAYS * 24 * 60 * 60_000;
+
+/**
+ * Every step of the repository with its share of the repository's recent
+ * sessions. One statement: the session counts are subqueries that read only
+ * `workbenches.id`, through the (workspace, created_at) index.
+ *
+ * Both counts are over the same sessions, the repository's sandbox sessions
+ * that started in the window, so the share is never more than 1. A local
+ * session is never analysed, so it must not count as a session that did not
+ * need the step. The window start goes in as text: a `Date` in a raw `sql`
+ * fragment reaches postgres-js unencoded.
+ */
+export function stepUsageQuery(repositoryId: string, since: Date) {
+  const recent = sql`
+    w.workspace_id = (SELECT r.workspace_id FROM ${repositories} r WHERE r.id = ${repositoryId})
+    AND w.repository_id = ${repositoryId}
+    AND w.kind = 'session'
+    AND w.runtime = 'sandbox'
+    AND w.created_at >= ${since.toISOString()}::timestamptz`;
+  return db()
+    .select({
+      ...STEP_COLUMNS,
+      neededBy: sql<number>`(
+        SELECT count(*)::int FROM ${stepSessions} ss JOIN ${workbenches} w ON w.id = ss.workbench_id
+        WHERE ss.step_id = ${steps}.id AND ${recent})`,
+      sessions: sql<number>`(SELECT count(*)::int FROM ${workbenches} w WHERE ${recent})`,
+    })
+    .from(steps)
+    .where(eq(steps.repositoryId, repositoryId))
+    .orderBy(asc(steps.ordinal));
+}
+
+/**
+ * Apply {@link setupStepVerdict} to every step, and return the steps with
+ * their share. A step that goes live gets `confirmed_at`. A step that goes
+ * back to waiting loses `confirmed_at` and `applied_at`, so it leaves the box
+ * setup and the bake. Reverted and failing steps do not change.
+ *
+ * A live step leaves only after {@link SETUP_STEP_WINDOW_DAYS} days of usage
+ * data ({@link recordStepUses}). Before that, the sessions that used a live
+ * step without running it were not counted, and the step would look unneeded.
+ * This is what keeps the steps from before this rule running until they have
+ * real data.
+ *
+ * Each update matches only the state it changes, so two replicas that
+ * reconcile at once write once.
+ */
+export async function reconcileSetupSteps(
+  repositoryId: string,
+  opts: { now?: Date; settings?: SetupSettings; workspaceId?: string } = {},
+): Promise<SetupRecipeStep[]> {
+  const now = opts.now ?? new Date();
+  const settings = opts.settings ?? (await repositorySetupSettings(repositoryId));
+  const canDrop = settings.usageSince !== null && now.getTime() - settings.usageSince.getTime() >= WINDOW_MS;
+  const rows = await stepUsageQuery(repositoryId, new Date(now.getTime() - WINDOW_MS));
+  const out: SetupRecipeStep[] = [];
+  for (const { neededBy: rawNeeded, sessions: rawSessions, ...row } of rows) {
+    const usage: StepUsage = { neededBy: Number(rawNeeded), sessions: Number(rawSessions), heavy: isHeavySetupStep(row.command), reason: null };
+    if (row.disabledAt || row.boxDisabledAt) {
+      out.push(rowToStep(row, usage));
+      continue;
+    }
+    const verdict = setupStepVerdict({
+      live: row.confirmedAt !== null,
+      heavy: usage.heavy,
+      neededBy: usage.neededBy,
+      sessions: usage.sessions,
+      typicalDurationMs: row.typicalDurationMs,
+      canDrop,
+    });
+    usage.reason = verdict.reason;
+    let current: StepRow = row;
+    if (verdict.live && !row.confirmedAt) {
+      const [updated] = await db()
+        .update(steps)
+        .set({ confirmedAt: now })
+        .where(and(eq(steps.id, row.id), isNull(steps.confirmedAt), isNull(steps.disabledAt), isNull(steps.boxDisabledAt)))
+        .returning(STEP_COLUMNS);
+      if (updated) {
+        current = updated;
+        debugBus.recordEvent({
+          service: 'setup_recipe',
+          action: 'step_confirmed',
+          summary: `Setup step ${row.id} now runs on new boxes. ${verdict.reason}`,
+          workspaceId: opts.workspaceId,
+          meta: { repositoryId, stepId: row.id, kind: row.kind },
+        });
+      }
+    } else if (!verdict.live && row.confirmedAt) {
+      const [updated] = await db()
+        .update(steps)
+        .set({ confirmedAt: null, appliedAt: null })
+        .where(and(eq(steps.id, row.id), isNotNull(steps.confirmedAt)))
+        .returning(STEP_COLUMNS);
+      if (updated) {
+        current = updated;
+        debugBus.recordEvent({
+          service: 'setup_recipe',
+          action: 'step_dropped',
+          summary: `Setup step ${row.id} no longer runs on new boxes or in the bake. ${verdict.reason}`,
+          workspaceId: opts.workspaceId,
+          meta: { repositoryId, stepId: row.id, kind: row.kind },
+        });
+      }
+    }
+    out.push(rowToStep(current, usage));
+  }
+  return out;
 }
 
 export async function setSetupLearning(repositoryId: string, disabled: boolean): Promise<void> {
@@ -156,56 +327,42 @@ export interface RecordStepsResult {
   full: number;
 }
 
-interface Sighting {
-  row: StepRow;
-  /** This sighting confirmed the step. */
-  confirmed: boolean;
-}
-
 /**
  * Count one more sighting of a stored step. A session counts once: the
- * (step, session) row is the proof. The step is confirmed, so it runs, when
- * its {@link SETUP_STEP_MIN_SESSIONS}th session sees it.
+ * (step, session) row is the proof. Null: no such step.
  */
-async function countSighting(repositoryId: string, key: string, workbenchId: string | null): Promise<Sighting | null> {
+async function countSighting(repositoryId: string, key: string, workbenchId: string | null): Promise<string | null> {
   const [row] = await db()
     .update(steps)
     .set({ seenCount: sql`${steps.seenCount} + 1`, lastSeenAt: new Date() })
     .where(and(eq(steps.repositoryId, repositoryId), eq(steps.stepKey, key)))
-    .returning(STEP_COLUMNS);
+    .returning({ id: steps.id });
   if (!row) return null;
-  return (workbenchId ? await countSession(row.id, workbenchId) : null) ?? { row, confirmed: false };
+  if (workbenchId) await countSession(row.id, workbenchId);
+  return row.id;
 }
 
-/** Null when the session had already counted. */
-async function countSession(stepId: string, workbenchId: string): Promise<Sighting | null> {
+/** One (step, session) row. A session that had already counted changes nothing. */
+async function countSession(stepId: string, workbenchId: string): Promise<boolean> {
   const [fresh] = await db()
     .insert(stepSessions)
     .values({ stepId, workbenchId })
     .onConflictDoNothing()
     .returning({ stepId: stepSessions.stepId });
-  if (!fresh) return null;
-  const [row] = await db()
-    .update(steps)
-    .set({
-      sessionCount: sql`${steps.sessionCount} + 1`,
-      confirmedAt: sql`CASE WHEN ${steps.confirmedAt} IS NULL AND ${steps.sessionCount} + 1 >= ${SETUP_STEP_MIN_SESSIONS} THEN now() ELSE ${steps.confirmedAt} END`,
-    })
-    .where(eq(steps.id, stepId))
-    // now() is the time of this statement's transaction, so only this update can make them equal.
-    .returning({ ...STEP_COLUMNS, confirmed: sql<boolean>`coalesce(${steps.confirmedAt} = now(), false)` });
-  if (!row) return null;
-  const { confirmed, ...rest } = row;
-  return { row: rest, confirmed: confirmed === true || (confirmed as unknown) === 't' };
+  if (!fresh) return false;
+  await db().update(steps).set({ sessionCount: sql`${steps.sessionCount} + 1` }).where(eq(steps.id, stepId));
+  return true;
 }
 
 /**
  * Add candidates to the recipe, in order. A step that is already there is
  * counted again; a reverted step stays reverted. A new step waits until
- * {@link SETUP_STEP_MIN_SESSIONS} different sessions recorded it, and is
- * refused once the recipe has {@link SETUP_RECIPE_MAX_STEPS} live or waiting
- * steps. Two sessions that add at once can pass the cap by a step or two; the
- * cap bounds growth, it is not a quota.
+ * enough recent sessions need it ({@link reconcileSetupSteps}), and is refused
+ * once the recipe has {@link SETUP_RECIPE_MAX_STEPS} steps that are live or
+ * were seen in the window. A waiting step that no session needed for the
+ * whole window does not take a place: one-offs must not fill the recipe. Two
+ * sessions that add at once can pass the cap by a step or two; the cap bounds
+ * growth, it is not a quota.
  */
 export async function recordSetupSteps(input: {
   repositoryId: string;
@@ -215,30 +372,25 @@ export async function recordSetupSteps(input: {
   candidates: SetupStepCandidate[];
 }): Promise<RecordStepsResult> {
   const out: RecordStepsResult = { added: [], seen: [], full: 0 };
-  const seen = ({ row, confirmed }: Sighting) => {
-    const step = rowToStep(row);
-    out.seen.push(step);
-    if (confirmed) {
-      debugBus.recordEvent({
-        service: 'setup_recipe',
-        action: 'step_confirmed',
-        summary: `Setup step ${step.id} was needed in ${step.sessionCount} sessions. It now runs on new boxes.`,
-        workspaceId: input.workspaceId,
-        meta: { repositoryId: input.repositoryId, stepId: step.id, workbenchId: input.workbenchId, kind: step.kind },
-      });
-    }
-  };
+  const addedIds: string[] = [];
+  const seenIds: string[] = [];
+  const windowStart = new Date(Date.now() - WINDOW_MS);
   for (const candidate of input.candidates) {
     const key = stepKey(candidate.kind, candidate.command);
     const existing = await countSighting(input.repositoryId, key, input.workbenchId);
     if (existing) {
-      seen(existing);
+      seenIds.push(existing);
       continue;
     }
     const [{ live }] = await db()
       .select({ live: count() })
       .from(steps)
-      .where(and(eq(steps.repositoryId, input.repositoryId), isNull(steps.disabledAt), isNull(steps.boxDisabledAt)));
+      .where(and(
+        eq(steps.repositoryId, input.repositoryId),
+        isNull(steps.disabledAt),
+        isNull(steps.boxDisabledAt),
+        or(isNotNull(steps.confirmedAt), gte(steps.lastSeenAt, windowStart)),
+      ));
     if (Number(live) >= SETUP_RECIPE_MAX_STEPS) {
       out.full += 1;
       continue;
@@ -261,19 +413,23 @@ export async function recordSetupSteps(input: {
     if (!inserted) {
       // Another session added the same step at the same moment. Count this one on its row.
       const raced = await countSighting(input.repositoryId, key, input.workbenchId);
-      if (raced) seen(raced);
+      if (raced) seenIds.push(raced);
       continue;
     }
-    const row = (input.workbenchId ? (await countSession(inserted.id, input.workbenchId))?.row : null) ?? inserted;
-    const step = rowToStep(row);
-    out.added.push(step);
+    if (input.workbenchId) await countSession(inserted.id, input.workbenchId);
+    addedIds.push(inserted.id);
     debugBus.recordEvent({
       service: 'setup_recipe',
       action: 'step_added',
-      summary: `Setup step ${step.id} (${step.kind}) ${input.source === 'agent' ? 'recorded by an agent' : 'learned'} from session ${input.workbenchId ?? 'unknown'}: ${redactSecrets(step.command).slice(0, 200)}. It waits for ${SETUP_STEP_MIN_SESSIONS} sessions before it runs.`,
+      summary: `Setup step ${inserted.id} (${inserted.kind}) ${input.source === 'agent' ? 'recorded by an agent' : 'learned'} from session ${input.workbenchId ?? 'unknown'}: ${redactSecrets(inserted.command).slice(0, 200)}. It waits until enough recent sessions need it.`,
       workspaceId: input.workspaceId,
-      meta: { repositoryId: input.repositoryId, stepId: step.id, workbenchId: input.workbenchId, kind: step.kind },
+      meta: { repositoryId: input.repositoryId, stepId: inserted.id, workbenchId: input.workbenchId, kind: inserted.kind },
     });
+  }
+  if (addedIds.length > 0 || seenIds.length > 0) {
+    const byId = new Map((await reconcileSetupSteps(input.repositoryId, { workspaceId: input.workspaceId })).map((s) => [s.id, s]));
+    for (const id of addedIds) if (byId.has(id)) out.added.push(byId.get(id)!);
+    for (const id of seenIds) if (byId.has(id)) out.seen.push(byId.get(id)!);
   }
   if (out.full > 0) {
     debugBus.recordEvent({
@@ -321,7 +477,7 @@ const toApplied = (row: Pick<typeof steps.$inferSelect, keyof typeof APPLY_COLUM
   sourceWorkbenchId: row.sourceWorkbenchId,
 });
 
-/** A step runs on boxes: confirmed, not reverted, not failing. */
+/** A step runs on boxes: live (`confirmed_at` set), not reverted, not failing. */
 const runnable = (repositoryId: string) => and(
   eq(steps.repositoryId, repositoryId),
   isNull(steps.disabledAt),
@@ -330,27 +486,29 @@ const runnable = (repositoryId: string) => and(
 );
 
 /**
- * The steps a new box runs after the repository's setup: every confirmed live
- * step, with no wait for the bake. Two more rules:
+ * The steps a new box runs after the repository's setup: every live step,
+ * with no wait for the bake. The verdict is applied first
+ * ({@link reconcileSetupSteps}), so a step whose share fell does not run. Two
+ * more rules:
  * - The old Docker start ({@link LEGACY_DOCKER_START_COMMAND}) is skipped.
  *   Docker starts on demand now, and that start failed as uid 1000.
  * - Two steps with one identity run once, the older one. Rows stored before
  *   the cargo forms were made one can be two rows for one install.
  */
-export async function setupStepsForBox(repositoryId: string): Promise<AppliedSetupStep[]> {
-  if (await learningDisabled(repositoryId)) return [];
-  const rows = await db()
-    .select(APPLY_COLUMNS)
-    .from(steps)
-    .where(and(runnable(repositoryId), ne(steps.command, LEGACY_DOCKER_START_COMMAND)))
-    .orderBy(asc(steps.ordinal));
+export async function setupStepsForBox(repositoryId: string, now = new Date()): Promise<AppliedSetupStep[]> {
+  const settings = await repositorySetupSettings(repositoryId);
+  if (settings.disabled) return [];
+  const all = await reconcileSetupSteps(repositoryId, { now, settings });
   const identities = new Set<string>();
-  return rows.map(toApplied).filter((step) => {
-    const identity = `${step.kind}\0${setupStepIdentity(step.kind, step.command)}`;
-    if (identities.has(identity)) return false;
-    identities.add(identity);
-    return true;
-  });
+  return all
+    .filter((s) => s.state === 'live' && s.command !== LEGACY_DOCKER_START_COMMAND)
+    .map((s): AppliedSetupStep => ({ id: s.id, command: s.command, kind: s.kind, phase: s.phase, sourceWorkbenchId: s.sourceWorkbenchId }))
+    .filter((step) => {
+      const identity = `${step.kind}\0${setupStepIdentity(step.kind, step.command)}`;
+      if (identities.has(identity)) return false;
+      identities.add(identity);
+      return true;
+    });
 }
 
 /**
@@ -414,6 +572,7 @@ export async function promoteSettledSteps(repositoryId: string, now = new Date()
 export async function effectiveRepositoryBake(repositoryId: string, now = new Date()): Promise<RepositoryBake | null> {
   const settings = await repositorySetupSettings(repositoryId);
   if (settings.disabled) return settings.bake;
+  await reconcileSetupSteps(repositoryId, { now, settings });
   await promoteSettledSteps(repositoryId, now);
   const rows = await db()
     .select(APPLY_COLUMNS)
@@ -492,6 +651,7 @@ export async function noteBoxSetupResults(
   const out = { failed: [] as string[], disabled: [] as string[] };
   for (const result of results) {
     const mine = and(eq(steps.repositoryId, repositoryId), eq(steps.id, result.id), isNull(steps.boxDisabledAt));
+    if (result.durationMs !== undefined) await noteDuration(repositoryId, result.id, result.durationMs);
     if (result.exitCode === 0) {
       await db().update(steps).set({ boxFailureCount: 0 }).where(and(mine, gt(steps.boxFailureCount, 0)));
       continue;
@@ -529,9 +689,34 @@ export async function noteBoxSetupResults(
 }
 
 /**
+ * One measurement of a step's time. The typical time is read and written in
+ * one statement, so two boxes that report at once do not lose a measurement.
+ * The SQL is `nextTypicalDurationMs` in shared: a test pins the two together.
+ */
+async function noteDuration(repositoryId: string, stepId: string, durationMs: number): Promise<void> {
+  const ms = Math.max(0, Math.min(Math.round(durationMs), 2_000_000_000));
+  await db()
+    .update(steps)
+    .set({
+      lastDurationMs: ms,
+      typicalDurationMs: sql`CASE WHEN ${steps.typicalDurationMs} IS NULL THEN ${ms}::int
+        ELSE round(${steps.typicalDurationMs} * (1 - ${SETUP_STEP_TYPICAL_WEIGHT}::float8) + ${ms}::int * ${SETUP_STEP_TYPICAL_WEIGHT}::float8)::int END`,
+      measuredBoxes: sql`${steps.measuredBoxes} + 1`,
+    })
+    .where(and(eq(steps.repositoryId, repositoryId), eq(steps.id, stepId)));
+}
+
+/** Keep the times of a box setup on the repository: one small record, replaced by each box. */
+async function noteSetupTiming(repositoryId: string, timing: SetupTiming): Promise<void> {
+  await db().update(repositories).set({
+    settings: sql`coalesce(${repositories.settings}, '{}'::jsonb) || jsonb_build_object('setupTiming', ${JSON.stringify(timing)}::jsonb)`,
+  }).where(eq(repositories.id, repositoryId));
+}
+
+/**
  * After a box's setup script ended: read its stored output and note each
- * learned step's result. It never throws, because a provision must not fail
- * on the recipe.
+ * learned step's result and time, and the times of the whole setup. It never
+ * throws, because a provision must not fail on the recipe.
  */
 export async function recordBoxSetupResults(row: {
   id: string;
@@ -547,6 +732,10 @@ export async function recordBoxSetupResults(row: {
     if (results.length > 0) {
       await noteBoxSetupResults(row.repositoryId, results, { workspaceId: row.workspaceId, workbenchId: row.id });
     }
+    const timing = parseSetupTiming(output);
+    if (timing) {
+      await noteSetupTiming(row.repositoryId, { ...timing, measuredAt: new Date().toISOString(), workbenchId: row.id });
+    }
   } catch (error) {
     debugBus.recordEvent({
       service: 'setup_recipe',
@@ -558,4 +747,35 @@ export async function recordBoxSetupResults(row: {
       meta: { repositoryId: row.repositoryId, workbenchId: row.id },
     });
   }
+}
+
+/**
+ * Count the sessions that used a live step without running it: the box had
+ * already run the step, so the agent used what it installs (`cargo` after
+ * rustup, `sqlx` after `cargo install sqlx-cli`, `pytest` after `uv sync`).
+ * See `setupStepUses`. Each use is one (step, session) row, like a sighting.
+ *
+ * The first call for a repository also marks when Talyn began to count uses
+ * (`settings.setupUsageSince`). Only {@link SETUP_STEP_WINDOW_DAYS} days after
+ * that can a live step leave ({@link reconcileSetupSteps}).
+ */
+export async function recordStepUses(input: {
+  repositoryId: string;
+  workbenchId: string;
+  calls: TurnToolCall[];
+  now?: Date;
+}): Promise<string[]> {
+  const since = (input.now ?? new Date()).toISOString();
+  await db().update(repositories).set({
+    settings: sql`coalesce(${repositories.settings}, '{}'::jsonb) || jsonb_build_object('setupUsageSince', ${since}::text)`,
+  }).where(and(eq(repositories.id, input.repositoryId), sql`(${repositories.settings} ->> 'setupUsageSince') IS NULL`));
+  const words = turnCommandWords(input.calls);
+  if (words.size === 0) return [];
+  const live = await db().select(APPLY_COLUMNS).from(steps).where(runnable(input.repositoryId));
+  const used: string[] = [];
+  for (const row of live) {
+    if (!setupStepUsed(toApplied(row), words)) continue;
+    if (await countSession(row.id, input.workbenchId)) used.push(row.id);
+  }
+  return used;
 }

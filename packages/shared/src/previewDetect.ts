@@ -283,6 +283,10 @@ export interface RepositorySettings {
   bake?: import('./bake.js').RepositoryBake | null;
   /** Setup learning (`setupRecipe.ts`). Absent means on. */
   setupLearning?: { disabled?: boolean; changedAt?: string };
+  /** When Talyn first counted uses of live setup steps here. A live step can leave only 14 days after it. */
+  setupUsageSince?: string;
+  /** The times of the newest box setup that ran learned steps. */
+  setupTiming?: import('./setupRecipe.js').SetupTiming;
   /** Absent means auto. */
   sandboxSize?: SandboxSizeSetting;
   detectedSandboxSize?: CachedSandboxSize;

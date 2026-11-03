@@ -2279,7 +2279,7 @@ export const repositorySetupSteps = pgTable(
     bakeDisabledReason: text('bake_disabled_reason'),
     /** Distinct sessions in `repository_setup_step_sessions`. */
     sessionCount: integer('session_count').notNull().default(0),
-    /** When the step reached `SETUP_STEP_MIN_SESSIONS` sessions. Null: waiting, it does not run. */
+    /** When the step went live (`setupStepVerdict`). Null: waiting, it does not run. */
     confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
     /** Box setups in a row where the step failed. */
     boxFailureCount: integer('box_failure_count').notNull().default(0),
@@ -2287,6 +2287,11 @@ export const repositorySetupSteps = pgTable(
     /** Set after `SETUP_STEP_MAX_BOX_FAILURES` failures: the step no longer runs. */
     boxDisabledAt: timestamp('box_disabled_at', { withTimezone: true }),
     boxDisabledReason: text('box_disabled_reason'),
+    /** The step's time in the newest box setup that measured it (migration 0104). */
+    lastDurationMs: integer('last_duration_ms'),
+    /** A rolling mean of the step's time, `SETUP_STEP_TYPICAL_WEIGHT`. */
+    typicalDurationMs: integer('typical_duration_ms'),
+    measuredBoxes: integer('measured_boxes').notNull().default(0),
   },
   (t) => ({
     keyUq: uniqueIndex('uq_repository_setup_steps_key').on(t.repositoryId, t.stepKey),

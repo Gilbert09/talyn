@@ -1,4 +1,4 @@
-import type { SetupRecipe, SetupRecipeStep } from '@talyn/shared';
+import { formatDurationMs, type SetupRecipe, type SetupRecipeStep } from '@talyn/shared';
 import { callApi, type GitHubRepo, type WatchedRepo } from '../api.js';
 import {
   defineTool,
@@ -21,12 +21,34 @@ function stepLine(step: SetupRecipeStep): string {
       ? 'settled into the bake'
       : 'box setup only';
   const from = step.sourceWorkbenchId ? `session ${step.sourceWorkbenchId}` : 'no session';
-  return `  ${step.id}  ${step.command}  [${step.kind}, ${step.phase}]  ${from}, ${step.source}, ${day(step.firstSeenAt)}  ${state}`;
+  const line = `  ${step.id}  ${step.command}  [${step.kind}, ${step.phase}]  ${from}, ${step.source}, ${day(step.firstSeenAt)}  ${state}`;
+  const extra = [stepTime(step), step.stateReason].filter(Boolean).join('. ');
+  return extra ? `${line}\n    ${extra}` : line;
+}
+
+/** "took 3m 12s (typical 2m 50s)". */
+function stepTime(step: SetupRecipeStep): string | null {
+  if (step.lastDurationMs === null || step.lastDurationMs === undefined) return null;
+  const typical = step.typicalDurationMs !== null && step.typicalDurationMs !== undefined && (step.measuredBoxes ?? 0) > 1
+    ? ` (typical ${formatDurationMs(step.typicalDurationMs)})`
+    : '';
+  return `took ${formatDurationMs(step.lastDurationMs)}${typical}`;
+}
+
+/** "Last setup took 9m 40s: repository setup 2m 5s, learned steps 7m 35s." */
+function timingLine(recipe: SetupRecipe): string | null {
+  const t = recipe.lastSetupTiming;
+  if (!t) return null;
+  const parts = [t.repositoryMs !== null ? `repository setup ${formatDurationMs(t.repositoryMs)}` : null, `learned steps ${formatDurationMs(t.learnedMs)}`];
+  return `Last setup took ${formatDurationMs(t.totalMs)}: ${parts.filter(Boolean).join(', ')}.`;
 }
 
 function recipeText(repositoryId: string, recipe: SetupRecipe): string {
   const live = recipe.steps.filter((s) => !s.disabledAt).length;
-  const head = `Setup steps of ${repositoryId}. Learning is ${recipe.learningDisabled ? 'off' : 'on'}. ${live} of ${recipe.maxSteps} live.`;
+  const head = [
+    `Setup steps of ${repositoryId}. Learning is ${recipe.learningDisabled ? 'off' : 'on'}. ${live} of ${recipe.maxSteps} live.`,
+    timingLine(recipe),
+  ].filter(Boolean).join('\n');
   return recipe.steps.length ? [head, ...recipe.steps.map(stepLine)].join('\n') : `${head}\nNo steps.`;
 }
 
@@ -105,7 +127,7 @@ export const REPOSITORIES = [
   ),
   defineTool(
     'list_setup_steps',
-    'List the setup steps that sessions learned for a repository. Each line has the step id, the command, the session that recorded it, the first-seen date, and whether it is reverted, settled into the bake, or box setup only. The first line says whether learning is on.',
+    'List the setup steps that sessions learned for a repository. Each line has the step id, the command, the session that recorded it, the first-seen date, and whether it is reverted, settled into the bake, or box setup only. Under it: how long the step took on the last box, and how many recent sessions needed it. The first lines say whether learning is on and how long the last setup took.',
     { repository_id: textSchema },
     ['repository_id'],
     { readOnlyHint: true },

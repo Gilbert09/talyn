@@ -9,7 +9,15 @@
  * wrote, not text an agent wrote.
  */
 import { validateRepositoryBake, type BakeStep, type RepositoryBake } from './bake.js';
-import { commandSegments, containsSecret, stripCommandPrefix, unwrapCommand, type TurnToolCall, type UnwrappedCommand } from './turnTiming.js';
+import {
+  commandSegments,
+  containsSecret,
+  formatDurationMs,
+  stripCommandPrefix,
+  unwrapCommand,
+  type TurnToolCall,
+  type UnwrappedCommand,
+} from './turnTiming.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import { shellQuote } from './workbenchGit.js';
 
@@ -46,7 +54,8 @@ export interface SetupStepCandidate {
 }
 
 /**
- * - `waiting`: seen in fewer than {@link SETUP_STEP_MIN_SESSIONS} sessions. It does not run yet.
+ * - `waiting`: too few of the repository's recent sessions needed it
+ *   ({@link setupStepVerdict}). It does not run.
  * - `live`: runs in the setup of every new box.
  * - `failing`: failed on {@link SETUP_STEP_MAX_BOX_FAILURES} boxes in a row. It does not run.
  * - `reverted`: a person reverted it.
@@ -86,6 +95,26 @@ export interface SetupRecipeStep {
   /** The step failed on too many boxes and no longer runs in the box setup or the bake. */
   boxDisabledAt: string | null;
   boxDisabledReason: string | null;
+  /** How long the step took in the last box setup that measured it. */
+  lastDurationMs?: number | null;
+  /** The step's typical time in the box setup: a rolling mean, see {@link SETUP_STEP_TYPICAL_WEIGHT}. */
+  typicalDurationMs?: number | null;
+  /** The box setups that measured the step. */
+  measuredBoxes?: number;
+  /**
+   * The repository's sandbox sessions that started in the last
+   * {@link SETUP_STEP_WINDOW_DAYS} days and needed the step: they ran it, or,
+   * for a live step, they used what it installs.
+   */
+  recentNeededSessions?: number;
+  /** The repository's sandbox sessions that started in the last {@link SETUP_STEP_WINDOW_DAYS} days. */
+  recentSessions?: number;
+  /** `recentNeededSessions / recentSessions`, 0 to 1. Null: no recent sessions. */
+  share?: number | null;
+  /** The step installs a browser or a large package set, so it needs a higher share ({@link isHeavySetupStep}). */
+  heavy?: boolean;
+  /** Why the step is in its state, for example "Waiting: needed by 2 of 31 sessions in the last 14 days. ..." */
+  stateReason?: string;
 }
 
 /** `GET /repositories/:id/setup-recipe`. */
@@ -93,7 +122,24 @@ export interface SetupRecipe {
   repositoryId: string;
   learningDisabled: boolean;
   maxSteps: number;
+  /** The window that the share of each step counts sessions in. */
+  windowDays?: number;
+  /** The times of the last box setup that ran learned steps. Null: none measured yet. */
+  lastSetupTiming?: SetupTiming | null;
   steps: SetupRecipeStep[];
+}
+
+/** One box setup's times: "Setup took 9m 40s: repository setup 2m 05s, learned steps 7m 35s". */
+export interface SetupTiming {
+  /** The whole setup script. */
+  totalMs: number;
+  /** The repository's own setup command. Null: the repository has none. */
+  repositoryMs: number | null;
+  /** All learned steps together. */
+  learnedMs: number;
+  measuredAt: string;
+  /** The session whose box it was. */
+  workbenchId: string | null;
 }
 
 /** `POST /repositories/:id/setup-recipe/steps`. */
@@ -125,11 +171,43 @@ export const SETUP_RECIPE_SETTLE_MS = 15 * 60_000;
 /** Learned bake steps are named `talyn-learned <step id>`, so a bake result names its step. */
 export const LEARNED_BAKE_STEP_PREFIX = 'talyn-learned ';
 /**
- * A learned or recorded step runs only after this many different sessions
- * needed it. One session's need (a browser download, a database it used once)
- * must not become the setup of every box.
+ * A step runs on every new box, so it must be a need of most work on the
+ * repository, not of one task (a browser for one test, a database for one
+ * script). Talyn measures the need as a share: the repository's sandbox
+ * sessions of the last {@link SETUP_STEP_WINDOW_DAYS} days that needed the step.
+ *
+ * Two weeks holds a normal work cycle (a sprint, a release), so a step that
+ * one week of work needed does not fall out in the next quiet week.
  */
-export const SETUP_STEP_MIN_SESSIONS = 2;
+export const SETUP_STEP_WINDOW_DAYS = 14;
+/**
+ * A step goes live only when at least this many different sessions needed it.
+ * On a quiet repository, a share of 2 sessions can be 100%, and 2 sessions can
+ * be the same task done twice.
+ */
+export const SETUP_STEP_MIN_SESSIONS = 3;
+/** A step goes live at this share of recent sessions: about one session in three. */
+export const SETUP_STEP_LIVE_SHARE = 0.3;
+/**
+ * A live step goes back to waiting below this share. Half of
+ * {@link SETUP_STEP_LIVE_SHARE}, so a step near the bar does not go in and out
+ * with each session.
+ */
+export const SETUP_STEP_DROP_SHARE = 0.15;
+/**
+ * The bars for a heavy step ({@link isHeavySetupStep}). A browser download
+ * costs every box minutes and hundreds of megabytes, so it must be a need of
+ * half the work.
+ */
+export const SETUP_STEP_HEAVY_LIVE_SHARE = 0.5;
+export const SETUP_STEP_HEAVY_DROP_SHARE = 0.25;
+/**
+ * A live step leaves only when the window has at least this many sessions.
+ * With 7 sessions, one session moves the share by less than 15 points, the gap
+ * between {@link SETUP_STEP_LIVE_SHARE} and {@link SETUP_STEP_DROP_SHARE}. So
+ * one session cannot take a step out, and the next put it back.
+ */
+export const SETUP_STEP_MIN_SESSIONS_TO_DROP = 7;
 /**
  * A step that failed in the box setup this many times in a row stops running.
  * One failure can be a bad box (a full disk, a lost network); two in a row is
@@ -160,6 +238,25 @@ export const SETUP_STEP_TIMEOUT_SEC: Record<SetupStepKind, number> = {
 };
 /** After the time limit, `timeout` sends TERM, then KILL after this many seconds. */
 export const SETUP_STEP_KILL_AFTER_SEC = 10;
+/**
+ * The weight of the newest box in a step's typical time:
+ * `typical = typical * (1 - w) + last * w`. With 0.2, the last 10 boxes carry
+ * about 90% of the value, so one slow box (a cold cache) moves it a little and
+ * a step that became fast (it went into the bake) shows that within days.
+ */
+export const SETUP_STEP_TYPICAL_WEIGHT = 0.2;
+/** The next typical time of a step, from its typical time and a new measurement. */
+export function nextTypicalDurationMs(typical: number | null | undefined, lastMs: number): number {
+  if (typical === null || typical === undefined) return Math.round(lastMs);
+  return Math.round(typical * (1 - SETUP_STEP_TYPICAL_WEIGHT) + lastMs * SETUP_STEP_TYPICAL_WEIGHT);
+}
+/**
+ * A step that typically takes this long on a box is slow: it gets the heavy
+ * bars of the frequency rule ({@link setupStepVerdict}). Two minutes added to
+ * every box start is what a person notices, and a step that few sessions need
+ * is not worth that.
+ */
+export const SETUP_STEP_SLOW_MS = 2 * 60_000;
 
 // ============================================================================
 // Refusals
@@ -457,7 +554,7 @@ function parseNode(w: string[], run: RunAs): ParseResult {
     return { command: pre + quoteAll(w), kind: 'node', phase: 'install' };
   }
   if (tool === 'playwright' && sub === 'install') {
-    return { command: `${pre}npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true };
+    return { command: `${pre}npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true, provides: ['playwright'] };
   }
   if (tool === 'yarn' && sub === 'global' && w[2] === 'add' && w.length > 3) {
     return { command: pre + quoteAll(w), kind: 'node', phase: 'install', provides: names(w.slice(3)).map(packageName) };
@@ -791,6 +888,10 @@ function provides(step: SetupStepCandidate, bin: string): boolean {
  * provides that command (or, failing a match, the next install at all): the
  * step says what it fixed, and its replay first checks whether the command is
  * already there.
+ *
+ * Only installs are learned. A start (a service, a compose stack, an exported
+ * variable, a database) is what one task needed, so Talyn never learns one
+ * from tool calls. An agent can still record one with `talyn_record_setup_step`.
  */
 export function extractSetupSteps(calls: TurnToolCall[], opts: { repoDir?: string } = {}): SetupExtraction {
   const out: SetupExtraction = { steps: [], refused: [] };
@@ -808,7 +909,7 @@ export function extractSetupSteps(calls: TurnToolCall[], opts: { repoDir?: strin
     const steps = stepsFromCommand(call.command, opts);
     out.refused.push(...steps.refused);
     for (const step of steps.steps) {
-      if (seen.has(step.command)) continue;
+      if (step.phase !== 'install' || seen.has(step.command)) continue;
       seen.add(step.command);
       found.push({ step, at });
     }
@@ -887,7 +988,12 @@ export interface LearnedStepResult {
   timedOut: boolean;
   /** The last line the step printed, at most 300 characters. */
   lastLine: string;
+  /** How long the step ran. Absent in the output of a script from before the step was timed. */
+  durationMs?: number;
 }
+
+/** The line the box setup prints last, with the times of the whole setup. */
+export const SETUP_TIMING_PREFIX = '[talyn] setup timing ';
 
 /** Installs first, then services, then what needs the services. */
 const KIND_ORDER: SetupStepKind[] = [
@@ -918,12 +1024,28 @@ export const LEARNED_PATH_LINE =
  * because the backend keeps only the end of a script's output, and a long
  * install must not push out the result of an earlier step.
  */
+/**
+ * Milliseconds since the epoch, in bash. `EPOCHREALTIME` (bash 5) has
+ * microseconds; its decimal mark depends on the locale. Then GNU `date`
+ * (`%3N`). Last, whole seconds, which still time a slow step.
+ */
+const NOW_MS_FUNCTION = [
+  'talyn_now_ms() {',
+  '  local t="${EPOCHREALTIME:-}"',
+  '  if [ -n "$t" ]; then t="${t/[.,]/}"; echo "${t%???}"; return; fi',
+  '  t="$(date +%s%3N 2>/dev/null)"',
+  '  case "$t" in \'\'|*[!0-9]*) echo "$(( $(date +%s) * 1000 ))" ;; *) echo "$t" ;; esac',
+  '}',
+];
+
 export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
   if (steps.length === 0) return null;
   const lines = [
     '# Setup that Talyn learned from earlier sessions on this repository.',
     '# Each step runs on its own. A failed step does not stop the others.',
     LEARNED_PATH_LINE,
+    ...NOW_MS_FUNCTION,
+    'talyn_learned_start="$(talyn_now_ms)"',
     'talyn_learned_run() {',
     '  bash -c "$1" </dev/null 2>&1 | tee "$2"',
     '  return "${PIPESTATUS[0]}"',
@@ -931,11 +1053,13 @@ export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
     'export -f talyn_learned_run',
     "talyn_learned_results=''",
     'talyn_learned_step() {',
-    '  local log code last',
+    '  local log code last start ms',
     '  echo "[talyn] learned step $1 (from session $2): $4"',
     '  log="$(mktemp)"',
+    '  start="$(talyn_now_ms)"',
     `  timeout -k ${SETUP_STEP_KILL_AFTER_SEC} "$3" bash -c 'talyn_learned_run "$1" "$2"' talyn-learned-step "$4" "$log"`,
     '  code=$?',
+    '  ms="$(( $(talyn_now_ms) - start ))"',
     "  last=\"$(grep -v '^[[:space:]]*$' \"$log\" | tail -n 1 | tr -d '\\r' | cut -c1-300)\"",
     '  rm -f "$log"',
     '  if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then',
@@ -943,17 +1067,27 @@ export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
     '  elif [ "$code" -ne 0 ]; then',
     '    echo "[talyn] learned step $1 failed with exit $code. A person can revert it in the repository settings." >&2',
     '  fi',
-    `  talyn_learned_results="$talyn_learned_results${LEARNED_STEP_RESULT_PREFIX}$1 exit $code: $last"$'\\n'`,
+    `  talyn_learned_results="$talyn_learned_results${LEARNED_STEP_RESULT_PREFIX}$1 exit $code ms $ms: $last"$'\\n'`,
     '}',
   ];
   for (const step of orderSetupSteps(steps)) {
     lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${SETUP_STEP_TIMEOUT_SEC[step.kind] ?? SETUP_STEP_TIMEOUT_SEC.other} ${shellQuote(step.command)}`);
   }
   lines.push(`printf '%s' "$talyn_learned_results"`);
+  lines.push('talyn_learned_ms="$(( $(talyn_now_ms) - talyn_learned_start ))"');
   return lines.join('\n');
 }
 
-const RESULT_LINE = /^\[talyn\] learned step result (\S+) exit (\d+): ?(.*)$/;
+/** The timing line, after the learned steps. `talyn_setup_start` and `talyn_own_ms` are set when the repository has its own setup. */
+const TIMING_LINE = [
+  'if [ -n "${talyn_setup_start:-}" ]; then',
+  `  echo "${SETUP_TIMING_PREFIX}total $(( $(talyn_now_ms) - talyn_setup_start )) repository $talyn_own_ms learned $talyn_learned_ms"`,
+  'else',
+  `  echo "${SETUP_TIMING_PREFIX}total $talyn_learned_ms learned $talyn_learned_ms"`,
+  'fi',
+].join('\n');
+
+const RESULT_LINE = /^\[talyn\] learned step result (\S+) exit (\d+)(?: ms (\d+))?: ?(.*)$/;
 
 /**
  * The learned-step results in a box setup's output. The last line for a step
@@ -966,9 +1100,27 @@ export function parseLearnedStepResults(output: string): LearnedStepResult[] {
     if (!m) continue;
     const exitCode = Number(m[2]);
     found.delete(m[1]);
-    found.set(m[1], { id: m[1], exitCode, timedOut: exitCode === 124 || exitCode === 137, lastLine: m[3].trim() });
+    found.set(m[1], {
+      id: m[1],
+      exitCode,
+      timedOut: exitCode === 124 || exitCode === 137,
+      lastLine: m[4].trim(),
+      ...(m[3] !== undefined ? { durationMs: Number(m[3]) } : {}),
+    });
   }
   return [...found.values()];
+}
+
+const TIMING = /^\[talyn\] setup timing total (\d+)(?: repository (\d+))? learned (\d+)\s*$/;
+
+/** The times of a box setup, from its last timing line. Null: the output has none. */
+export function parseSetupTiming(output: string): Pick<SetupTiming, 'totalMs' | 'repositoryMs' | 'learnedMs'> | null {
+  let found: Pick<SetupTiming, 'totalMs' | 'repositoryMs' | 'learnedMs'> | null = null;
+  for (const line of output.split(/\r?\n/)) {
+    const m = TIMING.exec(line);
+    if (m) found = { totalMs: Number(m[1]), repositoryMs: m[2] !== undefined ? Number(m[2]) : null, learnedMs: Number(m[3]) };
+  }
+  return found;
 }
 
 /**
@@ -981,8 +1133,17 @@ export function mergeLearnedSetup(config: WorkbenchConfig, steps: AppliedSetupSt
   if (!learned) return config;
   const own = config.setup?.command?.trim();
   const command = own
-    ? `(\n${own}\n)\ntalyn_setup_status=$?\n${learned}\nexit $talyn_setup_status`
-    : learned;
+    ? [
+        ...NOW_MS_FUNCTION,
+        'talyn_setup_start="$(talyn_now_ms)"',
+        `(\n${own}\n)`,
+        'talyn_setup_status=$?',
+        'talyn_own_ms="$(( $(talyn_now_ms) - talyn_setup_start ))"',
+        learned,
+        TIMING_LINE,
+        'exit $talyn_setup_status',
+      ].join('\n')
+    : `${learned}\n${TIMING_LINE}`;
   return { ...config, setup: { command } };
 }
 
@@ -1067,4 +1228,177 @@ export function bakeWithLearnedSteps(
 /** The step id in a learned bake step's name, or null for a step the repository wrote. */
 export function learnedBakeStepId(name: string): string | null {
   return name.startsWith(LEARNED_BAKE_STEP_PREFIX) ? name.slice(LEARNED_BAKE_STEP_PREFIX.length) : null;
+}
+
+// ============================================================================
+// Frequency: does every session need the step?
+// ============================================================================
+
+/** Browsers. Each is hundreds of megabytes, often with dozens of system packages. */
+const HEAVY_INSTALL = /\bplaywright\b[^|;&]*\binstall\b|(?:@puppeteer\/browsers|\bpuppeteer\b)[^|;&]*\b(?:install|browsers)\b/;
+/** The same, and TeX, as apt packages. `texlive-full` alone is gigabytes. */
+const HEAVY_APT_PACKAGE = /^(?:chromium(?:-[\w.-]+)?|google-chrome[\w.-]*|firefox(?:-esr)?|texlive(?:-[\w.-]+)?)$/;
+
+/**
+ * A step that installs a browser (playwright, puppeteer, chrome, chromium,
+ * firefox) or TeX. It costs every box minutes and gigabytes, so it needs
+ * {@link SETUP_STEP_HEAVY_LIVE_SHARE}, not {@link SETUP_STEP_LIVE_SHARE}.
+ */
+export function isHeavySetupStep(command: string): boolean {
+  if (HEAVY_INSTALL.test(command)) return true;
+  for (const segment of commandSegments(command)) {
+    const w = shellWords(unwrapCommand(segment).command);
+    if (!w || !['apt', 'apt-get'].includes(w[0]) || !w.includes('install')) continue;
+    if (names(w.slice(w.indexOf('install') + 1)).some((p) => HEAVY_APT_PACKAGE.test(packageName(p)))) return true;
+  }
+  return false;
+}
+
+/** The commands of a language's tools. A dependency install in the checkout is used by any of them. */
+const ECOSYSTEM_COMMANDS: Partial<Record<SetupStepKind, string[]>> = {
+  uv: ['uv', 'uvx', 'python', 'python3', 'pytest'],
+  pip: ['python', 'python3', 'pytest', 'pip', 'pip3'],
+  node: ['node', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx'],
+  go: ['go'],
+  gem: ['ruby', 'bundle', 'rake', 'rails'],
+};
+/** System libraries for a build. No command names them: the dependency install and the compilers use them. */
+const BUILD_LIBRARY = /^(?:lib[\w.+-]*-dev|build-essential|pkg-config|[\w.+-]+-dev)$/;
+const BUILD_COMMANDS = [...new Set([...Object.values(ECOSYSTEM_COMMANDS).flat(), 'cargo', 'rustc', 'make', 'cmake', 'cc', 'gcc'])];
+
+/**
+ * The commands that show that a session used a live step. A box that ran the
+ * step already has what it installs, so the agent does not install it again.
+ * Without this, a step that every session needs looks unneeded once it runs.
+ *
+ * - The command a step guards: `command -v uv || ...` gives `uv`.
+ * - The tools it installs: `cargo install sqlx-cli` gives `sqlx-cli`, which
+ *   `sqlx` matches ({@link setupStepUsed}).
+ * - For a dependency install in the checkout (`uv sync`, `pnpm install`), the
+ *   language's own commands.
+ * - For build libraries (`libpq-dev`), every build command.
+ *
+ * A start step has none: it is a one-off by nature, and a session that needs
+ * it every time records it again.
+ */
+export function setupStepUses(step: Pick<AppliedSetupStep, 'kind' | 'command' | 'phase'>): string[] {
+  if (step.phase !== 'install') return [];
+  const out = new Set<string>();
+  for (const m of step.command.matchAll(/command -v ([\w.+-]+)/g)) out.add(m[1]);
+  for (const parsed of stepsFromCommand(step.command).steps) {
+    const provided = (parsed.provides ?? []).map((p) => p.split('/').pop() ?? p);
+    if (parsed.kind === 'apt' && provided.length > 0 && provided.every((p) => BUILD_LIBRARY.test(p))) {
+      BUILD_COMMANDS.forEach((c) => out.add(c));
+    } else if (provided.length > 0) {
+      provided.forEach((p) => out.add(p));
+    } else {
+      (ECOSYSTEM_COMMANDS[parsed.kind] ?? []).forEach((c) => out.add(c));
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The commands that a turn's shell calls ran: the tool of each part, its
+ * runner (`uv` of `uv run pytest`), `tool-sub` for a subcommand
+ * (`cargo-nextest` of `cargo nextest run`), and the module of `python -m`.
+ */
+export function turnCommandWords(calls: TurnToolCall[]): Set<string> {
+  const out = new Set<string>();
+  for (const call of calls) {
+    if (!SHELL_TOOLS.has(call.name) || !call.command) continue;
+    for (const segment of commandSegments(call.command).flatMap(pipeParts)) {
+      const u = unwrapCommand(segment);
+      if (u.runner) out.add(u.runner.split(' ')[0]);
+      const w = u.command.split(/\s+/).map((x) => x.replace(/^['"]|['"]$/g, ''));
+      const tool = w[0]?.split('/').pop();
+      if (!tool || !/^[\w.+-]+$/.test(tool)) continue;
+      out.add(tool);
+      if (w[1] && /^[a-z][\w-]*$/.test(w[1])) out.add(`${tool}-${w[1]}`);
+      if (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2]) out.add(w[2]);
+    }
+  }
+  return out;
+}
+
+/** The commands of a pipeline: `cat x | jq .` is `cat x` and `jq .`. Quotes keep their `|`. */
+function pipeParts(segment: string): string[] {
+  const out: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  for (const c of segment) {
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '|') {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    current += c;
+  }
+  out.push(current);
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+
+/** Whether a session that ran {@link turnCommandWords} used the step. `sqlx` uses `sqlx-cli`. */
+export function setupStepUsed(step: Pick<AppliedSetupStep, 'kind' | 'command' | 'phase'>, words: Set<string>): boolean {
+  return setupStepUses(step).some((use) => words.has(use) || (use.endsWith('-cli') && words.has(use.slice(0, -4))));
+}
+
+export interface SetupStepVerdictInput {
+  /** The step runs on new boxes now. */
+  live: boolean;
+  heavy: boolean;
+  /** Recent sessions that needed the step. */
+  neededBy: number;
+  /** All recent sandbox sessions on the repository. */
+  sessions: number;
+  /** The step's typical time in the box setup. At {@link SETUP_STEP_SLOW_MS} or more, the heavy bars apply. */
+  typicalDurationMs?: number | null;
+  /**
+   * The window has the full {@link SETUP_STEP_WINDOW_DAYS} days of data. Until
+   * then a live step stays live: its sessions before Talyn counted uses look
+   * like sessions that did not need it.
+   */
+  canDrop: boolean;
+}
+
+const pct = (share: number) => `${Math.round(share * 100)}%`;
+
+/**
+ * Whether a step runs on new boxes, and why, from its share of the
+ * repository's recent sessions. A waiting step goes live at
+ * {@link SETUP_STEP_MIN_SESSIONS} sessions and {@link SETUP_STEP_LIVE_SHARE}.
+ * A live step goes back to waiting below {@link SETUP_STEP_DROP_SHARE}, but only
+ * with full data and at least {@link SETUP_STEP_MIN_SESSIONS_TO_DROP} sessions.
+ * Heavy and slow steps use the heavy bars.
+ */
+export function setupStepVerdict(input: SetupStepVerdictInput): { live: boolean; reason: string } {
+  const { neededBy, sessions } = input;
+  const share = sessions > 0 ? neededBy / sessions : 0;
+  const slow = (input.typicalDurationMs ?? 0) >= SETUP_STEP_SLOW_MS;
+  const strict = input.heavy || slow;
+  const liveBar = strict ? SETUP_STEP_HEAVY_LIVE_SHARE : SETUP_STEP_LIVE_SHARE;
+  const dropBar = strict ? SETUP_STEP_HEAVY_DROP_SHARE : SETUP_STEP_DROP_SHARE;
+  const counted = `needed by ${neededBy} of ${sessions} sessions in the last ${SETUP_STEP_WINDOW_DAYS} days`;
+  const heavy = input.heavy
+    ? ', because it installs a browser or a large package set'
+    : slow ? `, because it takes about ${formatDurationMs(input.typicalDurationMs!)} on each box` : '';
+  if (!input.live) {
+    if (neededBy >= SETUP_STEP_MIN_SESSIONS && share >= liveBar) return { live: true, reason: `Live: ${counted} (${pct(share)}).` };
+    return {
+      live: false,
+      reason: `Waiting: ${counted}. It runs on new boxes when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${pct(liveBar)} need it${heavy}.`,
+    };
+  }
+  if (sessions === 0 || share >= dropBar) return { live: true, reason: `Live: ${counted}${sessions ? ` (${pct(share)})` : ''}.` };
+  if (!input.canDrop) {
+    return { live: true, reason: `Live: ${counted} (${pct(share)}). It stays until Talyn has ${SETUP_STEP_WINDOW_DAYS} days of data.` };
+  }
+  if (sessions < SETUP_STEP_MIN_SESSIONS_TO_DROP) {
+    return { live: true, reason: `Live: ${counted} (${pct(share)}). Talyn needs ${SETUP_STEP_MIN_SESSIONS_TO_DROP} recent sessions to take a step out.` };
+  }
+  return { live: false, reason: `Waiting: ${counted} (${pct(share)}), under ${pct(dropBar)}. It no longer runs on new boxes.` };
 }

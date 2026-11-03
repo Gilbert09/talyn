@@ -117,6 +117,21 @@ describe('session setup and timing tools', () => {
       expect(text).toContain('st_1  [cargo, box setup and bake]  cargo install sqlx-cli');
     });
 
+    it('says why a recorded step waits, and tells the agent to record only what every session needs', async () => {
+      mockApi({
+        'GET /api/v1/workbenches/s1': () => wb(),
+        'POST /api/v1/repositories/repo1/setup-recipe/steps': () => ({
+          steps: [{ ...recorded.steps[0], stateReason: 'Waiting: needed by 1 of 12 sessions in the last 14 days.' }],
+        }),
+      });
+      const text = await tool('record_setup_step').handler(OWNER, { command: 'cargo install sqlx-cli', why: 'y' }, SELF);
+      expect(text).toContain('cargo install sqlx-cli\n    Waiting: needed by 1 of 12 sessions in the last 14 days.');
+      const description = tool('record_setup_step').description;
+      expect(description).toContain('Record only a step that every session on this repository needs');
+      expect(description).toContain('a browser for one test');
+      expect(description).toContain('at least 3 sessions and 30%');
+    });
+
     it("passes on the backend's refusal", async () => {
       mockApi(
         { 'GET /api/v1/workbenches/s1': () => wb() },
@@ -180,6 +195,32 @@ describe('session setup and timing tools', () => {
       expect(text).toContain('st_1  cargo install sqlx-cli  [cargo, install]  session s1, learned, 2026-10-30  box setup only');
       expect(text).toContain('st_2  apt-get install -y jq  [cargo, install]  no session, agent, 2026-10-30  settled into the bake');
       expect(text).toContain('st_3  brew install x  [cargo, install]  session s1, learned, 2026-10-30  reverted 2026-11-02 (not needed)');
+    });
+
+    it('shows how long each step and the last setup took, and why a step is in its state', async () => {
+      mockApi({
+        [`GET ${RECIPE}`]: () => ({
+          ...recipe([
+            step({ lastDurationMs: 192_000, typicalDurationMs: 170_000, measuredBoxes: 4, stateReason: 'Live: needed by 9 of 30 sessions in the last 14 days (30%).' }),
+            step({ id: 'st_2', lastDurationMs: 5_000, typicalDurationMs: 5_000, measuredBoxes: 1 }),
+            step({ id: 'st_3', stateReason: 'Waiting: needed by 2 of 31 sessions in the last 14 days.' }),
+          ]),
+          lastSetupTiming: { totalMs: 580_000, repositoryMs: 125_000, learnedMs: 455_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: 's1' },
+        }),
+      });
+      const text = await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' });
+      expect(text).toContain('Last setup took 9m 40s: repository setup 2m 5s, learned steps 7m 35s.');
+      expect(text).toContain('box setup only\n    took 3m 12s (typical 2m 50s). Live: needed by 9 of 30 sessions in the last 14 days (30%).');
+      // One box: no typical time yet.
+      expect(text).toContain('box setup only\n    took 5s\n');
+      expect(text).toContain('box setup only\n    Waiting: needed by 2 of 31 sessions in the last 14 days.');
+    });
+
+    it('says only learned steps when the repository has no setup of its own', async () => {
+      mockApi({
+        [`GET ${RECIPE}`]: () => ({ ...recipe([]), lastSetupTiming: { totalMs: 9_000, repositoryMs: null, learnedMs: 9_000, measuredAt: '2026-11-03T10:00:00.000Z', workbenchId: null } }),
+      });
+      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('Last setup took 9s: learned steps 9s.');
     });
 
     it('says when there are no steps', async () => {

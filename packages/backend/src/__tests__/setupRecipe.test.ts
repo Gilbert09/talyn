@@ -9,8 +9,21 @@ import {
   mergeLearnedSetup,
   LEGACY_DOCKER_START_COMMAND,
   missingCommands,
+  isHeavySetupStep,
+  nextTypicalDurationMs,
   orderSetupSteps,
   parseLearnedStepResults,
+  parseSetupTiming,
+  SETUP_STEP_DROP_SHARE,
+  SETUP_STEP_LIVE_SHARE,
+  SETUP_STEP_MIN_SESSIONS,
+  SETUP_STEP_MIN_SESSIONS_TO_DROP,
+  SETUP_STEP_SLOW_MS,
+  setupStepUsed,
+  setupStepUses,
+  setupStepVerdict,
+  TALYN_BRIEFING,
+  turnCommandWords,
   prepareRecordedStep,
   resolveWorkbenchConfig,
   setupStepIdentity,
@@ -388,7 +401,8 @@ describe('applying the recipe', () => {
     expect(script).toContain('timeout -k 10 "$3"');
     expect(script).toContain('A person can revert it in the repository settings.');
     expect(script.indexOf('talyn_learned_step s0')).toBeLessThan(script.indexOf('talyn_learned_step s3'));
-    expect(script.trimEnd().endsWith(`printf '%s' "$talyn_learned_results"`)).toBe(true);
+    expect(script).toContain('exit $code ms $ms: $last');
+    expect(script.trimEnd().endsWith('talyn_learned_ms="$(( $(talyn_now_ms) - talyn_learned_start ))"')).toBe(true);
     expect(learnedSetupScript([])).toBeNull();
   });
 
@@ -400,7 +414,8 @@ describe('applying the recipe', () => {
   it('runs the repository setup first and keeps its exit code', () => {
     const config = resolveWorkbenchConfig({ talynToml: '[scripts]\nsetup = "pnpm install"\n' });
     const merged = mergeLearnedSetup(config, steps);
-    expect(merged.setup!.command.startsWith('(\npnpm install\n)\ntalyn_setup_status=$?\n')).toBe(true);
+    expect(merged.setup!.command).toContain('talyn_setup_start="$(talyn_now_ms)"\n(\npnpm install\n)\ntalyn_setup_status=$?\n');
+    expect(merged.setup!.command.indexOf('pnpm install')).toBeLessThan(merged.setup!.command.indexOf('talyn_learned_step s0'));
     expect(merged.setup!.command.endsWith('exit $talyn_setup_status')).toBe(true);
     expect(merged.run).toEqual(config.run);
     expect(merged.source).toBe('talyn');
@@ -408,7 +423,9 @@ describe('applying the recipe', () => {
 
   it('becomes the whole setup when the repository has none, and changes nothing with no steps', () => {
     const config = resolveWorkbenchConfig({});
-    expect(mergeLearnedSetup(config, steps).setup!.command.startsWith('# Setup that Talyn learned')).toBe(true);
+    const merged = mergeLearnedSetup(config, steps).setup!.command;
+    expect(merged.startsWith('# Setup that Talyn learned')).toBe(true);
+    expect(merged).toContain('setup timing total $talyn_learned_ms learned $talyn_learned_ms');
     expect(mergeLearnedSetup(config, [])).toBe(config);
   });
 
@@ -438,14 +455,34 @@ describe('applying the recipe', () => {
     expect(r.stdout).toContain('second');
     expect(r.stderr).toContain('learned step a failed with exit 7');
     expect(r.stderr).toContain('learned step slow timed out after 1 seconds');
-    // In the order the steps ran: env, database, then other.
-    expect(parseLearnedStepResults(r.stdout)).toEqual([
+    // In the order the steps ran: env, database, then other. Each with its time.
+    const results = parseLearnedStepResults(r.stdout);
+    expect(results.map(({ durationMs: _d, ...rest }) => rest)).toEqual([
       { id: 'slow', exitCode: 124, timedOut: true, lastLine: '' },
       // A process left holding the output is stopped at the time limit, so it cannot hold the setup.
       { id: 'leak', exitCode: 124, timedOut: true, lastLine: 'started' },
       { id: 'a', exitCode: 7, timedOut: false, lastLine: 'cannot' },
       { id: 'b', exitCode: 0, timedOut: false, lastLine: 'second' },
     ]);
+    const ms = Object.fromEntries(results.map((x) => [x.id, x.durationMs]));
+    // bash 3 (macOS) has no EPOCHREALTIME, so a time can be whole seconds.
+    expect(ms.slow).toBeGreaterThanOrEqual(0);
+    expect(ms.slow).toBeLessThan(5_000);
+    expect(ms.a).toBeGreaterThanOrEqual(0);
+    expect(ms.a).toBeLessThanOrEqual(2_000);
+    const timing = parseSetupTiming(r.stdout)!;
+    expect(timing.repositoryMs).toBeGreaterThanOrEqual(0);
+    expect(timing.learnedMs).toBeGreaterThanOrEqual(1_000);
+    expect(timing.totalMs).toBeGreaterThanOrEqual(timing.learnedMs + timing.repositoryMs!);
+  });
+
+  it.runIf(hasTimeout)('times the steps of a setup with no repository setup of its own', () => {
+    const merged = mergeLearnedSetup(resolveWorkbenchConfig({}), [step('a', 'sleep 1.2', 'other', 'start')]);
+    const r = spawnSync('bash', ['-c', merged.setup!.command], { encoding: 'utf8', timeout: 20_000 });
+    expect(r.status).toBe(0);
+    // Whole seconds at worst: 1.2 s is at least 1000 ms.
+    expect(parseLearnedStepResults(r.stdout)[0].durationMs).toBeGreaterThanOrEqual(1_000);
+    expect(parseSetupTiming(r.stdout)).toMatchObject({ repositoryMs: null, learnedMs: expect.any(Number) });
   });
 });
 
@@ -529,5 +566,195 @@ describe('bakeWithLearnedSteps', () => {
   it('reads the step id back from a bake result', () => {
     expect(learnedBakeStepId('talyn-learned st_123')).toBe('st_123');
     expect(learnedBakeStepId('build')).toBeNull();
+  });
+});
+
+describe('step times', () => {
+  it('reads a time from a new result line and none from an old one', () => {
+    const output = [
+      '[talyn] learned step result st_new exit 0 ms 192345: Installed',
+      '[talyn] learned step result st_old exit 1: from an older script',
+      '[talyn] learned step result st_zero exit 124 ms 0: ',
+    ].join('\n');
+    expect(parseLearnedStepResults(output)).toEqual([
+      { id: 'st_new', exitCode: 0, timedOut: false, lastLine: 'Installed', durationMs: 192_345 },
+      { id: 'st_old', exitCode: 1, timedOut: false, lastLine: 'from an older script' },
+      { id: 'st_zero', exitCode: 124, timedOut: true, lastLine: '', durationMs: 0 },
+    ]);
+  });
+
+  it.each<[string, ReturnType<typeof parseSetupTiming>]>([
+    ['[talyn] setup timing total 580000 repository 125000 learned 455000', { totalMs: 580_000, repositoryMs: 125_000, learnedMs: 455_000 }],
+    ['[talyn] setup timing total 9000 learned 9000', { totalMs: 9_000, repositoryMs: null, learnedMs: 9_000 }],
+    ['[talyn] setup timing total x learned 1', null],
+    ['no timing here', null],
+    ['', null],
+  ])('reads the setup timing in %j', (output, expected) => {
+    expect(parseSetupTiming(`own output\n${output}\n`)).toEqual(expected);
+  });
+
+  it('keeps the last timing line', () => {
+    expect(parseSetupTiming('[talyn] setup timing total 1 learned 1\n[talyn] setup timing total 2 learned 2')).toMatchObject({ totalMs: 2 });
+  });
+
+  it.each<[number | null, number, number]>([
+    [null, 1000, 1000],
+    [1000, 1000, 1000],
+    [10_000, 0, 8_000],
+    [100_000, 200_000, 120_000],
+    [1, 2, 1],
+  ])('rolls the typical time: %s and a new %s give %s', (typical, last, expected) => {
+    expect(nextTypicalDurationMs(typical, last)).toBe(expected);
+  });
+
+  it('lets the last ten boxes carry most of the typical time', () => {
+    let typical: number | null = 600_000;
+    for (let i = 0; i < 10; i++) typical = nextTypicalDurationMs(typical, 5_000);
+    // A step that went into the bake: ten fast boxes take 10 minutes down to about a minute.
+    expect(typical).toBeLessThan(70_000);
+  });
+});
+
+describe('only installs are learned from tool calls', () => {
+  it.each([
+    ['a compose stack', 'docker compose -f docker-compose.dev.yml up -d db'],
+    ['a service start', 'sudo service postgresql start'],
+    ['a systemctl start', 'sudo systemctl start redis-server'],
+    ['a database create', 'createdb posthog_test'],
+    ['a psql create', `psql -c 'CREATE DATABASE test'`],
+    ['an exported variable', 'export DEBUG=1'],
+    ['a redis daemon', 'redis-server --daemonize yes'],
+  ])('learns no %s', (_name, command) => {
+    // The shape is known, as a start...
+    expect(one(command).steps[0]).toMatchObject({ phase: 'start' });
+    // ...and it is never learned from a turn.
+    expect(extractSetupSteps([bash(command)], { repoDir: REPO }).steps).toEqual([]);
+  });
+
+  it('still learns the installs of the same turn', () => {
+    const got = extractSetupSteps([bash('docker compose up -d'), bash('uv sync --frozen'), bash('sudo service postgresql start')], { repoDir: REPO });
+    expect(got.steps.map((s) => s.command)).toEqual(['uv sync --frozen']);
+  });
+
+  it('lets an agent record a start step, as a start', () => {
+    expect(prepareRecordedStep(`echo '127.0.0.1 db redis7 clickhouse' | sudo tee -a /etc/hosts`, 'compose names').steps[0])
+      .toMatchObject({ kind: 'other', phase: 'start' });
+    expect(prepareRecordedStep('docker compose up -d', 'stack').steps[0]).toMatchObject({ kind: 'compose', phase: 'start' });
+  });
+
+  it('never bakes a start step', () => {
+    const bake = bakeWithLearnedSteps(null, [
+      step('st_hosts', `echo x | sudo tee -a /etc/hosts`, 'other', 'start'),
+      step('st_pg', 'sudo -n service postgresql start', 'service', 'start'),
+    ]);
+    expect(bake).toBeNull();
+  });
+});
+
+describe('isHeavySetupStep', () => {
+  it.each([
+    ['npx playwright install --with-deps chromium', true],
+    ["cd 'frontend' && npx playwright install chromium", true],
+    ['npx @puppeteer/browsers install chrome@stable', true],
+    ['npx puppeteer browsers install chrome', true],
+    ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y chromium || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y chromium)', true],
+    ['sudo apt-get install -y google-chrome-stable', true],
+    ['sudo apt-get install -y firefox-esr', true],
+    ['sudo apt-get install -y texlive-full', true],
+    ['sudo apt-get install -y jq libpq-dev', false],
+    ['sudo apt-get install -y postgresql-15', false],
+    ['npx playwright test', false],
+    ['uv sync --frozen', false],
+    ['cargo install sqlx-cli', false],
+    ['pnpm install && npx playwright test', false],
+  ])('%j is heavy: %s', (command, heavy) => {
+    expect(isHeavySetupStep(command)).toBe(heavy);
+  });
+});
+
+describe('uses of a live step', () => {
+  const words = (...lines: string[]) => turnCommandWords(lines.map((c) => bash(c)));
+
+  it('reads tools, runners, subcommands and python -m', () => {
+    const got = words('uv run pytest posthog/x', 'cd rust && cargo nextest run', 'python -m mypy .', 'npx playwright test', './node_modules/.bin/jest');
+    for (const w of ['uv', 'pytest', 'cargo', 'cargo-nextest', 'python', 'mypy', 'npx', 'playwright', 'jest']) expect(got.has(w)).toBe(true);
+  });
+
+  it('ignores calls that are not shell calls', () => {
+    expect(turnCommandWords([{ ...bash('cargo build'), name: 'Read' }]).size).toBe(0);
+  });
+
+  it.each<[string, string, AppliedSetupStep['kind'], string, boolean]>([
+    ['rustup by cargo', "command -v cargo >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal", 'rustup', 'cargo build', true],
+    ['sqlx-cli by sqlx', 'cargo install sqlx-cli --no-default-features --features postgres', 'cargo', 'sqlx migrate run', true],
+    ['sqlx-cli not by cargo', 'cargo install sqlx-cli', 'cargo', 'cargo build', false],
+    ['cargo-nextest by cargo nextest', 'cargo binstall -y cargo-nextest', 'cargo', 'cargo nextest run', true],
+    ['uv sync by pytest', 'uv sync --frozen', 'uv', 'pytest posthog/x', true],
+    ['uv sync by uv run', 'uv sync --frozen', 'uv', 'uv run python manage.py test', true],
+    ['uv sync not by pnpm', 'uv sync --frozen', 'uv', 'pnpm test', false],
+    ['pnpm install by pnpm', "cd 'frontend' && pnpm install --frozen-lockfile", 'node', 'pnpm --filter=@posthog/frontend test', true],
+    ['playwright by a playwright test', 'npx playwright install --with-deps chromium', 'node', 'npx playwright test', true],
+    ['playwright not by pnpm', 'npx playwright install --with-deps chromium', 'node', 'pnpm install', false],
+    ['jq by jq', 'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq', 'apt', 'cat x.json | jq .', true],
+    ['postgres-15 not by psql', 'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-15', 'apt', 'psql -c "select 1"', false],
+    ['a build library by a build', 'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y libpq-dev pkg-config', 'apt', 'uv sync', true],
+    ['a download by its tool', '[ -x /usr/local/bin/just ] || { sudo -n curl -fsSL https://github.com/casey/just/releases/download/1.0/just -o /usr/local/bin/just && sudo -n chmod +x /usr/local/bin/just; }', 'download', 'just build', true],
+  ])('%s', (_name, command, kind, ran, used) => {
+    expect(setupStepUsed({ command, kind, phase: 'install' }, words(ran))).toBe(used);
+  });
+
+  it('gives a start step no uses: it is a one-off by nature', () => {
+    expect(setupStepUses({ command: 'docker compose up -d', kind: 'compose', phase: 'start' })).toEqual([]);
+    expect(setupStepUsed({ command: 'sudo -n service postgresql start', kind: 'service', phase: 'start' }, words('psql -c "select 1"'))).toBe(false);
+  });
+});
+
+describe('setupStepVerdict', () => {
+  const v = (input: Partial<Parameters<typeof setupStepVerdict>[0]>) =>
+    setupStepVerdict({ live: false, heavy: false, neededBy: 0, sessions: 0, canDrop: true, ...input });
+
+  it.each<[string, Partial<Parameters<typeof setupStepVerdict>[0]>, boolean]>([
+    ['2 of 30 stays waiting', { neededBy: 2, sessions: 30 }, false],
+    ['10 of 30 goes live', { neededBy: 10, sessions: 30 }, true],
+    ['9 of 30 (30%) goes live', { neededBy: 9, sessions: 30 }, true],
+    ['8 of 30 (27%) stays waiting', { neededBy: 8, sessions: 30 }, false],
+    ['2 of 2 is too few sessions', { neededBy: 2, sessions: 2 }, false],
+    ['3 of 3 goes live', { neededBy: 3, sessions: 3 }, true],
+    ['a heavy step at 10 of 30 waits', { neededBy: 10, sessions: 30, heavy: true }, false],
+    ['a heavy step at 15 of 30 goes live', { neededBy: 15, sessions: 30, heavy: true }, true],
+    ['a slow step at 10 of 30 waits', { neededBy: 10, sessions: 30, typicalDurationMs: SETUP_STEP_SLOW_MS }, false],
+    ['a fast step at 10 of 30 goes live', { neededBy: 10, sessions: 30, typicalDurationMs: SETUP_STEP_SLOW_MS - 1 }, true],
+    // Hysteresis: a live step stays between the two bars.
+    ['live at 5 of 30 (17%) stays', { live: true, neededBy: 5, sessions: 30 }, true],
+    ['live at 4 of 30 (13%) leaves', { live: true, neededBy: 4, sessions: 30 }, false],
+    ['live at 0 of 30 without 14 days of data stays', { live: true, neededBy: 0, sessions: 30, canDrop: false }, true],
+    ['live at 0 of 6 sessions stays', { live: true, neededBy: 0, sessions: SETUP_STEP_MIN_SESSIONS_TO_DROP - 1 }, true],
+    ['live at 0 of 7 sessions leaves', { live: true, neededBy: 0, sessions: SETUP_STEP_MIN_SESSIONS_TO_DROP }, false],
+    ['live with no sessions stays', { live: true }, true],
+    ['heavy live at 7 of 30 (23%) leaves', { live: true, neededBy: 7, sessions: 30, heavy: true }, false],
+    ['heavy live at 8 of 30 (27%) stays', { live: true, neededBy: 8, sessions: 30, heavy: true }, true],
+  ])('%s', (_name, input, live) => {
+    expect(v(input).live).toBe(live);
+  });
+
+  it('says why, with the counts a person can check', () => {
+    expect(v({ neededBy: 2, sessions: 31 }).reason)
+      .toBe(`Waiting: needed by 2 of 31 sessions in the last 14 days. It runs on new boxes when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${SETUP_STEP_LIVE_SHARE * 100}% need it.`);
+    expect(v({ neededBy: 9, sessions: 30 }).reason).toBe('Live: needed by 9 of 30 sessions in the last 14 days (30%).');
+    expect(v({ neededBy: 2, sessions: 30, heavy: true }).reason).toContain('50% need it, because it installs a browser or a large package set.');
+    expect(v({ neededBy: 2, sessions: 30, typicalDurationMs: 190_000 }).reason).toContain('because it takes about 3m 10s on each box');
+    expect(v({ live: true, neededBy: 1, sessions: 30, canDrop: false }).reason).toContain('It stays until Talyn has 14 days of data.');
+    expect(v({ live: true, neededBy: 1, sessions: 30 }).reason).toBe(`Waiting: needed by 1 of 30 sessions in the last 14 days (3%), under ${SETUP_STEP_DROP_SHARE * 100}%. It no longer runs on new boxes.`);
+  });
+});
+
+describe('what the agent is told', () => {
+  it('records only what every session on the repository needs', () => {
+    const speed = TALYN_BRIEFING.split('## Speed\n')[1]!.split('\n## ')[0];
+    const line = speed.split('\n').find((l) => l.includes('talyn_record_setup_step'))!;
+    expect(line).toContain('every session on this repository needs');
+    expect(line).toContain('dependency install');
+    expect(line).toContain('a browser for one test');
+    expect(line).not.toMatch(/service or test database/);
   });
 });

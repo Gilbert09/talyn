@@ -4696,6 +4696,50 @@
         ],
         "additionalProperties": false
       },
+      "SetupTiming": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "total_ms": {
+            "type": "integer",
+            "description": "The whole setup script."
+          },
+          "repository_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The repository's own setup command. Null: the repository has none."
+          },
+          "learned_ms": {
+            "type": "integer",
+            "description": "All learned steps together."
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "total_ms",
+          "repository_ms",
+          "learned_ms",
+          "measured_at",
+          "session_id"
+        ],
+        "description": "The times of the newest box setup that ran learned steps."
+      },
       "SetupStep": {
         "type": "object",
         "properties": {
@@ -4740,7 +4784,7 @@
               "failing",
               "reverted"
             ],
-            "description": "`waiting`: seen in fewer than 2 sessions, so it does not run yet. `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it."
+            "description": "`waiting`: too few of the repository's recent sessions need it, so it does not run (see `state_reason`). `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it."
           },
           "source_session_id": {
             "type": [
@@ -4816,6 +4860,47 @@
               "string",
               "null"
             ]
+          },
+          "recent_needed_sessions": {
+            "type": "integer",
+            "description": "The repository's sandbox sessions of the last `window_days` days that needed the step: they ran it, or used what a live step installs."
+          },
+          "recent_sessions": {
+            "type": "integer",
+            "description": "The repository's sandbox sessions of the last `window_days` days."
+          },
+          "share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "`recent_needed_sessions / recent_sessions`, 0 to 1. Null: no recent sessions."
+          },
+          "heavy": {
+            "type": "boolean",
+            "description": "The step installs a browser or a large package set, so it needs a higher share to run."
+          },
+          "state_reason": {
+            "type": "string",
+            "description": "Why the step is in its state, for example \"Waiting: needed by 2 of 31 sessions in the last 14 days. ...\""
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How long the step took in the newest box setup that measured it."
+          },
+          "typical_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "A rolling mean of the step's time in the box setup."
+          },
+          "measured_boxes": {
+            "type": "integer",
+            "description": "The box setups that measured the step."
           }
         },
         "required": [
@@ -4859,6 +4944,13 @@
           },
           "max_steps": {
             "type": "integer"
+          },
+          "window_days": {
+            "type": "integer",
+            "description": "The window that `recent_sessions` counts sessions in."
+          },
+          "last_setup_timing": {
+            "$ref": "#/components/schemas/SetupTiming"
           },
           "steps": {
             "type": "array",

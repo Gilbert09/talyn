@@ -356,6 +356,16 @@ export function toPublicSetupRecipe(recipe: SetupRecipe) {
     repository_id: recipe.repositoryId,
     learning: !recipe.learningDisabled,
     max_steps: recipe.maxSteps,
+    window_days: recipe.windowDays,
+    last_setup_timing: recipe.lastSetupTiming
+      ? {
+          total_ms: recipe.lastSetupTiming.totalMs,
+          repository_ms: recipe.lastSetupTiming.repositoryMs,
+          learned_ms: recipe.lastSetupTiming.learnedMs,
+          measured_at: recipe.lastSetupTiming.measuredAt,
+          session_id: recipe.lastSetupTiming.workbenchId,
+        }
+      : recipe.lastSetupTiming,
     steps: recipe.steps.map((s) => ({
       id: s.id,
       command: s.command,
@@ -376,6 +386,14 @@ export function toPublicSetupRecipe(recipe: SetupRecipe) {
       box_last_failure: s.boxLastFailure,
       box_disabled_at: s.boxDisabledAt,
       box_disabled_reason: s.boxDisabledReason,
+      recent_needed_sessions: s.recentNeededSessions,
+      recent_sessions: s.recentSessions,
+      share: s.share,
+      heavy: s.heavy,
+      state_reason: s.stateReason,
+      last_duration_ms: s.lastDurationMs,
+      typical_duration_ms: s.typicalDurationMs,
+      measured_boxes: s.measuredBoxes,
     })),
   };
 }

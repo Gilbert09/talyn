@@ -102,7 +102,7 @@ export const SetupStep = z
     why: z.string().nullable(),
     source: z.enum(['learned', 'agent']),
     state: z.enum(['waiting', 'live', 'failing', 'reverted']).openapi({
-      description: '`waiting`: seen in fewer than 2 sessions, so it does not run yet. `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it.',
+      description: '`waiting`: too few of the repository\'s recent sessions need it, so it does not run (see `state_reason`). `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it.',
     }),
     source_session_id: Id.nullable(),
     seen_count: z.number().int(),
@@ -116,8 +116,28 @@ export const SetupStep = z
     box_last_failure: z.string().nullable().openapi({ description: 'The exit code or time limit, and the last line the step printed.' }),
     box_disabled_at: Timestamp.nullable().openapi({ description: 'The step failed on too many boxes and no longer runs.' }),
     box_disabled_reason: z.string().nullable(),
+    recent_needed_sessions: z.number().int().optional().openapi({
+      description: 'The repository\'s sandbox sessions of the last `window_days` days that needed the step: they ran it, or used what a live step installs.',
+    }),
+    recent_sessions: z.number().int().optional().openapi({ description: 'The repository\'s sandbox sessions of the last `window_days` days.' }),
+    share: z.number().nullable().optional().openapi({ description: '`recent_needed_sessions / recent_sessions`, 0 to 1. Null: no recent sessions.' }),
+    heavy: z.boolean().optional().openapi({ description: 'The step installs a browser or a large package set, so it needs a higher share to run.' }),
+    state_reason: z.string().optional().openapi({ description: 'Why the step is in its state, for example "Waiting: needed by 2 of 31 sessions in the last 14 days. ..."' }),
+    last_duration_ms: z.number().int().nullable().optional().openapi({ description: 'How long the step took in the newest box setup that measured it.' }),
+    typical_duration_ms: z.number().int().nullable().optional().openapi({ description: 'A rolling mean of the step\'s time in the box setup.' }),
+    measured_boxes: z.number().int().optional().openapi({ description: 'The box setups that measured the step.' }),
   })
   .openapi('SetupStep');
+
+export const SetupTiming = z
+  .object({
+    total_ms: z.number().int().openapi({ description: 'The whole setup script.' }),
+    repository_ms: z.number().int().nullable().openapi({ description: 'The repository\'s own setup command. Null: the repository has none.' }),
+    learned_ms: z.number().int().openapi({ description: 'All learned steps together.' }),
+    measured_at: Timestamp,
+    session_id: Id.nullable(),
+  })
+  .openapi('SetupTiming');
 
 export const SetupRecipe = z
   .object({
@@ -125,6 +145,8 @@ export const SetupRecipe = z
     repository_id: Id,
     learning: z.boolean(),
     max_steps: z.number().int(),
+    window_days: z.number().int().optional().openapi({ description: 'The window that `recent_sessions` counts sessions in.' }),
+    last_setup_timing: SetupTiming.nullable().optional().openapi({ description: 'The times of the newest box setup that ran learned steps.' }),
     steps: z.array(SetupStep),
   })
   .openapi('SetupRecipe');
