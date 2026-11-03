@@ -5,6 +5,9 @@ import {
   ADMIN_HOST_OFFLINE,
   type AdminFleetHost,
   type AdminFleetLiveErrorCode,
+  type AdminHostBoxCounts,
+  type AdminHostCondition,
+  type AdminHostHealth,
 } from '@talyn/shared';
 import { FleetClient, type FleetSandbox } from '../selfHosted/client.js';
 import {
@@ -222,13 +225,13 @@ export async function fanOutHosts<T>(
  * Never throws, like every other read here.
  */
 export async function liveFleetSandboxes(): Promise<{
-  live: Array<{ sandbox: FleetSandbox; host: string }>;
+  live: LiveFleetSandbox[];
   degraded: Array<{ host: string; error: string }>;
 }> {
   const gateway = fleetPinnedEndpoint();
   if (!gateway) {
     const settled = await fanOutHosts((client) => client.listSandboxes());
-    const live: Array<{ sandbox: FleetSandbox; host: string }> = [];
+    const live: LiveFleetSandbox[] = [];
     const degraded: Array<{ host: string; error: string }> = [];
     for (const { host, result } of settled) {
       if (!result.ok) {
@@ -262,23 +265,94 @@ export async function liveFleetSandboxes(): Promise<{
   }
 
   const degraded: Array<{ host: string; error: string }> = [];
-  const hydrated = await Promise.all(
-    (refs ?? []).map(async (ref) => {
+  const hydrated = await mapLimit(refs ?? [], HYDRATE_CONCURRENCY, async (ref) => {
       try {
-        const { sandbox } = await client.getSandbox(ref.id);
-        return { sandbox, host: ref.host };
+        // The gateway's index names no host (a tenant has no use for one), so
+        // the host comes from the `X-Fleet-Host` the gateway puts on every
+        // sandbox answer. A sleeping box can wake on another host, so this is
+        // fresher than the host Talyn recorded at create.
+        const [{ sandbox }, host] = await Promise.all([
+          client.getSandbox(ref.id),
+          client.sandboxHost(ref.id).catch(() => undefined),
+        ]);
+        return { sandbox, host: host || ref.host || null };
       } catch (err) {
         // One id that could not be read is not a broken page. Reporting it
         // against its own host is what tells an operator WHICH box went quiet.
         degraded.push({
-          host: ref.host,
+          host: ref.host || gateway,
           error: `${ref.id}: ${err instanceof Error ? err.message : String(err)}`,
         });
         return null;
       }
-    }),
-  );
-  return { live: hydrated.filter((x): x is { sandbox: FleetSandbox; host: string } => x !== null), degraded };
+  });
+  return { live: hydrated.filter((x): x is LiveFleetSandbox => x !== null), degraded };
+}
+
+/** One live sandbox and the host holding it. Null host: nothing named one. */
+export interface LiveFleetSandbox {
+  sandbox: FleetSandbox;
+  host: string | null;
+}
+
+/**
+ * Hydrating the gateway index is two reads per sandbox. Sessions sleep instead
+ * of ending, so the index holds dozens of ids, and an unbounded fan-out would
+ * open them all at once against one control plane.
+ */
+const HYDRATE_CONCURRENCY = 8;
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/**
+ * A client that can read and act on ONE sandbox, and the host that holds it.
+ *
+ * Through the gateway when one is configured: a direct dial with
+ * FLEET_API_TOKEN resolves to the EMPTY tenant (see liveFleetSandboxes), so it
+ * cannot see a sandbox the gateway placed. Before this the run detail page and
+ * Cancel dialled the host directly, which answered "no such sandbox" for every
+ * gateway-placed run; Cancel then read that as "already gone" and reported a
+ * success while the box kept running.
+ */
+export async function adminSandboxClient(
+  host: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ client: FleetClient; viaGateway: boolean }> {
+  const gateway = fleetPinnedEndpoint();
+  if (gateway) {
+    const token = fleetGatewayToken();
+    if (!token) throw new FleetNotConfiguredError();
+    return {
+      client: new FleetClient(gateway, token, { timeoutMs: opts.timeoutMs ?? ADMIN_READ_TIMEOUT_MS }),
+      viaGateway: true,
+    };
+  }
+  const { client } = await fleetClientForHost(host, opts);
+  return { client, viaGateway: false };
+}
+
+/** One sandbox and the host holding it now. Throws like any client read. */
+export async function readAdminSandbox(
+  id: string,
+  host: string,
+): Promise<{ sandbox: FleetSandbox; terminal: boolean; host: string | null }> {
+  const { client, viaGateway } = await adminSandboxClient(host);
+  const [read, named] = await Promise.all([
+    client.getSandbox(id),
+    viaGateway ? client.sandboxHost(id).catch(() => undefined) : Promise.resolve(undefined),
+  ]);
+  return { sandbox: read.sandbox, terminal: read.terminal, host: named || (viaGateway ? null : host) };
 }
 
 /** The registry row, as the console's view type, with no live data attached. */
@@ -322,10 +396,80 @@ export async function listAdminFleetHosts(opts: { live?: boolean } = {}): Promis
     hosts.map(async (host) => {
       const base = toAdminHost(host);
       // Offline hosts are not dialled at all — probe() refuses them, and the
-      // registry row already carries the last thing they said.
-      const result = await probe(host.name, (client) => client.capacity());
-      if (result.ok) return { ...base, live: result.value };
-      return { ...base, liveError: result.error, liveErrorCode: result.code };
+      // registry row already carries the last thing they said. Capacity and
+      // stats together: capacity is what decides `accepting`, stats carries
+      // the health the control plane raises its alerts from.
+      const [result, stats] = await Promise.all([
+        probe(host.name, (client) => client.capacity()),
+        probe(host.name, (client) => client.stats()),
+      ]);
+      const health = stats.ok ? hostHealthFromStats(stats.value) : {};
+      if (result.ok) return { ...base, live: result.value, ...health };
+      return { ...base, liveError: result.error, liveErrorCode: result.code, ...health };
     })
   );
+}
+
+/**
+ * The health, conditions and box counts in a `GET /v1/stats` answer.
+ *
+ * Read field by field and defensively: `health` and `conditions` are newer
+ * than Talyn's FleetStats type, and a host on an older fleetd sends neither.
+ * The conditions are the HOST'S OWN (yas `HostHealth.Conditions`), never a copy
+ * computed here, so the console and the control plane cannot disagree about
+ * what is wrong.
+ */
+export function hostHealthFromStats(stats: unknown): {
+  health: AdminHostHealth | null;
+  conditions: AdminHostCondition[] | null;
+  boxes: AdminHostBoxCounts | null;
+} {
+  const raw = (stats ?? {}) as Record<string, unknown>;
+  const h = raw.health as Record<string, unknown> | undefined;
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const bake = (h?.bake ?? {}) as Record<string, unknown>;
+  const pressure = h?.diskPressure;
+  const health: AdminHostHealth | null =
+    h && typeof h === 'object'
+      ? {
+          diskFreeBytes: num(h.diskFreeBytes) ?? 0,
+          diskPressure: pressure === 'ok' || pressure === 'low' || pressure === 'critical' ? pressure : null,
+          diskCommittedMib: num(h.diskCommittedMib),
+          diskReserveMib: num(h.diskReserveMib),
+          diskHardFloorMib: num(h.diskHardFloorMib),
+          diskTopWriters: Array.isArray(h.diskTopWriters)
+            ? (h.diskTopWriters as Array<Record<string, unknown>>)
+                .filter((w) => w && typeof w.id === 'string')
+                .map((w) => ({
+                  id: w.id as string,
+                  writtenMib: num(w.writtenMib) ?? 0,
+                  rateMibPerMin: num(w.rateMibPerMin) ?? 0,
+                }))
+            : [],
+          hibernateUploadFailing: num(h.hibernateUploadFailing) ?? 0,
+          bakeFailingRepos: num(bake.failingRepos) ?? 0,
+          bakeMaxConsecutiveFailures: num(bake.maxConsecutiveFailures) ?? 0,
+        }
+      : null;
+  const conditions = Array.isArray(raw.conditions)
+    ? (raw.conditions as Array<Record<string, unknown>>)
+        .filter((c) => c && typeof c.kind === 'string')
+        .map((c) => ({
+          kind: c.kind as string,
+          severity: c.severity === 'critical' ? ('critical' as const) : ('warning' as const),
+          detail: typeof c.detail === 'string' ? c.detail : '',
+        }))
+    : null;
+  const by = raw.runsByStatus as Record<string, unknown> | undefined;
+  const count = (k: string) => num(by?.[k]) ?? 0;
+  const boxes: AdminHostBoxCounts | null =
+    by && typeof by === 'object'
+      ? {
+          // `running` is the pre-merge name for `busy`; an older record reads back as it.
+          running: count('starting') + count('idle') + count('busy') + count('running'),
+          asleep: count('suspended'),
+          queued: count('queued'),
+        }
+      : null;
+  return { health, conditions, boxes };
 }

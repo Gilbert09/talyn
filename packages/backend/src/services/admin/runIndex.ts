@@ -1,8 +1,15 @@
-import type { AdminRunIndex, AdminRunRow, AdminRunStatus } from '@talyn/shared';
+import type { AdminRunIndex, AdminRunRow, AdminRunSleep, AdminRunStatus } from '@talyn/shared';
 import type { FleetSandbox } from '../selfHosted/client.js';
 import { cloudStatusForSandbox } from '../selfHosted/poller.js';
 import { listAdminTasks } from './queries.js';
 import { liveFleetSandboxes } from './fleetProxy.js';
+import {
+  classifySandbox,
+  loadSandboxClaims,
+  logicalSandboxId,
+  parseSandboxId,
+  type SandboxClassification,
+} from './sandboxClaims.js';
 
 /**
  * "What is happening on the fleet", joined from two sources that each know
@@ -13,9 +20,9 @@ import { liveFleetSandboxes } from './fleetProxy.js';
  * dies with the process. The durable record is the `tasks` row. Neither alone
  * answers the question:
  *
- *   - `orphan: true` — a sandbox live on a host with no task behind it. A
- *     microVM burning memory for nobody. This is the single most valuable
- *     thing this page surfaces, and it is invisible from either side alone.
+ *   - `orphan: true` — a sandbox live on a host that no Talyn row (task,
+ *     session, thread or review unit, of any status) claims. A microVM burning
+ *     memory for nobody, invisible from either side alone.
  *   - `live: null` on a non-terminal task — the task believes it is running
  *     and the host has never heard of it. Usually a fleetd restart that lost
  *     the record, which is precisely what the re-credentialing path exists for.
@@ -25,9 +32,8 @@ import { liveFleetSandboxes } from './fleetProxy.js';
  * translated back into the run-status vocabulary the console has always
  * spoken (see cloudStatusForSandbox).
  *
- * The join key is the deterministic id: `talyn-<taskId>`, set by
- * services/selfHosted/executor.ts, and echoed back in
- * `metadata.cloudTask.remoteRunId`.
+ * The join key is the deterministic sandbox id. sandboxClaims.ts reads the
+ * three id schemes Talyn makes and finds the row behind each.
  */
 
 /** The METADATA fallback: `cloudTask.status` is written by the poller in the
@@ -65,14 +71,27 @@ function iso(value: string | undefined): string | null {
  * `orphan: true` by default because this builds from the live side alone; the
  * list overrides it when a task row claims the sandbox.
  */
-export function adminRunFromFleet(sandbox: FleetSandbox, host: string): AdminRunRow {
+export function adminRunFromFleet(sandbox: FleetSandbox, host: string | null): AdminRunRow {
+  const extra = sandbox as FleetSandbox & SandboxExtras;
+  const parsed = parseSandboxId(sandbox.id);
   return {
     runId: sandbox.id,
     host,
     taskId: null,
     workspaceId: sandbox.workspaceId ?? null,
     ownerEmail: null,
-    repo: null,
+    repo: sandbox.task?.repo ?? extra.repo ?? null,
+    kind: parsed.kind === 'workbench' ? 'session' : parsed.kind,
+    claim: 'orphan',
+    supersededReason: null,
+    title: null,
+    workbenchId: null,
+    workspaceName: null,
+    sandboxStatus: sandbox.status ?? null,
+    sleep: sleepOf(sandbox),
+    vcpuCount: typeof sandbox.vcpuCount === 'number' ? sandbox.vcpuCount : null,
+    diskMib: typeof sandbox.diskMib === 'number' && sandbox.diskMib > 0 ? sandbox.diskMib : null,
+    sandboxSize: null,
     status: cloudStatusForSandbox(sandbox),
     phase: sandbox.phase ?? null,
     adopted: Boolean(sandbox.adopted),
@@ -92,6 +111,81 @@ export function adminRunFromFleet(sandbox: FleetSandbox, host: string): AdminRun
     orphan: true,
     selfTest: Boolean(sandbox.task?.selfTest),
   };
+}
+
+/**
+ * Sandbox fields newer than Talyn's FleetSandbox type (yas openapi `Sandbox`).
+ * Read here and not added to the client type, which other work owns.
+ */
+interface SandboxExtras {
+  repo?: string;
+  suspendedAt?: string;
+  suspendUploaded?: boolean;
+  suspendUploadError?: string;
+}
+
+/**
+ * Where a suspended sandbox sleeps, or null when it is awake.
+ *
+ * `storage` once a complete copy is in object storage (the fleet sets
+ * `suspendUploaded` only after the manifest lands), `local` before that. A box
+ * asleep is normal: it costs no memory and no slot, and its silence is not a
+ * wedge. The Runs page used to read every suspended box as `running` with a
+ * growing idle time, and flagged all of them "wedged?".
+ */
+export function sleepOf(sandbox: FleetSandbox): AdminRunSleep | null {
+  if (sandbox.status !== 'suspended') return null;
+  const extra = sandbox as FleetSandbox & SandboxExtras;
+  const kind = sandbox.suspendKind;
+  return {
+    kind: extra.suspendUploaded ? 'storage' : 'local',
+    since: iso(extra.suspendedAt),
+    suspendKind: kind === 'memory' || kind === 'rootfs' ? kind : null,
+    uploadError: extra.suspendUploadError || null,
+  };
+}
+
+/**
+ * Put what the claiming row knows onto a live row.
+ *
+ * The host the fleet named wins over the one Talyn recorded: a sleeping box can
+ * wake on another host, and the recorded host is where it was CREATED.
+ */
+export function applyClassification(row: AdminRunRow, c: SandboxClassification): AdminRunRow {
+  const out: AdminRunRow = {
+    ...row,
+    kind: c.kind,
+    claim: c.claim,
+    supersededReason: c.supersededReason,
+    orphan: c.claim === 'orphan',
+  };
+  if (c.task) {
+    out.taskId = c.task.id;
+    out.workspaceId = c.task.workspaceId;
+    out.workspaceName = c.task.workspaceName;
+    out.ownerEmail = c.task.ownerEmail;
+    out.title = c.task.title;
+    out.host = row.host ?? c.task.fleetHost;
+    out.costUsd = row.costUsd ?? c.task.costUsd;
+  }
+  if (c.workbench) {
+    out.workbenchId = c.workbench.id;
+    out.workspaceId = c.workbench.workspaceId;
+    out.workspaceName = c.workbench.workspaceName;
+    out.ownerEmail = c.workbench.ownerEmail;
+    out.title = c.workbench.title || c.workbench.name;
+    out.repo = c.workbench.repoFullName || row.repo;
+    out.sandboxSize = c.workbench.sandboxSize;
+    out.host = row.host ?? c.workbench.fleetHost;
+  }
+  if (c.review) {
+    out.workspaceId = c.review.workspaceId;
+    out.workspaceName = c.review.workspaceName;
+    out.ownerEmail = c.review.ownerEmail;
+    out.title = `Code review${c.review.lens ? `: ${c.review.lens}` : ''} (${c.review.kind})`;
+    out.host = row.host ?? c.review.host;
+  }
+  return out;
 }
 
 /** The PR the initial task opened, when the record reports it there rather
@@ -119,90 +213,121 @@ function byRecency(a: AdminRunRow, b: AdminRunRow): number {
 export interface AdminRunFilters {
   host?: unknown;
   status?: unknown;
+  kind?: unknown;
+  owner?: unknown;
   limit?: unknown;
   before?: unknown;
 }
 
+function str(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Whether a row passes the page's filters. Applied to the live rows in memory. */
+export function runMatches(row: AdminRunRow, filters: { host: string; status: string; kind: string; owner: string }): boolean {
+  if (filters.host && row.host !== filters.host) return false;
+  if (filters.status && row.status !== filters.status) return false;
+  if (filters.kind && (row.kind ?? 'task') !== filters.kind) return false;
+  if (filters.owner && !(row.ownerEmail ?? '').toLowerCase().includes(filters.owner.toLowerCase())) return false;
+  return true;
+}
+
 /**
- * The durable page, left-joined with every online host's live run list.
+ * Every live sandbox, classified, plus the durable task history.
  *
- * Ordering and pagination come from `tasks`, because that is the side with a
- * stable total order and an index. Live-only runs are ORPHANS and are
- * prepended rather than paginated — there are never many, and burying one on
- * page four would defeat the point of surfacing them.
+ * Live rows come first in the sense that they are always present: they are not
+ * paginated (there are never many, and burying an orphan on page four would
+ * defeat the point), so they appear on the first page only. Every live row is
+ * classified against tasks, workbenches AND review units, so a session box is a
+ * session with an owner, not an orphan (see sandboxClaims.ts).
+ *
+ * History rows are task rows only: a task's record outlives its sandbox, and a
+ * session's history is on the Sessions page.
  */
 export async function listAdminRuns(filters: AdminRunFilters): Promise<AdminRunIndex> {
+  const f = { host: str(filters.host), status: str(filters.status), kind: str(filters.kind), owner: str(filters.owner) };
+  const firstPage = !str(filters.before);
+  const wantHistory = !f.kind || f.kind === 'task';
+
   const [page, { live, degraded }] = await Promise.all([
-    listAdminTasks({
-      host: filters.host,
-      limit: filters.limit,
-      before: filters.before,
-      provider: 'selfhosted',
-    }),
+    wantHistory
+      ? listAdminTasks({
+          host: f.host || undefined,
+          status: undefined,
+          ownerEmail: f.owner || undefined,
+          limit: filters.limit,
+          before: filters.before,
+          provider: 'selfhosted',
+        })
+      : Promise.resolve({ items: [], nextCursor: null }),
     // Not a host fan-out any more. Through the gateway a sandbox belongs to a
     // TENANT, and this backend's own FLEET_API_TOKEN resolves to the empty one
     // — so asking each box directly returns nothing for every run the gateway
     // placed. See liveFleetSandboxes.
-    liveFleetSandboxes(),
+    firstPage ? liveFleetSandboxes() : Promise.resolve({ live: [], degraded: [] }),
   ]);
 
-  const byRunId = new Map<string, { sandbox: FleetSandbox; host: string }>();
-  for (const entry of live) {
-    byRunId.set(entry.sandbox.id, entry);
-  }
+  const claims = await loadSandboxClaims(live.map((entry) => entry.sandbox.id));
+  const liveRows = live.map(({ sandbox, host }) =>
+    applyClassification(adminRunFromFleet(sandbox, host), classifySandbox(sandbox.id, claims)),
+  );
+  const liveIds = new Set(liveRows.map((r) => r.runId));
+  const liveLogical = new Set(liveRows.map((r) => logicalSandboxId(r.runId)));
 
-  const claimed = new Set<string>();
-  const claimedItems: AdminRunRow[] = page.items.map((task) => {
-    const runId = task.remoteRunId ?? `talyn-${task.id}`;
-    const match = byRunId.get(runId);
-    if (match) claimed.add(runId);
-    const sandbox = match?.sandbox;
-    return {
+  const historyRows: AdminRunRow[] = page.items
+    .map((task) => {
+      const runId = task.remoteRunId ?? `talyn-${task.id}`;
+      return { task, runId };
+    })
+    // The live row already carries this task, with fresher data.
+    .filter(({ runId }) => !liveIds.has(runId) && !liveLogical.has(logicalSandboxId(runId)))
+    .map(({ task, runId }) => ({
       runId,
-      // The live host wins over the recorded one: a sandbox adopted after a
-      // restart is where the fleet says it is, not where dispatch put it.
-      host: match?.host ?? task.fleetHost ?? null,
+      host: task.fleetHost ?? null,
       taskId: task.id,
       workspaceId: task.workspaceId,
       ownerEmail: task.ownerEmail,
       repo: null,
-      status: sandbox ? cloudStatusForSandbox(sandbox) : toStatus(task.cloudStatus),
-      phase: sandbox?.phase ?? task.phase ?? null,
-      adopted: Boolean(sandbox?.adopted),
-      slot: typeof sandbox?.slot === 'number' ? sandbox.slot : null,
-      goldenLayer: sandbox?.goldenLayer ?? null,
+      kind: 'task' as const,
+      claim: 'active' as const,
+      supersededReason: null,
+      title: task.title,
+      workbenchId: null,
+      workspaceName: task.workspaceName,
+      sandboxStatus: null,
+      sleep: null,
+      vcpuCount: null,
+      diskMib: null,
+      sandboxSize: null,
+      status: toStatus(task.cloudStatus),
+      phase: task.phase ?? null,
+      adopted: false,
+      slot: null,
+      goldenLayer: null,
       createdAt: task.createdAt,
-      startedAt: iso(sandbox?.startedAt),
-      endedAt: iso(sandbox?.endedAt) ?? task.completedAt,
-      deadline: iso(sandbox?.deadline),
-      lastHeartbeat: iso(sandbox?.lastHeartbeat),
-      lastActivity: iso(sandbox?.lastActivity),
-      costUsd: sandbox?.costUsd ?? task.costUsd,
+      startedAt: null,
+      endedAt: task.completedAt,
+      deadline: null,
+      lastHeartbeat: null,
+      lastActivity: null,
+      costUsd: task.costUsd,
       // No task-side fallback: only the live host knows what a sandbox is
       // using right now, and a stale figure would be worse than an honest
       // blank.
-      memUsedMib: typeof sandbox?.memUsedMib === 'number' ? sandbox.memUsedMib : null,
-      memMib: typeof sandbox?.memMib === 'number' ? sandbox.memMib : null,
-      prUrl: sandbox ? (sandbox.prUrl ?? initialTaskPrUrl(sandbox)) : null,
-      error: sandbox?.error ?? null,
+      memUsedMib: null,
+      memMib: null,
+      prUrl: null,
+      error: null,
       orphan: false,
-      selfTest: Boolean(sandbox?.task?.selfTest),
-    };
-  });
+      selfTest: false,
+    }));
 
-  const orphans = [...byRunId.entries()]
-    .filter(([runId]) => !claimed.has(runId))
-    .map(([, { sandbox, host }]) => adminRunFromFleet(sandbox, host));
-
-  // Merged by time, not concatenated.
-  //
-  // Orphans used to be prepended wholesale, on the reasoning that they are the
-  // most valuable thing here. The effect was the opposite: a run that started
-  // 58 seconds ago sorted BELOW four deploy self-tests from an hour ago, so the
-  // one row an operator opened the page to find was the one they had to hunt
-  // for. Orphans keep their tinted row and their count in the header — that is
-  // what makes them findable, and it costs the list nothing to stay in order.
-  const items = [...orphans, ...claimedItems].sort(byRecency);
+  // Merged by time, not concatenated: a run that started a minute ago must not
+  // sort below an hour-old orphan. Orphans keep their tinted row and their
+  // count in the header, which is what makes them findable.
+  const items = [...liveRows.filter((row) => runMatches(row, f)), ...historyRows.filter((row) => runMatches(row, f))].sort(
+    byRecency,
+  );
 
   return { items, nextCursor: page.nextCursor, degraded };
 }

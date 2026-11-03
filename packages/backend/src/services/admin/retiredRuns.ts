@@ -18,18 +18,35 @@ import { eq } from 'drizzle-orm';
 import type { AdminRunEvent, AdminRunEventPage, AdminRunRow } from '@talyn/shared';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { getPoolDbClient } from '../../db/client.js';
+import { parseSandboxId } from './sandboxClaims.js';
 
-/** The task id inside a fleet run id, or null when the id is not one of ours. */
+/**
+ * The task id inside a fleet run id, or null when the id is not a task run.
+ * A retry's `-rN` suffix is not part of the task id, and session and review
+ * boxes (`talyn-wb-`, `talyn-rev-`) are not tasks at all.
+ */
 export function taskIdFromRunId(runId: string): string | null {
-  const m = /^talyn-(.+)$/.exec(runId);
-  return m ? m[1] : null;
+  const parsed = parseSandboxId(runId);
+  return parsed.kind === 'task' ? parsed.key : null;
 }
+
+/** Everything the row needs, and NOT the transcript: that is read only for the events. */
+const RETIRED_TASK_COLUMNS = {
+  id: tasksTable.id,
+  workspaceId: tasksTable.workspaceId,
+  title: tasksTable.title,
+  status: tasksTable.status,
+  createdAt: tasksTable.createdAt,
+  updatedAt: tasksTable.updatedAt,
+  completedAt: tasksTable.completedAt,
+  metadata: tasksTable.metadata,
+} as const;
 
 async function loadTask(runId: string) {
   const taskId = taskIdFromRunId(runId);
   if (!taskId) return null;
   const rows = await getPoolDbClient()
-    .select()
+    .select(RETIRED_TASK_COLUMNS)
     .from(tasksTable)
     .where(eq(tasksTable.id, taskId))
     .limit(1);
@@ -40,7 +57,7 @@ async function loadTask(runId: string) {
  * A retired run's row, rebuilt from the task that owned it. Null when no task
  * claims this id — a genuinely unknown run, which must still 404.
  */
-export async function retiredRun(runId: string, host: string): Promise<AdminRunRow | null> {
+export async function retiredRun(runId: string, host: string | null): Promise<AdminRunRow | null> {
   const task = await loadTask(runId);
   if (!task) return null;
   const meta = (task.metadata ?? {}) as { cloudTask?: { costUsd?: number; prUrl?: string } };
@@ -51,6 +68,9 @@ export async function retiredRun(runId: string, host: string): Promise<AdminRunR
     workspaceId: task.workspaceId,
     ownerEmail: null,
     repo: null,
+    kind: 'task',
+    claim: 'active',
+    title: task.title ?? null,
     status: toRunStatus(task.status),
     phase: null,
     adopted: false,
@@ -109,7 +129,19 @@ export async function retiredEvents(
   runId: string,
   after: number
 ): Promise<AdminRunEventPage | null> {
-  const task = await loadTask(runId);
+  const taskId = taskIdFromRunId(runId);
+  if (!taskId) return null;
+  const rows = await getPoolDbClient()
+    .select({
+      transcript: tasksTable.transcript,
+      createdAt: tasksTable.createdAt,
+      updatedAt: tasksTable.updatedAt,
+      completedAt: tasksTable.completedAt,
+    })
+    .from(tasksTable)
+    .where(eq(tasksTable.id, taskId))
+    .limit(1);
+  const task = rows[0];
   if (!task) return null;
   const stored = Array.isArray(task.transcript) ? (task.transcript as unknown[]) : [];
   const at = (task.completedAt ?? task.updatedAt ?? task.createdAt ?? new Date()).toISOString();

@@ -508,6 +508,8 @@ type AdminTaskListRow = {
 
 export interface AdminTaskFilters {
   ownerId?: unknown;
+  /** A substring of the owner's email. */
+  ownerEmail?: unknown;
   workspaceId?: unknown;
   status?: unknown;
   provider?: unknown;
@@ -529,6 +531,8 @@ export async function listAdminTasks(
   if (typeof filters.ownerId === 'string' && filters.ownerId) {
     where.push(eq(workspacesTable.ownerId, filters.ownerId));
   }
+  const ownerTerm = searchTerm(filters.ownerEmail);
+  if (ownerTerm) where.push(ilike(usersTable.email, ownerTerm));
   if (typeof filters.status === 'string' && filters.status) {
     where.push(eq(tasksTable.status, filters.status));
   }
