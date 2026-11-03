@@ -9,6 +9,7 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { ChangesTab } from './ChangesTab';
 import { FilesTab } from './FilesTab';
 import { PullRequestTab } from './PullRequestTab';
+import { SandboxTab, sandboxStatusNeedsAttention, useSandboxStatus } from './SandboxStatusPanel';
 import { TerminalPanel } from './terminal/TerminalPanel';
 import { useTurnsEnded } from './useTurnsEnded';
 
@@ -16,6 +17,7 @@ export const GIT_PANEL_TAB_LABELS: Array<{ id: GitPanelTab; label: string; hint:
   { id: 'files', label: 'All files', hint: 'Every file on the branch' },
   { id: 'changes', label: 'Changes', hint: 'Changes against the base branch (⌘⇧D)' },
   { id: 'pr', label: 'Pull request', hint: 'The pull request: status, checks, reviews and the merge queue' },
+  { id: 'sandbox', label: 'Sandbox', hint: 'What the sandbox is doing, and whether the work is safe' },
 ];
 
 /**
@@ -35,14 +37,18 @@ export function GitPanel({
   ops: WorkbenchOps;
   pr: PRRow | null;
 }) {
-  const tab = useWorkbenchStore((s) => s.sideTab);
+  const storedTab = useWorkbenchStore((s) => s.sideTab);
+  const hasSandbox = workbench.runtime === 'sandbox';
+  const tab = storedTab === 'sandbox' && !hasSandbox ? 'changes' : storedTab;
   const setTab = useWorkbenchStore((s) => s.setSideTab);
   const width = useWorkbenchStore((s) => s.rightPanelWidth);
   const setWidth = useWorkbenchStore((s) => s.setRightPanelWidth);
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const [comments, setComments] = useState<DiffComment[]>([]);
-  const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false });
+  const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false, sandbox: false });
   const turnsEnded = useTurnsEnded(chats);
+  const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox);
+  const sandboxAttention = hasSandbox ? sandboxStatusNeedsAttention(sandbox.status) : null;
 
   useEffect(() => setComments([]), [workbench.id]);
   useEffect(() => setMounted((m) => (m[tab] ? m : { ...m, [tab]: true })), [tab]);
@@ -82,7 +88,7 @@ export function GitPanel({
         aria-valuenow={width}
       />
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1.5" role="tablist" aria-label="Session panels">
-        {GIT_PANEL_TAB_LABELS.map((t) => (
+        {GIT_PANEL_TAB_LABELS.filter((t) => t.id !== 'sandbox' || hasSandbox).map((t) => (
           <button
             key={t.id}
             type="button"
@@ -101,6 +107,14 @@ export function GitPanel({
             )}
             {t.id === 'changes' && comments.length > 0 && (
               <span className="ml-1 rounded bg-info/15 px-1 text-[10px] text-info">{comments.length}</span>
+            )}
+            {t.id === 'sandbox' && sandboxAttention && (
+              <span
+                className={cn('ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle', sandboxAttention === 'danger' ? 'bg-destructive' : 'bg-amber-500')}
+                data-testid="sandbox-tab-dot"
+                data-level={sandboxAttention}
+                aria-label="The sandbox needs attention"
+              />
             )}
           </button>
         ))}
@@ -127,6 +141,11 @@ export function GitPanel({
         {(mounted.pr || tab === 'pr') && (
           <div className={cn('h-full', tab !== 'pr' && 'hidden')}>
             <PullRequestTab workbench={workbench} chat={chat} pr={pr} visible={tab === 'pr'} turnsEnded={turnsEnded} />
+          </div>
+        )}
+        {hasSandbox && (mounted.sandbox || tab === 'sandbox') && (
+          <div className={cn('h-full', tab !== 'sandbox' && 'hidden')}>
+            <SandboxTab workbench={workbench} sandbox={sandbox} />
           </div>
         )}
       </div>

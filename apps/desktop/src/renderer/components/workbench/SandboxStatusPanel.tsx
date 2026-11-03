@@ -5,6 +5,7 @@ import {
   ArrowRightLeft,
   CircleHelp,
   CirclePause,
+  ChevronRight,
   CircleX,
   Cloud,
   Laptop,
@@ -20,11 +21,12 @@ import {
   type SandboxStatusState,
   type SandboxWorkSafety,
   type Workbench,
+  type WorkbenchChat,
+  type WorkbenchChatStatus,
   type WorkbenchSandboxStatus,
 } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -93,13 +95,14 @@ export function sandboxStatusNeedsAttention(status: WorkbenchSandboxStatus | nul
  * Reads the sandbox status once on mount, again when the session row moves,
  * and every 10 s while the panel is open.
  */
-export function useSandboxStatus(workbench: Workbench, open: boolean) {
+export function useSandboxStatus(workbench: Workbench, open: boolean, enabled = true) {
   const [status, setStatus] = useState<WorkbenchSandboxStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
   const id = workbench.id;
 
   const refresh = useCallback(async () => {
+    if (!enabled) return;
     const mine = ++seq.current;
     try {
       const next = await api.workbenches.sandboxStatus(id);
@@ -110,7 +113,7 @@ export function useSandboxStatus(workbench: Workbench, open: boolean) {
       if (mine !== seq.current) return;
       setError(err instanceof Error ? err.message : 'Could not read the sandbox status.');
     }
-  }, [id]);
+  }, [id, enabled]);
 
   useEffect(() => {
     setStatus(null);
@@ -125,62 +128,154 @@ export function useSandboxStatus(workbench: Workbench, open: boolean) {
   }, [refresh, workbench.status, workbench.sandboxState, workbench.updatedAt]);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || !enabled) return undefined;
     void refresh();
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [open, refresh]);
+  }, [open, enabled, refresh]);
 
   return { status, error, refresh };
 }
 
-/** The Sandbox chip in the session header. It opens the status panel. */
-export function SandboxStatusChip({ workbench }: { workbench: Workbench }) {
-  const [open, setOpen] = useState(false);
-  const holdOpen = useRef(false);
-  const { status, error, refresh } = useSandboxStatus(workbench, open);
+/** A span as one short token for the chip: "6m", "2h", "3d". */
+function shortSpan(ms: number): string {
+  const min = Math.max(1, Math.round(Math.max(0, ms) / 60_000));
+  if (min < 60) return `${min}m`;
+  const hours = Math.floor(min / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
+export type ChipTone = 'running' | 'idle' | 'asleep' | 'busy' | 'lost' | 'failed';
+
+const TONE_DOT: Record<ChipTone, string> = {
+  running: 'bg-emerald-500',
+  idle: 'bg-muted-foreground/60',
+  asleep: 'bg-indigo-400',
+  busy: 'bg-sky-500 animate-pulse',
+  lost: 'bg-amber-500',
+  failed: 'bg-destructive',
+};
+
+/**
+ * The chip's word and dot colour. The detailed status wins when it has loaded;
+ * until then the workbench row and the chat state give a good answer for free.
+ * Null: nothing to say (no sandbox yet, or the session is archived).
+ */
+export function sandboxChipState(
+  workbench: Pick<Workbench, 'status' | 'sandboxState'>,
+  chatStatus: WorkbenchChatStatus | null | undefined,
+  status: WorkbenchSandboxStatus | null,
+  now = Date.now()
+): { word: string; tone: ChipTone } | null {
+  const turn = chatStatus === 'running';
+  switch (status?.state) {
+    case 'running':
+      return { word: 'Running', tone: 'running' };
+    case 'idle': {
+      if (turn) return { word: 'Running', tone: 'running' };
+      const left = status.sleepsAt ? new Date(status.sleepsAt).getTime() - now : null;
+      return { word: left !== null && left > 0 ? `Idle · sleeps in ${shortSpan(left)}` : 'Idle', tone: 'idle' };
+    }
+    case 'asleep':
+      return { word: 'Asleep', tone: 'asleep' };
+    case 'hibernated':
+      return { word: 'In storage', tone: 'asleep' };
+    case 'waking':
+      return { word: 'Waking', tone: 'busy' };
+    case 'moving':
+      return { word: 'Moving', tone: 'busy' };
+    case 'starting':
+      return { word: 'Starting', tone: 'busy' };
+    case 'lost':
+      return { word: 'Lost', tone: 'lost' };
+    case 'failed':
+      return { word: 'Failed', tone: 'failed' };
+    default:
+      break;
+  }
+  if (workbench.status === 'moving') return { word: 'Moving', tone: 'busy' };
+  if (workbench.status === 'provisioning') return { word: 'Starting', tone: 'busy' };
+  switch (workbench.sandboxState) {
+    case 'creating':
+      return { word: 'Starting', tone: 'busy' };
+    case 'running':
+      return turn ? { word: 'Running', tone: 'running' } : { word: 'Idle', tone: 'idle' };
+    case 'suspended':
+      return { word: 'Asleep', tone: 'asleep' };
+    case 'lost':
+      return { word: 'Lost', tone: 'lost' };
+    case 'error':
+      return { word: 'Failed', tone: 'failed' };
+    default:
+      return null;
+  }
+}
+
+/** The Sandbox chip in the session header. It opens the Sandbox tab of the right panel. */
+export function SandboxStatusChip({ workbench, chat }: { workbench: Workbench; chat?: WorkbenchChat | null }) {
+  const setSideTab = useWorkbenchStore((s) => s.setSideTab);
+  const { status } = useSandboxStatus(workbench, false);
   const attention = sandboxStatusNeedsAttention(status);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const chip = sandboxChipState(workbench, chat?.status, status, now);
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && holdOpen.current) return;
-        setOpen(next);
-      }}
+    <button
+      type="button"
+      onClick={() => setSideTab('sandbox')}
+      className="app-region-no-drag inline-flex !max-w-48 shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+      title="Sandbox status"
+      data-attr="workbench-sandbox-chip"
     >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="app-region-no-drag inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="Talyn Fleet sandbox. Show what it is doing."
-          data-attr="workbench-sandbox-chip"
-        >
-          <Cloud className="h-3 w-3" />
-          Sandbox
-          {attention && (
-            <span
-              className={cn('h-1.5 w-1.5 shrink-0 rounded-full', attention === 'danger' ? 'bg-destructive' : 'bg-amber-500')}
-              data-testid="sandbox-chip-warning"
-              data-level={attention}
-              aria-label="The sandbox needs attention"
-            />
-          )}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <SandboxStatusPanel
-          workbench={workbench}
-          status={status}
-          error={error}
-          onRefresh={refresh}
-          onClose={() => setOpen(false)}
-          onHoldOpen={(hold) => {
-            holdOpen.current = hold;
-          }}
+      <Cloud className="h-3 w-3 shrink-0" />
+      {chip ? (
+        <>
+          <span
+            className={cn('h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[chip.tone])}
+            data-testid="sandbox-chip-dot"
+            data-tone={chip.tone}
+            aria-hidden
+          />
+          <span className="truncate" data-testid="sandbox-chip-word">
+            {chip.word}
+          </span>
+        </>
+      ) : (
+        'Sandbox'
+      )}
+      {attention && (
+        <span
+          className={cn('h-1.5 w-1.5 shrink-0 rounded-full', attention === 'danger' ? 'bg-destructive' : 'bg-amber-500')}
+          data-testid="sandbox-chip-warning"
+          data-level={attention}
+          aria-label="The sandbox needs attention"
         />
-      </PopoverContent>
-    </Popover>
+      )}
+      <ChevronRight className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+    </button>
+  );
+}
+
+/**
+ * The Sandbox tab of the right panel: the same content the popover had, as a
+ * page. The panel owns the status hook, so the tab label can show a dot, and
+ * the hook polls every 10 s while the tab is visible.
+ */
+export function SandboxTab({
+  workbench,
+  sandbox: { status, error, refresh },
+}: {
+  workbench: Workbench;
+  sandbox: ReturnType<typeof useSandboxStatus>;
+}) {
+  return (
+    <div className="h-full overflow-y-auto" data-testid="sandbox-tab">
+      <SandboxStatusPanel workbench={workbench} status={status} error={error} onRefresh={refresh} />
+    </div>
   );
 }
 

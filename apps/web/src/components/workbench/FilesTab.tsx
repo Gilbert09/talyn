@@ -1,9 +1,10 @@
-import { Suspense, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, X } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
 import { FileIcon } from './FileIcon';
 import { lazyWithReload } from '../../lib/lazyWithReload';
 
@@ -15,20 +16,30 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
   const [paths, setPaths] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
 
   const load = () => {
     if (ops.unavailable) return;
     setLoading(true);
-    ops
-      .listFiles()
+    readWithReconnect(() => ops.listFiles(), {
+      onReconnecting: (r) => alive.current && setReconnecting(r),
+      isCancelled: () => !alive.current,
+    })
       .then((p) => {
         setPaths(p);
         setError(null);
       })
       .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+      .finally(() => alive.current && setLoading(false));
   };
 
   useEffect(() => {
@@ -66,7 +77,7 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
         </button>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
+      {reconnecting ? <p className="px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p> : error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
       <div
         data-testid="file-tree"
         className={cn('min-h-0 overflow-y-auto py-1', selected ? 'max-h-[40%] shrink-0 border-b' : 'flex-1')}
@@ -158,10 +169,13 @@ function TreeLevel({
 function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; onClose: () => void }) {
   const [file, setFile] = useState<{ content: string; binary: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    ops
-      .readFile(path)
+    readWithReconnect(() => ops.readFile(path), {
+      onReconnecting: (r) => !cancelled && setReconnecting(r),
+      isCancelled: () => cancelled,
+    })
       .then((f) => {
         if (!cancelled) setFile(f);
       })
@@ -188,7 +202,8 @@ function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; o
     </div>
   );
   let body: ReactNode;
-  if (error) body = <p className="p-3 text-xs text-destructive">{error}</p>;
+  if (reconnecting) body = <p className="p-3 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p>;
+  else if (error) body = <p className="p-3 text-xs text-destructive">{error}</p>;
   else if (!file) body = loading;
   else if (file.binary) body = <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>;
   else {

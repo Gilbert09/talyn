@@ -13,6 +13,7 @@ import {
   PanelBottom,
   PanelRight,
   RotateCcw,
+  Cloud,
   Wrench,
 } from 'lucide-react';
 import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
@@ -381,6 +382,12 @@ export function WorkbenchHeader({
                   {!thread && (
                     <>
                       <DropdownMenuSeparator />
+                      {workbench.runtime === 'sandbox' && (
+                        <DropdownMenuItem onSelect={() => setSideTab('sandbox')} data-attr="workbench-show-sandbox">
+                          <Cloud className="mr-2 h-3.5 w-3.5" />
+                          Sandbox
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         disabled={linkBusy}
                         onSelect={() =>
@@ -512,7 +519,7 @@ export function WorkbenchHeader({
                 Local
               </span>
             ) : (
-              <SandboxStatusChip workbench={workbench} />
+              <SandboxStatusChip workbench={workbench} chat={chat} />
             )}
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />

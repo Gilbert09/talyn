@@ -51,6 +51,7 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'terminal.toggle', label: 'Toggle Terminal', keys: 'mod+j', section: 'view' },
   { id: 'panel.toggle', label: 'Toggle Right Panel', keys: 'mod+alt+b', section: 'view' },
   { id: 'workbench.changes', label: 'Show Changes', keys: 'mod+shift+d', section: 'view' },
+  { id: 'workbench.sandbox', label: 'Show Sandbox Status', keys: 'mod+alt+s', section: 'view' },
   { id: 'nav.back', label: 'Back', keys: 'mod+left', section: 'view', separatorBefore: true },
   { id: 'nav.forward', label: 'Forward', keys: 'mod+right', section: 'view' },
   { id: 'composer.focus', label: 'Focus Composer', keys: 'mod+shift+l', section: 'workbench' },

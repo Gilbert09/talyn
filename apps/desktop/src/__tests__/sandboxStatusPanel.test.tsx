@@ -4,12 +4,13 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { SandboxStatusAction, SandboxWorkSafety, Workbench, WorkbenchSandboxStatus } from '@talyn/shared';
+import type { SandboxStatusAction, SandboxWorkSafety, Workbench, WorkbenchChat, WorkbenchSandboxStatus } from '@talyn/shared';
 import {
   SandboxStatusChip,
   SandboxStatusPanel,
   formatAgo,
   formatSpan,
+  sandboxChipState,
   sandboxStatusNeedsAttention,
 } from '../renderer/components/workbench/SandboxStatusPanel';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
@@ -320,7 +321,41 @@ describe('SandboxStatusPanel', () => {
   });
 });
 
+describe('sandboxChipState', () => {
+  const row = (over: Partial<Workbench> = {}) => ({ status: 'ready', sandboxState: 'running', ...over }) as Workbench;
+  it.each<[string, Workbench, WorkbenchChat['status'] | null, WorkbenchSandboxStatus | null, string | null, string | null]>([
+    ['status running', row(), null, status({ state: 'running' }), 'Running', 'running'],
+    ['status idle with a sleep time', row(), 'idle', status({ state: 'idle', sleepsAt: ago(-6 * MIN + 5_000) }), 'Idle · sleeps in 6m', 'idle'],
+    ['status idle in hours', row(), 'idle', status({ state: 'idle', sleepsAt: ago(-2 * HOUR) }), 'Idle · sleeps in 2h', 'idle'],
+    ['status idle with no sleep time', row(), 'idle', status({ state: 'idle' }), 'Idle', 'idle'],
+    ['status idle but a turn runs', row(), 'running', status({ state: 'idle' }), 'Running', 'running'],
+    ['status asleep', row(), null, status({ state: 'asleep' }), 'Asleep', 'asleep'],
+    ['status hibernated', row(), null, status({ state: 'hibernated' }), 'In storage', 'asleep'],
+    ['status waking', row(), null, status({ state: 'waking' }), 'Waking', 'busy'],
+    ['status moving', row(), null, status({ state: 'moving' }), 'Moving', 'busy'],
+    ['status starting', row(), null, status({ state: 'starting' }), 'Starting', 'busy'],
+    ['status lost', row(), null, status({ state: 'lost' }), 'Lost', 'lost'],
+    ['status failed', row(), null, status({ state: 'failed' }), 'Failed', 'failed'],
+    ['no status, row running, chat idle', row(), 'idle', null, 'Idle', 'idle'],
+    ['no status, row running, chat running', row(), 'running', null, 'Running', 'running'],
+    ['no status, row suspended', row({ sandboxState: 'suspended' }), null, null, 'Asleep', 'asleep'],
+    ['no status, row creating', row({ sandboxState: 'creating' }), null, null, 'Starting', 'busy'],
+    ['no status, provisioning', row({ status: 'provisioning', sandboxState: 'none' }), null, null, 'Starting', 'busy'],
+    ['no status, moving', row({ status: 'moving' }), null, null, 'Moving', 'busy'],
+    ['no status, row lost', row({ sandboxState: 'lost' }), null, null, 'Lost', 'lost'],
+    ['no status, row error', row({ sandboxState: 'error' }), null, null, 'Failed', 'failed'],
+    ['no status, no sandbox', row({ sandboxState: 'none' }), null, null, null, null],
+    ['status unknown falls back to the row', row({ sandboxState: 'suspended' }), null, status({ state: 'unknown' }), 'Asleep', 'asleep'],
+  ])('%s', (_name, wb, chatStatus, s, word, tone) => {
+    const out = sandboxChipState(wb, chatStatus, s);
+    expect(out?.word ?? null).toBe(word);
+    expect(out?.tone ?? null).toBe(tone);
+  });
+});
+
 describe('SandboxStatusChip', () => {
+  beforeEach(() => useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false }));
+
   it.each<[string, WorkbenchSandboxStatus, 'warn' | 'danger' | null]>([
     ['healthy', status(), null],
     ['a work warning', status({ work: work({ warning: 'Not saved', warningLevel: 'warn' }) }), 'warn'],
@@ -336,13 +371,26 @@ describe('SandboxStatusChip', () => {
     }
   });
 
-  it('opens the panel and reads the status again', async () => {
-    sandboxStatus.mockResolvedValue(status({ headline: 'Idle. It goes to sleep in 5 minutes.' }));
+  it('shows the row state at once, then the status word and dot', async () => {
+    sandboxStatus.mockResolvedValue(status({ state: 'asleep' }));
+    render(<SandboxStatusChip workbench={WB} chat={{ id: 'c1', status: 'running' } as WorkbenchChat} />);
+    expect(screen.getByTestId('sandbox-chip-word')).toHaveTextContent('Running');
+    expect(screen.getByTestId('sandbox-chip-dot')).toHaveAttribute('data-tone', 'running');
+    await waitFor(() => expect(screen.getByTestId('sandbox-chip-word')).toHaveTextContent('Asleep'));
+    expect(screen.getByTestId('sandbox-chip-dot')).toHaveAttribute('data-tone', 'asleep');
+  });
+
+  it('has a tooltip and opens the Sandbox tab of the right panel', async () => {
+    sandboxStatus.mockResolvedValue(status());
     render(<SandboxStatusChip workbench={WB} />);
     await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: /Sandbox/ }));
-    expect(await screen.findByText('Idle. It goes to sleep in 5 minutes.')).toBeInTheDocument();
-    expect(sandboxStatus).toHaveBeenCalledTimes(2);
+    const chip = await screen.findByRole('button', { name: /Running/ });
+    expect(chip).toHaveAttribute('title', 'Sandbox status');
+    fireEvent.click(chip);
+    expect(useWorkbenchStore.getState().sideTab).toBe('sandbox');
+    expect(useWorkbenchStore.getState().rightPanelOpen).toBe(true);
+    // Clicking does not poll: the tab does that while it is visible.
+    expect(sandboxStatus).toHaveBeenCalledTimes(1);
   });
 
   it('reads again when the session row changes', async () => {

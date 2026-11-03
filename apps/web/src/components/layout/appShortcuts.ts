@@ -166,6 +166,13 @@ export function buildAppShortcuts(): Shortcut[] {
       run: () => wbStore().setSideTab('changes'),
     }),
     fromMenu({
+      id: 'workbench.sandbox',
+      group: 'Session',
+      allowInInput: true,
+      when: () => currentWorkbench()?.runtime === 'sandbox',
+      run: () => wbStore().setSideTab('sandbox'),
+    }),
+    fromMenu({
       id: 'terminal.toggle',
       group: 'Session',
       allowInInput: true,

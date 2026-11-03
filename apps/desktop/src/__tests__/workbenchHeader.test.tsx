@@ -114,7 +114,7 @@ describe('WorkbenchHeader layout', () => {
     expect(metaRow).toHaveTextContent('main');
     expect(metaRow).toContainElement(screen.getByTitle(/Required CI checks failing/));
     const chips = container.querySelector('[data-attr="workbench-header-chips"]');
-    expect(chips).toContainElement(screen.getByText('Sandbox'));
+    expect(chips).toContainElement(screen.getByTitle('Sandbox status'));
     expect(chips).toHaveClass('overflow-x-auto');
   });
 });
@@ -206,7 +206,16 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+  });
+
+  it('has a Sandbox entry in the Actions menu that opens the Sandbox tab', () => {
+    useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sandbox' }));
+    expect(useWorkbenchStore.getState().sideTab).toBe('sandbox');
+    expect(useWorkbenchStore.getState().rightPanelOpen).toBe(true);
   });
 
   it('the menu lists every action that applies, in cycle order', () => {
@@ -223,6 +232,7 @@ describe('WorkbenchHeader action cycle', () => {
       'Resolve conflicts',
       'Fix checksCtrl+Shift+X',
       'ArchiveCtrl+Shift+A',
+      'Sandbox',
       'Unlink pull request',
       'Copy branch name',
       'Continue as thread',

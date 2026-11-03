@@ -18,6 +18,7 @@ import { cn } from '../../lib/utils';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { newClientId } from '../../lib/workbenchBridge';
+import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
 import { createChatTab } from './ChatTabs';
@@ -62,7 +63,15 @@ export function ChangesTab({
   const [selection, setSelection] = useState<{ path: string; scope: WorkbenchDiffScope } | null>(null);
   const [collapsed, setCollapsed] = useState<Partial<Record<WorkbenchDiffScope, boolean>>>({});
   const [showMergedDiff, setShowMergedDiff] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const loadingRef = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
   const merged = workbench.pr?.state === 'merged';
   const showChanges = !merged || showMergedDiff;
 
@@ -72,7 +81,10 @@ export function ChangesTab({
     loadingRef.current = true;
     setLoading(true);
     try {
-      const next = await ops.changes(live ? { live: true } : undefined);
+      const next = await readWithReconnect(() => ops.changes(live ? { live: true } : undefined), {
+        onReconnecting: (r) => aliveRef.current && setReconnecting(r),
+        isCancelled: () => !aliveRef.current,
+      });
       setChanges(next);
       setError(null);
     } catch (err) {
@@ -136,7 +148,7 @@ export function ChangesTab({
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
         </button>
       </div>
-      {error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
+      {reconnecting ? <p className="px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p> : error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
       {!changes && loading && (
         <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading changes…
@@ -269,16 +281,20 @@ function FileDiffView({
 }) {
   const [patch, setPatch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [draft, setDraft] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    ops
-      .diff(file.path, scope)
+    readWithReconnect(() => ops.diff(file.path, scope), {
+      onReconnecting: (r) => !cancelled && setReconnecting(r),
+      isCancelled: () => cancelled,
+    })
       .then((p) => {
         if (cancelled) return;
         setPatch(p);
+        setError(null);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -302,11 +318,11 @@ function FileDiffView({
     []
   );
 
-  if (error) return <p className="p-3 text-xs text-destructive">{error}</p>;
+  if (error && !reconnecting) return <p className="p-3 text-xs text-destructive">{error}</p>;
   if (patch === null) {
     return (
       <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {asleep ? 'Waking the sandbox to load the diff…' : 'Loading diff…'}
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {reconnecting ? RECONNECTING_TEXT : asleep ? 'Waking the sandbox to load the diff…' : 'Loading diff…'}
       </div>
     );
   }
