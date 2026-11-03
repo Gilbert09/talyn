@@ -5,6 +5,7 @@ import {
   learnedBakeStepId,
   mergeLearnedSetup,
   redactSecrets,
+  setupStepIdentity,
   SETUP_RECIPE_MAX_STEPS,
   SETUP_RECIPE_SETTLE_MS,
   type AppliedSetupStep,
@@ -76,8 +77,9 @@ export function rowToStep(row: StepRow): SetupRecipeStep {
   };
 }
 
+/** The dedupe key. Keyed on {@link setupStepIdentity}, which is the command for every kind but cargo. */
 export function stepKey(kind: SetupStepKind, command: string): string {
-  return createHash('sha256').update(`${kind}\0${command}`).digest('hex');
+  return createHash('sha256').update(`${kind}\0${setupStepIdentity(kind, command)}`).digest('hex');
 }
 
 /** Only the flag and the bake: `repositories.settings` also holds the preview detection. */

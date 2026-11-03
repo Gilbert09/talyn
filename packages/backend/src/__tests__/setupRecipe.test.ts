@@ -10,9 +10,11 @@ import {
   orderSetupSteps,
   prepareRecordedStep,
   resolveWorkbenchConfig,
+  setupStepIdentity,
   setupStepRefusal,
   shellWords,
   stepsFromCommand,
+  unwrapCommand,
   validateRepositoryBake,
   type AppliedSetupStep,
   type TurnToolCall,
@@ -43,7 +45,16 @@ describe('stepsFromCommand', () => {
     // The sqlx case from a real posthog session.
     ['cargo install', 'cargo install sqlx-cli --no-default-features --features native-tls,postgres',
       ['cargo install sqlx-cli --no-default-features --features native-tls,postgres']],
-    ['cargo binstall gets -y', 'cargo binstall sqlx-cli', ['cargo binstall sqlx-cli -y']],
+    ['cargo binstall gets -y', 'cargo binstall sqlx-cli', ['cargo binstall -y sqlx-cli']],
+    // cargo-binstall refuses -y with --no-confirm: -y IS --no-confirm. A real posthog step.
+    ['cargo binstall -y --no-confirm --version', 'cargo binstall -y --no-confirm sqlx-cli --version 0.8.3', ['cargo binstall -y sqlx-cli@0.8.3']],
+    ['cargo binstall --no-confirm', 'cargo binstall --no-confirm sqlx-cli', ['cargo binstall -y sqlx-cli']],
+    ['cargo binstall -y crate@ver stays', 'cargo binstall -y sqlx-cli@0.8.3', ['cargo binstall -y sqlx-cli@0.8.3']],
+    ['cargo install --version becomes crate@ver', 'cargo install sqlx-cli --version 0.8.3 --locked', ['cargo install sqlx-cli@0.8.3 --locked']],
+    ['cargo install --version before the crate', 'cargo install --version 0.8.3 sqlx-cli', ['cargo install sqlx-cli@0.8.3']],
+    ['cargo install keeps a version range as a flag', "cargo install sqlx-cli --version '^0.8'", ["cargo install sqlx-cli --version '^0.8'"]],
+    ['cargo install with two crates keeps --version', 'cargo install a b --version 1.0.0', ['cargo install a b --version 1.0.0']],
+    ['cargo install under sudo keeps sudo', 'sudo cargo install just', ['sudo -n cargo install just']],
     ['rustup installer becomes the fixed form', "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
       ["command -v cargo >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"]],
     ['rustup toolchain', 'rustup toolchain install 1.82.0', ['rustup toolchain install 1.82.0']],
@@ -65,36 +76,76 @@ describe('stepsFromCommand', () => {
     ['yarn alone', 'yarn', ['yarn']],
     ['corepack', 'corepack enable pnpm', ['corepack enable pnpm']],
     ['playwright browsers', 'npx playwright install --with-deps chromium', ['npx playwright install --with-deps chromium']],
+    ['npm -g under sudo keeps sudo', 'sudo npm install -g turbo', ['sudo -n npm install -g turbo']],
+    ['corepack under sudo keeps sudo', 'sudo corepack enable', ['sudo -n corepack enable']],
     // apt
+    // apt runs as root, and the box runs as uid 1000: always sudo -n. A real posthog failure was "are you root?".
     ['apt with sudo and env', 'sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libpq-dev jq',
-      ['DEBIAN_FRONTEND=noninteractive apt-get install -y jq libpq-dev || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq libpq-dev)']],
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq libpq-dev || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq libpq-dev)']],
     ['apt output redirect', 'apt-get install -y -qq jq > /dev/null 2>&1',
-      ['DEBIAN_FRONTEND=noninteractive apt-get install -y jq || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq)']],
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq)']],
+    ['apt under sudo -E', 'sudo -E apt-get install -y jq',
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq)']],
+    ['apt under sudo -n', 'sudo -n apt install postgresql-15',
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-15 || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-15)']],
+    ['apt keeps --no-install-recommends', 'sudo apt-get install -y --no-install-recommends jq',
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq)']],
+    ['apt keeps the target release, which is not a package', 'sudo apt-get install -y -t bookworm-backports golang',
+      ['sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -t bookworm-backports golang || (sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -t bookworm-backports golang)']],
+    ['apt -o can run a command as root', "sudo apt-get install -y -o 'APT::Update::Pre-Invoke::=touch /x' jq", []],
+    ['apt -c', 'sudo apt-get install -c /tmp/apt.conf jq', []],
     ['apt update alone', 'apt-get update', []],
     // Other installers
     ['pip packages', 'pip install pre-commit', ['pip install pre-commit']],
+    ['pip under sudo keeps sudo', 'sudo pip install pre-commit', ['sudo -n pip install pre-commit']],
+    ['pip keeps a variable it needs', 'PIP_BREAK_SYSTEM_PACKAGES=1 pip install pre-commit', ['env PIP_BREAK_SYSTEM_PACKAGES=1 pip install pre-commit']],
+    ['pip under sudo keeps its variable after sudo', 'sudo PIP_BREAK_SYSTEM_PACKAGES=1 pip install pre-commit',
+      ['sudo -n env PIP_BREAK_SYSTEM_PACKAGES=1 pip install pre-commit']],
+    ['a variable that changes what runs is dropped', 'LD_PRELOAD=/tmp/x.so BASH_ENV=/tmp/x pip install pre-commit', ['pip install pre-commit']],
+    ['a variable named like a secret is dropped', 'PIP_KEYRING_PROVIDER=import pip install pre-commit', ['pip install pre-commit']],
+    ['cargo keeps a variable it needs', 'CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install just', ['env CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install just']],
+    ['a kept variable with a space in its value is dropped', "PIP_INDEX_URL='a b' pip install pre-commit", ['pip install pre-commit']],
+    ['pip in a project environment is not learned', 'uv run pip install pre-commit', []],
+    ['pip after activating a venv is not learned', 'source .venv/bin/activate && pip install pre-commit', []],
+    ['pip after . activate is not learned', '. venv/bin/activate && python -m pip install pre-commit', []],
     ['python -m pip', 'python3 -m pip install -r requirements.txt', ['python3 -m pip install -r requirements.txt']],
+    ['uv under sudo keeps sudo', 'sudo uv pip install --system ruff', ['sudo -n uv pip install --system ruff']],
     ['go install', 'go install github.com/pressly/goose/v3/cmd/goose@latest', ['go install github.com/pressly/goose/v3/cmd/goose@latest']],
+    ['go install keeps GOBIN', 'GOBIN=/usr/local/bin go install github.com/x/y@v1.0.0', ['env GOBIN=/usr/local/bin go install github.com/x/y@v1.0.0']],
     ['go get changes the module', 'go get github.com/x/y', []],
     ['brew', 'brew install jq', ['brew install jq']],
+    ['brew never gets sudo: it refuses root', 'sudo brew install jq', ['brew install jq']],
+    ['gem under sudo keeps sudo', 'sudo gem install bundler', ['sudo -n gem install bundler']],
     ['bundle', 'bundle install', ['bundle install']],
+    // /usr/local/bin belongs to root.
     ['github release download', 'curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint && chmod +x /usr/local/bin/hadolint',
-      ['[ -x /usr/local/bin/hadolint ] || { curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint && chmod +x /usr/local/bin/hadolint; }']],
+      ['[ -x /usr/local/bin/hadolint ] || { sudo -n curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint && sudo -n chmod +x /usr/local/bin/hadolint; }']],
     ['download outside a bin dir is ignored', 'curl -fsSL https://github.com/a/b/releases/download/v1/x.tgz -o /tmp/x.tgz', []],
     // Docker and services
     ['docker compose up', 'docker compose -f docker-compose.dev.yml up -d db redis', ['docker compose -f docker-compose.dev.yml up -d db redis']],
     ['docker compose up gets -d', 'docker-compose up db', ['docker compose up -d db']],
     ['docker compose in a directory', 'cd /work/posthog && docker compose up -d --wait', ['docker compose up -d --wait']],
     ['docker compose ps', 'docker compose ps', []],
-    ['dockerd by hand', 'sudo dockerd > /tmp/dockerd.log 2>&1 &',
-      ['pgrep -x dockerd >/dev/null 2>&1 || (nohup dockerd >/var/log/dockerd.log 2>&1 &); for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done']],
-    ['service docker start', 'sudo service docker start',
-      ['pgrep -x dockerd >/dev/null 2>&1 || (nohup dockerd >/var/log/dockerd.log 2>&1 &); for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done']],
-    ['service', 'service postgresql start', ['service postgresql start']],
-    ['systemctl', 'systemctl start redis-server', ['systemctl start redis-server']],
+    ['docker compose under sudo keeps sudo', 'sudo docker compose up -d db', ['sudo -n docker compose up -d db']],
+    // Docker starts on demand in the sandbox.
+    ['dockerd by hand', 'sudo dockerd > /tmp/dockerd.log 2>&1 &', []],
+    ['service docker start', 'sudo service docker start', []],
+    ['systemctl start docker', 'sudo systemctl start docker', []],
+    // Services need root.
+    ['service', 'service postgresql start', ['sudo -n service postgresql start']],
+    ['service under sudo', 'sudo service postgresql start', ['sudo -n service postgresql start']],
+    ['systemctl', 'systemctl start redis-server', ['sudo -n systemctl start redis-server']],
+    ['init script', 'sudo /etc/init.d/postgresql start', ['sudo -n /etc/init.d/postgresql start']],
+    ['pg_ctlcluster', 'sudo pg_ctlcluster 15 main start', ['sudo -n pg_ctlcluster 15 main start']],
+    ['pg_ctlcluster as postgres', 'sudo -u postgres pg_ctlcluster 15 main start', ['sudo -n -u postgres pg_ctlcluster 15 main start']],
+    ['redis-server --daemonize needs no root', 'redis-server --daemonize yes', ['redis-server --daemonize yes']],
     // Databases
     ['createdb', 'createdb -h localhost -U posthog test_posthog', ['createdb -h localhost -U posthog test_posthog 2>/dev/null || true']],
+    // As uid 1000 this fails, and `|| true` would hide it.
+    ['createdb as postgres keeps the user', 'sudo -u postgres createdb posthog', ['sudo -n -u postgres createdb posthog 2>/dev/null || true']],
     ['psql create database', `psql -h localhost -U postgres -c "CREATE DATABASE posthog_e2e"`, [`psql -h localhost -U postgres -c 'CREATE DATABASE posthog_e2e' || true`]],
+    ['psql as postgres keeps the user', `sudo -u postgres psql -c "CREATE ROLE posthog"`, [`sudo -n -u postgres psql -c 'CREATE ROLE posthog' || true`]],
+    ['sudo as root is plain sudo', 'sudo -u root pip install x', ['sudo -n pip install x']],
     ['psql other sql', `psql -c "DROP DATABASE x"`, []],
     // Env
     ['export alone', 'export DATABASE_URL=postgres://localhost:5432/posthog',
@@ -117,6 +168,8 @@ describe('stepsFromCommand', () => {
     ['a password in a URL', 'pip install --index-url https://me:hunter2@pypi.example.com/simple foo', 'secret'],
     ['a secret export', 'export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz', 'secret'],
     ['a password export', 'export POSTGRES_PASSWORD=posthog', 'secret'],
+    ['a Docker start', 'sudo dockerd &', 'Docker starts on demand'],
+    ['a Docker service start', 'sudo service docker start', 'Docker starts on demand'],
   ])('refuses %s', (_name, command, reason) => {
     const found = one(command);
     expect(found.steps).toEqual([]);
@@ -127,7 +180,7 @@ describe('stepsFromCommand', () => {
   it('tags kinds and phases', () => {
     expect(one('cargo install sqlx-cli').steps[0]).toMatchObject({ kind: 'cargo', phase: 'install', provides: ['sqlx-cli'] });
     expect(one('docker compose up -d').steps[0]).toMatchObject({ kind: 'compose', phase: 'start' });
-    expect(one('dockerd &').steps[0]).toMatchObject({ kind: 'docker', phase: 'start' });
+    expect(one('sudo service postgresql start').steps[0]).toMatchObject({ kind: 'service', phase: 'start' });
     expect(one('export FOO=bar').steps[0]).toMatchObject({ kind: 'env', phase: 'start' });
     expect(one('createdb x').steps[0]).toMatchObject({ kind: 'database', phase: 'start' });
   });
@@ -222,10 +275,20 @@ describe('setupStepRefusal', () => {
 
 describe('prepareRecordedStep', () => {
   it('rewrites a known command into the fixed form, with the agent\'s reason', () => {
-    expect(prepareRecordedStep('sudo cargo install sqlx-cli', 'sqlx is needed for the migrations')).toEqual({
+    expect(prepareRecordedStep('cargo install sqlx-cli', 'sqlx is needed for the migrations')).toEqual({
       steps: [{ command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install', why: 'sqlx is needed for the migrations', provides: ['sqlx-cli'] }],
       refused: [],
     });
+  });
+
+  it('keeps sudo when the agent used it', () => {
+    expect(prepareRecordedStep('sudo apt-get install -y jq', '').steps[0].command.startsWith('sudo -n env DEBIAN_FRONTEND=noninteractive apt-get')).toBe(true);
+  });
+
+  it('refuses a Docker start and says why, rather than keeping it as written', () => {
+    const prepared = prepareRecordedStep('sudo dockerd > /tmp/d.log 2>&1 &', 'docker is needed');
+    expect(prepared.steps).toEqual([]);
+    expect(prepared.refused[0].reason).toContain('Docker starts on demand');
   });
 
   it('keeps an unknown command as written, for the box setup only', () => {
@@ -243,6 +306,58 @@ describe('prepareRecordedStep', () => {
     const prepared = prepareRecordedStep(command, 'why');
     expect(prepared.steps).toEqual([]);
     expect(prepared.refused).toHaveLength(1);
+  });
+});
+
+describe('setupStepIdentity', () => {
+  it.each([
+    ['cargo binstall -y sqlx-cli@0.8.3', 'cargo binstall -y --no-confirm sqlx-cli --version 0.8.3'],
+    ['cargo binstall -y sqlx-cli@0.8.3', 'cargo binstall sqlx-cli@0.8.3 -y'],
+    ['cargo binstall -y sqlx-cli@0.8.3', 'cargo binstall --no-confirm sqlx-cli@0.8.3'],
+    ['cargo install sqlx-cli@0.8.3', 'cargo install sqlx-cli --version 0.8.3'],
+    ['command -v sqlx >/dev/null 2>&1 || cargo binstall -y sqlx-cli@0.8.3', 'command -v sqlx >/dev/null 2>&1 || cargo binstall --no-confirm sqlx-cli --version 0.8.3'],
+    ['sudo -n cargo install just@1.0.0', 'sudo -n cargo install just --version 1.0.0'],
+  ])('%j and %j are one step', (a, b) => {
+    expect(setupStepIdentity('cargo', a)).toBe(setupStepIdentity('cargo', b));
+  });
+
+  it.each([
+    ['cargo install sqlx-cli@0.8.3', 'cargo install sqlx-cli@0.8.4'],
+    ['cargo install sqlx-cli', 'cargo binstall -y sqlx-cli'],
+    ['cargo install sqlx-cli', 'cargo install sqlx-cli --locked'],
+  ])('%j and %j are two steps', (a, b) => {
+    expect(setupStepIdentity('cargo', a)).not.toBe(setupStepIdentity('cargo', b));
+  });
+
+  it('is the command itself for every other kind, so stored keys stay the same', () => {
+    for (const command of ['pip install x', 'sudo -n apt-get install -y jq', 'cargo install x --version 1']) {
+      expect(setupStepIdentity('pip', command)).toBe(command);
+    }
+  });
+
+  it('is the stored command for a step in the fixed form', () => {
+    for (const command of [...commands('cargo binstall --no-confirm sqlx-cli --version 0.8.3'), ...commands('cargo install just')]) {
+      expect(setupStepIdentity('cargo', command)).toBe(command);
+    }
+  });
+});
+
+describe('unwrapCommand', () => {
+  it.each<[string, Partial<ReturnType<typeof unwrapCommand>>]>([
+    ['apt-get install jq', { command: 'apt-get install jq', sudo: false, sudoUser: null }],
+    ['sudo apt-get install jq', { command: 'apt-get install jq', sudo: true, sudoUser: null }],
+    ['sudo -E apt-get install jq', { command: 'apt-get install jq', sudo: true }],
+    ['sudo -n -E apt-get install jq', { command: 'apt-get install jq', sudo: true }],
+    ['sudo -u postgres psql', { command: 'psql', sudo: true, sudoUser: 'postgres' }],
+    ['sudo -upostgres psql', { command: 'psql', sudoUser: 'postgres' }],
+    ['sudo --user=postgres psql', { command: 'psql', sudoUser: 'postgres' }],
+    ['sudo --preserve-env=PATH pip install x', { command: 'pip install x', sudo: true }],
+    ['sudo -u root apt install jq', { command: 'apt install jq', sudo: true, sudoUser: null }],
+    ['A=1 sudo B=2 pip install x', { command: 'pip install x', sudo: true, assignments: ['A=1', 'B=2'] }],
+    ['uv run pip install x', { command: 'pip install x', runner: 'uv run' }],
+    ['npx playwright install', { command: 'playwright install', runner: 'npx' }],
+  ])('%j', (segment, expected) => {
+    expect(unwrapCommand(segment)).toMatchObject(expected);
   });
 });
 

@@ -9,7 +9,7 @@
  * wrote, not text an agent wrote.
  */
 import { validateRepositoryBake, type BakeStep, type RepositoryBake } from './bake.js';
-import { commandSegments, containsSecret, stripCommandPrefix, type TurnToolCall } from './turnTiming.js';
+import { commandSegments, containsSecret, stripCommandPrefix, unwrapCommand, type TurnToolCall, type UnwrappedCommand } from './turnTiming.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import { shellQuote } from './workbenchGit.js';
 
@@ -226,7 +226,6 @@ function withoutOutputPlumbing(segment: string): string {
 }
 
 const quoteAll = (words: string[]) => words.map(shellQuote).join(' ');
-const operands = (words: string[]) => words.filter((w) => !w.startsWith('-'));
 
 /** Flags whose next word is a value, so the value is not a package name. */
 const VALUE_FLAGS = new Set([
@@ -262,8 +261,63 @@ interface Parsed {
 
 type ParseResult = Parsed | { refused: string } | null;
 
-const DOCKER_START =
+/**
+ * The Docker start that Talyn used to learn. Docker now starts on demand in the
+ * sandbox: the first client on /var/run/docker.sock starts dockerd. This start
+ * also failed as uid 1000 (it writes /var/log/dockerd.log), and its
+ * `docker info` loop could hang. Stored steps with this exact command are
+ * skipped when a box is set up, so no migration is needed.
+ */
+export const LEGACY_DOCKER_START_COMMAND =
   "pgrep -x dockerd >/dev/null 2>&1 || (nohup dockerd >/var/log/dockerd.log 2>&1 &); for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done";
+
+const DOCKER_ON_DEMAND = 'Docker starts on demand in the sandbox, so Talyn does not learn a Docker start.';
+
+/** How the original command ran: under sudo, as which user, and with which variables. */
+interface RunAs {
+  sudo: boolean;
+  user: string | null;
+  /** Leading `NAME=value` words that are kept, see {@link KEPT_ENV}. */
+  env: string[];
+}
+
+/**
+ * Leading variables a step keeps. Each one configures the tool that the step
+ * runs, for example `PIP_BREAK_SYSTEM_PACKAGES=1 pip install x`, which fails
+ * on Debian without it. Other variables are dropped: a variable such as
+ * LD_PRELOAD or BASH_ENV changes what runs, so it must not reach every box.
+ */
+const KEPT_ENV = /^(?:(?:PIP|UV|NPM_CONFIG|npm_config|PNPM|YARN|CARGO|RUSTUP|PLAYWRIGHT|BUNDLE|GEM)_\w+|RUSTFLAGS|GOFLAGS|GOPROXY|GOPRIVATE|GONOSUMDB|GOBIN|GOTOOLCHAIN|CGO_ENABLED)$/;
+const SECRET_NAME = /TOKEN|AUTH|PASS|SECRET|KEY|CRED/i;
+const SAFE_USER = /^[a-z_][a-z0-9_-]*$/;
+
+function runAsOf(u: UnwrappedCommand): RunAs | null {
+  if (u.sudoUser !== null && !SAFE_USER.test(u.sudoUser)) return null;
+  const env: string[] = [];
+  for (const word of u.assignments) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|(\S*))$/.exec(word);
+    if (!m || !KEPT_ENV.test(m[1]) || SECRET_NAME.test(m[1])) continue;
+    const value = m[2] ?? m[3] ?? m[4] ?? '';
+    if (/^[\w@%+=:,./-]*$/.test(value)) env.push(`${m[1]}=${value}`);
+  }
+  return { sudo: u.sudo, user: u.sudoUser, env };
+}
+
+/**
+ * The words in front of a step's command. A step runs as the user its
+ * command ran as: `sudo` in the command gives `sudo -n` in the step, so it can
+ * run as uid 1000 and never waits for a password. `root` forces sudo for the
+ * commands that only root can run.
+ */
+function runPrefix(run: RunAs, opts: { root?: boolean; env?: boolean; user?: boolean } = {}): string {
+  const words: string[] = [];
+  if (run.sudo || opts.root) {
+    words.push('sudo', '-n');
+    if (opts.user !== false && run.user) words.push('-u', run.user);
+  }
+  if (opts.env !== false && run.env.length > 0) words.push('env', ...run.env);
+  return words.length > 0 ? `${quoteAll(words)} ` : '';
+}
 
 function parseInstaller(segment: string): ParseResult {
   if (!PIPE_TO_SHELL.test(segment) || !/\b(?:curl|wget)\b/.test(segment)) return null;
@@ -276,21 +330,43 @@ function parseInstaller(segment: string): ParseResult {
   return { refused: `The command runs a script from ${url}, which is not one of the installers Talyn applies automatically (rustup, uv, pnpm).` };
 }
 
+/**
+ * apt runs as root, so the step always has `sudo -n`. Kept options:
+ * `--no-install-recommends` (without it the step installs more than the
+ * session did) and the target release. `-o` and `-c` can run any command as
+ * root, so a command with them is not learned.
+ */
 function parseApt(w: string[]): ParseResult {
   const at = w.indexOf('install');
   if (at < 0) return null;
-  const pkgs = [...new Set(operands(w.slice(at + 1)))].sort();
-  if (pkgs.length === 0 || !pkgs.every((p) => /^[A-Za-z0-9][A-Za-z0-9+.:~=_-]*$/.test(p))) return null;
-  const list = quoteAll(pkgs);
+  const args = w.slice(at + 1);
+  const pkgs: string[] = [];
+  const kept: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (['-o', '-c', '--option', '--config-file'].includes(a) || /^--(?:option|config-file)=/.test(a) || /^-[oc]./.test(a)) return null;
+    if (a === '-t' || a === '--target-release') {
+      const release = args[++i];
+      if (!release || !SAFE_NAME.test(release)) return null;
+      kept.push('-t', release);
+    } else if (a === '--no-install-recommends') {
+      if (!kept.includes(a)) kept.push(a);
+    } else if (!a.startsWith('-')) {
+      pkgs.push(a);
+    }
+  }
+  const list = [...new Set(pkgs)].sort();
+  if (list.length === 0 || !list.every((p) => /^[A-Za-z0-9][A-Za-z0-9+.:~=_-]*$/.test(p))) return null;
+  const install = `sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ${quoteAll([...kept, ...list])}`;
   return {
-    command: `DEBIAN_FRONTEND=noninteractive apt-get install -y ${list} || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ${list})`,
+    command: `${install} || (sudo -n apt-get update && ${install})`,
     kind: 'apt',
     phase: 'install',
-    provides: pkgs.map(packageName),
+    provides: list.map(packageName),
   };
 }
 
-function parsePip(w: string[], head: string[]): ParseResult {
+function parsePip(w: string[], head: string[], run: RunAs): ParseResult {
   const at = w.indexOf('install');
   if (at < 0) return null;
   const args = w.slice(at + 1);
@@ -298,34 +374,36 @@ function parsePip(w: string[], head: string[]): ParseResult {
   const project = args.some((a) => ['-r', '--requirement', '-e', '--editable', '.'].includes(a));
   const pkgs = names(args);
   if (!project && (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p)))) return null;
-  return { command: quoteAll([...head, 'install', ...args]), kind: 'pip', phase: 'install', inCheckout: project, provides: project ? [] : pkgs.map(packageName) };
+  return { command: runPrefix(run) + quoteAll([...head, 'install', ...args]), kind: 'pip', phase: 'install', inCheckout: project, provides: project ? [] : pkgs.map(packageName) };
 }
 
-function parseUv(w: string[]): ParseResult {
+function parseUv(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
-  if (sub === 'sync') return { command: quoteAll(w), kind: 'uv', phase: 'install', inCheckout: true };
-  if (sub === 'pip' && w[2] === 'install' && w.length > 3) return { command: quoteAll(w), kind: 'uv', phase: 'install', inCheckout: true };
+  const command = runPrefix(run) + quoteAll(w);
+  if (sub === 'sync') return { command, kind: 'uv', phase: 'install', inCheckout: true };
+  if (sub === 'pip' && w[2] === 'install' && w.length > 3) return { command, kind: 'uv', phase: 'install', inCheckout: true };
   if ((sub === 'tool' || sub === 'python') && w[2] === 'install') {
     const pkgs = names(w.slice(3));
     if (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p))) return null;
-    return { command: quoteAll(w), kind: 'uv', phase: 'install', provides: sub === 'tool' ? pkgs.map(packageName) : [] };
+    return { command, kind: 'uv', phase: 'install', provides: sub === 'tool' ? pkgs.map(packageName) : [] };
   }
   return null;
 }
 
-function parseNode(w: string[]): ParseResult {
+function parseNode(w: string[], run: RunAs): ParseResult {
   const [tool, sub] = w;
   const rest = w.slice(2);
   const global = rest.includes('-g') || rest.includes('--global');
   const pkgs = names(rest);
+  const pre = runPrefix(run);
   if (tool === 'corepack' && ['enable', 'prepare', 'install'].includes(sub ?? '')) {
-    return { command: quoteAll(w), kind: 'node', phase: 'install' };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install' };
   }
   if (tool === 'playwright' && sub === 'install') {
-    return { command: `npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true };
+    return { command: `${pre}npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true };
   }
   if (tool === 'yarn' && sub === 'global' && w[2] === 'add' && w.length > 3) {
-    return { command: quoteAll(w), kind: 'node', phase: 'install', provides: names(w.slice(3)).map(packageName) };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install', provides: names(w.slice(3)).map(packageName) };
   }
   const installs = (tool === 'npm' && ['install', 'i', 'ci', 'add'].includes(sub ?? ''))
     || ((tool === 'pnpm' || tool === 'bun') && ['install', 'i', 'add'].includes(sub ?? ''))
@@ -333,14 +411,43 @@ function parseNode(w: string[]): ParseResult {
   if (!installs) return null;
   if (global) {
     if (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p))) return null;
-    return { command: quoteAll(w), kind: 'node', phase: 'install', provides: pkgs.map(packageName) };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install', provides: pkgs.map(packageName) };
   }
   // A package named without -g is a dependency change, which belongs in the code, not the setup.
   if (pkgs.length > 0 || sub === 'add') return null;
-  return { command: quoteAll(w), kind: 'node', phase: 'install', inCheckout: true };
+  return { command: pre + quoteAll(w), kind: 'node', phase: 'install', inCheckout: true };
 }
 
-function parseCargo(w: string[]): ParseResult {
+const BINSTALL_YES = new Set(['-y', '--no-confirm']);
+
+/**
+ * One form for one cargo install: `crate --version v` becomes `crate@v`, and
+ * `cargo binstall` gets one `-y` after `binstall`. cargo-binstall refuses `-y`
+ * and `--no-confirm` together ("cannot be used multiple times"), because `-y`
+ * is `--no-confirm`.
+ */
+export function canonicalCargoWords(w: string[]): string[] {
+  const sub = w[1];
+  let rest = w.slice(2);
+  if (sub === 'binstall') rest = rest.filter((a) => !BINSTALL_YES.has(a));
+  const v = rest.indexOf('--version');
+  const version = v >= 0 ? rest[v + 1] : undefined;
+  if (version && /^[\w.+-]+$/.test(version) && !rest.includes('--git')) {
+    const without = rest.filter((_, i) => i !== v && i !== v + 1);
+    const crates = names(without);
+    if (crates.length === 1 && !crates[0].includes('@')) {
+      let done = false;
+      rest = without.map((a, i) => {
+        if (done || a !== crates[0] || (i > 0 && VALUE_FLAGS.has(without[i - 1]))) return a;
+        done = true;
+        return `${a}@${version}`;
+      });
+    }
+  }
+  return [w[0], sub, ...(sub === 'binstall' ? ['-y'] : []), ...rest];
+}
+
+function parseCargo(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
   if (sub !== 'install' && sub !== 'binstall') return null;
   const rest = w.slice(2);
@@ -348,35 +455,37 @@ function parseCargo(w: string[]): ParseResult {
   const crates = names(rest);
   if (crates.length === 0 && !rest.includes('--git')) return null;
   if (!crates.every((c) => /^[A-Za-z0-9_][\w-]*(?:@[\w.+-]+)?$/.test(c))) return null;
-  const words = sub === 'binstall' && !rest.some((a) => a === '-y' || a === '--no-confirm') ? [...w, '-y'] : w;
-  return { command: quoteAll(words), kind: 'cargo', phase: 'install', provides: crates.map(packageName) };
+  return { command: runPrefix(run) + quoteAll(canonicalCargoWords(w)), kind: 'cargo', phase: 'install', provides: crates.map(packageName) };
 }
 
-function parseRustup(w: string[]): ParseResult {
+function parseRustup(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
   const ok = (sub === 'toolchain' && w[2] === 'install') || sub === 'default' || sub === 'install'
     || ((sub === 'target' || sub === 'component') && w[2] === 'add');
   if (!ok || w.length < 3 || !names(w.slice(2)).every((n) => SAFE_NAME.test(n))) return null;
-  return { command: quoteAll(w), kind: 'rustup', phase: 'install', provides: sub === 'target' || sub === 'component' ? [] : ['rustc', 'cargo'] };
+  return { command: runPrefix(run) + quoteAll(w), kind: 'rustup', phase: 'install', provides: sub === 'target' || sub === 'component' ? [] : ['rustc', 'cargo'] };
 }
 
-function parseGo(w: string[]): ParseResult {
-  if (w[1] === 'mod' && w[2] === 'download') return { command: quoteAll(w), kind: 'go', phase: 'install', inCheckout: true };
+function parseGo(w: string[], run: RunAs): ParseResult {
+  if (w[1] === 'mod' && w[2] === 'download') return { command: runPrefix(run) + quoteAll(w), kind: 'go', phase: 'install', inCheckout: true };
   if (w[1] !== 'install') return null;
   const pkgs = names(w.slice(2));
   if (pkgs.length === 0 || !pkgs.every((p) => /^[\w.~/-]+@[\w.+-]+$/.test(p))) return null;
-  return { command: quoteAll(w), kind: 'go', phase: 'install', provides: pkgs.map((p) => p.split('@')[0].split('/').pop() ?? p) };
+  return { command: runPrefix(run) + quoteAll(w), kind: 'go', phase: 'install', provides: pkgs.map((p) => p.split('@')[0].split('/').pop() ?? p) };
 }
 
-function parseBrewOrGem(w: string[]): ParseResult {
+/** brew refuses to run as root, so a brew step never gets sudo. */
+function parseBrewOrGem(w: string[], run: RunAs): ParseResult {
   const [tool, sub] = w;
-  if (tool === 'bundle' && (sub === undefined || sub === 'install')) return { command: quoteAll(w), kind: 'gem', phase: 'install', inCheckout: true };
+  const pre = tool === 'brew' ? runPrefix({ ...run, sudo: false }) : runPrefix(run);
+  if (tool === 'bundle' && (sub === undefined || sub === 'install')) return { command: pre + quoteAll(w), kind: 'gem', phase: 'install', inCheckout: true };
   if (sub !== 'install') return null;
   const pkgs = names(w.slice(2));
   if (pkgs.length === 0 || !pkgs.every((p) => SAFE_NAME.test(p))) return null;
-  return { command: quoteAll(w), kind: tool === 'brew' ? 'brew' : 'gem', phase: 'install', provides: pkgs };
+  return { command: pre + quoteAll(w), kind: tool === 'brew' ? 'brew' : 'gem', phase: 'install', provides: pkgs };
 }
 
+/** /usr/local/bin belongs to root, so the download and the chmod have `sudo -n`. */
 function parseDownload(w: string[]): ParseResult {
   const tool = w[0];
   const url = w.find((x) => /^https?:\/\//.test(x));
@@ -388,14 +497,14 @@ function parseDownload(w: string[]): ParseResult {
     return { refused: `The download comes from ${url}. Talyn applies downloads automatically only from public artifact hosts such as GitHub releases.` };
   }
   return {
-    command: `[ -x ${dest} ] || { curl -fsSL ${shellQuote(url)} -o ${dest} && chmod +x ${dest}; }`,
+    command: `[ -x ${dest} ] || { sudo -n curl -fsSL ${shellQuote(url)} -o ${dest} && sudo -n chmod +x ${dest}; }`,
     kind: 'download',
     phase: 'install',
     provides: [dest.split('/').pop()!],
   };
 }
 
-function parseCompose(w: string[]): ParseResult {
+function parseCompose(w: string[], run: RunAs): ParseResult {
   const base = w[0] === 'docker-compose' ? 1 : w[0] === 'docker' && w[1] === 'compose' ? 2 : -1;
   if (base < 0) return null;
   const up = w.indexOf('up', base);
@@ -405,37 +514,45 @@ function parseCompose(w: string[]): ParseResult {
   if (![...global, ...args].every((x) => /^[\w@%+=:,./-]+$/.test(x))) return null;
   const detached = args.some((a) => a === '-d' || a === '--detach' || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(a));
   return {
-    command: quoteAll(['docker', 'compose', ...global, 'up', ...(detached ? [] : ['-d']), ...args]),
+    command: runPrefix(run) + quoteAll(['docker', 'compose', ...global, 'up', ...(detached ? [] : ['-d']), ...args]),
     kind: 'compose',
     phase: 'start',
     inCheckout: true,
   };
 }
 
-function parseService(w: string[]): ParseResult {
+/**
+ * Service starts. `service`, `systemctl`, init scripts and `pg_ctlcluster`
+ * need root, so they always get `sudo -n`. A Docker start is recognised and
+ * refused: Docker starts on demand in the sandbox.
+ */
+function parseService(w: string[], run: RunAs): ParseResult {
   const [tool] = w;
-  if (tool === 'dockerd') return { command: DOCKER_START, kind: 'docker', phase: 'start' };
+  if (tool === 'dockerd') return { refused: DOCKER_ON_DEMAND };
   let name: string | undefined;
   if (tool === 'service' && ['start', 'restart'].includes(w[2] ?? '')) name = w[1];
   else if (tool === 'systemctl' && ['start', 'restart'].includes(w[1] ?? '')) name = w[2];
   else if (/^\/etc\/init\.d\/[\w@.-]+$/.test(tool) && ['start', 'restart'].includes(w[1] ?? '')) name = tool.split('/').pop();
-  if (name === 'docker') return { command: DOCKER_START, kind: 'docker', phase: 'start' };
-  if (name && SAFE_NAME.test(name) && w.length <= 3) return { command: quoteAll(w), kind: 'service', phase: 'start' };
+  if (name === 'docker' || name === 'docker.service') return { refused: DOCKER_ON_DEMAND };
+  if (name && SAFE_NAME.test(name) && w.length <= 3) return { command: runPrefix(run, { root: true, env: false }) + quoteAll(w), kind: 'service', phase: 'start' };
   if ((tool === 'pg_ctlcluster' && w.length === 4 && w[3] === 'start') || (tool === 'redis-server' && w.includes('--daemonize'))) {
-    if (w.every((x) => /^[\w@%+=:,./-]+$/.test(x))) return { command: quoteAll(w), kind: 'service', phase: 'start' };
+    const pre = runPrefix(run, { root: tool === 'pg_ctlcluster', env: false });
+    if (w.every((x) => /^[\w@%+=:,./-]+$/.test(x))) return { command: pre + quoteAll(w), kind: 'service', phase: 'start' };
   }
   return null;
 }
 
-function parseDatabase(w: string[]): ParseResult {
+/** `sudo -u postgres createdb x` keeps its user: as uid 1000 it fails, and `|| true` would hide that. */
+function parseDatabase(w: string[], run: RunAs): ParseResult {
+  const pre = runPrefix(run, { env: false });
   if (w[0] === 'createdb' && names(w.slice(1)).length >= 1) {
-    return { command: `${quoteAll(w)} 2>/dev/null || true`, kind: 'database', phase: 'start' };
+    return { command: `${pre}${quoteAll(w)} 2>/dev/null || true`, kind: 'database', phase: 'start' };
   }
   if (w[0] === 'psql') {
     const at = w.findIndex((x) => x === '-c' || x === '--command');
     const sql = at >= 0 ? w[at + 1] : undefined;
     if (sql && /^\s*create\s+(?:database|role|user|extension|schema)\b/i.test(sql) && !/;\s*\S/.test(sql)) {
-      return { command: `${quoteAll(w)} || true`, kind: 'database', phase: 'start' };
+      return { command: `${pre}${quoteAll(w)} || true`, kind: 'database', phase: 'start' };
     }
   }
   return null;
@@ -455,27 +572,39 @@ function parseExport(segment: string): ParseResult {
   };
 }
 
-function parseSegment(raw: string): ParseResult {
+/** Runners that pick the environment a command runs in. `npx` and friends only find a JS tool. */
+const ENV_RUNNERS = /^(?:uv|poetry|pipenv|hatch|pdm) run$|^bundle exec$/;
+
+function parseSegment(raw: string, opts: { inVenv?: boolean } = {}): ParseResult {
   const installer = parseInstaller(stripCommandPrefix(raw));
   if (installer) return installer;
-  const segment = withoutOutputPlumbing(stripCommandPrefix(raw));
+  const unwrapped = unwrapCommand(raw);
+  const run = runAsOf(unwrapped);
+  if (!run) return null;
+  const segment = withoutOutputPlumbing(unwrapped.command);
   if (/^export\s/.test(segment)) return null;
   const w = shellWords(segment);
   if (!w || w.length === 0) return null;
   const [tool] = w;
+  // `uv run pip install x` installs into the project's environment. Without
+  // the runner the step would install into the system Python, so it is not learned.
+  if (unwrapped.runner && ENV_RUNNERS.test(unwrapped.runner)) return null;
   if (tool === 'apt' || tool === 'apt-get') return parseApt(w);
-  if (tool === 'pip' || tool === 'pip3') return parsePip(w.slice(1), [tool]);
-  if (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2] === 'pip') return parsePip(w.slice(3), w.slice(0, 3));
-  if (tool === 'uv') return parseUv(w);
-  if (['npm', 'pnpm', 'yarn', 'bun', 'corepack', 'playwright'].includes(tool)) return parseNode(w);
-  if (tool === 'cargo') return parseCargo(w);
-  if (tool === 'rustup') return parseRustup(w);
-  if (tool === 'go') return parseGo(w);
-  if (tool === 'brew' || tool === 'gem' || tool === 'bundle') return parseBrewOrGem(w);
+  const isPip = tool === 'pip' || tool === 'pip3' || (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2] === 'pip');
+  // The same for a pip after `source .venv/bin/activate`: the box has no such environment yet.
+  if (isPip && opts.inVenv) return null;
+  if (tool === 'pip' || tool === 'pip3') return parsePip(w.slice(1), [tool], run);
+  if (isPip) return parsePip(w.slice(3), w.slice(0, 3), run);
+  if (tool === 'uv') return parseUv(w, run);
+  if (['npm', 'pnpm', 'yarn', 'bun', 'corepack', 'playwright'].includes(tool)) return parseNode(w, run);
+  if (tool === 'cargo') return parseCargo(w, run);
+  if (tool === 'rustup') return parseRustup(w, run);
+  if (tool === 'go') return parseGo(w, run);
+  if (tool === 'brew' || tool === 'gem' || tool === 'bundle') return parseBrewOrGem(w, run);
   if (tool === 'curl' || tool === 'wget') return parseDownload(w);
-  if (tool === 'docker' || tool === 'docker-compose') return parseCompose(w);
-  if (tool === 'createdb' || tool === 'psql') return parseDatabase(w);
-  return parseService(w);
+  if (tool === 'docker' || tool === 'docker-compose') return parseCompose(w, run);
+  if (tool === 'createdb' || tool === 'psql') return parseDatabase(w, run);
+  return parseService(w, run);
 }
 
 /** The directory after `cd <dir>`, relative to the checkout. Null: not known. */
@@ -534,6 +663,7 @@ export function stepsFromCommand(command: string, opts: { repoDir?: string } = {
   // Only a command made of exports is an environment setup; `export X=1 && pytest` is a one-off.
   const onlyExports = segments.length > 0 && segments.every((s) => /^export\s/.test(s.trim()));
   let dir: string | null = '';
+  let inVenv = false;
   for (const raw of segments) {
     const stripped = stripCommandPrefix(raw);
     const cd = /^(?:cd|pushd)(?:\s+(.*))?$/.exec(stripped);
@@ -542,7 +672,11 @@ export function stepsFromCommand(command: string, opts: { repoDir?: string } = {
       dir = words && words.length === 1 ? nextDir(dir, words[0], opts.repoDir) : null;
       continue;
     }
-    const parsed = onlyExports ? parseExport(stripped) : parseSegment(raw);
+    if (/^(?:source|\.)\s+\S*bin\/activate\b/.test(stripped)) {
+      inVenv = true;
+      continue;
+    }
+    const parsed = onlyExports ? parseExport(stripped) : parseSegment(raw, { inVenv });
     if (!parsed) continue;
     if ('refused' in parsed) {
       out.refused.push({ command: raw.trim(), reason: parsed.refused });
@@ -656,6 +790,22 @@ export function prepareRecordedStep(command: string, why: string): SetupExtracti
   const reason = known.refused[0]?.reason ?? plain;
   if (reason) return { steps: [], refused: [{ command: trimmed, reason }] };
   return { steps: [{ command: trimmed, kind: 'other', phase: 'start', why: why.trim() || DEFAULT_WHY.other }], refused: [] };
+}
+
+/**
+ * What makes two steps the same step, for the dedupe key. The command itself,
+ * except a cargo install, whose `crate@v` and `crate --version v` forms, and
+ * `-y` and `--no-confirm`, are one step. For every other command the identity
+ * is the command, so the stored keys of those steps do not change.
+ */
+export function setupStepIdentity(kind: SetupStepKind, command: string): string {
+  if (kind !== 'cargo') return command;
+  const m = /^(command -v [\w.+-]+ >\/dev\/null 2>&1 \|\| )?(.*)$/s.exec(command)!;
+  const w = shellWords(m[2]);
+  if (!w) return command;
+  const at = w.indexOf('cargo');
+  if (at < 0 || !['install', 'binstall'].includes(w[at + 1] ?? '')) return command;
+  return `${m[1] ?? ''}${quoteAll([...w.slice(0, at), ...canonicalCargoWords(w.slice(at))])}`;
 }
 
 // ============================================================================
