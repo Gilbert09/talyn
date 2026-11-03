@@ -558,6 +558,16 @@ function ownedByProvision(id: string, sandboxId: string | null) {
   );
 }
 
+/** Whether the row is still this provision's: the same test its writes make, and no write. */
+export async function isProvisionOwned(id: string, sandboxId: string | null): Promise<boolean> {
+  const rows = await db()
+    .select({ id: workbenchesTable.id })
+    .from(workbenchesTable)
+    .where(ownedByProvision(id, sandboxId))
+    .limit(1);
+  return rows.length > 0;
+}
+
 /** A provision's write. Null when the row is no longer this provision's. */
 export async function updateProvisioningWorkbench(
   id: string,

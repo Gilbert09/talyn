@@ -7,7 +7,7 @@ import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } fr
 import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
-import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { FleetCapacityError, FleetRunNotFoundError } from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
   buildSandboxCreateBody,
@@ -20,7 +20,14 @@ import { refreshDiffStat } from './changes.js';
 import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, notReadyError, SandboxSizeRefusedError, userFacingError, WorkbenchError } from './errors.js';
+import {
+  isHibernationFetchFailed,
+  localRuntimeError,
+  notReadyError,
+  SandboxSizeRefusedError,
+  userFacingError,
+  WorkbenchError,
+} from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { isHibernationLost, keptSandboxIdsFor, recordRecoveredTranscript } from './recovery.js';
@@ -58,6 +65,7 @@ import {
   failProvisioningWorkbench,
   failQueued,
   getWorkbench,
+  isProvisionOwned,
   isThread,
   keepSandboxes,
   listChats,
@@ -116,6 +124,74 @@ async function setProvisioningRow(
   if (!updated) throw new ProvisionSupersededError(`the session moved on from sandbox ${sandboxId ?? '(none)'}`);
   await emitWorkbenchUpdated(await publicWorkbench(updated));
   return updated;
+}
+
+/**
+ * How a provision waits for a free sandbox. The fleet queues only task
+ * dispatches, never a bare session box, so Talyn waits instead. The bound
+ * matches the fleet's own queue limit (`MaxQueueWait`, 30 minutes). A field,
+ * not a constant, so tests can shorten it.
+ */
+export const PROVISION_CAPACITY_WAIT = {
+  maxMs: 30 * 60_000,
+  firstDelayMs: 10_000,
+  maxDelayMs: 60_000,
+  /** How often a sleep checks for a drain or a lost claim. */
+  checkMs: 1_000,
+};
+
+export const WAITING_FOR_SANDBOX_MESSAGE = 'Waiting for a free sandbox';
+export const NO_FREE_SANDBOX_MESSAGE = 'No sandbox became free in 30 minutes. Retry when the fleet has room.';
+
+/** The pause before the next try: doubling, capped, with jitter. The fleet's Retry-After wins when it is longer. */
+export function capacityWaitDelayMs(attempt: number, retryAfterMs?: number, random = Math.random): number {
+  const { firstDelayMs, maxDelayMs } = PROVISION_CAPACITY_WAIT;
+  const doubled = Math.min(maxDelayMs, firstDelayMs * 2 ** Math.min(attempt, 30));
+  const base = Math.min(maxDelayMs, Math.max(doubled, retryAfterMs ?? 0));
+  return Math.round(base * (0.8 + 0.4 * random()));
+}
+
+/**
+ * Create the session's box, and wait while the fleet has no room. Every try
+ * uses the same sandbox id: the fleet's create is idempotent on the id.
+ * The wait ends quietly (null) at a drain, and with a superseded error when
+ * the claim or the row moves on. The resume sweep starts a new wait after a
+ * deploy, and that wait starts its own clock.
+ */
+async function createWaitingForCapacity(
+  row: WorkbenchRow,
+  sandboxId: string,
+  ownSandboxId: string | null,
+  claim: ProvisionClaim,
+): Promise<CreatedWorkbenchSandbox | null> {
+  let startedAt: number | null = null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await createWorkbenchSandbox(row, sandboxId);
+    } catch (err) {
+      if (!(err instanceof FleetCapacityError) || isHibernationFetchFailed(err)) throw err;
+      const now = Date.now();
+      startedAt ??= now;
+      const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
+      if (left <= 0) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+      if (isWorkbenchDraining()) return null;
+      assertOwned(claim);
+      if (attempt === 0) {
+        row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
+        recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${err.reason}: waiting for a free sandbox`, false);
+        console.warn(`[workbench] no free sandbox for ${row.id} (${err.reason}); waiting`);
+      }
+      const until = Date.now() + Math.min(capacityWaitDelayMs(attempt, err.retryAfterMs), left);
+      while (Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(PROVISION_CAPACITY_WAIT.checkMs, until - Date.now())));
+        if (isWorkbenchDraining()) return null;
+        assertOwned(claim);
+      }
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) {
+        throw new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+      }
+    }
+  }
 }
 
 async function setRow(row: WorkbenchRow, patch: Parameters<typeof updateWorkbench>[1]): Promise<WorkbenchRow> {
@@ -300,7 +376,8 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     };
 
     // 1. The box.
-    const created = await createWorkbenchSandbox(row, row.sandboxId ?? sandboxIdFor(row.id));
+    const created = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
+    if (!created) return;
     if (!created.ok) return await fail(created.error);
     assertOwned(claim);
     const sandboxId = created.sandboxId;
