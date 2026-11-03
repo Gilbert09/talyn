@@ -2277,9 +2277,35 @@ export const repositorySetupSteps = pgTable(
     disabledReason: text('disabled_reason'),
     bakeDisabledAt: timestamp('bake_disabled_at', { withTimezone: true }),
     bakeDisabledReason: text('bake_disabled_reason'),
+    /** Distinct sessions in `repository_setup_step_sessions`. */
+    sessionCount: integer('session_count').notNull().default(0),
+    /** When the step reached `SETUP_STEP_MIN_SESSIONS` sessions. Null: waiting, it does not run. */
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    /** Box setups in a row where the step failed. */
+    boxFailureCount: integer('box_failure_count').notNull().default(0),
+    boxLastFailure: text('box_last_failure'),
+    /** Set after `SETUP_STEP_MAX_BOX_FAILURES` failures: the step no longer runs. */
+    boxDisabledAt: timestamp('box_disabled_at', { withTimezone: true }),
+    boxDisabledReason: text('box_disabled_reason'),
   },
   (t) => ({
     keyUq: uniqueIndex('uq_repository_setup_steps_key').on(t.repositoryId, t.stepKey),
+  })
+);
+
+/** One row per (step, session) that recorded the step, so a step counts each session once. */
+export const repositorySetupStepSessions = pgTable(
+  'repository_setup_step_sessions',
+  {
+    stepId: text('step_id')
+      .notNull()
+      .references(() => repositorySetupSteps.id, { onDelete: 'cascade' }),
+    /** No foreign key: the count stays when the session is deleted. */
+    workbenchId: text('workbench_id').notNull(),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.stepId, t.workbenchId] }),
   })
 );
 

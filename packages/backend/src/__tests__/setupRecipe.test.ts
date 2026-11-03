@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   bakeHostsFor,
@@ -6,12 +7,15 @@ import {
   learnedBakeStepId,
   learnedSetupScript,
   mergeLearnedSetup,
+  LEGACY_DOCKER_START_COMMAND,
   missingCommands,
   orderSetupSteps,
+  parseLearnedStepResults,
   prepareRecordedStep,
   resolveWorkbenchConfig,
   setupStepIdentity,
   setupStepRefusal,
+  SETUP_STEP_TIMEOUT_SEC,
   shellWords,
   stepsFromCommand,
   unwrapCommand,
@@ -376,12 +380,21 @@ describe('applying the recipe', () => {
     expect(orderSetupSteps(steps).map((s) => s.id)).toEqual(['s0', 's1', 's2', 's3']);
   });
 
-  it('writes a script that logs each step and its session, and never fails the setup', () => {
+  it('writes a script that logs each step and its session, with a time limit per kind, and never fails the setup', () => {
     const script = learnedSetupScript(steps)!;
-    expect(script).toContain('[talyn] learned step $1 (from session $2): $3');
-    expect(script).toContain("talyn_learned_step s1 wb-src 'cargo install sqlx-cli'");
+    expect(script).toContain('[talyn] learned step $1 (from session $2): $4');
+    expect(script).toContain(`talyn_learned_step s1 wb-src ${SETUP_STEP_TIMEOUT_SEC.cargo} 'cargo install sqlx-cli'`);
+    expect(script).toContain(`talyn_learned_step s3 wb-src ${SETUP_STEP_TIMEOUT_SEC.compose} 'docker compose up -d'`);
+    expect(script).toContain('timeout -k 10 "$3"');
+    expect(script).toContain('A person can revert it in the repository settings.');
     expect(script.indexOf('talyn_learned_step s0')).toBeLessThan(script.indexOf('talyn_learned_step s3'));
+    expect(script.trimEnd().endsWith(`printf '%s' "$talyn_learned_results"`)).toBe(true);
     expect(learnedSetupScript([])).toBeNull();
+  });
+
+  it('gives every kind a time limit, installs longer than starts', () => {
+    for (const kind of ['installer', 'apt', 'cargo', 'pip', 'node'] as const) expect(SETUP_STEP_TIMEOUT_SEC[kind]).toBeGreaterThanOrEqual(600);
+    for (const kind of ['service', 'database', 'docker'] as const) expect(SETUP_STEP_TIMEOUT_SEC[kind]).toBe(120);
   });
 
   it('runs the repository setup first and keeps its exit code', () => {
@@ -399,15 +412,71 @@ describe('applying the recipe', () => {
     expect(mergeLearnedSetup(config, [])).toBe(config);
   });
 
-  it('runs for real: a failed learned step does not stop the next one or change the exit code', async () => {
-    const { spawnSync } = await import('node:child_process');
+  // The guest has GNU coreutils. A runner without `timeout` (macOS without coreutils) skips this.
+  const hasTimeout = (() => {
+    const r = spawnSync('bash', ['-c', 'timeout --version'], { encoding: 'utf8' });
+    return r.status === 0 && /coreutils/i.test(r.stdout);
+  })();
+
+  it.runIf(hasTimeout)('runs for real: a failed or hung step does not stop the next one or change the exit code, and each reports its result', () => {
     const config = resolveWorkbenchConfig({ talynToml: '[scripts]\nsetup = "echo own; exit 3"\n' });
-    const merged = mergeLearnedSetup(config, [step('a', 'exit 7', 'other', 'start'), step('b', 'echo second', 'other', 'start')]);
-    const r = spawnSync('bash', ['-c', merged.setup!.command], { encoding: 'utf8' });
+    const merged = mergeLearnedSetup(config, [
+      step('a', 'echo cannot; exit 7', 'other', 'start'),
+      step('slow', 'read line; sleep 30; echo never', 'env', 'start'),
+      step('leak', '(sleep 30 &); echo started', 'database', 'start'),
+      step('b', 'echo second; echo; echo', 'other', 'start'),
+    ]);
+    // Short limits, so the test does not wait the real ones.
+    const command = merged.setup!.command
+      .replace(`talyn_learned_step slow wb-src ${SETUP_STEP_TIMEOUT_SEC.env} `, 'talyn_learned_step slow wb-src 1 ')
+      .replace(`talyn_learned_step leak wb-src ${SETUP_STEP_TIMEOUT_SEC.database} `, 'talyn_learned_step leak wb-src 1 ');
+    const started = Date.now();
+    const r = spawnSync('bash', ['-c', command], { encoding: 'utf8', timeout: 20_000 });
+    expect(Date.now() - started).toBeLessThan(15_000);
     expect(r.status).toBe(3);
     expect(r.stdout).toContain('own');
     expect(r.stdout).toContain('second');
     expect(r.stderr).toContain('learned step a failed with exit 7');
+    expect(r.stderr).toContain('learned step slow timed out after 1 seconds');
+    // In the order the steps ran: env, database, then other.
+    expect(parseLearnedStepResults(r.stdout)).toEqual([
+      { id: 'slow', exitCode: 124, timedOut: true, lastLine: '' },
+      // A process left holding the output is stopped at the time limit, so it cannot hold the setup.
+      { id: 'leak', exitCode: 124, timedOut: true, lastLine: 'started' },
+      { id: 'a', exitCode: 7, timedOut: false, lastLine: 'cannot' },
+      { id: 'b', exitCode: 0, timedOut: false, lastLine: 'second' },
+    ]);
+  });
+});
+
+describe('parseLearnedStepResults', () => {
+  it('reads one result per step, the last line for a step winning', () => {
+    const output = [
+      'some setup output',
+      '[talyn] learned step result st_a exit 0: done',
+      '[talyn] learned step result st_b exit 100: E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)',
+      '[talyn] learned step result st_c exit 124: ',
+      '[talyn] learned step result st_a exit 1: again\r',
+      '[talyn] learned step st_x (from session wb): not a result',
+      'garbage [talyn] learned step result st_y exit 0: not at the line start',
+    ].join('\n');
+    expect(parseLearnedStepResults(output)).toEqual([
+      { id: 'st_b', exitCode: 100, timedOut: false, lastLine: 'E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)' },
+      { id: 'st_c', exitCode: 124, timedOut: true, lastLine: '' },
+      { id: 'st_a', exitCode: 1, timedOut: false, lastLine: 'again' },
+    ]);
+  });
+
+  it.each(['', 'no results here', '[talyn] learned step result st_a exit x: no code'])('finds none in %j', (output) => {
+    expect(parseLearnedStepResults(output)).toEqual([]);
+  });
+
+  it('treats a KILL after the time limit as a timeout', () => {
+    expect(parseLearnedStepResults('[talyn] learned step result s exit 137: x')[0].timedOut).toBe(true);
+  });
+
+  it('knows the old Docker start by its exact command', () => {
+    expect(LEGACY_DOCKER_START_COMMAND).toContain('nohup dockerd >/var/log/dockerd.log');
   });
 });
 

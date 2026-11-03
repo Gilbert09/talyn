@@ -9,6 +9,7 @@ import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxSize from '../services/workbenches/sandboxSize.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import * as scripts from '../services/workbenches/scripts.js';
+import * as setupRecipe from '../services/workbenches/setupRecipe.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
 import {
   PROVISION_SETUP_WATCH,
@@ -388,6 +389,14 @@ describe('one provision per session across instances', () => {
         status: 'ready',
         statusMessage: 'The setup script exited with 3. Its output is in the Scripts panel.',
       });
+    });
+
+    it('reads the learned-step results of the box once its setup ends', async () => {
+      vi.spyOn(scripts, 'startScript').mockResolvedValue({ done: Promise.resolve(0) });
+      const record = vi.spyOn(setupRecipe, 'recordBoxSetupResults').mockResolvedValue();
+      await provisionWorkbench(WB);
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(record.mock.calls[0][0]).toMatchObject({ id: WB, sandboxId: OLD_BOX });
     });
   });
 });

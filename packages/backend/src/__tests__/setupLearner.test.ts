@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { eq } from 'drizzle-orm';
@@ -6,14 +8,23 @@ import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import {
   repositories,
+  repositorySetupStepSessions,
   repositorySetupSteps,
   workbenchChats,
   workbenchEvents,
   workbenches,
+  workbenchScriptRuns,
   workbenchTurnTimings,
   workspaces,
 } from '../db/schema.js';
-import { resolveWorkbenchConfig, SETUP_RECIPE_MAX_STEPS, SETUP_RECIPE_SETTLE_MS, type SetupStepCandidate } from '@talyn/shared';
+import {
+  LEGACY_DOCKER_START_COMMAND,
+  resolveWorkbenchConfig,
+  SETUP_RECIPE_MAX_STEPS,
+  SETUP_RECIPE_SETTLE_MS,
+  SETUP_STEP_TIMEOUT_SEC,
+  type SetupStepCandidate,
+} from '@talyn/shared';
 
 const { repositoryRoutes } = await import('../routes/repositories.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
@@ -55,12 +66,14 @@ describe('setup learner and turn time report', () => {
     const session = { repoFullName: 'posthog/posthog', branch: 'tom/x', baseBranch: 'master', agent: 'claude', status: 'ready', sandboxState: 'running' };
     await testDb.db.insert(workbenches).values([
       { id: 'wb-a', workspaceId: 'ws-a', repositoryId: 'repo-a', name: 'a', runtime: 'sandbox', sandboxId: 'sb-a', ...session },
+      { id: 'wb-a2', workspaceId: 'ws-a', repositoryId: 'repo-a', name: 'a2', runtime: 'sandbox', sandboxId: 'sb-a2', ...session },
       { id: 'wb-local', workspaceId: 'ws-a', repositoryId: 'repo-a', name: 'local', runtime: 'local', ...session },
       { id: 'wb-thread', workspaceId: 'ws-a', repositoryId: null, repoFullName: '', kind: 'thread', name: 'thread', branch: '', baseBranch: '', runtime: 'sandbox', agent: 'claude', status: 'ready' },
       { id: 'wb-b', workspaceId: 'ws-b', repositoryId: 'repo-b', name: 'b', runtime: 'sandbox', ...session, repoFullName: 'bee/hive' },
     ]);
     await testDb.db.insert(workbenchChats).values([
       { id: 'chat-a', workbenchId: 'wb-a', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' },
+      { id: 'chat-a2', workbenchId: 'wb-a2', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' },
       { id: 'chat-local', workbenchId: 'wb-local', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' },
       { id: 'chat-thread', workbenchId: 'wb-thread', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' },
     ]);
@@ -108,28 +121,78 @@ describe('setup learner and turn time report', () => {
     ], firstSeq);
   }
 
+  /** Record the candidates from two sessions, so the steps run. */
+  async function recordConfirmed(candidates: SetupStepCandidate[], sessions: [string, string] = ['wb-a', 'wb-a2']) {
+    await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: sessions[0], source: 'learned', candidates });
+    return recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: sessions[1], source: 'learned', candidates });
+  }
+
   describe('the recipe store', () => {
     it('adds steps once, counts them again, and keeps a reverted step reverted', async () => {
       const first = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [cand('cargo install sqlx-cli'), cand('uv sync', 'uv')] });
       expect(first.added.map((s) => s.command)).toEqual(['cargo install sqlx-cli', 'uv sync']);
       const again = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-other', source: 'learned', candidates: [cand('cargo install sqlx-cli')] });
       expect(again.added).toEqual([]);
-      expect(again.seen[0]).toMatchObject({ seenCount: 2, sourceWorkbenchId: 'wb-a' });
+      expect(again.seen[0]).toMatchObject({ seenCount: 2, sessionCount: 2, sourceWorkbenchId: 'wb-a' });
 
       const reverted = await recipe.revertSetupStep('repo-a', first.added[0].id);
       expect(reverted).toMatchObject({ disabledReason: 'Reverted by a person.' });
       await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [cand('cargo install sqlx-cli')] });
       const got = await recipe.getSetupRecipe('repo-a');
-      expect(got.steps.find((s) => s.command === 'cargo install sqlx-cli')).toMatchObject({ disabledAt: expect.any(String), seenCount: 3 });
+      expect(got.steps.find((s) => s.command === 'cargo install sqlx-cli')).toMatchObject({ disabledAt: expect.any(String), seenCount: 3, sessionCount: 2, state: 'reverted' });
       expect(await recipe.revertSetupStep('repo-a', 'missing')).toBeNull();
       expect(await recipe.revertSetupStep('repo-a2', first.added[1].id)).toBeNull();
     });
 
-    it('keeps one row per command when two sessions learn it at once', async () => {
+    it('keeps one row per command when two sessions learn it at once, and counts every session', async () => {
       await Promise.all([1, 2, 3].map((n) =>
         recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: `wb-${n}`, source: 'learned', candidates: [cand('cargo install just')] })));
       const rows = await testDb.db.select().from(repositorySetupSteps);
       expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ seenCount: 3, sessionCount: 3, confirmedAt: expect.any(Date) });
+    });
+
+    it('runs a new step only after a second, different session needed it', async () => {
+      const spy = vi.spyOn(debugBus, 'recordEvent');
+      const step = cand('docker compose up -d', 'compose', 'start');
+      const first = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [step] });
+      expect(first.added[0]).toMatchObject({ state: 'waiting', sessionCount: 1, seenCount: 1, confirmedAt: null });
+      // The same session again is one session: seen twice, still waiting.
+      const repeat = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [step] });
+      expect(repeat.seen[0]).toMatchObject({ state: 'waiting', sessionCount: 1, seenCount: 2 });
+      // An agent's call without a session counts no session.
+      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: null, source: 'agent', candidates: [step] });
+      expect(await recipe.setupStepsForBox('repo-a')).toEqual([]);
+      expect(await recipe.effectiveRepositoryBake('repo-a', new Date(Date.now() + 2 * SETUP_RECIPE_SETTLE_MS))).toBeNull();
+      expect(spy.mock.calls.some(([e]) => e.action === 'step_confirmed')).toBe(false);
+
+      const second = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a2', source: 'learned', candidates: [step] });
+      expect(second.seen[0]).toMatchObject({ state: 'live', sessionCount: 2, seenCount: 4, confirmedAt: expect.any(String) });
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.command)).toEqual(['docker compose up -d']);
+      expect(spy.mock.calls.filter(([e]) => e.action === 'step_confirmed')).toHaveLength(1);
+      // A third session keeps it confirmed, with no second event.
+      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-3', source: 'learned', candidates: [step] });
+      expect(spy.mock.calls.filter(([e]) => e.action === 'step_confirmed')).toHaveLength(1);
+      expect(await testDb.db.select().from(repositorySetupStepSessions)).toHaveLength(3);
+      spy.mockRestore();
+    });
+
+    it('waits for two sessions for an agent-recorded step too', async () => {
+      const added = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'agent', candidates: [cand('make dev-setup', 'other', 'start')] });
+      expect(added.added[0].state).toBe('waiting');
+      expect(await recipe.setupStepsForBox('repo-a')).toEqual([]);
+      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a2', source: 'learned', candidates: [cand('make dev-setup', 'other', 'start')] });
+      expect(await recipe.setupStepsForBox('repo-a')).toHaveLength(1);
+    });
+
+    it('treats the cargo forms of one install as one step', async () => {
+      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [cand('cargo binstall -y sqlx-cli@0.8.3')] });
+      const again = await recipe.recordSetupSteps({
+        repositoryId: 'repo-a', workbenchId: 'wb-a2', source: 'agent', candidates: [cand('cargo binstall -y --no-confirm sqlx-cli --version 0.8.3')],
+      });
+      expect(again.added).toEqual([]);
+      expect(again.seen[0]).toMatchObject({ command: 'cargo binstall -y sqlx-cli@0.8.3', sessionCount: 2 });
+      expect(await testDb.db.select().from(repositorySetupSteps)).toHaveLength(1);
     });
 
     it('stops adding at the cap, and a revert makes room', async () => {
@@ -152,9 +215,14 @@ describe('setup learner and turn time report', () => {
 
   describe('auto-apply', () => {
     async function seedSteps() {
-      await recipe.recordSetupSteps({
-        repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned',
-        candidates: [cand('cargo install sqlx-cli'), cand('docker compose up -d', 'compose', 'start')],
+      await recordConfirmed([cand('cargo install sqlx-cli'), cand('docker compose up -d', 'compose', 'start')]);
+    }
+
+    /** A row as an older release stored it, outside the rules of today. */
+    async function storeRow(id: string, command: string, kind: string, ordinal: number) {
+      await testDb.db.insert(repositorySetupSteps).values({
+        id, repositoryId: 'repo-a', stepKey: `k-${id}`, ordinal, command, kind, phase: kind === 'cargo' ? 'install' : 'start',
+        source: 'learned', sourceWorkbenchId: 'wb-a', confirmedAt: new Date(), sessionCount: 1,
       });
     }
 
@@ -180,10 +248,25 @@ describe('setup learner and turn time report', () => {
       expect(await recipe.effectiveRepositoryBake('repo-a', new Date(Date.now() + 2 * SETUP_RECIPE_SETTLE_MS))).toBeNull();
     });
 
+    it('skips the old Docker start: Docker starts on demand', async () => {
+      await storeRow('st_docker', LEGACY_DOCKER_START_COMMAND, 'docker', 1);
+      await storeRow('st_cargo', 'cargo install just', 'cargo', 2);
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.id)).toEqual(['st_cargo']);
+      // It stays in the recipe, so a person sees it and can revert it.
+      expect((await recipe.getSetupRecipe('repo-a')).steps.map((s) => s.id)).toEqual(['st_docker', 'st_cargo']);
+    });
+
+    it('runs two stored rows of one cargo install once, the older one', async () => {
+      await storeRow('st_old', 'cargo binstall -y sqlx-cli@0.8.3', 'cargo', 1);
+      await storeRow('st_dup', 'cargo binstall -y --no-confirm sqlx-cli --version 0.8.3', 'cargo', 2);
+      await storeRow('st_other', 'cargo binstall -y sqlx-cli@0.8.4', 'cargo', 3);
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.id)).toEqual(['st_old', 'st_other']);
+    });
+
     it('keeps the box starting when the recipe cannot be read', async () => {
       const spy = vi.spyOn(debugBus, 'recordEvent');
       const base = resolveWorkbenchConfig({});
-      await testDb.pglite.exec('DROP TABLE repository_setup_steps');
+      await testDb.pglite.exec('DROP TABLE repository_setup_steps CASCADE');
       expect(await recipe.withLearnedSetup((await getWorkbench('wb-a'))!, base)).toBe(base);
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ action: 'read_failed', ok: false }));
       spy.mockRestore();
@@ -192,12 +275,14 @@ describe('setup learner and turn time report', () => {
     it('puts install steps into the bake only once the recipe has settled, so a burst gives one bake change', async () => {
       await testDb.db.update(repositories).set({ settings: { bake: { steps: [{ name: 'own', run: 'make bake' }] } } }).where(eq(repositories.id, 'repo-a'));
       const t = Date.now();
-      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-1', source: 'learned', candidates: [cand('cargo install sqlx-cli')] });
+      await recordConfirmed([cand('cargo install sqlx-cli')], ['wb-1', 'wb-1b']);
+      // A step that waits for its second session never goes into the bake.
+      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-9', source: 'learned', candidates: [cand('cargo install waiting')] });
       // A box created during the burst gets the repository's own bake, unchanged.
       expect((await recipe.effectiveRepositoryBake('repo-a', new Date(t + 60_000)))!.steps.map((s) => s.name)).toEqual(['own']);
-      // A second session learns more within the window: the window starts again.
-      await testDb.db.update(repositorySetupSteps).set({ firstSeenAt: new Date(t - SETUP_RECIPE_SETTLE_MS + 60_000) });
-      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-2', source: 'learned', candidates: [cand('cargo install just'), cand('docker compose up -d', 'compose', 'start')] });
+      // More steps are confirmed within the window: the window starts again.
+      await testDb.db.update(repositorySetupSteps).set({ confirmedAt: new Date(t - SETUP_RECIPE_SETTLE_MS + 60_000) }).where(eq(repositorySetupSteps.command, 'cargo install sqlx-cli'));
+      await recordConfirmed([cand('cargo install just'), cand('docker compose up -d', 'compose', 'start')], ['wb-2', 'wb-2b']);
       expect((await recipe.effectiveRepositoryBake('repo-a', new Date(t + 120_000)))!.steps).toHaveLength(1);
 
       const spy = vi.spyOn(debugBus, 'recordEvent');
@@ -237,6 +322,117 @@ describe('setup learner and turn time report', () => {
     });
   });
 
+  describe('box setup results', () => {
+    const later = () => new Date(Date.now() + 2 * SETUP_RECIPE_SETTLE_MS);
+    async function stepId(command: string) {
+      return (await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.command === command)!.id;
+    }
+
+    it('stops a step after two failed boxes in a row, with the reason, in the box setup and the bake', async () => {
+      await recordConfirmed([cand('cargo install sqlx-cli'), cand('docker compose up -d', 'compose', 'start')]);
+      const id = await stepId('cargo install sqlx-cli');
+      expect((await recipe.effectiveRepositoryBake('repo-a', later()))!.steps).toHaveLength(1);
+      const spy = vi.spyOn(debugBus, 'recordEvent');
+
+      const first = await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 101, timedOut: false, lastLine: 'error: linker `cc` not found' }]);
+      expect(first).toEqual({ failed: [id], disabled: [] });
+      let step = (await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.id === id)!;
+      expect(step).toMatchObject({ state: 'live', boxFailureCount: 1, boxLastFailure: 'exit 101: error: linker `cc` not found', boxDisabledAt: null });
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.id)).toContain(id);
+
+      const second = await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 101, timedOut: false, lastLine: 'GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 failed' }]);
+      expect(second).toEqual({ failed: [id], disabled: [id] });
+      step = (await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.id === id)!;
+      expect(step).toMatchObject({ state: 'failing', boxFailureCount: 2, boxDisabledAt: expect.any(String) });
+      expect(step.boxDisabledReason).toMatch(/^Failed on 2 boxes in a row\. Last: exit 101: /);
+      expect(step.boxDisabledReason).not.toContain('ghp_');
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.id)).not.toContain(id);
+      expect(await recipe.effectiveRepositoryBake('repo-a', later())).toBeNull();
+      expect(spy.mock.calls.map(([e]) => e.action)).toEqual(['step_box_failed', 'step_box_disabled']);
+      // A stopped step is not counted again, and does not fill the recipe.
+      expect(await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 1, timedOut: false, lastLine: '' }])).toEqual({ failed: [], disabled: [] });
+      spy.mockRestore();
+    });
+
+    it('sets the count back to 0 on a success, so only failures in a row stop a step', async () => {
+      await recordConfirmed([cand('cargo install sqlx-cli')]);
+      const id = await stepId('cargo install sqlx-cli');
+      await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 1, timedOut: false, lastLine: 'a bad box' }]);
+      await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 0, timedOut: false, lastLine: 'ok' }]);
+      await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 1, timedOut: false, lastLine: 'another bad box' }]);
+      const step = (await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.id === id)!;
+      expect(step).toMatchObject({ state: 'live', boxFailureCount: 1, boxLastFailure: 'exit 1: another bad box' });
+    });
+
+    it('names a time limit as the failure', async () => {
+      await recordConfirmed([cand('docker compose up -d --wait', 'compose', 'start')]);
+      const id = await stepId('docker compose up -d --wait');
+      await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 124, timedOut: true, lastLine: '' }]);
+      const step = (await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.id === id)!;
+      expect(step.boxLastFailure).toBe(`timed out after ${SETUP_STEP_TIMEOUT_SEC.compose} seconds`);
+    });
+
+    it('changes only steps of the repository', async () => {
+      const other = await recipe.recordSetupSteps({ repositoryId: 'repo-a2', workbenchId: 'wb-x', source: 'learned', candidates: [cand('cargo install just')] });
+      const id = other.added[0].id;
+      expect(await recipe.noteBoxSetupResults('repo-a', [{ id, exitCode: 1, timedOut: false, lastLine: '' }])).toEqual({ failed: [], disabled: [] });
+      expect((await recipe.getSetupRecipe('repo-a2')).steps[0].boxFailureCount).toBe(0);
+    });
+
+    it('reads the results from the stored setup output of the box', async () => {
+      await recordConfirmed([cand('cargo install sqlx-cli'), cand('docker compose up -d', 'compose', 'start')]);
+      const cargo = await stepId('cargo install sqlx-cli');
+      const compose = await stepId('docker compose up -d');
+      await recipe.noteBoxSetupResults('repo-a', [{ id: compose, exitCode: 1, timedOut: false, lastLine: 'x' }]);
+      const output = [
+        'own setup output',
+        `[talyn] learned step ${cargo} (from session wb-a): cargo install sqlx-cli`,
+        `[talyn] learned step result ${cargo} exit 101: error: could not compile`,
+        `[talyn] learned step result ${compose} exit 0: Started`,
+      ].join('\n');
+      await testDb.db.insert(workbenchScriptRuns).values({
+        id: 'wb-a:setup', workbenchId: 'wb-a', workspaceId: 'ws-a', sandboxId: 'sb-a', name: 'setup',
+        generation: 'g1', owner: 'x', output, running: false, exitCode: 0,
+      });
+      await recipe.recordBoxSetupResults({ id: 'wb-a', repositoryId: 'repo-a', sandboxId: 'sb-a', workspaceId: 'ws-a' });
+      const steps = (await recipe.getSetupRecipe('repo-a')).steps;
+      expect(steps.find((s) => s.id === cargo)).toMatchObject({ boxFailureCount: 1, boxLastFailure: 'exit 101: error: could not compile' });
+      expect(steps.find((s) => s.id === compose)).toMatchObject({ boxFailureCount: 0 });
+      // Another box's output is not this box's.
+      await recipe.recordBoxSetupResults({ id: 'wb-a', repositoryId: 'repo-a', sandboxId: 'sb-other', workspaceId: 'ws-a' });
+      expect((await recipe.getSetupRecipe('repo-a')).steps.find((s) => s.id === cargo)!.boxFailureCount).toBe(1);
+    });
+
+    it('never throws: a failure goes to the debug bus', async () => {
+      const spy = vi.spyOn(debugBus, 'recordEvent');
+      await testDb.pglite.exec('DROP TABLE workbench_script_runs');
+      await expect(recipe.recordBoxSetupResults({ id: 'wb-a', repositoryId: 'repo-a', sandboxId: 'sb-a' })).resolves.toBeUndefined();
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ action: 'box_results_failed', ok: false }));
+      spy.mockRestore();
+    });
+  });
+
+  describe('migration 0103', () => {
+    it('keeps the steps stored before it running, with their first session counted', async () => {
+      // As 0099 stored them: no session rows, nothing confirmed.
+      await testDb.db.insert(repositorySetupSteps).values([
+        { id: 'st_old', repositoryId: 'repo-a', stepKey: recipe.stepKey('cargo', 'cargo install just'), command: 'cargo install just', kind: 'cargo', phase: 'install', source: 'learned', sourceWorkbenchId: 'wb-a', seenCount: 4 },
+        { id: 'st_agent', repositoryId: 'repo-a', stepKey: 'k2', command: 'make x', kind: 'other', phase: 'start', source: 'agent', sourceWorkbenchId: null },
+      ]);
+      const sqlText = fs.readFileSync(path.resolve(__dirname, '../db/migrations/0103_setup_step_sessions_and_box_failures.sql'), 'utf8');
+      for (const stmt of sqlText.split('--> statement-breakpoint').map((x) => x.trim()).filter((x) => /^(INSERT|UPDATE)/.test(x))) {
+        await testDb.pglite.exec(stmt);
+      }
+      const steps = (await recipe.getSetupRecipe('repo-a')).steps;
+      expect(steps.map((s) => [s.id, s.state, s.sessionCount])).toEqual([['st_old', 'live', 1], ['st_agent', 'live', 0]]);
+      expect((await recipe.setupStepsForBox('repo-a')).map((s) => s.id)).toEqual(['st_old', 'st_agent']);
+      // The first session is counted, so the same session again is not a second one.
+      const again = await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [cand('cargo install just')] });
+      expect(again.added).toEqual([]);
+      expect(again.seen[0]).toMatchObject({ id: 'st_old', state: 'live', sessionCount: 1, seenCount: 5 });
+    });
+  });
+
   describe('after a turn', () => {
     it('stores the time report from the tool calls, without the transcript', async () => {
       await seedPosthogTurn();
@@ -266,10 +462,24 @@ describe('setup learner and turn time report', () => {
         why: expect.stringContaining('`sqlx` was missing'),
         source: 'learned',
         sourceWorkbenchId: 'wb-a',
+        state: 'waiting',
       });
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ action: 'step_refused', summary: expect.stringContaining('example.com') }));
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ action: 'step_refused', summary: expect.stringContaining('Docker starts on demand') }));
       spy.mockRestore();
+    });
+
+    it('runs what a turn learned only after a turn in a second session learned it too', async () => {
+      await seedPosthogTurn('chat-a', 1);
+      await seedPosthogTurn('chat-a', 2, 100);
+      await insights.analyseTurn('chat-a', 1, { readBakeSteps: async () => [] });
+      await insights.analyseTurn('chat-a', 2, { readBakeSteps: async () => [] });
+      expect(await recipe.setupStepsForBox('repo-a')).toEqual([]);
+      await seedPosthogTurn('chat-a2', 1, 200);
+      await insights.analyseTurn('chat-a2', 1, { readBakeSteps: async () => [] });
+      const got = await recipe.getSetupRecipe('repo-a');
+      expect(got.steps.map((s) => [s.state, s.sessionCount, s.seenCount])).toEqual([['live', 2, 3], ['live', 2, 3], ['live', 2, 3]]);
+      expect(await recipe.setupStepsForBox('repo-a')).toHaveLength(3);
     });
 
     it('learns nothing for a thread, a local session or a repository with learning off', async () => {
@@ -292,7 +502,7 @@ describe('setup learner and turn time report', () => {
     });
 
     it('reads the bake results at most every ten minutes per repository', async () => {
-      await recipe.recordSetupSteps({ repositoryId: 'repo-a', workbenchId: 'wb-a', source: 'learned', candidates: [cand('cargo install x')] });
+      await recordConfirmed([cand('cargo install x')]);
       await testDb.db.update(repositorySetupSteps).set({ appliedAt: new Date() });
       await seedPosthogTurn('chat-a', 1);
       await seedPosthogTurn('chat-a', 2, 100);
@@ -392,7 +602,12 @@ describe('setup learner and turn time report', () => {
     it('records, lists, reverts, and turns learning off and on', async () => {
       const recorded = await call('POST', '/repositories/repo-a/setup-recipe/steps', { command: 'cargo install sqlx-cli', why: 'migrations need sqlx', sessionId: 'wb-a' });
       expect(recorded.status).toBe(200);
-      expect(recorded.body.data.steps).toEqual([expect.objectContaining({ command: 'cargo install sqlx-cli', source: 'agent', sourceWorkbenchId: 'wb-a', why: 'migrations need sqlx' })]);
+      expect(recorded.body.data.steps).toEqual([expect.objectContaining({
+        command: 'cargo install sqlx-cli', source: 'agent', sourceWorkbenchId: 'wb-a', why: 'migrations need sqlx', state: 'waiting', sessionCount: 1,
+      })]);
+      // The same command from a second session confirms it.
+      const confirmed = await call('POST', '/repositories/repo-a/setup-recipe/steps', { command: 'cargo install sqlx-cli', why: 'again', sessionId: 'wb-a2' });
+      expect(confirmed.body.data.steps).toEqual([expect.objectContaining({ state: 'live', sessionCount: 2 })]);
 
       const listed = await call('GET', '/repositories/repo-a/setup-recipe');
       expect(listed.body.data).toMatchObject({ repositoryId: 'repo-a', learningDisabled: false, maxSteps: SETUP_RECIPE_MAX_STEPS });

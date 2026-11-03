@@ -148,7 +148,10 @@ describe('/v1 repository settings', () => {
     const recipe = await call('GET', '/repositories/repo-a/setup_recipe');
     expect(recipe.body).toMatchObject({
       object: 'setup_recipe', repository_id: 'repo-a', learning: true,
-      steps: [{ id: 'step-1', command: 'apt-get install -y jq', phase: 'install', seen_count: 2, reverted_at: null }],
+      steps: [{
+        id: 'step-1', command: 'apt-get install -y jq', phase: 'install', seen_count: 2, reverted_at: null,
+        state: 'waiting', session_count: 0, box_failure_count: 0, box_last_failure: null, box_disabled_at: null, box_disabled_reason: null,
+      }],
     });
     const reverted = await call('POST', '/repositories/repo-a/setup_recipe/steps/step-1/revert');
     expect(reverted.status).toBe(200);

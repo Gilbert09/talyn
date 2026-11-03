@@ -101,13 +101,21 @@ export const SetupStep = z
     phase: z.enum(['install', 'start']).openapi({ description: '`install` steps also go into the baked image.' }),
     why: z.string().nullable(),
     source: z.enum(['learned', 'agent']),
+    state: z.enum(['waiting', 'live', 'failing', 'reverted']).openapi({
+      description: '`waiting`: seen in fewer than 2 sessions, so it does not run yet. `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it.',
+    }),
     source_session_id: Id.nullable(),
     seen_count: z.number().int(),
+    session_count: z.number().int().openapi({ description: 'The different sessions that needed the step.' }),
     first_seen_at: Timestamp,
     last_seen_at: Timestamp,
     applied_at: Timestamp.nullable().openapi({ description: 'When the step went into the baked image.' }),
     reverted_at: Timestamp.nullable().openapi({ description: 'A person reverted the step. Talyn does not learn it again.' }),
     reverted_reason: z.string().nullable(),
+    box_failure_count: z.number().int().openapi({ description: 'Box setups in a row where the step failed.' }),
+    box_last_failure: z.string().nullable().openapi({ description: 'The exit code or time limit, and the last line the step printed.' }),
+    box_disabled_at: Timestamp.nullable().openapi({ description: 'The step failed on too many boxes and no longer runs.' }),
+    box_disabled_reason: z.string().nullable(),
   })
   .openapi('SetupStep');
 

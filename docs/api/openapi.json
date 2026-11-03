@@ -4732,6 +4732,16 @@
               "agent"
             ]
           },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "live",
+              "failing",
+              "reverted"
+            ],
+            "description": "`waiting`: seen in fewer than 2 sessions, so it does not run yet. `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it."
+          },
           "source_session_id": {
             "type": [
               "string",
@@ -4742,6 +4752,10 @@
           },
           "seen_count": {
             "type": "integer"
+          },
+          "session_count": {
+            "type": "integer",
+            "description": "The different sessions that needed the step."
           },
           "first_seen_at": {
             "type": "string",
@@ -4776,6 +4790,32 @@
               "string",
               "null"
             ]
+          },
+          "box_failure_count": {
+            "type": "integer",
+            "description": "Box setups in a row where the step failed."
+          },
+          "box_last_failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The exit code or time limit, and the last line the step printed."
+          },
+          "box_disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The step failed on too many boxes and no longer runs.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "box_disabled_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4785,13 +4825,19 @@
           "phase",
           "why",
           "source",
+          "state",
           "source_session_id",
           "seen_count",
+          "session_count",
           "first_seen_at",
           "last_seen_at",
           "applied_at",
           "reverted_at",
-          "reverted_reason"
+          "reverted_reason",
+          "box_failure_count",
+          "box_last_failure",
+          "box_disabled_at",
+          "box_disabled_reason"
         ]
       },
       "SetupRecipe": {

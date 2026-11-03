@@ -17,6 +17,7 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
+import { recordBoxSetupResults } from './setupRecipe.js';
 import { runningScriptNames, startScript, stopAllScripts } from './scripts.js';
 import {
   appendEvents,
@@ -942,6 +943,7 @@ async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow): Promise<str
   try {
     const { done } = await startScript(fresh, 'setup', { config });
     const code = await done;
+    await recordBoxSetupResults(fresh);
     return code === 0 ? null : `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
   } catch (err) {
     return `The setup script could not run: ${userFacingError(err)}`;

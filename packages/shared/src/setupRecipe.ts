@@ -45,6 +45,14 @@ export interface SetupStepCandidate {
   provides?: string[];
 }
 
+/**
+ * - `waiting`: seen in fewer than {@link SETUP_STEP_MIN_SESSIONS} sessions. It does not run yet.
+ * - `live`: runs in the setup of every new box.
+ * - `failing`: failed on {@link SETUP_STEP_MAX_BOX_FAILURES} boxes in a row. It does not run.
+ * - `reverted`: a person reverted it.
+ */
+export type SetupStepState = 'waiting' | 'live' | 'failing' | 'reverted';
+
 export interface SetupRecipeStep {
   id: string;
   command: string;
@@ -52,11 +60,17 @@ export interface SetupRecipeStep {
   phase: SetupStepPhase;
   why: string | null;
   source: SetupStepSource;
+  state: SetupStepState;
   /** The session that first needed the step. */
   sourceWorkbenchId: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Each time a session or an agent recorded the step. */
   seenCount: number;
+  /** The different sessions that recorded the step. */
+  sessionCount: number;
+  /** When the step was seen in enough sessions to run. Null: waiting. */
+  confirmedAt: string | null;
   /** When the step went into the bake. Null: box setup only, until the recipe settles. */
   appliedAt: string | null;
   /** A person reverted the step. It is not learned again. */
@@ -65,6 +79,13 @@ export interface SetupRecipeStep {
   /** The step failed in a bake. It still runs in the box setup. */
   bakeDisabledAt: string | null;
   bakeDisabledReason: string | null;
+  /** Box setups in a row where the step failed. A success sets it to 0. */
+  boxFailureCount: number;
+  /** The last box failure, for example `exit 100: E: Unable to locate package x`. */
+  boxLastFailure: string | null;
+  /** The step failed on too many boxes and no longer runs in the box setup or the bake. */
+  boxDisabledAt: string | null;
+  boxDisabledReason: string | null;
 }
 
 /** `GET /repositories/:id/setup-recipe`. */
@@ -103,6 +124,42 @@ export const SETUP_STEP_MAX_BYTES = 1000;
 export const SETUP_RECIPE_SETTLE_MS = 15 * 60_000;
 /** Learned bake steps are named `talyn-learned <step id>`, so a bake result names its step. */
 export const LEARNED_BAKE_STEP_PREFIX = 'talyn-learned ';
+/**
+ * A learned or recorded step runs only after this many different sessions
+ * needed it. One session's need (a browser download, a database it used once)
+ * must not become the setup of every box.
+ */
+export const SETUP_STEP_MIN_SESSIONS = 2;
+/**
+ * A step that failed in the box setup this many times in a row stops running.
+ * One failure can be a bad box (a full disk, a lost network); two in a row is
+ * the step.
+ */
+export const SETUP_STEP_MAX_BOX_FAILURES = 2;
+/** The time limit of one learned step in the box setup, in seconds. */
+export const SETUP_STEP_TIMEOUT_SEC: Record<SetupStepKind, number> = {
+  installer: 600,
+  rustup: 600,
+  apt: 600,
+  brew: 600,
+  // A cargo install that compiles from source takes about ten minutes.
+  cargo: 900,
+  go: 600,
+  gem: 600,
+  pip: 600,
+  uv: 600,
+  node: 600,
+  download: 300,
+  env: 30,
+  docker: 120,
+  service: 120,
+  // A compose start pulls its images first, which is an install in time.
+  compose: 600,
+  database: 120,
+  other: 600,
+};
+/** After the time limit, `timeout` sends TERM, then KILL after this many seconds. */
+export const SETUP_STEP_KILL_AFTER_SEC = 10;
 
 // ============================================================================
 // Refusals
@@ -820,6 +877,18 @@ export interface AppliedSetupStep {
   sourceWorkbenchId?: string | null;
 }
 
+/** The line the box setup prints for each learned step, after all of them ran. */
+export const LEARNED_STEP_RESULT_PREFIX = '[talyn] learned step result ';
+
+export interface LearnedStepResult {
+  id: string;
+  exitCode: number;
+  /** The step ran into its time limit. */
+  timedOut: boolean;
+  /** The last line the step printed, at most 300 characters. */
+  lastLine: string;
+}
+
 /** Installs first, then services, then what needs the services. */
 const KIND_ORDER: SetupStepKind[] = [
   'installer', 'rustup', 'apt', 'brew', 'cargo', 'go', 'gem', 'pip', 'uv', 'node', 'download',
@@ -838,22 +907,68 @@ export function orderSetupSteps<T extends Pick<AppliedSetupStep, 'kind'>>(steps:
 export const LEARNED_PATH_LINE =
   'export PATH="$HOME/.cargo/bin:$HOME/go/bin:$HOME/.local/bin:$HOME/.local/share/pnpm:$PATH"';
 
-/** The box-setup script for the learned steps, or null when there are none. */
+/**
+ * The box-setup script for the learned steps, or null when there are none.
+ *
+ * Each step runs on its own, with no stdin and with a time limit
+ * ({@link SETUP_STEP_TIMEOUT_SEC}): one hung step must not hold the setup. A
+ * failed step does not stop the others. Its output goes to the setup output
+ * and to a file, for its last line. After all steps, one result line per step
+ * ({@link LEARNED_STEP_RESULT_PREFIX}) says how it ended. The lines come last
+ * because the backend keeps only the end of a script's output, and a long
+ * install must not push out the result of an earlier step.
+ */
 export function learnedSetupScript(steps: AppliedSetupStep[]): string | null {
   if (steps.length === 0) return null;
   const lines = [
     '# Setup that Talyn learned from earlier sessions on this repository.',
     '# Each step runs on its own. A failed step does not stop the others.',
     LEARNED_PATH_LINE,
+    'talyn_learned_run() {',
+    '  bash -c "$1" </dev/null 2>&1 | tee "$2"',
+    '  return "${PIPESTATUS[0]}"',
+    '}',
+    'export -f talyn_learned_run',
+    "talyn_learned_results=''",
     'talyn_learned_step() {',
-    '  echo "[talyn] learned step $1 (from session $2): $3"',
-    '  bash -c "$3" || echo "[talyn] learned step $1 failed with exit $?. A person can revert it in the repository settings." >&2',
+    '  local log code last',
+    '  echo "[talyn] learned step $1 (from session $2): $4"',
+    '  log="$(mktemp)"',
+    `  timeout -k ${SETUP_STEP_KILL_AFTER_SEC} "$3" bash -c 'talyn_learned_run "$1" "$2"' talyn-learned-step "$4" "$log"`,
+    '  code=$?',
+    "  last=\"$(grep -v '^[[:space:]]*$' \"$log\" | tail -n 1 | tr -d '\\r' | cut -c1-300)\"",
+    '  rm -f "$log"',
+    '  if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then',
+    '    echo "[talyn] learned step $1 timed out after $3 seconds. A person can revert it in the repository settings." >&2',
+    '  elif [ "$code" -ne 0 ]; then',
+    '    echo "[talyn] learned step $1 failed with exit $code. A person can revert it in the repository settings." >&2',
+    '  fi',
+    `  talyn_learned_results="$talyn_learned_results${LEARNED_STEP_RESULT_PREFIX}$1 exit $code: $last"$'\\n'`,
     '}',
   ];
   for (const step of orderSetupSteps(steps)) {
-    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${shellQuote(step.command)}`);
+    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${SETUP_STEP_TIMEOUT_SEC[step.kind] ?? SETUP_STEP_TIMEOUT_SEC.other} ${shellQuote(step.command)}`);
   }
+  lines.push(`printf '%s' "$talyn_learned_results"`);
   return lines.join('\n');
+}
+
+const RESULT_LINE = /^\[talyn\] learned step result (\S+) exit (\d+): ?(.*)$/;
+
+/**
+ * The learned-step results in a box setup's output. The last line for a step
+ * wins. Output that has no result line (a setup that was stopped) gives none.
+ */
+export function parseLearnedStepResults(output: string): LearnedStepResult[] {
+  const found = new Map<string, LearnedStepResult>();
+  for (const line of output.split(/\r?\n/)) {
+    const m = RESULT_LINE.exec(line);
+    if (!m) continue;
+    const exitCode = Number(m[2]);
+    found.delete(m[1]);
+    found.set(m[1], { id: m[1], exitCode, timedOut: exitCode === 124 || exitCode === 137, lastLine: m[3].trim() });
+  }
+  return [...found.values()];
 }
 
 /**

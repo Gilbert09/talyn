@@ -39,7 +39,7 @@ import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.j
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { isHibernationLost, keptSandboxIdsFor, recordRecoveredTranscript } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
-import { effectiveRepositoryBake } from './setupRecipe.js';
+import { effectiveRepositoryBake, recordBoxSetupResults } from './setupRecipe.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -621,6 +621,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       const { done } = await startScript(row, 'setup', { config, resume: true });
       const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
       if (!exited || isWorkbenchDraining()) return;
+      await recordBoxSetupResults(row);
       const { code } = exited;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;

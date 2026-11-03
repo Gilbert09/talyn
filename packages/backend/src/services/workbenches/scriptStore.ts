@@ -80,3 +80,9 @@ export async function resetSetupForGeneration(row: WorkbenchRow): Promise<void> 
   await getPoolDbClient().delete(runs).where(and(eq(runs.workbenchId, row.id), eq(runs.name, 'setup'),
     sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`));
 }
+/** The stored end of a script's output on one box (at most 64 KiB), or null. */
+export async function scriptOutput(workbenchId: string, name: string, sandboxId: string): Promise<string | null> {
+  const [row] = await getPoolDbClient().select({ output: runs.output }).from(runs)
+    .where(and(eq(runs.workbenchId, workbenchId), eq(runs.name, name), eq(runs.sandboxId, sandboxId)));
+  return row?.output ?? null;
+}
