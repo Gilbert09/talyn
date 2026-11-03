@@ -155,6 +155,7 @@ export interface AdminSessionFilters {
   host?: unknown;
   owner?: unknown;
   runtime?: unknown;
+  workspaceId?: unknown;
   limit?: unknown;
   before?: unknown;
 }
@@ -181,6 +182,8 @@ export function sessionListWhere(filters: AdminSessionFilters, now: number = Dat
   if (status) where.push(eq(workbenchesTable.status, status));
   const host = str(filters.host);
   if (host) where.push(eq(workbenchesTable.fleetHost, host));
+  const workspaceId = str(filters.workspaceId);
+  if (workspaceId) where.push(eq(workbenchesTable.workspaceId, workspaceId));
   const runtime = str(filters.runtime);
   if (runtime === 'sandbox' || runtime === 'local') where.push(eq(workbenchesTable.runtime, runtime));
   const owner = searchTerm(filters.owner);

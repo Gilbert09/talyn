@@ -20,6 +20,7 @@ export function adminSessionRoutes(): Router {
       host: req.query.host,
       owner: req.query.owner,
       runtime: req.query.runtime,
+      workspaceId: req.query.workspaceId,
       limit: req.query.limit,
       before: req.query.before,
     });

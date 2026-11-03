@@ -2423,6 +2423,7 @@ export const admin = {
       host?: string;
       owner?: string;
       runtime?: string;
+      workspaceId?: string;
       limit?: number;
       before?: string;
     }) => request<AdminPage<AdminSessionSummary>>('GET', `/admin/sessions${adminQuery({ ...params })}`),

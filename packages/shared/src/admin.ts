@@ -607,6 +607,22 @@ export interface AdminWorkspaceDetail extends AdminWorkspaceSummary {
   activeTaskCount: number;
   /** Provider types with credentials configured. Never the credentials. */
   providers: string[];
+  /** What the workspace uses beyond tasks. Absent on an older backend. */
+  features?: AdminWorkspaceFeatures;
+}
+
+/** Counts only. The rules, prompts and secrets behind them stay on the backend. */
+export interface AdminWorkspaceFeatures {
+  /** Sessions and threads that are not archived. */
+  sessions: number;
+  threads: number;
+  loops: { enabled: number; total: number };
+  workflows: { enabled: number; total: number };
+  mcpServers: number;
+  /** Webhook endpoints that send to this workspace's events, enabled. */
+  webhookEndpoints: number;
+  /** The owner's API tokens that are not revoked and can reach this workspace. */
+  apiTokens: number;
 }
 
 export interface AdminTaskSummary {

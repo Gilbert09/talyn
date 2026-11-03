@@ -12,14 +12,21 @@ import {
   type AdminUserDetail,
   type AdminUserSummary,
   type AdminWorkspaceDetail,
+  type AdminWorkspaceFeatures,
   type AdminWorkspaceSummary,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import {
+  apiTokens as apiTokensTable,
+  apiWebhookEndpoints as webhookEndpointsTable,
   integrations as integrationsTable,
+  loops as loopsTable,
+  mcpServers as mcpServersTable,
   repositories as repositoriesTable,
   tasks as tasksTable,
   users as usersTable,
+  workbenches as workbenchesTable,
+  workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { deriveEntitlement } from '../billing/entitlements.js';
@@ -413,6 +420,59 @@ export async function getAdminWorkspace(id: string): Promise<AdminWorkspaceDetai
     taskCount: Number(tasksTotal?.n ?? 0),
     activeTaskCount: Number(tasksActive?.n ?? 0),
     providers: [...new Set(providers.map((p) => p.type))].sort(),
+    features: await workspaceFeatures(id, row.ownerId),
+  };
+}
+
+/**
+ * What a workspace uses beyond tasks, as counts. Each is one aggregate query,
+ * and none reads a rule, a prompt or a credential.
+ */
+export async function workspaceFeatures(workspaceId: string, ownerId: string): Promise<AdminWorkspaceFeatures> {
+  const db = getPoolDbClient();
+  const enabledCount = (col: AnyPgColumn) => sql<number>`count(*) filter (where ${col})`.as('enabled');
+  const [benches, loops, workflows, mcp, hooks, tokens] = await Promise.all([
+    db
+      .select({
+        sessions: sql<number>`count(*) filter (where ${workbenchesTable.kind} <> 'thread')`.as('sessions'),
+        threads: sql<number>`count(*) filter (where ${workbenchesTable.kind} = 'thread')`.as('threads'),
+      })
+      .from(workbenchesTable)
+      .where(and(eq(workbenchesTable.workspaceId, workspaceId), sql`${workbenchesTable.archivedAt} is null`)),
+    db
+      .select({ total: count(), enabled: enabledCount(loopsTable.enabled) })
+      .from(loopsTable)
+      .where(eq(loopsTable.workspaceId, workspaceId)),
+    db
+      .select({ total: count(), enabled: enabledCount(workflowsTable.enabled) })
+      .from(workflowsTable)
+      .where(eq(workflowsTable.workspaceId, workspaceId)),
+    db.select({ n: count() }).from(mcpServersTable).where(eq(mcpServersTable.workspaceId, workspaceId)),
+    db
+      .select({ n: count() })
+      .from(webhookEndpointsTable)
+      .where(and(eq(webhookEndpointsTable.workspaceId, workspaceId), eq(webhookEndpointsTable.enabled, true))),
+    // A token with no workspace list reaches every workspace of its owner.
+    db
+      .select({ n: count() })
+      .from(apiTokensTable)
+      .where(
+        and(
+          eq(apiTokensTable.ownerId, ownerId),
+          sql`${apiTokensTable.revokedAt} is null`,
+          sql`(${apiTokensTable.workspaceIds} is null or ${workspaceId} = any(${apiTokensTable.workspaceIds}))`,
+        ),
+      ),
+  ]);
+  const n = (v: unknown) => Number(v ?? 0);
+  return {
+    sessions: n(benches[0]?.sessions),
+    threads: n(benches[0]?.threads),
+    loops: { enabled: n(loops[0]?.enabled), total: n(loops[0]?.total) },
+    workflows: { enabled: n(workflows[0]?.enabled), total: n(workflows[0]?.total) },
+    mcpServers: n(mcp[0]?.n),
+    webhookEndpoints: n(hooks[0]?.n),
+    apiTokens: n(tokens[0]?.n),
   };
 }
 

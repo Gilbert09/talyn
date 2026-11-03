@@ -36,6 +36,7 @@ export function SessionsPage() {
   const host = params.get('host') ?? '';
   const owner = params.get('owner') ?? '';
   const before = params.get('before') ?? '';
+  const workspaceId = params.get('workspaceId') ?? '';
 
   const { data, error, loading, initialLoading, refresh } = useAdminQuery(
     () =>
@@ -45,9 +46,10 @@ export function SessionsPage() {
         state,
         host: host || undefined,
         owner: owner || undefined,
+        workspaceId: workspaceId || undefined,
         before: before || undefined,
       }),
-    { intervalMs: POLL_MS, deps: [q, kind, state, host, owner, before] }
+    { intervalMs: POLL_MS, deps: [q, kind, state, host, owner, workspaceId, before] }
   );
   const hosts = useAdminQuery(() => api.admin.fleet.hosts(), {});
   const hostNames = [...new Set([...(hosts.data ?? []).map((h) => h.name), ...(host ? [host] : [])])].sort();
@@ -137,7 +139,7 @@ export function SessionsPage() {
     },
   ];
 
-  const filtered = Boolean(q || kind || host || owner || state !== 'live');
+  const filtered = Boolean(q || kind || host || owner || workspaceId || state !== 'live');
 
   return (
     <Page
@@ -208,6 +210,16 @@ export function SessionsPage() {
         </div>
       }
     >
+      {workspaceId && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs">
+          <span className="text-muted-foreground">Scoped to</span>
+          <Pill tone="muted">workspace {workspaceId}</Pill>
+          <button onClick={() => setParam('workspaceId', '')} className="ml-auto underline hover:no-underline">
+            Clear scope
+          </button>
+        </div>
+      )}
+
       <DataTable
         rows={items}
         columns={columns}

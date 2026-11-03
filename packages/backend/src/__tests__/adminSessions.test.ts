@@ -8,6 +8,7 @@ import { wrapAsyncRoutes } from '../middleware/asyncHandler.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
+  apiTokens as apiTokensTable,
   fleetHosts as fleetHostsTable,
   repositories as repositoriesTable,
   repositorySetupSteps as setupStepsTable,
@@ -24,6 +25,7 @@ import {
   sessionListQuery,
 } from '../services/admin/sessions.js';
 import { loadSandboxClaims, workbenchClaimQuery, workbenchShortId } from '../services/admin/sandboxClaims.js';
+import { workspaceFeatures } from '../services/admin/queries.js';
 import { computeHostAlerts, OFFLINE_ALERT_WINDOW_MS } from '../services/admin/hostAlerts.js';
 import { hostHealthFromStats } from '../services/admin/fleetProxy.js';
 import type { FleetHostView } from '../services/fleetHosts.js';
@@ -403,5 +405,40 @@ describe('hostHealthFromStats', () => {
       conditions: null,
       boxes: { running: 0, asleep: 0, queued: 0 },
     });
+  });
+});
+
+describe('workspaceFeatures', () => {
+  it('counts live sessions and threads, and the owner tokens that reach the workspace', async () => {
+    const token = (id: string, over: Partial<typeof apiTokensTable.$inferInsert> = {}) => ({
+      id,
+      ownerId: OWNER_ID,
+      name: id,
+      tokenPrefix: id,
+      tokenHash: `hash-${id}`,
+      scopes: ['read'],
+      ...over,
+    });
+    await db.insert(apiTokensTable).values([
+      token('all-workspaces'),
+      token('this-workspace', { workspaceIds: ['ws1'] }),
+      token('other-workspace', { workspaceIds: ['ws2'] }),
+      token('revoked', { revokedAt: new Date() }),
+    ]);
+    expect(await workspaceFeatures('ws1', OWNER_ID)).toEqual({
+      // The archived session is not counted.
+      sessions: 2,
+      threads: 1,
+      loops: { enabled: 0, total: 0 },
+      workflows: { enabled: 0, total: 0 },
+      mcpServers: 0,
+      webhookEndpoints: 0,
+      apiTokens: 2,
+    });
+  });
+
+  it('scopes the sessions list to one workspace', async () => {
+    const { data } = await get<AdminPage<AdminSessionSummary>>('/sessions?workspaceId=nope');
+    expect(data.items).toEqual([]);
   });
 });
