@@ -27,3 +27,10 @@ export async function withMaintenanceClaim(name: string, run: (renew: () => Prom
     await db.execute(sql`DELETE FROM workbench_maintenance_claims WHERE name = ${name} AND token = ${token}`);
   }
 }
+
+/** Whether a live claim holds `name`. A check, not a claim: use it only to step aside. */
+export async function isMaintenanceClaimHeld(name: string): Promise<boolean> {
+  const result = await getPoolDbClient().execute(sql`SELECT 1 FROM workbench_maintenance_claims
+    WHERE name = ${name} AND expires_at > now()`);
+  return rows(result).length > 0;
+}

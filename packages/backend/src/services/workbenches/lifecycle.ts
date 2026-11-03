@@ -44,6 +44,7 @@ import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor } from './talynMcp.js';
+import { isMaintenanceClaimHeld, withMaintenanceClaim } from './maintenanceClaim.js';
 import {
   claimArchive,
   backfillCredentialArchives,
@@ -54,6 +55,7 @@ import {
   pendingArchives,
   renewArchive,
   deleteWorkbenchRow,
+  failProvisioningWorkbench,
   failQueued,
   getWorkbench,
   isThread,
@@ -61,8 +63,10 @@ import {
   listChats,
   liveWorkbenchNames,
   provisioningWorkbenchIds,
+  recordProvisionedSandbox,
   requeueDroppedMessages,
   resetFailedChats,
+  updateProvisioningWorkbench,
   updateWorkbench,
   type WorkbenchRow,
 } from './store.js';
@@ -75,7 +79,9 @@ import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollow
  *
  * Provisioning is IDEMPOTENT end to end, which is what makes it safe to re-run
  * after a crash: the fleet's create returns the existing box for a repeated
- * id, and the clone script keeps a clone and a local branch it finds.
+ * id, and the clone script keeps a clone and a local branch it finds. One run
+ * owns a session's provision across instances (the `provision:<id>` claim),
+ * and the clone script also takes a lock in the box.
  */
 
 /** How long the clone and checkout may take. A blobless clone of a very large repository is minutes, not seconds. */
@@ -83,7 +89,34 @@ const CLONE_TIMEOUT_MS = 20 * 60_000;
 /** An archive script is cleanup, not a build; past this it is stopped and the archive goes on. */
 const ARCHIVE_SCRIPT_TIMEOUT_MS = 2 * 60_000;
 
+/** This process's provisions: a fast path in front of the cross-instance claim. */
 const provisioning = new Set<string>();
+
+/** The claim expires 2 minutes after its last renewal, so 20 s leaves five missed renewals of slack. */
+const PROVISION_CLAIM_RENEW_MS = 20_000;
+
+export const provisionClaimName = (workbenchId: string): string => `provision:${workbenchId}`;
+
+/** This run no longer owns the provision: its claim lapsed, or the row moved on. It stops and writes nothing. */
+class ProvisionSupersededError extends Error {}
+
+type ProvisionClaim = { lost: boolean };
+
+function assertOwned(claim: ProvisionClaim): void {
+  if (claim.lost) throw new ProvisionSupersededError('the provision claim expired');
+}
+
+/** A provision's write, only while the row is still this run's. */
+async function setProvisioningRow(
+  row: WorkbenchRow,
+  sandboxId: string | null,
+  patch: Parameters<typeof updateProvisioningWorkbench>[2],
+): Promise<WorkbenchRow> {
+  const updated = await updateProvisioningWorkbench(row.id, sandboxId, patch);
+  if (!updated) throw new ProvisionSupersededError(`the session moved on from sandbox ${sandboxId ?? '(none)'}`);
+  await emitWorkbenchUpdated(await publicWorkbench(updated));
+  return updated;
+}
 
 async function setRow(row: WorkbenchRow, patch: Parameters<typeof updateWorkbench>[1]): Promise<WorkbenchRow> {
   const updated = (await updateWorkbench(row.id, patch)) ?? row;
@@ -101,17 +134,18 @@ function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['setting
  * The ONE way a provision fails: the workbench and a box that never came up
  * go to `error`, the reason lands in `statusMessage` (which the payload's
  * `error` carries), and each chat says why. Waiting messages stay queued for a
- * retry. A workbench archived while this ran is left alone.
+ * retry. A workbench archived, retried or restored while this ran is left
+ * alone: the write names the sandbox id this run used.
  */
-async function failProvision(workbenchId: string, message: string): Promise<void> {
-  const row = await getWorkbench(workbenchId);
-  if (!row || row.archivedAt || isWorkbenchDraining()) return;
+async function failProvision(workbenchId: string, sandboxId: string | null, message: string): Promise<void> {
+  if (isWorkbenchDraining()) return;
+  const row = await failProvisioningWorkbench(workbenchId, sandboxId, message);
+  if (!row) {
+    console.warn(`[workbench] not failing ${workbenchId}: it moved on from sandbox ${sandboxId ?? '(none)'} (${message})`);
+    return;
+  }
   recordWorkbenchEvent(row, 'provision_failed', message, false);
-  await setRow(row, {
-    status: 'error',
-    statusMessage: message,
-    sandboxState: 'error',
-  });
+  await emitWorkbenchUpdated(await publicWorkbench(row));
   await failQueued(row.id, message);
 }
 
@@ -223,41 +257,70 @@ export async function createWorkbenchSandbox(
   return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId, size };
 }
 
+/**
+ * Provision a sandbox session. ONE run owns a session at a time, across
+ * backend instances: the run holds the `provision:<id>` maintenance claim and
+ * renews it while it works. A call that finds the claim held returns and
+ * changes nothing; the resume sweep comes back if the holder dies.
+ */
 export async function provisionWorkbench(workbenchId: string, opts: { restore?: boolean } = {}): Promise<void> {
-  if (provisioning.has(workbenchId)) return;
+  if (provisioning.has(workbenchId) || isWorkbenchDraining()) return;
   provisioning.add(workbenchId);
-  let row = await getWorkbench(workbenchId);
   try {
-    if (!row || row.runtime !== 'sandbox' || row.archivedAt || isWorkbenchDraining()) return;
+    await withMaintenanceClaim(provisionClaimName(workbenchId), async (renew) => {
+      const claim: ProvisionClaim = { lost: false };
+      const timer = setInterval(() => {
+        void renew().catch(() => { claim.lost = true; });
+      }, PROVISION_CLAIM_RENEW_MS);
+      timer.unref();
+      try {
+        await provisionClaimed(workbenchId, opts, claim);
+      } finally {
+        clearInterval(timer);
+      }
+    });
+  } finally {
+    provisioning.delete(workbenchId);
+  }
+}
+
+async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }, claim: ProvisionClaim): Promise<void> {
+  // Read under the claim: a late call finds the session ready, failed or archived.
+  let row = await getWorkbench(workbenchId);
+  if (!row || row.runtime !== 'sandbox' || row.archivedAt || row.status !== 'provisioning' || isWorkbenchDraining()) return;
+  // Every write below names this id. A Retry or a restore moves the row to a new one.
+  let ownSandboxId: string | null = row.sandboxId;
+  try {
     row = (await ensureSandboxGeneration(row.id))!;
     await resetSetupForGeneration(row);
     const replacingLostSandbox = row.sandboxState === 'lost';
-    const fail = (message: string) => failProvision(workbenchId, message);
+    const fail = async (message: string) => {
+      assertOwned(claim);
+      await failProvision(workbenchId, ownSandboxId, message);
+    };
 
     // 1. The box.
     const created = await createWorkbenchSandbox(row, row.sandboxId ?? sandboxIdFor(row.id));
     if (!created.ok) return await fail(created.error);
-    const settings = settingsWithoutFleetSandboxId(row);
-    if (created.fleetSandboxId) settings.fleetSandboxId = created.fleetSandboxId;
-    // A resize that waited is done: this box has the size.
-    if (settings.resizeTo === created.size) {
-      settings.sandboxSize = created.size;
-      delete settings.resizeTo;
-      delete settings.resizeReason;
-    }
+    assertOwned(claim);
     const sandboxId = created.sandboxId;
-    row = await setRow(row, {
+    const boxed = await recordProvisionedSandbox(row.id, ownSandboxId, {
       sandboxId,
       sandboxState: replacingLostSandbox ? 'lost' : 'running',
-      fleetHost: created.fleetHost ?? row.fleetHost ?? null,
-      settings,
+      fleetHost: created.fleetHost,
+      fleetSandboxId: created.fleetSandboxId,
+      size: created.size,
       statusMessage: isThread(row) ? 'Preparing the thread' : 'Cloning the repository',
     });
+    if (!boxed) throw new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+    ownSandboxId = sandboxId;
+    row = boxed;
+    await emitWorkbenchUpdated(await publicWorkbench(row));
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
 
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
-    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail);
+    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
     // 2. The repository and the branch.
     const cloned = await runCapture(row, cloneScript(row), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
     if (cloned.exitCode !== 0) {
@@ -267,6 +330,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       );
     }
     if (isWorkbenchDraining()) return;
+    assertOwned(claim);
     // The saved work comes back from Talyn's storage before the setup script
     // runs against the files: the archive's for a restore, the last
     // checkpoint's for a lost box.
@@ -285,7 +349,8 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     const config = await loadWorkbenchConfig(row).catch(() => null);
     if (isWorkbenchDraining()) return;
     if (config?.setup) {
-      row = await setRow(row, { statusMessage: 'Running the setup script' });
+      assertOwned(claim);
+      row = await setProvisioningRow(row, sandboxId, { statusMessage: 'Running the setup script' });
       const { done } = await startScript(row, 'setup', { config, resume: true });
       const code = await done;
       if (isWorkbenchDraining()) return;
@@ -295,11 +360,13 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
 
     if (isWorkbenchDraining()) return;
+    assertOwned(claim);
     row = await linkPullRequest(row);
     if (row.memoryRestorePending || replacingLostSandbox) {
       await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive', workNote);
     }
-    row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
+    assertOwned(claim);
+    row = await setProvisioningRow(row, sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
     void refreshDiffStat(row);
     // The archive's work is on this box now: make it the checkpoint, so a loss before the first turn keeps it.
@@ -311,12 +378,14 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
   } catch (err) {
     if (isWorkbenchDraining() || (err instanceof WorkbenchError && err.code === 'draining')) return;
+    if (err instanceof ProvisionSupersededError || claim.lost) {
+      console.warn(`[workbench] provisioning ${workbenchId} stopped: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     console.warn(`[workbench] provisioning ${workbenchId} failed:`, err);
-    await failProvision(workbenchId, userFacingError(err)).catch((failErr) =>
+    await failProvision(workbenchId, ownSandboxId, userFacingError(err)).catch((failErr) =>
       console.error(`[workbench] recording the failed provision of ${workbenchId} failed:`, failErr),
     );
-  } finally {
-    provisioning.delete(workbenchId);
   }
 }
 
@@ -325,16 +394,18 @@ async function finishThreadProvision(
   row: WorkbenchRow,
   replacingLostSandbox: boolean,
   fail: (message: string) => Promise<void>,
+  claim: ProvisionClaim,
 ): Promise<void> {
   const prepared = await runCapture(row, THREAD_WORKDIR_SCRIPT, { cwd: '/', timeoutMs: 60_000 });
   if (prepared.exitCode !== 0) {
     return fail(`Could not prepare the thread's sandbox: ${prepared.stderr.trim().split('\n').slice(-3).join(' ') || `exit ${prepared.exitCode}`}`);
   }
   if (isWorkbenchDraining()) return;
+  assertOwned(claim);
   if (row.memoryRestorePending || replacingLostSandbox) {
     await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
   }
-  row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
+  row = await setProvisioningRow(row, row.sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
   recordWorkbenchEvent(row, 'ready', 'provisioned');
   for (const chat of await listChats(row.id)) {
     if (chat.queuedMessages.length > 0 && !chat.closedAt) await startQueuedIfIdle(chat.id);
@@ -375,6 +446,8 @@ export async function processArchive(workbenchId: string): Promise<void> {
   if (isWorkbenchDraining()) return;
   const seen = await getWorkbench(workbenchId);
   if (!seen?.archivePendingAt || seen.status === 'moving' || provisioning.has(workbenchId)) return;
+  // Another instance may be provisioning it. Its writes stop at the archive's status change, and it lets the claim go.
+  if (await isMaintenanceClaimHeld(provisionClaimName(workbenchId))) return;
   const row = await claimArchive(seen);
   if (!row) return;
   let lost = false;
@@ -584,8 +657,47 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.pullRequestId) await emitPrSession(row.workspaceId, row.pullRequestId);
 }
 
-/** Resume provisions promptly. Turn ownership protects overlapping backend instances. */
+/** Resume provisions promptly. Turn ownership and the provision claim protect overlapping backend instances. */
 const BOOT_SWEEP_DELAY_MS = 5_000;
+
+const PROVISION_POLLER = 'workbench-provision-sweep';
+/**
+ * A stranded provision waits for its dead owner's claim to lapse (2 minutes)
+ * and then at most one more pass. No minimum row age: a pass over a live
+ * provision costs one claim INSERT that matches nothing.
+ */
+const PROVISION_SWEEP_INTERVAL_MS = 15_000;
+
+/**
+ * Start a provision for every session left in `provisioning`. A live one,
+ * here or on another instance, holds its claim, so the call returns at once.
+ * Fire and forget: a pass must not wait out a 20-minute clone.
+ */
+export async function sweepStrandedProvisions(): Promise<number> {
+  if (isWorkbenchDraining()) return 0;
+  let started = 0;
+  for (const id of await provisioningWorkbenchIds()) {
+    if (isWorkbenchDraining()) break;
+    if (provisioning.has(id)) continue;
+    scheduleProvision(id);
+    started += 1;
+  }
+  return started;
+}
+
+let provisionSweepRunning = false;
+let provisionSweepArmed = false;
+async function provisionSweepTick(): Promise<void> {
+  if (provisionSweepRunning || isWorkbenchDraining()) return;
+  provisionSweepRunning = true;
+  const started = Date.now();
+  let error: unknown;
+  try { await runWithoutScope(() => sweepStrandedProvisions()); } catch (err) { error = err; }
+  finally {
+    provisionSweepRunning = false;
+    debugBus.pollerTick(PROVISION_POLLER, { durationMs: Date.now() - started, ok: !error, error });
+  }
+}
 
 let turnSweepTimer: NodeJS.Timeout | null = null;
 let turnSweepRunning = false;
@@ -659,18 +771,22 @@ async function moveSweepTick(): Promise<void> {
 
 /**
  * Arm the one-shot boot sweep: settle turns a dead process left running, and
- * carry on provisions it left half done. Then the move sweep, which runs on
- * an interval: an instance can die mid-move at any time, not only at a deploy,
- * and the row would stay `moving` until the next one.
+ * carry on provisions it left half done. The provision sweep then repeats on
+ * the turn sweep's timer: a provision another instance started after this
+ * pass, and then lost at its drain, must not wait for the next boot. Then the
+ * move sweep, which runs on an interval: an instance can die mid-move at any
+ * time, not only at a deploy, and the row would stay `moving` until the next one.
  */
 export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   if (bootTimer) return;
   debugBus.registerPoller('workbench-turn-sweep', 5_000, 'Resumes stale turns and starts queued messages.');
   debugBus.registerPoller('workbench-backup-sweep', 30_000, 'Retries agent backups after a backend restart.');
+  debugBus.registerPoller(PROVISION_POLLER, PROVISION_SWEEP_INTERVAL_MS, 'Resumes session provisions whose owner stopped or died.');
   void turnSweepTick();
   void backupSweepTick();
   const bootAt = Date.now();
   let lastBackupAt = bootAt;
+  let lastProvisionAt = bootAt;
   let lastInterval = 5_000;
   const scheduleSweep = () => {
     const interval = Date.now() - bootAt < 120_000 ? 5_000 : 15_000;
@@ -681,6 +797,10 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
     turnSweepTimer = setTimeout(() => {
       void turnSweepTick();
       if (Date.now() - lastBackupAt >= 30_000) { lastBackupAt = Date.now(); void backupSweepTick(); }
+      if (provisionSweepArmed && Date.now() - lastProvisionAt >= PROVISION_SWEEP_INTERVAL_MS) {
+        lastProvisionAt = Date.now();
+        void provisionSweepTick();
+      }
       scheduleSweep();
     }, interval);
     turnSweepTimer.unref();
@@ -692,13 +812,14 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
         await backfillCredentialArchives();
         initWorkbenchMaintenance();
         const settled = await sweepOrphanedTurns();
-        const stuck = await provisioningWorkbenchIds();
-        for (const id of stuck) scheduleProvision(id);
-        if (settled > 0 || stuck.length > 0) {
-          console.log(`[workbench] boot sweep: settled ${settled} orphaned turn(s), resumed ${stuck.length} provision(s)`);
+        const stuck = await sweepStrandedProvisions();
+        if (settled > 0 || stuck > 0) {
+          console.log(`[workbench] boot sweep: settled ${settled} orphaned turn(s), scheduled ${stuck} provision(s)`);
         }
       } catch (err) {
         console.error('[workbench] boot sweep failed:', err);
+      } finally {
+        provisionSweepArmed = true;
       }
     });
     void moveSweepTick();
@@ -729,6 +850,7 @@ export function stopWorkbenches(): void {
   archiveSweepTimer = null;
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
+  provisionSweepArmed = false;
   if (moveSweepTimer) clearInterval(moveSweepTimer);
   moveSweepTimer = null;
 }

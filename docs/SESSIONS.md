@@ -2,6 +2,33 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Workbench provisioning: one owner across instances (2026-11-03)
+
+**What was wrong.** A provision had only an in-memory guard. The boot sweep ran 5 s after boot and started a provision for every `provisioning` row. During a Railway deploy the old instance stays live for up to 3 minutes after that. So both instances provisioned the same session. Two clone scripts then ran in one box. The second found a half-made `.git`, its fetch or `checkout -b` failed, and `failProvision` marked the session `error` and failed the first prompt.
+
+Other defects in the same path:
+- The step-1 write copied `settings` and `sandboxId` from a stale read. The `ready` write and the failure write had no condition.
+- After Retry (generation `-r1`), a stale run could mark the new generation `error` or write back the deleted sandbox id.
+- A provision that started on the old instance after the new instance's boot sweep, and then died at drain, stayed at "Cloning the repository".
+- A late call on a `ready` session ran the whole pipeline again.
+
+**What changed.**
+- `cloneScript` opens `/work/.talyn-clone.lock` on fd 9 and runs `flock 9` when `flock` is on the PATH. The lock is outside every work tree. A second run waits, then takes the existing-clone path. The guest image is Debian bookworm, where `flock` is in util-linux. Without `flock` the script runs as before.
+- `provisionWorkbench` takes the maintenance claim `provision:<id>` (`withMaintenanceClaim`, migration `0089`, no new migration) and renews it every 20 s. The claim expires 2 minutes after the last renewal. A call that finds the claim held returns and writes nothing. The in-memory set stays as a fast path. A run whose renewal fails stops and writes nothing.
+- Under the claim the run reads the row again and returns unless the status is `provisioning`.
+- Every provision write is conditional: `status = 'provisioning'`, not archived, and the sandbox id the run used (`ownedByProvision` in `store.ts`). A write that matches no row stops the run with no failed prompt and no broadcast. Step 1 (`recordProvisionedSandbox`) changes only the `settings` keys it owns, in SQL.
+- The one-shot boot resume is now the first pass of a periodic sweep (`sweepStrandedProvisions`, poller `workbench-provision-sweep`, every 15 s on the turn-sweep timer). It stops at drain. It has no minimum row age, because a pass over a live provision costs one claim INSERT that matches nothing.
+- `processArchive` also steps aside while another instance holds the provision claim (`isMaintenanceClaimHeld`).
+
+**Not as planned, and open items.**
+- The first deploy of this change still overlaps an old instance that takes no claim. That one deploy can still provision a session twice.
+- A run that loses its write does not delete the box it created. The id can be the live box's id, so the reaper keeps that job.
+- A clone process killed mid-`git clone` (SIGKILL) can still leave a half-made `.git`. The lock does not repair that case.
+- The sweep reads `status = 'provisioning'` with no index on `status`. The result is ids only. A partial index needs a migration, and this change adds none.
+- An archive marked during a provision waits until the provision writes again and stops. Before, the provision wrote `ready` over the archived row.
+
+Tests: `workbenchProvisionClaim.test.ts` (new) and the clone-script tests in `workbenchFraming.test.ts`. The concurrent real-git clone test fails without the lock and passes with it.
+
 ## Public API, phase 2: pull requests, merge queue and code reviews (2026-11-02)
 
 Four new scopes: `pull_requests:read|write` and `code_reviews:read|write`. The merge-queue routes use the pull-request scopes. `POST /pull-requests/{id}/sessions` uses `sessions:write` and the `workbenches` gate, because it starts a session.
@@ -299,7 +326,7 @@ Scripts store their offsets and recent output. Clients reload that output after 
 Setup and archive scripts reuse their stored run on the same sandbox. Pending agent backups retry after restart.
 
 Audit: moves and pending archives already have durable leases and recovery sweeps.
-Provisioning retries its idempotent steps at boot. It still lacks a lease across instances for clone operations.
+Provisioning retries its idempotent steps at boot. (2026-11-03: a provision now holds a claim across instances, and the clone script takes a lock. See "Workbench provisioning: one owner across instances".)
 PR creation can find an existing PR for its branch. Adopted turns repeat completion when necessary.
 Imports still lack a durable completion record for partially copied transcripts.
 Preview servers survive, but an active forwarded HTTP request can end during deployment.

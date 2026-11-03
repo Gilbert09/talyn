@@ -670,6 +670,9 @@ export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<
 /** Where a golden-booted box already has the repository checked out. */
 export const GOLDEN_REPO_DIR = `${SANDBOX_WORK_ROOT}/repo`;
 
+/** The clone script's lock. In the work root, never in a repository's tree. */
+export const CLONE_LOCK_FILE = `${SANDBOX_WORK_ROOT}/.talyn-clone.lock`;
+
 /** `git fetch --deepen` steps tried for a merge base in a shallow clone before `--unshallow`. */
 export const MERGE_BASE_DEEPEN_TRIES = 4;
 export const MERGE_BASE_DEEPEN_BY = 500;
@@ -712,6 +715,10 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
   return [
     'set -e',
     `mkdir -p ${SANDBOX_WORK_ROOT}`,
+    // Two provisions of one session can run this at once. The second waits,
+    // then finds the clone and takes the existing-clone path. Outside the work tree.
+    `exec 9>${shellQuote(CLONE_LOCK_FILE)}`,
+    'if command -v flock >/dev/null 2>&1; then flock 9; fi',
     `if [ ! -d ${dir}/.git ]; then`,
     `  origin_url=$(git -C ${golden} remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)`,
     '  golden_match=',

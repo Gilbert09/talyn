@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,7 @@ import {
 import { encodePtyFrame, matchTerminalPath, PtyFrameDecoder } from '../services/workbenches/terminalBridge.js';
 import { workRestoreScript, workSaveScript } from '../services/workbenches/workCheckpointScripts.js';
 import {
+  CLONE_LOCK_FILE,
   cloneScript,
   GOLDEN_REPO_DIR,
   MERGE_BASE_DEEPEN_TRIES,
@@ -271,6 +272,22 @@ describe('sandbox naming and scripts', () => {
     expect(link).toBeLessThan(script.indexOf('git checkout'));
   });
 
+  it('holds one lock outside the work tree for the whole clone, and runs without flock as before', () => {
+    const script = cloneScript({ repoFullName: 'Acme/App', branch: 'feat', baseBranch: 'main' });
+    expect(CLONE_LOCK_FILE).toBe('/work/.talyn-clone.lock');
+    expect(CLONE_LOCK_FILE.startsWith(`${repoDirFor({ repoFullName: 'Acme/App' })}/`)).toBe(false);
+    expect(CLONE_LOCK_FILE.startsWith(`${GOLDEN_REPO_DIR}/`)).toBe(false);
+    const lines = script.split('\n');
+    const open = lines.indexOf('exec 9>/work/.talyn-clone.lock');
+    const lock = lines.indexOf('if command -v flock >/dev/null 2>&1; then flock 9; fi');
+    expect(open).toBeGreaterThan(lines.indexOf('mkdir -p /work'));
+    expect(lock).toBe(open + 1);
+    // Before the first look at the clone, so a waiting run sees the finished one.
+    expect(lock).toBeLessThan(lines.findIndex((l) => l.includes('/.git ]')));
+    expect(lock).toBeLessThan(lines.findIndex((l) => l.includes('ln -s')));
+    expect(lock).toBeLessThan(lines.findIndex((l) => l.includes('git clone')));
+  });
+
   it('fetches the base and the session branch by explicit refspec, never the whole remote', () => {
     const script = cloneScript({ repoFullName: 'a/b', branch: 'feat/x', baseBranch: 'release' });
     expect(script).not.toContain('git fetch --prune origin');
@@ -349,6 +366,53 @@ describe('sandbox naming and scripts', () => {
         if (upstream) expect(run('git rev-parse --abbrev-ref @{u}', dir).stdout.trim()).toBe(upstream);
         // A second run (a re-provision) is a no-op that still succeeds.
         expect(run(localScript(root, origin, branch, baseBranch)).status).toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    const hasFlock = spawnSync('bash', ['-c', 'command -v flock']).status === 0;
+    const runAsync = (root: string, script: string) => new Promise<{ status: number | null; stderr: string }>((resolve) => {
+      const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+      const child = spawn('bash', ['-c', script], { cwd: root, env });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += String(d); });
+      child.on('close', (status) => resolve({ status, stderr }));
+    });
+
+    it.skipIf(!hasFlock).each([
+      ['a fresh clone', false],
+      ['a linked golden', true],
+    ])('two concurrent runs both succeed on %s', async (_name, golden) => {
+      const { root, origin, run } = fixture();
+      try {
+        if (golden) expect(run(`git clone -q --depth 1 --branch main --single-branch file://${origin} work/repo`).status).toBe(0);
+        const script = localScript(root, origin, 'feat', 'main');
+        const results = await Promise.all([runAsync(root, script), runAsync(root, script)]);
+        for (const r of results) expect(r.status, r.stderr).toBe(0);
+        const dir = join(root, 'work', 'App');
+        expect(run(`test -L ${dir}`).status === 0).toBe(golden);
+        expect(run('git rev-parse --abbrev-ref HEAD', dir).stdout.trim()).toBe('feat');
+        expect(run('git rev-parse --abbrev-ref @{u}', dir).stdout.trim()).toBe('origin/feat');
+        expect(run(`test -e ${join(dir, '.talyn-clone.lock')}`).status).not.toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('runs without flock on the PATH', () => {
+      const { root, origin, run } = fixture();
+      try {
+        const bin = join(root, 'bin');
+        const git = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+        expect(run(`mkdir -p ${bin} && ln -s ${git} ${bin}/git`).status).toBe(0);
+        for (const tool of ['bash', 'mkdir', 'tr', 'grep', 'ln', 'cat', 'sh', 'env', 'basename', 'dirname', 'sed', 'uname']) {
+          const found = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+          if (found) run(`ln -sf ${found} ${bin}/${tool}`);
+        }
+        const res = run(`PATH=${bin}; ${localScript(root, origin, 'newb', 'main')}`);
+        expect(res.status, String(res.stderr)).toBe(0);
+        expect(run('git rev-parse --abbrev-ref HEAD', join(root, 'work', 'App')).stdout.trim()).toBe('newb');
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

@@ -545,6 +545,79 @@ export async function failLostWorkbench(id: string, sandboxId: string, message: 
 }
 
 /**
+ * The rows a provision may still write: provisioning, live, and on the sandbox
+ * id the run used. A Retry or a restore moves the row to a new id, and an
+ * archive changes its status, so a stale run's write matches nothing.
+ */
+function ownedByProvision(id: string, sandboxId: string | null) {
+  return and(
+    eq(workbenchesTable.id, id),
+    eq(workbenchesTable.status, 'provisioning'),
+    isNull(workbenchesTable.archivedAt),
+    sandboxId === null ? isNull(workbenchesTable.sandboxId) : eq(workbenchesTable.sandboxId, sandboxId),
+  );
+}
+
+/** A provision's write. Null when the row is no longer this provision's. */
+export async function updateProvisioningWorkbench(
+  id: string,
+  sandboxId: string | null,
+  patch: Pick<Partial<NewWorkbench>, 'status' | 'statusMessage' | 'sandboxState' | 'memoryRestorePending'>,
+): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(ownedByProvision(id, sandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Record the box a provision created. Only the keys this step owns change in
+ * `settings`, read in the statement: a stale copy of the row must not undo a
+ * resize request or a kept sandbox id written since.
+ */
+export async function recordProvisionedSandbox(
+  id: string,
+  expectedSandboxId: string | null,
+  box: {
+    sandboxId: string;
+    sandboxState: WorkbenchSandboxState;
+    fleetHost: string | null;
+    fleetSandboxId: string | null;
+    size: string;
+    statusMessage: string;
+  },
+): Promise<WorkbenchRow | null> {
+  const s = workbenchesTable.settings;
+  const base = sql`(COALESCE(${s}, '{}'::jsonb) - 'fleetSandboxId')`;
+  const resized = sql`(CASE WHEN ${s} ->> 'resizeTo' = ${box.size}::text
+    THEN (${base} - 'resizeTo' - 'resizeReason') || jsonb_build_object('sandboxSize', ${box.size}::text)
+    ELSE ${base} END)`;
+  const settings = box.fleetSandboxId
+    ? sql`${resized} || jsonb_build_object('fleetSandboxId', ${box.fleetSandboxId}::text)`
+    : resized;
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      sandboxId: box.sandboxId,
+      sandboxState: box.sandboxState,
+      ...(box.fleetHost ? { fleetHost: box.fleetHost } : {}),
+      settings,
+      statusMessage: box.statusMessage,
+      updatedAt: new Date(),
+    })
+    .where(ownedByProvision(id, expectedSandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** A provision failed. Null when the row is no longer this provision's. */
+export async function failProvisioningWorkbench(id: string, sandboxId: string | null, message: string): Promise<WorkbenchRow | null> {
+  return updateProvisioningWorkbench(id, sandboxId, { status: 'error', statusMessage: message, sandboxState: 'error' });
+}
+
+/**
  * Set a generated title, but only while the workbench has none. One
  * statement, so a title a person sets at the same moment always wins.
  * Null when nothing changed.
