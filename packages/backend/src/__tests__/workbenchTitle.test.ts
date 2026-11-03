@@ -20,7 +20,7 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
   },
 }));
 
-const { generateSandboxTitle } = await import('../services/workbenches/title.js');
+const { generateSandboxTitle, startTitleGeneration, resetTitleAttempts, MAX_TITLE_FAILURES } = await import('../services/workbenches/title.js');
 const { getWorkbench, insertWorkbench, setGeneratedTitle, updateWorkbench } = await import(
   '../services/workbenches/store.js'
 );
@@ -219,5 +219,48 @@ describe('generateSandboxTitle', () => {
     const run = vi.fn(reply('x'));
     expect(await generateSandboxTitle(await row(), '   ', { run })).toBeNull();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  describe('startTitleGeneration', () => {
+    beforeEach(() => resetTitleAttempts());
+
+    it('titles a session whose first turn failed, on the retry turn', async () => {
+      const failing = vi.fn(reply('', 1));
+      await startTitleGeneration(await row(), 'turn one', { run: failing });
+      expect((await row()).title).toBeNull();
+      await startTitleGeneration(await row(), 'turn two', { run: reply('Fix Retry Titles') });
+      expect((await row()).title).toBe('Fix Retry Titles');
+    });
+
+    it('titles a recovered session on a later turn number', async () => {
+      await updateWorkbench('wb-1', { sandboxId: 'talyn-wb-wb-1-r1' });
+      await startTitleGeneration(await row(), 'turn five', { run: reply('Recovered Session') });
+      expect((await row()).title).toBe('Recovered Session');
+    });
+
+    it('never replaces a title a person set', async () => {
+      await updateWorkbench('wb-1', { title: 'My own name' });
+      const run = vi.fn(reply('Generated'));
+      await startTitleGeneration(await row(), 'later turn', { run });
+      expect(run).not.toHaveBeenCalled();
+      expect((await row()).title).toBe('My own name');
+    });
+
+    it('does not run again after the bound of failed tries', async () => {
+      const run = vi.fn(reply('', 1));
+      for (let i = 0; i < MAX_TITLE_FAILURES + 2; i++) await startTitleGeneration(await row(), 'msg', { run });
+      expect(run).toHaveBeenCalledTimes(MAX_TITLE_FAILURES);
+    });
+
+    it('runs one call at a time per session', async () => {
+      let release: (v: { exitCode: number; stdout: string; stderr: string; stdoutBytes: Buffer }) => void = () => {};
+      const slow = vi.fn(() => new Promise<{ exitCode: number; stdout: string; stderr: string; stdoutBytes: Buffer }>((r) => { release = r; }));
+      const first = startTitleGeneration(await row(), 'a', { run: slow });
+      await startTitleGeneration(await row(), 'b', { run: slow });
+      expect(slow).toHaveBeenCalledTimes(1);
+      release({ exitCode: 0, stdout: 'Slow Title', stderr: '', stdoutBytes: Buffer.from('Slow Title') });
+      await first;
+      expect((await row()).title).toBe('Slow Title');
+    });
   });
 });

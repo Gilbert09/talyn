@@ -649,7 +649,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
     // The box is awake and has its credentials: name the session beside the turn.
-    if (turn === 1 && firstAttempt === 0) startTitleGeneration(wb, message.text);
+    // Any turn counts, so a retried or recovered session still gets a title.
+    startTitleGeneration(wb, message.text);
 
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     // A reboot rewrites the agent's home files, so this runs every turn. A
