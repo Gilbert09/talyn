@@ -659,7 +659,8 @@ function validateDotfiles(value: unknown): SandboxDotfiles | null {
   if (typeof raw.slug !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(raw.slug.trim())) {
     throw new SetupListError('The dotfiles repository must be owner/name.', 'invalid_dotfiles');
   }
-  const ref = raw.ref === undefined || raw.ref === null ? '' : raw.ref;
+  const rawRef = raw.ref === undefined || raw.ref === null ? '' : raw.ref;
+  const ref = typeof rawRef === 'string' ? rawRef.trim() : rawRef;
   if (typeof ref !== 'string' || bytes(ref) > 255 || /[\s\0~^:?*[\\]/.test(ref) || ref.startsWith('-')) {
     throw new SetupListError('The dotfiles branch is not a valid branch, tag or commit.', 'invalid_dotfiles');
   }
@@ -670,7 +671,7 @@ function validateDotfiles(value: unknown): SandboxDotfiles | null {
     if (check.refusal) throw new SetupListError(`The dotfiles install command: ${check.refusal}`, 'setup_step_refused');
     if (check.forceBox) throw new SetupListError('The dotfiles install command reads a secret. The image build has no secrets.', 'setup_step_refused');
   }
-  return { slug: raw.slug.trim(), ref: ref.trim(), install: install === null ? null : install.trim() };
+  return { slug: raw.slug.trim(), ref, install: install === null ? null : install.trim() };
 }
 
 /** `PUT /workspaces/:id/sandbox-setup`. Null: no such workspace. */
