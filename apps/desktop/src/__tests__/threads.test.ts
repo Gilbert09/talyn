@@ -205,10 +205,10 @@ describe('groupByRepository', () => {
   });
 });
 
-describe('activity order', () => {
+describe('session order', () => {
   it.each([
-    ['latest update', [wb('old', { updatedAt: '2026-10-12' }), wb('new', { updatedAt: '2026-10-14' })], ['new', 'old']],
-    ['creation tie', [wb('old', { createdAt: '2026-10-12' }), wb('new', { createdAt: '2026-10-14' })], ['new', 'old']],
+    ['newest created first', [wb('old', { createdAt: '2026-10-12' }), wb('new', { createdAt: '2026-10-14' })], ['new', 'old']],
+    ['a later update does not move a session', [wb('new', { createdAt: '2026-10-14', updatedAt: '2026-10-14' }), wb('old', { createdAt: '2026-10-12', updatedAt: '2026-10-20' })], ['new', 'old']],
     ['ID tie', [wb('z'), wb('a')], ['a', 'z']],
   ])('%s', (_case, sessions, expected) => {
     expect(newestSessions(sessions).map((row) => row.id)).toEqual(expected);
@@ -216,9 +216,9 @@ describe('activity order', () => {
 
   it('orders groups by their newest session', () => {
     const groups = groupByRepository([
-      wb('a', { repoFullName: 'acme/a', updatedAt: '2026-10-11' }),
-      wb('b', { repoFullName: 'acme/b', updatedAt: '2026-10-14' }),
-      wb('c', { repoFullName: 'acme/a', updatedAt: '2026-10-13' }),
+      wb('a', { repoFullName: 'acme/a', createdAt: '2026-10-11', updatedAt: '2026-10-20' }),
+      wb('b', { repoFullName: 'acme/b', createdAt: '2026-10-14' }),
+      wb('c', { repoFullName: 'acme/a', createdAt: '2026-10-13' }),
     ]);
     expect(groups.map((group) => [group.repo, group.items.map((row) => row.id)])).toEqual([
       ['acme/b', ['b']], ['acme/a', ['c', 'a']],

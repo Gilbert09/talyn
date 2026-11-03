@@ -105,16 +105,16 @@ describe('AppSidebar', () => {
   });
 
 
-  it('uses the visual activity order for numbered shortcuts', () => {
+  it('keeps the creation order when a session changes, and the shortcuts follow it', () => {
     useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
       repoFullName: 'acme/web', updatedAt: '2026-10-16T00:00:00Z',
     }));
     render(<AppSidebar />);
     const rows = screen.getAllByRole('button').filter((row) => row.getAttribute('data-attr') === 'sidebar-workbench-row');
-    expect(rows.map((row) => row.textContent)).toEqual(['lisbon', 'rome', 'oslo']);
-    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['lisbon', 'rome', 'oslo']);
+    expect(rows.map((row) => row.textContent)).toEqual(['rome', 'oslo', 'lisbon']);
+    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['rome', 'oslo', 'lisbon']);
     act(() => buildAppShortcuts().find((shortcut) => shortcut.id === 'workbench.jump.1')?.run());
-    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'lisbon' });
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'rome' });
   });
 
   it('shows the diff stat of a row', () => {

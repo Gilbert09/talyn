@@ -12,7 +12,7 @@ export interface RepoGroup {
   items: Workbench[];
 }
 
-/** Live sessions grouped by repository, with the newest activity first. */
+/** Live sessions grouped by repository, with the newest session first. The order does not change as sessions work. */
 export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
   const map = new Map<string, Workbench[]>();
   for (const wb of workbenches) {
@@ -23,7 +23,7 @@ export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
   }
   return [...map.entries()]
     .map(([repo, items]) => ({ repo, items: newestSessions(items) }))
-    .sort((a, b) => b.items[0].updatedAt.localeCompare(a.items[0].updatedAt) || a.repo.localeCompare(b.repo));
+    .sort((a, b) => b.items[0].createdAt.localeCompare(a.items[0].createdAt) || a.repo.localeCompare(b.repo));
 }
 
 export function isArchived(wb: Workbench): boolean {
