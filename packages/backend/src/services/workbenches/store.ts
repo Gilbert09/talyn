@@ -23,6 +23,7 @@ import {
   workbenchCheckpoints as checkpointsTable,
   workbenchEvents as eventsTable,
   workbenches as workbenchesTable,
+  workbenchTurnTimings,
 } from '../../db/schema.js';
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
@@ -89,6 +90,11 @@ export const WORKBENCH_COLUMNS = {
   workCheckpointSha: workbenchesTable.workCheckpointSha,
   workCheckpointAt: workbenchesTable.workCheckpointAt,
   workCheckpointBytes: workbenchesTable.workCheckpointBytes,
+  workCheckedAt: workbenchesTable.workCheckedAt,
+  workUnpushedCommits: workbenchesTable.workUnpushedCommits,
+  workSaveFailures: workbenchesTable.workSaveFailures,
+  workSaveFailedAt: workbenchesTable.workSaveFailedAt,
+  workSaveError: workbenchesTable.workSaveError,
   archivedAt: workbenchesTable.archivedAt,
   createdAt: workbenchesTable.createdAt,
   updatedAt: workbenchesTable.updatedAt,
@@ -265,6 +271,70 @@ export async function clearWorkCheckpoint(id: string, sandboxId?: string): Promi
     .update(workbenchesTable)
     .set({ workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null })
     .where(sandboxId ? and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)) : eq(workbenchesTable.id, id));
+}
+
+/** The longest save error kept on the row. The panel shows it on one line. */
+const WORK_SAVE_ERROR_MAX_CHARS = 500;
+
+/**
+ * A save worked: a new checkpoint, a check that found nothing new, or nothing
+ * to save. Only while the row still names the box. True when it ends a run of
+ * failures, so the caller can say that the work is saved again.
+ */
+export async function recordWorkSaveSuccess(
+  id: string,
+  sandboxId: string,
+  at: Date,
+  unpushed: number | null,
+): Promise<boolean> {
+  const onBox = and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId));
+  const set = { workCheckedAt: at, ...(unpushed === null ? {} : { workUnpushedCommits: unpushed }) };
+  const ended = await db()
+    .update(workbenchesTable)
+    .set({ ...set, workSaveFailures: 0, workSaveFailedAt: null, workSaveError: null })
+    .where(and(onBox, gt(workbenchesTable.workSaveFailures, 0)))
+    .returning({ id: workbenchesTable.id });
+  if (ended.length > 0) return true;
+  await db().update(workbenchesTable).set(set).where(onBox);
+  return false;
+}
+
+/** A save failed. Returns the failures in a row, or null when the row names another box now. */
+export async function recordWorkSaveFailure(id: string, sandboxId: string, at: Date, error: string): Promise<number | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      workSaveFailures: sql`${workbenchesTable.workSaveFailures} + 1`,
+      workSaveFailedAt: at,
+      workSaveError: error.slice(0, WORK_SAVE_ERROR_MAX_CHARS),
+    })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)))
+    .returning({ failures: workbenchesTable.workSaveFailures });
+  return row?.failures ?? null;
+}
+
+/**
+ * The newest turn start and turn end of a session, and whether a turn runs
+ * now. A lost box's note reads them to say whether the agent ran after the
+ * last save. A turn ends when its time report is written, so a turn cut by
+ * the loss has a start and no end.
+ */
+export async function lastTurnActivity(
+  workbenchId: string,
+): Promise<{ lastStartedAt: Date | null; lastEndedAt: Date | null; running: boolean }> {
+  const [chats] = await db()
+    .select({
+      lastStartedAt: sql<Date | string | null>`max(${chatsTable.turnStartedAt})`,
+      running: sql<boolean>`coalesce(bool_or(${chatsTable.status} = 'running'), false)`,
+    })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  const [ends] = await db()
+    .select({ lastEndedAt: sql<Date | string | null>`max(${workbenchTurnTimings.createdAt})` })
+    .from(workbenchTurnTimings)
+    .where(eq(workbenchTurnTimings.workbenchId, workbenchId));
+  const date = (raw: Date | string | null | undefined) => (raw === null || raw === undefined ? null : new Date(raw));
+  return { lastStartedAt: date(chats?.lastStartedAt), lastEndedAt: date(ends?.lastEndedAt), running: Boolean(chats?.running) };
 }
 
 /** `settings` with `ids` added to `keptSandboxIds`. */

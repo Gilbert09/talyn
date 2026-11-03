@@ -81,6 +81,7 @@ import {
   isProvisionOwned,
   isThread,
   keepSandboxes,
+  lastTurnActivity,
   listChats,
   liveWorkbenchNames,
   moveProvisionToSandboxId,
@@ -615,7 +616,14 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       workNote = archiveRestoreNote(await restoreWork(row, 'archive'));
     } else if (replacingLostSandbox) {
       const restore = await restoreWork(row, 'checkpoint');
-      workNote = recoveryWorkNote(restore, { lostAt: new Date(), recordedAt: row.workCheckpointAt });
+      const turns = await lastTurnActivity(row.id).catch(() => null);
+      workNote = recoveryWorkNote(restore, {
+        lostAt: new Date(),
+        recordedAt: row.workCheckpointAt,
+        checkedAt: row.workCheckedAt,
+        saveFailures: row.workSaveFailures,
+        ...(turns ? { lastTurnStartedAt: turns.lastStartedAt, lastTurnEndedAt: turns.lastEndedAt, turnRunning: turns.running } : {}),
+      });
     }
 
     // 3. The setup script. A failure leaves the workbench usable — the agent

@@ -127,6 +127,7 @@ export * from './workbenchDetect.js';
 export * from './talynBriefing.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
+export * from './workbenchSandboxStatus.js';
 export * from './bake.js';
 export * from './turnTiming.js';
 export * from './setupRecipe.js';

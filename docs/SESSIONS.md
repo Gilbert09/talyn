@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Sandbox status panel, and save results that a person can see (2026-11-03)
+
+**The incident, read from production.** Session 95491f73 (Debugbear triage) did not work for two hours after its last checkpoint. Turn 1 ran from 15:03:33 to 15:10:15 UTC. The turn-end checkpoint saved at 15:10:51 (1554 bytes, 1 commit not pushed). At 15:11:04 the PR push failed ("the remote end hung up unexpectedly"). No turn and no event came after that until the box was lost (recovered at 15:42) and lost again after the fleetd restart (recovered at 17:32). Both restores put the commit back, and PR #128452 opened from it at 17:34. No checkpoint ran after 15:10 because the triggers were the turn end and file-changing tools during a turn, and none happened. Nothing was lost. The note "up to 141 minutes of work are missing" measured the time from the checkpoint to the loss, not to the last change, and that read as lost work. The disk I/O errors (15:07 in the box's dmesg) did not stop that save, because the bundle is staged in `/dev/shm`.
+
+**What changed.**
+- Each save result goes on the row (migration `0105`): `work_checked_at` (a save confirmed that storage holds all the work), `work_unpushed_commits` (the save script now prints the count), `work_save_failures`, `work_save_failed_at`, `work_save_error`. Before, a failed save went only to the log and the debug bus.
+- The chat gets a note at the first failure in a run, a stronger note at the third, and a note when a save works again. A bundle that is too large counts as a failure but keeps its own note. A lost box is recorded with no note, because the loss has its own.
+- Typing in the session terminal and the end of a script now trigger a save, through the same throttle as a turn (one interval later, once for a burst). No timer runs for idle sessions.
+- The lost-box note uses the later check time, and says "The agent did not run after that" when the last turn ended before the checkpoint and no save failed. A turn cut by the loss has a start and no time report, so it keeps the old wording.
+- `GET /workbenches/:id/sandbox-status` (`services/workbenches/sandboxStatus.ts`) answers the Sandbox panel: state, host, size, activity, work safety, last problem, actions. The fleet read is cached 10 s per box and has a 5 s timeout; a failure makes the fleet part unknown. MCP tool `talyn_session_sandbox_status`, allowed for a session token on itself and its thread.
+
+**Open.** There is no "save work now" route. There is no plain "move to a new box" route, only a resize to another size. `workbench_script_runs.started_at` is null for runs from before this change.
+
 ## Workbench provisioning: one owner across instances (2026-11-03)
 
 **What was wrong.** A provision had only an in-memory guard. The boot sweep ran 5 s after boot and started a provision for every `provisioning` row. During a Railway deploy the old instance stays live for up to 3 minutes after that. So both instances provisioned the same session. Two clone scripts then ran in one box. The second found a half-made `.git`, its fetch or `checkout -b` failed, and `failProvision` marked the session `error` and failed the first prompt.

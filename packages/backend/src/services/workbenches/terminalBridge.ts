@@ -17,6 +17,7 @@ import { userMayUseWorkbenches } from './access.js';
 import { fleetClientFor, recordWorkbenchEvent, repoDirFor, runCapture } from './sandboxRuntime.js';
 import { recoverLostSandbox } from './recovery.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
+import { noteWorkActivity } from './workCheckpoint.js';
 
 /**
  * The terminal for a sandbox workbench: a WebSocket at
@@ -192,8 +193,11 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
         return;
       }
     }
-    if (session) session.write(data);
-    else if (backlog.length < 256) backlog.push(data);
+    if (session) {
+      session.write(data);
+      // Typing can change files outside a turn: save them as a turn's changes are saved.
+      noteWorkActivity(workbenchId);
+    } else if (backlog.length < 256) backlog.push(data);
   });
   ws.on('close', () => close(1000, 'client closed'));
   ws.on('error', () => close(1011, 'socket error'));

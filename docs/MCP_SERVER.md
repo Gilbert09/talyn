@@ -174,6 +174,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | --- | --- |
 | `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
 | `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
+| `talyn_session_sandbox_status` | Read the state of a session's sandbox in plain words: starting, running, idle (with the time it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. It also shows the fleet host and size, what runs now, when the work was last saved, what is not pushed, failed saves and the last problem. Read-only. The fleet's record is cached for 10 seconds; when the fleet does not answer, that part is unknown. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |

@@ -212,6 +212,11 @@ export function isRemoteResumeRequired(err: unknown): boolean {
 /** Resumes in flight, per sandbox, so a burst of calls waits on one resume. */
 const resuming = new Map<string, Promise<void>>();
 
+/** Whether Talyn is resuming this box now. */
+export function isResuming(sandboxId: string): boolean {
+  return resuming.has(sandboxId);
+}
+
 export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
   let pending = resuming.get(sandboxId);
   if (!pending) {

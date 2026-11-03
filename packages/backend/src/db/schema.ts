@@ -2110,6 +2110,14 @@ export const workbenches = pgTable(
     workCheckpointAt: timestamp('work_checkpoint_at', { withTimezone: true }),
     /** The checkpoint bundle's size, compressed. */
     workCheckpointBytes: integer('work_checkpoint_bytes'),
+    /** When a save last confirmed that storage holds all of the box's work (migration 0105). */
+    workCheckedAt: timestamp('work_checked_at', { withTimezone: true }),
+    /** Commits GitHub lacks, as the last save counted them. Null: not known. */
+    workUnpushedCommits: integer('work_unpushed_commits'),
+    /** Saves that failed in a row. 0 after one works. */
+    workSaveFailures: integer('work_save_failures').notNull().default(0),
+    workSaveFailedAt: timestamp('work_save_failed_at', { withTimezone: true }),
+    workSaveError: text('work_save_error'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2369,6 +2377,8 @@ export const workbenchScriptRuns = pgTable('workbench_script_runs', {
   output: text('output').notNull().default(''),
   running: boolean('running').notNull().default(true),
   exitCode: integer('exit_code'),
+  /** When the run started (migration 0105). Null on older rows. */
+  startedAt: timestamp('started_at', { withTimezone: true }),
 });
 
 // ---------- Slack sessions (migration 0090) ----------

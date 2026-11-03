@@ -16,6 +16,7 @@ import {
   SETUP_STEP_WINDOW_DAYS,
   type SandboxSize,
   type RecordSetupStepResult,
+  type WorkbenchSandboxStatus,
   type WorkbenchTiming,
   type Workbench,
   type WorkbenchChanges,
@@ -250,6 +251,31 @@ function timingText(t: WorkbenchTiming): string {
       lines.push(`  ${formatDurationMs(s.ms)}  ${s.category}  ${s.command ?? s.name}${s.isError ? '  (failed)' : ''}`);
     }
   }
+  return lines.join('\n');
+}
+
+/** The Sandbox panel's facts, as lines an agent can read. */
+export function sandboxStatusText(s: WorkbenchSandboxStatus): string {
+  const lines = [`Session ${s.workbenchId}: ${s.headline}`];
+  if (s.detail) lines.push(`Note: ${s.detail}`);
+  const where = [s.host ? `host ${s.host}` : '', s.size ? `size ${s.size.label}` : ''].filter(Boolean).join(', ');
+  if (where) lines.push(`Sandbox: ${where}.`);
+  if (s.since) lines.push(`${s.state === 'asleep' || s.state === 'hibernated' ? 'Asleep since' : 'Started at'}: ${s.since}`);
+  if (s.sleepsAt) lines.push(`Goes to sleep at: ${s.sleepsAt}`);
+  if (!s.fleet.known && s.fleet.error) lines.push(`The fleet did not answer: ${s.fleet.error}`);
+  lines.push('Doing:');
+  lines.push(...(s.activity.length ? s.activity.map((a) => `  ${a.text}`) : ['  Nothing.']));
+  if (s.work) {
+    const w = s.work;
+    lines.push('Work:');
+    lines.push(`  Last checkpoint: ${w.savedAt ?? 'none'}${w.checkedAt && w.checkedAt !== w.savedAt ? `; last check with no new changes: ${w.checkedAt}` : ''}`);
+    if (w.uncommitted) lines.push(`  Not committed: ${w.uncommitted.files} file(s), +${w.uncommitted.added}/-${w.uncommitted.removed}`);
+    if (w.unpushedCommits !== null) lines.push(`  Commits not on GitHub: ${w.unpushedCommits}`);
+    if (w.failures > 0) lines.push(`  Saves failed in a row: ${w.failures}, last at ${w.lastFailureAt ?? 'unknown'}: ${w.lastFailure ?? ''}`.trimEnd());
+    if (w.warning) lines.push(`  Warning: ${w.warning}`);
+  }
+  if (s.problem) lines.push(`Last problem${s.problem.at ? ` (${s.problem.at})` : ''}: ${s.problem.text}`);
+  if (s.actions.length) lines.push(`Actions in the app: ${s.actions.map((a) => a.label).join(', ')}.`);
   return lines.join('\n');
 }
 
@@ -592,6 +618,21 @@ export const SESSIONS = [
       const sessionId = await threadScopedSession(ownerId, args, ctx, 'read the time report of');
       const timing = await callApi<WorkbenchTiming>(ownerId, 'GET', `/workbenches/${encodeURIComponent(sessionId)}/timing`);
       return timingText(timing);
+    },
+    FEATURE
+  ),
+  defineTool(
+    'session_sandbox_status',
+    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host and size, what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session. A session can read itself and the sessions of its thread.' },
+    },
+    [],
+    { readOnlyHint: true },
+    async (ownerId, args, ctx) => {
+      const sessionId = await threadScopedSession(ownerId, args, ctx, 'read the sandbox status of');
+      const status = await callApi<WorkbenchSandboxStatus>(ownerId, 'GET', `/workbenches/${encodeURIComponent(sessionId)}/sandbox-status`);
+      return sandboxStatusText(status);
     },
     FEATURE
   ),

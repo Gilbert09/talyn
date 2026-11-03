@@ -72,6 +72,7 @@ import {
   stopSessionScript,
 } from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
+import { getSandboxStatus } from '../services/workbenches/sandboxStatus.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -715,6 +716,21 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       ok(res, await getWorkbenchTiming(row.id));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * The Sandbox panel: the box's state, what runs on it, and whether its work
+   * is saved. Read-only; a fleet that does not answer degrades the fleet part
+   * to unknown and never fails the request.
+   */
+  router.get('/:id/sandbox-status', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await getSandboxStatus(row));
     } catch (err) {
       fail(res, err);
     }

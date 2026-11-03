@@ -6,14 +6,24 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeFleet } from './helpers/fakeFleet.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { repositories, workbenches, workspaces } from '../db/schema.js';
+import { repositories, workbenchChats, workbenches, workbenchTurnTimings, workspaces } from '../db/schema.js';
 import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { provisionWorkbench } from '../services/workbenches/lifecycle.js';
 import { AGENT_MEMORY_RECAP_NOTE } from '../services/workbenches/recovery.js';
-import { getWorkbench, insertChat, insertWorkbench, listEvents, recordWorkCheckpoint, updateWorkbench } from '../services/workbenches/store.js';
+import { FleetRunNotFoundError } from '../services/selfHosted/client.js';
+import {
+  getWorkbench,
+  insertChat,
+  insertWorkbench,
+  lastTurnActivity,
+  listEvents,
+  recordWorkCheckpoint,
+  recordWorkSaveFailure,
+  updateWorkbench,
+} from '../services/workbenches/store.js';
 import {
   checkpointWork,
   CHECKPOINT_DURING_TURN_MS,
@@ -23,6 +33,7 @@ import {
   DIFF_STAT_DURING_TURN_MS,
   draftsMayChangeFiles,
   noteTurnActivity,
+  noteWorkActivity,
   nextCheckpointGapMs,
   setWorkCheckpointClockForTests,
   settleTurnActivity,
@@ -31,6 +42,10 @@ import {
 } from '../services/workbenches/workCheckpoint.js';
 import {
   archiveRestoreNote,
+  CHECKPOINT_KEEPS_FAILING_AFTER,
+  CHECKPOINT_RECOVERED_NOTE,
+  checkpointFailedNote,
+  checkpointKeepsFailingNote,
   checkpointTime,
   NO_CHECKPOINT_NOTE,
   parseWorkRestore,
@@ -184,10 +199,10 @@ describe.skipIf(process.platform === 'win32')('saved work in real repositories',
     makeWork(box);
     const first = save(box);
     const sha = (first as { sha: string }).sha;
-    expect(save(box, sha)).toEqual({ kind: 'unchanged', sha });
+    expect(save(box, sha)).toEqual({ kind: 'unchanged', sha, unpushed: 0 });
     // A commit with the same tree still moves HEAD, so it is a change.
     commit(box, 'local commit');
-    expect(save(box, sha).kind).toBe('bundle');
+    expect(save(box, sha)).toMatchObject({ kind: 'bundle', unpushed: 1 });
     write(box, 'a.txt', 'three\n');
     expect(save(box, sha).kind).toBe('bundle');
   });
@@ -233,7 +248,7 @@ describe.skipIf(process.platform === 'win32')('saved work in real repositories',
     );
     expect(existsSync(workRestoreBundle(WB))).toBe(false);
     // The next save on the new box finds nothing new.
-    expect(save(fresh, (saved as { sha: string }).sha)).toEqual({ kind: 'unchanged', sha: (saved as { sha: string }).sha });
+    expect(save(fresh, (saved as { sha: string }).sha)).toEqual({ kind: 'unchanged', sha: (saved as { sha: string }).sha, unpushed: 1 });
   });
 
   it('restores a branch that was never pushed, even after its base moved on', () => {
@@ -279,12 +294,15 @@ describe.skipIf(process.platform === 'win32')('saved work in real repositories',
 describe('parsing the scripts', () => {
   it.each([
     [{ exitCode: 0, stdout: 'CLEAN\n', stderr: '' }, { kind: 'clean' }],
-    [{ exitCode: 0, stdout: `UNCHANGED ${SHA}\n`, stderr: '' }, { kind: 'unchanged', sha: SHA }],
+    [{ exitCode: 0, stdout: `UNCHANGED ${SHA} 2\n`, stderr: '' }, { kind: 'unchanged', sha: SHA, unpushed: 2 }],
+    // An answer without the count, from a script older than the count.
+    [{ exitCode: 0, stdout: `UNCHANGED ${SHA}\n`, stderr: '' }, { kind: 'unchanged', sha: SHA, unpushed: null }],
     [{ exitCode: 0, stdout: 'TOO_LARGE 123\n', stderr: '' }, { kind: 'too_large', size: 123 }],
-    [{ exitCode: 0, stdout: `noise\nBUNDLE ${SHA} ${EPOCH} - 42 ${SUM}\n`, stderr: '' },
-      { kind: 'bundle', sha: SHA, at: new Date(T0), base: null, size: 42, sha256: SUM }],
+    [{ exitCode: 0, stdout: `noise\nBUNDLE ${SHA} ${EPOCH} - 42 ${SUM} 0\n`, stderr: '' },
+      { kind: 'bundle', sha: SHA, at: new Date(T0), base: null, size: 42, sha256: SUM, unpushed: 0 }],
     [{ exitCode: 0, stdout: `BUNDLE ${SHA} ${EPOCH} ${'a'.repeat(40)} 42 ${SUM}`, stderr: '' },
-      { kind: 'bundle', sha: SHA, at: new Date(T0), base: 'a'.repeat(40), size: 42, sha256: SUM }],
+      { kind: 'bundle', sha: SHA, at: new Date(T0), base: 'a'.repeat(40), size: 42, sha256: SUM, unpushed: null }],
+    [{ exitCode: 0, stdout: `UNCHANGED ${SHA} x\n`, stderr: '' }, { kind: 'failed', detail: 'saving the work exited 0' }],
     [{ exitCode: 1, stdout: '', stderr: 'a\nb\ncould not stage the work\n' }, { kind: 'failed', detail: 'a b could not stage the work' }],
     [{ exitCode: 0, stdout: '', stderr: '' }, { kind: 'failed', detail: 'saving the work exited 0' }],
     [{ exitCode: 1, stdout: 'CLEAN', stderr: '' }, { kind: 'failed', detail: 'saving the work exited 1' }],
@@ -349,6 +367,56 @@ describe('the notes', () => {
     [{ kind: 'failed', detail: 'boom' }, 'could not put back the work saved when it was archived: boom.'],
   ])('after an archive: %j', (restore, part) => {
     expect(archiveRestoreNote(restore)).toContain(part);
+  });
+
+  const lostAt = new Date(T0 + 141 * 60_000);
+  const restored: WorkRestore = { kind: 'restored', sha: SHA, at, commits: 1 };
+  it.each<[string, Parameters<typeof recoveryWorkNote>[1], string[], string[]]>([
+    // The 2026-11-03 session: the turn ended before the checkpoint and nothing ran after it.
+    ['the agent did not run after the checkpoint',
+      { lostAt, lastTurnStartedAt: new Date(T0 - 7 * 60_000), lastTurnEndedAt: new Date(T0 - 30_000), turnRunning: false },
+      ['The agent did not run after that, so only changes made in a terminal or by a script after it can be missing.'],
+      ['141 minutes']],
+    ['a session that never ran a turn', { lostAt, lastTurnStartedAt: null, turnRunning: false },
+      ['The agent did not run after that'], ['minutes of work']],
+    ['a turn ran after the checkpoint',
+      { lostAt, lastTurnStartedAt: new Date(T0 + 5 * 60_000), lastTurnEndedAt: new Date(T0 + 20 * 60_000), turnRunning: false },
+      ['up to 141 minutes of work, are missing'], ['did not run']],
+    ['a turn was cut by the loss: a start and no end',
+      { lostAt, lastTurnStartedAt: new Date(T0 - 60_000), lastTurnEndedAt: new Date(T0 - 3 * 60 * 60_000), turnRunning: false },
+      ['up to 141 minutes of work, are missing'], ['did not run']],
+    ['a turn still runs', { lostAt, lastTurnStartedAt: new Date(T0 - 60_000), lastTurnEndedAt: new Date(T0 - 30_000), turnRunning: true },
+      ['up to 141 minutes'], ['did not run']],
+    ['saves failed after the checkpoint',
+      { lostAt, lastTurnStartedAt: new Date(T0 - 60_000), lastTurnEndedAt: new Date(T0 - 30_000), turnRunning: false, saveFailures: 2 },
+      ['up to 141 minutes'], ['did not run']],
+    ['the facts are not known', { lostAt }, ['up to 141 minutes'], ['did not run']],
+    ['a later check found nothing new', { lostAt, checkedAt: new Date(T0 + 131 * 60_000) },
+      ['A later check at 2099-01-01 12:11 UTC found no new changes.', 'up to 10 minutes of work'], ['141']],
+    ['a check is ignored after a failed save', { lostAt, checkedAt: new Date(T0 + 131 * 60_000), saveFailures: 1 },
+      ['up to 141 minutes'], ['later check']],
+  ])('after a loss: %s', (_label, opts, has, hasNot) => {
+    const text = recoveryWorkNote(restored, opts);
+    expect(text).toContain('from a checkpoint taken at 2099-01-01 10:00 UTC, with 1 commit that had not been pushed.');
+    for (const part of has) expect(text).toContain(part);
+    for (const part of hasNot) expect(text).not.toContain(part);
+  });
+
+  it.each<[string, string, Date | null, string]>([
+    ['with a checkpoint', 'the disk is full', new Date(T0),
+      "Talyn could not save a checkpoint of this session's work: the disk is full. The last checkpoint is from 2099-01-01 10:00 UTC. Talyn tries again after the next change."],
+    ['with no checkpoint, and a detail that ends in a full stop', 'git failed.', null,
+      "Talyn could not save a checkpoint of this session's work: git failed. There is no checkpoint of this work yet. Talyn tries again after the next change."],
+  ])('says that a save failed: %s', (_label, detail, savedAt, expected) => {
+    expect(checkpointFailedNote(detail, savedAt)).toBe(expected);
+  });
+
+  it('says that saves keep failing, with what is at risk', () => {
+    expect(CHECKPOINT_KEEPS_FAILING_AFTER).toBe(3);
+    expect(checkpointKeepsFailingNote(3, new Date(T0))).toBe(
+      "Talyn could not save this session's work 3 times in a row. If the sandbox is lost, changes made after 2099-01-01 10:00 UTC are lost too. To keep them, push the branch.",
+    );
+    expect(checkpointKeepsFailingNote(3, null)).toContain('changes that are not pushed are lost too');
   });
 
   it('names the time zone, and says honestly that nothing was saved', () => {
@@ -526,7 +594,7 @@ describe('saved work in a session', () => {
   });
 
   it('streams the bundle into storage a part at a time and records it on the row', async () => {
-    expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toEqual({ kind: 'saved', sha: SHA, at: new Date(T0), size: bundle.length });
+    expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toEqual({ kind: 'saved', sha: SHA, at: new Date(T0), size: bundle.length, unpushed: null });
     const m = meta();
     expect(m).toMatchObject({ version: 1, kind: 'checkpoint', sha: SHA, base: null, branch: 'feat', size: bundle.length, parts: 3, takenAt: '2099-01-01T10:00:00.000Z' });
     const parts = [0, 1, 2].map((i) => store.objects.get(`ws/${WB}/checkpoint/${m.generation}/part-0000${i}`)!);
@@ -565,7 +633,7 @@ describe('saved work in a session', () => {
   it('passes the recorded sha so an unchanged box saves nothing', async () => {
     await updateWorkbench(WB, { workCheckpointSha: SHA, workCheckpointAt: new Date(T0) });
     reply = (script) => (script.includes('talyn work checkpoint') ? { stdout: `UNCHANGED ${SHA}` } : null);
-    expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toEqual({ kind: 'unchanged', sha: SHA });
+    expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toEqual({ kind: 'unchanged', sha: SHA, unpushed: null });
     expect(saves()[0]).toContain(`prev=${SHA}`);
     expect(store.objects.size).toBe(0);
   });
@@ -628,6 +696,120 @@ describe('saved work in a session', () => {
     expect(await recordWorkCheckpoint(WB, 'box', SHA, new Date(T0), 1)).toBe(false);
     expect(await recordWorkCheckpoint(WB, 'box-r1', SHA, new Date(T0), 1)).toBe(true);
     expect(await getWorkbench(WB)).toMatchObject({ workCheckpointSha: SHA, workCheckpointBytes: 1 });
+  });
+
+  describe('the result of each save', () => {
+    const failing = () => { reply = (script) => (script.includes('talyn work checkpoint') ? { exitCode: 1, stderr: 'could not write the bundle' } : null); };
+    const working = (line = bundleLine()) => { reply = (script) => (script.includes('talyn work checkpoint') ? { stdout: line } : null); };
+    const notes = async () => (await listEvents('chat', 0, 50)).events
+      .filter((e) => typeof e.event.subtype === 'string' && (e.event.subtype as string).startsWith('work_checkpoint_'))
+      .map((e) => [e.event.subtype, e.event.text]);
+    const save = async () => checkpointWork((await getWorkbench(WB))!, 'during_turn');
+
+    it('records a run of failures on the row, and notes its start, its third save and its end', async () => {
+      await save();
+      const savedAt = (await getWorkbench(WB))!.workCheckpointAt!;
+      failing();
+      for (let i = 1; i <= 4; i++) {
+        clock.advance(60_000);
+        await save();
+        expect(await getWorkbench(WB)).toMatchObject({
+          workSaveFailures: i, workSaveError: 'could not write the bundle', workSaveFailedAt: new Date(T0 + i * 60_000),
+        });
+      }
+      expect(await notes()).toEqual([
+        ['work_checkpoint_failed', checkpointFailedNote('could not write the bundle', savedAt)],
+        ['work_checkpoint_failed', checkpointKeepsFailingNote(3, savedAt)],
+      ]);
+      working(`UNCHANGED ${SHA} 1`);
+      clock.advance(60_000);
+      await save();
+      expect(await getWorkbench(WB)).toMatchObject({
+        workSaveFailures: 0, workSaveError: null, workSaveFailedAt: null,
+        workCheckedAt: new Date(T0 + 5 * 60_000), workUnpushedCommits: 1, workCheckpointAt: savedAt,
+      });
+      expect((await notes()).at(-1)).toEqual(['work_checkpoint_recovered', CHECKPOINT_RECOVERED_NOTE]);
+      // A save with no failure before it says nothing.
+      clock.advance(60_000);
+      await save();
+      expect(await notes()).toHaveLength(3);
+    });
+
+    it.each<[string, string, { workUnpushedCommits: number | null; workCheckpointSha: string | null }]>([
+      ['a new checkpoint', `BUNDLE ${SHA} ${EPOCH} - 5 ${createHash('sha256').update('small').digest('hex')} 2`, { workUnpushedCommits: 2, workCheckpointSha: SHA }],
+      ['nothing to save', 'CLEAN', { workUnpushedCommits: 0, workCheckpointSha: null }],
+      ['an older script with no count', `UNCHANGED ${SHA}`, { workUnpushedCommits: null, workCheckpointSha: null }],
+    ])('records when a save confirmed the work: %s', async (_label, line, expected) => {
+      bundle = Buffer.from('small');
+      working(line);
+      clock.advance(1_000);
+      await save();
+      // A new checkpoint is confirmed at its own time, so the loss note does not report a later check.
+      const at = line.startsWith('BUNDLE') ? new Date(T0) : new Date(T0 + 1_000);
+      expect(await getWorkbench(WB)).toMatchObject({ ...expected, workCheckedAt: at, workSaveFailures: 0 });
+    });
+
+    it('counts a bundle that is too large as a failed save, with only its own note', async () => {
+      working(`TOO_LARGE ${200 * 1024 * 1024}`);
+      await save();
+      expect(await getWorkbench(WB)).toMatchObject({ workSaveFailures: 1, workSaveError: tooLargeNote(200 * 1024 * 1024) });
+      expect((await notes()).map(([subtype]) => subtype)).toEqual(['work_checkpoint_too_large']);
+    });
+
+    it('records a lost box, and leaves its note to the loss', async () => {
+      vi.mocked(runtime.runCapture).mockRejectedValueOnce(new FleetRunNotFoundError('box'));
+      expect(await save()).toMatchObject({ kind: 'failed' });
+      expect((await getWorkbench(WB))?.workSaveFailures).toBe(1);
+      expect(await notes()).toEqual([]);
+    });
+
+    it('ignores a late result from a box the session no longer names', async () => {
+      await updateWorkbench(WB, { sandboxId: 'box-r1' });
+      expect(await recordWorkSaveFailure(WB, 'box', new Date(T0), 'late')).toBeNull();
+      expect((await getWorkbench(WB))?.workSaveFailures).toBe(0);
+    });
+  });
+
+  describe('outside a turn', () => {
+    beforeEach(() => {
+      bundle = Buffer.from('small');
+      reply = (script) => (script.includes('talyn work checkpoint') ? { stdout: bundleLine() } : null);
+    });
+
+    it('saves one interval after typing or a script, once for a burst', async () => {
+      for (let i = 0; i < 10; i++) {
+        noteWorkActivity(WB);
+        clock.advance(1_000);
+      }
+      await flush();
+      expect(saves()).toHaveLength(0);
+      clock.advance(CHECKPOINT_DURING_TURN_MS - 10_000);
+      await flush();
+      expect(saves()).toHaveLength(1);
+      expect(changes.refreshDiffStat).toHaveBeenCalled();
+      clock.advance(CHECKPOINT_DURING_TURN_MS);
+      await flush();
+      expect(saves()).toHaveLength(1);
+    });
+
+    it('saves nothing for a session that is not ready', async () => {
+      await updateWorkbench(WB, { status: 'provisioning' });
+      noteWorkActivity(WB);
+      clock.advance(CHECKPOINT_DURING_TURN_MS);
+      await flush();
+      expect(saves()).toHaveLength(0);
+    });
+  });
+
+  describe('the last turn', () => {
+    it('reads the newest turn start, the newest turn end and whether a turn runs', async () => {
+      expect(await lastTurnActivity(WB)).toEqual({ lastStartedAt: null, lastEndedAt: null, running: false });
+      await testDb.db.update(workbenchChats).set({ turnStartedAt: new Date(T0), status: 'running' });
+      await testDb.db.insert(workbenchTurnTimings).values({
+        chatId: 'chat', turn: 1, workbenchId: WB, wallMs: 1, toolMs: 0, modelMs: 1, createdAt: new Date(T0 + 60_000),
+      });
+      expect(await lastTurnActivity(WB)).toEqual({ lastStartedAt: new Date(T0), lastEndedAt: new Date(T0 + 60_000), running: true });
+    });
   });
 
   describe('during a turn', () => {

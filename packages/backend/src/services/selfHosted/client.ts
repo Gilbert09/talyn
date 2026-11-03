@@ -106,6 +106,18 @@ export interface FleetSandbox {
   goldenStale?: boolean;
   /** `memory` or `rootfs`, while suspended. */
   suspendKind?: string;
+  /** Where the suspended images are on the host. Empty or absent: none on the host. */
+  suspendDir?: string;
+  /** True when a complete copy of the suspension is in object storage (hibernation). */
+  suspendUploaded?: boolean;
+  /** When the box was suspended. */
+  suspendedAt?: string;
+  /** The idle timeout the box runs with, in seconds. Absent on an older fleetd. */
+  idleTtlSec?: number;
+  /** When the host last asked the box to do something: the idle clock. */
+  lastRequestAt?: string;
+  /** The box's CPU share in thousandths of a vCPU, when the fleet sends it. */
+  milliVcpu?: number;
   /** Last vsock heartbeat. */
   lastHeartbeat?: string;
   /**

@@ -103,6 +103,79 @@ describe('session setup and timing tools', () => {
     });
   });
 
+  describe('session_sandbox_status', () => {
+    const status = {
+      workbenchId: 's1', checkedAt: '2099-01-01T12:00:00.000Z', state: 'idle', headline: 'Idle. It goes to sleep in 12 minutes.',
+      detail: null, sleepsAt: '2099-01-01T12:12:00.000Z', since: '2099-01-01T10:30:00.000Z', replacementStarting: false,
+      fleet: { known: true, status: 'idle', phase: 'agent', error: null }, host: 'hetzner-64',
+      size: { key: 'standard', label: 'Standard · 4 GB, 4 vCPU', memMib: 4096, vcpus: 4 },
+      activity: [{ kind: 'queued', text: '1 message queued.', since: null }],
+      work: {
+        savedAt: '2099-01-01T10:00:00.000Z', savedBytes: 1554, checkedAt: '2099-01-01T11:00:00.000Z', unpushedCommits: 1,
+        uncommitted: { added: 3, removed: 1, files: 2 }, committed: null, branchPushed: false, failures: 3,
+        lastFailureAt: '2099-01-01T11:59:00.000Z', lastFailure: 'disk I/O error', warning: 'Talyn could not save the work 3 times in a row.', warningLevel: 'danger',
+      },
+      problem: { text: 'The sandbox was lost.', at: '2099-01-01T09:00:00.000Z' },
+      actions: [{ kind: 'resize', label: 'Move to a new size', confirm: null }],
+    };
+
+    it('is read-only and in the session allow-list', () => {
+      expect(SESSION_TOKEN_TOOLS.has('talyn_session_sandbox_status')).toBe(true);
+      expect(tool('session_sandbox_status').annotations.readOnlyHint).toBe(true);
+    });
+
+    it('reads the calling session by default and says every fact in words', async () => {
+      const { calls } = mockApi({ 'GET /api/v1/workbenches/s1/sandbox-status': () => status });
+      const text = await tool('session_sandbox_status').handler(OWNER, {}, SELF);
+      expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/s1/sandbox-status']);
+      for (const part of [
+        'Session s1: Idle. It goes to sleep in 12 minutes.',
+        'Sandbox: host hetzner-64, size Standard · 4 GB, 4 vCPU.',
+        'Started at: 2099-01-01T10:30:00.000Z',
+        '  1 message queued.',
+        'Last checkpoint: 2099-01-01T10:00:00.000Z; last check with no new changes: 2099-01-01T11:00:00.000Z',
+        'Not committed: 2 file(s), +3/-1',
+        'Commits not on GitHub: 1',
+        'Saves failed in a row: 3, last at 2099-01-01T11:59:00.000Z: disk I/O error',
+        'Warning: Talyn could not save the work 3 times in a row.',
+        'Last problem (2099-01-01T09:00:00.000Z): The sandbox was lost.',
+        'Actions in the app: Move to a new size.',
+      ]) expect(text).toContain(part);
+    });
+
+    it('says nothing runs, and that the fleet did not answer', async () => {
+      mockApi({ 'GET /api/v1/workbenches/s1/sandbox-status': () => ({
+        ...status, state: 'unknown', headline: 'Talyn could not read the sandbox from the fleet.', sleepsAt: null, since: null,
+        fleet: { known: false, status: null, phase: null, error: 'timeout' }, activity: [], work: null, problem: null, actions: [],
+      }) });
+      const text = await tool('session_sandbox_status').handler(OWNER, {}, SELF);
+      expect(text).toContain('The fleet did not answer: timeout');
+      expect(text).toContain('Doing:\n  Nothing.');
+      expect(text).not.toContain('Work:');
+    });
+
+    it('reads a session of the calling thread', async () => {
+      const { calls } = mockApi({
+        'GET /api/v1/workbenches/s1': () => wb({ threadId: 'thread1' }),
+        'GET /api/v1/workbenches/s1/sandbox-status': () => status,
+      });
+      await tool('session_sandbox_status').handler(OWNER, { session_id: 's1' }, THREAD);
+      expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/s1', '/api/v1/workbenches/s1/sandbox-status']);
+    });
+
+    it('refuses a session outside the caller and its thread', async () => {
+      const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => wb({ id: 'other', threadId: 'thread9' }) });
+      await expect(tool('session_sandbox_status').handler(OWNER, { session_id: 'other' }, SELF)).rejects.toThrow(/itself, or a session in its thread/);
+      expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/other']);
+    });
+
+    it('reads any session for a user token, and needs a session id there', async () => {
+      mockApi({ 'GET /api/v1/workbenches/other/sandbox-status': () => ({ ...status, workbenchId: 'other' }) });
+      expect(await tool('session_sandbox_status').handler(OWNER, { session_id: 'other' })).toContain('Session other:');
+      await expect(tool('session_sandbox_status').handler(OWNER, {})).rejects.toThrow('session_id is required');
+    });
+  });
+
   describe('record_setup_step', () => {
     const recorded = { steps: [{ id: 'st_1', command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install' }] };
 

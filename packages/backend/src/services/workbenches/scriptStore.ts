@@ -14,7 +14,7 @@ const columns = {
 export type ScriptLease = { [K in keyof typeof columns]: typeof runs.$inferSelect[K] };
 export async function claimScript(row: WorkbenchRow, name: string): Promise<ScriptLease | null> {
   const values = { id: `${row.id}:${name}`, workbenchId: row.id, sandboxId: row.sandboxId!, workspaceId: row.workspaceId, name,
-    sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null };
+    sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null, startedAt: new Date() };
   const [claimed] = await getPoolDbClient().insert(runs).values(values)
     .onConflictDoUpdate({ target: runs.id, set: values, setWhere: or(eq(runs.running, false), ne(runs.sandboxId, row.sandboxId!), sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`) }).returning(columns);
   return claimed ?? null;
