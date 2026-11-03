@@ -283,6 +283,18 @@ export interface RepositorySettings {
   bake?: import('./bake.js').RepositoryBake | null;
   /** Setup learning (`setupRecipe.ts`). Absent means on. */
   setupLearning?: { disabled?: boolean; changedAt?: string };
+  /** When Talyn first counted uses of live setup steps here. A live step can leave only 14 days after it. */
+  setupUsageSince?: string;
+  /** The times of the newest box setup that ran learned steps. */
+  setupTiming?: import('./setupRecipe.js').SetupTiming;
+  /** The newest box setups, newest first (`SETUP_TIMING_HISTORY`). */
+  setupTimingHistory?: import('./setupRecipe.js').SetupTiming[];
+  /** Extra hosts the image build may reach (was `bake.hosts`). */
+  setupHosts?: string[];
+  /** The repository's own setup, as the newest box read it, and the knob for it. */
+  repoSetup?: { command?: string | null; source?: import('./setupLayers.js').RepoSetupSource | null; readAt?: string | null; runOnBox?: import('./setupLayers.js').RepoSetupRunOnBox };
+  /** What the newest box was told about its images. */
+  setupImage?: import('./setupLayers.js').SetupImageStatus;
   /** Absent means auto. */
   sandboxSize?: SandboxSizeSetting;
   detectedSandboxSize?: CachedSandboxSize;
