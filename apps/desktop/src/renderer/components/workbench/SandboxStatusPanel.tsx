@@ -1,0 +1,465 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  Activity,
+  Archive,
+  ArrowRightLeft,
+  CircleHelp,
+  CirclePause,
+  CircleX,
+  Cloud,
+  Laptop,
+  Loader2,
+  Moon,
+  Snowflake,
+  TriangleAlert,
+} from 'lucide-react';
+import {
+  SANDBOX_SIZES,
+  type SandboxSize,
+  type SandboxStatusAction,
+  type SandboxStatusState,
+  type SandboxWorkSafety,
+  type Workbench,
+  type WorkbenchSandboxStatus,
+} from '@talyn/shared';
+import { Button } from '../ui/button';
+import { ConfirmDialog } from '../ui/confirm-dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
+import { cn } from '../../lib/utils';
+import { api } from '../../lib/api';
+import { useWorkbenchStore } from '../../stores/workbenches';
+
+/** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
+const POLL_MS = 10_000;
+
+const STATE_ICON: Record<SandboxStatusState, { icon: typeof Cloud; className: string; spin?: boolean }> = {
+  starting: { icon: Loader2, className: 'text-sky-500', spin: true },
+  running: { icon: Activity, className: 'text-emerald-500' },
+  idle: { icon: CirclePause, className: 'text-muted-foreground' },
+  asleep: { icon: Moon, className: 'text-indigo-400' },
+  hibernated: { icon: Snowflake, className: 'text-indigo-400' },
+  waking: { icon: Loader2, className: 'text-sky-500', spin: true },
+  moving: { icon: ArrowRightLeft, className: 'text-sky-500' },
+  lost: { icon: TriangleAlert, className: 'text-amber-500' },
+  failed: { icon: CircleX, className: 'text-destructive' },
+  archived: { icon: Archive, className: 'text-muted-foreground' },
+  local: { icon: Laptop, className: 'text-muted-foreground' },
+  unknown: { icon: CircleHelp, className: 'text-muted-foreground' },
+};
+
+const RESIZE_OUTCOME: Record<'unchanged' | 'after_turn' | 'moving', string> = {
+  unchanged: 'The session already has this size.',
+  after_turn: 'The move starts when the current turn ends.',
+  moving: 'Talyn is moving the session to the new box.',
+};
+
+/** A span of time in short words: "less than a minute", "12 min", "3 h", "2 d". */
+export function formatSpan(ms: number): string {
+  const min = Math.floor(Math.max(0, ms) / 60_000);
+  if (min < 1) return 'less than a minute';
+  if (min < 60) return `${min} min`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}
+
+export function formatAgo(iso: string, now = Date.now()): string {
+  const ms = now - new Date(iso).getTime();
+  return ms < 60_000 ? 'just now' : `${formatSpan(ms)} ago`;
+}
+
+function sinceLine(status: WorkbenchSandboxStatus, now: number): string | null {
+  if (!status.since) return null;
+  const span = formatSpan(now - new Date(status.since).getTime());
+  if (status.state === 'running' || status.state === 'idle') return `Up for ${span}`;
+  if (status.state === 'asleep' || status.state === 'hibernated') return `Asleep for ${span}`;
+  return null;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** True when the chip needs a dot: the work may not be safe, or the box is gone. */
+export function sandboxStatusNeedsAttention(status: WorkbenchSandboxStatus | null): 'warn' | 'danger' | null {
+  if (!status) return null;
+  if (status.state === 'failed') return 'danger';
+  if (status.work?.warning) return status.work.warningLevel === 'danger' ? 'danger' : 'warn';
+  if (status.state === 'lost') return 'warn';
+  return null;
+}
+
+/**
+ * Reads the sandbox status once on mount, again when the session row moves,
+ * and every 10 s while the panel is open.
+ */
+export function useSandboxStatus(workbench: Workbench, open: boolean) {
+  const [status, setStatus] = useState<WorkbenchSandboxStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const seq = useRef(0);
+  const id = workbench.id;
+
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const next = await api.workbenches.sandboxStatus(id);
+      if (mine !== seq.current) return;
+      setStatus(next);
+      setError(null);
+    } catch (err) {
+      if (mine !== seq.current) return;
+      setError(err instanceof Error ? err.message : 'Could not read the sandbox status.');
+    }
+  }, [id]);
+
+  useEffect(() => {
+    setStatus(null);
+    setError(null);
+    return () => {
+      seq.current++;
+    };
+  }, [id]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh, workbench.status, workbench.sandboxState, workbench.updatedAt]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [open, refresh]);
+
+  return { status, error, refresh };
+}
+
+/** The Sandbox chip in the session header. It opens the status panel. */
+export function SandboxStatusChip({ workbench }: { workbench: Workbench }) {
+  const [open, setOpen] = useState(false);
+  const holdOpen = useRef(false);
+  const { status, error, refresh } = useSandboxStatus(workbench, open);
+  const attention = sandboxStatusNeedsAttention(status);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && holdOpen.current) return;
+        setOpen(next);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="app-region-no-drag inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+          title="Talyn Fleet sandbox. Show what it is doing."
+          data-attr="workbench-sandbox-chip"
+        >
+          <Cloud className="h-3 w-3" />
+          Sandbox
+          {attention && (
+            <span
+              className={cn('h-1.5 w-1.5 shrink-0 rounded-full', attention === 'danger' ? 'bg-destructive' : 'bg-amber-500')}
+              data-testid="sandbox-chip-warning"
+              data-level={attention}
+              aria-label="The sandbox needs attention"
+            />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <SandboxStatusPanel
+          workbench={workbench}
+          status={status}
+          error={error}
+          onRefresh={refresh}
+          onClose={() => setOpen(false)}
+          onHoldOpen={(hold) => {
+            holdOpen.current = hold;
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1 border-t px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function WorkSafety({ work, now }: { work: SandboxWorkSafety; now: number }) {
+  const checkedNewer =
+    work.checkedAt && (!work.savedAt || new Date(work.checkedAt).getTime() > new Date(work.savedAt).getTime());
+  return (
+    <ul className="space-y-0.5 text-xs" data-testid="sandbox-work">
+      <li>{work.savedAt ? `Last checkpoint ${formatAgo(work.savedAt, now)}` : 'No checkpoint yet'}</li>
+      {checkedNewer && work.checkedAt && <li>Checked {formatAgo(work.checkedAt, now)}: no new changes</li>}
+      {work.uncommitted &&
+        (work.uncommitted.files > 0 ? (
+          <li>
+            Not committed: {plural(work.uncommitted.files, 'file', 'files')},{' '}
+            <span className="text-emerald-600 dark:text-emerald-400">+{work.uncommitted.added}</span>{' '}
+            <span className="text-destructive">-{work.uncommitted.removed}</span>
+          </li>
+        ) : (
+          <li>All changes are committed</li>
+        ))}
+      {work.unpushedCommits !== null && work.unpushedCommits > 0 ? (
+        <li>{plural(work.unpushedCommits, 'commit', 'commits')} not on GitHub</li>
+      ) : (
+        work.branchPushed === true && <li>Branch is pushed</li>
+      )}
+      {work.failures > 0 && (
+        <li className="text-destructive">
+          {work.failures === 1 ? 'The last save failed' : `The last ${work.failures} saves failed`}
+          {work.lastFailureAt ? ` (${formatAgo(work.lastFailureAt, now)})` : ''}
+          {work.lastFailure ? `: ${work.lastFailure}` : ''}
+        </li>
+      )}
+    </ul>
+  );
+}
+
+type Pending = { action: SandboxStatusAction; size?: SandboxSize };
+
+/** What the sandbox is doing, in plain words. The backend writes the words. */
+export function SandboxStatusPanel({
+  workbench,
+  status,
+  error,
+  onRefresh,
+  onClose,
+  onHoldOpen,
+}: {
+  workbench: Workbench;
+  status: WorkbenchSandboxStatus | null;
+  error: string | null;
+  onRefresh: () => void | Promise<void>;
+  onClose?: () => void;
+  onHoldOpen?: (hold: boolean) => void;
+}) {
+  const [busy, setBusy] = useState<SandboxStatusAction['kind'] | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
+
+  const ask = (next: Pending | null) => {
+    setPending(next);
+    onHoldOpen?.(next !== null);
+  };
+
+  if (!status) {
+    return (
+      <div className="p-3 text-xs" data-testid="sandbox-status-panel">
+        {error ? (
+          <p className="text-destructive">{error}</p>
+        ) : (
+          <p className="flex items-center gap-1.5 text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" /> Reading the sandbox status
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const now = Date.now();
+  const state = STATE_ICON[status.state];
+  const StateIcon = state.icon;
+  const since = sinceLine(status, now);
+  const work = status.work;
+
+  const perform = async ({ action, size }: Pending) => {
+    setBusy(action.kind);
+    setActionError(null);
+    setNote(null);
+    try {
+      if (action.kind === 'wake') await api.workbenches.wake(workbench.id);
+      else if (action.kind === 'retry') useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+      else if (action.kind === 'resize' && size) {
+        const res = await api.workbenches.resize(workbench.id, { size });
+        setNote(RESIZE_OUTCOME[res.outcome]);
+        setPicking(false);
+      }
+      await onRefresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : `Could not ${action.label.toLowerCase()}.`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const start = (next: Pending) => {
+    if (next.action.confirm) ask(next);
+    else void perform(next);
+  };
+
+  const press = (action: SandboxStatusAction) => {
+    if (action.kind === 'show_setup_output') {
+      useWorkbenchStore.getState().setTerminalTab('setup');
+      onClose?.();
+      return;
+    }
+    if (action.kind === 'resize') {
+      setPicking((p) => !p);
+      return;
+    }
+    start({ action });
+  };
+
+  const resizeAction = status.actions.find((a) => a.kind === 'resize');
+
+  return (
+    <div className="text-sm" data-testid="sandbox-status-panel" data-state={status.state}>
+      <div className="space-y-1 px-3 py-2.5">
+        <div className="flex items-start gap-2">
+          <StateIcon className={cn('mt-0.5 h-4 w-4 shrink-0', state.className, state.spin && 'animate-spin')} aria-hidden />
+          <p className="font-medium leading-snug" data-testid="sandbox-headline">
+            {status.headline}
+          </p>
+        </div>
+        {status.detail && <p className="text-xs text-muted-foreground">{status.detail}</p>}
+        {since && <p className="text-xs text-muted-foreground">{since}</p>}
+        {!status.fleet.known && status.fleet.error && (
+          <p className="text-[11px] text-muted-foreground" data-testid="sandbox-fleet-unknown">
+            The fleet did not answer. Some facts are unknown.
+          </p>
+        )}
+      </div>
+
+      {work?.warning && (
+        <div
+          role="alert"
+          data-testid="sandbox-work-warning"
+          data-level={work.warningLevel ?? 'warn'}
+          className={cn(
+            'mx-3 mb-2 flex items-start gap-1.5 rounded border px-2 py-1.5 text-xs',
+            work.warningLevel === 'danger'
+              ? 'border-destructive/40 bg-destructive/10 text-destructive'
+              : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+          )}
+        >
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>{work.warning}</span>
+        </div>
+      )}
+
+      {(status.host || status.size) && (
+        <Section title="Where">
+          <ul className="space-y-0.5 text-xs">
+            {status.host && <li>Host: <span className="font-mono">{status.host}</span></li>}
+            {status.size && <li>Size: {status.size.label}</li>}
+          </ul>
+        </Section>
+      )}
+
+      <Section title="Doing">
+        {status.activity.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Nothing is running.</p>
+        ) : (
+          <ul className="space-y-0.5 text-xs" data-testid="sandbox-activity">
+            {status.activity.map((a, i) => (
+              <li key={`${a.kind}-${a.chatId ?? a.name ?? i}`}>
+                {a.text}
+                {a.since && <span className="text-muted-foreground"> · {formatSpan(now - new Date(a.since).getTime())}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      {work && (
+        <Section title="Work">
+          <WorkSafety work={work} now={now} />
+        </Section>
+      )}
+
+      {status.problem && (
+        <Section title="Last problem">
+          <p className="text-xs" data-testid="sandbox-problem">
+            {status.problem.text}
+            {status.problem.at && <span className="text-muted-foreground"> · {formatAgo(status.problem.at, now)}</span>}
+          </p>
+        </Section>
+      )}
+
+      {(status.actions.length > 0 || actionError || note) && (
+        <div className="space-y-2 border-t px-3 py-2">
+          {status.actions.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {status.actions.map((action) => (
+                <Button
+                  key={action.kind}
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2.5 text-xs"
+                  disabled={busy !== null}
+                  aria-expanded={action.kind === 'resize' ? picking : undefined}
+                  onClick={() => press(action)}
+                  data-attr={`sandbox-action-${action.kind}`}
+                >
+                  {busy === action.kind && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          )}
+          {picking && resizeAction && (
+            <ul className="space-y-1" data-testid="sandbox-size-picker">
+              {(Object.keys(SANDBOX_SIZES) as SandboxSize[]).map((size) => {
+                const current = status.size?.key === size;
+                return (
+                  <li key={size}>
+                    <button
+                      type="button"
+                      disabled={current || busy !== null}
+                      onClick={() => start({ action: resizeAction, size })}
+                      className={cn(
+                        'flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-xs hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent',
+                        current && 'border-primary/50 bg-primary/5'
+                      )}
+                      data-attr={`sandbox-size-${size}`}
+                    >
+                      <span>
+                        <span className="font-medium">{SANDBOX_SIZES[size].label}</span>
+                        <span className="text-muted-foreground"> · {SANDBOX_SIZES[size].hint}</span>
+                      </span>
+                      {current && <span className="shrink-0 text-[10px] text-muted-foreground">Current</span>}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {note && <p className="text-xs text-muted-foreground">{note}</p>}
+          {actionError && (
+            <p className="text-xs text-destructive" role="alert">
+              {actionError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {error && <p className="border-t px-3 py-1.5 text-[11px] text-destructive">{error}</p>}
+
+      <ConfirmDialog
+        open={pending !== null}
+        title={pending ? `${pending.action.label}?` : ''}
+        description={pending?.action.confirm ?? undefined}
+        confirmLabel={pending?.action.label ?? 'Confirm'}
+        busy={busy !== null}
+        onConfirm={() => {
+          const next = pending;
+          ask(null);
+          if (next) void perform(next);
+        }}
+        onCancel={() => ask(null)}
+      />
+    </div>
+  );
+}

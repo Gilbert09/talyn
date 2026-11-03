@@ -2929,6 +2929,13 @@ export const workbenches = {
   retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
   /** Where the session's turns spent their time, by category, with the slowest calls. */
   timing: (id: string) => request<WorkbenchTiming>('GET', `/workbenches/${enc(id)}/timing`),
+  /** The Sandbox panel: the box's state, what runs on it, and whether its work is saved. */
+  sandboxStatus: (id: string) =>
+    request<import('@talyn/shared').WorkbenchSandboxStatus>('GET', `/workbenches/${enc(id)}/sandbox-status`),
+  /** Move the session to a box of another size. The work moves with it; a running turn is never cut. */
+  resize: (id: string, input: { size: import('@talyn/shared').SandboxSize; reason?: string; rememberForRepository?: boolean }) =>
+    request<{ outcome: 'unchanged' | 'after_turn' | 'moving'; size: import('@talyn/shared').SandboxSize; rememberedForRepository: boolean; continued: boolean }>(
+      'PUT', `/workbenches/${enc(id)}/sandbox-size`, input),
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),

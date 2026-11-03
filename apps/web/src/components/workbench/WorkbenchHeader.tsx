@@ -51,6 +51,7 @@ import { createChatTab } from './ChatTabs';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { SandboxStatusChip } from './SandboxStatusPanel';
 import { SessionPreviewLinks } from './SessionPreviewLinks';
 import { timeAgo } from './new/RecentWorkbenches';
 import { ThreadChip } from '../threads/ThreadChip';
@@ -503,16 +504,16 @@ export function WorkbenchHeader({
                 Thread
               </span>
             )}
-            <span
-              className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-              title={
-                workbench.runtime === "local"
-                  ? "Local session"
-                  : "Talyn Fleet sandbox"
-              }
-            >
-              {workbench.runtime === "local" ? "Local" : "Sandbox"}
-            </span>
+            {workbench.runtime === "local" ? (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title="Local session"
+              >
+                Local
+              </span>
+            ) : (
+              <SandboxStatusChip workbench={workbench} />
+            )}
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}

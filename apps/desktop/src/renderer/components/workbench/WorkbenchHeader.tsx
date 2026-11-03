@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
-  Cloud,
   Copy,
   GitBranch,
   GitMerge,
@@ -51,6 +50,7 @@ import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type ArchiveOptions } from './archiveWorkbench';
 import { createChatTab } from './ChatTabs';
+import { SandboxStatusChip } from './SandboxStatusPanel';
 import { SessionPreviewChips } from './SessionPreviewChips';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
@@ -177,7 +177,6 @@ export function WorkbenchHeader({
   const primary = primaryWorkbenchAction(workbench, prLike);
   const available = availableWorkbenchActions(workbench, prLike);
   const archived = isArchivedWorkbench(workbench);
-  const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
 
   const restore = async () => {
     setRestoring(true);
@@ -494,17 +493,17 @@ export function WorkbenchHeader({
                 Thread
               </span>
             )}
-            <span
-              className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-              title={
-                workbench.runtime === 'local'
-                  ? `Local worktree: ${workbench.localPath ?? ''}`
-                  : 'Talyn Fleet sandbox'
-              }
-            >
-              <RuntimeIcon className="h-3 w-3" />
-              {workbench.runtime === 'local' ? 'Local' : 'Sandbox'}
-            </span>
+            {workbench.runtime === 'local' ? (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title={`Local worktree: ${workbench.localPath ?? ''}`}
+              >
+                <Laptop className="h-3 w-3" />
+                Local
+              </span>
+            ) : (
+              <SandboxStatusChip workbench={workbench} />
+            )}
             {workbench.runtime === 'sandbox' &&
               workbench.settings?.internetAccess === false && (
                 <span

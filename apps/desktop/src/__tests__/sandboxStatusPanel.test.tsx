@@ -1,0 +1,357 @@
+/**
+ * @jest-environment jsdom
+ */
+import '@testing-library/jest-dom';
+import React from 'react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { SandboxStatusAction, SandboxWorkSafety, Workbench, WorkbenchSandboxStatus } from '@talyn/shared';
+import {
+  SandboxStatusChip,
+  SandboxStatusPanel,
+  formatAgo,
+  formatSpan,
+  sandboxStatusNeedsAttention,
+} from '../renderer/components/workbench/SandboxStatusPanel';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
+
+const sandboxStatus = jest.fn();
+const wake = jest.fn();
+const retry = jest.fn();
+const resize = jest.fn();
+jest.mock('../renderer/lib/api', () => ({
+  api: {
+    workbenches: {
+      sandboxStatus: (...a: unknown[]) => sandboxStatus(...a),
+      wake: (...a: unknown[]) => wake(...a),
+      retry: (...a: unknown[]) => retry(...a),
+      resize: (...a: unknown[]) => resize(...a),
+    },
+  },
+}));
+
+const WB = { id: 'wb1', runtime: 'sandbox', status: 'ready', sandboxState: 'running', updatedAt: '2026-11-03T10:00:00Z' } as Workbench;
+
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+function work(over: Partial<SandboxWorkSafety> = {}): SandboxWorkSafety {
+  return {
+    savedAt: null,
+    savedBytes: null,
+    checkedAt: null,
+    unpushedCommits: null,
+    uncommitted: null,
+    committed: null,
+    branchPushed: null,
+    failures: 0,
+    lastFailureAt: null,
+    lastFailure: null,
+    warning: null,
+    warningLevel: null,
+    ...over,
+  };
+}
+
+function status(over: Partial<WorkbenchSandboxStatus> = {}): WorkbenchSandboxStatus {
+  return {
+    workbenchId: 'wb1',
+    checkedAt: new Date().toISOString(),
+    state: 'running',
+    headline: 'The agent is working.',
+    detail: null,
+    sleepsAt: null,
+    since: null,
+    replacementStarting: false,
+    fleet: { known: true, status: 'running', phase: null, error: null },
+    host: 'hetzner-64',
+    size: { key: 'standard', label: 'Standard · 4 GB, 4 vCPU', memMib: 4096, vcpus: 4 },
+    activity: [],
+    work: work(),
+    problem: null,
+    actions: [],
+    ...over,
+  };
+}
+
+const action = (kind: SandboxStatusAction['kind'], label: string, confirm: string | null = null): SandboxStatusAction => ({
+  kind,
+  label,
+  confirm,
+});
+
+function renderPanel(s: WorkbenchSandboxStatus | null, extra: Partial<React.ComponentProps<typeof SandboxStatusPanel>> = {}) {
+  const onRefresh = jest.fn().mockResolvedValue(undefined);
+  const onClose = jest.fn();
+  render(<SandboxStatusPanel workbench={WB} status={s} error={null} onRefresh={onRefresh} onClose={onClose} {...extra} />);
+  return { onRefresh, onClose };
+}
+
+afterEach(() => {
+  cleanup();
+  jest.clearAllMocks();
+});
+
+describe('formatSpan and formatAgo', () => {
+  it.each<[number, string]>([
+    [10_000, 'less than a minute'],
+    [12 * MIN, '12 min'],
+    [2 * HOUR + 5 * MIN, '2 h'],
+    [50 * HOUR, '2 d'],
+    [-5_000, 'less than a minute'],
+  ])('formatSpan(%i) is %s', (ms, text) => {
+    expect(formatSpan(ms)).toBe(text);
+  });
+
+  it.each<[number, string]>([
+    [20_000, 'just now'],
+    [12 * MIN, '12 min ago'],
+    [3 * HOUR, '3 h ago'],
+  ])('formatAgo for %i ms is %s', (ms, text) => {
+    expect(formatAgo(ago(ms))).toBe(text);
+  });
+});
+
+describe('sandboxStatusNeedsAttention', () => {
+  it.each<[string, WorkbenchSandboxStatus | null, 'warn' | 'danger' | null]>([
+    ['no status', null, null],
+    ['a healthy box', status(), null],
+    ['failed', status({ state: 'failed' }), 'danger'],
+    ['lost', status({ state: 'lost' }), 'warn'],
+    ['a warn warning', status({ work: work({ warning: 'Old work', warningLevel: 'warn' }) }), 'warn'],
+    ['a danger warning', status({ work: work({ warning: 'At risk', warningLevel: 'danger' }) }), 'danger'],
+    ['a thread with no work', status({ work: null }), null],
+  ])('%s', (_name, s, expected) => {
+    expect(sandboxStatusNeedsAttention(s)).toBe(expected);
+  });
+});
+
+describe('SandboxStatusPanel', () => {
+  it.each<[string, Partial<WorkbenchSandboxStatus>, string, RegExp | null]>([
+    ['idle with sleep', { state: 'idle', headline: 'Idle. It goes to sleep in 12 minutes.', since: ago(2 * HOUR), sleepsAt: ago(-12 * MIN) }, 'Idle. It goes to sleep in 12 minutes.', /^Up for 2 h$/],
+    ['running', { state: 'running', headline: 'The agent is working.', since: ago(30 * MIN) }, 'The agent is working.', /^Up for 30 min$/],
+    ['asleep', { state: 'asleep', headline: 'Asleep. It wakes in seconds.', since: ago(3 * HOUR) }, 'Asleep. It wakes in seconds.', /^Asleep for 3 h$/],
+    ['hibernated', { state: 'hibernated', headline: 'Hibernated. Waking takes a few minutes.', since: ago(26 * HOUR) }, 'Hibernated. Waking takes a few minutes.', /^Asleep for 1 d$/],
+    ['lost with a replacement', { state: 'lost', headline: 'The box was lost. Talyn is starting a new one.', replacementStarting: true, since: ago(HOUR) }, 'The box was lost. Talyn is starting a new one.', null],
+    ['failed', { state: 'failed', headline: 'The session could not start.', detail: 'The setup script failed.' }, 'The session could not start.', null],
+  ])('%s shows its headline', (_name, over, headline, since) => {
+    renderPanel(status(over));
+    expect(screen.getByTestId('sandbox-headline')).toHaveTextContent(headline);
+    expect(screen.getByTestId('sandbox-status-panel')).toHaveAttribute('data-state', over.state);
+    if (since) expect(screen.getByText(since)).toBeInTheDocument();
+    else expect(screen.queryByText(/^(Up|Asleep) for/)).not.toBeInTheDocument();
+  });
+
+  it('shows the detail, host and size', () => {
+    renderPanel(status({ detail: 'The setup script failed.' }));
+    expect(screen.getByText('The setup script failed.')).toBeInTheDocument();
+    expect(screen.getByText('hetzner-64')).toBeInTheDocument();
+    expect(screen.getByText('Size: Standard · 4 GB, 4 vCPU')).toBeInTheDocument();
+  });
+
+  it('shows a loading line and then an error when there is no status', () => {
+    const { rerender } = render(<SandboxStatusPanel workbench={WB} status={null} error={null} onRefresh={jest.fn()} />);
+    expect(screen.getByText('Reading the sandbox status')).toBeInTheDocument();
+    rerender(<SandboxStatusPanel workbench={WB} status={null} error="Not found" onRefresh={jest.fn()} />);
+    expect(screen.getByText('Not found')).toBeInTheDocument();
+  });
+
+  it.each<[string, Partial<SandboxWorkSafety>, 'warn' | 'danger' | null]>([
+    ['warn', { warning: 'The work is not saved for 40 minutes.', warningLevel: 'warn' }, 'warn'],
+    ['danger', { warning: 'The box is lost and the work is not saved.', warningLevel: 'danger' }, 'danger'],
+    ['no warning', { warning: null, warningLevel: null }, null],
+  ])('the work warning banner for %s', (_name, over, level) => {
+    renderPanel(status({ work: work(over) }));
+    const banner = screen.queryByTestId('sandbox-work-warning');
+    if (!level) {
+      expect(banner).not.toBeInTheDocument();
+      return;
+    }
+    expect(banner).toHaveAttribute('data-level', level);
+    expect(banner).toHaveTextContent(over.warning!);
+    expect(banner?.className).toContain(level === 'danger' ? 'text-destructive' : 'text-amber-700');
+  });
+
+  it.each<[string, Partial<SandboxWorkSafety>, string[]]>([
+    ['nothing saved', {}, ['No checkpoint yet']],
+    ['a checkpoint and a newer check', { savedAt: ago(12 * MIN), checkedAt: ago(2 * MIN) }, ['Last checkpoint 12 min ago', 'Checked 2 min ago: no new changes']],
+    ['uncommitted files and unpushed commits', { uncommitted: { files: 3, added: 20, removed: 4 }, unpushedCommits: 2 }, ['Not committed: 3 files, +20 -4', '2 commits not on GitHub']],
+    ['one unpushed commit', { unpushedCommits: 1 }, ['1 commit not on GitHub']],
+    ['a pushed branch with clean files', { uncommitted: { files: 0, added: 0, removed: 0 }, unpushedCommits: 0, branchPushed: true }, ['All changes are committed', 'Branch is pushed']],
+    ['failed saves', { failures: 2, lastFailure: 'The upload timed out', lastFailureAt: ago(5 * MIN) }, ['The last 2 saves failed (5 min ago): The upload timed out']],
+  ])('work safety: %s', (_name, over, lines) => {
+    renderPanel(status({ work: work(over) }));
+    const list = screen.getByTestId('sandbox-work');
+    for (const line of lines) expect(list).toHaveTextContent(line);
+  });
+
+  it('hides the checked line when it is older than the checkpoint', () => {
+    renderPanel(status({ work: work({ savedAt: ago(2 * MIN), checkedAt: ago(12 * MIN) }) }));
+    expect(screen.queryByText(/no new changes/)).not.toBeInTheDocument();
+  });
+
+  it('has no work section for a thread', () => {
+    renderPanel(status({ work: null }));
+    expect(screen.queryByTestId('sandbox-work')).not.toBeInTheDocument();
+  });
+
+  it('lists the activity', () => {
+    renderPanel(
+      status({
+        activity: [
+          { kind: 'turn', text: 'The agent is working', since: null, chatId: 'c1' },
+          { kind: 'script', text: 'The run script is running', since: null, name: 'run' },
+        ],
+      })
+    );
+    expect(screen.getByText('The agent is working')).toBeInTheDocument();
+    expect(screen.getByText('The run script is running')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing is running.')).not.toBeInTheDocument();
+  });
+
+  it('says nothing is running when the activity is empty', () => {
+    renderPanel(status({ activity: [] }));
+    expect(screen.getByText('Nothing is running.')).toBeInTheDocument();
+  });
+
+  it.each<[string, Partial<WorkbenchSandboxStatus['fleet']>, boolean]>([
+    ['the fleet did not answer', { known: false, error: 'timeout' }, true],
+    ['the fleet was not asked', { known: false, error: null }, false],
+    ['the fleet answered', { known: true, error: null }, false],
+  ])('the fleet line when %s', (_name, fleet, shown) => {
+    renderPanel(status({ fleet: { known: true, status: null, phase: null, error: null, ...fleet } }));
+    expect(Boolean(screen.queryByText('The fleet did not answer. Some facts are unknown.'))).toBe(shown);
+  });
+
+  it('shows the last problem', () => {
+    renderPanel(status({ problem: { text: 'The box was lost on its host.', at: ago(4 * MIN) } }));
+    expect(screen.getByTestId('sandbox-problem')).toHaveTextContent('The box was lost on its host. · 4 min ago');
+  });
+
+  it.each<[string, SandboxStatusAction[], string[], string[]]>([
+    ['no actions', [], [], ['Wake', 'Retry', 'Change size', 'Show setup output']],
+    ['wake only', [action('wake', 'Wake')], ['Wake'], ['Retry', 'Change size', 'Show setup output']],
+    [
+      'retry and setup output',
+      [action('retry', 'Retry'), action('show_setup_output', 'Show setup output')],
+      ['Retry', 'Show setup output'],
+      ['Wake', 'Change size'],
+    ],
+    ['resize', [action('resize', 'Change size')], ['Change size'], ['Wake', 'Retry']],
+  ])('actions: %s', (_name, actions, shown, hidden) => {
+    renderPanel(status({ actions }));
+    for (const label of shown) expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    for (const label of hidden) expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+  });
+
+  it('calls wake at once when confirm is null, then refreshes', async () => {
+    wake.mockResolvedValue({ status: 'resuming' });
+    const { onRefresh } = renderPanel(status({ state: 'asleep', actions: [action('wake', 'Wake')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wake' }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(wake).toHaveBeenCalledWith('wb1');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('asks before retry when confirm is set, and calls it only after Confirm', async () => {
+    retry.mockResolvedValue({ ...WB, status: 'provisioning' });
+    const upsert = jest.spyOn(useWorkbenchStore.getState(), 'upsertWorkbench');
+    const onHoldOpen = jest.fn();
+    const { onRefresh } = renderPanel(
+      status({ state: 'failed', actions: [action('retry', 'Retry', 'Retry starts a new box. Work that is not saved is lost.')] }),
+      { onHoldOpen }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.getByText('Retry starts a new box. Work that is not saved is lost.')).toBeInTheDocument();
+    expect(onHoldOpen).toHaveBeenLastCalledWith(true);
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === 'Retry')!);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(retry).toHaveBeenCalledWith('wb1');
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ status: 'provisioning' }));
+    expect(onHoldOpen).toHaveBeenLastCalledWith(false);
+    upsert.mockRestore();
+  });
+
+  it('does not call retry when the confirmation is cancelled', () => {
+    renderPanel(status({ state: 'failed', actions: [action('retry', 'Retry', 'Are you sure?')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('shows an action error in the panel', async () => {
+    wake.mockRejectedValue(new Error('The fleet is full'));
+    renderPanel(status({ actions: [action('wake', 'Wake')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wake' }));
+    expect(await screen.findByText('The fleet is full')).toBeInTheDocument();
+  });
+
+  it('opens a size picker with the current size marked, then resizes', async () => {
+    resize.mockResolvedValue({ outcome: 'after_turn', size: 'large', rememberedForRepository: false, continued: false });
+    const { onRefresh } = renderPanel(status({ actions: [action('resize', 'Change size')] }));
+    expect(screen.queryByTestId('sandbox-size-picker')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Change size' }));
+    const current = screen.getByRole('button', { name: /Standard · 4 GB/ });
+    expect(current).toBeDisabled();
+    expect(current).toHaveTextContent('Current');
+    fireEvent.click(screen.getByRole('button', { name: /Large · 12 GB/ }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(resize).toHaveBeenCalledWith('wb1', { size: 'large' });
+    expect(screen.getByText('The move starts when the current turn ends.')).toBeInTheDocument();
+  });
+
+  it('asks before a resize with a confirmation', () => {
+    renderPanel(status({ actions: [action('resize', 'Change size', 'The box restarts.')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change size' }));
+    fireEvent.click(screen.getByRole('button', { name: /Medium · 8 GB/ }));
+    expect(resize).not.toHaveBeenCalled();
+    expect(screen.getByText('The box restarts.')).toBeInTheDocument();
+  });
+
+  it('opens the setup output tab and closes the panel', () => {
+    const { onClose } = renderPanel(status({ actions: [action('show_setup_output', 'Show setup output')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show setup output' }));
+    expect(useWorkbenchStore.getState().terminalTab).toBe('setup');
+    expect(useWorkbenchStore.getState().terminalOpen).toBe(true);
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('SandboxStatusChip', () => {
+  it.each<[string, WorkbenchSandboxStatus, 'warn' | 'danger' | null]>([
+    ['healthy', status(), null],
+    ['a work warning', status({ work: work({ warning: 'Not saved', warningLevel: 'warn' }) }), 'warn'],
+    ['failed', status({ state: 'failed' }), 'danger'],
+  ])('shows the warning dot for %s', async (_name, s, level) => {
+    sandboxStatus.mockResolvedValue(s);
+    render(<SandboxStatusChip workbench={WB} />);
+    await waitFor(() => expect(sandboxStatus).toHaveBeenCalledWith('wb1'));
+    if (level) expect(await screen.findByTestId('sandbox-chip-warning')).toHaveAttribute('data-level', level);
+    else {
+      await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(1));
+      expect(screen.queryByTestId('sandbox-chip-warning')).not.toBeInTheDocument();
+    }
+  });
+
+  it('opens the panel and reads the status again', async () => {
+    sandboxStatus.mockResolvedValue(status({ headline: 'Idle. It goes to sleep in 5 minutes.' }));
+    render(<SandboxStatusChip workbench={WB} />);
+    await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox/ }));
+    expect(await screen.findByText('Idle. It goes to sleep in 5 minutes.')).toBeInTheDocument();
+    expect(sandboxStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads again when the session row changes', async () => {
+    sandboxStatus.mockResolvedValue(status());
+    const { rerender } = render(<SandboxStatusChip workbench={WB} />);
+    await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(1));
+    rerender(<SandboxStatusChip workbench={WB} />);
+    expect(sandboxStatus).toHaveBeenCalledTimes(1);
+    rerender(<SandboxStatusChip workbench={{ ...WB, sandboxState: 'suspended' } as Workbench} />);
+    await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(2));
+  });
+});
