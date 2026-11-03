@@ -4,7 +4,15 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { SandboxStatusAction, SandboxWorkSafety, Workbench, WorkbenchChat, WorkbenchSandboxStatus } from '@talyn/shared';
+import type {
+  SandboxStartInfo,
+  SandboxStartLayer,
+  SandboxStatusAction,
+  SandboxWorkSafety,
+  Workbench,
+  WorkbenchChat,
+  WorkbenchSandboxStatus,
+} from '@talyn/shared';
 import {
   SandboxStatusChip,
   SandboxStatusPanel,
@@ -318,6 +326,142 @@ describe('SandboxStatusPanel', () => {
     expect(useWorkbenchStore.getState().terminalTab).toBe('setup');
     expect(useWorkbenchStore.getState().terminalOpen).toBe(true);
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('How this box started', () => {
+  function start(over: Partial<SandboxStartInfo> = {}): SandboxStartInfo {
+    return {
+      image: {
+        layer: 'repo',
+        label: 'The shared image for this repository',
+        detail: 'The image has the repository and its own setup. The box ran the Setup list steps itself.',
+        repoCommit: 'abc123def4567890',
+        builtAt: null,
+        userLayerPending: true,
+        repoLayerPending: false,
+        pending: 'The fleet is building a new image with the Setup list. A new box uses it when it is ready.',
+        stale: false,
+      },
+      timeline: {
+        sandboxId: 'box',
+        cause: 'new',
+        requestedAt: ago(40 * MIN),
+        totalMs: 380_000,
+        capacityWaitMs: 90_000,
+        steps: [
+          { kind: 'capacity_wait', label: 'Waited for a free sandbox', durationMs: 90_000, ok: null },
+          { kind: 'box', label: 'Box started', durationMs: 20_000, ok: null },
+          { kind: 'checkout', label: 'Checked out the branch', durationMs: 4_000, ok: null },
+          { kind: 'repository_setup', label: 'Repository setup', durationMs: 6_000, ok: true },
+          { kind: 'box_steps', label: 'Setup list steps', durationMs: 312_000, ok: false },
+          { kind: 'setup_step', label: 'Install sqlx', durationMs: 12_000, ok: true },
+          { kind: 'setup_step', label: 'Start the database', durationMs: 300_000, ok: false, detail: 'timed out' },
+          { kind: 'ready', label: 'Ready', durationMs: 380_000, ok: null },
+        ],
+      },
+      lastWake: { at: ago(10 * MIN), durationMs: 130_000, from: 'storage', ok: true, text: 'Restored from storage in 2m 10s.' },
+      recent: [
+        { at: ago(40 * MIN), totalMs: 380_000, layer: 'repo', thisSession: true },
+        { at: ago(3 * HOUR), totalMs: 48_000, layer: 'base', thisSession: false },
+      ],
+      medianMs: 48_000,
+      comparison: 'This start took 6m 20s. The median start for this repository is 48s.',
+      slow: true,
+      note: null,
+      ...over,
+    };
+  }
+
+  it('shows the image, the timeline with its failed steps, the last wake, the slow start and the recent starts', () => {
+    renderPanel(status({ start: start() }));
+    expect(screen.getByText('How this box started')).toBeInTheDocument();
+    const image = screen.getByTestId('sandbox-start-image');
+    expect(image).toHaveAttribute('data-layer', 'repo');
+    expect(image).toHaveTextContent('Image: The shared image for this repository');
+    expect(image).toHaveTextContent('Commit abc123d');
+    expect(screen.getByTestId('sandbox-start-pending')).toHaveTextContent('The fleet is building a new image');
+
+    const rows = screen.getByTestId('sandbox-start-timeline').querySelectorAll('li');
+    expect(Array.from(rows).map((r) => r.getAttribute('data-kind'))).toEqual([
+      'capacity_wait', 'box', 'checkout', 'repository_setup', 'box_steps', 'setup_step', 'setup_step', 'ready',
+    ]);
+    expect(rows[0]).toHaveTextContent('Waited for a free sandbox1m 30s');
+    expect(rows[5]).toHaveAttribute('data-ok', 'true');
+    expect(rows[6]).toHaveAttribute('data-ok', 'false');
+    expect(rows[6]).toHaveTextContent('Start the database(timed out)5m 0s');
+    expect(rows[6]).toHaveClass('text-destructive');
+    expect(rows[7]).toHaveTextContent('Ready6m 20s');
+
+    const comparison = screen.getByTestId('sandbox-start-comparison');
+    expect(comparison).toHaveAttribute('data-slow', 'true');
+    expect(comparison).toHaveTextContent('This start took 6m 20s. The median start for this repository is 48s.');
+    expect(screen.getByTestId('sandbox-start-wake')).toHaveTextContent('Restored from storage in 2m 10s. · 10 min ago');
+    const recent = screen.getByTestId('sandbox-start-recent');
+    expect(recent).toHaveTextContent('40 min ago · repository image · this session6m 20s');
+    expect(recent).toHaveTextContent('3 h ago · base image48s');
+  });
+
+  it.each<[SandboxStartLayer | null, string]>([
+    ['user', 'Your image for this repository'],
+    ['repo', 'The shared image for this repository'],
+    ['legacy', 'An older image for this repository'],
+    ['base', 'The base image, with a full clone'],
+    [null, 'Not known'],
+  ])('names the %s image', (layer, label) => {
+    renderPanel(status({ start: start({ image: { ...start().image!, layer, label, pending: null, repoCommit: null } }) }));
+    expect(screen.getByTestId('sandbox-start-image')).toHaveAttribute('data-layer', layer ?? 'unknown');
+    expect(screen.getByTestId('sandbox-start-image')).toHaveTextContent(`Image: ${label}`);
+    expect(screen.queryByTestId('sandbox-start-pending')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Commit/)).not.toBeInTheDocument();
+  });
+
+  it('shows a normal start without the warning, and a build time when the fleet gives one', () => {
+    renderPanel(status({
+      start: start({
+        slow: false,
+        comparison: 'This start took 50s. The median start for this repository is 48s.',
+        image: { ...start().image!, builtAt: ago(2 * HOUR), stale: true },
+      }),
+    }));
+    expect(screen.getByTestId('sandbox-start-comparison')).toHaveAttribute('data-slow', 'false');
+    expect(screen.getByTestId('sandbox-start-image')).toHaveTextContent('Commit abc123d · Built 2 h ago');
+    expect(screen.getByText('A newer image exists. A new box boots it.')).toBeInTheDocument();
+  });
+
+  it('says what Talyn does not know, and leaves out what is empty', () => {
+    renderPanel(status({
+      start: start({
+        image: null, timeline: null, lastWake: null, recent: [], medianMs: null, comparison: null, slow: false,
+        note: 'Talyn has no start times for this box. A box that started before Talyn kept them has none.',
+      }),
+    }));
+    expect(screen.getByTestId('sandbox-start-note')).toHaveTextContent('Talyn has no start times for this box.');
+    for (const id of ['sandbox-start-image', 'sandbox-start-timeline', 'sandbox-start-wake', 'sandbox-start-recent', 'sandbox-start-comparison']) {
+      expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+    }
+  });
+
+  it('shows a row that was not measured, and a failed wake', () => {
+    renderPanel(status({
+      start: start({
+        timeline: { ...start().timeline!, steps: [{ kind: 'box_steps', label: 'Setup list steps', durationMs: null, ok: null }] },
+        lastWake: { at: ago(MIN), durationMs: 300_000, from: 'storage', ok: false, text: 'A restore from storage failed after 5m 0s.' },
+      }),
+    }));
+    expect(screen.getByTestId('sandbox-start-timeline')).toHaveTextContent('Setup list stepsnot measured');
+    expect(screen.getByTestId('sandbox-start-wake')).toHaveClass('text-destructive');
+  });
+
+  it.each<[string, WorkbenchSandboxStatus]>([
+    ['an older backend that sends no start', status()],
+    ['a start with nothing in it', status({ start: start({ image: null, timeline: null, lastWake: null, recent: [], comparison: null, note: null }) })],
+    ['a null start', status({ start: null })],
+  ])('has no section for %s', (_name, s) => {
+    renderPanel(s);
+    expect(screen.getByTestId('sandbox-headline')).toBeInTheDocument();
+    expect(screen.queryByText('How this box started')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sandbox-start')).not.toBeInTheDocument();
   });
 });
 

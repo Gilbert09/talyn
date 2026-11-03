@@ -171,6 +171,39 @@ describe('Sandbox tab', () => {
     expect(sandboxStatus.mock.calls.length).toBe(hidden);
   });
 
+  it('shows how the box started, and no section for an old payload', async () => {
+    sandboxStatus.mockResolvedValue(
+      status({
+        start: {
+          image: {
+            layer: 'user', label: 'Your image for this repository', detail: 'The image has the repository, its setup and the Setup list steps.',
+            repoCommit: null, builtAt: null, userLayerPending: false, repoLayerPending: false, pending: null, stale: false,
+          },
+          timeline: {
+            sandboxId: 'box', cause: 'new', requestedAt: null, totalMs: 47_000, capacityWaitMs: null,
+            steps: [
+              { kind: 'box', label: 'Box started', durationMs: 20_000, ok: null },
+              { kind: 'setup_step', label: 'Install sqlx', durationMs: 12_000, ok: false, detail: 'exit 101' },
+              { kind: 'ready', label: 'Ready', durationMs: 47_000, ok: null },
+            ],
+          },
+          lastWake: null, recent: [], medianMs: null, comparison: null, slow: false, note: null,
+        },
+      })
+    );
+    useWorkbenchStore.setState({ sideTab: 'sandbox' });
+    const first = renderPanel();
+    expect(await screen.findByText('How this box started')).toBeInTheDocument();
+    expect(screen.getByTestId('sandbox-start-image')).toHaveAttribute('data-layer', 'user');
+    expect(screen.getByTestId('sandbox-start-timeline')).toHaveTextContent('Install sqlx(exit 101)12s');
+    first.unmount();
+
+    sandboxStatus.mockResolvedValue(status());
+    renderPanel();
+    expect(await screen.findByTestId('sandbox-headline')).toBeInTheDocument();
+    expect(screen.queryByText('How this box started')).not.toBeInTheDocument();
+  });
+
   it('the chip opens the tab', async () => {
     useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false });
     render(<SandboxStatusChip workbench={WB} chat={chat} />);

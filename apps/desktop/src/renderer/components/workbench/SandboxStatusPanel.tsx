@@ -3,6 +3,7 @@ import {
   Activity,
   Archive,
   ArrowRightLeft,
+  Check,
   CircleHelp,
   CirclePause,
   ChevronRight,
@@ -15,8 +16,11 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import {
+  formatDurationMs,
   SANDBOX_SIZES,
   type SandboxSize,
+  type SandboxStartInfo,
+  type SandboxStartLayer,
   type SandboxStatusAction,
   type SandboxStatusState,
   type SandboxWorkSafety,
@@ -321,6 +325,117 @@ function WorkSafety({ work, now }: { work: SandboxWorkSafety; now: number }) {
   );
 }
 
+const START_LAYER_SHORT: Record<SandboxStartLayer, string> = {
+  user: 'your image',
+  repo: 'repository image',
+  legacy: 'older image',
+  base: 'base image',
+};
+
+/** True when the backend sent anything for "How this box started". An older backend sends nothing. */
+function hasStartFacts(start: SandboxStartInfo | null | undefined): start is SandboxStartInfo {
+  if (!start) return false;
+  return Boolean(start.image || start.timeline?.steps.length || start.lastWake || start.recent.length || start.comparison || start.note);
+}
+
+/** The image, the start timeline, the last wake and the repository's recent starts. */
+function BoxStart({ start, now }: { start: SandboxStartInfo; now: number }) {
+  const { image, timeline } = start;
+  return (
+    <div className="space-y-2 text-xs" data-testid="sandbox-start">
+      {image && (
+        <div className="space-y-0.5" data-testid="sandbox-start-image" data-layer={image.layer ?? 'unknown'}>
+          <p>
+            <span className="text-muted-foreground">Image: </span>
+            <span className="font-medium">{image.label}</span>
+          </p>
+          <p className="text-muted-foreground">{image.detail}</p>
+          {(image.repoCommit || image.builtAt) && (
+            <p className="text-muted-foreground">
+              {image.repoCommit && (
+                <>
+                  Commit <span className="font-mono">{image.repoCommit.slice(0, 7)}</span>
+                </>
+              )}
+              {image.repoCommit && image.builtAt && ' · '}
+              {image.builtAt && `Built ${formatAgo(image.builtAt, now)}`}
+            </p>
+          )}
+          {image.pending && <p data-testid="sandbox-start-pending">{image.pending}</p>}
+          {image.stale && <p>A newer image exists. A new box boots it.</p>}
+        </div>
+      )}
+      {start.comparison && (
+        <p
+          data-testid="sandbox-start-comparison"
+          data-slow={start.slow ? 'true' : 'false'}
+          className={cn(start.slow ? 'flex items-start gap-1.5 text-amber-700 dark:text-amber-300' : 'text-muted-foreground')}
+        >
+          {start.slow && <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />}
+          <span>{start.comparison}</span>
+        </p>
+      )}
+      {timeline && timeline.steps.length > 0 && (
+        <ul className="space-y-0.5" data-testid="sandbox-start-timeline">
+          {timeline.steps.map((step, i) => (
+            <li
+              key={`${step.kind}-${i}`}
+              data-kind={step.kind}
+              data-ok={step.ok === null ? 'unknown' : String(step.ok)}
+              className={cn(
+                'flex items-baseline justify-between gap-2',
+                step.kind === 'setup_step' && 'pl-4',
+                step.kind === 'ready' && 'border-t pt-0.5 font-medium',
+                step.ok === false && 'text-destructive'
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-1">
+                {step.ok === false && <CircleX className="h-3 w-3 shrink-0" aria-label="Failed" />}
+                {step.ok === true && step.kind === 'setup_step' && (
+                  <Check className="h-3 w-3 shrink-0 text-emerald-500" aria-label="Done" />
+                )}
+                <span className="truncate">{step.label}</span>
+                {step.detail && <span className="shrink-0 text-muted-foreground">({step.detail})</span>}
+              </span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {step.durationMs === null ? 'not measured' : formatDurationMs(step.durationMs)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {start.lastWake && (
+        <p data-testid="sandbox-start-wake" className={cn(!start.lastWake.ok && 'text-destructive')}>
+          {start.lastWake.text}
+          <span className="text-muted-foreground"> · {formatAgo(start.lastWake.at, now)}</span>
+        </p>
+      )}
+      {start.recent.length > 0 && (
+        <div data-testid="sandbox-start-recent">
+          <p className="text-muted-foreground">Recent starts of this repository</p>
+          <ul className="space-y-0.5">
+            {start.recent.map((r) => (
+              <li key={`${r.at}-${r.totalMs}`} className="flex justify-between gap-2">
+                <span className="text-muted-foreground">
+                  {formatAgo(r.at, now)}
+                  {r.layer ? ` · ${START_LAYER_SHORT[r.layer]}` : ''}
+                  {r.thisSession ? ' · this session' : ''}
+                </span>
+                <span className="tabular-nums">{formatDurationMs(r.totalMs)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {start.note && (
+        <p className="text-muted-foreground" data-testid="sandbox-start-note">
+          {start.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
 type Pending = { action: SandboxStatusAction; size?: SandboxSize };
 
 /** What the sandbox is doing, in plain words. The backend writes the words. */
@@ -472,6 +587,12 @@ export function SandboxStatusPanel({
       {work && (
         <Section title="Work">
           <WorkSafety work={work} now={now} />
+        </Section>
+      )}
+
+      {hasStartFacts(status.start) && (
+        <Section title="How this box started">
+          <BoxStart start={status.start} now={now} />
         </Section>
       )}
 

@@ -91,6 +91,119 @@ export interface SandboxStatusProblem {
   at: string | null;
 }
 
+/** The image a box booted: `SandboxImageLayer` in `setupLayers.ts`. */
+export type SandboxStartLayer = 'user' | 'repo' | 'legacy' | 'base';
+
+/** The image the box booted, in plain words. */
+export interface SandboxStartImage {
+  /** Null: the fleet did not say. */
+  layer: SandboxStartLayer | null;
+  /** For example "Your image for this repository". */
+  label: string;
+  /** What the image holds and what the box did itself. */
+  detail: string;
+  /** The repository commit in the image. Null: the image holds no checkout, or the fleet did not say. */
+  repoCommit: string | null;
+  /** When the image was built. Null: the fleet does not say. */
+  builtAt?: string | null;
+  /** The fleet is building a newer user layer or repo layer. Null: not known. */
+  userLayerPending: boolean | null;
+  repoLayerPending: boolean | null;
+  /** One line about a newer image that the fleet builds. Null: none. */
+  pending: string | null;
+  /** True: a box made now boots a newer image. Null: not known. */
+  stale?: boolean | null;
+}
+
+/**
+ * - `capacity_wait`: the box waited for a free sandbox.
+ * - `box`: the fleet made the box and booted it.
+ * - `checkout` or `clone`: the branch, on the image's checkout or from a full clone.
+ * - `repository_setup`: the repository's own setup command.
+ * - `box_steps`: the Setup list steps on the box, all together. `setup_step` rows follow it.
+ * - `setup_step`: one Setup list step.
+ * - `ready`: from the request for the box to the end of the setup.
+ */
+export type SandboxStartStepKind =
+  | 'capacity_wait'
+  | 'box'
+  | 'checkout'
+  | 'clone'
+  | 'repository_setup'
+  | 'box_steps'
+  | 'setup_step'
+  | 'ready';
+
+/** One row of the start timeline. */
+export interface SandboxStartStep {
+  kind: SandboxStartStepKind;
+  label: string;
+  /** Null: not measured. */
+  durationMs: number | null;
+  /** False: it failed. Null: not known, or the row cannot fail. */
+  ok: boolean | null;
+  /** For example "exit 1" or "timed out". */
+  detail?: string | null;
+}
+
+/** How this box started, as Talyn measured it. */
+export interface SandboxStartTimeline {
+  sandboxId: string | null;
+  /** Why Talyn made this box. */
+  cause: 'new' | 'move' | 'lost' | 'restore' | null;
+  /** When Talyn asked the fleet for the box. Null: not measured. */
+  requestedAt: string | null;
+  /** From the request for the box to the end of the setup. Null: not measured. */
+  totalMs: number | null;
+  /** The wait for a free sandbox. Null or 0: no wait. */
+  capacityWaitMs: number | null;
+  steps: SandboxStartStep[];
+}
+
+/** The last time Talyn woke this box. */
+export interface SandboxWake {
+  at: string;
+  durationMs: number | null;
+  /** `host`: the box woke from its host's disk. `storage`: the fleet restored it from object storage. */
+  from: 'host' | 'storage';
+  ok: boolean;
+  /** For example "Restored from storage in 2m 10s." */
+  text: string;
+}
+
+/** One recent box start of the repository. */
+export interface SandboxRecentStart {
+  at: string;
+  totalMs: number;
+  layer: SandboxStartLayer | null;
+  /** A box of this session. */
+  thisSession: boolean;
+}
+
+/** The "How this box started" section. */
+export interface SandboxStartInfo {
+  image: SandboxStartImage | null;
+  timeline: SandboxStartTimeline | null;
+  lastWake: SandboxWake | null;
+  /** The repository's recent box starts, newest first. */
+  recent: SandboxRecentStart[];
+  /** The median start of the repository's other recent boxes. Null: too few to say. */
+  medianMs: number | null;
+  /** For example "This start took 6m 20s. The median start for this repository is 48s." */
+  comparison: string | null;
+  /** This start took much longer than the median. */
+  slow: boolean;
+  /** What Talyn does not know, in words. Null: nothing to say. */
+  note: string | null;
+}
+
+/** A start is slow when it takes this many times the median, and at least {@link SANDBOX_SLOW_START_MIN_EXTRA_MS} more. */
+export const SANDBOX_SLOW_START_FACTOR = 2;
+/** A start under a minute over the median is not slow, whatever the factor says. */
+export const SANDBOX_SLOW_START_MIN_EXTRA_MS = 60_000;
+/** Fewer other starts than this give no median. */
+export const SANDBOX_START_MEDIAN_MIN = 3;
+
 export interface WorkbenchSandboxStatus {
   workbenchId: string;
   /** When the backend assembled this answer. */
@@ -117,6 +230,8 @@ export interface WorkbenchSandboxStatus {
   /** The last error or recovery note, with its time. */
   problem: SandboxStatusProblem | null;
   actions: SandboxStatusAction[];
+  /** How the box started: its image, its start timeline and recent starts. Absent on an older backend. */
+  start?: SandboxStartInfo | null;
 }
 
 /** Unsaved work older than this shows a warning in the Sandbox panel. */
