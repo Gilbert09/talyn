@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Operator console: session boxes on the Runs page, a Sessions page, host health (2026-11-03)
+
+**What was wrong.** The Runs page joined fleet sandboxes only to `talyn-<task>` ids. Every session and thread box (`talyn-wb-<24 hex>[-rN]--<hash>`) showed "orphan" with no owner. The gateway's sandbox index names no host, so HOST was blank for every box. The backend folds `suspended` into the `running` run status, so every sleeping box showed "wedged?". Run detail, events and Cancel dialled the host directly with `FLEET_API_TOKEN`, which resolves to the fleet's empty tenant and cannot see a gateway-placed box: Cancel read "no such sandbox" as "already gone" and reported success.
+
+**What changed.**
+- `services/admin/sandboxClaims.ts` reads the three id schemes (task, workbench, review unit) and finds the claiming row in three queries. "orphan" now means no Talyn row of any status names the box. A row that is archived, has moved to a newer generation, or kept the box after a failed restore makes it "superseded", with the reason.
+- The host comes from the gateway's `X-Fleet-Host` (`sandboxHost`), then from the host Talyn recorded. Hydration runs 8 at a time.
+- Each row carries the sleep state (`local`, or `storage` once `suspendUploaded`), the fleet's own status word, vCPUs, disk and the session's size. "wedged?" fires only for an awake box (starting, idle, busy).
+- Run detail, events, the stream and Cancel go through the gateway when one is configured (`adminSandboxClient`). Cancel is not offered on a live session's current box.
+- New read-only `GET /admin/sessions` and `/admin/sessions/:id`, and Sessions pages in the console. Transcript events are read as their type words only.
+- Hosts read `GET /v1/stats` beside `/v1/capacity` for health, conditions and box counts. `GET /admin/fleet/alerts` (cached 15 s) drives a banner on every page.
+- Workspace detail counts sessions, threads, loops, workflows, MCP servers, webhook endpoints and API tokens.
+
+**Not as planned, and open items.**
+- Host health is live-only. The relayed host report carries `placementPriority`, `region` and the health fields, but `recordFleetHostReport` drops them and storing them needs a migration. Placement priority is not shown anywhere yet.
+- The control plane's raised alerts (with their sustain time) have no API. The banner shows the conditions the hosts report now.
+- The `golden_stale` incident reads `goldensStale` from the metrics snapshot, which fleetd only exports to Prometheus. It never fires.
+
 ## Sandbox status panel, and save results that a person can see (2026-11-03)
 
 **The incident, read from production.** Session 95491f73 (Debugbear triage) did not work for two hours after its last checkpoint. Turn 1 ran from 15:03:33 to 15:10:15 UTC. The turn-end checkpoint saved at 15:10:51 (1554 bytes, 1 commit not pushed). At 15:11:04 the PR push failed ("the remote end hung up unexpectedly"). No turn and no event came after that until the box was lost (recovered at 15:42) and lost again after the fleetd restart (recovered at 17:32). Both restores put the commit back, and PR #128452 opened from it at 17:34. No checkpoint ran after 15:10 because the triggers were the turn end and file-changing tools during a turn, and none happened. Nothing was lost. The note "up to 141 minutes of work are missing" measured the time from the checkpoint to the loss, not to the last change, and that read as lost work. The disk I/O errors (15:07 in the box's dmesg) did not stop that save, because the bundle is staged in `/dev/shm`.
