@@ -142,6 +142,13 @@ export const MOVE_IGNORED_FILE_MAX_BYTES = 1 * MIB;
  */
 export const MOVE_IGNORED_TOTAL_MAX_BYTES = 16 * MIB;
 
+/**
+ * Free space in /dev/shm, in KiB, under which a failed write is read as a
+ * full /dev/shm: `head` writes in blocks of a few KiB, so a write that failed
+ * for space leaves less than this.
+ */
+const STAGE_FULL_KIB = 1024;
+
 /** Large ignored files named in the manifest; the rest are counted. */
 const SKIPPED_NAMES_SHOWN = 50;
 
@@ -250,11 +257,49 @@ export const MOVE_EXPORT_EXIT: Record<number, string> = {
   34: 'could not pack the ignored files',
   35: 'could not pack the agent conversations',
   36: 'could not bundle the commits',
+  37: 'there is not enough free memory in /dev/shm to stage the work',
   40: 'the work is too large to move',
   41: 'a rebase, merge, cherry-pick or bisect is in progress',
   42: 'there are commits with Git LFS files that are not pushed',
 };
 const BLOCKING_EXITS = new Set([41, 42]);
+
+/**
+ * How the export stages a file. `capped` writes stdin to `$d/<name>`, at
+ * most one byte over what is left of the cap, so the staging never holds
+ * more than the cap in all: on a 1 GiB box /dev/shm is 256 MiB. `staged`
+ * runs after `<producer> | capped <name>` with the exit for a failed
+ * producer and the pipe's statuses, and checks in this order:
+ *   1. the write: a missing file or a failed `head` is a staging failure
+ *      (30, or 37 when /dev/shm is full), never a size;
+ *   2. the size: over the cap in all is 40, and the file was cut, so the
+ *      producer's broken pipe does not count;
+ *   3. the producer: any other failure is the given exit, with its stderr.
+ * Every number is read with a check, so an empty value is never compared.
+ */
+export const MOVE_STAGE_FUNCTIONS: readonly string[] = [
+  'allzero() { for c in "$@"; do [ "$c" = 0 ] || return 1; done; }',
+  'capped() { head -c $((cap - used + 1)) > "$d/$1"; }',
+  'nowrite() {',
+  '  if [ ! -d "$d" ]; then echo "the staging folder $d was removed while the export ran" >&2; exit 30; fi',
+  '  local free=',
+  '  read -r _ _ _ free _ < <(df -Pk -- "$d" 2>/dev/null | tail -n 1) || true',
+  '  case "$free" in ""|*[!0-9]*) free= ;; esac',
+  `  if [ -n "$free" ] && [ "$free" -lt ${STAGE_FULL_KIB} ]; then echo "/dev/shm has $free KiB free, so $1 could not be written" >&2; exit 37; fi`,
+  '  echo "could not write $1 in $d" >&2; exit 30',
+  '}',
+  'staged() {',
+  '  local name=$1 code=$2 last= size=',
+  '  shift 2',
+  '  for last in "$@"; do :; done',
+  '  if [ "$last" != 0 ] || [ ! -f "$d/$name" ]; then nowrite "$name"; fi',
+  '  size=$(wc -c < "$d/$name" | tr -d " ") || nowrite "$name"',
+  '  case "$size" in ""|*[!0-9]*) nowrite "$name" ;; esac',
+  '  used=$((used + size))',
+  `  if [ "$used" -gt "$cap" ]; then echo "$name takes the work over the ${MOVE_TRANSFER_MAX_BYTES / MIB} MB a move can carry" >&2; exit 40; fi`,
+  '  allzero "$@" || exit "$code"',
+  '}',
+];
 
 /**
  * The old box's side. Writes only under /dev/shm (staging, index, temp files)
@@ -292,12 +337,10 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     'set -u',
     `d=${dir}`,
     `cap=${MOVE_TRANSFER_MAX_BYTES}`,
-    'rm -rf -- "$d" && mkdir -p -- "$d" && : > "$d/manifest.extra" || exit 30',
+    'rm -rf -- "$d" && mkdir -p -- "$d" && : > "$d/manifest.extra" || { echo "could not make the staging folder $d" >&2; exit 30; }',
+    'used=0',
     'b64() { printf %s "$1" | base64 -w 0; }',
-    'allzero() { for c in "$@"; do [ "$c" = 0 ] || return 1; done; }',
-    // A file one byte over the cap was cut, so it is refused, not sent.
-    'fits() { [ "$(stat -c %s -- "$d/$1")" -le "$cap" ] || { echo "TOO_LARGE $1" >&2; exit 40; }; }',
-    'capped() { head -c $((cap + 1)) > "$d/$1"; }',
+    ...MOVE_STAGE_FUNCTIONS,
     'gitpath() { env -u GIT_INDEX_FILE git rev-parse --git-path "$1"; }',
     // The REAL index, read only: the env points GIT_INDEX_FILE at /dev/shm.
     'real_index=$(gitpath index) || exit 31',
@@ -316,13 +359,17 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     // Commits: a bundle of every carried ref, less what the remote already has.
     `git for-each-ref --format='%(objectname) %(refname) %(upstream:short)' refs/heads refs/stash refs/talyn/checkpoints > "$d/refs.txt" || exit 31`,
     'refs=(); while IFS= read -r r; do refs+=("$r"); done < <(cut -d " " -f 2 "$d/refs.txt")',
-    'if [ "${#refs[@]}" -gt 0 ] && [ "$(git rev-list --count "${refs[@]}" --not --remotes)" -gt 0 ]; then',
+    // A failed count must stop the export: read as 0, the commits would be left behind.
+    'ahead=0',
+    'if [ "${#refs[@]}" -gt 0 ]; then ahead=$(git rev-list --count "${refs[@]}" --not --remotes) || exit 31; fi',
+    'case "$ahead" in ""|*[!0-9]*) echo "git rev-list did not count the commits" >&2; exit 31 ;; esac',
+    'if [ "$ahead" -gt 0 ]; then',
     // Unpushed commits that add LFS pointers: their objects are only in .git/lfs.
     '  if [ -d "$(gitpath lfs)" ] && git log --format= -p --no-textconv --no-ext-diff "${refs[@]}" --not --remotes 2>/dev/null | grep -q "^+version https://git-lfs.github.com/spec/v1"; then',
     '    echo LFS_UNPUSHED >&2; exit 42',
     '  fi',
     '  git bundle create - "${refs[@]}" --not --remotes | capped repo.bundle',
-    '  rc="${PIPESTATUS[*]}"; fits repo.bundle; allzero $rc || exit 36',
+    '  staged repo.bundle 36 "${PIPESTATUS[@]}"',
     'fi',
     // Paths with a clean/smudge filter (LFS, git-crypt, uv.lock) travel as raw
     // bytes: a diff would carry the cleaned text, which does not apply.
@@ -335,18 +382,18 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     'done < <(GIT_INDEX_FILE="$real_index" git check-attr -z --stdin filter < "$d/changed.list")',
     'if [ -s "$d/filtered.list" ]; then',
     '  tar -czf - --null --no-recursion -T "$d/filtered.list" | capped filtered.tgz',
-    '  rc="${PIPESTATUS[*]}"; fits filtered.tgz; allzero $rc || exit 33',
+    '  staged filtered.tgz 33 "${PIPESTATUS[@]}"',
     'fi',
     // Staged changes, against HEAD, from the real index.
     'GIT_INDEX_FILE="$real_index" git diff --cached --binary --no-ext-diff --no-textconv --no-color HEAD -- . ${excl[@]+"${excl[@]}"} | gzip -c | capped staged.patch.gz',
-    'rc="${PIPESTATUS[*]}"; fits staged.patch.gz; allzero $rc || exit 33',
+    'staged staged.patch.gz 33 "${PIPESTATUS[@]}"',
     // Unstaged and untracked: a copy of the index in /dev/shm, untracked files
     // added as intent-to-add (no blobs written), then the work tree against it.
     'rm -f -- "$GIT_INDEX_FILE"',
     'if [ -f "$real_index" ]; then cp -- "$real_index" "$GIT_INDEX_FILE" || exit 33; fi',
     'git ls-files -z -o --exclude-standard | xargs -0 -r git add -N -- || exit 33',
     'git diff --binary --no-ext-diff --no-textconv --no-color -- . ${excl[@]+"${excl[@]}"} | gzip -c | capped unstaged.patch.gz',
-    'rc="${PIPESTATUS[*]}"; fits unstaged.patch.gz; allzero $rc || exit 33',
+    'staged unstaged.patch.gz 33 "${PIPESTATUS[@]}"',
     'rm -f -- "$GIT_INDEX_FILE"',
     // Small ignored files. Each costs its size in 512-byte blocks plus a
     // 512-byte header, as in the tar. Dependency folders are counted, not sent.
@@ -376,14 +423,14 @@ export function moveExportScript(input: { workbenchId: string; sessions: MoveSes
     'done < <(GIT_INDEX_FILE="$real_index" git ls-files -z -o -i --exclude-standard --directory)',
     'if [ -s "$d/ignored.list" ]; then',
     '  tar -czf - --null --no-recursion -T "$d/ignored.list" | capped ignored.tgz',
-    '  rc="${PIPESTATUS[*]}"; fits ignored.tgz; allzero $rc || exit 34',
+    '  staged ignored.tgz 34 "${PIPESTATUS[@]}"',
     'fi',
     // The agents' conversation files, by path from /, so they land where they were.
     ': > "$d/agent.list"',
     ...sessionLines,
     'if [ -s "$d/agent.list" ]; then',
     '  tar -C / -czf - --null -T "$d/agent.list" | capped agent.tgz',
-    '  rc="${PIPESTATUS[*]}"; fits agent.tgz; allzero $rc || exit 35',
+    '  staged agent.tgz 35 "${PIPESTATUS[@]}"',
     'fi',
     // The manifest.
     'printf "HEAD %s\\n" "$head"',
@@ -850,6 +897,10 @@ function tail(text: string): string {
   return text.trim().split('\n').slice(-3).join(' ').slice(-300);
 }
 
+function lastLine(text: string): string {
+  return (text.trim().split('\n').at(-1) ?? '').slice(-300);
+}
+
 /**
  * Stop what writes the old box after the export would read it: the scripts
  * (followed here or by another instance) and every terminal. True when
@@ -888,7 +939,10 @@ async function exportFromOldBox(row: WorkbenchRow, sessions: MoveSession[]): Pro
   if (BLOCKING_EXITS.has(r.exitCode)) throw new MoveBlocked(MOVE_EXPORT_EXIT[r.exitCode]);
   if (r.exitCode !== 0) {
     const what = MOVE_EXPORT_EXIT[r.exitCode] ?? `the export exited ${r.exitCode}`;
-    throw new Error(`${what}${tail(r.stderr) ? `: ${tail(r.stderr)}` : ''}`);
+    // For these two the script's own last line says it all; the lines before
+    // are the broken pipe of a producer that was cut off.
+    const detail = r.exitCode === 37 || r.exitCode === 40 ? lastLine(r.stderr) : tail(r.stderr);
+    throw new Error(`${what}${detail ? `: ${detail}` : ''}`);
   }
   if (r.truncated) throw new Error('the export answer was cut short');
   const manifest = parseMoveManifest(r.stdout);

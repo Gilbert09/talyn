@@ -107,9 +107,13 @@ export function workSaveScript(
     `sha=$(${IDENTITY} git commit-tree --no-gpg-sign "$tree" -p "$head" -m ${shellQuote(`talyn work ${opts.kind} ${row.id}`)}) || fail "could not write the commit"`,
     'git update-ref "$ref" "$sha" || fail "could not name the commit"',
     `base=$(git rev-parse -q --verify ${shellQuote(`refs/remotes/origin/${row.baseBranch}^{commit}`)} 2>/dev/null || true)`,
-    'if [ -n "$base" ]; then git bundle create "$d/work.bundle" "$ref" --not "$base" >/dev/null 2>&1',
-    'else git bundle create "$d/work.bundle" "$ref" >/dev/null 2>&1; fi || fail "could not write the bundle"',
+    // git's own error stays on stderr, so the failure says why.
+    'if [ -n "$base" ]; then git bundle create "$d/work.bundle" "$ref" --not "$base" >/dev/null',
+    'else git bundle create "$d/work.bundle" "$ref" >/dev/null; fi || fail "could not write the bundle"',
+    '[ -f "$d/work.bundle" ] || fail "git made no bundle file"',
     'size=$(wc -c < "$d/work.bundle" | tr -d " ")',
+    // An empty or broken size must fail the save, never read as small or as too large.
+    'case "$size" in ""|*[!0-9]*) fail "could not read the size of the bundle" ;; esac',
     `if [ "$size" -gt ${max} ]; then rm -rf -- "$d"; echo "TOO_LARGE $size"; exit 0; fi`,
     'echo "BUNDLE $sha $(git log -1 --format=%ct "$sha") ${base:--} $size $(sha256_of "$d/work.bundle")"',
   ].join('\n');

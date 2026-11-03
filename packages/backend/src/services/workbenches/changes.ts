@@ -216,7 +216,10 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
   const q = shellQuote(safePath);
   const script = [
     `[ -f ${q} ] || exit 3`,
-    `[ "$(wc -c < ${q})" -le ${MAX_FILE_BYTES} ] || exit 4`,
+    // A size that cannot be read is a failed read, never "too large".
+    `n=$(wc -c < ${q} | tr -d ' ') || exit 5`,
+    `case "$n" in ''|*[!0-9]*) exit 5 ;; esac`,
+    `[ "$n" -le ${MAX_FILE_BYTES} ] || exit 4`,
     `cat ${q}`,
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });

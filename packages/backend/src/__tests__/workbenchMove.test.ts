@@ -502,6 +502,38 @@ describe('moving a session to a fresh sandbox', () => {
       expect(await row()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
     });
 
+    it.each<[string, { exitCode: number; stderr: string }, string]>([
+      [
+        'a staging file that is missing',
+        {
+          exitCode: 30,
+          stderr: `environment: line 40: /dev/shm/talyn-move-${WB}/repo.bundle: No such file or directory\nthe staging folder /dev/shm/talyn-move-${WB} was removed while the export ran`,
+        },
+        `could not stage the work in memory: environment: line 40: /dev/shm/talyn-move-${WB}/repo.bundle: No such file or directory the staging folder /dev/shm/talyn-move-${WB} was removed while the export ran`,
+      ],
+      [
+        'a full /dev/shm',
+        { exitCode: 37, stderr: "head: error writing 'repo.bundle': No space left on device\n/dev/shm has 12 KiB free, so repo.bundle could not be written" },
+        'there is not enough free memory in /dev/shm to stage the work: /dev/shm has 12 KiB free, so repo.bundle could not be written',
+      ],
+      [
+        'a bundle git could not make',
+        { exitCode: 36, stderr: 'fatal: unable to read 1234abcd: Input/output error' },
+        'could not bundle the commits: fatal: unable to read 1234abcd: Input/output error',
+      ],
+      [
+        'work over the cap',
+        { exitCode: 40, stderr: 'error: pipe broken\nfatal: write error\nrepo.bundle takes the work over the 96 MB a move can carry' },
+        'the work is too large to move: repo.bundle takes the work over the 96 MB a move can carry',
+      ],
+    ])('says what failed for %s, and calls only real excess too large', async (_label, reply, message) => {
+      replies.export = reply;
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+      expect(result).toMatchObject({ moved: false, reason: 'failed', message: expect.stringContaining(message) });
+      if (reply.exitCode !== 40) expect((result as { message?: string }).message).not.toMatch(/too large/);
+      expect(fleet.has('create')).toBe(false);
+    });
+
     it('when the session is deleted during the move, deletes the new box and not the old one', async () => {
       replies.import = async () => {
         await testDb.db.execute(sql`DELETE FROM workbenches`);
