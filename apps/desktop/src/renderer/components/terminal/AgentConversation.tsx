@@ -12,6 +12,8 @@ import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { BoxRefusalAction } from '../billing/BoxRefusalAction';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
+import { openExternal } from '../../lib/openExternal';
+import { Button } from '../ui/button';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
   buildBlocks,
@@ -20,7 +22,6 @@ import {
   groupToolRuns,
   groupedBlockSignature,
   mergeToolBlocks,
-  parseAutoPrDetails,
   stripAutoPrBlock,
   stripPlanBlocks,
 } from '@talyn/shared';
@@ -230,6 +231,8 @@ function BlockViewImpl({
         />
       );
     case 'system':
+      if (block.subtype === 'talyn_pr' && block.pullRequest)
+        return <PullRequestCard text={block.text} url={block.url} pullRequest={block.pullRequest} />;
       if (block.subtype === 'talyn_pr') return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
       if (block.subtype === 'talyn_memory' && block.memory) return <MemoryChangeCard change={block.memory} />;
       if (block.subtype === 'talyn_thread' && block.thread) return <ThreadSessionCard event={block.thread} />;
@@ -251,9 +254,8 @@ function BlockViewImpl({
 
 function TextBlock({ text }: { text: string }) {
   // A session draws a plan block as its own card, under the turn.
-  const pr = parseAutoPrDetails(text);
   const shown = stripPlanBlocks(stripAutoPrBlock(text));
-  if (!shown && !pr.ok) return null;
+  if (!shown) return null;
   return (
     // Paragraph spacing is renderMarkdownish's own (`my-1 leading-relaxed` on
     // its `p`), so this sets size and colour only. Overriding it from here
@@ -261,12 +263,6 @@ function TextBlock({ text }: { text: string }) {
     // stylesheet order.
     <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
       {shown ? renderMarkdownish(shown, 'surface') : null}
-      {pr.ok && (
-        <div className="mt-2 flex items-start gap-1.5 rounded border border-border px-3 py-2 text-xs" data-testid="pull-request-card">
-          <GitPullRequest className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>Pull request ready: {pr.details.title}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -610,6 +606,40 @@ function PermissionBlock({
         </span>
       </div>
       <ToolInputPreview toolName={toolName} toolInput={toolInput} />
+    </div>
+  );
+}
+
+
+/** The pull request Talyn opened or linked for a workbench, with a button to open it. */
+function PullRequestCard({
+  text,
+  url,
+  pullRequest,
+}: {
+  text: string;
+  url?: string;
+  pullRequest: NonNullable<Extract<GroupedBlock, { kind: 'system' }>['pullRequest']>;
+}) {
+  const label = pullRequest.adopted ? text : pullRequest.existing ? 'Linked' : 'Opened';
+  return (
+    <div className="rounded-md border border-border bg-card text-xs" data-testid="pull-request-card">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
+        <GitPullRequest className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-medium" title={pullRequest.title}>
+          {pullRequest.title ?? `Pull request #${pullRequest.number}`}
+        </span>
+        <span className="text-muted-foreground">
+          #{pullRequest.number} · {label}
+        </span>
+        {url && (
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={() => void openExternal(url)} aria-label={`Open pull request #${pullRequest.number}`}>
+              Open
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

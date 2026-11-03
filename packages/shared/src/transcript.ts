@@ -17,7 +17,7 @@
  * layer must not decide how text becomes markup.
  */
 import type { AgentEvent } from './index.js';
-import { adoptedPullRequestMessage } from './workbenchPullRequest.js';
+import { adoptedPullRequestMessage, parseAutoPrDetails } from './workbenchPullRequest.js';
 import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
 import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
 
@@ -91,6 +91,8 @@ export type Block =
       memory?: MemoryChangeEvent;
       /** Set for `subtype: 'talyn_thread'`, so a card can link to the session. */
       thread?: ThreadSessionEvent;
+      /** Set for an ok `subtype: 'talyn_pr'`, so a card can show the PR. `title` is the agent's own, when its reply had one. */
+      pullRequest?: { number: number; title?: string; existing: boolean; adopted: boolean };
     }
   | {
       kind: 'result';
@@ -141,6 +143,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   // accumulator and let the assistant path below render the final content as
   // normal blocks — unconditionally, not on an id match; see the note there.
   let streamingText = '';
+  // The title of the latest auto-PR details block, for the card the opened PR gets.
+  let lastPrTitle: string | undefined;
   let streamingMsgId: string | undefined;
 
   for (const event of events) {
@@ -222,6 +226,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           input?: unknown;
         };
         if (b.type === 'text' && b.text) {
+          const details = parseAutoPrDetails(b.text);
+          if (details.ok) lastPrTitle = details.details.title;
           blocks.push({ kind: 'text', key: `${seqKey}.${i}`, text: b.text });
         } else if (b.type === 'thinking' && b.thinking) {
           blocks.push({ kind: 'thinking', key: `${seqKey}.${i}`, text: b.thinking });
@@ -363,6 +369,16 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
             ? adoptedPullRequestMessage(pr.number as number)
             : `${pr.existing === true ? 'Linked the open pull request' : 'Opened pull request'} #${pr.number}`,
         ...(ok && typeof pr.url === 'string' ? { url: pr.url } : {}),
+        ...(ok
+          ? {
+              pullRequest: {
+                number: pr.number as number,
+                ...(lastPrTitle ? { title: lastPrTitle } : {}),
+                existing: pr.existing === true,
+                adopted: pr.adopted === true,
+              },
+            }
+          : {}),
         isError: !ok,
       });
       continue;

@@ -1,13 +1,15 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { pullRequestOutcomeEvent, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../renderer/components/terminal/AgentConversation';
 import { toastPullRequestFailures } from '../renderer/lib/workbenchNotify';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { toast } from '../renderer/stores/toast';
+import { openExternal } from '../renderer/lib/openExternal';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+jest.mock('../renderer/lib/openExternal', () => ({ openExternal: jest.fn() }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
@@ -22,33 +24,42 @@ afterEach(() => {
 });
 
 describe('the Create PR outcome in the transcript', () => {
-  it('draws a PR block as a card and hides its JSON', () => {
-    const reply = 'Done.\n\n```talyn-pr\n{"title":"feat: done","body":"Body","commitMessage":"feat: done","draft":false}\n```';
-    render(<AgentBlocks events={[at(1, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } })]} />);
-    expect(screen.getByTestId('pull-request-card')).toHaveTextContent('feat: done');
+  const reply = 'Done.\n\n```talyn-pr\n{"title":"feat: done","body":"Body","commitMessage":"feat: done","draft":false}\n```';
+  const replyEvent = at(1, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } });
+  const url = 'https://github.com/acme/app/pull/12';
+
+  it('hides the PR block and draws no card before the PR exists', () => {
+    render(<AgentBlocks events={[replyEvent]} />);
+    expect(screen.getByText('Done.')).toBeInTheDocument();
     expect(screen.queryByText(/commitMessage/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pull-request-card')).not.toBeInTheDocument();
   });
-  it('links the PR it opened', () => {
-    render(
-      <AgentBlocks
-        events={[at(3, pullRequestOutcomeEvent({ ok: true, number: 12, url: 'https://github.com/acme/app/pull/12', existing: false }))]}
-      />
-    );
-    const link = screen.getByRole('link', { name: 'Opened pull request #12' });
-    expect(link).toHaveAttribute('href', 'https://github.com/acme/app/pull/12');
-    expect(screen.getByTestId('pull-request-outcome')).not.toHaveClass('text-destructive');
+
+  it('draws a card with the title, number and Open button once the PR opens', () => {
+    render(<AgentBlocks events={[replyEvent, at(3, pullRequestOutcomeEvent({ ok: true, number: 12, url, existing: false }))]} />);
+    const card = screen.getByTestId('pull-request-card');
+    expect(card).toHaveTextContent('feat: done');
+    expect(card).toHaveTextContent('#12 · Opened');
+    fireEvent.click(screen.getByRole('button', { name: 'Open pull request #12' }));
+    expect(openExternal).toHaveBeenCalledWith(url);
+  });
+
+  it('falls back to the number when the reply had no details', () => {
+    render(<AgentBlocks events={[at(3, pullRequestOutcomeEvent({ ok: true, number: 12, url, existing: false }))]} />);
+    expect(screen.getByTestId('pull-request-card')).toHaveTextContent('Pull request #12');
   });
 
   it('says when it linked a PR that was already open', () => {
     render(<AgentBlocks events={[at(3, pullRequestOutcomeEvent({ ok: true, number: 9, url: 'u', existing: true }))]} />);
-    expect(screen.getByRole('link', { name: 'Linked the open pull request #9' })).toBeInTheDocument();
+    expect(screen.getByTestId('pull-request-card')).toHaveTextContent('#9 · Linked');
   });
 
-  it('shows the error, with no link', () => {
+  it('shows the error as a row, with no card or link', () => {
     const message = 'GitHub refused the push. The Talyn GitHub App needs Contents: Read & write on acme/app.';
     render(<AgentBlocks events={[at(3, pullRequestOutcomeEvent({ ok: false, message }))]} />);
     expect(screen.getByTestId('pull-request-outcome')).toHaveTextContent(message);
     expect(screen.getByTestId('pull-request-outcome')).toHaveClass('text-destructive');
+    expect(screen.queryByTestId('pull-request-card')).not.toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 });
