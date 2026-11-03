@@ -3,7 +3,10 @@ import type {
   RepositoryInstructions,
   RepositoryPreviewResponse,
   RepositorySandboxSizeResponse,
+  RepositorySetup,
+  SetupListStep,
   SetupRecipe,
+  SetupTiming,
   WorkbenchChangedFile,
   WorkbenchChanges,
   WorkbenchCheckpoint,
@@ -11,6 +14,7 @@ import type {
   WorkbenchPreviewLink,
   WorkbenchReadiness,
   WorkbenchTiming,
+  WorkspaceSandboxSetup,
 } from '@talyn/shared';
 import { workspaceMemories as memoriesTable } from '../../db/schema.js';
 import { cursorTimeColumn } from './cursor.js';
@@ -395,5 +399,118 @@ export function toPublicSetupRecipe(recipe: SetupRecipe) {
       typical_duration_ms: s.typicalDurationMs,
       measured_boxes: s.measuredBoxes,
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Setup list
+// ---------------------------------------------------------------------------
+
+function toPublicBoxSetupTiming(t: SetupTiming) {
+  return {
+    total_ms: t.totalMs,
+    repository_ms: t.repositoryMs,
+    learned_ms: t.learnedMs,
+    measured_at: t.measuredAt,
+    session_id: t.workbenchId,
+    box_ready_ms: t.boxReadyMs ?? null,
+    checkout_ms: t.checkoutMs ?? null,
+    setup_repository_ms: t.setupRepositoryMs ?? null,
+    setup_box_steps_ms: t.setupBoxStepsMs ?? null,
+    layer: t.layer ?? null,
+  };
+}
+
+export function toPublicSetupListStep(s: SetupListStep) {
+  return {
+    id: s.id,
+    repository_id: s.repositoryId,
+    position: s.position,
+    name: s.name,
+    command: s.command,
+    kind: s.kind,
+    run_on: s.runOn,
+    origin: s.origin,
+    status: s.status,
+    status_reason: s.statusReason,
+    status_changed_at: s.statusChangedAt,
+    accepted_by: s.acceptedBy,
+    timeout_sec: s.timeoutSec,
+    box_only_reason: s.boxOnlyReason,
+    why: s.why,
+    source_session_id: s.sourceWorkbenchId,
+    seen_count: s.seenCount,
+    session_count: s.sessionCount,
+    first_seen_at: s.firstSeenAt,
+    last_seen_at: s.lastSeenAt,
+    confirmed_at: s.confirmedAt,
+    image_applied_at: s.imageAppliedAt,
+    image_failed_at: s.imageFailedAt,
+    image_failure_reason: s.imageFailureReason,
+    box_failure_count: s.boxFailureCount,
+    box_last_failure: s.boxLastFailure,
+    last_duration_ms: s.lastDurationMs,
+    typical_duration_ms: s.typicalDurationMs,
+    measured_boxes: s.measuredBoxes,
+    ...(s.recentSessions !== undefined
+      ? { recent_needed_sessions: s.recentNeededSessions, recent_sessions: s.recentSessions, share: s.share ?? null, heavy: s.heavy ?? false }
+      : {}),
+    ...(s.verdictReason ? { verdict_reason: s.verdictReason } : {}),
+    created_at: s.createdAt,
+    updated_at: s.updatedAt,
+  };
+}
+
+function toPublicSetupListLimits(l: RepositorySetup['limits']) {
+  return {
+    image_max_steps: l.imageMaxSteps,
+    image_total_sec: l.imageTotalSec,
+    max_hosts: l.maxHosts,
+    max_user_steps: l.maxUserSteps,
+    step_max_sec: l.stepMaxSec,
+  };
+}
+
+export function toPublicRepositorySetup(setup: RepositorySetup) {
+  return {
+    object: 'repository_setup' as const,
+    repository_id: setup.repositoryId,
+    learning: !setup.learningDisabled,
+    window_days: setup.windowDays,
+    max_learned_steps: setup.maxLearnedSteps,
+    limits: toPublicSetupListLimits(setup.limits),
+    repo_setup: {
+      command: setup.repoSetup.command,
+      source: setup.repoSetup.source,
+      read_at: setup.repoSetup.readAt,
+      run_on_box: setup.repoSetup.runOnBox,
+    },
+    steps: setup.steps.map(toPublicSetupListStep),
+    hosts: setup.hosts,
+    image: setup.image
+      ? {
+          layer: setup.image.layer,
+          repo_commit: setup.image.repoCommit,
+          repo_layer_pending: setup.image.repoLayerPending,
+          user_layer_pending: setup.image.userLayerPending,
+          repo_setup_ok: setup.image.repoSetupOk,
+          applied_step_ids: setup.image.appliedStepIds,
+          checked_at: setup.image.checkedAt,
+          session_id: setup.image.workbenchId,
+        }
+      : null,
+    last_setup_timing: setup.lastSetupTiming ? toPublicBoxSetupTiming(setup.lastSetupTiming) : null,
+    timing_history: setup.timingHistory.map(toPublicBoxSetupTiming),
+  };
+}
+
+export function toPublicWorkspaceSandboxSetup(setup: WorkspaceSandboxSetup) {
+  return {
+    object: 'workspace_sandbox_setup' as const,
+    workspace_id: setup.workspaceId,
+    dotfiles: setup.dotfiles ? { slug: setup.dotfiles.slug, ref: setup.dotfiles.ref, install: setup.dotfiles.install } : null,
+    hosts: setup.hosts,
+    steps: setup.steps.map(toPublicSetupListStep),
+    limits: toPublicSetupListLimits(setup.limits),
   };
 }
