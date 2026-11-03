@@ -8,6 +8,7 @@ import { peekExternalQueueState } from '../externalQueueState.js';
 import {
   clearTrunkPause,
   getQueueEntryEstimate,
+  MAX_PR_NUMBERS_PER_LOOKUP,
   resolvePullRequests,
   resolveRepository,
   trunkKeyHash,
@@ -76,7 +77,6 @@ const inflight = new Map<string, Promise<MergeEtaAnswer>>();
 const repositoryIds = new Map<string, { id: string; expiresAt: number }>();
 const repositoryInflight = new Map<string, Promise<string | null>>();
 const PR_BATCH_WINDOW_MS = 200;
-const MAX_PR_NUMBERS = 50;
 type PrWaiter = {
   resolve: (found: ParsedTrunkPullRequest | null) => void;
   reject: (error: unknown) => void;
@@ -210,8 +210,8 @@ async function flushPrBatch(key: string, batch: PrBatch): Promise<void> {
   prBatches.delete(key);
   const numbers = [...batch.waiters.keys()];
   await Promise.all(
-    Array.from({ length: Math.ceil(numbers.length / MAX_PR_NUMBERS) }, async (_, index) => {
-      const chunk = numbers.slice(index * MAX_PR_NUMBERS, (index + 1) * MAX_PR_NUMBERS);
+    Array.from({ length: Math.ceil(numbers.length / MAX_PR_NUMBERS_PER_LOOKUP) }, async (_, index) => {
+      const chunk = numbers.slice(index * MAX_PR_NUMBERS_PER_LOOKUP, (index + 1) * MAX_PR_NUMBERS_PER_LOOKUP);
       try {
         const page = await resolvePullRequests(
           batch.apiKey,

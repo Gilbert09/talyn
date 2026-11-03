@@ -13,12 +13,26 @@ const pr = (number: number): MergeEtaPr => ({
   id: `pr-${number}`, workspaceId: 'ws1', owner: 'PostHog', repo: 'posthog', number, state: 'open', labels: [],
 });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+const activeRow = (number: number) => ({
+  id: `trunk-pr-${number}`, number, isCurrentlySubmittedToQueue: true, queueEntry: { state: 'pending' },
+});
+/** The numbers a `GET /v2/pull-requests` call asked for. */
+const numbersIn = (url: unknown) => (new URL(String(url)).searchParams.get('number') ?? '').split(',').map(Number);
+/**
+ * `GET /v2/pull-requests` as Trunk answers it: one comma-separated `number`
+ * (a repeated one is a 400), rows by number ascending, `limit` rows per page
+ * (default 25).
+ */
+const lookupAnswer = (url: string, skip: (number: number) => boolean = () => false) => {
+  const params = new URL(url).searchParams;
+  if (params.getAll('number').length !== 1) return json({ error: { code: 'VALIDATION_FAILED' } }, 400);
+  const limit = Number(params.get('limit') ?? 25);
+  const rows = numbersIn(url).sort((a, b) => a - b).filter((n) => !skip(n)).map(activeRow);
+  return json({ data: rows.slice(0, limit), ...(rows.length > limit ? { nextCursor: 'more' } : {}) });
+};
 const responseFor = (url: string) => {
   if (url.includes('/v2/repositories')) return json({ data: [{ id: 'repo-1' }] });
-  if (url.includes('/v2/pull-requests?')) {
-    const numbers = new URL(url).searchParams.getAll('number').map(Number);
-    return json({ data: numbers.map((number) => ({ id: `trunk-pr-${number}`, number, isCurrentlySubmittedToQueue: true, queueEntry: { state: 'pending' } })) });
-  }
+  if (url.includes('/v2/pull-requests?')) return lookupAnswer(url);
   return json({ status: 'available', kind: 'merge', estimatedAt: '2026-10-30T12:30:00Z' });
 };
 
@@ -106,20 +120,27 @@ describe('Trunk merge ETA service', () => {
     expect((await pending).every((answer) => answer.eta !== null)).toBe(true);
     const lookups = fetch.mock.calls.filter(([url]) => String(url).includes('/v2/pull-requests?'));
     expect(lookups).toHaveLength(1);
-    expect(new URL(String(lookups[0][0])).searchParams.getAll('number')).toHaveLength(20);
+    expect(numbersIn(lookups[0][0])).toHaveLength(20);
     expect(fetch.mock.calls.filter(([url]) => String(url).includes('/queue-entry-estimate'))).toHaveLength(20);
+  });
+
+  it('sends the numbers as one comma-separated value, with a limit that covers them', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => responseFor(String(input)));
+    const pending = Promise.all([3, 1, 2].map((number) => mergeEtaForPr(pr(number))));
+    await vi.runAllTimersAsync();
+    await pending;
+    const lookup = fetch.mock.calls.find(([url]) => String(url).includes('/v2/pull-requests?'));
+    const params = new URL(String(lookup?.[0])).searchParams;
+    expect(params.getAll('number')).toEqual(['3,1,2']);
+    expect(params.get('limit')).toBe('3');
   });
 
   it('splits lookups after 50 numbers and marks missing PRs as not queued', async () => {
     vi.useFakeTimers();
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes('/v2/pull-requests?')) {
-        const numbers = new URL(url).searchParams.getAll('number').map(Number);
-        return json({ data: numbers.filter((number) => number !== 51).map((number) => ({
-          id: `trunk-pr-${number}`, number, isCurrentlySubmittedToQueue: true, queueEntry: { state: 'pending' },
-        })) });
-      }
+      if (url.includes('/v2/pull-requests?')) return lookupAnswer(url, (number) => number === 51);
       return responseFor(url);
     });
     const pending = Promise.all(Array.from({ length: 51 }, (_, index) => mergeEtaForPr(pr(index + 1))));
@@ -127,7 +148,10 @@ describe('Trunk merge ETA service', () => {
     const answers = await pending;
     const lookups = fetch.mock.calls.filter(([url]) => String(url).includes('/v2/pull-requests?'));
     expect(lookups).toHaveLength(2);
-    expect(lookups.map(([url]) => new URL(String(url)).searchParams.getAll('number').length).sort()).toEqual([1, 50]);
+    expect(lookups.map(([url]) => numbersIn(url).length).sort((a, b) => a - b)).toEqual([1, 50]);
+    // Every PR on the full page was found, not only the first 25. (Some later
+    // estimates are refused as "unavailable" by the 4-per-second limiter.)
+    expect(answers.slice(0, 50).filter((answer) => answer.reason === 'not_queued')).toEqual([]);
     expect(answers[50].reason).toBe('not_queued');
   });
 
