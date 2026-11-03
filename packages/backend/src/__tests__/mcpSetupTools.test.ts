@@ -149,4 +149,79 @@ describe('session setup and timing tools', () => {
       await expect(tool('record_setup_step').handler(OWNER, args, SELF)).rejects.toThrow(error);
     });
   });
+
+  describe('setup step list and revert', () => {
+    const step = (overrides: Record<string, unknown> = {}) => ({
+      id: 'st_1', command: 'cargo install sqlx-cli', kind: 'cargo', phase: 'install', why: null, source: 'learned',
+      sourceWorkbenchId: 's1', firstSeenAt: '2026-10-30T10:00:00.000Z', lastSeenAt: '2026-10-31T10:00:00.000Z', seenCount: 2,
+      appliedAt: null, disabledAt: null, disabledReason: null, bakeDisabledAt: null, bakeDisabledReason: null, ...overrides,
+    });
+    const recipe = (steps: unknown[], learningDisabled = false) => ({ repositoryId: 'repo1', learningDisabled, maxSteps: 20, steps });
+    const RECIPE = '/api/v1/repositories/repo1/setup-recipe';
+
+    it('are scoped: list for a session token, revert for a user token only', () => {
+      expect(SESSION_TOKEN_TOOLS.has('talyn_list_setup_steps')).toBe(true);
+      expect(SESSION_TOKEN_TOOLS.has('talyn_revert_setup_step')).toBe(false);
+      expect(tool('list_setup_steps').annotations.readOnlyHint).toBe(true);
+      expect(tool('revert_setup_step').annotations.destructiveHint).toBe(true);
+    });
+
+    it('lists each step with its state and whether learning is on', async () => {
+      const { calls } = mockApi({
+        [`GET ${RECIPE}`]: () => recipe([
+          step(),
+          step({ id: 'st_2', command: 'apt-get install -y jq', appliedAt: '2026-11-01T00:00:00.000Z', sourceWorkbenchId: null, source: 'agent' }),
+          step({ id: 'st_3', command: 'brew install x', disabledAt: '2026-11-02T09:00:00.000Z', disabledReason: 'not needed' }),
+        ], true),
+      });
+      const text = await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' });
+      expect(calls).toHaveLength(1);
+      expect(text).toContain('Learning is off. 2 of 20 live.');
+      expect(text).toContain('st_1  cargo install sqlx-cli  [cargo, install]  session s1, learned, 2026-10-30  box setup only');
+      expect(text).toContain('st_2  apt-get install -y jq  [cargo, install]  no session, agent, 2026-10-30  settled into the bake');
+      expect(text).toContain('st_3  brew install x  [cargo, install]  session s1, learned, 2026-10-30  reverted 2026-11-02 (not needed)');
+    });
+
+    it('says when there are no steps', async () => {
+      mockApi({ [`GET ${RECIPE}`]: () => recipe([]) });
+      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('No steps.');
+    });
+
+    it('reverts a step, and a second list shows it reverted', async () => {
+      let reverted = false;
+      const { calls } = mockApi({
+        [`DELETE ${RECIPE}/steps/st_1`]: () => {
+          reverted = true;
+          return recipe([step({ disabledAt: '2026-11-03T00:00:00.000Z' })]);
+        },
+        [`GET ${RECIPE}`]: () => recipe([reverted ? step({ disabledAt: '2026-11-03T00:00:00.000Z' }) : step()]),
+      });
+      const text = await tool('revert_setup_step').handler(OWNER, { repository_id: 'repo1', step_id: 'st_1' });
+      expect(calls[0].method).toBe('DELETE');
+      expect(text).toContain('Reverted st_1.');
+      expect(text).toContain('0 of 20 live.');
+      expect(await tool('list_setup_steps').handler(OWNER, { repository_id: 'repo1' })).toContain('reverted 2026-11-03');
+    });
+
+    it.each(['list_setup_steps', 'revert_setup_step'])('answers not found for a repository of another workspace in %s', async (name) => {
+      mockApi({}, {
+        [`GET ${RECIPE}`]: { status: 404, error: 'Repository not found.' },
+        [`DELETE ${RECIPE}/steps/st_1`]: { status: 404, error: 'Repository not found.' },
+      });
+      await expect(tool(name).handler(OWNER, { repository_id: 'repo1', step_id: 'st_1' })).rejects.toThrow(/not found/i);
+    });
+
+    it('answers not found for an unknown step', async () => {
+      mockApi({}, { [`DELETE ${RECIPE}/steps/nope`]: { status: 404, error: 'This repository has no such setup step.' } });
+      await expect(tool('revert_setup_step').handler(OWNER, { repository_id: 'repo1', step_id: 'nope' })).rejects.toThrow(/no such setup step/);
+    });
+
+    it.each([
+      ['list_setup_steps', {}, 'repository_id is required'],
+      ['revert_setup_step', { repository_id: 'repo1' }, 'step_id is required'],
+    ])('needs its ids in %s', async (name, args, error) => {
+      mockApi({});
+      await expect(tool(name).handler(OWNER, args)).rejects.toThrow(error);
+    });
+  });
 });

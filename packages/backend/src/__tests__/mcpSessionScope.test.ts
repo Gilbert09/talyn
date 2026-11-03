@@ -93,7 +93,7 @@ const EXCLUDED = [
   // Account
   'talyn_get_billing_status', 'talyn_list_cloud_providers', 'talyn_whats_new',
   // Workspace configuration
-  'talyn_add_repository', 'talyn_remove_repository',
+  'talyn_add_repository', 'talyn_remove_repository', 'talyn_revert_setup_step',
   'talyn_create_skill', 'talyn_update_skill', 'talyn_delete_skill',
   'talyn_create_workflow', 'talyn_update_workflow', 'talyn_set_workflow_enabled', 'talyn_delete_workflow',
   'talyn_create_loop', 'talyn_update_loop', 'talyn_set_loop_enabled', 'talyn_delete_loop', 'talyn_run_loop_now',
@@ -119,6 +119,7 @@ describe('session token tool scope', () => {
     'talyn_get_merge_queue_timeline', 'talyn_set_merge_queue_stack', 'talyn_list_pull_requests',
     'talyn_create_task', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
+    'talyn_list_setup_steps',
   ])('allows %s', (name) => {
     expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
   });

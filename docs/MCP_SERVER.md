@@ -77,6 +77,8 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_list_github_repos` | Find accessible GitHub repositories. Use `search` to narrow the first 100 matches. |
 | `talyn_add_repository` | Watch a repository. Accept `owner/name` or separate owner and repository fields. |
 | `talyn_remove_repository` | Stop watching a repository. |
+| `talyn_list_setup_steps` | List the setup steps that sessions learned for a repository: id, command, recording session, date, and whether the step is reverted, settled into the bake, or box setup only. Also shows whether learning is on. Allowed for session tokens. |
+| `talyn_revert_setup_step` | Revert one learned setup step. It stops running on new boxes, stays listed as reverted, and Talyn does not learn it again. Not allowed for session tokens. |
 
 ### Pull requests
 
