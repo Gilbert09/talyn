@@ -1,5 +1,5 @@
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import type { AdminRunRow } from '@talyn/shared';
+import { ADMIN_RUN_KINDS, type AdminRunRow } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
 import { Page, Pill } from '../../components/layout/Page';
@@ -7,12 +7,18 @@ import { DataTable, type Column } from '../../components/ui/DataTable';
 import { CopyableId } from '../../components/ui/CopyableId';
 import { absolute, countdown, duration, mib, pct, relativeAge, usd } from '../../lib/format';
 import {
+  boxSizeLabel,
+  countRuns,
   durationSeconds,
   idlePct,
   idleSeconds,
+  isAsleep,
+  isRealOrphan,
   isTerminal,
   looksWedged,
-  sortRuns,
+  runClaim,
+  runKind,
+  sleepSeconds,
 } from '../../lib/fleetView';
 import { ROUTES, routeTo } from '../../lib/routes';
 import { useAdminMutation } from '../../hooks/useAdminMutation';
@@ -20,18 +26,22 @@ import { ConfirmMutationDialog } from '../../components/admin/ConfirmMutationDia
 import { useCapability } from '../../components/auth/AdminGate';
 
 /**
- * Every run the fleet is or was running.
+ * Every sandbox the fleet holds now, and the task runs it held before.
  *
  * Filter state lives in the URL (`useSearchParams`), not component state, so a
  * filtered view is a link an operator can paste into Slack. That is the same
  * reason drill-ins are routes rather than modals.
  *
- * Rows are in time order, newest first, orphans included. They used to be
- * ranked — orphans hoisted to the top — which sounds right and read terribly:
- * a run that started 58 seconds ago sorted BELOW four deploy self-tests from an
- * hour ago, so the row an operator opened the page to find was the one they had
- * to hunt for. Orphans keep a tinted row and a count in the header, which is
- * what makes them findable without reordering the list around them.
+ * Each live box is classified by the backend against tasks, sessions, threads
+ * and review units. A session box opens its session; a task box opens the run.
+ * "Orphan" means no Talyn row of any status names the box, and "superseded"
+ * means a row names it but has moved on (archived, or on a newer box): a
+ * cleanup candidate with an owner, not a leak.
+ *
+ * Rows are in time order, newest first, as the backend sends them. They used
+ * to be ranked, orphans first, and the row an operator opened the page to find
+ * was the one they had to hunt for. Orphans keep a tinted row and a count in
+ * the header instead.
  */
 const POLL_MS = 8_000;
 
@@ -47,16 +57,35 @@ const STATUSES = ['running', 'queued', 'completed', 'failed', 'cancelled'] as co
  */
 const IDLE_SHARE_WORTH_SHOWING = 10;
 
+const KIND_LABEL: Record<string, string> = {
+  task: 'task',
+  session: 'session',
+  thread: 'thread',
+  review: 'review',
+  unknown: 'other',
+};
+
 export function RunsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const host = params.get('host') ?? '';
   const status = params.get('status') ?? '';
+  const kind = params.get('kind') ?? '';
+  const owner = params.get('owner') ?? '';
 
   const { data, error, loading, initialLoading, refresh } = useAdminQuery(
-    () => api.admin.fleet.runs({ host: host || undefined, status: status || undefined }),
-    { intervalMs: POLL_MS, deps: [host, status] }
+    () =>
+      api.admin.fleet.runs({
+        host: host || undefined,
+        status: status || undefined,
+        kind: kind || undefined,
+        owner: owner || undefined,
+      }),
+    { intervalMs: POLL_MS, deps: [host, status, kind, owner] }
   );
+  // The registry only: it dials nothing, and it is what names the hosts.
+  const hosts = useAdminQuery(() => api.admin.fleet.hosts(), {});
+  const hostNames = [...new Set([...(hosts.data ?? []).map((h) => h.name), ...(host ? [host] : [])])].sort();
 
   function setFilter(key: string, value: string) {
     const next = new URLSearchParams(params);
@@ -68,13 +97,9 @@ export function RunsPage() {
   const canMutate = useCapability('fleet.mutate');
   const cancel = useAdminMutation<AdminRunRow>(refresh);
 
-  const rows = data ? sortRuns(data.items) : null;
-  // Self-tests are orphans by the strict definition — no task row behind them —
-  // but they are exactly what is supposed to happen after a fleet deploy.
-  // Counting them made the header read "4 orphaned" after four merges, which is
-  // how a warning stops being read.
-  const orphans = rows?.filter((r) => r.orphan && !r.selfTest).length ?? 0;
-  const wedged = rows?.filter((r) => looksWedged(r)).length ?? 0;
+  const rows = data ? data.items : null;
+  const counts = countRuns(rows ?? []);
+  const filtered = Boolean(host || status || kind || owner);
 
   const columns: Column<AdminRunRow>[] = [
     {
@@ -83,23 +108,30 @@ export function RunsPage() {
       cell: (r) => (
         <div className="flex items-center gap-2">
           <CopyableId value={r.runId} />
-          {r.orphan &&
-            (r.selfTest ? (
-              <Pill
-                tone="muted"
-                title="A guest self-test fired by the fleet's deploy script, not a Talyn task"
-              >
-                self-test
-              </Pill>
-            ) : (
-              <Pill tone="critical" title="Live on a host with no task behind it">
-                orphan
-              </Pill>
-            ))}
+          <Pill tone="muted" title="What the sandbox is for, read from its id">
+            {KIND_LABEL[runKind(r)] ?? runKind(r)}
+          </Pill>
+          <ClaimPill run={r} />
           {r.adopted && (
             <Pill tone="muted" title="Re-attached after a fleetd restart">
               adopted
             </Pill>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'what',
+      header: 'What',
+      cell: (r) => (
+        <div className="min-w-0 max-w-[18rem]">
+          <div className="truncate" title={r.title ?? undefined}>
+            {r.title ?? <Muted />}
+          </div>
+          {(r.repo || r.workspaceName) && (
+            <div className="truncate text-xs text-muted-foreground">
+              {[r.repo, r.workspaceName].filter(Boolean).join(' · ')}
+            </div>
           )}
         </div>
       ),
@@ -136,6 +168,17 @@ export function RunsPage() {
       key: 'idle',
       header: 'Idle',
       cell: (r) => {
+        if (isAsleep(r)) {
+          const slept = sleepSeconds(r);
+          return (
+            <span
+              className="tabular-nums text-muted-foreground"
+              title="Asleep, which is normal: the box costs no memory and no slot until its next turn"
+            >
+              {slept == null ? 'asleep' : `slept ${duration(slept)}`}
+            </span>
+          );
+        }
         const idle = idleSeconds(r);
         if (idle == null) return <Muted />;
         const share = idlePct(r);
@@ -169,25 +212,38 @@ export function RunsPage() {
       key: 'memory',
       header: 'Memory',
       cell: (r) => {
-        // Absent, not zero. A terminal run's VMM is gone and a host on an older
-        // fleetd never sends the field; showing "0 MiB" for either would be a
-        // measurement that was never taken.
-        if (r.memUsedMib == null) return <Muted />;
-        const share = pct(r.memUsedMib, r.memMib);
+        // Usage is absent, not zero, on a box whose VMM is gone (terminal or
+        // asleep) and on a host with an older fleetd. The size still says what
+        // the box is booted at.
+        const size = boxSizeLabel(r);
+        const share = r.memUsedMib != null ? pct(r.memUsedMib, r.memMib) : null;
+        if (r.memUsedMib == null && !size) return <Muted />;
         return (
-          <span
+          <div
             className="tabular-nums"
             title={
-              r.memMib != null
+              r.memUsedMib != null && r.memMib != null
                 ? `Using ${mib(r.memUsedMib)} of a ${mib(r.memMib)} ceiling. The ceiling is what the guest booted at; its balloon holds it below that and lets it grow only as it needs to.`
-                : `Using ${mib(r.memUsedMib)}`
+                : undefined
             }
           >
-            {mib(r.memUsedMib)}
-            {share != null && (
-              <span className="ml-1 text-muted-foreground">({Math.round(share)}%)</span>
+            {r.memUsedMib != null ? (
+              <>
+                {mib(r.memUsedMib)}
+                {share != null && (
+                  <span className="ml-1 text-muted-foreground">({Math.round(share)}%)</span>
+                )}
+              </>
+            ) : (
+              <Muted />
             )}
-          </span>
+            {size && (
+              <div className="text-xs text-muted-foreground">
+                {size}
+                {r.diskMib ? ` · ${mib(r.diskMib)} disk` : ''}
+              </div>
+            )}
+          </div>
         );
       },
     },
@@ -195,7 +251,11 @@ export function RunsPage() {
     {
       key: 'owner',
       header: 'Owner',
-      cell: (r) => <span className="truncate text-xs">{r.ownerEmail ?? <Muted />}</span>,
+      cell: (r) => (
+        <div className="min-w-0 text-xs">
+          <div className="truncate">{r.ownerEmail ?? <Muted />}</div>
+        </div>
+      ),
     },
     ...(canMutate
       ? [
@@ -203,12 +263,12 @@ export function RunsPage() {
             key: 'actions',
             header: '',
             cell: (r: AdminRunRow) =>
-              r.host && !isTerminal(r.status) ? (
+              !isTerminal(r.status) && r.status != null ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     cancel.start(r, ({ reason }) =>
-                      api.admin.fleet.cancelRun(r.host!, r.runId, { reason })
+                      api.admin.fleet.cancelRun(r.host ?? '-', r.runId, { reason })
                     );
                   }}
                   className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
@@ -236,20 +296,53 @@ export function RunsPage() {
       subtitle={
         <span className="flex flex-wrap items-center gap-2">
           <span>{rows?.length ?? 0} shown</span>
-          {orphans > 0 && <Pill tone="critical">{orphans} orphaned</Pill>}
-          {wedged > 0 && <Pill tone="warn">{wedged} possibly wedged</Pill>}
+          <Pill tone="info">{counts.running} running</Pill>
+          <Pill tone="muted">{counts.asleep} asleep</Pill>
+          {counts.superseded > 0 && (
+            <Pill tone="warn" title="A Talyn row names the box, but it is archived or has moved on">
+              {counts.superseded} superseded
+            </Pill>
+          )}
+          {counts.orphaned > 0 && <Pill tone="critical">{counts.orphaned} orphaned</Pill>}
+          {counts.wedged > 0 && <Pill tone="warn">{counts.wedged} possibly wedged</Pill>}
         </span>
       }
       onRefresh={refresh}
       refreshing={loading}
       actions={
-        <div className="flex items-center gap-2">
-          <input
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={kind}
+            onChange={(e) => setFilter('kind', e.target.value)}
+            aria-label="Filter by kind"
+            className="rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+          >
+            <option value="">All kinds</option>
+            {ADMIN_RUN_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+          <select
             value={host}
             onChange={(e) => setFilter('host', e.target.value)}
-            placeholder="host"
             aria-label="Filter by host"
-            className="w-28 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+            className="rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+          >
+            <option value="">All hosts</option>
+            {hostNames.map((h) => (
+              <option key={h} value={h}>
+                {h}
+              </option>
+            ))}
+          </select>
+          <input
+            value={owner}
+            onChange={(e) => setFilter('owner', e.target.value)}
+            placeholder="owner email"
+            aria-label="Filter by owner"
+            className="w-36 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
           />
           <select
             value={status}
@@ -284,14 +377,14 @@ export function RunsPage() {
         loading={loading}
         initialLoading={initialLoading}
         onRetry={refresh}
-        emptyMessage={host || status ? 'No runs match these filters' : 'No fleet runs yet'}
+        emptyMessage={filtered ? 'No runs match these filters' : 'No fleet runs yet'}
         emptyHint={
-          host || status
+          filtered
             ? 'Clear the filters to see everything.'
-            : 'Runs appear here once a task is dispatched to the self-hosted fleet.'
+            : 'Runs appear here once a task or a session starts on the fleet.'
         }
-        onRowClick={(r) => navigate(routeTo(ROUTES.fleetRun, { runId: r.runId }) + hostQuery(r))}
-        rowClassName={(r) => (r.orphan && !r.selfTest ? 'bg-destructive/5' : undefined)}
+        onRowClick={(r) => navigate(runLink(r))}
+        rowClassName={(r) => (isRealOrphan(r) ? 'bg-destructive/5' : undefined)}
       />
 
       <ConfirmMutationDialog
@@ -325,12 +418,60 @@ export function RunsPage() {
   );
 }
 
-/** The detail page needs the host to know which fleetd to ask. */
-function hostQuery(run: AdminRunRow): string {
-  return run.host ? `?host=${encodeURIComponent(run.host)}` : '';
+/**
+ * Where a row opens. A session or thread box opens its session, which shows the
+ * box too. Anything else opens the run, with the host so a deploy without a
+ * gateway knows which fleetd to ask.
+ */
+export function runLink(run: AdminRunRow): string {
+  if (run.workbenchId && (run.kind === 'session' || run.kind === 'thread')) {
+    return routeTo(ROUTES.session, { sessionId: run.workbenchId });
+  }
+  const base = routeTo(ROUTES.fleetRun, { runId: run.runId });
+  return run.host ? `${base}?host=${encodeURIComponent(run.host)}` : base;
+}
+
+function ClaimPill({ run }: { run: AdminRunRow }) {
+  const claim = runClaim(run);
+  if (claim === 'orphan') {
+    return run.selfTest ? (
+      <Pill tone="muted" title="A guest self-test fired by the fleet's deploy script, not a Talyn task">
+        self-test
+      </Pill>
+    ) : (
+      <Pill tone="critical" title="No Talyn task, session, thread or review names this box">
+        orphan
+      </Pill>
+    );
+  }
+  if (claim === 'superseded') {
+    return (
+      <Pill tone="warn" title={run.supersededReason ?? 'A cleanup candidate'}>
+        superseded
+      </Pill>
+    );
+  }
+  return null;
 }
 
 function StatusPill({ run }: { run: AdminRunRow }) {
+  if (isAsleep(run)) {
+    const where = run.sleep?.kind === 'storage' ? 'in storage' : 'local';
+    return (
+      <Pill
+        tone="muted"
+        title={
+          run.sleep?.kind === 'storage'
+            ? 'Hibernated: a complete copy is in object storage'
+            : run.sleep?.uploadError
+              ? `Suspended on its host. The last hibernation upload failed: ${run.sleep.uploadError}`
+              : 'Suspended on its host'
+        }
+      >
+        asleep · {where}
+      </Pill>
+    );
+  }
   if (looksWedged(run)) return <Pill tone="critical">wedged?</Pill>;
   switch (run.status) {
     case 'running':

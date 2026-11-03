@@ -1,5 +1,12 @@
-import type { AdminFleetHost, AdminIncidentSeverity, AdminRunRow } from '@talyn/shared';
-import { parseTime, pct } from './format';
+import {
+  SANDBOX_SIZES,
+  type AdminFleetHost,
+  type AdminIncidentSeverity,
+  type AdminRunClaim,
+  type AdminRunKind,
+  type AdminRunRow,
+} from '@talyn/shared';
+import { mib, parseTime, pct } from './format';
 
 /**
  * Pure derivations for the fleet views.
@@ -135,16 +142,94 @@ export function idlePct(run: AdminRunRow, now: number = Date.now()): number | nu
 export const WEDGE_WARN_SECONDS = 240;
 
 /**
+ * Whether a sandbox is asleep: suspended on its host, or hibernated to storage.
+ *
+ * Asleep is normal. A session's box sleeps between turns and costs no memory
+ * and no slot, so its silence says nothing about whether it is stuck.
+ */
+export function isAsleep(run: AdminRunRow): boolean {
+  return Boolean(run.sleep) || run.sandboxStatus === 'suspended';
+}
+
+/** How long a sleeping box has slept, or null when it is awake or the host did not say. */
+export function sleepSeconds(run: AdminRunRow, now: number = Date.now()): number | null {
+  if (!isAsleep(run)) return null;
+  const since = parseTime(run.sleep?.since);
+  return since == null ? null : Math.max(0, Math.round((now - since) / 1000));
+}
+
+/** The fleet states in which a box is awake and should be sending frames. */
+const AWAKE_STATES = new Set(['starting', 'idle', 'busy', 'running']);
+
+/**
  * Whether a run looks stuck.
  *
- * Only meaningful for a non-terminal run: a completed run stops sending frames
- * by definition, and flagging every finished run as wedged would make the
- * signal useless.
+ * Only for a box that is awake (starting, idle or busy) and silent past the
+ * threshold. A completed run stops sending frames by definition, and so does a
+ * box that is asleep: the page used to read every suspended session as
+ * "running" and flag all of them "wedged?", which made the flag mean nothing.
+ *
+ * A row with no fleet state word (an older backend, or task history) keeps the
+ * old rule on the run status.
  */
 export function looksWedged(run: AdminRunRow, now: number = Date.now()): boolean {
-  if (run.status !== 'running' && run.status !== 'queued') return false;
+  if (isAsleep(run)) return false;
+  if (run.sandboxStatus) {
+    if (!AWAKE_STATES.has(run.sandboxStatus)) return false;
+  } else if (run.status !== 'running' && run.status !== 'queued') {
+    return false;
+  }
   const idle = idleSeconds(run, now);
   return idle != null && idle >= WEDGE_WARN_SECONDS;
+}
+
+/** What the sandbox is for. An older backend sends no kind: a task id means a task. */
+export function runKind(run: AdminRunRow): AdminRunKind {
+  return run.kind ?? (run.taskId ? 'task' : 'unknown');
+}
+
+/** Whether a Talyn row claims the sandbox. An older backend sends only `orphan`. */
+export function runClaim(run: AdminRunRow): AdminRunClaim {
+  return run.claim ?? (run.orphan ? 'orphan' : 'active');
+}
+
+/** An orphan worth a warning: not a deploy self-test, which is supposed to happen. */
+export function isRealOrphan(run: AdminRunRow): boolean {
+  return runClaim(run) === 'orphan' && !run.selfTest;
+}
+
+/** The header counts on the Runs page. */
+export interface RunCounts {
+  running: number;
+  asleep: number;
+  superseded: number;
+  orphaned: number;
+  wedged: number;
+}
+
+export function countRuns(runs: AdminRunRow[], now: number = Date.now()): RunCounts {
+  const counts: RunCounts = { running: 0, asleep: 0, superseded: 0, orphaned: 0, wedged: 0 };
+  for (const run of runs) {
+    if (isAsleep(run)) counts.asleep++;
+    else if (!isTerminal(run.status) && run.status != null) counts.running++;
+    if (runClaim(run) === 'superseded') counts.superseded++;
+    if (isRealOrphan(run)) counts.orphaned++;
+    if (looksWedged(run, now)) counts.wedged++;
+  }
+  return counts;
+}
+
+/**
+ * The box's size in words: the named size when the memory matches one
+ * ("Large · 12 GB"), else the memory, with the vCPUs when known.
+ */
+export function boxSizeLabel(run: Pick<AdminRunRow, 'memMib' | 'vcpuCount' | 'sandboxSize'>): string | null {
+  const named = run.sandboxSize ? SANDBOX_SIZES[run.sandboxSize as keyof typeof SANDBOX_SIZES] : undefined;
+  if (named && (run.memMib == null || run.memMib === named.memMib)) return named.label;
+  const byMemory = Object.values(SANDBOX_SIZES).find((size) => size.memMib === run.memMib);
+  if (byMemory) return byMemory.label;
+  if (run.memMib == null) return null;
+  return run.vcpuCount ? `${mib(run.memMib)} · ${run.vcpuCount} vCPU` : mib(run.memMib);
 }
 
 export function isTerminal(status: AdminRunRow['status']): boolean {
@@ -159,7 +244,7 @@ export function isTerminal(status: AdminRunRow['status']): boolean {
  * then live ones, then history.
  */
 export function runRank(run: AdminRunRow, now: number = Date.now()): number {
-  if (run.orphan) return 0;
+  if (runClaim(run) === 'orphan') return 0;
   if (looksWedged(run, now)) return 1;
   if (!isTerminal(run.status)) return 2;
   return 3;

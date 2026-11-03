@@ -14,8 +14,16 @@ import type { AdminRunIndex } from '@talyn/shared';
  */
 
 const runs = vi.fn();
+const hosts = vi.fn();
 vi.mock('../lib/api', () => ({
-  api: { admin: { fleet: { runs: (...a: unknown[]) => runs(...a) } } },
+  api: {
+    admin: {
+      fleet: {
+        runs: (...a: unknown[]) => runs(...a),
+        hosts: (...a: unknown[]) => hosts(...a),
+      },
+    },
+  },
 }));
 
 vi.mock('../components/auth/AdminGate', () => ({
@@ -44,36 +52,55 @@ function renderAt(url: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   runs.mockResolvedValue(page());
+  hosts.mockResolvedValue([{ name: 'hetzner-64' }, { name: 'scaleway-1' }]);
 });
+
+const NONE = { host: undefined, status: undefined, kind: undefined, owner: undefined };
 afterEach(cleanup);
 
 describe('reading filters from the URL', () => {
   it('passes a pasted host filter through to the request', async () => {
     renderAt('/fleet/runs?host=hetzner-64');
-    await waitFor(() => expect(runs).toHaveBeenCalledWith({ host: 'hetzner-64', status: undefined }));
+    await waitFor(() => expect(runs).toHaveBeenCalledWith({ ...NONE, host: 'hetzner-64' }));
   });
 
   it('passes a pasted status filter through', async () => {
     renderAt('/fleet/runs?status=running');
-    await waitFor(() => expect(runs).toHaveBeenCalledWith({ host: undefined, status: 'running' }));
+    await waitFor(() => expect(runs).toHaveBeenCalledWith({ ...NONE, status: 'running' }));
   });
 
   it('restores both controls from the URL', async () => {
-    renderAt('/fleet/runs?host=hetzner-64&status=failed');
+    renderAt('/fleet/runs?host=hetzner-64&status=failed&kind=session&owner=tom');
     await waitFor(() => expect(runs).toHaveBeenCalled());
-    expect((screen.getByLabelText(/Filter by host/i) as HTMLInputElement).value).toBe('hetzner-64');
+    expect((screen.getByLabelText(/Filter by host/i) as HTMLSelectElement).value).toBe('hetzner-64');
     expect((screen.getByLabelText(/Filter by status/i) as HTMLSelectElement).value).toBe('failed');
+    expect((screen.getByLabelText(/Filter by kind/i) as HTMLSelectElement).value).toBe('session');
+    expect((screen.getByLabelText(/Filter by owner/i) as HTMLInputElement).value).toBe('tom');
+  });
+
+  it.each([
+    ['kind', '/fleet/runs?kind=thread', { kind: 'thread' }],
+    ['owner', '/fleet/runs?owner=owner%40example.test', { owner: 'owner@example.test' }],
+  ])('passes a pasted %s filter through', async (_label, url, expected) => {
+    renderAt(url);
+    await waitFor(() => expect(runs).toHaveBeenCalledWith({ ...NONE, ...expected }));
+  });
+
+  it('keeps a host filter for a host the registry no longer lists', async () => {
+    renderAt('/fleet/runs?host=old-box');
+    await waitFor(() => expect(runs).toHaveBeenCalled());
+    expect((screen.getByLabelText(/Filter by host/i) as HTMLSelectElement).value).toBe('old-box');
   });
 
   it('sends no filters when the URL has none', async () => {
     renderAt('/fleet/runs');
-    await waitFor(() => expect(runs).toHaveBeenCalledWith({ host: undefined, status: undefined }));
+    await waitFor(() => expect(runs).toHaveBeenCalledWith(NONE));
   });
 
   it('does not choke on an unknown status value', async () => {
     // A stale link should degrade to an unfiltered-ish view, not blow up.
     renderAt('/fleet/runs?status=bogus');
-    await waitFor(() => expect(runs).toHaveBeenCalledWith({ host: undefined, status: 'bogus' }));
+    await waitFor(() => expect(runs).toHaveBeenCalledWith({ ...NONE, status: 'bogus' }));
     expect(document.body.textContent).toBeTruthy();
   });
 });

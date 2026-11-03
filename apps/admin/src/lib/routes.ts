@@ -29,6 +29,8 @@ export const ROUTES = {
   workspace: '/product/workspaces/:workspaceId',
   tasks: '/product/tasks',
   task: '/product/tasks/:taskId',
+  sessions: '/product/sessions',
+  session: '/product/sessions/:sessionId',
 
   audit: '/audit',
   debug: '/debug',
