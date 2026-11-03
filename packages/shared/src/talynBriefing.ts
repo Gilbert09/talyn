@@ -52,6 +52,7 @@ ports = [{ port = 3000, label = "App", primary = true }]
 
 ## Pull requests
 - To land a pull request, add it to Talyn's merge queue with the \`talyn\` tools. Do not merge it yourself.
+- When the person's own older pull request is replaced by yours, close it with \`talyn_close_pull_request\`, not \`gh\`. Add a comment that links to the new pull request.
 - For failing CI, review comments and shipping, use the \`talyn-ci-triage\`, \`talyn-review-loop\` and \`talyn-ship-pr\` skills when they are installed.
 
 ## Subscriptions

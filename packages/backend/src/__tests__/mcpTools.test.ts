@@ -92,7 +92,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(92);
+    expect(names).toHaveLength(93);
     for (const expected of [
       'talyn_list_workspaces',
       'talyn_get_workspace',
@@ -111,6 +111,7 @@ describe('mcp tool registry', () => {
       'talyn_set_review_hidden',
       'talyn_set_auto_keep_mergeable',
       'talyn_merge_pull_request',
+      'talyn_close_pull_request',
       'talyn_fix_pull_request',
       'talyn_set_merge_queue',
       'talyn_set_merge_queue_stack',
@@ -697,6 +698,96 @@ describe('MCP product coverage', () => {
     expect(result.content[0].text).toContain('workflows_unavailable');
     expect(calls).toHaveLength(1);
     await server.close();
+  });
+
+  describe('talyn_close_pull_request', () => {
+    const closed = (over: Record<string, unknown> = {}) => ({
+      owner: 'acme',
+      repo: 'web',
+      number: 42,
+      url: 'https://github.com/acme/web/pull/42',
+      pullRequestId: 'pr1',
+      alreadyClosed: false,
+      commentPosted: false,
+      ...over,
+    });
+
+    it('is destructive, reaches GitHub and is allowed for a session token', async () => {
+      const { SESSION_TOKEN_TOOLS } = await import('../mcp/sessionScope.js');
+      expect(tool('talyn_close_pull_request').annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: true,
+      });
+      expect(SESSION_TOKEN_TOOLS.has('talyn_close_pull_request')).toBe(true);
+    });
+
+    it('closes by Talyn id and posts the comment', async () => {
+      const { calls } = mockApi({
+        'POST /api/v1/pull-requests/close': () => closed({ commentPosted: true }),
+      });
+      const text = await tool('talyn_close_pull_request').handler(OWNER, {
+        pull_request_id: 'pr1',
+        comment: 'Replaced by #43.',
+      });
+      expect(text).toBe('Closed acme/web#42 after posting the comment.  https://github.com/acme/web/pull/42');
+      expect(calls[0].body).toEqual({ pullRequestId: 'pr1', comment: 'Replaced by #43.' });
+    });
+
+    it('closes by repository and number in the only workspace, without a comment', async () => {
+      const { calls } = mockApi({
+        'GET /api/v1/workspaces': () => [{ id: 'ws1', name: 'Mine' }],
+        'POST /api/v1/pull-requests/close': () => closed(),
+      });
+      const text = await tool('talyn_close_pull_request').handler(OWNER, {
+        repository: 'acme/web',
+        number: 42,
+        comment: '   ',
+      });
+      expect(text).toBe('Closed acme/web#42.  https://github.com/acme/web/pull/42');
+      expect(calls.at(-1)!.body).toEqual({ repository: 'acme/web', number: 42, workspaceId: 'ws1' });
+    });
+
+    it('sends the calling session, and lets the route find its workspace', async () => {
+      const { calls } = mockApi({ 'POST /api/v1/pull-requests/close': () => closed() });
+      await tool('talyn_close_pull_request').handler(
+        OWNER,
+        { repository: 'acme/web', number: 42, session_id: 'not-used' },
+        { session: { tokenId: 't1', workbenchId: 's1', depth: 0 } }
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body).toEqual({ repository: 'acme/web', number: 42, sessionId: 's1' });
+    });
+
+    it('reports an already closed PR and the comment it did not post', async () => {
+      mockApi({ 'POST /api/v1/pull-requests/close': () => closed({ alreadyClosed: true }) });
+      expect(
+        await tool('talyn_close_pull_request').handler(OWNER, { pull_request_id: 'pr1', comment: 'bye' })
+      ).toBe('acme/web#42 is already closed. Nothing changed, and Talyn did not post the comment.  https://github.com/acme/web/pull/42');
+    });
+
+    it('passes a refusal through as the error', async () => {
+      mockApi({
+        'POST /api/v1/pull-requests/close': () => ({
+          status: 403,
+          body: { success: false, code: 'not_your_pull_request', error: 'Talyn closes only your own pull requests.' },
+        }),
+      });
+      await expect(tool('talyn_close_pull_request').handler(OWNER, { pull_request_id: 'pr1' })).rejects.toThrow(
+        'Talyn closes only your own pull requests. (code: not_your_pull_request)'
+      );
+    });
+
+    it.each([
+      ['no target', {}],
+      ['a repository with no number', { repository: 'acme/web' }],
+      ['a number with no repository', { number: 42 }],
+      ['a comment that is not text', { pull_request_id: 'pr1', comment: 5 }],
+    ])('refuses %s before it calls the API', async (_label, args) => {
+      const { calls } = mockApi({});
+      await expect(tool('talyn_close_pull_request').handler(OWNER, args)).rejects.toThrow();
+      expect(calls).toHaveLength(0);
+    });
   });
 
   it('reports submission to the external merge queue', async () => {

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
-import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { pullRequests as pullRequestsTable, workbenches as workbenchesTable } from '../db/schema.js';
 import { upsertFromBatchResult } from '../services/prCache.js';
 import { publicAutoMergeState, setAutoKeepMergeable } from '../services/prAutoKeep.js';
 import {
@@ -21,7 +21,12 @@ import {
   fetchPRReviewDetail,
   type PRSummary,
 } from '../services/githubGraphql.js';
-import { githubService, MergeNotPermittedForAppError } from '../services/github.js';
+import {
+  githubService,
+  GitHubNotConnectedError,
+  MergeNotPermittedForAppError,
+} from '../services/github.js';
+import { closePullRequest, PrCloseError } from '../services/prClose.js';
 import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import {
   setFocused,
@@ -109,6 +114,7 @@ import type { ApiResponse, PRPriorityVerdict, PRStackInfo } from '@talyn/shared'
  *   POST  /pull-requests/:id/merge-queue/resubmit  re-submit a parked entry
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
+ *   POST  /pull-requests/close            close the caller's own PR, comment first
  *   POST  /pull-requests/watch            track an arbitrary PR by URL
  *   POST  /pull-requests/:id/watch        start/stop tracking a row we hold
  */
@@ -1837,6 +1843,79 @@ export function pullRequestRoutes(): Router {
         });
       }
       res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // Close a PR as the connected GitHub user, with an optional comment first.
+  // Body: `{ pullRequestId }` or `{ workspaceId, repository: 'owner/name',
+  // number }`, plus `comment?` and `sessionId?`. A session id only adds rules,
+  // so a caller gains nothing by sending one. The rules are in
+  // services/prClose.ts.
+  router.post('/close', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    const pullRequestId = text(body.pullRequestId);
+    const sessionId = text(body.sessionId);
+    let workspaceId = text(body.workspaceId);
+    const db = getDbClient();
+    if (pullRequestId) {
+      const [row] = await db
+        .select({ workspaceId: pullRequestsTable.workspaceId })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, pullRequestId))
+        .limit(1);
+      if (!row) return res.status(404).json({ success: false, error: 'Pull request not found' });
+      workspaceId = row.workspaceId;
+    } else if (!workspaceId && sessionId) {
+      const [wb] = await db
+        .select({ workspaceId: workbenchesTable.workspaceId })
+        .from(workbenchesTable)
+        .where(eq(workbenchesTable.id, sessionId))
+        .limit(1);
+      if (!wb) return res.status(404).json({ success: false, error: 'Session not found' });
+      workspaceId = wb.workspaceId;
+    }
+    if (!workspaceId) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Pass pullRequestId, or workspaceId with repository and number.' });
+    }
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    try {
+      const result = await closePullRequest({
+        workspaceId,
+        pullRequestId,
+        repository: text(body.repository),
+        number: body.number,
+        comment: body.comment,
+        sessionId,
+      });
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      if (err instanceof PrCloseError) {
+        return res.status(err.status).json({ success: false, code: err.code, error: err.message });
+      }
+      if (err instanceof GitHubNotConnectedError) {
+        return res.status(409).json({
+          success: false,
+          code: 'github_not_connected',
+          error: 'GitHub is not connected for this workspace. Connect it in Settings.',
+        });
+      }
+      if (err instanceof GitHubRateLimitError) {
+        if (err.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+        return res.status(503).json({
+          success: false,
+          code: 'rate_limited',
+          error: 'GitHub is rate limiting Talyn. Nothing was posted or closed. Try again in a few minutes.',
+        });
+      }
+      const message = err instanceof Error ? err.message : 'Close failed';
+      return res.status(502).json({ success: false, error: message });
     }
   });
 

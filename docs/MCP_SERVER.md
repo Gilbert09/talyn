@@ -95,6 +95,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_set_review_hidden` | Hide or restore a PR in the review list. |
 | `talyn_set_auto_keep_mergeable` | Enable or disable automatic cloud fixes. |
 | `talyn_merge_pull_request` | Merge a PR or submit it to the external merge queue. |
+| `talyn_close_pull_request` | Close a PR as you, with an optional comment first. Pass `pull_request_id`, or `repository` and `number`. Talyn closes only your own PRs (the GitHub author is the connected user) or PRs a Talyn session opened. A merged PR is refused. An already closed PR is a no-op, and Talyn does not post the comment. Talyn posts the comment only when the close is allowed. If the close then fails, the error says that the comment is on the PR. From a session token, the PR must be in the session's repository, and the session's own PR is refused. |
 | `talyn_fix_pull_request` | Start the standard cloud task to make a PR ready to merge. |
 
 ### Merge queue
@@ -281,6 +282,9 @@ refused until somebody adds it.
   the request waits (`settings.archiveAfterTurn`).
 - `talyn_cancel_session_turn`, `talyn_send_session_message`,
   `talyn_restore_session` and `talyn_retry_session` on itself are refused.
+- `talyn_close_pull_request` refuses the session's own pull request, and any
+  pull request outside the session's repository. A thread has no repository,
+  so it cannot close pull requests.
 - Calls on other sessions work as they do for a personal token.
 
 **Sessions that start sessions.** A session started through a session token

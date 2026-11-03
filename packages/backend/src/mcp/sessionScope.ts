@@ -34,6 +34,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_set_auto_keep_mergeable',
   'talyn_set_merge_queue',
   'talyn_merge_pull_request',
+  // Its own rules for a session: only the session's repository, never the
+  // session's own PR, and only the owner's PRs or PRs a session opened.
+  'talyn_close_pull_request',
   'talyn_fix_pull_request',
   // track/untrack are a person's choice, so they are not here: a session's own
   // PR is already shown by the session.
