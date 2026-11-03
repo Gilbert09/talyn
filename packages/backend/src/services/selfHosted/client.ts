@@ -381,6 +381,15 @@ export interface CreateSandboxInput {
   memMib?: number;
   /** The guest's CPU-time allowance in thousandths of a vCPU. Absent takes the tenant's default. */
   milliVcpu?: number;
+  /**
+   * A BARE create only: when the host is out of memory, join the fleet's queue
+   * instead of a 503. The answer is then at once, with `status: 'queued'`, and
+   * the caller polls `getSandbox` until the box is `idle` or `failed`. Every
+   * other refusal is still a 503. A session provision sends it. A move does
+   * not, because a move keeps the old box when the fleet is full. A fleet that
+   * predates the field ignores it.
+   */
+  queueWhenFull?: boolean;
 }
 
 /** One MCP server, as the fleet takes it on a create. */

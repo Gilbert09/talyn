@@ -622,6 +622,24 @@ export async function recordProvisionedSandbox(
   return row ?? null;
 }
 
+/**
+ * Move a provision to a new sandbox id before its box exists: the fleet lost a
+ * queued box, and its id answers from a failed record. Null when the row is no
+ * longer this provision's.
+ */
+export async function moveProvisionToSandboxId(
+  id: string,
+  expectedSandboxId: string | null,
+  sandboxId: string,
+): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ sandboxId, updatedAt: new Date() })
+    .where(ownedByProvision(id, expectedSandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
 /** A provision failed. Null when the row is no longer this provision's. */
 export async function failProvisioningWorkbench(id: string, sandboxId: string | null, message: string): Promise<WorkbenchRow | null> {
   return updateProvisioningWorkbench(id, sandboxId, { status: 'error', statusMessage: message, sandboxState: 'error' });

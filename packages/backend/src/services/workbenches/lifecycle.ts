@@ -7,7 +7,14 @@ import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } fr
 import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
-import { FleetCapacityError, FleetRunNotFoundError } from '../selfHosted/client.js';
+import {
+  FleetCapacityError,
+  FleetDispatchUncertainError,
+  FleetRunNotFoundError,
+  FleetThrottleError,
+  type FleetClient,
+  type FleetSandbox,
+} from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
   buildSandboxCreateBody,
@@ -70,6 +77,7 @@ import {
   keepSandboxes,
   listChats,
   liveWorkbenchNames,
+  moveProvisionToSandboxId,
   provisioningWorkbenchIds,
   recordProvisionedSandbox,
   requeueDroppedMessages,
@@ -127,10 +135,12 @@ async function setProvisioningRow(
 }
 
 /**
- * How a provision waits for a free sandbox. The fleet queues only task
- * dispatches, never a bare session box, so Talyn waits instead. The bound
- * matches the fleet's own queue limit (`MaxQueueWait`, 30 minutes). A field,
- * not a constant, so tests can shorten it.
+ * How a provision waits for a free sandbox. When the host is out of memory,
+ * the create asks the fleet to queue the box (`queueWhenFull`), and Talyn
+ * polls the queued box. Every other refusal is a 503, and Talyn tries again
+ * with backoff. ONE bound covers both kinds of wait. It matches the fleet's
+ * own queue limit (`MaxQueueWait`, 30 minutes). A field, not a constant, so
+ * tests can shorten it.
  */
 export const PROVISION_CAPACITY_WAIT = {
   maxMs: 30 * 60_000,
@@ -138,10 +148,30 @@ export const PROVISION_CAPACITY_WAIT = {
   maxDelayMs: 60_000,
   /** How often a sleep checks for a drain or a lost claim. */
   checkMs: 1_000,
+  /** How often a provision reads a box that the fleet queued. */
+  queuePollMs: 5_000,
 };
 
 export const WAITING_FOR_SANDBOX_MESSAGE = 'Waiting for a free sandbox';
 export const NO_FREE_SANDBOX_MESSAGE = 'No sandbox became free in 30 minutes. Retry when the fleet has room.';
+
+/**
+ * The start of the fleet's error on a queued box that a fleetd restart lost.
+ * Nothing ran. The id answers from the failed record, so a new create needs a
+ * new id. The second form is the fleet's queue pump finding the same loss.
+ */
+const QUEUE_LOST_ERRORS = ['lost while queued', 'queued run did not survive'];
+/** The start of the fleet's error on a queued box that reached the fleet's own queue limit. */
+const QUEUE_TIMEOUT_ERROR = 'waited';
+/** The states of a box that has booted. The synchronous create answers `idle`. */
+const BOOTED_STATUSES: ReadonlySet<string> = new Set(['idle', 'busy', 'suspended']);
+
+type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error'>;
+
+/** The fleet queued the box, or the queue already failed it. */
+function isQueueRecord(record: FleetRecord): boolean {
+  return record.status === 'queued' || (record.status === 'failed' && record.phase === 'queued');
+}
 
 /** The pause before the next try: doubling, capped, with jitter. The fleet's Retry-After wins when it is longer. */
 export function capacityWaitDelayMs(attempt: number, retryAfterMs?: number, random = Math.random): number {
@@ -151,46 +181,134 @@ export function capacityWaitDelayMs(attempt: number, retryAfterMs?: number, rand
   return Math.round(base * (0.8 + 0.4 * random()));
 }
 
+/** Sleep in short steps. False at a drain. A lost claim ends the sleep early, and the caller reads `claim.lost`. */
+async function pauseProvision(ms: number, claim: ProvisionClaim): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(PROVISION_CAPACITY_WAIT.checkMs, until - Date.now())));
+    if (isWorkbenchDraining()) return false;
+    if (claim.lost) return true;
+  }
+  return true;
+}
+
+/** The queued box's record. Null when the fleet cannot answer now: the next poll asks again. */
+async function readQueuedBox(client: FleetClient, sandboxId: string): Promise<FleetRecord | null> {
+  try {
+    return (await client.getSandbox(sandboxId)).sandbox;
+  } catch (err) {
+    if (err instanceof FleetCapacityError || err instanceof FleetThrottleError || err instanceof FleetDispatchUncertainError) {
+      console.warn(`[workbench] reading queued sandbox ${sandboxId} failed; polling again:`, err.message);
+      return null;
+    }
+    throw err;
+  }
+}
+
+type CapacityWait = { created: CreatedWorkbenchSandbox; ownSandboxId: string | null };
+
 /**
- * Create the session's box, and wait while the fleet has no room. Every try
- * uses the same sandbox id: the fleet's create is idempotent on the id.
- * The wait ends quietly (null) at a drain, and with a superseded error when
- * the claim or the row moves on. The resume sweep starts a new wait after a
- * deploy, and that wait starts its own clock.
+ * Create the session's box, and wait while the fleet has no room. A 503 is
+ * tried again with the same sandbox id: the fleet's create is idempotent on
+ * the id. A queued box is polled until it boots. A queued box that a fleetd
+ * restart lost is created again on the next sandbox id, and the row moves to
+ * that id. So the caller takes `ownSandboxId` from the answer.
+ *
+ * The wait ends quietly (null) at a drain. The fleet keeps a queued box, and
+ * the resume sweep's create with the same id finds it and waits again, on its
+ * own clock. The wait ends with a superseded error when the claim or the row
+ * moves on. A queued box is deleted then, unless the row still names it: a new
+ * owner of the provision waits on the same box.
  */
 async function createWaitingForCapacity(
   row: WorkbenchRow,
   sandboxId: string,
   ownSandboxId: string | null,
   claim: ProvisionClaim,
-): Promise<CreatedWorkbenchSandbox | null> {
+): Promise<CapacityWait | null> {
   let startedAt: number | null = null;
-  for (let attempt = 0; ; attempt++) {
+  let noted = false;
+  const timeLeft = () => {
+    startedAt ??= Date.now();
+    return PROVISION_CAPACITY_WAIT.maxMs - (Date.now() - startedAt);
+  };
+  /** The first wait of either kind: one message on the row and one event. */
+  const noteWait = async (why: string) => {
+    if (noted) return;
+    noted = true;
+    row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
+    recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${why}: waiting for a free sandbox`, false);
+    console.warn(`[workbench] no free sandbox for ${row.id} (${why}); waiting`);
+  };
+  const superseded = () => new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+
+  for (let attempt = 0; ;) {
+    let created: CreatedWorkbenchSandbox;
     try {
-      return await createWorkbenchSandbox(row, sandboxId);
+      created = await createWorkbenchSandbox(row, sandboxId, { queueWhenFull: true });
     } catch (err) {
       if (!(err instanceof FleetCapacityError) || isHibernationFetchFailed(err)) throw err;
-      const now = Date.now();
-      startedAt ??= now;
-      const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
+      const left = timeLeft();
       if (left <= 0) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
       if (isWorkbenchDraining()) return null;
       assertOwned(claim);
-      if (attempt === 0) {
-        row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
-        recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${err.reason}: waiting for a free sandbox`, false);
-        console.warn(`[workbench] no free sandbox for ${row.id} (${err.reason}); waiting`);
-      }
-      const until = Date.now() + Math.min(capacityWaitDelayMs(attempt, err.retryAfterMs), left);
-      while (Date.now() < until) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(PROVISION_CAPACITY_WAIT.checkMs, until - Date.now())));
-        if (isWorkbenchDraining()) return null;
-        assertOwned(claim);
-      }
-      if (!(await isProvisionOwned(row.id, ownSandboxId))) {
-        throw new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
-      }
+      await noteWait(err.reason);
+      if (!(await pauseProvision(Math.min(capacityWaitDelayMs(attempt++, err.retryAfterMs), left), claim))) return null;
+      assertOwned(claim);
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) throw superseded();
+      continue;
     }
+    if (!created.ok || !isQueueRecord(created.record)) return { created, ownSandboxId };
+
+    const { client } = created;
+    const dropQueuedBox = async () => {
+      await client.deleteSandbox(sandboxId).catch((err) =>
+        console.warn(`[workbench] deleting queued sandbox ${sandboxId} failed:`, err),
+      );
+    };
+    /** The wait is no longer this run's. The queued box goes, unless the row still names it. */
+    const stopWaiting = async () => {
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) await dropQueuedBox();
+      return superseded();
+    };
+    let record = created.record;
+    for (;;) {
+      if (record.status === 'failed' && record.phase === 'queued') {
+        const error = record.error ?? '';
+        if (QUEUE_LOST_ERRORS.some((prefix) => error.startsWith(prefix))) break;
+        if (error.startsWith(QUEUE_TIMEOUT_ERROR)) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+        throw new Error(`The sandbox failed while it waited for room: ${error || 'the fleet gave no reason'}`);
+      }
+      if (record.status && BOOTED_STATUSES.has(record.status)) return { created: { ...created, record }, ownSandboxId };
+      if (record.status !== 'queued' && record.status !== 'starting') {
+        throw new Error(`The sandbox did not start: ${record.error || `the fleet reports it ${record.status}`}`);
+      }
+      const left = timeLeft();
+      if (left <= 0) {
+        await dropQueuedBox();
+        throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+      }
+      if (isWorkbenchDraining()) return null;
+      if (claim.lost) throw await stopWaiting();
+      await noteWait('queued in the fleet').catch(async (err: unknown) => {
+        throw err instanceof ProvisionSupersededError ? await stopWaiting() : err;
+      });
+      if (!(await pauseProvision(Math.min(PROVISION_CAPACITY_WAIT.queuePollMs, left), claim))) return null;
+      if (claim.lost || !(await isProvisionOwned(row.id, ownSandboxId))) throw await stopWaiting();
+      record = (await readQueuedBox(client, sandboxId)) ?? record;
+    }
+
+    // A fleetd restart lost the queued box. Nothing ran, so create it again on the next id.
+    const nextId = nextSandboxId({ id: row.id, sandboxId, settings: row.settings });
+    assertOwned(claim);
+    const moved = await moveProvisionToSandboxId(row.id, ownSandboxId, nextId);
+    if (!moved) throw superseded();
+    recordWorkbenchEvent(moved, 'sandbox_queue_lost', `the fleet lost queued sandbox ${sandboxId}; creating ${nextId}`, false);
+    console.warn(`[workbench] the fleet lost queued sandbox ${sandboxId} of ${row.id}; creating ${nextId}`);
+    row = moved;
+    ownSandboxId = nextId;
+    sandboxId = nextId;
+    await emitWorkbenchUpdated(await publicWorkbench(row));
   }
 }
 
@@ -253,7 +371,17 @@ export const THREAD_SANDBOX_SIZE: SandboxSize = (Object.keys(SANDBOX_SIZES) as S
 export const THREAD_WORKDIR_SCRIPT = `mkdir -p ${SANDBOX_WORK_ROOT}`;
 
 export type CreatedWorkbenchSandbox =
-  | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null; size: SandboxSize }
+  | {
+    ok: true;
+    sandboxId: string;
+    fleetHost: string | null;
+    fleetSandboxId: string | null;
+    size: SandboxSize;
+    /** The fleet's record as the create answered it. A queued box says `queued`. */
+    record: Pick<FleetSandbox, 'status' | 'phase' | 'error'>;
+    /** The client the create used. A queued box is polled and deleted through it. */
+    client: FleetClient;
+  }
   | { ok: false; error: string };
 
 /**
@@ -265,7 +393,7 @@ export type CreatedWorkbenchSandbox =
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
-  opts: { strictSize?: boolean } = {},
+  opts: { strictSize?: boolean; queueWhenFull?: boolean } = {},
 ): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
@@ -308,6 +436,7 @@ export async function createWorkbenchSandbox(
     ...(repository && bake ? { bake } : {}),
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+    ...(opts.queueWhenFull ? { queueWhenFull: true } : {}),
   });
   const chosen = isThread(row) ? null : sessionSandboxSize(row);
   const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : chosen ?? await sizeForSession(row);
@@ -330,7 +459,15 @@ export async function createWorkbenchSandbox(
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
       : null;
-  return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId, size };
+  return {
+    ok: true,
+    sandboxId,
+    fleetHost: target.host ?? created.host ?? null,
+    fleetSandboxId,
+    size,
+    record: { status: created.sandbox?.status, phase: created.sandbox?.phase, error: created.sandbox?.error },
+    client: target.client,
+  };
 }
 
 /**
@@ -376,8 +513,10 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     };
 
     // 1. The box.
-    const created = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
-    if (!created) return;
+    const waited = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
+    if (!waited) return;
+    ownSandboxId = waited.ownSandboxId;
+    const { created } = waited;
     if (!created.ok) return await fail(created.error);
     assertOwned(claim);
     const sandboxId = created.sandboxId;
