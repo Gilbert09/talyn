@@ -13,6 +13,8 @@ import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { BoxRefusalAction } from '../billing/BoxRefusalAction';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
 import { openExternal } from '../../lib/openExternal';
+import { prDetailIdFor } from '../../lib/prDetail';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
@@ -622,6 +624,10 @@ function PullRequestCard({
   pullRequest: NonNullable<Extract<GroupedBlock, { kind: 'system' }>['pullRequest']>;
 }) {
   const label = pullRequest.adopted ? text : pullRequest.existing ? 'Linked' : 'Opened';
+  const detailId = useWorkbenchStore((s) =>
+    prDetailIdFor(s.selectedWorkbenchId ? s.workbenches[s.selectedWorkbenchId] : null, pullRequest.number)
+  );
+  const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   return (
     <div className="rounded-md border border-border bg-card text-xs" data-testid="pull-request-card">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
@@ -632,11 +638,16 @@ function PullRequestCard({
         <span className="text-muted-foreground">
           #{pullRequest.number} · {label}
         </span>
-        {url && (
+        {(url || detailId) && (
           <div className="ml-auto flex items-center gap-1.5">
-            <Button variant="outline" size="sm" onClick={() => void openExternal(url)} aria-label={`Open pull request #${pullRequest.number}`}>
+            {detailId && (
+              <Button variant="outline" size="sm" onClick={() => openPrDetail(detailId)} aria-label={`Open the details of pull request #${pullRequest.number}`}>
+                Details
+              </Button>
+            )}
+            {url && <Button variant="outline" size="sm" onClick={() => void openExternal(url)} aria-label={`Open pull request #${pullRequest.number}`}>
               Open
-            </Button>
+            </Button>}
           </div>
         )}
       </div>

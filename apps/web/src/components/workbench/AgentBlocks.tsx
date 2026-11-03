@@ -1,4 +1,6 @@
 import { openExternal } from '../../lib/openExternal';
+import { prDetailIdFor } from '../../lib/prDetail';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
 import { useBillingStore } from '../../stores/billing';
@@ -405,6 +407,10 @@ function PullRequestCard({
   pullRequest: NonNullable<Extract<GroupedBlock, { kind: 'system' }>['pullRequest']>;
 }) {
   const label = pullRequest.adopted ? text : pullRequest.existing ? 'Linked' : 'Opened';
+  const detailId = useWorkbenchStore((s) =>
+    prDetailIdFor(s.selectedWorkbenchId ? s.workbenches[s.selectedWorkbenchId] : null, pullRequest.number)
+  );
+  const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   return (
     <div className="rounded-md border border-border bg-card text-xs" data-testid="pull-request-card">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
@@ -415,11 +421,16 @@ function PullRequestCard({
         <span className="text-muted-foreground">
           #{pullRequest.number} · {label}
         </span>
-        {url && (
+        {(url || detailId) && (
           <div className="ml-auto flex items-center gap-1.5">
-            <Button variant="outline" size="sm" onClick={() => void openExternal(url)} aria-label={`Open pull request #${pullRequest.number}`}>
+            {detailId && (
+              <Button variant="outline" size="sm" onClick={() => openPrDetail(detailId)} aria-label={`Open the details of pull request #${pullRequest.number}`}>
+                Details
+              </Button>
+            )}
+            {url && <Button variant="outline" size="sm" onClick={() => void openExternal(url)} aria-label={`Open pull request #${pullRequest.number}`}>
               Open
-            </Button>
+            </Button>}
           </div>
         )}
       </div>

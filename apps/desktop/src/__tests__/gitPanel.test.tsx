@@ -317,7 +317,7 @@ describe('Pull request tab', () => {
     expect(screen.queryByRole('button', { name: /Auto-keep/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Review/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId('merge-queue-section')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Details/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open details/ })).toBeInTheDocument();
     expect(screen.getByTitle('Open on GitHub')).toBeInTheDocument();
     await screen.findByText(/No checks have run yet|not available right now/);
   });
@@ -405,7 +405,7 @@ describe('Pull request tab', () => {
     getPr.mockResolvedValue({ row: PR, fresh });
     render(<PullRequestTab workbench={WB} chat={chat} pr={PR} visible turnsEnded={0} />);
     expect(screen.queryByTestId('pr-sheet')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Open details/ }));
     expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'overview');
   });
 });

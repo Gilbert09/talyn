@@ -234,6 +234,9 @@ interface WorkbenchState {
   selectChat: (workbenchId: string, chatId: string) => void;
   hideChat: (workbenchId: string, chatId: string) => void;
   setSideTab: (tab: WorkbenchSideTab) => void;
+  /** The Talyn pull request id shown in the session's details overlay, or null. */
+  prDetailId: string | null;
+  openPrDetail: (pullRequestId: string | null) => void;
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
   setRightPanelWidth: (width: number) => void;
@@ -265,6 +268,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   selectedChatByWorkbench: {},
   hiddenChatIds: {},
   sideTab: initialLayout.gitPanelTab,
+  prDetailId: null,
   rightPanelOpen: true,
   rightPanelWidth: initialLayout.gitPanelWidth,
   terminalOpen: false,
@@ -417,6 +421,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { hiddenChatIds: { ...s.hiddenChatIds, [chatId]: true }, selectedChatByWorkbench: selected };
     }),
 
+  openPrDetail: (prDetailId) => set({ prDetailId }),
   setSideTab: (sideTab) => {
     set({ sideTab, rightPanelOpen: true });
     writeLayout({ gitPanelTab: sideTab });

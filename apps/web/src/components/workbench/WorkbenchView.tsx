@@ -15,6 +15,7 @@ import { GitPanel } from './GitPanel';
 import { WorkPanel } from './WorkPanel';
 import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
+import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
@@ -26,6 +27,11 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const chat = useSelectedChat(workbench.id);
   const pr = useWorkbenchPr(workbench);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
+  const prDetailId = useWorkbenchStore((s) => s.prDetailId);
+  const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
+
+  // The overlay belongs to the session it was opened from.
+  useEffect(() => () => openPrDetail(null), [workbench.id, openPrDetail]);
 
   // A fresh read on open: the list may be minutes old, and it carries the chats when the backend embeds them.
   useEffect(() => {
@@ -49,6 +55,12 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
             <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
           ))}
       </div>
+      <PRDetailSheet
+        pullRequestId={prDetailId}
+        onClose={() => openPrDetail(null)}
+        layout="overlay"
+        seedRow={pr && pr.id === prDetailId ? pr : null}
+      />
     </div>
   );
 }

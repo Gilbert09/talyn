@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  ExternalLink,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -144,6 +145,7 @@ export function WorkbenchHeader({
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel);
   const setSideTab = useWorkbenchStore((s) => s.setSideTab);
   const openPrTab = () => setSideTab('pr');
+  const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -273,16 +275,28 @@ export function WorkbenchHeader({
         </h1>
         <div className="app-region-no-drag flex min-w-0 max-w-[70%] shrink items-center gap-2">
           {pr?.state === 'open' && pr.summary.url && (
-            <Button
-              variant="outline"
-              className="h-7 min-w-0 max-w-24 gap-1.5 truncate px-2.5 text-xs"
-              onClick={() => void openExternal(pr.summary.url)}
-              title={`Open #${pr.number} on GitHub: ${pr.summary.title}`}
-              data-attr="workbench-open-pr"
-            >
-              <GitPullRequest className="h-3.5 w-3.5" />
-              PR #{pr.number}
-            </Button>
+            <div className="flex min-w-0 items-center gap-0.5">
+              <Button
+                variant="outline"
+                className="h-7 min-w-0 max-w-24 gap-1.5 truncate px-2.5 text-xs"
+                onClick={() => openPrDetail(pr.id)}
+                title={`Open the details of #${pr.number}: ${pr.summary.title}`}
+                data-attr="workbench-open-pr"
+              >
+                <GitPullRequest className="h-3.5 w-3.5" />
+                PR #{pr.number}
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-7 w-7 shrink-0 p-0"
+                onClick={() => void openExternal(pr.summary.url)}
+                title={`Open #${pr.number} on GitHub`}
+                aria-label={`Open #${pr.number} on GitHub`}
+                data-attr="workbench-open-pr-github"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           )}
           {archived && (
             <Button

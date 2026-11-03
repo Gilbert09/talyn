@@ -223,7 +223,7 @@ export function PullRequestTab({
             title="Open the full pull request view"
           >
             <PanelRightOpen className="mr-1 h-3 w-3" />
-            Details
+            Open details
           </Button>
         </div>
         {review && (
