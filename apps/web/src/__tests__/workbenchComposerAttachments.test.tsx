@@ -156,3 +156,29 @@ it('keeps the composer enabled during a sandbox refresh', async () => {
   await waitFor(() => expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Continue' })));
   expect(screen.queryByText(/moving to a fresh sandbox/i)).toBeNull();
 });
+
+const waitingChat = (wait: object, extra: object = {}) => ({
+  id: 'chat-1', status: 'running',
+  queuedMessages: [{ id: 'q1', text: 'first message', queuedAt: '2026-11-03T10:00:00Z', capacityWait: { turn: 1, startedAt: '2026-11-03T10:00:00Z', retryAt: new Date(Date.now() + 20_000).toISOString(), attempts: 1, ...wait }, ...extra }],
+}) as unknown as WorkbenchChat;
+
+it.each([
+  ['capacity', /^Waiting for a free sandbox… \(retrying in \d+s\)$/],
+  ['waking', /^Waking the sandbox…$/],
+])('shows a status line and no Queued chip for a %s wait', (reason, text) => {
+  const ops = { ...sandboxOps(workbench), removeQueued: vi.fn() };
+  render(<Composer workbench={workbench} chat={waitingChat({ reason })} ops={ops} todos={null} contextUsage={null} slashCommands={null} />);
+  expect(screen.getByText(text)).toBeInTheDocument();
+  expect(screen.queryByText('Queued')).not.toBeInTheDocument();
+  expect(screen.queryByText('first message')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop waiting' }));
+  expect(ops.removeQueued).toHaveBeenCalledWith('chat-1', 'q1');
+});
+
+it('shows an ordinary queued message as a Queued chip', () => {
+  const ordinary = { id: 'chat-1', status: 'running', queuedMessages: [{ id: 'q2', text: 'later', queuedAt: '2026-11-03T10:00:00Z' }] } as unknown as WorkbenchChat;
+  render(<Composer workbench={workbench} chat={ordinary} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  expect(screen.getByText('Queued')).toBeInTheDocument();
+  expect(screen.getByText('later')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
+});

@@ -3,9 +3,11 @@ import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
   type Workbench,
+  type WorkbenchCapacityWait,
   type WorkbenchChat,
   type WorkbenchContextUsage,
   type WorkbenchEffort,
+  type WorkbenchQueuedMessage,
   type WorkbenchTodo,
   workbenchQueuesMessages,
 } from '@talyn/shared';
@@ -261,7 +263,9 @@ export function Composer({
     >
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
-          {queue.map((m) => (
+          {queue.map((m) => m.capacityWait ? (
+            <CapacityWaitLine key={m.id} message={m} wait={m.capacityWait} chatId={chat?.id} ops={ops} />
+          ) : (
             <li
               key={m.id}
               className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground"
@@ -378,5 +382,40 @@ export function Composer({
         </div>
       </div>
     </div>
+  );
+}
+
+/** The wait-for-a-sandbox text, with the seconds until the next try. */
+export function capacityWaitText(wait: WorkbenchCapacityWait, now: number): string {
+  if (wait.reason === 'waking') return 'Waking the sandbox…';
+  const seconds = Math.max(0, Math.ceil((new Date(wait.retryAt).getTime() - now) / 1000));
+  return Number.isFinite(seconds) && seconds > 0
+    ? `Waiting for a free sandbox… (retrying in ${seconds}s)`
+    : 'Waiting for a free sandbox…';
+}
+
+/** A message that waits for a sandbox is the turn in progress, so it is a status line and not a queued chip. */
+function CapacityWaitLine({ message, wait, chatId, ops }: { message: WorkbenchQueuedMessage; wait: WorkbenchCapacityWait; chatId: string | undefined; ops: WorkbenchOps }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <li data-attr="workbench-capacity-wait" className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground">
+      <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+      <span className="min-w-0 flex-1 truncate">{capacityWaitText(wait, now)}</span>
+      {ops.canRemoveQueued && chatId && (
+        <button
+          type="button"
+          onClick={() => ops.removeQueued(chatId, message.id)}
+          className="rounded p-0.5 hover:bg-accent hover:text-foreground"
+          aria-label="Stop waiting"
+          title="Stop waiting"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </li>
   );
 }

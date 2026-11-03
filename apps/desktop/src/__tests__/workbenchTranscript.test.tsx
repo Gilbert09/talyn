@@ -272,3 +272,14 @@ it.each([
   if (phase === 'restoring') expect(screen.getByText(/after a long idle/)).toBeInTheDocument();
   else expect(screen.queryByText(/after a long idle/)).not.toBeInTheDocument();
 });
+
+it.each(['No sandbox became free in 30 minutes', 'The sandbox did not wake in 30 minutes'])('hides Retry when the 30-minute wait ended: %s', (message) => {
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, message)]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText('Ended with error')).toBeInTheDocument();
+  expect(retryButton()).not.toBeInTheDocument();
+});
+
+it.each(['API 429', 'The sandbox stopped', 'No sandbox was found'])('keeps Retry for another error: %s', (message) => {
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, message)]} loading={false} error={null} ops={ops} />);
+  expect(retryButton()).toBeInTheDocument();
+});

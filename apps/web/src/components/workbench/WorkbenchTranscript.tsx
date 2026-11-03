@@ -294,6 +294,9 @@ const TurnView = React.memo(function TurnView({
   );
 });
 
+/** The 30-minute wait for a sandbox ended. A plain retry would start another 30-minute wait. */
+export const SANDBOX_WAIT_BOUND_ERROR = /No sandbox became free in 30 minutes|The sandbox did not wake in 30 minutes/i;
+
 function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string }) {
   const [sending, setSending] = useState(false);
   const send = async () => {
@@ -308,6 +311,7 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
       setSending(false);
     }
   };
+  if (SANDBOX_WAIT_BOUND_ERROR.test(reason)) return null;
   return (
     <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
       className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
