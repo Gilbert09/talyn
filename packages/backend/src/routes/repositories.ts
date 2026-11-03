@@ -6,13 +6,26 @@ import {
   detectRepoSandboxSize, getSizeRepository, mergeSandboxSize, sandboxSizeResponse, validateSandboxSizeChoice,
 } from '../services/workbenches/sandboxSize.js';
 import { Router, type Request, type Response } from 'express';
-import { prepareRecordedStep, type PutRepositoryInstructionsInput, type RecordSetupStepInput } from '@talyn/shared';
 import {
+  prepareRecordedStep,
+  type PutRepositoryInstructionsInput,
+  type PutRepositorySetupInput,
+  type RecordSetupStepInput,
+  type SetupListStep,
+} from '@talyn/shared';
+import {
+  acceptSetupStep,
+  dismissSetupStep,
+  getRepositorySetup,
   getSetupRecipe,
   learningDisabled,
+  putRepositorySetup,
   recordSetupSteps,
+  retrySetupStep,
   revertSetupStep,
   setSetupLearning,
+  SetupListError,
+  toRecipeStep,
 } from '../services/workbenches/setupLayers.js';
 import { getWorkbench } from '../services/workbenches/store.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
@@ -213,6 +226,57 @@ export function repositoryRoutes(): Router {
     res.json({ success: true, data: sandboxSizeResponse(row) });
   });
 
+  // ---- The Setup list: the repository's own setup, then one ordered list of steps ----
+
+  const NO_REPOSITORY = 'Repository not found.';
+  const NO_STEP = 'This repository has no such setup step.';
+
+  function setupListRefusal(err: unknown, res: Response): void {
+    if (!(err instanceof SetupListError)) throw err;
+    res.status(err.status).json({ success: false, error: err.message, code: err.code });
+  }
+
+  router.get('/:id/setup', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const setup = await getRepositorySetup(req.params.id);
+    if (!setup) return res.status(404).json({ success: false, error: NO_REPOSITORY });
+    res.json({ success: true, data: setup });
+  });
+
+  router.put('/:id/setup', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    try {
+      const setup = await putRepositorySetup(req.params.id, req.body as PutRepositorySetupInput);
+      if (!setup) return res.status(404).json({ success: false, error: NO_REPOSITORY });
+      res.json({ success: true, data: setup });
+    } catch (err) {
+      setupListRefusal(err, res);
+    }
+  });
+
+  const stepActions: Record<string, (repositoryId: string, stepId: string) => Promise<SetupListStep | null>> = {
+    accept: (repositoryId, stepId) => acceptSetupStep(repositoryId, stepId),
+    dismiss: (repositoryId, stepId) => dismissSetupStep(repositoryId, stepId),
+    retry: (repositoryId, stepId) => retrySetupStep({ repositoryId }, stepId),
+  };
+
+  for (const [action, run] of Object.entries(stepActions)) {
+    router.post(`/:id/setup/steps/:stepId/${action}`, async (req, res) => {
+      if (!(await previewGate(req, res))) return;
+      try {
+        const step = await run(req.params.id, req.params.stepId);
+        if (!step) return res.status(404).json({ success: false, error: NO_STEP });
+        const setup = await getRepositorySetup(req.params.id);
+        if (!setup) return res.status(404).json({ success: false, error: NO_REPOSITORY });
+        res.json({ success: true, data: setup });
+      } catch (err) {
+        setupListRefusal(err, res);
+      }
+    });
+  }
+
+  // ---- The old shapes. Remove after one release: clients use /:id/setup ----
+
   router.get('/:id/bake', async (req, res) => {
     if (!(await previewGate(req, res))) return;
     const row = await getSizeRepository(req.params.id);
@@ -230,8 +294,6 @@ export function repositoryRoutes(): Router {
       res.status(400).json({ success: false, error: (err as Error).message });
     }
   });
-
-  // ---- The setup recipe: steps that sessions learned, applied to new boxes and the bake ----
 
   router.get('/:id/setup-recipe', async (req, res) => {
     if (!(await previewGate(req, res))) return;
@@ -289,7 +351,7 @@ export function repositoryRoutes(): Router {
     if (recorded.added.length === 0 && recorded.seen.length === 0) {
       return res.status(409).json({ success: false, error: 'The setup recipe is full. A person can revert steps to make room.', code: 'setup_recipe_full' });
     }
-    res.json({ success: true, data: { steps: [...recorded.added, ...recorded.seen] } });
+    res.json({ success: true, data: { steps: [...recorded.added, ...recorded.seen].map(toRecipeStep) } });
   });
 
   router.delete('/:id', async (req, res) => {

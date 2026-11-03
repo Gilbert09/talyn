@@ -1,6 +1,6 @@
 import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js';
 import { disableRankingCollection, resumeRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
@@ -18,6 +18,13 @@ import {
   assertCanEnableAutoReview,
 } from '../services/billing/entitlements.js';
 import { ensureDefaultWorkspace } from '../services/workspaceBootstrap.js';
+import { userMayUseWorkbenches } from '../services/workbenches/access.js';
+import {
+  getWorkspaceSandboxSetup,
+  putWorkspaceSandboxSetup,
+  retrySetupStep,
+  SetupListError,
+} from '../services/workbenches/setupLayers.js';
 import { checkCustomReviewers } from '../services/codeReview/reviewerSkills.js';
 import {
   PROMPT_KINDS,
@@ -32,6 +39,7 @@ import {
   type ApiResponse,
   type PromptKind,
   type PromptTemplateOverride,
+  type PutWorkspaceSandboxSetupInput,
   CodeReviewRequestError,
   codeReviewReviewersProblem,
   codeReviewSettingsPatch,
@@ -502,6 +510,46 @@ export function workspaceRoutes(): Router {
       success: true,
       data: rowToWorkspace(rows[0], relations),
     } as ApiResponse<Workspace>);
+  });
+
+  // ---- Settings → Sandbox setup: the dotfiles and the steps of every repository's image ----
+
+  /** Workspace access, and the same sessions gate as the repository Setup list. */
+  async function sandboxSetupGate(req: Request, res: Response): Promise<boolean> {
+    try { await requireWorkspaceAccess(req, req.params.id); }
+    catch (err) { handleAccessError(err, res); return false; }
+    const user = assertUser(req);
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      res.status(403).json({ success: false, error: 'Sessions are not available for this account.' });
+      return false;
+    }
+    return true;
+  }
+
+  router.get('/:id/sandbox-setup', async (req, res) => {
+    if (!(await sandboxSetupGate(req, res))) return;
+    const setup = await getWorkspaceSandboxSetup(req.params.id);
+    if (!setup) return res.status(404).json({ success: false, error: 'Workspace not found' });
+    res.json({ success: true, data: setup });
+  });
+
+  router.put('/:id/sandbox-setup', async (req, res) => {
+    if (!(await sandboxSetupGate(req, res))) return;
+    try {
+      const setup = await putWorkspaceSandboxSetup(req.params.id, req.body as PutWorkspaceSandboxSetupInput);
+      if (!setup) return res.status(404).json({ success: false, error: 'Workspace not found' });
+      res.json({ success: true, data: setup });
+    } catch (err) {
+      if (!(err instanceof SetupListError)) throw err;
+      res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    }
+  });
+
+  router.post('/:id/sandbox-setup/steps/:stepId/retry', async (req, res) => {
+    if (!(await sandboxSetupGate(req, res))) return;
+    const step = await retrySetupStep({ workspaceId: req.params.id }, req.params.stepId);
+    if (!step) return res.status(404).json({ success: false, error: 'This workspace has no such setup step.' });
+    res.json({ success: true, data: step });
   });
 
   router.delete('/:id', async (req, res) => {
