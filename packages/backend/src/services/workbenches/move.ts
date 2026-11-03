@@ -1,6 +1,6 @@
 import { isSandboxSize, SANDBOX_SIZES, shellQuote, WORKBENCH_IMPORT_MAX_BYTES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
-import { FleetRunNotFoundError, type FleetSandbox } from '../selfHosted/client.js';
+import { FleetHttpError, FleetRunNotFoundError, type FleetClient, type FleetSandbox } from '../selfHosted/client.js';
 import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { userFacingError } from './errors.js';
@@ -1251,6 +1251,43 @@ export async function probeDisk(row: WorkbenchRow): Promise<DiskProbe | null> {
   return parseDiskProbe(r.stderr);
 }
 
+const GUEST_GROW_RETRIES = 2;
+let guestGrowRetryDelayMs = 5_000;
+
+/** For tests: the wait between two guest-step retries. */
+export function setGuestGrowRetryDelayForTests(ms: number): void {
+  guestGrowRetryDelayMs = ms;
+}
+
+/**
+ * Ask the fleet to grow the disk. When the call fails, the fleet may have
+ * grown and charged the image while the guest step did not finish. Asking for
+ * the size the box now has retries only the guest step. A refusal that is not
+ * a server fault or a lost connection is not retried.
+ */
+async function growWithGuestRetry(
+  client: FleetClient,
+  sandboxId: string,
+  target: number,
+): Promise<'grown' | 'unsupported'> {
+  let size = target;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.growSandboxDisk(sandboxId, size);
+    } catch (err) {
+      const retryable = err instanceof FleetHttpError ? err.status >= 500 : !(err instanceof FleetRunNotFoundError);
+      if (!retryable || attempt >= GUEST_GROW_RETRIES) throw err;
+      await new Promise((resolve) => setTimeout(resolve, guestGrowRetryDelayMs));
+      const charged = await client
+        .getSandbox(sandboxId)
+        .then((r) => ((r.sandbox.diskGrowFromMib ?? 0) > 0 ? r.sandbox.diskMib : undefined))
+        .catch(() => undefined);
+      // No pending grow means the first call never reached the charge: ask again for the target.
+      size = charged ?? target;
+    }
+  }
+}
+
 /**
  * Grow the box's disk through the fleet, when it can. True when the box then
  * has `LOW_DISK_BYTES` free. False when the fleet has no grow route, the grow
@@ -1261,13 +1298,16 @@ export async function tryGrowDisk(row: WorkbenchRow, probe?: DiskProbe | null): 
   const before = probe ?? (await probeDisk(row));
   if (!before) return false;
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const current = await client
+  const known = await client
     .getSandbox(row.sandboxId)
-    .then((r) => r.sandbox.diskMib)
+    .then((r) => r.sandbox)
     .catch(() => undefined);
-  const target = grownDiskMib(before, current);
+  const current = known?.diskMib;
+  // A grow the guest never confirmed is already charged: finish it at the same size.
+  const pending = (known?.diskGrowFromMib ?? 0) > 0 && !!current;
+  const target = pending ? current! : grownDiskMib(before, current);
   if (target === null) return false;
-  const answer = await client.growSandboxDisk(row.sandboxId, target);
+  const answer = await growWithGuestRetry(client, row.sandboxId, target);
   if (answer === 'unsupported') return false;
   const after = await probeDisk(row).catch(() => null);
   const ok = after !== null && after.availBytes >= LOW_DISK_BYTES;

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { repositories, workspaces } from '../db/schema.js';
-import type { FleetExecFrame, FleetExecRequest, FleetSandbox } from '../services/selfHosted/client.js';
+import { FleetHttpError, type FleetExecFrame, type FleetExecRequest, type FleetSandbox } from '../services/selfHosted/client.js';
 
 /**
  * Moving a session to a fresh sandbox: the claim and its lease, the order of a
@@ -113,8 +113,14 @@ class MoveFleet extends FakeFleet {
     return { sandbox: { id, ...this.sandbox } as FleetSandbox, terminal: false };
   }
 
-  async growSandboxDisk(id: string) {
+  growSizes: number[] = [];
+  growErrors: Array<Error | undefined> = [];
+
+  async growSandboxDisk(id: string, diskMib: number) {
     this.log.push({ kind: 'grow', box: id });
+    this.growSizes.push(diskMib);
+    const err = this.growErrors.shift();
+    if (err) throw err;
     return this.grow;
   }
 
@@ -164,6 +170,7 @@ describe('moving a session to a fresh sandbox', () => {
     vi.stubEnv('FLEET_GATEWAY_TOKEN', '');
     vi.stubEnv('FLEET_ALLOWED', 'true');
     move.resetMovesForTests();
+    move.setGuestGrowRetryDelayForTests(0);
     testDb = await createTestDb();
     await seedUser(testDb.db, { id: 'owner-a' });
     await testDb.db.insert(workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
@@ -639,6 +646,56 @@ describe('moving a session to a fresh sandbox', () => {
       await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
       expect(fleet.has('grow')).toBe(true);
       expect(fleet.has('export')).toBe(false);
+    });
+
+    describe('a grow whose guest step fails', () => {
+      const guestFailure = () => new FleetHttpError('guest growth failed: context canceled', 500, 'disk_grow_failed');
+
+      beforeEach(() => {
+        replies.checkpoint = lowCheckpoint(GIB);
+        fleet.grow = 'grown';
+      });
+
+      it('retries the guest step at the size the box now has, and does not move', async () => {
+        fleet.growErrors = [guestFailure()];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        const original = fleet.getSandbox.bind(fleet);
+        let reads = 0;
+        fleet.getSandbox = async (id: string) => {
+          // The first read is before the grow; later reads see the charge.
+          const r = await original(id);
+          return ++reads === 1 ? r : { ...r, sandbox: { ...r.sandbox, diskMib: 24234, diskGrowFromMib: 16384 } };
+        };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(2);
+        expect(fleet.growSizes[1]).toBe(24234);
+        expect(fleet.has('export')).toBe(false);
+      });
+
+      it('starts with the guest step when a grow is already pending', async () => {
+        fleet.sandbox = { status: 'idle', diskMib: 24234, diskGrowFromMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toEqual([24234]);
+        expect(fleet.has('export')).toBe(false);
+      });
+
+      it('moves the box when every retry fails', async () => {
+        fleet.growErrors = [guestFailure(), guestFailure(), guestFailure()];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('export')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(3);
+      });
+
+      it('does not retry a refusal that is not a server fault', async () => {
+        fleet.growErrors = [new FleetHttpError('too large', 400, 'disk_too_large')];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('export')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(1);
+      });
     });
 
     it('does not move a box a disk move made and that is on the newest golden; says so once', async () => {

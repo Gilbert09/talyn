@@ -102,6 +102,11 @@ export interface FleetSandbox {
   goldenLayer?: string;
   /** The rootfs this box was given. Absent or 0 means the golden's own size. */
   diskMib?: number;
+  /**
+   * Non-zero while a disk grow to `diskMib` is charged but the guest has not
+   * confirmed it. Asking for `diskMib` again retries only the guest step.
+   */
+  diskGrowFromMib?: number;
   /** True when a newer golden exists for this box's repository. Absent reads as "not stale". */
   goldenStale?: boolean;
   /** `memory` or `rootfs`, while suspended. */
