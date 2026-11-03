@@ -271,6 +271,32 @@ export interface WorkbenchQueuedMessage {
    */
   origin?: 'user' | 'talyn';
   queuedAt: string;
+  /**
+   * Set while the message waits for a free sandbox. Its turn started, the
+   * fleet had no room to wake the box, and the message went back to the head
+   * of the queue. Its user message is already in the transcript, in `turn`.
+   * Absent for an ordinary queued message.
+   */
+  capacityWait?: WorkbenchCapacityWait;
+}
+
+/** A queued message that waits for a free sandbox. See `WorkbenchQueuedMessage.capacityWait`. */
+export interface WorkbenchCapacityWait {
+  /** The turn the message keeps. The transcript shows its user message there. */
+  turn: number;
+  /** When the wait started. The wait ends with an error 30 minutes after it. */
+  startedAt: string;
+  /** When Talyn tries to start the turn again. */
+  retryAt: string;
+  /** How many tries the fleet refused. */
+  attempts: number;
+  /**
+   * What the last refusal said. `capacity`: the fleet has no room, or it
+   * throttles the workspace ("Waiting for a free sandbox"). `waking`: the
+   * fleet is restoring the box, or could not fetch its hibernated copy yet
+   * ("Waking the sandbox").
+   */
+  reason: 'capacity' | 'waking';
 }
 
 export interface WorkbenchChat {

@@ -92,7 +92,7 @@ import {
   updateWorkbench,
   type WorkbenchRow,
 } from './store.js';
-import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollowers } from './turns.js';
+import { cancelAllTurns, isWaitingForSandbox, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollowers } from './turns.js';
 
 /**
  * A sandbox workbench's life: provision (create the box, clone, set up),
@@ -740,13 +740,13 @@ export async function processArchive(workbenchId: string): Promise<void> {
     if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && isThread(row)) {
       // A thread's box holds no work of its own: its conversation is in the transcript and the agent backups.
       const chats = await listChats(row.id);
-      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id));
       await checkLease();
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
       const chats = await listChats(row.id);
-      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id));
       await stopAllScripts(row);
       const config = await loadWorkbenchConfig(row);
       await checkLease();
@@ -924,7 +924,7 @@ export async function deleteWorkbench(workbenchId: string): Promise<void> {
 async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
     const chats = await listChats(row.id);
-    await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id)).catch(() => undefined);
+    await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id)).catch(() => undefined);
     await stopAllScripts(row).catch(() => undefined);
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);

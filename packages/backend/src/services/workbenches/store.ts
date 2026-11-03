@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, isNotNull, or, lt, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, isNotNull, or, lt, lte, ne, sql, type SQL } from 'drizzle-orm';
 import type {
   AgentEvent,
   AgentStreamSnapshot,
@@ -1017,6 +1017,14 @@ function workbenchState(chatId: string) {
     )`;
 }
 
+/**
+ * The head of the queue waits for a free sandbox and its next try is not due
+ * yet. No turn starts then: the retry timer or the turn sweep comes back at
+ * `retryAt`, so the backoff holds across sends, instances and deploys.
+ */
+const headWaitsForSandbox = (queue: SQL) =>
+  sql`COALESCE((${queue} -> 0 -> 'capacityWait' ->> 'retryAt')::timestamptz > now(), false)`;
+
 const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL OR archive_on_idle IS NOT NULL OR archive_after_turn IS NOT NULL)`);
 
 export interface ClaimResult {
@@ -1052,7 +1060,8 @@ export async function claimOrEnqueue(
     ), merged AS (
       SELECT status AS prev_status, queued_messages || ${add}::jsonb AS mq,
         (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_UNAVAILABLE}
-          AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0) AS go
+          AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0
+          AND NOT ${headWaitsForSandbox(sql`(queued_messages || ${add}::jsonb)`)}) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
@@ -1100,7 +1109,8 @@ export async function finishTurn(
       SELECT queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
       SELECT queued_messages AS mq,
-        (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0) AS go
+        (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0
+          AND NOT ${headWaitsForSandbox(sql`queued_messages`)}) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
@@ -1139,7 +1149,9 @@ export async function finishTurn(
 /**
  * Give a turn back to the queue before it ran anything: its message goes to
  * the head of the queue, the turn number is returned, and the chat is idle.
- * For a turn that found its workbench moving. Null when the chat was not running.
+ * For a turn that found its workbench moving, and for a turn that waits for a
+ * free sandbox (the message then carries `capacityWait`). Null when the chat
+ * was not running.
  */
 export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
   const result = await db().execute(sql`
@@ -1153,6 +1165,29 @@ export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessag
       updated_at = now()
     WHERE c.id = ${chatId} AND c.status = 'running' AND c.turn_owner = ${TURN_OWNER}
       AND (${turn ?? null}::int IS NULL OR c.turn_count = ${turn ?? null})
+    RETURNING ${RETURNING_CHAT}
+  `);
+  const row = rowsOf<RawChatRow>(result)[0];
+  return row ? rawToChatRow(row) : null;
+}
+
+/**
+ * End the wait of the message at the head of the queue that waits for a free
+ * sandbox: take it out of the queue and give it back its turn. The transcript
+ * already shows its user message in that turn, so the next message must not
+ * take the same number. Nothing drains after it, as after a cancel.
+ * `messageId` limits this to that message. Null when no message waits.
+ */
+export async function abandonCapacityWait(chatId: string, messageId?: string): Promise<ChatRow | null> {
+  const result = await db().execute(sql`
+    UPDATE workbench_chats c SET
+      queued_messages = c.queued_messages - 0,
+      turn_count = (c.queued_messages -> 0 -> 'capacityWait' ->> 'turn')::int,
+      drain_pending = false,
+      updated_at = now()
+    WHERE c.id = ${chatId} AND c.status <> 'running'
+      AND c.queued_messages -> 0 -> 'capacityWait' IS NOT NULL
+      AND (${messageId ?? null}::text IS NULL OR c.queued_messages -> 0 ->> 'id' = ${messageId ?? null})
     RETURNING ${RETURNING_CHAT}
   `);
   const row = rowsOf<RawChatRow>(result)[0];
@@ -1718,6 +1753,7 @@ export async function queuedIdleChats(): Promise<Array<{ id: string }>> {
   return db().select({ id: chatsTable.id }).from(chatsTable).where(and(
     eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
     sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
+    sql`NOT ${headWaitsForSandbox(sql`${chatsTable.queuedMessages}`)}`,
   ));
 }
 

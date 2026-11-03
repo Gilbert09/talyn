@@ -21,6 +21,7 @@ import {
   type AgentStreamParser,
   type SendWorkbenchMessageInput,
   type WorkbenchAttachment,
+  type WorkbenchCapacityWait,
   type WorkbenchChatStatus,
   type WorkbenchQueuedMessage,
   type WorkbenchStatus,
@@ -45,7 +46,9 @@ import {
 } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
-import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { isHibernationFetchFailed, isWakeRefusal, localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE } from './lifecycle.js';
+import { isSizeRefusal } from './sandboxSize.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { syncSkillPack } from './skillPack.js';
@@ -56,7 +59,7 @@ import { applyPendingResize, pendingResize } from './resize.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
-import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { FleetRunNotFoundError, type FleetCapacityError, type FleetHttpError, type FleetThrottleError } from '../selfHosted/client.js';
 import { selectFleetAccount } from '../selfHosted/accountSelection.js';
 import { exhaustedAgentFrom, noteExhaustedAgent, noteRateLimitedAccount, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
 import {
@@ -78,6 +81,7 @@ import { sendWebhookSignal } from '../apiWebhooks/signals.js';
 import { startTitleGeneration } from './title.js';
 import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, type BranchNamingInput } from './branchName.js';
 import {
+  abandonCapacityWait,
   appendEvents,
   claimOrEnqueue,
   finishTurn,
@@ -279,7 +283,9 @@ export async function sendMessage(
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
   if (claim.started) {
-    sendWebhookSignal({ kind: 'turn_started', workspaceId: chat.workspaceId, chatId, turn: claim.started.turn });
+    if (!claim.started.message.capacityWait) {
+      sendWebhookSignal({ kind: 'turn_started', workspaceId: chat.workspaceId, chatId, turn: claim.started.turn });
+    }
     launchTurnLoop(chatId, claim.started);
   }
   return { queued: claim.started?.message.id !== message.id };
@@ -294,7 +300,10 @@ export async function startQueuedIfIdle(chatId: string): Promise<boolean> {
     return false;
   }
   emitWorkbenchChat(claim.chat.workspaceId, rowToChat(claim.chat));
-  sendWebhookSignal({ kind: 'turn_started', workspaceId: claim.chat.workspaceId, chatId, turn: claim.started.turn });
+  // A message that waits for a free sandbox started its turn once already: a retry is not a new turn.
+  if (!claim.started.message.capacityWait) {
+    sendWebhookSignal({ kind: 'turn_started', workspaceId: claim.chat.workspaceId, chatId, turn: claim.started.turn });
+  }
   launchTurnLoop(chatId, claim.started);
   return true;
 }
@@ -366,6 +375,11 @@ async function runTurnLoopBody(
       await releaseLease(chatId, heldTurn, 'the turn follower failed', error);
       return;
     } finally { clearInterval(heartbeat); }
+    // Before the lease checks: nothing ran, and a requeue that this instance still owns keeps the message safe across a deploy.
+    if (outcome.capacityWait) {
+      await requeueForSandbox(chatId, next.message, heldTurn, outcome.capacityWait);
+      return;
+    }
     if (lost || isWorkbenchDetached() || outcome.handedOff) {
       await releaseLease(chatId, heldTurn, lost ?? outcome.handoffReason ?? 'this instance detached', lostError ?? outcome.handoffError);
       return;
@@ -468,6 +482,8 @@ interface TurnOutcome {
   relaunch?: { message: WorkbenchQueuedMessage; attempt: number; failedOver?: boolean };
   /** The agent finished the turn: its message and final text, for the branch name. */
   succeeded?: BranchNamingInput;
+  /** The fleet had no room to wake the box: the message goes back to the queue and waits. Nothing ran. */
+  capacityWait?: WorkbenchCapacityWait;
 }
 
 export const DISK_FULL_MOVED_NOTE =
@@ -591,6 +607,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
   let agentMayBeRunning = false;
+  /** Set when the first launch begins. Before it, nothing of this turn ran in the box. */
+  let launched = false;
   let recapWrite = Promise.resolve();
   try {
     let wb = early;
@@ -708,6 +726,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     };
     let attempt = firstAttempt;
     let failedOver = alreadyFailedOver;
+    launched = true;
     for (;;) {
       const parser = createAgentStreamParser(agent);
       attemptSawResult = false;
@@ -789,6 +808,12 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       await events.flush();
       return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
     }
+    // The box could not wake: no room on its host, the fleet throttles us, or the
+    // hibernated copy is not back yet. Wait, as a session start does. A relaunch
+    // (attempt > 0) has logs in the box, so it does not.
+    if (!launched && firstAttempt === 0 && isWakeRefusal(err) && !isSizeRefusal(err)) {
+      return capacityWaitOutcome(early, chatId, message, turn, err, events);
+    }
     if (agentMayBeRunning) return handoffOutcome('the agent may be running and its log could not be followed', err);
     // userFacingError, so a fleet answer such as hibernation_fetch_failed reads
     // as plain words and not as the fleet's raw refusal.
@@ -838,6 +863,121 @@ async function cancelledOutcome(events: EventBatcher, sawResult = false): Promis
   if (!sawResult) events.add(errorResultEvent('cancelled', 'Stopped.'));
   await events.flush();
   return { status: 'idle', statusMessage: 'Cancelled', cancelled: true };
+}
+
+export const NO_FREE_SANDBOX_TURN_MESSAGE = 'No sandbox became free in 30 minutes. Retry the turn when the fleet has room.';
+export const WAKING_SANDBOX_MESSAGE = 'Waking the sandbox';
+export const SANDBOX_DID_NOT_WAKE_TURN_MESSAGE = 'The sandbox did not wake in 30 minutes. Retry the turn shortly.';
+
+/**
+ * Why the box could not wake, in the wait's words. `waking` when the fleet
+ * could not fetch the hibernated copy yet, or reports the box as starting (a
+ * restore is in progress). Otherwise `capacity`. The read is best effort.
+ */
+async function wakeRefusalReason(wb: WorkbenchRow | null, err: unknown): Promise<WorkbenchCapacityWait['reason']> {
+  if (isHibernationFetchFailed(err)) return 'waking';
+  if (!wb?.sandboxId) return 'capacity';
+  try {
+    const client = await fleetClientFor(wb.workspaceId, wb.fleetHost);
+    return (await client.getSandbox(wb.sandboxId)).sandbox.status === 'starting' ? 'waking' : 'capacity';
+  } catch {
+    return 'capacity';
+  }
+}
+
+/**
+ * A turn whose box could not wake. A refusal that starts the wait, or changes
+ * its reason, writes one note to the transcript. Each refusal sets the next
+ * try with the session start's backoff. After the start's bound
+ * (`PROVISION_CAPACITY_WAIT.maxMs`, counted from the first refusal) the turn
+ * fails.
+ */
+async function capacityWaitOutcome(
+  wb: WorkbenchRow | null,
+  chatId: string,
+  message: WorkbenchQueuedMessage,
+  turn: number,
+  err: FleetCapacityError | FleetThrottleError | FleetHttpError,
+  events: EventBatcher,
+): Promise<TurnOutcome> {
+  const now = Date.now();
+  const prior = message.capacityWait?.turn === turn ? message.capacityWait : undefined;
+  const startedAt = prior ? Date.parse(prior.startedAt) : now;
+  const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
+  const reason = await wakeRefusalReason(wb, err);
+  if (left <= 0) {
+    const why = reason === 'waking' ? SANDBOX_DID_NOT_WAKE_TURN_MESSAGE : NO_FREE_SANDBOX_TURN_MESSAGE;
+    noteTurn('turn_capacity_gave_up', chatId, turn, `the box did not wake after ${prior?.attempts ?? 0} tries`, err);
+    events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
+    await events.flush();
+    return { status: 'error', statusMessage: why, cancelled: false };
+  }
+  const attempts = prior?.attempts ?? 0;
+  const retryAfterMs = 'retryAfterMs' in err ? err.retryAfterMs : undefined;
+  const delay = Math.min(capacityWaitDelayMs(attempts, retryAfterMs), left);
+  if (prior?.reason !== reason) {
+    const text = reason === 'waking' ? WAKING_SANDBOX_MESSAGE : WAITING_FOR_SANDBOX_MESSAGE;
+    events.add({ type: 'system', subtype: 'sandbox_capacity_wait', text });
+    if (wb) recordWorkbenchEvent(wb, 'sandbox_capacity_wait', `chat ${chatId.slice(0, 8)} turn ${turn}: ${text}`, false);
+  }
+  noteTurn('turn_capacity_wait', chatId, turn, `${reason} (${err.name}); trying again in ${Math.round(delay / 1000)} s`);
+  await events.flush();
+  return {
+    status: 'idle', statusMessage: null, cancelled: false,
+    capacityWait: {
+      turn, startedAt: new Date(startedAt).toISOString(), retryAt: new Date(now + delay).toISOString(),
+      attempts: attempts + 1, reason,
+    },
+  };
+}
+
+/**
+ * Put the waiting message back at the head of the queue, with its wait. The
+ * queue claim does not start it before `retryAt`. This process tries at that
+ * time, and the turn sweep tries too, so a deploy loses nothing.
+ */
+async function requeueForSandbox(chatId: string, message: WorkbenchQueuedMessage, turn: number, wait: WorkbenchCapacityWait): Promise<void> {
+  adoptFailures.delete(chatId);
+  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, turn);
+  if (!requeued) {
+    await releaseLease(chatId, turn, 'the chat moved on before its wait for a sandbox was recorded');
+    return;
+  }
+  emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+  const timer = setTimeout(() => {
+    void runWithoutScope(() => retryWaitingMessage(chatId, message.id)).catch((err) => {
+      console.warn(`[workbench] retrying the turn of chat ${chatId} after a wait for a sandbox failed:`, err);
+    });
+  }, Math.max(0, Date.parse(wait.retryAt) - Date.now()) + 100);
+  timer.unref();
+}
+
+/** Start the waiting message, when it still waits at the head of the queue. */
+async function retryWaitingMessage(chatId: string, messageId: string): Promise<boolean> {
+  const chat = await getChat(chatId);
+  const head = chat?.queuedMessages[0];
+  if (!chat || chat.closedAt || head?.id !== messageId || !head.capacityWait) return false;
+  return startQueuedIfIdle(chatId);
+}
+
+/** The chat is idle and the head of its queue waits for a free sandbox. */
+export function isWaitingForSandbox(chat: Pick<ChatRow, 'status' | 'queuedMessages'>): boolean {
+  return chat.status !== 'running' && Boolean(chat.queuedMessages?.[0]?.capacityWait);
+}
+
+/**
+ * Stop a wait for a free sandbox: on a cancel, an archive, or when the person
+ * removes the waiting message. The message leaves the queue and its turn ends
+ * as stopped. Null when the chat has no message that waits.
+ */
+export async function endCapacityWait(chatId: string, messageId?: string): Promise<ChatRow | null> {
+  const row = await abandonCapacityWait(chatId, messageId);
+  if (!row) return null;
+  const stored = await appendEvents(chatId, [{ turn: row.turnCount, event: errorResultEvent('cancelled', 'Stopped.') }]);
+  emitWorkbenchEvents(row.workspaceId, chatId, stored);
+  emitWorkbenchChat(row.workspaceId, rowToChat(row));
+  sendWebhookSignal({ kind: 'turn_completed', workspaceId: row.workspaceId, chatId, turn: row.turnCount, finalStatus: 'idle' });
+  return row;
 }
 
 /** The prompt, with the attached files named so the agent knows where to look. */
@@ -927,7 +1067,8 @@ export async function createCheckpoint(
  */
 async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number): Promise<WorkbenchRow> {
   const first = await createCheckpoint(wb, chatId, turn).catch((err) => {
-    if (err instanceof FleetRunNotFoundError) throw err;
+    // This exec wakes the box: a box that cannot wake fails every step after it, so the turn waits for room instead.
+    if (err instanceof FleetRunNotFoundError || isWakeRefusal(err)) throw err;
     console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
     return { sha: null, disk: null, error: err instanceof Error ? err.message : String(err) };
   });
@@ -1004,7 +1145,11 @@ export async function cancelTurn(chatId: string): Promise<void> {
   if (wb.runtime === 'local') throw localRuntimeError();
   const live = liveTurns.get(chatId);
   if (live) live.cancelRequested = true;
-  if (chat.status !== 'running' && !live) return;
+  if (chat.status !== 'running' && !live) {
+    // Between two tries of a wait for a free sandbox nothing runs: the wait itself stops.
+    await endCapacityWait(chatId);
+    return;
+  }
   const lease = await getTurnLease(chatId);
   if (lease && lease.turn !== chat.turnCount) return;
   if (wb.sandboxId) {

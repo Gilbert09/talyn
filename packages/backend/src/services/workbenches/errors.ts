@@ -26,6 +26,16 @@ export function isHibernationFetchFailed(err: unknown): boolean {
 }
 
 /**
+ * The box could not wake now, for a reason that clears with time: the fleet
+ * has no room (503), it throttles this tenant (429), or it could not fetch the
+ * hibernated copy yet (503 `hibernation_fetch_failed`, the copy is intact). A
+ * turn waits on all three. A session start fails fast on the last one.
+ */
+export function isWakeRefusal(err: unknown): err is FleetCapacityError | FleetThrottleError | FleetHttpError {
+  return err instanceof FleetCapacityError || err instanceof FleetThrottleError || isHibernationFetchFailed(err);
+}
+
+/**
  * A refusal the routes turn into a status and a machine code. Thrown by the
  * workbench services for conditions a person can act on — the workbench is
  * not ready, it is a local one, a path is outside the repository — and never

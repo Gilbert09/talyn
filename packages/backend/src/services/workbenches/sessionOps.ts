@@ -21,7 +21,7 @@ import {
   type ChatRow,
   type WorkbenchRow,
 } from './store.js';
-import { cancelTurn, sendMessage } from './turns.js';
+import { cancelTurn, endCapacityWait, sendMessage } from './turns.js';
 import { noteDiffStatFresh } from './workCheckpoint.js';
 
 /**
@@ -137,6 +137,9 @@ export async function patchChat(
 
 /** Take one message out of a chat's queue. Null when the chat is gone. */
 export async function dropQueuedMessage(chatId: string, messageId: string): Promise<ChatRow | null> {
+  // A message that waits for a free sandbox has its turn in the transcript: that turn ends as stopped.
+  const waited = await endCapacityWait(chatId, messageId);
+  if (waited) return waited;
   const row = await removeQueuedMessage(chatId, messageId);
   if (row) emitWorkbenchChat(row.workspaceId, rowToChat(row));
   return row;
@@ -144,6 +147,7 @@ export async function dropQueuedMessage(chatId: string, messageId: string): Prom
 
 /** Empty a chat's queue. A running turn goes on; nothing starts after it. */
 export async function clearQueuedMessages(chat: ChatRow): Promise<ChatRow> {
+  await endCapacityWait(chat.id);
   return patchChat(chat, { queuedMessages: [] });
 }
 
