@@ -32,7 +32,7 @@ function step(patch: Partial<SetupRecipeStep> = {}): SetupRecipeStep {
     bakeDisabledAt: null,
     bakeDisabledReason: null,
     ...patch,
-  };
+  } as SetupRecipeStep;
 }
 
 function recipe(steps: SetupRecipeStep[], patch: Partial<SetupRecipe> = {}): SetupRecipe {
@@ -170,5 +170,102 @@ test('lists live steps first and reverted steps under their own heading', async 
   const rows = Array.from(container.querySelectorAll('[data-attr="repo-setup-step"]')).map((el) => el.getAttribute('data-step-id'));
   expect(rows).toEqual(['a', 'b']);
   expect(screen.getAllByRole('button', { name: 'Revert step' })).toHaveLength(1);
+  expect(screen.getByText('1 of 20 steps')).toBeInTheDocument();
+});
+
+const learned = (patch: Partial<SetupRecipeStep>) => step({ state: 'live', ...patch });
+
+test.each([
+  { state: 'waiting' as const, badge: 'Waiting' },
+  { state: 'live' as const, badge: 'Runs on new boxes' },
+  { state: 'failing' as const, badge: 'Failing' },
+  { state: 'reverted' as const, badge: 'Reverted' },
+])('shows the $badge badge for a $state step', async ({ state, badge }) => {
+  recipeGet.mockResolvedValue(recipe([step({ state, disabledAt: state === 'reverted' ? '2026-11-03T09:00:00Z' : null })]));
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText(/sh\.rustup\.rs/);
+  expect(container.querySelector('[data-attr="repo-setup-step-state"]')).toHaveTextContent(badge);
+});
+
+test('shows Heavy, the reason and the share', async () => {
+  recipeGet.mockResolvedValue(recipe([learned({
+    heavy: true, stateReason: 'Needed by 2 of 31 recent sessions', recentNeededSessions: 2, recentSessions: 31, share: 0.0645,
+  })]));
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  expect(await screen.findByText('Heavy')).toBeInTheDocument();
+  expect(container.querySelector('[data-attr="repo-setup-step"]')).toHaveTextContent('Needed by 2 of 31 recent sessions');
+  expect(screen.getByText('Needed by 2 of 31 recent sessions (6%).')).toBeInTheDocument();
+});
+
+test.each([
+  { name: 'all numbers', patch: { lastDurationMs: 192_000, typicalDurationMs: 170_000, measuredBoxes: 7 }, text: 'Took 3m 12s (typical 2m 50s, on 7 boxes).' },
+  { name: 'one box', patch: { lastDurationMs: 45_000, typicalDurationMs: 45_000, measuredBoxes: 1 }, text: 'Took 45s (typical 45s, on 1 box).' },
+  { name: 'hours', patch: { lastDurationMs: 3_720_000 }, text: 'Took 1h 2m.' },
+])('formats the step time: $name', async ({ patch, text }) => {
+  recipeGet.mockResolvedValue(recipe([learned(patch)]));
+  render(<RepoSetupSteps repositoryId="r1" />);
+  expect(await screen.findByText(text)).toBeInTheDocument();
+});
+
+test('shows the box failure line for a failing step', async () => {
+  recipeGet.mockResolvedValue(recipe([step({
+    state: 'failing', boxFailureCount: 2, boxLastFailure: 'exit 100: E: Unable to locate package x',
+    boxDisabledAt: '2026-11-03T09:00:00Z', boxDisabledReason: 'Failed on 2 boxes in a row',
+  })]));
+  render(<RepoSetupSteps repositoryId="r1" />);
+  const line = await screen.findByText(/^Failed on 2 boxes in a row\. Last: exit 100/);
+  expect(line).toHaveTextContent('Turned off on');
+  expect(screen.getByText('Failing', { selector: 'h4' })).toBeInTheDocument();
+});
+
+test('shows no box failure line for a healthy step', async () => {
+  recipeGet.mockResolvedValue(recipe([learned({ boxFailureCount: 0, boxLastFailure: null, boxDisabledAt: null, boxDisabledReason: null })]));
+  render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText(/sh\.rustup\.rs/);
+  expect(screen.queryByText('Failures')).toBeNull();
+});
+
+test.each([
+  { name: 'both parts', timing: { totalMs: 580_000, repositoryMs: 125_000, learnedMs: 455_000 }, text: /^Last setup took 9m 40s: repository setup 2m 5s, learned steps 7m 35s\./ },
+  { name: 'no repository setup', timing: { totalMs: 455_000, repositoryMs: null, learnedMs: 455_000 }, text: /^Last setup took 7m 35s: learned steps 7m 35s\./ },
+])('shows the last setup timing: $name', async ({ timing, text }) => {
+  recipeGet.mockResolvedValue(recipe([learned({})], { lastSetupTiming: { ...timing, measuredAt: '2026-11-03T09:00:00Z', workbenchId: 'wb1' } }));
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText(/sh\.rustup\.rs/);
+  const header = container.querySelector('[data-attr="repo-setup-steps-timing"]') as HTMLElement;
+  expect(header.textContent).toMatch(text);
+});
+
+test('shows no timing header when none was measured', async () => {
+  recipeGet.mockResolvedValue(recipe([learned({})], { lastSetupTiming: null }));
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText(/sh\.rustup\.rs/);
+  expect(container.querySelector('[data-attr="repo-setup-steps-timing"]')).toBeNull();
+});
+
+test('sorts live steps slowest first and groups waiting, failing and reverted steps', async () => {
+  recipeGet.mockResolvedValue(recipe([
+    learned({ id: 'fast', command: 'echo fast', typicalDurationMs: 5_000 }),
+    learned({ id: 'untimed', command: 'echo untimed' }),
+    step({ id: 'wait', command: 'echo wait', state: 'waiting' }),
+    learned({ id: 'slow', command: 'echo slow', typicalDurationMs: 200_000 }),
+    step({ id: 'fail', command: 'echo fail', state: 'failing' }),
+    step({ id: 'rev', command: 'echo rev', state: 'reverted', disabledAt: '2026-11-03T09:00:00Z' }),
+  ]));
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText('echo slow');
+  const rows = Array.from(container.querySelectorAll('[data-attr="repo-setup-step"]')).map((el) => el.getAttribute('data-step-id'));
+  expect(rows).toEqual(['slow', 'fast', 'untimed', 'wait', 'fail', 'rev']);
+  expect(screen.getByText('Waiting for more sessions', { selector: 'h4' })).toBeInTheDocument();
+  expect(screen.getByText('Reverted', { selector: 'h4' })).toBeInTheDocument();
+  expect(screen.getByText('3 of 20 steps')).toBeInTheDocument();
+});
+
+test('renders an older payload with no new fields and no new lines', async () => {
+  const { container } = render(<RepoSetupSteps repositoryId="r1" />);
+  await screen.findByText(/sh\.rustup\.rs/);
+  expect(container.querySelector('[data-attr="repo-setup-step-state"]')).toBeNull();
+  expect(container.querySelector('[data-attr="repo-setup-steps-timing"]')).toBeNull();
+  for (const label of ['State', 'Use', 'Time', 'Failures']) expect(screen.queryByText(label)).toBeNull();
   expect(screen.getByText('1 of 20 steps')).toBeInTheDocument();
 });

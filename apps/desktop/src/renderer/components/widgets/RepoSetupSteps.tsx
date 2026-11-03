@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { SetupRecipe, SetupRecipeStep, SetupStepKind } from '@talyn/shared';
+import { formatDurationMs, type SetupRecipe, type SetupRecipeStep, type SetupStepKind, type SetupStepState, type SetupTiming } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { toast } from '../../stores/toast';
@@ -35,6 +35,43 @@ export function isLiveSetupStep(step: SetupRecipeStep): boolean {
   return !step.disabledAt;
 }
 
+/** The step's state. An older backend sends none, so a step that is not reverted counts as live. */
+export function setupStepState(step: SetupRecipeStep): SetupStepState {
+  if (step.state) return step.state;
+  return step.disabledAt ? 'reverted' : 'live';
+}
+
+const STATE_BADGES: Record<SetupStepState, string> = {
+  waiting: 'Waiting',
+  live: 'Runs on new boxes',
+  failing: 'Failing',
+  reverted: 'Reverted',
+};
+
+function formatShare(step: SetupRecipeStep): string | null {
+  if (typeof step.recentNeededSessions !== 'number' || typeof step.recentSessions !== 'number') return null;
+  const percent = typeof step.share === 'number' ? ` (${Math.round(step.share * 100)}%)` : '';
+  return `Needed by ${step.recentNeededSessions} of ${step.recentSessions} recent sessions${percent}`;
+}
+
+function formatTiming(step: SetupRecipeStep): string | null {
+  if (typeof step.lastDurationMs !== 'number') return null;
+  const parts: string[] = [];
+  if (typeof step.typicalDurationMs === 'number') parts.push(`typical ${formatDurationMs(step.typicalDurationMs)}`);
+  if (step.measuredBoxes) parts.push(`on ${step.measuredBoxes} ${step.measuredBoxes === 1 ? 'box' : 'boxes'}`);
+  return `Took ${formatDurationMs(step.lastDurationMs)}${parts.length ? ` (${parts.join(', ')})` : ''}`;
+}
+
+/** The slowest-first order of live steps. A step with no time yet goes last. */
+function bySlowest(a: SetupRecipeStep, b: SetupRecipeStep): number {
+  return (b.typicalDurationMs ?? b.lastDurationMs ?? -1) - (a.typicalDurationMs ?? a.lastDurationMs ?? -1);
+}
+
+export function timingHeader(timing: SetupTiming): string {
+  const repository = timing.repositoryMs === null ? '' : `repository setup ${formatDurationMs(timing.repositoryMs)}, `;
+  return `Last setup took ${formatDurationMs(timing.totalMs)}: ${repository}learned steps ${formatDurationMs(timing.learnedMs)}.`;
+}
+
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return 'unknown';
   const date = new Date(iso);
@@ -57,7 +94,12 @@ interface StepFact {
  */
 function stepFacts(step: SetupRecipeStep, openSession: (id: string) => void): StepFact[] {
   const facts: StepFact[] = [];
-  if (step.phase === 'start') {
+  const currentState = setupStepState(step);
+  if (currentState === 'waiting') {
+    facts.push({ key: 'runs', label: 'Runs', value: 'Not yet. It runs when enough recent sessions need it.' });
+  } else if (currentState === 'failing') {
+    facts.push({ key: 'runs', label: 'Runs', value: 'No. It does not run on new boxes while it fails.' });
+  } else if (step.phase === 'start') {
     facts.push({ key: 'runs', label: 'Runs', value: 'On each new box' });
   } else if (step.bakeDisabledAt) {
     facts.push({ key: 'runs', label: 'Runs', value: `On each new box. Taken out of the bake on ${formatWhen(step.bakeDisabledAt)}` });
@@ -66,6 +108,19 @@ function stepFacts(step: SetupRecipeStep, openSession: (id: string) => void): St
     facts.push({ key: 'runs', label: 'Runs', value: `In the bake since ${formatWhen(step.appliedAt)}` });
   } else {
     facts.push({ key: 'runs', label: 'Runs', value: 'On each new box. It goes into the bake when the steps stop changing.' });
+  }
+  const state = currentState;
+  if (step.stateReason) facts.push({ key: 'state', label: 'State', value: step.stateReason });
+  const share = formatShare(step);
+  if (share) facts.push({ key: 'share', label: 'Use', value: `${share}.` });
+  const timing = formatTiming(step);
+  if (timing) facts.push({ key: 'timing', label: 'Time', value: `${timing}.` });
+  if (state === 'failing' || step.boxDisabledAt || (step.boxFailureCount ?? 0) > 0) {
+    const count = step.boxFailureCount ?? 0;
+    const failed = count > 0 ? `Failed on ${count} ${count === 1 ? 'box' : 'boxes'} in a row.` : 'Failed on a box.';
+    const last = step.boxLastFailure ? ` Last: ${step.boxLastFailure}` : '';
+    const off = step.boxDisabledAt ? ` Turned off on ${formatWhen(step.boxDisabledAt)}${step.boxDisabledReason ? `: ${step.boxDisabledReason}` : '.'}` : '';
+    facts.push({ key: 'box-failure', label: 'Failures', value: `${failed}${last}${off}` });
   }
   if (step.why) facts.push({ key: 'why', label: 'Why', value: step.why });
   facts.push({ key: 'source', label: 'Source', value: step.source === 'agent' ? 'Added by an agent' : 'Learned from a session' });
@@ -102,13 +157,16 @@ function StepRow({ step, busy, onRevert }: {
 }) {
   const [confirming, setConfirming] = useState(false);
   const live = isLiveSetupStep(step);
+  const state = setupStepState(step);
   const openSession = (id: string) => useNavigationStore.getState().navigate({ view: 'workbench', id });
   return (
-    <li data-attr="repo-setup-step" data-step-id={step.id} className={cn('space-y-2 rounded border p-2', !live && 'opacity-60')}>
+    <li data-attr="repo-setup-step" data-step-id={step.id} className={cn('space-y-2 rounded border p-2', (!live || state === 'waiting' || state === 'failing') && 'opacity-60')}>
       <div className="flex flex-wrap items-center gap-1">
         <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{KIND_LABELS[step.kind] ?? step.kind}</span>
         <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{phaseBadge(step)}</span>
-        {!live && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">Reverted</span>}
+        {step.state && <span data-attr="repo-setup-step-state" className={cn('rounded border px-1.5 py-0.5 text-[10px]', state === 'failing' ? 'border-destructive/50 text-destructive' : 'text-muted-foreground')}>{STATE_BADGES[state]}</span>}
+        {!step.state && !live && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">Reverted</span>}
+        {step.heavy && <span data-attr="repo-setup-step-heavy" className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">Heavy</span>}
       </div>
       <pre className="whitespace-pre-wrap break-all rounded bg-background px-2 py-1 font-mono text-[11px]">{step.command}</pre>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[11px] leading-5">
@@ -169,8 +227,12 @@ export function RepoSetupSteps({ repositoryId, onChange }: {
   if (!recipe) return <p className="text-xs text-muted-foreground" data-attr="repo-setup-steps">Loading setup steps…</p>;
 
   const steps = Array.isArray(recipe.steps) ? recipe.steps : [];
-  const live = steps.filter(isLiveSetupStep);
-  const reverted = steps.filter((step) => !isLiveSetupStep(step));
+  const running = steps.filter((step) => setupStepState(step) === 'live').sort(bySlowest);
+  const waiting = steps.filter((step) => setupStepState(step) === 'waiting');
+  const failing = steps.filter((step) => setupStepState(step) === 'failing');
+  const reverted = steps.filter((step) => setupStepState(step) === 'reverted');
+  const live = running;
+  const timing = recipe.lastSetupTiming;
   const learning = !recipe.learningDisabled;
 
   return (
@@ -200,6 +262,11 @@ export function RepoSetupSteps({ repositoryId, onChange }: {
         </div>
         <p className="max-w-prose leading-5 text-muted-foreground">{learningHint}</p>
       </div>
+      {timing && (
+        <p className="max-w-prose leading-5" data-attr="repo-setup-steps-timing">
+          {timingHeader(timing)} <span className="text-muted-foreground">{formatWhen(timing.measuredAt)}</span>
+        </p>
+      )}
       {live.length === 0 ? (
         <p className="text-muted-foreground" data-attr="repo-setup-steps-empty">{steps.length === 0 ? emptyText : 'No live steps.'}</p>
       ) : (
@@ -207,6 +274,36 @@ export function RepoSetupSteps({ repositoryId, onChange }: {
           <p className="text-muted-foreground">{live.length} of {recipe.maxSteps} steps</p>
           <ul className="space-y-2">
             {live.map((step) => (
+              <StepRow
+                key={step.id}
+                step={step}
+                busy={busy}
+                onRevert={() => void act(() => api.repositories.setupRecipe.revertStep(repositoryId, step.id), 'Could not revert the step')}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+      {waiting.length > 0 && (
+        <div className="space-y-2" data-attr="repo-setup-steps-waiting">
+          <h4 className="font-medium text-muted-foreground">Waiting for more sessions</h4>
+          <ul className="space-y-2">
+            {waiting.map((step) => (
+              <StepRow
+                key={step.id}
+                step={step}
+                busy={busy}
+                onRevert={() => void act(() => api.repositories.setupRecipe.revertStep(repositoryId, step.id), 'Could not revert the step')}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+      {failing.length > 0 && (
+        <div className="space-y-2" data-attr="repo-setup-steps-failing">
+          <h4 className="font-medium text-muted-foreground">Failing</h4>
+          <ul className="space-y-2">
+            {failing.map((step) => (
               <StepRow
                 key={step.id}
                 step={step}

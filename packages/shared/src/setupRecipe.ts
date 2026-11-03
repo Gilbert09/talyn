@@ -45,8 +45,18 @@ export interface SetupStepCandidate {
   provides?: string[];
 }
 
+/**
+ * - `waiting`: too few of the repository's recent sessions needed it
+ *   ({@link setupStepVerdict}). It does not run.
+ * - `live`: runs in the setup of every new box.
+ * - `failing`: failed on {@link SETUP_STEP_MAX_BOX_FAILURES} boxes in a row. It does not run.
+ * - `reverted`: a person reverted it.
+ */
+export type SetupStepState = 'waiting' | 'live' | 'failing' | 'reverted';
+
 export interface SetupRecipeStep {
   id: string;
+  state: SetupStepState;
   command: string;
   kind: SetupStepKind;
   phase: SetupStepPhase;
@@ -56,7 +66,12 @@ export interface SetupRecipeStep {
   sourceWorkbenchId: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Each time a session or an agent recorded the step. */
   seenCount: number;
+  /** The different sessions that recorded the step. */
+  sessionCount: number;
+  /** When the step was seen in enough sessions to run. Null: waiting. */
+  confirmedAt: string | null;
   /** When the step went into the bake. Null: box setup only, until the recipe settles. */
   appliedAt: string | null;
   /** A person reverted the step. It is not learned again. */
@@ -65,6 +80,33 @@ export interface SetupRecipeStep {
   /** The step failed in a bake. It still runs in the box setup. */
   bakeDisabledAt: string | null;
   bakeDisabledReason: string | null;
+  /** Box setups in a row where the step failed. A success sets it to 0. */
+  boxFailureCount: number;
+  /** The last box failure, for example `exit 100: E: Unable to locate package x`. */
+  boxLastFailure: string | null;
+  /** The step failed on too many boxes and no longer runs in the box setup or the bake. */
+  boxDisabledAt: string | null;
+  boxDisabledReason: string | null;
+  /** How long the step took in the last box setup that measured it. */
+  lastDurationMs?: number | null;
+  /** The step's typical time in the box setup: a rolling mean, see {@link SETUP_STEP_TYPICAL_WEIGHT}. */
+  typicalDurationMs?: number | null;
+  /** The box setups that measured the step. */
+  measuredBoxes?: number;
+  /**
+   * The repository's sandbox sessions that started in the last
+   * {@link SETUP_STEP_WINDOW_DAYS} days and needed the step: they ran it, or,
+   * for a live step, they used what it installs.
+   */
+  recentNeededSessions?: number;
+  /** The repository's sandbox sessions that started in the last {@link SETUP_STEP_WINDOW_DAYS} days. */
+  recentSessions?: number;
+  /** `recentNeededSessions / recentSessions`, 0 to 1. Null: no recent sessions. */
+  share?: number | null;
+  /** The step installs a browser or a large package set, so it needs a higher share ({@link isHeavySetupStep}). */
+  heavy?: boolean;
+  /** Why the step is in its state, for example "Waiting: needed by 2 of 31 sessions in the last 14 days. ..." */
+  stateReason?: string;
 }
 
 /** `GET /repositories/:id/setup-recipe`. */
@@ -73,6 +115,23 @@ export interface SetupRecipe {
   learningDisabled: boolean;
   maxSteps: number;
   steps: SetupRecipeStep[];
+  /** The window that the share of each step counts sessions in. */
+  windowDays?: number;
+  /** The times of the last box setup that ran learned steps. Null: none measured yet. */
+  lastSetupTiming?: SetupTiming | null;
+}
+
+/** One box setup's times: "Setup took 9m 40s: repository setup 2m 05s, learned steps 7m 35s". */
+export interface SetupTiming {
+  /** The whole setup script. */
+  totalMs: number;
+  /** The repository's own setup command. Null: the repository has none. */
+  repositoryMs: number | null;
+  /** All learned steps together. */
+  learnedMs: number;
+  measuredAt: string;
+  /** The session whose box it was. */
+  workbenchId: string | null;
 }
 
 /** `POST /repositories/:id/setup-recipe/steps`. */
