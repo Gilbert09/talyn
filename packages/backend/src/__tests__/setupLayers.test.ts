@@ -733,6 +733,54 @@ describe('the Setup list', () => {
       expect((await layers.getRepositorySetup('repo-a'))!.lastSetupTiming).toMatchObject({ totalMs: 580_000 });
     });
 
+    it('keeps the start of the box on the session: the image, the waits, each step by name, and the total', async () => {
+      await recordConfirmed([cand('cargo install sqlx-cli'), cand('docker compose up -d', 'compose', 'start')]);
+      const cargo = (await learnedOf()).find((s) => s.command === 'cargo install sqlx-cli')!;
+      const compose = (await learnedOf()).find((s) => s.command === 'docker compose up -d')!;
+      const output = [
+        `[talyn] learned step result dotfiles exit 0 ms 3000: done`,
+        `[talyn] learned step result ${cargo.id} exit 0 ms 455000: Installed`,
+        `[talyn] learned step result ${compose.id} exit 124 ms 300000: `,
+        '[talyn] setup timing total 760000 repository 2000 learned 758000',
+      ].join('\n');
+      await testDb.db.insert(workbenchScriptRuns).values({
+        id: 'wb-a:setup', workbenchId: 'wb-a', workspaceId: 'ws-a', sandboxId: 'sb-a', name: 'setup',
+        generation: 'g1', owner: 'x', output, running: false, exitCode: 0,
+      });
+      const requestedAtMs = Date.now() - 900_000;
+      await layers.recordBoxSetupResults({ id: 'wb-a', repositoryId: 'repo-a', sandboxId: 'sb-a', workspaceId: 'ws-a' }, {
+        cause: 'new', requestedAtMs, capacityWaitMs: 60_000, boxReadyMs: 75_000, checkoutMs: 4_000, prebakedCheckout: true,
+        layer: 'repo', repoCommit: 'abc123', userLayerPending: true, repoLayerPending: false, setupMs: 761_000, setupExitCode: 0,
+      });
+      const stored = (await getWorkbench('wb-a'))!.settings as Loose;
+      expect(stored.boxStart).toMatchObject({
+        sandboxId: 'sb-a', cause: 'new', requestedAt: new Date(requestedAtMs).toISOString(), waitMs: 60_000, readyMs: 75_000,
+        checkoutMs: 4_000, prebaked: true, repoSetupMs: 2_000, stepsMs: 758_000, setupMs: 761_000, setupExit: 0,
+        layer: 'repo', repoCommit: 'abc123', userLayerPending: true, repoLayerPending: false,
+        steps: [
+          { id: 'dotfiles', name: 'Dotfiles', ms: 3_000, exit: 0 },
+          { id: cargo.id, name: cargo.name, ms: 455_000, exit: 0 },
+          { id: compose.id, name: compose.name, ms: 300_000, exit: 124, timedOut: true },
+        ],
+      });
+      expect(stored.boxStart.totalMs).toBeGreaterThanOrEqual(900_000);
+      // The same instant as the repository's history entry, which carries the total too.
+      const history = (await layers.getRepositorySetup('repo-a'))!.timingHistory;
+      expect(history[0]).toMatchObject({ measuredAt: stored.boxStart.measuredAt, startTotalMs: stored.boxStart.totalMs, boxReadyMs: 75_000 });
+      expect(stored).not.toHaveProperty('lastWake');
+    });
+
+    it('keeps the start of a box with no setup script', async () => {
+      await layers.recordBoxSetupResults(
+        { id: 'wb-a', repositoryId: 'repo-a', sandboxId: 'sb-a', workspaceId: 'ws-a' },
+        { boxReadyMs: 20_000, checkoutMs: 9_000, prebakedCheckout: false, layer: 'base' },
+        { ranSetup: false },
+      );
+      expect(((await getWorkbench('wb-a'))!.settings as Loose).boxStart).toMatchObject({
+        sandboxId: 'sb-a', readyMs: 20_000, checkoutMs: 9_000, prebaked: false, layer: 'base', steps: [], setupMs: null, totalMs: null,
+      });
+    });
+
     it('projects the times and the share in the public API', async () => {
       const { toPublicSetupRecipe } = await import('../services/public/workProjections.js');
       const { SetupRecipe } = await import('../schemas/public/repositorySettings.js');

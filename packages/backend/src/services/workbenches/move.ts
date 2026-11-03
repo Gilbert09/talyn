@@ -1,4 +1,4 @@
-import { isSandboxSize, SANDBOX_SIZES, shellQuote, WORKBENCH_IMPORT_MAX_BYTES, type SandboxSize } from '@talyn/shared';
+import { hasPrebakedCheckout, isSandboxSize, SANDBOX_SIZES, shellQuote, WORKBENCH_IMPORT_MAX_BYTES, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { FleetHttpError, FleetRunNotFoundError, type FleetClient, type FleetSandbox } from '../selfHosted/client.js';
 import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
@@ -17,7 +17,7 @@ import {
   sandboxIdFor,
 } from './sandboxRuntime.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
-import { recordBoxSetupResults } from './setupLayers.js';
+import { recordBoxSetupResults, type BoxTiming } from './setupLayers.js';
 import { runningScriptNames, startScript, stopAllScripts } from './scripts.js';
 import {
   appendEvents,
@@ -835,19 +835,34 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     step = 'create';
     await setMessage(claimed, 'Starting a fresh sandbox');
     const { boxLayerOf, createWorkbenchSandbox } = await import('./lifecycle.js');
+    const createStartedAt = Date.now();
     // A resize wants exactly its size: a refusal fails the move rather than make a standard box.
     const made = await createWorkbenchSandbox(claimed, targetId, { strictSize: reason === 'resize' });
     if (!made.ok) throw new Error(made.error);
+    const boxReadyMs = Date.now() - createStartedAt;
     created = made;
     await setMoveTargetHost(row.id, from, targetId, made.fleetHost, made.fleetSandboxId);
     const fresh: WorkbenchRow = { ...claimed, sandboxGeneration: made.sandboxId, sandboxId: made.sandboxId, fleetHost: made.fleetHost ?? null };
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'clone';
-    const cloned = await runCapture(fresh, cloneScript(claimed, { boxLayer: boxLayerOf(made), prebakedCheckout: made.record.prebakedCheckout }), {
+    const madeLayer = boxLayerOf(made);
+    const checkoutStartedAt = Date.now();
+    const cloned = await runCapture(fresh, cloneScript(claimed, { boxLayer: madeLayer, prebakedCheckout: made.record.prebakedCheckout }), {
       cwd: '/',
       timeoutMs: CLONE_TIMEOUT_MS,
     });
+    // The copy of the work runs between the clone and the setup, so the total is the parts, not the clock.
+    const startFacts: BoxTiming = {
+      cause: 'move',
+      boxReadyMs,
+      checkoutMs: Date.now() - checkoutStartedAt,
+      layer: madeLayer.layer,
+      repoCommit: madeLayer.repoCommit,
+      userLayerPending: made.record.userLayerPending ?? null,
+      repoLayerPending: made.record.repoLayerPending ?? null,
+      prebakedCheckout: hasPrebakedCheckout(madeLayer, made.record.prebakedCheckout),
+    };
     if (cloned.exitCode !== 0) throw new Error(`the clone failed: ${tail(cloned.stderr) || `exit ${cloned.exitCode}`}`);
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
@@ -868,7 +883,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
 
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
     step = 'setup';
-    const setupNote = await runSetup(claimed, fresh);
+    const setupNote = await runSetup(claimed, fresh, startFacts);
 
     step = 'commit';
     if (lease.lost || !(await heartbeatMove(row.id, from, targetId))) throw new Error('the move lost its claim');
@@ -993,14 +1008,18 @@ async function transferFile(oldRow: WorkbenchRow, newRow: WorkbenchRow, file: Mo
 }
 
 /** The setup script, as a provision runs it. A failure is a note, not a failed move. */
-async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow): Promise<string | null> {
+async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow, timing: BoxTiming): Promise<string | null> {
   const config = await loadWorkbenchConfig(fresh).catch(() => null);
-  if (!config?.setup) return null;
+  if (!config?.setup) {
+    await recordBoxSetupResults(fresh, timing, { ranSetup: false });
+    return null;
+  }
   await setMessage(claimed, 'Running the setup script');
   try {
+    const setupStartedAt = Date.now();
     const { done } = await startScript(fresh, 'setup', { config });
     const code = await done;
-    await recordBoxSetupResults(fresh);
+    await recordBoxSetupResults(fresh, { ...timing, setupMs: Date.now() - setupStartedAt, setupExitCode: code ?? null });
     return code === 0 ? null : `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
   } catch (err) {
     return `The setup script could not run: ${userFacingError(err)}`;

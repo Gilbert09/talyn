@@ -150,6 +150,8 @@ export interface SetupTiming {
   setupBoxStepsMs?: number | null;
   /** The image layer the box booted (`SandboxImageLayer`). */
   layer?: string | null;
+  /** From the request for the box to the end of its setup, waits included. Absent: not measured. */
+  startTotalMs?: number | null;
 }
 
 /** `POST /repositories/:id/setup-recipe/steps`. */

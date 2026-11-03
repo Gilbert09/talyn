@@ -75,6 +75,7 @@ import {
 } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { scriptOutput } from './scriptStore.js';
+import { stepNames, storedSteps, writeBoxStart, type BoxStartCause, type StoredBoxStart } from './boxStart.js';
 
 /**
  * The Setup list: storage, the box setup, and the image layers. The pure rules
@@ -1429,11 +1430,48 @@ async function noteSetupTiming(repositoryId: string, timing: SetupTiming): Promi
   }).where(eq(repositories.id, repositoryId));
 }
 
-/** The times the provision measured outside the setup script. */
+/** The times and the image facts the provision measured outside the setup script. */
 export interface BoxTiming {
   boxReadyMs?: number | null;
   checkoutMs?: number | null;
   layer?: string | null;
+  cause?: BoxStartCause | null;
+  /** `Date.now()` when Talyn asked the fleet for the box. */
+  requestedAtMs?: number | null;
+  /** The wait for a free sandbox, inside `boxReadyMs`. */
+  capacityWaitMs?: number | null;
+  /** The image held the checkout. False: a full clone. */
+  prebakedCheckout?: boolean | null;
+  repoCommit?: string | null;
+  userLayerPending?: boolean | null;
+  repoLayerPending?: boolean | null;
+  /** The whole setup script, by the provision's clock, and its exit code. */
+  setupMs?: number | null;
+  setupExitCode?: number | null;
+}
+
+/** A box start as `settings.boxStart` keeps it, before the setup adds its part. */
+export function boxStartRecord(sandboxId: string, timing: BoxTiming, measuredAt = ''): StoredBoxStart {
+  return {
+    sandboxId,
+    cause: timing.cause ?? null,
+    measuredAt,
+    requestedAt: timing.requestedAtMs != null ? new Date(timing.requestedAtMs).toISOString() : null,
+    waitMs: timing.capacityWaitMs ?? null,
+    readyMs: timing.boxReadyMs ?? null,
+    checkoutMs: timing.checkoutMs ?? null,
+    prebaked: timing.prebakedCheckout ?? null,
+    repoSetupMs: null,
+    stepsMs: null,
+    setupMs: timing.setupMs ?? null,
+    setupExit: timing.setupExitCode ?? null,
+    totalMs: null,
+    steps: [],
+    layer: timing.layer ?? null,
+    repoCommit: timing.repoCommit ?? null,
+    userLayerPending: timing.userLayerPending ?? null,
+    repoLayerPending: timing.repoLayerPending ?? null,
+  };
 }
 
 /**
@@ -1455,18 +1493,29 @@ export async function recordBoxSetupResults(
       await noteBoxSetupResults(row.repositoryId, results, { workspaceId: row.workspaceId, workbenchId: row.id });
     }
     const script = output ? parseSetupTiming(output) : null;
+    if (!script && results.length === 0 && timing.boxReadyMs == null && timing.checkoutMs == null) return;
+    const measuredAt = new Date().toISOString();
+    const startTotalMs = timing.requestedAtMs != null ? Date.now() - timing.requestedAtMs : null;
+    await writeBoxStart(row.id, {
+      ...boxStartRecord(row.sandboxId, timing, measuredAt),
+      repoSetupMs: script?.repositoryMs ?? null,
+      stepsMs: script ? script.learnedMs : null,
+      totalMs: startTotalMs,
+      steps: storedSteps(results, await stepNames(results.map((r) => r.id))),
+    });
     if (!script && timing.boxReadyMs == null && timing.checkoutMs == null) return;
     const record: SetupTiming = {
       totalMs: script?.totalMs ?? 0,
       repositoryMs: script?.repositoryMs ?? null,
       learnedMs: script?.learnedMs ?? 0,
-      measuredAt: new Date().toISOString(),
+      measuredAt,
       workbenchId: row.id,
       boxReadyMs: timing.boxReadyMs ?? null,
       checkoutMs: timing.checkoutMs ?? null,
       setupRepositoryMs: script?.repositoryMs ?? null,
       setupBoxStepsMs: script ? script.learnedMs : null,
       layer: timing.layer ?? null,
+      startTotalMs,
     };
     await noteSetupTiming(row.repositoryId, record);
     debugBus.recordEvent({

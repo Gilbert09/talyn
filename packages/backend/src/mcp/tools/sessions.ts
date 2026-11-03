@@ -16,6 +16,9 @@ import {
   SETUP_STEP_WINDOW_DAYS,
   type SandboxSize,
   type RecordSetupStepResult,
+  type SandboxStartInfo,
+  type SandboxStartLayer,
+  type SandboxStartTimeline,
   type WorkbenchSandboxStatus,
   type WorkbenchTiming,
   type Workbench,
@@ -283,9 +286,53 @@ export function sandboxStatusText(s: WorkbenchSandboxStatus): string {
     if (w.warning) lines.push(`  Warning: ${w.warning}`);
   }
   if (s.problem) lines.push(`Last problem${s.problem.at ? ` (${s.problem.at})` : ''}: ${s.problem.text}`);
+  if (s.start) lines.push(...boxStartLines(s.start));
   if (s.actions.length) lines.push(`Actions in the app: ${s.actions.map((a) => a.label).join(', ')}.`);
   return lines.join('\n');
 }
+
+const START_LAYER_SHORT: Record<SandboxStartLayer, string> = {
+  user: 'your image',
+  repo: 'repository image',
+  legacy: 'older image',
+  base: 'base image',
+};
+
+/** "How this box started", as lines. */
+function boxStartLines(start: SandboxStartInfo): string[] {
+  const lines = ['How this box started:'];
+  const { image, timeline } = start;
+  if (image) {
+    lines.push(`  Image: ${image.label}${image.repoCommit ? `, commit ${image.repoCommit.slice(0, 12)}` : ''}${image.builtAt ? `, built ${image.builtAt}` : ''}.`);
+    lines.push(`  ${image.detail}`);
+    if (image.pending) lines.push(`  ${image.pending}`);
+    if (image.stale) lines.push('  A newer image exists. A new box boots it.');
+  }
+  if (timeline) {
+    if (timeline.requestedAt) lines.push(`  Box requested at ${timeline.requestedAt}${timeline.cause && timeline.cause !== 'new' ? ` (${START_CAUSE[timeline.cause]})` : ''}.`);
+    for (const step of timeline.steps) {
+      const indent = step.kind === 'setup_step' ? '    ' : '  ';
+      const time = step.durationMs === null ? 'not measured' : formatDurationMs(step.durationMs);
+      const failed = step.ok === false ? ` (failed${step.detail ? `: ${step.detail}` : ''})` : '';
+      lines.push(`${indent}${step.label}: ${time}${failed}`);
+    }
+  }
+  if (start.lastWake) lines.push(`  Last wake (${start.lastWake.at}): ${start.lastWake.text}`);
+  if (start.comparison) lines.push(`  ${start.comparison}${start.slow ? ' This start was slow.' : ''}`);
+  if (start.recent.length) {
+    const recent = start.recent.map((r) => `${formatDurationMs(r.totalMs)}${r.layer ? ` (${START_LAYER_SHORT[r.layer]})` : ''}${r.thisSession ? ' this session' : ''}`);
+    lines.push(`  Recent starts of this repository, newest first: ${recent.join(', ')}.`);
+  }
+  if (start.note) lines.push(`  ${start.note}`);
+  return lines;
+}
+
+const START_CAUSE: Record<NonNullable<SandboxStartTimeline['cause']>, string> = {
+  new: 'a new session',
+  move: 'a move to a new box',
+  lost: 'a new box for a lost one',
+  restore: 'a restore of an archived session',
+};
 
 const eventSeq = (key: string): number | null => {
   const match = /^(\d+)(?:\.|$)/.exec(key);
@@ -631,7 +678,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'session_sandbox_status',
-    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host and size, what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
+    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host and size, how the box started (the image it booted, the wait for a free sandbox, the clone or checkout, the setup and each Setup list step, the last wake, and how the start compares with the repository's median), what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
     {
       session_id: { type: 'string', description: 'The session. Default: the calling session. A session can read itself and the sessions of its thread.' },
     },

@@ -2,7 +2,7 @@ import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkbenchCapacityWait } from '@talyn/shared';
+import type { SandboxStartInfo, WorkbenchCapacityWait } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { repositories, workbenchChats, workbenchEvents, workbenches, workbenchScriptRuns, workspaces } from '../db/schema.js';
 import type { FleetClient, FleetSandbox } from '../services/selfHosted/client.js';
@@ -23,6 +23,14 @@ import {
   type StatusScript,
 } from '../services/workbenches/sandboxStatus.js';
 import { getWorkbench, insertChat, insertWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
+import {
+  parseStartHistory,
+  recordSandboxWake,
+  startHistoryQuery,
+  type StartHistoryEntry,
+  type StoredBoxStart,
+  type StoredWake,
+} from '../services/workbenches/boxStart.js';
 
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
@@ -242,6 +250,186 @@ describe('the actions', () => {
 });
 
 // ============================================================================
+// How the box started
+// ============================================================================
+
+const SEC = 1000;
+
+function boxStart(overrides: Partial<StoredBoxStart> = {}): StoredBoxStart {
+  return {
+    sandboxId: 'box', cause: 'new', measuredAt: ago(30 * MIN).toISOString(), requestedAt: ago(37 * MIN).toISOString(),
+    waitMs: null, readyMs: 20 * SEC, checkoutMs: 4 * SEC, prebaked: true, repoSetupMs: 6 * SEC, stepsMs: 15 * SEC,
+    setupMs: 22 * SEC, setupExit: 0, totalMs: 47 * SEC,
+    steps: [
+      { id: 'dotfiles', name: 'Dotfiles', ms: 3 * SEC, exit: 0 },
+      { id: 'st_1', name: 'Install sqlx', ms: 12 * SEC, exit: 0 },
+    ],
+    layer: 'repo', repoCommit: 'abc123def4567890', userLayerPending: null, repoLayerPending: null,
+    ...overrides,
+  };
+}
+
+const withStart = (start: StoredBoxStart | null, extra: Record<string, unknown> = {}, rowOverrides: Partial<WorkbenchRow> = {}) =>
+  row({ settings: { ...(start ? { boxStart: start } : {}), ...extra } as WorkbenchRow['settings'], ...rowOverrides });
+
+const hist = (ms: number, overrides: Partial<StartHistoryEntry> = {}): StartHistoryEntry =>
+  ({ at: ago(60 * MIN).toISOString(), ms, layer: 'repo', wb: 'other', ...overrides });
+
+describe('how the box started', () => {
+  it.each<[string, Partial<FleetSandbox>, string, string]>([
+    ['your image', { layer: 'user' }, 'user', 'Your image for this repository'],
+    ['the shared image', { layer: 'repo' }, 'repo', 'The shared image for this repository'],
+    ['an older image', { layer: 'legacy' }, 'legacy', 'An older image for this repository'],
+    ['the base image', { layer: 'base' }, 'base', 'The base image, with a full clone'],
+    ['an old fleet that says only goldenLayer repo', { goldenLayer: 'repo' }, 'legacy', 'An older image for this repository'],
+    ['an old fleet that says only goldenLayer base', { goldenLayer: 'base' }, 'base', 'The base image, with a full clone'],
+  ])('names %s from the fleet record', (_label, sandbox, layer, label) => {
+    const image = describeSandboxStatus(input({ fleet: fleet({ status: 'idle', repoCommit: 'f00d', ...sandbox }) })).start!.image!;
+    expect(image).toMatchObject({ layer, label, repoCommit: 'f00d', builtAt: null });
+    expect(image.detail.length).toBeGreaterThan(20);
+  });
+
+  it('reads the image from the stored start when the fleet does not answer, and the fleet record wins when it does', () => {
+    expect(describeSandboxStatus(input({ row: withStart(boxStart({ layer: 'user' })), fleet: { ok: false, error: 'timeout' } })).start!.image)
+      .toMatchObject({ layer: 'user', repoCommit: 'abc123def4567890' });
+    expect(describeSandboxStatus(input({ row: withStart(boxStart({ layer: 'user' })), fleet: fleet({ layer: 'base' }) })).start!.image)
+      .toMatchObject({ layer: 'base', repoCommit: 'abc123def4567890' });
+  });
+
+  it('has no image when neither the fleet nor Talyn knows one', () => {
+    const start = describeSandboxStatus(input({ fleet: fleet({ status: 'idle' }) })).start!;
+    expect(start.image).toBeNull();
+    expect(start.timeline).toBeNull();
+    expect(start.note).toBe('Talyn has no start times for this box. A box that started before Talyn kept them has none.');
+  });
+
+  it.each<[boolean | undefined, boolean | undefined, string | null]>([
+    [true, false, 'The fleet is building a new image with the Setup list. A new box uses it when it is ready.'],
+    [false, true, 'The fleet is building a new image of this repository. A new box uses it when it is ready.'],
+    [true, true, 'The fleet is building new images for this repository. A new box uses them when they are ready.'],
+    [false, false, null],
+  ])('says when a newer layer is building: user %s, repo %s', (user, repo, words) => {
+    const image = describeSandboxStatus(input({ fleet: fleet({ layer: 'repo', userLayerPending: user, repoLayerPending: repo }) })).start!.image!;
+    expect(image.pending).toBe(words);
+    expect(image).toMatchObject({ userLayerPending: user, repoLayerPending: repo });
+  });
+
+  it('says a stale image', () => {
+    expect(describeSandboxStatus(input({ fleet: fleet({ layer: 'repo', goldenStale: true }) })).start!.image!.stale).toBe(true);
+  });
+
+  it('builds the timeline from the stored start, with each step and its result', () => {
+    const start = describeSandboxStatus(input({
+      row: withStart(boxStart({
+        waitMs: 90 * SEC, readyMs: 110 * SEC, setupExit: 1,
+        steps: [
+          { id: 'dotfiles', name: 'Dotfiles', ms: 3 * SEC, exit: 0 },
+          { id: 'st_1', name: 'Install sqlx', ms: 12 * SEC, exit: 101 },
+          { id: 'st_2', name: 'Start the database', ms: 300 * SEC, exit: 124, timedOut: true },
+        ],
+      })),
+    })).start!;
+    expect(start.timeline).toMatchObject({ sandboxId: 'box', cause: 'new', capacityWaitMs: 90 * SEC, totalMs: 47 * SEC });
+    expect(start.timeline!.steps).toEqual([
+      { kind: 'capacity_wait', label: 'Waited for a free sandbox', durationMs: 90 * SEC, ok: null },
+      { kind: 'box', label: 'Box started', durationMs: 20 * SEC, ok: null },
+      { kind: 'checkout', label: 'Checked out the branch', durationMs: 4 * SEC, ok: null },
+      { kind: 'repository_setup', label: 'Repository setup', durationMs: 6 * SEC, ok: false, detail: 'exit 1' },
+      { kind: 'box_steps', label: 'Setup list steps', durationMs: 15 * SEC, ok: false },
+      { kind: 'setup_step', label: 'Dotfiles', durationMs: 3 * SEC, ok: true },
+      { kind: 'setup_step', label: 'Install sqlx', durationMs: 12 * SEC, ok: false, detail: 'exit 101' },
+      { kind: 'setup_step', label: 'Start the database', durationMs: 300 * SEC, ok: false, detail: 'timed out' },
+      { kind: 'ready', label: 'Ready', durationMs: 47 * SEC, ok: null },
+    ]);
+  });
+
+  it('says clone for a base image, and takes the whole setup as the repository setup when no step ran', () => {
+    const steps = describeSandboxStatus(input({
+      row: withStart(boxStart({ layer: 'base', prebaked: null, repoSetupMs: null, stepsMs: null, steps: [], setupMs: 30 * SEC })),
+      fleet: fleet({}),
+    })).start!.timeline!.steps;
+    expect(steps.map((s) => s.kind)).toEqual(['box', 'clone', 'repository_setup', 'ready']);
+    expect(steps[1]).toMatchObject({ label: 'Cloned the repository', durationMs: 4 * SEC });
+    expect(steps[2]).toMatchObject({ durationMs: 30 * SEC, ok: true });
+  });
+
+  it('leaves out rows that were not measured: an old record, and a start whose setup still runs', () => {
+    const partial = boxStart({ totalMs: null, setupMs: null, setupExit: null, repoSetupMs: null, stepsMs: null, steps: [], checkoutMs: null });
+    const running = describeSandboxStatus(input({ row: withStart(partial, {}, { status: 'provisioning' }), fleet: null })).start!;
+    expect(running.timeline!.steps.map((s) => s.kind)).toEqual(['box']);
+    expect(running.note).toBe('The setup is running. Talyn adds its times when it ends.');
+    expect(running.image).toMatchObject({ layer: 'repo' });
+  });
+
+  it('ignores a stored start of another box', () => {
+    const start = describeSandboxStatus(input({ row: withStart(boxStart({ sandboxId: 'old-box' })), fleet: fleet({}) })).start!;
+    expect(start.timeline).toBeNull();
+    expect(start.note).toContain('Talyn has no start times for this box');
+  });
+
+  it('says a start that has not ended yet', () => {
+    expect(describeSandboxStatus(input({ row: row({ status: 'provisioning' }), fleet: null })).start!.note)
+      .toBe('Talyn shows the start times when the box is ready.');
+  });
+
+  it.each<[string, Partial<SandboxStatusInput>]>([
+    ['a local session', { row: row({ runtime: 'local', sandboxId: null }) }],
+    ['an archived session', { row: row({ archivedAt: ago(MIN), status: 'archived' }) }],
+    ['a thread', { row: row({ kind: 'thread', repositoryId: null }) }],
+  ])('has no section for %s', (_label, given) => {
+    expect(describeSandboxStatus(input(given)).start).toBeNull();
+  });
+
+  it('compares the start with the median of the repository, leaving its own entry out', () => {
+    const own = boxStart({ totalMs: 380 * SEC });
+    const history = [
+      hist(380 * SEC, { wb: 'wb1', at: own.measuredAt }),
+      hist(40 * SEC), hist(48 * SEC, { wb: 'wb1', at: ago(5 * 60 * MIN).toISOString() }), hist(50 * SEC), hist(60 * SEC, { layer: 'base' }),
+      hist(45 * SEC), hist(52 * SEC),
+    ];
+    const start = describeSandboxStatus(input({ row: withStart(own), history })).start!;
+    expect(start.medianMs).toBe(49 * SEC);
+    expect(start.comparison).toBe('This start took 6m 20s. The median start for this repository is 49s.');
+    expect(start.slow).toBe(true);
+    expect(start.recent).toHaveLength(5);
+    expect(start.recent[0]).toEqual({ at: own.measuredAt, totalMs: 380 * SEC, layer: 'repo', thisSession: true });
+    expect(start.recent[2]).toMatchObject({ thisSession: true });
+    expect(start.recent[4]).toMatchObject({ layer: 'base', thisSession: false });
+  });
+
+  it.each<[string, number, number[], boolean, string | null]>([
+    ['a normal start', 50 * SEC, [40 * SEC, 48 * SEC, 52 * SEC], false, 'This start took 50s. The median start for this repository is 48s.'],
+    ['twice the median but under a minute more', 90 * SEC, [40 * SEC, 45 * SEC, 50 * SEC], false, 'This start took 1m 30s. The median start for this repository is 45s.'],
+    ['too few other starts', 300 * SEC, [40 * SEC, 45 * SEC], false, null],
+  ])('%s', (_label, total, others, slow, comparison) => {
+    const start = describeSandboxStatus(input({ row: withStart(boxStart({ totalMs: total })), history: others.map((ms) => hist(ms)) })).start!;
+    expect(start.slow).toBe(slow);
+    expect(start.comparison).toBe(comparison);
+  });
+
+  it('gives the median alone when this box has no total', () => {
+    const start = describeSandboxStatus(input({ history: [hist(40 * SEC), hist(50 * SEC), hist(60 * SEC)] })).start!;
+    expect(start).toMatchObject({ medianMs: 50 * SEC, comparison: 'The median start for this repository is 50s.', slow: false });
+  });
+
+  it.each<[Partial<StoredWake>, string]>([
+    [{ from: 'storage', ok: true, ms: 130 * SEC }, 'Restored from storage in 2m 10s.'],
+    [{ from: 'host', ok: true, ms: 3 * SEC }, 'Woke on its host in 3s.'],
+    [{ from: 'storage', ok: false, ms: 300 * SEC }, 'A restore from storage failed after 5m 0s.'],
+    [{ from: 'host', ok: true, ms: null }, 'Woke on its host.'],
+  ])('says the last wake: %o', (wake, words) => {
+    const stored: StoredWake = { sandboxId: 'box', at: ago(10 * MIN).toISOString(), ms: null, from: 'host', ok: true, ...wake };
+    expect(describeSandboxStatus(input({ row: withStart(null, { lastWake: stored }) })).start!.lastWake)
+      .toEqual({ at: stored.at, durationMs: stored.ms, from: stored.from, ok: stored.ok, text: words });
+  });
+
+  it('ignores a wake of another box', () => {
+    const stored: StoredWake = { sandboxId: 'old-box', at: ago(MIN).toISOString(), ms: 1000, from: 'host', ok: true };
+    expect(describeSandboxStatus(input({ row: withStart(null, { lastWake: stored }) })).start!.lastWake).toBeNull();
+  });
+});
+
+// ============================================================================
 // The endpoint, against a database
 // ============================================================================
 
@@ -372,6 +560,71 @@ describe('GET /workbenches/:id/sandbox-status', () => {
     expect(note.sql).not.toContain('transcript');
     expect(note.params).toContain(5000 - PROBLEM_NOTE_WINDOW);
   });
+  it('answers how the box started: the stored start, the fleet image, the last wake and the repository median', async () => {
+    getSandbox.mockResolvedValue({ sandbox: { id: 'box', status: 'idle', layer: 'user', repoCommit: 'c0ffee', userLayerPending: false }, terminal: false });
+    const measuredAt = new Date(Date.now() - 30 * MIN).toISOString();
+    await testDb.db.update(workbenches).set({
+      settings: {
+        boxStart: { sandboxId: 'box', cause: 'new', measuredAt, requestedAt: null, waitMs: null, readyMs: 20_000, checkoutMs: 3_000, prebaked: true,
+          repoSetupMs: null, stepsMs: 1_000, setupMs: 2_000, setupExit: 0, totalMs: 380_000,
+          steps: [{ id: 'st_1', name: 'Install just', ms: 1_000, exit: 0 }], layer: 'user', repoCommit: null, userLayerPending: true, repoLayerPending: null },
+      } as never,
+    });
+    await recordSandboxWake({ sandboxId: 'box', at: new Date(Date.now() - MIN).toISOString(), ms: 2_500, from: 'host', ok: true });
+    const entry = (ms: number, extra: Record<string, unknown> = {}) =>
+      ({ totalMs: 0, repositoryMs: null, learnedMs: 0, measuredAt: new Date(Date.now() - 60 * MIN).toISOString(), workbenchId: 'other', boxReadyMs: ms, checkoutMs: 0, ...extra });
+    await testDb.db.update(repositories).set({
+      settings: { setupTimingHistory: [entry(1, { startTotalMs: 380_000, measuredAt, workbenchId: 'wb-a' }), entry(40_000), entry(45_000), entry(50_000)] } as never,
+    });
+    const res = await call('/workbenches/wb-a/sandbox-status');
+    const start = res.body.data!.start as SandboxStartInfo;
+    expect(start.image).toMatchObject({ layer: 'user', label: 'Your image for this repository', repoCommit: 'c0ffee', userLayerPending: false, pending: null });
+    expect(start.timeline!.steps.map((s) => s.kind)).toEqual(['box', 'checkout', 'box_steps', 'setup_step', 'ready']);
+    expect(start.lastWake).toMatchObject({ from: 'host', text: 'Woke on its host in 3s.' });
+    expect(start).toMatchObject({ medianMs: 45_000, slow: true, comparison: 'This start took 6m 20s. The median start for this repository is 45s.' });
+    expect(start.recent.map((r) => r.thisSession)).toEqual([true, false, false, false]);
+    // The start and the wake stay out of the session payload.
+    const wb = await call('/workbenches/wb-a');
+    expect(JSON.stringify(wb.body.data)).not.toMatch(/boxStart|lastWake/);
+  });
+
+  it('answers with an empty history when the repository has none, and never fails on a broken one', async () => {
+    getSandbox.mockResolvedValue({ sandbox: { id: 'box', status: 'idle' }, terminal: false });
+    await testDb.db.update(repositories).set({ settings: { setupTimingHistory: 'not a list' } as never });
+    const res = await call('/workbenches/wb-a/sandbox-status');
+    expect(res.status).toBe(200);
+    expect(res.body.data!.start).toMatchObject({ recent: [], medianMs: null, image: null, timeline: null });
+  });
+
+  it('reduces the history in SQL to four fields, leaves out entries with no box time, and totals old entries from their parts', async () => {
+    await testDb.db.update(repositories).set({
+      settings: {
+        setupTiming: { big: 'x'.repeat(5000) },
+        setupTimingHistory: [
+          { measuredAt: '2099-01-01T10:00:00.000Z', workbenchId: 'w1', boxReadyMs: 10_000, checkoutMs: 2_000, totalMs: 30_000, layer: 'repo', startTotalMs: 45_500 },
+          { measuredAt: '2099-01-01T09:00:00.000Z', workbenchId: 'w2', boxReadyMs: 10_000, checkoutMs: null, totalMs: 30_000, layer: 'base' },
+          { measuredAt: '2099-01-01T08:00:00.000Z', workbenchId: 'w3', totalMs: 99_000, repositoryMs: null, learnedMs: 99_000 },
+          'junk',
+        ],
+      } as never,
+    });
+    const [found] = await startHistoryQuery('repo');
+    expect(parseStartHistory(found.recent)).toEqual([
+      { at: '2099-01-01T10:00:00.000Z', ms: 45_500, layer: 'repo', wb: 'w1' },
+      { at: '2099-01-01T09:00:00.000Z', ms: 40_000, layer: 'base', wb: 'w2' },
+    ]);
+    const query = startHistoryQuery('repo').toSQL().sql;
+    const selected = query.slice(0, query.lastIndexOf(' from "repositories"'));
+    expect(selected.replace(/"repositories"\."settings" -> 'setupTimingHistory'/g, '')).not.toContain('"settings"');
+  });
+
+  it('records a wake on the session that names the box, and on no other', async () => {
+    await recordSandboxWake({ sandboxId: 'box', at: '2099-01-01T10:00:00.000Z', ms: 120_000, from: 'storage', ok: true });
+    await recordSandboxWake({ sandboxId: 'not-ours', at: '2099-01-01T10:00:00.000Z', ms: 1, from: 'host', ok: true });
+    expect(((await getWorkbench('wb-a'))!.settings as Record<string, unknown>).lastWake)
+      .toEqual({ sandboxId: 'box', at: '2099-01-01T10:00:00.000Z', ms: 120_000, from: 'storage', ok: true });
+  });
+
   it('refuses another owner, and an account without sessions', async () => {
     expect([403, 404]).toContain((await call('/workbenches/wb-a/sandbox-status', 'owner-b')).status);
     vi.stubEnv('WORKBENCHES_ENABLED', 'false');

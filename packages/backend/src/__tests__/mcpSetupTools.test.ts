@@ -152,6 +152,68 @@ describe('session setup and timing tools', () => {
       expect(text).toContain('The fleet did not answer: timeout');
       expect(text).toContain('Doing:\n  Nothing.');
       expect(text).not.toContain('Work:');
+      expect(text).not.toContain('How this box started:');
+    });
+
+    it('says how the box started: the image, each timeline row, the last wake, the median and the recent starts', async () => {
+      mockApi({ 'GET /api/v1/workbenches/s1/sandbox-status': () => ({
+        ...status,
+        start: {
+          image: {
+            layer: 'repo', label: 'The shared image for this repository', detail: 'The image has the repository and its own setup.',
+            repoCommit: 'abc123def4567890', builtAt: null, userLayerPending: true, repoLayerPending: false,
+            pending: 'The fleet is building a new image with the Setup list. A new box uses it when it is ready.', stale: true,
+          },
+          timeline: {
+            sandboxId: 'box', cause: 'lost', requestedAt: '2099-01-01T10:00:00.000Z', totalMs: 380_000, capacityWaitMs: 90_000,
+            steps: [
+              { kind: 'capacity_wait', label: 'Waited for a free sandbox', durationMs: 90_000, ok: null },
+              { kind: 'box', label: 'Box started', durationMs: 20_000, ok: null },
+              { kind: 'checkout', label: 'Checked out the branch', durationMs: 4_000, ok: null },
+              { kind: 'box_steps', label: 'Setup list steps', durationMs: null, ok: false },
+              { kind: 'setup_step', label: 'Install sqlx', durationMs: 12_000, ok: false, detail: 'exit 101' },
+              { kind: 'ready', label: 'Ready', durationMs: 380_000, ok: null },
+            ],
+          },
+          lastWake: { at: '2099-01-01T11:00:00.000Z', durationMs: 130_000, from: 'storage', ok: true, text: 'Restored from storage in 2m 10s.' },
+          recent: [
+            { at: '2099-01-01T10:06:00.000Z', totalMs: 380_000, layer: 'repo', thisSession: true },
+            { at: '2099-01-01T09:00:00.000Z', totalMs: 48_000, layer: 'base', thisSession: false },
+          ],
+          medianMs: 48_000,
+          comparison: 'This start took 6m 20s. The median start for this repository is 48s.',
+          slow: true,
+          note: null,
+        },
+      }) });
+      const text = await tool('session_sandbox_status').handler(OWNER, {}, SELF);
+      for (const part of [
+        'How this box started:',
+        '  Image: The shared image for this repository, commit abc123def456.',
+        '  The image has the repository and its own setup.',
+        '  The fleet is building a new image with the Setup list. A new box uses it when it is ready.',
+        '  A newer image exists. A new box boots it.',
+        '  Box requested at 2099-01-01T10:00:00.000Z (a new box for a lost one).',
+        '  Waited for a free sandbox: 1m 30s',
+        '  Box started: 20s',
+        '  Checked out the branch: 4s',
+        '  Setup list steps: not measured (failed)',
+        '    Install sqlx: 12s (failed: exit 101)',
+        '  Ready: 6m 20s',
+        '  Last wake (2099-01-01T11:00:00.000Z): Restored from storage in 2m 10s.',
+        '  This start took 6m 20s. The median start for this repository is 48s. This start was slow.',
+        '  Recent starts of this repository, newest first: 6m 20s (repository image) this session, 48s (base image).',
+      ]) expect(text).toContain(part);
+      expect(text.indexOf('How this box started:')).toBeLessThan(text.indexOf('Actions in the app:'));
+    });
+
+    it('says what Talyn does not know about the start', async () => {
+      mockApi({ 'GET /api/v1/workbenches/s1/sandbox-status': () => ({
+        ...status,
+        start: { image: null, timeline: null, lastWake: null, recent: [], medianMs: null, comparison: null, slow: false, note: 'Talyn has no start times for this box.' },
+      }) });
+      const text = await tool('session_sandbox_status').handler(OWNER, {}, SELF);
+      expect(text).toContain('How this box started:\n  Talyn has no start times for this box.');
     });
 
     it('reads a session of the calling thread', async () => {

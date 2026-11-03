@@ -29,6 +29,7 @@ import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
 import { cleanJsonbString, stringifyJsonbSafe, toJsonbSafe } from './jsonSafe.js';
+import { BOX_START_SETTINGS_KEYS } from './boxStart.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -125,6 +126,15 @@ export const CHAT_COLUMNS = {
 
 export type ChatRow = Pick<typeof chatsTable.$inferSelect, keyof typeof CHAT_COLUMNS>;
 
+/** The start timeline and the last wake are for the Sandbox panel only: they stay out of every list and broadcast. */
+function publicSettings(settings: WorkbenchRow['settings'] | null): Workbench['settings'] {
+  if (!settings) return {};
+  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings)) return settings;
+  const out = { ...settings } as Record<string, unknown>;
+  for (const key of BOX_START_SETTINGS_KEYS) delete out[key];
+  return out as Workbench['settings'];
+}
+
 export function rowToWorkbench(row: WorkbenchRow): Workbench {
   return {
     id: row.id,
@@ -146,7 +156,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     status: row.status === 'archiveError' ? 'archiveError' : row.archivedAt ? 'archived' : row.status as WorkbenchStatus,
     statusMessage: row.statusMessage,
     pullRequestId: row.pullRequestId,
-    settings: row.settings ?? {},
+    settings: publicSettings(row.settings),
     source: row.source ?? null,
     diffStat: row.diffStat ? { added: row.diffStat.added, removed: row.diffStat.removed, files: row.diffStat.files } : null,
     uncommittedStats: row.diffStat?.uncommittedStats ?? null,

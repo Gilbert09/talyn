@@ -16,6 +16,7 @@ import {
 import { getPoolDbClient } from '../../db/client.js';
 import { workbenchChats as chats, workbenchEvents as events, workbenchScriptRuns as runs } from '../../db/schema.js';
 import type { FleetSandbox } from '../selfHosted/client.js';
+import { describeBoxStart, parseStartHistory, startHistoryQuery, type StartHistoryEntry } from './boxStart.js';
 import { fleetClientFor, isResuming } from './sandboxRuntime.js';
 import { checkpointTime } from './workCheckpointScripts.js';
 import type { WorkbenchRow } from './store.js';
@@ -183,6 +184,8 @@ export interface SandboxStatusInput {
   /** Talyn is resuming the box now. */
   resuming: boolean;
   now: Date;
+  /** The repository's recent box starts. Absent: not read. */
+  history?: StartHistoryEntry[] | null;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -462,6 +465,7 @@ export function describeSandboxStatus(input: SandboxStatusInput): WorkbenchSandb
     work: workOf(input, activity),
     problem: problemOf(input, fleetError),
     actions: actionsOf(input, answer.state, activity),
+    start: describeBoxStart({ row, sandbox, history: input.history ?? null }),
   };
 }
 
@@ -471,10 +475,11 @@ function asksFleet(row: WorkbenchRow): row is WorkbenchRow & { sandboxId: string
 }
 
 export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Promise<WorkbenchSandboxStatus> {
-  const [chatRows, scripts, fleet] = await Promise.all([
+  const [chatRows, scripts, fleet, history] = await Promise.all([
     statusChatsQuery(row.id) as Promise<StatusChat[]>,
     row.runtime === 'sandbox' ? (statusScriptsQuery(row.id) as Promise<StatusScript[]>) : Promise.resolve([]),
     asksFleet(row) ? readFleetRecord(row, now.getTime()) : Promise.resolve(null),
+    readStartHistory(row),
   ]);
   const open = chatRows.filter((c) => !c.closedAt);
   const notes = open.length ? await problemNoteQuery(open) : [];
@@ -487,5 +492,18 @@ export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Pro
     note,
     resuming: row.sandboxId ? isResuming(row.sandboxId) : false,
     now,
+    history,
   });
+}
+
+/** The repository's recent starts, for a sandbox session. Null when there is nothing to compare, or the read fails. */
+async function readStartHistory(row: WorkbenchRow): Promise<StartHistoryEntry[] | null> {
+  if (row.runtime !== 'sandbox' || row.kind === 'thread' || row.archivedAt || !row.repositoryId) return null;
+  try {
+    const [found] = await startHistoryQuery(row.repositoryId);
+    return parseStartHistory(found?.recent);
+  } catch (err) {
+    console.warn(`[workbench] reading the start history of ${row.repositoryId} failed:`, err);
+    return null;
+  }
 }

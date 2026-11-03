@@ -201,6 +201,12 @@ describe('one provision per session across instances', () => {
     expect(await claims()).toEqual([{ name: CLAIM, token: 'other-instance' }]);
   });
 
+  /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
+  const withoutBoxStart = (settings: object | undefined) => {
+    const { boxStart: _boxStart, ...rest } = (settings ?? {}) as Record<string, unknown>;
+    return rest;
+  };
+
   it('keeps settings written after the run read the row', async () => {
     await updateWorkbench(WB, { settings: { fleetSandboxId: 'stale-fleet-id' } });
     const create = fleet.createSandbox.bind(fleet);
@@ -211,7 +217,8 @@ describe('one provision per session across instances', () => {
     await provisionWorkbench(WB);
     const row = await getWorkbench(WB);
     expect(row?.status).toBe('ready');
-    expect(row?.settings).toEqual({ keptSandboxIds: ['older-box'], internetAccess: false });
+    expect(withoutBoxStart(row?.settings)).toEqual({ keptSandboxIds: ['older-box'], internetAccess: false });
+    expect(row?.settings).toHaveProperty('boxStart.sandboxId', row?.sandboxId);
   });
 
   it.each([
@@ -221,13 +228,13 @@ describe('one provision per session across instances', () => {
     vi.spyOn(sandboxSize, 'sessionSandboxSize').mockReturnValue('standard');
     await updateWorkbench(WB, { settings });
     await provisionWorkbench(WB);
-    expect((await getWorkbench(WB))?.settings).toEqual(expected);
+    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual(expected);
   });
 
   it('records the fleet sandbox id when the fleet names its own', async () => {
     vi.spyOn(fleet, 'createSandbox').mockResolvedValue({ sandbox: { id: 'fleet-own-id', status: 'idle' }, host: 'host-1' } as never);
     await provisionWorkbench(WB);
-    expect((await getWorkbench(WB))?.settings).toEqual({ fleetSandboxId: 'fleet-own-id' });
+    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual({ fleetSandboxId: 'fleet-own-id' });
   });
 
   describe('the resume sweep', () => {

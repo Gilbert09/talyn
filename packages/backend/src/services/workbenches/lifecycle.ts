@@ -4,7 +4,7 @@ import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
 import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
-import { boxLayerContextFrom, pickWorkbenchName, SANDBOX_SIZES, withCheckoutCommit, type BoxLayerContext, type SandboxSize } from '@talyn/shared';
+import { boxLayerContextFrom, hasPrebakedCheckout, pickWorkbenchName, SANDBOX_SIZES, withCheckoutCommit, type BoxLayerContext, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import {
@@ -45,7 +45,8 @@ import {
   SANDBOX_LOST_MESSAGE,
 } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
-import { imageSetupForCreate, noteImageResults, noteImageStatus, recordBoxSetupResults } from './setupLayers.js';
+import { boxStartRecord, imageSetupForCreate, noteImageResults, noteImageStatus, recordBoxSetupResults, type BoxTiming } from './setupLayers.js';
+import { writeBoxStart, type BoxStartCause } from './boxStart.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -267,7 +268,8 @@ async function readQueuedBox(client: FleetClient, sandboxId: string): Promise<Fl
   }
 }
 
-type CapacityWait = { created: CreatedWorkbenchSandbox; ownSandboxId: string | null };
+/** `waitMs`: how long the create waited for a free sandbox. 0: no wait. */
+type CapacityWait = { created: CreatedWorkbenchSandbox; ownSandboxId: string | null; waitMs: number };
 
 /**
  * Create the session's box, and wait while the fleet has no room. A 503 is
@@ -303,6 +305,7 @@ async function createWaitingForCapacity(
     console.warn(`[workbench] no free sandbox for ${row.id} (${why}); waiting`);
   };
   const superseded = () => new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+  const waited = () => (startedAt === null ? 0 : Date.now() - startedAt);
 
   for (let attempt = 0; ;) {
     let created: CreatedWorkbenchSandbox;
@@ -323,7 +326,7 @@ async function createWaitingForCapacity(
       if (!(await isProvisionOwned(row.id, ownSandboxId))) throw superseded();
       continue;
     }
-    if (!created.ok || !isQueueRecord(created.record)) return { created, ownSandboxId };
+    if (!created.ok || !isQueueRecord(created.record)) return { created, ownSandboxId, waitMs: waited() };
 
     const { client } = created;
     const dropQueuedBox = async () => {
@@ -344,7 +347,7 @@ async function createWaitingForCapacity(
         if (error.startsWith(QUEUE_TIMEOUT_ERROR)) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
         throw new Error(`The sandbox failed while it waited for room: ${error || 'the fleet gave no reason'}`);
       }
-      if (record.status && BOOTED_STATUSES.has(record.status)) return { created: { ...created, record }, ownSandboxId };
+      if (record.status && BOOTED_STATUSES.has(record.status)) return { created: { ...created, record }, ownSandboxId, waitMs: waited() };
       if (record.status !== 'queued' && record.status !== 'starting') {
         throw new Error(`The sandbox did not start: ${record.error || `the fleet reports it ${record.status}`}`);
       }
@@ -649,6 +652,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
 
     // 1. The box.
     const createStartedAt = Date.now();
+    const cause: BoxStartCause = opts.restore || row.memoryRestorePending === 'archive' ? 'restore' : replacingLostSandbox ? 'lost' : 'new';
     const waited = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
     if (!waited) return;
     ownSandboxId = waited.ownSandboxId;
@@ -676,6 +680,20 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     // A thread has no repository: no clone, setup, PR, diff or saved work.
     if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
     void noteBoxImage(row, created.record, boxLayer);
+    const startFacts: BoxTiming = {
+      cause,
+      requestedAtMs: createStartedAt,
+      capacityWaitMs: waited.waitMs,
+      boxReadyMs,
+      layer: boxLayer.layer,
+      repoCommit: boxLayer.repoCommit,
+      userLayerPending: created.record.userLayerPending ?? null,
+      repoLayerPending: created.record.repoLayerPending ?? null,
+      prebakedCheckout: hasPrebakedCheckout(boxLayer, created.record.prebakedCheckout),
+    };
+    // The image and the boot show in the Sandbox panel while the clone and the setup run.
+    await writeBoxStart(row.id, boxStartRecord(sandboxId, startFacts)).catch((err: unknown) =>
+      console.warn(`[workbench] keeping the start of ${sandboxId} failed:`, err));
     // 2. The repository and the branch: a checkout when the image holds the repository.
     const checkoutStartedAt = Date.now();
     const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout }), {
@@ -719,16 +737,17 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     if (config?.setup) {
       assertOwned(claim);
       row = await setProvisioningRow(row, sandboxId, { statusMessage: 'Running the setup script' });
+      const setupStartedAt = Date.now();
       const { done } = await startScript(row, 'setup', { config, resume: true });
       const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
       if (!exited || isWorkbenchDraining()) return;
-      await recordBoxSetupResults(row, { boxReadyMs, checkoutMs, layer: boxLayer.layer });
+      await recordBoxSetupResults(row, { ...startFacts, checkoutMs, setupMs: Date.now() - setupStartedAt, setupExitCode: exited.code ?? null });
       const { code } = exited;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
       }
     } else {
-      await recordBoxSetupResults(row, { boxReadyMs, checkoutMs, layer: boxLayer.layer }, { ranSetup: false });
+      await recordBoxSetupResults(row, { ...startFacts, checkoutMs }, { ranSetup: false });
     }
 
     if (isWorkbenchDraining()) return;

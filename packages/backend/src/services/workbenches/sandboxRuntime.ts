@@ -67,6 +67,7 @@ import {
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
+import { recordSandboxWake } from './boxStart.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -221,23 +222,33 @@ export function isResuming(sandboxId: string): boolean {
   return resuming.has(sandboxId);
 }
 
-export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
+/**
+ * Resume a suspended box once, however many callers wait. `from` says where
+ * the box sleeps: `storage` for a hibernated box (the fleet refused an exec
+ * with `remote_resume_required`), `host` for a box on its host's disk. The
+ * wake and its time go on the session for the Sandbox panel.
+ */
+export function resumeOnce(client: FleetClient, sandboxId: string, from: 'host' | 'storage' = 'storage'): Promise<void> {
   let pending = resuming.get(sandboxId);
   if (!pending) {
-    console.log(`[workbench] resuming hibernated sandbox ${sandboxId}`);
+    console.log(`[workbench] resuming ${from === 'storage' ? 'hibernated' : 'suspended'} sandbox ${sandboxId}`);
     const startedAt = Date.now();
+    const note = (ok: boolean, ms: number) =>
+      recordSandboxWake({ sandboxId, at: new Date(startedAt).toISOString(), ms, from, ok });
     pending = client
       .resumeSandbox(sandboxId)
       .then(
         () => {
           const ms = Date.now() - startedAt;
           console.log(`[workbench] resumed sandbox ${sandboxId} in ${ms} ms`);
-          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms } });
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms, from } });
+          void note(true, ms);
         },
         (error: unknown) => {
           const ms = Date.now() - startedAt;
           console.warn(`[workbench] resuming sandbox ${sandboxId} failed after ${ms} ms:`, error);
-          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms } });
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms, from } });
+          void note(false, ms);
           throw error;
         },
       )

@@ -39,6 +39,7 @@ import { importClaudeSession, importTargetChat, parseImportBody } from '../servi
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
+import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
 import {
@@ -641,6 +642,13 @@ export function workbenchRoutes(): Router {
         ...((row.settings as Record<string, unknown> | null)?.archiveCredentialsRearmed ? { archiveCredentialsRearmed: true } : {}),
         // Server-only: old boxes the reaper must keep.
         ...(row.settings?.keptSandboxIds ? { keptSandboxIds: row.settings.keptSandboxIds } : {}),
+        // Server-only: the box's start times and last wake, for the Sandbox panel.
+        ...Object.fromEntries(
+          BOX_START_SETTINGS_KEYS.flatMap((key) => {
+            const value = (row.settings as Record<string, unknown> | null)?.[key];
+            return value === undefined ? [] : [[key, value]];
+          }),
+        ),
         // A move's target, lease and backoff: server-only, and a later box must not reuse the target's generation.
         ...Object.fromEntries(
           MOVE_SETTINGS_KEYS.flatMap((key) => {
@@ -758,7 +766,8 @@ export function workbenchRoutes(): Router {
         if (sandbox.status === 'suspended') {
           status = 'resuming';
           // The fleet may answer that the box is lost, e.g. its hibernated copy cannot be restored.
-          resumeOnce(client, row.sandboxId)
+          const inStorage = Boolean(sandbox.suspendUploaded) && !sandbox.suspendDir;
+          resumeOnce(client, row.sandboxId, inStorage ? 'storage' : 'host')
             .catch((err: unknown) => recoverLostSandbox(row, err))
             .catch(() => undefined);
         }

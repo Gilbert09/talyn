@@ -265,6 +265,12 @@ describe('workbench routes', () => {
   });
 
   describe('creating', () => {
+    /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
+    const withoutBoxStart = (settings: object | undefined) => {
+      const { boxStart: _boxStart, ...rest } = (settings ?? {}) as Record<string, unknown>;
+      return rest;
+    };
+
     it('records the fleet sandbox id and keeps other settings', async () => {
       const createSandbox = fleet.createSandbox.bind(fleet);
       fleet.createSandbox = async (input) => {
@@ -272,7 +278,7 @@ describe('workbench routes', () => {
         return { ...created, sandbox: { ...created.sandbox, id: `${input.id}--3542ee` } };
       };
       const wb = await createSandboxWorkbench({ internetAccess: false });
-      expect((await getWorkbench(wb.id))?.settings).toEqual({
+      expect(withoutBoxStart((await getWorkbench(wb.id))?.settings)).toEqual({
         internetAccess: false,
         fleetSandboxId: `${sandboxIdFor(wb.id)}--3542ee`,
       });
@@ -360,7 +366,7 @@ describe('workbench routes', () => {
       [false, false],
     ] as const)('stores internetAccess %s and creates the box with access %s', async (flag, open) => {
       const wb = await createSandboxWorkbench(flag === undefined ? {} : { internetAccess: flag });
-      expect((await getWorkbench(wb.id))?.settings).toEqual(flag === undefined ? {} : { internetAccess: flag });
+      expect(withoutBoxStart((await getWorkbench(wb.id))?.settings)).toEqual(flag === undefined ? {} : { internetAccess: flag });
       expect(fleet.created[0].policy?.egress).toEqual(open ? { mode: 'open' } : undefined);
     });
 
