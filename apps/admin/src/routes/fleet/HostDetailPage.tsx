@@ -6,6 +6,7 @@ import { StatCard } from '../../components/ui/StatCard';
 import { mib, pctLabel, relativeAge } from '../../lib/format';
 import { hostState, memoryPct, slotsPct } from '../../lib/fleetView';
 import { ROUTES } from '../../lib/routes';
+import { HostHealthPanel } from '../../components/fleet/HostHealth';
 
 /**
  * One host in detail.
@@ -104,15 +105,27 @@ export function HostDetailPage() {
         />
       </div>
 
+      <HostHealthPanel host={data} />
+
       {data.runsByStatus && (
         <section className="mt-6">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Runs by status
+            Sandboxes by state (every tenant)
           </h2>
           <div className="flex flex-wrap gap-2">
+            {/* The fleet's own state words (busy, idle, suspended), which are
+                not the Runs page's status filter, so these link to the host. */}
             {Object.entries(data.runsByStatus).map(([status, n]) => (
-              <Link key={status} to={`${ROUTES.fleetRuns}?host=${encodeURIComponent(data.name)}&status=${status}`}>
-                <Pill tone={status === 'running' ? 'good' : status === 'failed' ? 'critical' : 'muted'}>
+              <Link key={status} to={`${ROUTES.fleetRuns}?host=${encodeURIComponent(data.name)}`}>
+                <Pill
+                  tone={
+                    status === 'busy' || status === 'running'
+                      ? 'info'
+                      : status === 'failed'
+                        ? 'critical'
+                        : 'muted'
+                  }
+                >
                   {status} {n}
                 </Pill>
               </Link>
