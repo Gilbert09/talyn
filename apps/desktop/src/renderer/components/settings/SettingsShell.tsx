@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import {
   Bot,
+  Box,
   Brain,
   Bug,
   CreditCard,
@@ -48,6 +49,7 @@ import { MCPServerSettings } from './sections/McpSettings';
 import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
+import { SandboxSetupSettings } from './sections/SandboxSetupSettings';
 import { SessionsSettings } from './sections/SessionsSettings';
 import { ShortcutsSettings } from './sections/ShortcutsSettings';
 import { WorkspaceSettings } from './sections/WorkspaceSettings';
@@ -90,6 +92,12 @@ function McpServersPage() {
   return <McpServersPanel />;
 }
 
+function SandboxSetupPage() {
+  const features = useWorkspaceStore((s) => s.features);
+  if (!workbenchesOffered(features)) return null;
+  return <SandboxSetupSettings />;
+}
+
 function TeamPage() {
   return (
     <SettingsPage title="Team">
@@ -106,6 +114,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   sessions: SessionsSettings,
   agents: AgentsSettings,
   repositories: RepositoriesSettings,
+  sandboxSetup: SandboxSetupPage,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
   memory: MemoryPage,
@@ -141,6 +150,9 @@ export function SettingsShell() {
         { id: 'sessions', icon: SquareTerminal, label: 'Sessions' },
         { id: 'agents', icon: Bot, label: 'Agents' },
         { id: 'repositories', icon: FolderGit2, label: 'Repositories' },
+        ...(workbenchesOffered(features)
+          ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
+          : []),
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
         ...(workbenchesOffered(features)

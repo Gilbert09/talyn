@@ -105,6 +105,7 @@ export type SettingsSection =
   | 'sessions'
   | 'agents'
   | 'repositories'
+  | 'sandboxSetup'
   | 'shortcuts'
   | 'pullRequests'
   | 'workspace'

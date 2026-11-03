@@ -37,12 +37,14 @@ import {
   ScanSearch,
   SquareTerminal,
   Keyboard,
+  Box,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
+import { SandboxSetupSettings } from '../settings/sections/SandboxSetupSettings';
 import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
@@ -138,6 +140,9 @@ export function SettingsPanel() {
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
+    ...(features?.workbenches === true
+      ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
+      : []),
     { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
     { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
@@ -200,6 +205,7 @@ export function SettingsPanel() {
         <ScrollArea className="h-full">
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
+            {activeSection === 'sandboxSetup' && features?.workbenches === true && <SandboxSetupSettings />}
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}

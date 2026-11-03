@@ -31,6 +31,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   sessions: 'Sessions',
   agents: 'Agents',
   repositories: 'Repositories',
+  sandboxSetup: 'Sandbox setup',
   shortcuts: 'Shortcuts',
   pullRequests: 'Pull requests',
   workspace: 'Workspace',
@@ -142,6 +143,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
       if (section === 'slack' && !workbenchesOffered(features)) continue;
       if (section === 'memory' && !workbenchesOffered(features)) continue;
+      if (section === 'sandboxSetup' && !workbenchesOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,

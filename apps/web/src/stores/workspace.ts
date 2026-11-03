@@ -89,6 +89,7 @@ export type SettingsSection =
   | 'sessions'
   | 'shortcuts'
   | 'workspace'
+  | 'sandboxSetup'
   | 'integrations'
   | 'slack'
   | 'skills'

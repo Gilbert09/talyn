@@ -37,6 +37,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sessions',
   'agents',
   'repositories',
+  'sandboxSetup',
   'shortcuts',
   'pullRequests',
   'workspace',
