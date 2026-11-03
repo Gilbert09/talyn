@@ -6,6 +6,7 @@ import { adminCapabilities } from './guards.js';
 import { adminProductRoutes } from './product.js';
 import { adminAuditRoutes } from './audit.js';
 import { adminFleetRoutes } from './fleet.js';
+import { adminSessionRoutes } from './sessions.js';
 
 /**
  * The operator console's API (admin.talyn.dev).
@@ -81,6 +82,9 @@ export function adminRoutes(): Router {
   // Fleet operations. Every read here proxies to fleetd over the private
   // link and DEGRADES rather than failing — see services/admin/fleetProxy.ts.
   router.use('/fleet', adminFleetRoutes());
+
+  // Sessions and threads (workbenches). Read-only.
+  router.use('/sessions', adminSessionRoutes());
 
   router.use(adminProductRoutes());
 
