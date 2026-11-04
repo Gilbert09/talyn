@@ -9,7 +9,7 @@ import { render, renderHook, screen, fireEvent, waitFor, cleanup } from '@testin
  * the desktop — so this is how the web port gets exercised at all.
  *
  * What is actually at risk here is not the wizard's logic, which was copied
- * verbatim, but its ONE browser-specific dependency: step 2 starts the GitHub
+ * verbatim, but its ONE browser-specific dependency: step 1 starts the GitHub
  * App flow and then waits for `useGithubConnection` to re-check on window
  * focus. The first port navigated the current tab to GitHub, which unmounts
  * the wizard mid-setup and — because the backend sends browser clients to
@@ -22,6 +22,8 @@ vi.mock('../lib/api', () => ({
   api: {
     github: {
       getStatus: vi.fn().mockResolvedValue({ connected: false }),
+      listAllRepos: vi.fn().mockResolvedValue([]),
+      listInstallations: vi.fn().mockResolvedValue([]),
       getUser: vi.fn().mockResolvedValue({ login: 'octocat' }),
       installViaApp: vi.fn().mockResolvedValue({
         installUrl: 'https://github.com/apps/x/installations/new',
@@ -31,7 +33,7 @@ vi.mock('../lib/api', () => ({
     repositories: { list: vi.fn().mockResolvedValue([]) },
     workspaces: { list: vi.fn().mockResolvedValue([]), create: vi.fn() },
     environments: { list: vi.fn().mockResolvedValue([]) },
-    // Step 2 loads the agent credentials itself — `useSystemStatus` does not
+    // Step 3 loads the agent credentials itself — `useSystemStatus` does not
     // run until onboarding is over, which is exactly the bug that made the
     // Talyn Fleet card invisible on this screen.
     cloudProviders: { list: vi.fn().mockResolvedValue([]) },
@@ -46,9 +48,14 @@ const { OnboardingWizard } = await import('../components/onboarding/OnboardingWi
 // Auto-cleanup is off (this suite does not run with vitest `globals`), so
 // without this every render stacks in the same document and a second wizard
 // makes "find the Next button" ambiguous.
-beforeEach(() => {
+beforeEach(async () => {
   cleanup();
   vi.clearAllMocks();
+  localStorage.clear();
+  const { api } = await import('../lib/api');
+  const { useWorkspaceStore } = await import('../stores/workspace');
+  useWorkspaceStore.setState({ currentWorkspaceId: null, repositories: [], cloudProviders: null, posthogStatus: null });
+  vi.mocked(api.github.getStatus).mockResolvedValue({ connected: false } as never);
 });
 
 describe('OnboardingWizard', () => {
@@ -62,22 +69,12 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Connect GitHub')).toBeTruthy();
     expect(body).not.toContain('Name your workspace');
     expect(body).not.toContain('Workspace name');
-    // Four steps: GitHub, the agent, repos, then code review. The agent step is new —
-    // it did not used to be part of setup, and is now because the fleet runs on
-    // the user's OWN Claude or Codex subscription, so asking up front is what
-    // makes the first task run on their key.
-    expect(screen.getByTitle('Connect an agent')).toBeTruthy();
-    expect(screen.getByTitle('Turn on code review')).toBeTruthy();
+    const titles = [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title'));
+    expect(titles).toEqual([
+      'Connect GitHub', 'Choose where your agent will work.', 'Connect your agent', 'Start your first session',
+    ]);
+    expect(body).not.toContain('code review');
     expect(screen.queryByText('5')).toBeNull();
-  });
-
-  // Optional on purpose: a workspace that is not on the fleet allow-list is
-  // served no fleet card, and gating Next would strand it on a step it cannot
-  // complete. ConnectAgentModal remains the fallback for anyone who skips.
-  it('does not gate progress on connecting an agent', () => {
-    const { container } = render(<OnboardingWizard />);
-    expect(container.querySelector('[title="Connect an agent"]')).toBeTruthy();
-    expect(container.textContent).toContain('Connect GitHub');
   });
 
   it('gates progress on the GitHub connection', () => {
@@ -115,7 +112,7 @@ describe('the activation funnel is fed by the step new users actually take', () 
 /**
  * The source survey. It is the only acquisition signal the DESKTOP build can
  * have — a browser cookie cannot reach an Electron renderer — so what matters
- * is that it records an answer without costing a step or gating Finish.
+ * is that it records an answer without costing a step or blocking session creation.
  */
 describe('the "where did you find Talyn?" survey', () => {
   // The hook returns early without a workspace id, so the wizard can never
@@ -123,7 +120,12 @@ describe('the "where did you find Talyn?" survey', () => {
   async function connectGithub() {
     const { api } = await import('../lib/api');
     const { useWorkspaceStore } = await import('../stores/workspace');
-    useWorkspaceStore.setState({ currentWorkspaceId: 'ws1' });
+    useWorkspaceStore.setState({ currentWorkspaceId: 'ws1', repositories: [
+      { id: 'r1', workspaceId: 'ws1', owner: 'acme', repo: 'app', fullName: 'acme/app' },
+    ] });
+    vi.mocked(api.cloudProviders.list).mockResolvedValue([
+      { type: 'selfhosted', connected: true, connectedAgents: ['claude'] },
+    ] as never);
     vi.mocked(api.github.getStatus).mockResolvedValue({
       configured: true,
       connected: true,
@@ -138,26 +140,26 @@ describe('the "where did you find Talyn?" survey', () => {
     await waitFor(() => expect(next()?.hasAttribute('disabled')).toBe(false));
     fireEvent.click(next()!);
     fireEvent.click(next()!);
+    await waitFor(() => expect(next()?.hasAttribute('disabled')).toBe(false));
     fireEvent.click(next()!);
     await screen.findByText(/Where did you find Talyn\?/i);
   }
 
-  it('is absent until the final step, and never gates Finish', async () => {
+  it('is absent until the final step and does not block Skip', async () => {
     await connectGithub();
     const first = render(<OnboardingWizard />);
     expect(screen.queryByText(/Where did you find Talyn\?/i)).toBeNull();
     first.unmount();
 
     await walkToLastStep();
-    const finish = [...document.querySelectorAll('button')].find((b) =>
-      /finish/i.test(b.textContent ?? '')
+    const skip = [...document.querySelectorAll('button')].find((b) =>
+      /skip for now/i.test(b.textContent ?? '')
     );
-    // Nothing selected, and Finish is still live. An acquisition metric is not
-    // worth spending activation on.
-    expect(finish?.hasAttribute('disabled')).toBe(false);
+    // The survey does not block Skip.
+    expect(skip?.hasAttribute('disabled')).toBe(false);
   });
 
-  it('records the answer on click, not on Finish', async () => {
+  it('records the answer when selected', async () => {
     const { trackEvent } = await import('../lib/analytics');
     await walkToLastStep();
 
@@ -178,7 +180,7 @@ describe('the "where did you find Talyn?" survey', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reddit' }));
     fireEvent.click(
-      [...document.querySelectorAll('button')].find((b) => /finish/i.test(b.textContent ?? ''))!
+      [...document.querySelectorAll('button')].find((b) => /skip for now/i.test(b.textContent ?? ''))!
     );
     expect(trackEvent).toHaveBeenCalledWith(
       'onboarding_completed',
@@ -191,7 +193,7 @@ describe('the "where did you find Talyn?" survey', () => {
     await walkToLastStep();
 
     fireEvent.click(
-      [...document.querySelectorAll('button')].find((b) => /finish/i.test(b.textContent ?? ''))!
+      [...document.querySelectorAll('button')].find((b) => /skip for now/i.test(b.textContent ?? ''))!
     );
     // Explicitly null rather than absent, so "skipped" and "never shipped the
     // survey" stay distinguishable in PostHog.

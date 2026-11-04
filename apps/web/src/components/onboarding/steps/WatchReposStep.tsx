@@ -22,12 +22,7 @@ interface WatchReposStepProps {
   workspaceId: string;
 }
 
-/**
- * Step 3 — pick repositories to watch. Reuses the same localStorage repo
- * cache as the Settings card (one shared key per workspace) so the expensive
- * "all repos" fetch isn't repeated. Skippable: repos can be added later in
- * Settings → Workspace.
- */
+/** Choose repositories for sessions. Use the repository cache shared with Settings. */
 export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const { repositories, setRepositories } = useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
@@ -108,9 +103,8 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Pick the repositories you want Talyn to track. Their PRs, reviews, and CI status
-        show up in the GitHub panel.
+      <p className="text-[13px] text-muted-foreground">
+        Choose at least one repository for your sessions.
       </p>
 
       {repositories.length > 0 && (

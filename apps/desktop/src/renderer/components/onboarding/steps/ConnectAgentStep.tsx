@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check } from 'lucide-react';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
@@ -11,27 +11,10 @@ import {
   PostHogCodeCard,
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
-import { LocalAgentStatus } from './LocalAgentStatus';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
-/**
- * Onboarding step 3: connect the agent that will actually do the work.
- *
- * Two screens, not one. First the person picks an agent, then they see only
- * that agent's sign-in. The old step drew every connect form at once, and a
- * Codex paste box sat beside a PostHog host field, above an explanation of
- * the fleet's architecture that nobody needs before their first task. The
- * fleet is still how Claude and Codex run; the step no longer explains it.
- *
- * Claude and Codex come first, in that order: they run on a subscription the
- * reader almost certainly already pays for, while PostHog Code needs a
- * PostHog account. They are drawn only when the backend lists the fleet for
- * this workspace — /cloud-providers filters it by the fleet flag, and offering
- * a sign-in whose save 403s reads as a broken integration.
- *
- * Skippable. The modal that asks on the first dispatch is still the fallback.
- */
+/** Connect a subscription or PostHog Code before starting a session. */
 export function ConnectAgentStep() {
   // The cards read the store, and nothing else fills it during onboarding:
   // `useSystemStatus` mounts in `MainLayout`, which renders only once the
@@ -104,36 +87,38 @@ export function ConnectAgentStep() {
 
   return (
     <div className="space-y-4">
-      <LocalAgentStatus />
       <p className="text-[13px] text-muted-foreground">
-        Or run in the cloud on Talyn Fleet with your own subscription. You can add another
-        agent later in Settings.
+        Use your Claude or ChatGPT subscription
       </p>
       <div className="space-y-2">
         {options.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => setChoice(option.id)}
-            className={cn(
-              'w-full flex items-center gap-3 rounded-lg border p-4 text-left transition-colors',
-              'hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          <Fragment key={option.id}>
+            {option.id === 'posthog' && (
+              <h3 className="pt-2 text-xs font-medium text-muted-foreground">Other options</h3>
             )}
-          >
-            <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center shrink-0">
-              {option.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-medium">{option.name}</p>
-              <p className="text-[13px] text-muted-foreground">{option.detail}</p>
-            </div>
-            {option.connected && (
-              <span className="flex items-center gap-1 text-[13px] text-green-600">
-                <Check className="w-4 h-4" />
-                Connected
-              </span>
-            )}
-          </button>
+            <button
+              type="button"
+              onClick={() => setChoice(option.id)}
+              className={cn(
+                'w-full flex items-center gap-3 rounded-lg border p-4 text-left transition-colors',
+                'hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+              )}
+            >
+              <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center shrink-0">
+                {option.icon}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-medium">{option.name}</p>
+                <p className="text-[13px] text-muted-foreground">{option.detail}</p>
+              </div>
+              {option.connected && (
+                <span className="flex items-center gap-1 text-[13px] text-green-600">
+                  <Check className="w-4 h-4" />
+                  Connected
+                </span>
+              )}
+            </button>
+          </Fragment>
         ))}
       </div>
     </div>

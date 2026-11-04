@@ -41,20 +41,12 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Connect GitHub')).toBeTruthy();
     expect(body).not.toContain('Name your workspace');
     expect(body).not.toContain('Workspace name');
-    // Three steps, code-first: GitHub, the repos you code in, then an agent.
     const titles = [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title'));
-    expect(titles).toEqual(['Connect GitHub', 'Add repositories', 'Connect an agent']);
+    expect(titles).toEqual([
+      'Connect GitHub', 'Choose where your agent will work.', 'Connect your agent', 'Start your first session',
+    ]);
     expect(body).not.toContain('code review');
-    expect(screen.queryByText('4')).toBeNull();
-  });
-
-  // Optional on purpose: a workspace that is not on the fleet allow-list is
-  // served no fleet card, and gating Next would strand it on a step it cannot
-  // complete. ConnectAgentModal remains the fallback for anyone who skips.
-  it('does not gate progress on connecting an agent', () => {
-    const { container } = render(<OnboardingWizard />);
-    expect(container.querySelector('[title="Connect an agent"]')).toBeTruthy();
-    expect(container.textContent).toContain('Connect GitHub');
+    expect(screen.queryByText('5')).toBeNull();
   });
 
   it('gates progress on the GitHub connection', () => {

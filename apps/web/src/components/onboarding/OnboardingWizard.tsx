@@ -1,104 +1,112 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGithubConnection } from '../../hooks/useGithubConnection';
 import { trackEvent } from '../../lib/analytics';
+import { FirstSessionStep } from './steps/FirstSessionStep';
 import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
-import { CodeReviewStep } from './steps/CodeReviewStep';
+import { useNavigationStore } from '../../stores/navigation';
 
 const STEPS = [
-  { key: 'github', title: 'Connect GitHub', optional: false },
-  { key: 'agent', title: 'Connect an agent', optional: true },
-  { key: 'repos', title: 'Watch repositories', optional: true },
-  // Last, and OPTIONAL — mandatory for the reason the agent step is: only step
-  // 0 gates Next, and a step somebody cannot complete would strand them.
-  { key: 'review', title: 'Turn on code review', optional: true },
+  { key: 'github', title: 'Connect GitHub' },
+  { key: 'repos', title: 'Choose where your agent will work.' },
+  { key: 'agent', title: 'Connect your agent' },
+  { key: 'first_session', title: 'Start your first session' },
 ] as const;
 
-/**
- * First-run onboarding. Walks a new user through the minimum setup needed to
- * see their PR queue: a GitHub connection, and repos to watch.
- *
- * There is no "name your workspace" step. The backend bootstraps one for every
- * owner (services/workspaceBootstrap.ts), because naming a workspace is a
- * question nobody can answer well before they have seen the product — it groups
- * repos, and at that point they have connected none. Renaming lives in
- * Settings. `currentWorkspaceId` is therefore always set by the time this
- * renders; if it somehow is not, the repo step waits rather than offering to
- * create one.
- *
- * Connecting an agent IS part of setup, and it did not used to be. The old
- * reasoning — task buttons render regardless, and the first dispatch opens
- * ConnectAgentModal — held while the agent was metered credits somebody else
- * billed. Talyn Fleet is the default compute now and runs on the user's OWN
- * Claude or Codex subscription, so asking up front is what makes the first task
- * run on their key instead of dead-ending at a modal.
- *
- * The step is OPTIONAL, and deliberately so: a workspace that is not on the
- * fleet allow-list is served no fleet card, and gating Next would strand it on
- * a step it cannot complete. ConnectAgentModal remains the fallback for anyone
- * who skips. Shown by App in place of MainLayout until `onboardingComplete`
- * flips true.
- */
+/** Connect GitHub, choose repositories, and connect an agent before starting a session. */
 export function OnboardingWizard() {
-  const { currentWorkspaceId, repositories, cloudProviders, setOnboardingComplete, setJustOnboarded } =
+  const { currentWorkspaceId, repositories, cloudProviders, posthogStatus, setOnboardingComplete, setJustOnboarded } =
     useWorkspaceStore();
   const { status, user } = useGithubConnection(currentWorkspaceId);
+  const navigate = useNavigationStore((s) => s.navigate);
   const [step, setStep] = useState(0);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const viewedStep = useRef<string | null>(null);
+  const reportedAgents = useRef(new Set<string>());
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
+  const latestSignupSource = useRef<SignupSource | null>(null);
 
-  // Persist "started, not finished" so a reload resumes the wizard rather than
-  // reading the GitHub connection as a finished setup (useInitialDataLoad).
   useEffect(() => {
     setOnboardingComplete(false);
   }, [setOnboardingComplete]);
 
-  // Captured on click rather than on Finish: an answer given by somebody who
-  // then closes the window is still the answer, and this is the only
-  // acquisition signal the desktop has.
+  useEffect(() => {
+    const key = STEPS[step].key;
+    if (viewedStep.current === key) return;
+    viewedStep.current = key;
+    trackEvent('onboarding_step_viewed', { step: key });
+  }, [step]);
+
   function handleSourceSelect(source: SignupSource) {
+    latestSignupSource.current = source;
     setSignupSource(source);
     trackEvent('signup_source_survey', { signup_source: source });
   }
 
   const githubConnected = Boolean(status?.connected);
-  // Reported on completion, never gated on — see the note above on why the
-  // agent step is skippable.
-  const agentConnected = (cloudProviders ?? []).some((p) => p.connected);
+  const fleet = cloudProviders?.find((provider) => provider.type === 'selfhosted');
+  const claudeConnected = fleet?.connectedAgents?.includes('claude') ?? false;
+  const codexConnected = fleet?.connectedAgents?.includes('codex') ?? false;
+  const posthogConnected = posthogStatus?.connected === true;
+  const agentConnected = claudeConnected || codexConnected || posthogConnected;
+  // A session runs on the fleet, so where the fleet is offered only a fleet agent can start one.
+  const sessionAgentConnected = fleet ? claudeConnected || codexConnected : posthogConnected;
 
-  // Required steps gate the Next button; optional steps are always advanceable.
-  const canAdvance = step === 0 ? githubConnected : true;
+  useEffect(() => {
+    if (step !== 2) return;
+    const connections = { claude: claudeConnected, codex: codexConnected, posthog_code: posthogConnected };
+    for (const [vendor, connected] of Object.entries(connections)) {
+      if (!connected || reportedAgents.current.has(vendor)) continue;
+      reportedAgents.current.add(vendor);
+      trackEvent('onboarding_agent_connected', { vendor });
+    }
+  }, [step, claudeConnected, codexConnected, posthogConnected]);
 
+  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : sessionAgentConnected;
   const isLast = step === STEPS.length - 1;
 
+  function finishOnboarding() {
+    trackEvent('onboarding_completed', {
+      github_connected: githubConnected,
+      repos_watched: repositories.length,
+      agent_connected: agentConnected,
+      // The answer can change while the session request is pending.
+      signup_source: latestSignupSource.current,
+    });
+    setJustOnboarded(true);
+    setOnboardingComplete(true);
+  }
+
   function handlePrimary() {
-    if (isLast) {
-      trackEvent('onboarding_completed', {
-        github_connected: githubConnected,
-        repos_watched: repositories.length,
-        agent_connected: agentConnected,
-        signup_source: signupSource,
-      });
-      // Tell the PR sync to force a real poll on first entry (the repos were
-      // only just watched, so the cache is empty) — see usePullRequestSync.
-      setJustOnboarded(true);
-      setOnboardingComplete(true);
-      return;
-    }
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    if (!canAdvance || isLast) return;
+    trackEvent('onboarding_step_completed', { step: STEPS[step].key });
+    setStep((s) => s + 1);
+  }
+
+  function handleSessionCreated() {
+    trackEvent('first_session_created', { from: 'onboarding' });
+    trackEvent('onboarding_step_completed', { step: 'first_session' });
+    finishOnboarding();
+  }
+
+  function handleSkip() {
+    trackEvent('onboarding_first_session_skipped');
+    navigate({ view: 'home' }, { replace: true });
+    finishOnboarding();
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-background p-6">
-      <div className="w-full max-w-lg space-y-6 rounded-lg border bg-card p-8 shadow-sm">
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-lg space-y-6 rounded-lg border bg-card p-6">
         <div className="space-y-1 text-center">
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Welcome to Talyn</h1>
-          <p className="text-sm text-muted-foreground">Let's get your workspace set up.</p>
+          <h1 className="font-display text-base font-semibold tracking-tight">Welcome to Talyn</h1>
+          <p className="text-[13px] text-muted-foreground">Let's get your workspace set up.</p>
         </div>
 
         {/* Step indicator */}
@@ -128,21 +136,24 @@ export function OnboardingWizard() {
         </div>
 
         <div>
-          <h2 className="mb-3 text-lg font-medium">
+          <h2 className="mb-3 text-base font-semibold">
             {STEPS[step].title}
-            {STEPS[step].optional && (
-              <span className="ml-2 text-xs font-normal text-muted-foreground">Optional</span>
-            )}
           </h2>
 
           {step === 0 && (
             <ConnectGitHubStep workspaceId={currentWorkspaceId} status={status} user={user} />
           )}
-          {step === 1 && <ConnectAgentStep />}
-          {step === 2 && currentWorkspaceId && (
+          {step === 1 && currentWorkspaceId && (
             <WatchReposStep workspaceId={currentWorkspaceId} />
           )}
-          {STEPS[step]?.key === 'review' && <CodeReviewStep />}
+          {step === 2 && <ConnectAgentStep />}
+          {isLast && (
+            <FirstSessionStep
+              onCreated={handleSessionCreated}
+              onSkip={handleSkip}
+              onBusyChange={setCreatingSession}
+            />
+          )}
 
           {isLast && (
             <div className="mt-4">
@@ -156,22 +167,18 @@ export function OnboardingWizard() {
           <Button
             variant="ghost"
             onClick={() => setStep((s) => Math.max(s - 1, 0))}
-            disabled={step === 0}
+            disabled={step === 0 || creatingSession}
             className={step === 0 ? 'invisible' : ''}
           >
-            <ArrowLeft className="mr-1 h-4 w-4" />
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
             Back
           </Button>
-          <Button onClick={handlePrimary} disabled={!canAdvance}>
-            {isLast ? (
-              'Finish'
-            ) : (
-              <>
-                Next
-                <ArrowRight className="ml-1 h-4 w-4" />
-              </>
-            )}
-          </Button>
+          {!isLast && (
+            <Button onClick={handlePrimary} disabled={!canAdvance}>
+              Next
+              <ArrowRight className="ml-1 h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

@@ -1,24 +1,7 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
 
-/**
- * "Where did you find Talyn?" — one optional question on the last onboarding
- * step.
- *
- * This exists because click-level attribution is unfixable for the desktop
- * app, not because surveys are better than measurement. On the web the
- * marketing site and the app share a registrable domain, so posthog-js's
- * cross-subdomain cookie carries the anonymous distinct id (and with it the
- * referrer and every utm_*) into the account — see lib/analytics.ts. A
- * packaged Electron renderer has no such thread: the download happens in a
- * browser and the install runs in a different process with a different
- * storage, so nothing links the two. A self-reported answer is a worse
- * instrument than a UTM, and it is the only one available there.
- *
- * Deliberately optional and never gating Finish. This sits at the point where
- * the user is one click from their PR queue, and an acquisition metric is not
- * worth spending activation on.
- */
+/** Collect an optional signup source beside the first session form. */
 
 const SOURCES = [
   { id: 'hacker_news', label: 'Hacker News' },

@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Archive, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { Button } from '../ui/button';
+import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { openExternal } from '../../lib/openExternal';
 import { toast } from '../../stores/toast';
 import {
@@ -35,7 +37,14 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const groups = useMemo(() => groupByRepository(workbenches.filter((w) => !isArchived(w))), [workbenches]);
 
   if (groups.length === 0) {
-    return <p className="px-3 py-2 text-xs text-muted-foreground">No sessions yet.</p>;
+    return (
+      <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground">
+        <p>No sessions yet.</p>
+        <Button variant="outline" size="sm" onClick={() => openNewWorkbench()}>
+          Start a session
+        </Button>
+      </div>
+    );
   }
 
   let index = 0;
