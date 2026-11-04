@@ -51,6 +51,7 @@ import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSA
 import { isSizeRefusal } from './sandboxSize.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
+import { observeSessionFiles, sessionFileProbe } from './sessionFileSync.js';
 import { syncSkillPack } from './skillPack.js';
 import { notifyThread } from './threads.js';
 import { sessionMemoryEnabled } from './memory.js';
@@ -88,6 +89,7 @@ import {
   finishTurn,
   getChat,
   getCheckpoint,
+  isFreshSessionTurn,
   getWorkbench,
   isThread,
   requeueTurn,
@@ -268,6 +270,7 @@ export async function sendMessage(
   input: SendWorkbenchMessageInput,
   opts: { origin?: 'talyn' } = {},
 ): Promise<{ queued: boolean }> {
+  const receivedAt = new Date().toISOString();
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
@@ -277,7 +280,7 @@ export async function sendMessage(
   // box coming, so a queued message would wait forever.
   if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
   if (wb.status !== 'ready' && !workbenchQueuesMessages(wb.status as WorkbenchStatus)) throw notReadyError(wb.status);
-  const message = normaliseMessage(input);
+  const message = { ...normaliseMessage(input), queuedAt: receivedAt };
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
@@ -633,51 +636,52 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs. It reports the free disk too (T2).
     // A relaunch keeps the turn's first checkpoint: an earlier attempt may have run.
-    if (firstAttempt === 0 || !(await getCheckpoint(chatId, turn))) {
-      const awake = wb;
-      wb = await withRestorePhase(chatId, () => checkpointAndCheckDisk(awake, chatId, turn), {
-        readSandbox: async () => {
-          const client = await fleetClientFor(awake.workspaceId, awake.fleetHost);
-          return (await client.getSandbox(awake.sandboxId!)).sandbox;
-        },
-        publish: async () => {
-          const current = await getChat(chatId);
-          if (current) emitWorkbenchChat(current.workspaceId, rowToChat(current));
-        },
-      });
-    }
+    const awake = wb;
+    const keepCheckpoint = firstAttempt > 0 && Boolean(await getCheckpoint(chatId, turn));
+    const fresh = firstAttempt === 0 && turn === 1 && !awake.workCheckpointAt && !awake.workCheckedAt &&
+      !awake.workSaveFailedAt && !chat.importedFrom && (await isFreshSessionTurn(awake.id));
+    wb = await withRestorePhase(chatId, () => checkpointAndCheckDisk(awake, chatId, turn, fresh || keepCheckpoint), {
+      readSandbox: async () => {
+        const client = await fleetClientFor(awake.workspaceId, awake.fleetHost);
+        return (await client.getSandbox(awake.sandboxId!)).sandbox;
+      },
+      publish: async () => {
+        const current = await getChat(chatId);
+        if (current) emitWorkbenchChat(current.workspaceId, rowToChat(current));
+      },
+    });
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
-    // The session's account, or the next one when it has crossed the threshold.
-    const refreshed = await refreshSandboxCredentials(wb, { model: turnModel });
+    const agent = chat.agent === 'codex' ? 'codex' : 'claude';
+    const jobs = [
+      refreshSandboxCredentials(wb, { model: turnModel }),
+      syncInstructionFiles(wb, agent).catch((err) => {
+        if (err instanceof FleetRunNotFoundError) throw err;
+        console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
+        recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
+      }),
+      (async () => {
+        const talynTools = await sessionHasTalynMcp(wb);
+        const talynSkills = await syncSkillPack(wb, { talynTools }).catch((err) => {
+          if (err instanceof FleetRunNotFoundError) throw err;
+          console.warn(`[workbench] syncing the skill pack for chat ${chatId} failed:`, err);
+          recordWorkbenchEvent(wb, 'skill_pack_sync', err instanceof Error ? err.message : String(err), false);
+          return false;
+        });
+        const memory = talynTools && (await sessionMemoryEnabled(wb.workspaceId).catch(() => false));
+        return { talynTools, talynSkills, memory };
+      })(),
+      writeAttachments(wb, chatId, turn, message.attachments ?? []),
+    ] as const;
+    const [refreshed, , { talynTools, talynSkills, memory }, attached] = await Promise.all(jobs).catch(async (err: unknown) => {
+      // Finish every write before recovery, a retry, or another turn can start.
+      await Promise.allSettled(jobs);
+      throw err;
+    });
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
-    // The box is awake and has its credentials: name the session beside the turn.
-    // Any turn counts, so a retried or recovered session still gets a title.
     startTitleGeneration(wb, message.text);
 
-    const agent = chat.agent === 'codex' ? 'codex' : 'claude';
-    // A reboot rewrites the agent's home files, so this runs every turn. A
-    // failure costs the user's instructions for one turn, not the turn.
-    await syncInstructionFiles(wb, agent).catch((err) => {
-      if (err instanceof FleetRunNotFoundError) throw err;
-      console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
-      recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
-    });
-    const talynTools = await sessionHasTalynMcp(wb);
-    // Talyn's built-in skills, on the same terms: every turn, and a failure
-    // costs the skills for one turn, not the turn.
-    const talynSkills = await syncSkillPack(wb, { talynTools }).catch((err) => {
-      if (err instanceof FleetRunNotFoundError) throw err;
-      console.warn(`[workbench] syncing the skill pack for chat ${chatId} failed:`, err);
-      recordWorkbenchEvent(wb, 'skill_pack_sync', err instanceof Error ? err.message : String(err), false);
-      return false;
-    });
-    // The memory tools come from the same MCP server. A failed read only drops the note.
-    const memory = talynTools && (await sessionMemoryEnabled(wb.workspaceId).catch(() => false));
-    if (live.cancelRequested) return cancelledOutcome(events);
-
-    const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
     const planMode = message.planMode ?? chat.planMode;
     const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
@@ -716,7 +720,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
             sandboxMode: planMode ? 'read-only' : 'danger-full-access',
           })
         : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
-    const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) };
+    const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), TALYN_TURN_QUEUED_AT: message.queuedAt };
 
     let accountId = refreshed.accountId;
     let outcome!: Awaited<ReturnType<typeof followDurableExec>>;
@@ -1042,20 +1046,25 @@ export async function createCheckpoint(
   wb: WorkbenchRow,
   chatId: string,
   turn: number,
+  skipCheckpoint = false,
 ): Promise<{ sha: string | null; disk: DiskProbe | null; error: string | null }> {
-  // A thread has no repository to snapshot. The disk probe still runs: it is also the exec that wakes the box.
-  if (isThread(wb)) {
-    const probe = await runCapture(wb, DISK_PROBE_SCRIPT, { quiet: true, timeoutMs: 60_000, env: { TMPDIR: '/dev/shm' }, diskRecovery: false });
-    return { sha: null, disk: parseDiskProbe(probe.stderr), error: null };
+  observeSessionFiles(wb, '');
+  const probeScript = `${DISK_PROBE_SCRIPT}\n${sessionFileProbe(repoDirFor(wb))}`;
+  // The first exec still wakes the box and checks its disk.
+  if (isThread(wb) || skipCheckpoint) {
+    const probe = await runCapture(wb, probeScript, { quiet: true, timeoutMs: 60_000, env: { TMPDIR: '/dev/shm' }, diskRecovery: false });
+    observeSessionFiles(wb, probe.stderr);
+    return { sha: null, disk: parseDiskProbe(probe.stderr), error: !isThread(wb) && probe.exitCode !== 0 ? probe.stderr : null };
   }
   const steps = checkpointCreateSteps({ chatId, turn, tmpIndexPath: tmpIndexPath(chatId, turn) });
-  const r = await runCapture(wb, `${DISK_PROBE_SCRIPT}\n${toShellScript(steps)}`, {
+  const r = await runCapture(wb, `${probeScript}\n${toShellScript(steps)}`, {
     quiet: true,
     timeoutMs: 120_000,
     env: { TMPDIR: '/dev/shm' },
     // The caller deals with a full disk itself, knowing which chat is running.
     diskRecovery: false,
   });
+  observeSessionFiles(wb, r.stderr);
   const disk = parseDiskProbe(r.stderr);
   const sha = r.stdout.trim().split('\n').pop()?.trim() ?? '';
   if (r.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) {
@@ -1070,8 +1079,8 @@ export async function createCheckpoint(
  * T2: the turn-start checkpoint, and when the disk is low or full, a grow or a
  * move before the turn runs. Returns the row to run the turn on.
  */
-async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number): Promise<WorkbenchRow> {
-  const first = await createCheckpoint(wb, chatId, turn).catch((err) => {
+async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number, skipCheckpoint = false): Promise<WorkbenchRow> {
+  const first = await createCheckpoint(wb, chatId, turn, skipCheckpoint).catch((err) => {
     // This exec wakes the box: a box that cannot wake fails every step after it, so the turn waits for room instead.
     if (err instanceof FleetRunNotFoundError || isWakeRefusal(err)) throw err;
     console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
@@ -1089,7 +1098,7 @@ async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: nu
   );
   if (!recovered.ok) return wb;
   if (recovered.action === 'moved' || first.sha === null) {
-    await createCheckpoint(recovered.row, chatId, turn).catch(() => undefined);
+    await createCheckpoint(recovered.row, chatId, turn, skipCheckpoint).catch(() => undefined);
   }
   return recovered.row;
 }
@@ -1398,7 +1407,22 @@ async function followTurnOutput(
   let sessionId = chat.agentSessionId;
   return followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
     async (records) => {
-      const drafts = records.flatMap(({ record }) => record.stream === 'stdout' ? parser.push(record.line) : []);
+      const drafts = records.flatMap<AgentEventDraft | Record<string, unknown>>(({ record }) => {
+        if (record.spawned && record.timing) {
+          const { queuedAt, spawnedAt } = record.timing;
+          if (Number.isFinite(queuedAt) && Number.isFinite(spawnedAt) && spawnedAt >= queuedAt) {
+            return [{ type: 'system', subtype: 'agent_spawn', talyn: { kind: 'turn_spawn_timing', startMs: spawnedAt - queuedAt } }];
+          }
+          return [];
+        }
+        const parsed = record.stream === 'stdout' ? parser.push(record.line) : [];
+        return parsed.map((draft) => {
+          if (draft.type !== 'system' || draft.subtype !== 'init' || !record.timing) return draft;
+          const { queuedAt, spawnedAt, at } = record.timing;
+          if (![queuedAt, spawnedAt, at].every(Number.isFinite) || spawnedAt < queuedAt || at < spawnedAt) return draft;
+          return { ...draft, talyn: { kind: 'turn_start_timing', startMs: spawnedAt - queuedAt, initMs: at - spawnedAt } };
+        });
+      });
       const nextOffset = records[records.length - 1].offset;
       const snapshot = parser.snapshot();
       const stored = await retryBatchWrite(() => appendEvents(chat.id, drafts.map((event) => ({ turn, event })), {

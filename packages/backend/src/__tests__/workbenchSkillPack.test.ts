@@ -33,19 +33,17 @@ const sandbox = vi.hoisted(() => ({
   calls: [] as Array<{ script: string; env: Record<string, string> }>,
 }));
 
-vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../services/workbenches/sandboxRuntime.js')>()),
-  runCapture: async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
-    sandbox.calls.push({ script, env: opts.env ?? {} });
-    const r = spawnSync('bash', [bashScriptFile(script)], {
-      cwd: '/',
-      env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
-      encoding: 'utf8',
-    });
-    return { exitCode: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, stdoutBytes: Buffer.from(r.stdout) };
-  },
-}));
+const runInSandbox = async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
+  sandbox.calls.push({ script, env: opts.env ?? {} });
+  const r = spawnSync('bash', [bashScriptFile(script)], {
+    cwd: '/',
+    env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
+    encoding: 'utf8',
+  });
+  return { exitCode: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, stdoutBytes: Buffer.from(r.stdout) };
+};
 
+const runtime = await import('../services/workbenches/sandboxRuntime.js');
 const {
   CODEX_BRIEFING_END,
   CODEX_BRIEFING_START,
@@ -59,6 +57,7 @@ const {
   skillPackSyncPlan,
   syncSkillPack,
 } = await import('../services/workbenches/skillPack.js');
+const { observeSessionFiles, sessionFileProbe } = await import('../services/workbenches/sessionFileSync.js');
 const { sandboxScriptEnv } = await import('../services/workbenches/sandboxRuntime.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -265,12 +264,42 @@ describe('session skill pack', () => {
       tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'talyn-skills-'));
       sandbox.home = path.join(tmp, 'home');
       sandbox.calls = [];
+      vi.spyOn(runtime, 'runCapture').mockImplementation(runInSandbox);
       await fs.mkdir(sandbox.home, { recursive: true });
     });
 
     afterEach(async () => {
+      vi.restoreAllMocks();
       await testDb.cleanup();
       await fs.rm(tmp, { recursive: true, force: true });
+    });
+
+    function probe(target = row) {
+      const result = spawnSync('bash', [bashScriptFile(sessionFileProbe('/workspace/app'))], {
+        env: { ...process.env, HOME: sandbox.home }, encoding: 'utf8',
+      });
+      expect(result.status, result.stderr).toBe(0);
+      observeSessionFiles(target, result.stderr);
+    }
+
+    it('skips unchanged files and invalidates changes to settings, disk, and sandbox identity', async () => {
+      await syncSkillPack(row, { talynTools: true });
+      probe();
+      sandbox.calls = [];
+      await syncSkillPack(row, { talynTools: true });
+      expect(sandbox.calls).toHaveLength(0);
+      await fs.writeFile(home('.claude/skills/talyn-speed/SKILL.md'), 'edited');
+      probe();
+      await syncSkillPack(row, { talynTools: true });
+      expect(sandbox.calls).toHaveLength(1);
+      probe();
+      await setPack(false);
+      expect(await syncSkillPack(row, { talynTools: true })).toBe(false);
+      expect(sandbox.calls).toHaveLength(2);
+      const replacement = { ...row, sandboxId: 'new-box' };
+      probe(replacement);
+      await syncSkillPack(replacement, { talynTools: true });
+      expect(sandbox.calls).toHaveLength(3);
     });
 
     it.each([

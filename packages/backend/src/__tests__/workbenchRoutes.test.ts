@@ -521,12 +521,12 @@ describe('workbench routes', () => {
       await putInstructionFile('ws-a', {
         key: 'claude-user', agent: 'claude', target: 'user', sourcePath: '~/.claude/CLAUDE.md', content: 'be terse', enabled: true,
       });
-      scriptedFleet((script) => (script.includes('.claude/rules') ? { exitCode: 1, stderr: 'disk full' } : null));
+      scriptedFleet((script) => (script.includes('.claude/rules') && script.includes('TALYN_F0') ? { exitCode: 1, stderr: 'disk full' } : null));
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
-      const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules'));
+      const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules') && e.script.includes('TALYN_F0'));
       const turn = fleet.execs.findIndex((e) => isAgentTurn(e.script));
       expect(sync).toBeGreaterThan(-1);
       expect(sync).toBeLessThan(turn);
@@ -540,10 +540,10 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
       // The Talyn briefing (rules/talyn.md, the talyn:briefing block) rides the skill pack. The instruction sync writes neither of these.
-      expect(fleet.execs.some((e) => e.script.includes('rules/talyn-') || e.script.includes('talyn:instructions'))).toBe(false);
+      expect(fleet.execs.some((e) => e.req.env?.TALYN_F0 !== undefined && e.script.includes('talyn:instructions'))).toBe(false);
     });
 
-    it('runs claude as a sandbox turn: checkpoint, fresh credentials, then the CLI', async () => {
+    it('runs claude as a sandbox turn: fresh credentials, then the CLI (no checkpoint on a fresh box)', async () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: "- fix 'it'", planMode: true, model: 'claude-opus-5', effort: 'high' });
@@ -560,10 +560,11 @@ describe('workbench routes', () => {
       expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
       // The checkpoint ran before the agent, and the credentials are the box's vendor only.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
-      expect(order.indexOf('checkpoint')).toBeLessThan(order.indexOf('agent'));
+      // A fresh box skips the turn-start checkpoint, so none runs before the agent.
+      expect(order.slice(0, order.indexOf('agent'))).not.toContain('checkpoint');
       expect(fleet.credentialPushes[0].creds).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', repo: 'acme/app' });
       const cps = await call('GET', `/workbenches/chats/${chatId}/checkpoints`);
-      expect(cps.body.data).toMatchObject([{ turn: 1, sha: 'c'.repeat(40), ref: `refs/talyn/checkpoints/${chatId}/1` }]);
+      expect(cps.body.data).toEqual([]);
 
       // The second turn resumes the session the first one reported.
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'again' });

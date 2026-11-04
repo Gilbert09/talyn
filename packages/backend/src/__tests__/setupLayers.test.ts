@@ -820,6 +820,20 @@ describe('the Setup list', () => {
       expect(stored).toMatchObject({ chatId: 'chat-a', turn: 1, workbenchId: 'wb-a', wallMs: 2_600_000, calls: 8 });
     });
 
+    it.each([null, { startMs: 1800, initMs: 450 }, { startMs: 1800, initMs: null }])('stores startup timing %j and preserves it on analysis replay', async (startup) => {
+      await seedPosthogTurn();
+      if (startup) {
+        await seedTurn('chat-a', 1, [
+          [0, { type: 'system', subtype: 'agent_spawn', talyn: { kind: 'turn_spawn_timing', startMs: startup.initMs === null ? startup.startMs : 100 } }],
+          ...(startup.initMs === null ? [] : [[1, { type: 'system', subtype: 'init', talyn: { kind: 'turn_start_timing', ...startup } }] as [number, Loose]]),
+        ], 100);
+      }
+      await insights.analyseTurn('chat-a', 1, { readBakeSteps: async () => [] });
+      await insights.analyseTurn('chat-a', 1, { readBakeSteps: async () => [] });
+      const [stored] = await testDb.db.select({ startMs: workbenchTurnTimings.startMs, initMs: workbenchTurnTimings.initMs }).from(workbenchTurnTimings);
+      expect(stored).toEqual(startup ?? { startMs: null, initMs: null });
+    });
+
     it('learns the steps, links "command not found", and refuses the unknown installer', async () => {
       const spy = vi.spyOn(debugBus, 'recordEvent');
       await seedPosthogTurn();

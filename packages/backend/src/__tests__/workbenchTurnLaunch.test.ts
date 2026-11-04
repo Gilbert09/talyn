@@ -14,6 +14,11 @@ vi.mock('../services/mcpServers/dispatch.js', async (importOriginal) => ({
   mcpIntegrationSecrets: vi.fn(async () => ({})),
 }));
 
+const runtime = await import('../services/workbenches/sandboxRuntime.js');
+const instructions = await import('../services/workbenches/instructions.js');
+const skills = await import('../services/workbenches/skillPack.js');
+const sandboxFiles = await import('../services/workbenches/sandboxFiles.js');
+const { FleetRunNotFoundError } = await import('../services/selfHosted/client.js');
 const { addFleetAccount, setFleetAccountUsage } = await import('../services/selfHosted/accounts.js');
 const { encryptString } = await import('../services/tokenCrypto.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
@@ -104,6 +109,122 @@ describe('workbench turn launch', () => {
   async function staleHeartbeat(at = new Date(Date.now() - 91_000)) {
     await testDb.db.update(workbenchChats).set({ turnHeartbeatAt: at }).where(eq(workbenchChats.id, 'chat'));
   }
+
+  it('wakes first, then starts all independent steps before any finishes', async () => {
+    fleet.hibernated = true;
+    let wake!: () => void;
+    fleet.resumeGate = new Promise((resolve) => { wake = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const calls: string[] = [];
+    vi.spyOn(runtime, 'refreshSandboxCredentials').mockImplementation(async () => {
+      calls.push('credentials'); await gate; return { accountId: null, note: null };
+    });
+    vi.spyOn(instructions, 'syncInstructionFiles').mockImplementation(async () => { calls.push('instructions'); await gate; });
+    vi.spyOn(skills, 'syncSkillPack').mockImplementation(async () => { calls.push('skills'); await gate; return false; });
+    vi.spyOn(sandboxFiles, 'writeSandboxFiles').mockImplementation(async () => { calls.push('attachments'); await gate; });
+    await sendMessage('chat', { text: 'go', attachments: [{ name: 'a.txt', mimeType: 'text/plain', dataBase64: 'YQ==' }] });
+    await vi.waitFor(() => expect(fleet.resumes).toBe(1));
+    expect(calls).toEqual([]);
+    wake();
+    try {
+      await vi.waitFor(() => expect(calls.sort()).toEqual(['attachments', 'credentials', 'instructions', 'skills']));
+      expect(agentRuns).toBe(0);
+    } finally { release(); }
+    await settled('idle');
+    expect(agentRuns).toBe(1);
+  });
+
+  it.each(['credentials', 'attachments', 'instructions', 'skills'] as const)('propagates a fatal %s failure after other steps finish', async (step) => {
+    const failure = new FleetRunNotFoundError('missing sandbox');
+    vi.spyOn(runtime, 'refreshSandboxCredentials').mockImplementation(async () => {
+      if (step === 'credentials') throw failure;
+      return { accountId: null, note: null };
+    });
+    vi.spyOn(instructions, 'syncInstructionFiles').mockImplementation(async () => { if (step === 'instructions') throw failure; });
+    vi.spyOn(skills, 'syncSkillPack').mockImplementation(async () => { if (step === 'skills') throw failure; return false; });
+    vi.spyOn(sandboxFiles, 'writeSandboxFiles').mockImplementation(async () => { if (step === 'attachments') throw failure; });
+    await sendMessage('chat', { text: 'go', attachments: [{ name: 'a.txt', mimeType: 'text/plain', dataBase64: 'YQ==' }] });
+    await settled('error');
+    expect(agentRuns).toBe(0);
+    expect(instructions.syncInstructionFiles).toHaveBeenCalled();
+    expect(skills.syncSkillPack).toHaveBeenCalled();
+    expect(sandboxFiles.writeSandboxFiles).toHaveBeenCalled();
+  });
+
+  it.each(['instructions', 'skills'] as const)('keeps a %s sync error as a warning', async (step) => {
+    if (step === 'instructions') vi.spyOn(instructions, 'syncInstructionFiles').mockRejectedValue(new Error('sync failed'));
+    else vi.spyOn(skills, 'syncSkillPack').mockRejectedValue(new Error('sync failed'));
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect(agentRuns).toBe(1);
+  });
+
+  it.each([
+    [0, null, false],
+    [0, new Date(), true],
+    [1, null, true],
+  ])('checks disk and takes a checkpoint only when needed: prior turns %i, saved %s', async (priorTurns, checkpointAt, expected) => {
+    await testDb.db.update(workbenchChats).set({ turnCount: priorTurns }).where(eq(workbenchChats.id, 'chat'));
+    await testDb.db.update(workbenches).set({ workCheckpointAt: checkpointAt }).where(eq(workbenches.id, 'wb'));
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    const first = fleet.scripts[0];
+    expect(first).toContain('TALYN_FILE_HASH');
+    expect(first.includes('git commit-tree')).toBe(expected);
+    expect(first).toContain('df ');
+    expect(Boolean(await store.getCheckpoint('chat', priorTurns + 1))).toBe(expected);
+  });
+
+  it('does not treat a new chat in a used session as a fresh box', async () => {
+    await testDb.db.insert(workbenchChats).values({
+      id: 'older-chat', workbenchId: 'wb', workspaceId: 'ws', title: 'Older', agent: 'claude', turnCount: 2,
+    });
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect(fleet.scripts[0]).toContain('git commit-tree');
+  });
+
+  it('takes a checkpoint when the terminal was used before the first turn', async () => {
+    await testDb.db.update(workbenches).set({ lastActivityAt: new Date() }).where(eq(workbenches.id, 'wb'));
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect(fleet.scripts[0]).toContain('git commit-tree');
+  });
+
+  it('waits for pending writes before it settles a failed turn', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const failed = vi.spyOn(runtime, 'refreshSandboxCredentials').mockRejectedValue(new Error('credentials failed'));
+    vi.spyOn(instructions, 'syncInstructionFiles').mockImplementation(() => gate);
+    await sendMessage('chat', { text: 'go' });
+    try {
+      await vi.waitFor(() => expect(failed).toHaveBeenCalled());
+      expect((await store.getChat('chat'))?.status).toBe('running');
+      expect(agentRuns).toBe(0);
+    } finally { release(); }
+    await settled('error');
+  });
+
+  it.each(['claude', 'codex'] as const)('stores guest startup timing on the %s init event', async (agent) => {
+    const durable = await import('../services/workbenches/durableExec.js');
+    const follow = durable.followDurableBatches;
+    vi.spyOn(durable, 'followDurableBatches').mockImplementation((wb, key, marker, offset, onBatch, opts) =>
+      follow(wb, key, marker, offset, (records) => onBatch(records.map((r) => ({
+        ...r, record: { ...r.record, timing: { queuedAt: 1000, spawnedAt: 2200, at: 2700 } },
+      }))), opts));
+    if (agent === 'codex') {
+      await testDb.db.update(workbenchChats).set({ agent }).where(eq(workbenchChats.id, 'chat'));
+      fleet.handler = (script) => isAgentTurn(script, 'codex')
+        ? { stdout: [JSON.stringify({ type: 'thread.started', thread_id: 'sess' }), JSON.stringify({ type: 'turn.completed', usage: {} })], exitCode: 0 }
+        : { stdout: '', exitCode: 0 };
+    }
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect(await events()).toContainEqual(expect.objectContaining({
+      type: 'system', subtype: 'init', talyn: { kind: 'turn_start_timing', startMs: 1200, initMs: 500 },
+    }));
+  });
 
   it.each([
     ['the supervisor started late', true, 0],

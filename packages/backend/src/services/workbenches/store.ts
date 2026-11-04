@@ -789,6 +789,19 @@ export async function sessionTurnCount(workbenchId: string): Promise<number> {
   return Number(row?.turns ?? 0);
 }
 
+/** Check session history before skipping the first checkpoint. */
+export async function isFreshSessionTurn(workbenchId: string): Promise<boolean> {
+  const [row] = await db()
+    .select({ fresh: sql<boolean>`${workbenchesTable.lastActivityAt} IS NULL AND (
+      SELECT COALESCE(SUM(${chatsTable.turnCount}), 0) FROM ${chatsTable}
+      WHERE ${chatsTable.workbenchId} = ${workbenchId}
+    ) = 1` })
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.id, workbenchId))
+    .limit(1);
+  return row?.fresh === true;
+}
+
 /**
  * Move a Talyn-named branch from `from` to `to`, but only while the row still
  * says `from` and has no PR. Null when nothing matched. A clash on

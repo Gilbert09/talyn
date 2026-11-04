@@ -5,7 +5,12 @@ import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { runCapture, runStream, killMarker, recordWorkbenchEvent, type StreamOutcome } from './sandboxRuntime.js';
 import type { WorkbenchRow } from './store.js';
 
-export interface LogRecord { stream: 'stdout' | 'stderr'; line: string }
+export interface LogRecord {
+  stream: 'stdout' | 'stderr';
+  line: string;
+  spawned?: boolean;
+  timing?: { queuedAt: number; spawnedAt: number; at: number };
+}
 
 /**
  * Where durable logs live. The guest runs every exec as the unprivileged
@@ -44,10 +49,13 @@ const write = data => {
     fs.closeSync(fd); start = position; fd = fs.openSync(p.log+'/'+start, 'a');
   }
 };
+const queuedAt = Date.parse(process.env.TALYN_TURN_QUEUED_AT || '');
+const spawnedAt = Date.now();
 const child = cp.spawn('bash', ['-c', process.env.TALYN_DURABLE_SCRIPT], {stdio:['ignore','pipe','pipe']});
+if (Number.isFinite(queuedAt)) write(Buffer.from(JSON.stringify({stream:'stdout',line:'',spawned:true,timing:{queuedAt,spawnedAt,at:spawnedAt}})+'\n'));
 for (const stream of ['stdout','stderr']) {
   readline.createInterface({input:child[stream], crlfDelay:Infinity}).on('line', line => {
-    write(Buffer.from(JSON.stringify({stream,line})+'\n'));
+    write(Buffer.from(JSON.stringify({stream,line,...(Number.isFinite(queuedAt) ? {timing:{queuedAt,spawnedAt,at:Date.now()}} : {})})+'\n'));
   });
 }
 const finish = code => {

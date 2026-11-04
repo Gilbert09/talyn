@@ -44,6 +44,26 @@ describe('durable sandbox log', () => {
       expect(readFileSync(paths.log, 'utf8').trimEnd().split('\n')).toEqual(lines);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  it('records spawn and output times in the guest log', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'talyn-timing-'));
+    const paths = { log: join(dir, 'turn.log'), exit: join(dir, 'turn.exit'), started: join(dir, 'turn.started') };
+    const queuedAt = Date.now() - 500;
+    try {
+      const result = spawnSync(process.execPath, ['-e', DURABLE_SUPERVISOR], {
+        env: { ...process.env, TALYN_LOG_PATHS: JSON.stringify(paths), TALYN_PID_FILE: join(dir, 'turn.pid'),
+          TALYN_TURN_QUEUED_AT: new Date(queuedAt).toISOString(), TALYN_DURABLE_SCRIPT: "printf 'init\\n'" }, encoding: 'utf8',
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const [spawn, record] = readFileSync(paths.log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(spawn.spawned).toBe(true);
+      expect(spawn.timing.spawnedAt).toBe(record.timing.spawnedAt);
+      expect(record.line).toBe('init');
+      expect(record.timing.queuedAt).toBe(queuedAt);
+      expect(record.timing.spawnedAt).toBeGreaterThanOrEqual(queuedAt + 500);
+      expect(record.timing.at).toBeGreaterThanOrEqual(record.timing.spawnedAt);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('reports a dead process only after reading its final output', () => {
     const dir = mkdtempSync(join(tmpdir(), 'talyn-log-'));
     try {

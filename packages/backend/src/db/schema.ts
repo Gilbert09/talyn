@@ -2249,6 +2249,8 @@ export const workbenchTurnTimings = pgTable(
     workbenchId: text('workbench_id')
       .notNull()
       .references(() => workbenches.id, { onDelete: 'cascade' }),
+    startMs: bigint('start_ms', { mode: 'number' }),
+    initMs: bigint('init_ms', { mode: 'number' }),
     wallMs: bigint('wall_ms', { mode: 'number' }).notNull(),
     toolMs: bigint('tool_ms', { mode: 'number' }).notNull(),
     modelMs: bigint('model_ms', { mode: 'number' }).notNull(),
