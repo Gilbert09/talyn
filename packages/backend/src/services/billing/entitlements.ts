@@ -129,6 +129,33 @@ export interface TierProductIds {
 export const PRO_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_PRO_ANNUAL'] as const;
 export const LEGACY_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] as const;
 
+const PERIOD_PRODUCT_ENV_VARS: Record<'personal' | 'team', Record<'monthly' | 'annual', readonly string[]>> = {
+  personal: {
+    monthly: ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_MONTHLY'],
+    annual: ['POLAR_PRODUCT_ID_PRO_ANNUAL', 'POLAR_PRODUCT_ID_ANNUAL'],
+  },
+  team: {
+    monthly: ['POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_MONTHLY'],
+    annual: ['POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'],
+  },
+};
+
+/**
+ * The billing period a stored subscription product id sells, or null for no
+ * product or one this deployment does not know. Read from env at call time.
+ */
+export function subscriptionPeriod(
+  polarProductId: string | null | undefined,
+  kind: 'personal' | 'team' = 'personal'
+): 'monthly' | 'annual' | null {
+  if (!polarProductId) return null;
+  const table = PERIOD_PRODUCT_ENV_VARS[kind];
+  for (const period of ['monthly', 'annual'] as const) {
+    if (productIdsFromEnv(table[period]).includes(polarProductId)) return period;
+  }
+  return null;
+}
+
 function productIdsFromEnv(names: readonly string[]): string[] {
   return names.map((name) => process.env[name]?.trim()).filter((id): id is string => Boolean(id));
 }
@@ -163,6 +190,8 @@ export interface TeamBillingRow {
   planOverride: string | null;
   /** `teams.tier`. Absent or unknown reads as Legacy Pro (see `teamSeatTier`). */
   tier?: string | null;
+  /** `teams.polar_product_id`; names the team's billing period. */
+  polarProductId?: string | null;
 }
 
 /**
@@ -781,6 +810,7 @@ async function loadBillingTeam(ownerId: string): Promise<{
       plan: teamsTable.plan,
       planOverride: teamsTable.planOverride,
       tier: teamsTable.tier,
+      polarProductId: teamsTable.polarProductId,
       source: teamSeatsTable.source,
     })
     .from(usersTable)
@@ -794,6 +824,7 @@ async function loadBillingTeam(ownerId: string): Promise<{
       name: teamsTable.name,
       plan: teamsTable.plan,
       planOverride: teamsTable.planOverride,
+      polarProductId: teamsTable.polarProductId,
     })
     .from(teamAdminsTable)
     .innerJoin(teamsTable, eq(teamsTable.id, teamAdminsTable.teamId))
@@ -897,6 +928,21 @@ async function readCreditSummary(ownerId: string, now: Date): Promise<CreditSumm
 }
 
 /**
+ * The period of the subscription that grants the tier: the user's own
+ * product, or the team's when a seat grants it. Null for free, a comp
+ * override or an unknown product.
+ */
+export function billingPeriodOf(
+  source: TierResolution['source'],
+  userProductId: string | null | undefined,
+  teamProductId: string | null | undefined
+): 'monthly' | 'annual' | null {
+  if (source === 'subscription') return subscriptionPeriod(userProductId, 'personal');
+  if (source === 'team') return subscriptionPeriod(teamProductId, 'team');
+  return null;
+}
+
+/**
  * The full billing snapshot served by `GET /billing/status` and pushed on
  * the `subscription:updated` WS event.
  *
@@ -981,6 +1027,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     ...(row?.subscriptionStatus ? { subscriptionStatus: row.subscriptionStatus } : {}),
     cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
     ...(row?.currentPeriodEnd ? { currentPeriodEnd: row.currentPeriodEnd.toISOString() } : {}),
+    period: billingPeriodOf(resolution.source, row?.polarProductId, teamContext?.seatTeam?.polarProductId),
     activeTasks: boxesInUse,
     activeTaskLimit: limits.concurrentBoxes,
     ...uncapped,

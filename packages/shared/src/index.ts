@@ -1905,6 +1905,12 @@ export interface BillingStatus {
   cancelAtPeriodEnd: boolean;
   /** ISO date the current billing period ends (renewal or expiry). */
   currentPeriodEnd?: string;
+  /**
+   * The billing period of the subscription that grants the plan: a personal
+   * one, or the team's when a seat does. Null for free, a comp or an unknown
+   * product; absent on a backend that predates it.
+   */
+  period?: 'monthly' | 'annual' | null;
   activeTasks: number;
   /** null = unlimited. */
   activeTaskLimit: number | null;

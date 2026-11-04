@@ -12,6 +12,7 @@ import {
   formatBoxHoursLabel,
   formatBoxHoursUsage,
   formatCreditPack,
+  formatPlanPeriodLine,
   formatPricePerHour,
   formatUsd,
   sizePriceTable,
@@ -45,6 +46,7 @@ import { Input } from '../../ui/input';
 import { Select } from '../../ui/select';
 import { SettingsPage } from '../../ui/settings';
 import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
+import { AnnualSwitch } from './AnnualSwitch';
 
 const hours = (tier: PlanTier) => formatBoxHoursLabel(boxHoursToWeightedSeconds(PLAN_LIMITS[tier].includedBoxHours));
 
@@ -161,6 +163,8 @@ function PlanCard({
       ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)}/month`
       : `${formatUsd(pricing.proMonthlyMicros, 0)}/month or ${formatUsd(pricing.proAnnualMicros, 0)}/year`;
 
+  const periodLine = formatPlanPeriodLine(tier, status.period, pricing);
+
   return (
     <Card className="space-y-3 p-3" data-testid="plan-card">
       <div>
@@ -170,7 +174,9 @@ function PlanCard({
           {tier !== 'free' && <Zap className="h-3.5 w-3.5 text-primary" />}
         </p>
         {tier !== 'free' && !comped && !teamPaid && (
-          <p className="mt-1 text-xs text-muted-foreground">Plan prices: {price}</p>
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="plan-period-line">
+            {periodLine ?? `Plan prices: ${price}`}
+          </p>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
           {hours(tier)} a month, {PLAN_LIMITS[tier].concurrentBoxes} boxes at once,{' '}
@@ -199,6 +205,7 @@ function PlanCard({
           run out.
         </p>
       )}
+      <AnnualSwitch status={status} placement="plan_page" />
       <div className="flex flex-wrap items-center gap-2">
         {tier === 'free' || canMove ? (
           <Button size="sm" data-attr="plan-upgrade" onClick={() => openUpgrade(true)}>

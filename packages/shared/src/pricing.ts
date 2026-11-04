@@ -665,3 +665,33 @@ export function formatCreditPack(id: CreditPackId): string {
   const price = formatUsd(pack.priceMicros, 0);
   return pack.bonusPercent ? `${price} (+${pack.bonusPercent}% bonus)` : price;
 }
+
+/** What a monthly Pro subscriber saves a year by paying annually, in micro-dollars (never negative). */
+export function annualSavingsMicros(pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros'>): Micros {
+  return Math.max(0, pricing.proMonthlyMicros * 12 - pricing.proAnnualMicros);
+}
+
+export const BILLING_PERIOD_LABELS = { monthly: 'Monthly', annual: 'Annual' } as const;
+
+/**
+ * "Pro · Monthly · $40/month": the plan card's line for a paid subscriber.
+ * Null when the period is unknown or the tier is free, so the caller can keep
+ * its older wording.
+ */
+export function formatPlanPeriodLine(
+  tier: PlanTier,
+  period: 'monthly' | 'annual' | null | undefined,
+  pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros' | 'legacyProMonthlyMicros'>
+): string | null {
+  if (tier === 'free' || !period) return null;
+  const micros =
+    tier === 'legacy_pro'
+      ? period === 'monthly'
+        ? pricing.legacyProMonthlyMicros
+        : PLAN_PRICES.legacy_pro.annualMicros
+      : period === 'monthly'
+        ? pricing.proMonthlyMicros
+        : pricing.proAnnualMicros;
+  if (micros == null) return null;
+  return `${PLAN_TIER_LABELS[tier]} · ${BILLING_PERIOD_LABELS[period]} · ${formatUsd(micros, 0)}/${period === 'monthly' ? 'month' : 'year'}`;
+}

@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CreditCard, Download, Loader2, Lock, Smartphone, Zap } from 'lucide-react';
 import {
   PLAN_LIMITS,
+  PLAN_PRICES,
   PLAN_TIER_LABELS,
   SANDBOX_SIZES,
   formatBoxHoursUsage,
   formatPricePerHour,
+  formatPlanPeriodLine,
   formatUsd,
   sizePriceTable,
   type BillingOrder,
@@ -36,6 +38,7 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
 import { CreditPackButtons, legacyMonthlyPrice, proPrices } from '../../billing/BillingActions';
+import { AnnualSwitch } from './AnnualSwitch';
 import { AutoTopupForm } from './AutoTopupForm';
 import { LegacyBillingSettings, formatOrderAmount } from './LegacyBillingSettings';
 
@@ -87,7 +90,16 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
                 {tier !== 'free' && <Zap className="h-4 w-4 text-primary" />}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {tier !== 'free' && !comped && !teamPaid && <>Plan prices: {tierPrice(tier, view)}. </>}
+                {tier !== 'free' && !comped && !teamPaid && (
+                  <span data-testid="plan-period-line">
+                    {formatPlanPeriodLine(tier, status.period, {
+                      proMonthlyMicros: status.pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros,
+                      proAnnualMicros: status.pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros ?? 0,
+                      legacyProMonthlyMicros: status.pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros,
+                    }) ?? `Plan prices: ${tierPrice(tier, view)}`}
+                    .{' '}
+                  </span>
+                )}
                 {tier === 'free' &&
                   `${FREE_INCLUDED_TEXT} a month, small and standard boxes, ${limits.concurrentBoxes} at once.`}
                 {tier === 'pro' && `${PRO_INCLUDED_TEXT} a month, every size, up to ${limits.concurrentBoxes} at once.`}
@@ -124,6 +136,8 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
               </p>
             </div>
           )}
+
+          <AnnualSwitch status={status} placement="plan_page" />
 
           <div className="flex flex-wrap items-center gap-2">
             {tier === 'free' || (tier === 'legacy_pro' && subscribed) ? (

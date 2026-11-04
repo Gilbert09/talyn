@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Zap } from 'lucide-react';
 import {
+  BILLING_PERIOD_LABELS,
   CREDIT_PACK_IDS,
   PLAN_LIMITS,
   PLAN_PRICES,
@@ -15,6 +16,7 @@ import {
 } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
+import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
@@ -284,7 +286,12 @@ export function UsageUpgradeModal({
                   </ul>
                   <div className="mt-auto space-y-2">
                     {plan === current ? (
-                      <p className="font-medium text-primary">Your plan</p>
+                      <>
+                        <p className="font-medium text-primary">
+                          Your plan{plan !== 'team' && status.planSource === 'subscription' && status.period ? ` · ${BILLING_PERIOD_LABELS[status.period]}` : ''}
+                        </p>
+                        {plan === 'pro' && <AnnualSwitch status={status} placement="compare_plans" />}
+                      </>
                     ) : plan === 'pro' && tier === 'free' ? (
                       <Button className="w-full" onClick={checkoutPro} disabled={busy !== null || waiting}>Upgrade to Pro</Button>
                     ) : plan === 'pro' && tier === 'legacy_pro' && status.planSource === 'subscription' ? (

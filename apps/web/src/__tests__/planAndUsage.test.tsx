@@ -295,4 +295,56 @@ describe('BillingSettings', () => {
     expect(await screen.findByText('The monthly limit must cover at least one top-up.')).toBeInTheDocument();
     expect(billing.autoTopup.update).not.toHaveBeenCalled();
   });
+
+  describe('billing period', () => {
+    const monthly = () => usageStatus('pro', {}, { period: 'monthly' });
+
+    it.each([
+      ['pro', 'monthly', 'Pro · Monthly · $40/month'],
+      ['pro', 'annual', 'Pro · Annual · $400/year'],
+      ['legacy_pro', 'monthly', 'Legacy Pro · Monthly · $15/month'],
+    ] as const)('%s %s shows the period line', (tier, period, text) => {
+      show(usageStatus(tier, {}, { period }));
+      expect(screen.getByTestId('plan-period-line')).toHaveTextContent(text);
+    });
+
+    it('keeps the price list when the period is unknown', () => {
+      show(usageStatus('pro', {}, { period: null }));
+      expect(screen.getByTestId('plan-period-line')).toHaveTextContent('Plan prices: $40/month or $400/year');
+    });
+
+    it.each([
+      ['annual', { period: 'annual' as const }],
+      ['unknown period', { period: null }],
+      ['cancelling', { period: 'monthly' as const, cancelAtPeriodEnd: true }],
+      ['past due', { period: 'monthly' as const, subscriptionStatus: 'past_due' }],
+      ['team seat', { period: 'monthly' as const, planSource: 'team' as const }],
+      ['comp', { period: 'monthly' as const, planSource: 'override' as const }],
+    ])('no switch offered when %s', (_name, overrides) => {
+      show(usageStatus('pro', {}, overrides));
+      expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+    });
+
+    it('confirms, switches and tracks the outcome', async () => {
+      billing.changePlan.mockResolvedValue({ ok: true });
+      show(monthly());
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to annual · save $80 a year' }));
+      expect(billing.changePlan).not.toHaveBeenCalled();
+      expect(screen.getByTestId('annual-switch-confirm')).toHaveTextContent('prorated difference');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+      await waitFor(() => expect(billing.changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'annual' }));
+      await waitFor(() => expect(screen.getByTestId('annual-switch-done')).toBeInTheDocument());
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_started', { placement: 'plan_page' });
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_completed', { placement: 'plan_page' });
+    });
+
+    it('shows the failure and tracks it', async () => {
+      billing.changePlan.mockRejectedValue(new Error('The plan change failed.'));
+      show(monthly());
+      fireEvent.click(screen.getByRole('button', { name: /Switch to annual/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+      await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
+    });
+  });
 });

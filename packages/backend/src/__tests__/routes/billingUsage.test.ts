@@ -304,6 +304,24 @@ describe('POST /billing/change-plan', () => {
     expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
   });
 
+  it('Pro monthly → annual calls Polar with the annual product', async () => {
+    setPolarEnv();
+    await subscribed('prod-pro-m');
+    await setUser({ polarSubscriptionId: 'sub-mine' });
+    const { status } = await call('POST', '/change-plan', { to: 'pro', period: 'annual' });
+    expect(status).toBe(200);
+    expect(polar.changeSubscriptionProduct).toHaveBeenCalledWith('sub-mine', 'prod-pro-a');
+  });
+
+  it('Pro annual → monthly is refused: the portal does that', async () => {
+    setPolarEnv();
+    await subscribed('prod-pro-a');
+    const { status, body } = await call('POST', '/change-plan', { to: 'pro', period: 'monthly' });
+    expect(status).toBe(409);
+    expect(body.code).toBe('annual_to_monthly_via_portal');
+    expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
+  });
+
   it('502 when Polar refuses', async () => {
     setPolarEnv();
     await subscribed();

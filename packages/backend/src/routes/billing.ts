@@ -26,7 +26,7 @@ import { getPoolDbClient } from '../db/client.js';
 import { usageIntervals, users as usersTable } from '../db/schema.js';
 import { assertUser } from '../middleware/auth.js';
 import { readAutoTopupSettings, saveAutoTopupSettings } from '../services/billing/autoTopup.js';
-import { billingEnabled, buildBillingStatus } from '../services/billing/entitlements.js';
+import { billingEnabled, buildBillingStatus, subscriptionPeriod } from '../services/billing/entitlements.js';
 import {
   changeSubscriptionProduct,
   createCheckoutUrl,
@@ -35,6 +35,7 @@ import {
   getInvoiceUrlForUser,
   listOrdersForUser,
   OrderNotFoundError,
+  personalProductTier,
   proProductId,
 } from '../services/billing/polar.js';
 import { liveLots, resolveUsageTier } from '../services/billing/usage/index.js';
@@ -46,6 +47,8 @@ export const CREDITS_REQUIRE_PAID_PLAN_CODE = 'credits_require_paid_plan';
 export const ALREADY_SUBSCRIBED_CODE = 'already_subscribed';
 /** 409 code on change-plan when there is no personal subscription to change. */
 export const NO_SUBSCRIPTION_CODE = 'no_subscription';
+/** 409 code on change-plan when Pro annual asks for monthly: the portal handles that. */
+export const ANNUAL_TO_MONTHLY_CODE = 'annual_to_monthly_via_portal';
 
 /** Subscription statuses that keep paid access (the webhook's GRANTING_STATUSES). */
 const GRANTING_STATUSES = new Set(['active', 'trialing', 'past_due']);
@@ -251,6 +254,13 @@ export function billingRoutes(): Router {
     if (!productId) return notConfigured(res);
     if (row.polarProductId === productId) {
       return res.json({ success: true, data: { ok: true } } as ApiResponse<{ ok: true }>);
+    }
+    if (body.period === 'monthly' && subscriptionPeriod(row.polarProductId) === 'annual' && personalProductTier(row.polarProductId) === 'pro') {
+      return res.status(409).json({
+        success: false,
+        code: ANNUAL_TO_MONTHLY_CODE,
+        error: 'Switch from annual to monthly in the billing portal.',
+      });
     }
     try {
       await changeSubscriptionProduct(row.polarSubscriptionId, productId);

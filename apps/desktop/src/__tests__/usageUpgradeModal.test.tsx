@@ -79,6 +79,23 @@ describe('UpgradeModal with usage billing', () => {
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' }));
   });
 
+  it('compare plans marks the current plan with its period and offers the switch', async () => {
+    changePlan.mockResolvedValue({ ok: true });
+    open(usageStatus('pro', { overrides: { period: 'monthly' } }), 'compare_plans');
+    const card = screen.getByTestId('compare-plan-pro');
+    expect(card).toHaveTextContent('Your plan · Monthly');
+    fireEvent.click(within(card).getByRole('button', { name: 'Switch to annual · save $80 a year' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Confirm switch' }));
+    await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'annual' }));
+    expect(trackEvent).toHaveBeenCalledWith('annual_switch_started', { placement: 'compare_plans' });
+  });
+
+  it('compare plans shows no switch for an annual subscriber', () => {
+    open(usageStatus('pro', { overrides: { period: 'annual' } }), 'compare_plans');
+    expect(screen.getByTestId('compare-plan-pro')).toHaveTextContent('Your plan · Annual');
+    expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+  });
+
   it('compares plans for Pro without credit packs', () => {
     open(usageStatus('pro'), 'compare_plans');
     expect(screen.getByText('Compare plans')).toBeInTheDocument();

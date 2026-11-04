@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { UpgradeModal } from '../renderer/components/modals/UpgradeModal';
 import { BillingSettings } from '../renderer/components/settings/sections/BillingSettings';
 import { useBillingStore } from '../renderer/stores/billing';
-import { trackEvent } from '../renderer/lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { oldStatus, usageStatus } from '../testing/billingStatus';
 
@@ -354,6 +354,72 @@ describe('BillingSettings with usage billing', () => {
       expect(form).toHaveTextContent('The card was declined.');
       fireEvent.click(within(form).getByRole('button', { name: 'Buy credits' }));
       await waitFor(() => expect(creditCheckout).toHaveBeenCalledWith({ pack: '25' }));
+    });
+  });
+
+  describe('billing period', () => {
+    const monthly = () => usageStatus('pro', { overrides: { period: 'monthly' } });
+
+    it.each([
+      ['pro', 'monthly', 'Pro · Monthly · $40/month'],
+      ['pro', 'annual', 'Pro · Annual · $400/year'],
+      ['legacy_pro', 'monthly', 'Legacy Pro · Monthly · $15/month'],
+    ] as const)('%s %s shows the period line', (tier, period, text) => {
+      show(usageStatus(tier, { overrides: { period } }));
+      expect(screen.getByTestId('plan-period-line')).toHaveTextContent(text);
+    });
+
+    it('keeps the price list when the period is unknown', () => {
+      show(usageStatus('pro', { overrides: { period: null } }));
+      expect(screen.getByTestId('plan-period-line')).toHaveTextContent('Plan prices: $40/month or $400/year');
+    });
+
+    it.each([
+      ['annual', { period: 'annual' as const }],
+      ['unknown period', { period: null }],
+      ['cancelling', { period: 'monthly' as const, cancelAtPeriodEnd: true }],
+      ['past due', { period: 'monthly' as const, subscriptionStatus: 'past_due' }],
+      ['team seat', { period: 'monthly' as const, planSource: 'team' as const }],
+      ['comp', { period: 'monthly' as const, planSource: 'override' as const }],
+    ])('no switch offered when %s', (_name, overrides) => {
+      show(usageStatus('pro', { overrides }));
+      expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+    });
+
+    it('no switch offered on Free or Legacy Pro', () => {
+      show(usageStatus('legacy_pro', { overrides: { period: 'monthly' } }));
+      expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+    });
+
+    it('confirms, switches and tracks the outcome', async () => {
+      changePlan.mockResolvedValue({ ok: true });
+      show(monthly());
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to annual · save $80 a year' }));
+      expect(changePlan).not.toHaveBeenCalled();
+      expect(screen.getByTestId('annual-switch-confirm')).toHaveTextContent('prorated difference');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+      await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'annual' }));
+      await waitFor(() => expect(screen.getByTestId('annual-switch-done')).toBeInTheDocument());
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_started', { placement: 'plan_page' });
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_completed', { placement: 'plan_page' });
+    });
+
+    it('cancel leaves the plan alone', () => {
+      show(monthly());
+      fireEvent.click(screen.getByRole('button', { name: /Switch to annual/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(changePlan).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Switch to annual/ })).toBeVisible();
+    });
+
+    it('shows the failure and tracks it', async () => {
+      changePlan.mockRejectedValue(new Error('The plan change failed.'));
+      show(monthly());
+      fireEvent.click(screen.getByRole('button', { name: /Switch to annual/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+      await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
+      expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
+      expect(captureAnalyticsException).toHaveBeenCalled();
     });
   });
 });

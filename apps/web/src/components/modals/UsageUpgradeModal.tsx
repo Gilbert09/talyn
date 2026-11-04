@@ -1,7 +1,8 @@
 import { Check, Zap } from 'lucide-react';
-import { PLAN_LIMITS, PLAN_PRICES, PLAN_TIER_LABELS, SANDBOX_SIZES, formatBoxHoursLabel, boxHoursToWeightedSeconds, formatUsd, type PlanTier } from '@talyn/shared';
+import { BILLING_PERIOD_LABELS, PLAN_LIMITS, PLAN_PRICES, PLAN_TIER_LABELS, SANDBOX_SIZES, formatBoxHoursLabel, boxHoursToWeightedSeconds, formatUsd, type PlanTier } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
+import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { trackEvent } from '../../lib/analytics';
@@ -192,7 +193,12 @@ export function UsageUpgradeModal({
                   </ul>
                   <div className="mt-auto space-y-2">
                     {plan === current ? (
-                      <p className="font-medium text-primary">Your plan</p>
+                      <>
+                        <p className="font-medium text-primary">
+                          Your plan{plan !== 'team' && view.status.planSource === 'subscription' && view.status.period ? ` · ${BILLING_PERIOD_LABELS[view.status.period]}` : ''}
+                        </p>
+                        {plan === 'pro' && <AnnualSwitch status={view.status} placement="compare_plans" />}
+                      </>
                     ) : plan === 'pro' && view.tier === 'free' ? (
                       <ProPlanForm mode="checkout" placement="upgrade_modal" />
                     ) : plan === 'pro' && view.tier === 'legacy_pro' && view.status.planSource === 'subscription' ? (

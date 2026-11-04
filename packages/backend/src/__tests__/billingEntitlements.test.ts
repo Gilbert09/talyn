@@ -27,7 +27,9 @@ import {
   assertCanActivateTask,
   buildBillingStatus,
   countActiveTasks,
+  billingPeriodOf,
   resolveEntitlement,
+  subscriptionPeriod,
   withBoxGate,
 } from '../services/billing/entitlements.js';
 import { ensurePeriod } from '../services/billing/usage/periods.js';
@@ -272,6 +274,66 @@ describe('assertCanActivateTask', () => {
     await exhaustIncluded('free');
     const failedId = await insertTask('ws1', 'failed');
     await expect(assertCanActivateTask(TEST_USER_ID, failedId)).rejects.toBeInstanceOf(UsageExhaustedError);
+  });
+});
+
+describe('subscriptionPeriod', () => {
+  const env = {
+    POLAR_PRODUCT_ID_PRO_MONTHLY: 'pro-m',
+    POLAR_PRODUCT_ID_PRO_ANNUAL: 'pro-a',
+    POLAR_PRODUCT_ID_MONTHLY: 'leg-m',
+    POLAR_PRODUCT_ID_ANNUAL: 'leg-a',
+    POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'team-m',
+    POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'team-a',
+  };
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const [k, v] of Object.entries(env)) {
+      saved[k] = process.env[k];
+      process.env[k] = v;
+    }
+  });
+  afterEach(() => {
+    for (const k of Object.keys(env)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it.each<[string | null | undefined, 'personal' | 'team', 'monthly' | 'annual' | null]>([
+    ['pro-m', 'personal', 'monthly'],
+    ['pro-a', 'personal', 'annual'],
+    ['leg-m', 'personal', 'monthly'],
+    ['leg-a', 'personal', 'annual'],
+    ['team-m', 'team', 'monthly'],
+    ['team-a', 'team', 'annual'],
+    ['team-a', 'personal', null],
+    ['pro-m', 'team', null],
+    ['unknown', 'personal', null],
+    [null, 'personal', null],
+    [undefined, 'team', null],
+    ['', 'personal', null],
+  ])('%s (%s) → %s', (id, kind, expected) => {
+    expect(subscriptionPeriod(id, kind)).toBe(expected);
+  });
+
+  it.each<[Parameters<typeof billingPeriodOf>[0], 'monthly' | 'annual' | null]>([
+    ['subscription', 'annual'],
+    ['team', 'monthly'],
+    ['default', null],
+    ['override', null],
+  ])('billingPeriodOf %s → %s', (source, expected) => {
+    expect(billingPeriodOf(source, 'pro-a', 'team-m')).toBe(expected);
+  });
+
+  it('billingPeriodOf ignores a stored product when the plan is free', async () => {
+    await db.update(usersTable).set({ polarProductId: 'pro-a' }).where(eq(usersTable.id, TEST_USER_ID));
+    expect((await buildBillingStatus(TEST_USER_ID)).period).toBeNull();
+  });
+
+  it('status carries the subscriber period', async () => {
+    await db.update(usersTable).set({ plan: 'unlimited', polarProductId: 'pro-a' }).where(eq(usersTable.id, TEST_USER_ID));
+    expect((await buildBillingStatus(TEST_USER_ID)).period).toBe('annual');
   });
 });
 
