@@ -4,6 +4,7 @@ import {
   TEAM_MIN_SEATS,
   TEAM_OVER_ALLOCATED_ERROR_CODE,
   TEAM_SEATS_FULL_ERROR_CODE,
+  teamSeatTier,
   type AssignTeamSeatsResponse,
   type TeamDetail,
   type TeamSeat,
@@ -18,6 +19,8 @@ import {
 import { withBlockingAdvisoryLock } from '../advisoryLock.js';
 import { ensureGithubUserId } from '../githubIdentity.js';
 import { teamGrantsSeats } from './entitlements.js';
+
+export const TEAM_NO_SUBSCRIPTION_CODE = 'no_subscription';
 
 /**
  * Team plan: seat billing and nothing else.
@@ -174,6 +177,8 @@ async function loadTeamRow(teamId: string) {
       name: teamsTable.name,
       plan: teamsTable.plan,
       planOverride: teamsTable.planOverride,
+      tier: teamsTable.tier,
+      polarProductId: teamsTable.polarProductId,
       seatsPurchased: teamsTable.seatsPurchased,
       polarSubscriptionId: teamsTable.polarSubscriptionId,
       subscriptionStatus: teamsTable.subscriptionStatus,
@@ -257,6 +262,7 @@ export async function getTeamDetail(teamId: string): Promise<TeamDetail> {
     id: team.id,
     name: team.name,
     active: teamGrantsSeats(team),
+    tier: teamSeatTier(team.tier),
     planSource:
       team.planOverride === 'team' || team.planOverride === 'none'
         ? 'override'
@@ -597,6 +603,17 @@ export async function prepareSeatCountChange(teamId: string, seats: number): Pro
     );
   }
   return team.polarSubscriptionId;
+}
+
+export async function prepareTeamPlanChange(teamId: string): Promise<{
+  subscriptionId: string;
+  productId: string | null;
+}> {
+  const team = await loadTeamRow(teamId);
+  if (!team.polarSubscriptionId || !teamGrantsSeats(team)) {
+    throw new TeamError(409, 'The team has no active subscription to change.', TEAM_NO_SUBSCRIPTION_CODE);
+  }
+  return { subscriptionId: team.polarSubscriptionId, productId: team.polarProductId };
 }
 
 /**

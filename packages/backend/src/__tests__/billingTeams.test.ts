@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
+import type { Request, Response } from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { eq } from 'drizzle-orm';
@@ -23,7 +24,7 @@ import {
   teamGrantsSeats,
   withBoxGate,
 } from '../services/billing/entitlements.js';
-import { PLAN_LIMITS } from '@talyn/shared';
+import { PLAN_LIMITS, type TeamDetail } from '@talyn/shared';
 import {
   addTeamAdmin,
   assertTeamAdmin,
@@ -37,6 +38,7 @@ import {
   leaveTeam,
   normaliseGithubLogin,
   prepareSeatCountChange,
+  prepareTeamPlanChange,
   removeSeat,
   removeTeamAdmin,
   soleAdminOfPayingTeam,
@@ -47,6 +49,7 @@ import {
   seatTiersFromPrices,
   teamCustomerExternalId,
   teamIdFromCustomerExternalId,
+  getPolarClient,
 } from '../services/billing/polar.js';
 import {
   githubUserIdFromIdentities,
@@ -598,6 +601,126 @@ describe('team administration', () => {
     await expect(assertTeamCanCheckout(paying, 3)).resolves.toBeUndefined();
     await expect(assertTeamCanCheckout(paying, 1)).resolves.toBeUndefined();
     await expect(assertTeamCanCheckout(paying, 0)).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('team plan changes', () => {
+  const planEnv = {
+    POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'prod-team-pro-monthly',
+    POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'prod-team-pro-annual',
+    TEAMS_ENABLED: 'true',
+  };
+  const previous: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const [key, value] of Object.entries(planEnv)) {
+      previous[key] = process.env[key];
+      process.env[key] = value;
+    }
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(planEnv)) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  });
+
+  async function request(teamId: string, body: unknown, user = BUYER, path = '/:id/change-plan') {
+    const { teamRoutes } = await import('../routes/teams.js');
+    const router = teamRoutes() as unknown as {
+      stack: Array<{ route?: { path: string; stack: Array<{ handle: (req: Request, res: Response) => Promise<unknown> }> } }>;
+    };
+    const route = router.stack.find((layer) => layer.route?.path === path)?.route;
+    if (!route) throw new Error(`Missing team route ${path}`);
+    const req = {
+      params: { id: teamId },
+      body,
+      user: { id: user, email: `${user}@example.test`, isAdmin: false },
+    } as unknown as Request;
+    const result: { status: number; body: Record<string, unknown> } = { status: 200, body: {} };
+    const res = {
+      status(code: number) { result.status = code; return this; },
+      json(value: Record<string, unknown>) { result.body = value; return this; },
+    } as unknown as Response;
+    await route.stack[0]!.handle(req, res);
+    return result;
+  }
+
+  it.each([
+    ['monthly', 'prod-team-pro-monthly'],
+    ['annual', 'prod-team-pro-annual'],
+  ] as const)('moves a Legacy Pro team to %s Pro with invoice proration', async (period, productId) => {
+    const teamId = await makeTeam();
+    const update = vi.spyOn(getPolarClient().subscriptions, 'update').mockResolvedValue({} as never);
+    expect(await request(teamId, { period })).toMatchObject({ status: 200, body: { success: true } });
+    expect(update).toHaveBeenCalledWith({
+      id: 'sub-t',
+      subscriptionUpdate: { productId, prorationBehavior: 'invoice' },
+    });
+    expect((await teamRow(teamId)).tier).toBe('legacy_pro');
+  });
+
+  it('does not let a non-admin change the plan', async () => {
+    const teamId = await makeTeam();
+    const update = vi.spyOn(getPolarClient().subscriptions, 'update');
+    expect((await request(teamId, { period: 'monthly' }, STRANGER)).status).toBe(404);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no subscription id', { polarSubscriptionId: null }],
+    ['inactive plan', { plan: 'none' }],
+    ['blocked plan', { planOverride: 'none' }],
+    ['override without subscription', { polarSubscriptionId: null, planOverride: 'team' }],
+  ] as const)('refuses %s with no_subscription', async (_name, changes) => {
+    const teamId = await makeTeam();
+    await db.update(teamsTable).set(changes).where(eq(teamsTable.id, teamId));
+    await expect(prepareTeamPlanChange(teamId)).rejects.toMatchObject({ status: 409, code: 'no_subscription' });
+    expect(await request(teamId, { period: 'monthly' })).toMatchObject({
+      status: 409, body: { success: false, code: 'no_subscription' },
+    });
+  });
+
+  it('returns success without a Polar call when already on the product', async () => {
+    const teamId = await makeTeam();
+    await db.update(teamsTable).set({ polarProductId: 'prod-team-pro-monthly', tier: 'pro' }).where(eq(teamsTable.id, teamId));
+    const update = vi.spyOn(getPolarClient().subscriptions, 'update');
+    expect(await request(teamId, { period: 'monthly' })).toMatchObject({ status: 200, body: { success: true } });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { period: 'weekly' }, { period: 1 }])('rejects an invalid period', async (body) => {
+    const teamId = await makeTeam();
+    expect((await request(teamId, body)).status).toBe(400);
+  });
+
+  it('returns 502 when Polar refuses the change', async () => {
+    const teamId = await makeTeam();
+    vi.spyOn(getPolarClient().subscriptions, 'update').mockRejectedValue(new Error('failed'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await request(teamId, { period: 'monthly' })).toMatchObject({
+      status: 502,
+      body: { error: 'The plan change failed. Nothing was charged. Try again in a moment.' },
+    });
+  });
+
+  it('returns the not-configured answer without a Pro product pair', async () => {
+    const teamId = await makeTeam();
+    delete process.env.POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL;
+    expect(await request(teamId, { period: 'monthly' })).toMatchObject({
+      status: 400, body: { error: 'Billing is not configured on this backend' },
+    });
+  });
+
+  it('returns the seat tier in team detail', async () => {
+    const teamId = await makeTeam();
+    const get = async () => (await request(teamId, undefined, BUYER, '/:id')).body.data as TeamDetail;
+    expect((await get()).tier).toBe('legacy_pro');
+    await db.update(teamsTable).set({ tier: 'pro' }).where(eq(teamsTable.id, teamId));
+    expect((await get()).tier).toBe('pro');
+    await db.update(teamsTable).set({ tier: 'unknown' }).where(eq(teamsTable.id, teamId));
+    expect((await get()).tier).toBe('legacy_pro');
   });
 });
 

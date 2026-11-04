@@ -418,6 +418,10 @@ function pairConfigured(names: Record<BillingPeriod, string>): boolean {
   return Boolean(envProduct(names.monthly)) && Boolean(envProduct(names.annual));
 }
 
+export function teamProProductId(period: BillingPeriod): string | undefined {
+  return pairConfigured(TEAM_PRO_PRODUCT_ENV) ? envProduct(TEAM_PRO_PRODUCT_ENV[period]) : undefined;
+}
+
 /**
  * The team product a new team buys: the Pro team product ($40 a seat) when it
  * is configured, else the old team product (whose seats are Legacy Pro).

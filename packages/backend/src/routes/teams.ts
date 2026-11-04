@@ -8,6 +8,7 @@ import type {
   CheckoutSessionResponse,
   CreateTeamRequest,
   GitHubAccountSuggestion,
+  TeamChangePlanRequest,
   TeamCheckoutRequest,
   TeamDetail,
   TeamPricing,
@@ -19,12 +20,14 @@ import { isFeatureEnabled } from '../services/featureFlags.js';
 import { githubService } from '../services/github.js';
 import {
   createTeamCheckoutUrl,
+  changeSubscriptionProduct,
   createTeamPortalUrl,
   getInvoiceUrlForTeam,
   getTeamPricing,
   listOrdersForTeam,
   OrderNotFoundError,
   teamBillingConfigured,
+  teamProProductId,
   updateTeamSubscriptionSeats,
 } from '../services/billing/polar.js';
 import {
@@ -38,6 +41,7 @@ import {
   leaveTeam,
   normaliseGithubLogin,
   prepareSeatCountChange,
+  prepareTeamPlanChange,
   removeSeat,
   removeTeamAdmin,
   renameTeam,
@@ -261,6 +265,32 @@ export function teamRoutes(): Router {
       const seats = Number((req.body as { seats?: unknown })?.seats);
       const subscriptionId = await prepareSeatCountChange(req.params.id!, seats);
       await updateTeamSubscriptionSeats(subscriptionId, seats);
+      res.json({ success: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post('/:id/change-plan', async (req, res) => {
+    if (!(await adminGate(req, res))) return;
+    const body = (req.body ?? {}) as Partial<TeamChangePlanRequest>;
+    if (body.period !== 'monthly' && body.period !== 'annual') {
+      return res.status(400).json({ success: false, error: "Send { period: 'monthly' | 'annual' }." });
+    }
+    try {
+      const { subscriptionId, productId: currentProductId } = await prepareTeamPlanChange(req.params.id!);
+      const productId = teamProProductId(body.period);
+      if (!productId) {
+        return res.status(400).json({ success: false, error: 'Billing is not configured on this backend' });
+      }
+      if (currentProductId !== productId) {
+        try {
+          await changeSubscriptionProduct(subscriptionId, productId);
+        } catch (err) {
+          console.error(`[billing] team plan change for ${req.params.id!} failed:`, err);
+          return res.status(502).json({ success: false, error: 'The plan change failed. Nothing was charged. Try again in a moment.' });
+        }
+      }
       res.json({ success: true });
     } catch (err) {
       sendError(res, err);

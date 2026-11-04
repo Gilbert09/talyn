@@ -1992,6 +1992,8 @@ export interface TeamDetail {
   name: string;
   /** Whether the team currently grants its seats Unlimited. */
   active: boolean;
+  /** What each seat grants. Teams bought before usage billing are Legacy Pro. */
+  tier: 'pro' | 'legacy_pro';
   planSource: 'none' | 'subscription' | 'override';
   seatsPurchased: number;
   seatsUsed: number;
@@ -2011,6 +2013,10 @@ export interface CreateTeamRequest {
 export interface TeamCheckoutRequest {
   period: 'monthly' | 'annual';
   seats: number;
+}
+
+export interface TeamChangePlanRequest {
+  period: 'monthly' | 'annual';
 }
 
 /** A GitHub account suggested by the seat picker, `GET /billing/team/:id/github-users`. */

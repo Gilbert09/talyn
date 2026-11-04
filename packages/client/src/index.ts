@@ -90,6 +90,7 @@ import type {
   GitHubAccountSuggestion,
   GitHubOwnerCoverage,
   TeamCheckoutRequest,
+  TeamChangePlanRequest,
   TeamDetail,
   TeamPricing,
   WSEvent,
@@ -2300,6 +2301,8 @@ export const billing = {
       request<void>('DELETE', `/billing/team/${teamId}/seats/${seatId}`),
     setSeatCount: (teamId: string, seats: number) =>
       request<void>('POST', `/billing/team/${teamId}/seat-count`, { seats }),
+    changePlan: (teamId: string, body: TeamChangePlanRequest) =>
+      request<void>('POST', `/billing/team/${teamId}/change-plan`, body),
     addAdmin: (teamId: string, login: string) =>
       request<TeamDetail>('POST', `/billing/team/${teamId}/admins`, { login }),
     removeAdmin: (teamId: string, userId: string) =>
