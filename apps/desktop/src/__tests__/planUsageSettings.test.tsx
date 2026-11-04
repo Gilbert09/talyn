@@ -6,6 +6,7 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { UpgradeModal } from '../renderer/components/modals/UpgradeModal';
 import { BillingSettings } from '../renderer/components/settings/sections/BillingSettings';
+import { formatRenewalDate } from '../renderer/components/settings/sections/BillingOrderHistory';
 import { useBillingStore } from '../renderer/stores/billing';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
@@ -70,7 +71,7 @@ describe('BillingSettings with usage billing', () => {
   it('captures plan page clicks with their locations', () => {
     show(usageStatus('pro'));
     fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add credits', expanded: false }));
     expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
     expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
   });
@@ -277,7 +278,7 @@ describe('BillingSettings with usage billing', () => {
         }),
       );
       expect(screen.getByTestId('plan-card')).toHaveTextContent(label);
-      expect(screen.getByTestId('plan-card')).toHaveTextContent(`${dateLabel} December 1, 2026`);
+      expect(screen.getByTestId('plan-card')).toHaveTextContent(`${dateLabel} ${formatRenewalDate('2026-12-01T00:00:00Z')}`);
       fireEvent.click(screen.getByRole('button', { name: 'Manage billing' }));
       await waitFor(() => expect(portal).toHaveBeenCalled());
     },

@@ -7,6 +7,7 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { BillingSettings } from '../components/settings/sections/BillingSettings';
 import { useBillingStore } from '../stores/billing';
 import { trackEvent } from '../lib/analytics';
+import { formatLongDate } from '../lib/usageBilling';
 import { oldStatus, usageStatus } from './usageBillingFixtures';
 
 const { billing, goToHostedPage } = vi.hoisted(() => ({
@@ -61,7 +62,7 @@ describe('BillingSettings', () => {
   it('captures plan page clicks with their locations', () => {
     show(usageStatus('pro'));
     fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add credits', expanded: false }));
     expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
     expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
   });
@@ -257,7 +258,7 @@ describe('BillingSettings', () => {
       Object.assign(status, { cancelAtPeriodEnd, subscriptionStatus, currentPeriodEnd: '2026-12-01T00:00:00Z' });
       show(status);
       expect(screen.getByText(new RegExp(`^${label}`))).toBeVisible();
-      expect(screen.getByText(new RegExp(`${dateLabel} December 1, 2026`))).toBeVisible();
+      expect(screen.getByText(new RegExp(`${dateLabel} ${formatLongDate('2026-12-01T00:00:00Z')}`))).toBeVisible();
     }
   );
 
