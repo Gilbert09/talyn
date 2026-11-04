@@ -7,9 +7,12 @@ import {
   mergeQueueEntries, pullRequests, repositories, workbenchChats, workbenchScriptRuns, workbenches, workspaces,
 } from '../db/schema.js';
 import { tryWithAdvisoryLock } from '../services/advisoryLock.js';
-import { idleArchiveTick, sweepIdleSessions } from '../services/workbenches/idleArchive.js';
+import { idleArchiveTick, resetIdleSkipsForTests, sweepIdleSessions } from '../services/workbenches/idleArchive.js';
 import { restoreWorkbench, settleArchivesForTests } from '../services/workbenches/lifecycle.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
+import { memoryWorkObjectStore } from '../services/workbenches/workStorage.js';
+import { setWorkObjectStoreForTests } from '../services/workbenches/workStorage.js';
+import { readWorkMeta } from '../services/workbenches/workCheckpoint.js';
 import { getWorkbench, insertChat, insertWorkbench, listEvents, touchWorkbenchActivity } from '../services/workbenches/store.js';
 
 vi.mock('../services/websocket.js', async (original) => ({
@@ -33,6 +36,7 @@ const ago = (ms: number) => new Date(now.getTime() - ms);
 describe('archive idle sessions', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
   let fleet: FakeFleet;
+  let store: ReturnType<typeof memoryWorkObjectStore>;
 
   /** A ready session whose every timestamp is `idleMs` old, unless a test moves one. */
   async function seed(id: string, idleMs = 8 * DAY, extra: Partial<typeof workbenches.$inferInsert> = {}) {
@@ -56,6 +60,9 @@ describe('archive idle sessions', () => {
 
   beforeEach(async () => {
     lock.acquired = true;
+    resetIdleSkipsForTests();
+    store = memoryWorkObjectStore();
+    setWorkObjectStoreForTests(store);
     testDb = await createTestDb();
     await seedUser(testDb.db);
     await testDb.db.insert(workspaces).values({ id: 'ws', ownerId: 'user-test', name: 'Workspace' });
@@ -67,6 +74,7 @@ describe('archive idle sessions', () => {
   afterEach(async () => {
     await settleArchivesForTests();
     setWorkbenchFleetClientForTests(null);
+    setWorkObjectStoreForTests(null);
     vi.restoreAllMocks();
     await testDb.cleanup();
   });
@@ -208,6 +216,95 @@ describe('archive idle sessions', () => {
     const { archiveWorkbench } = await import('../services/workbenches/lifecycle.js');
     const manual = await archiveWorkbench('wb');
     expect(manual.settings).not.toMatchObject({ autoArchivedReason: 'idle' });
+  });
+
+  describe('a sleeping box', () => {
+    const generation = 'g1';
+    async function putCheckpoint(id = 'wb') {
+      const prefix = `ws/${id}/checkpoint`;
+      await store.put(`${prefix}/${generation}/part-00000`, Buffer.from('bundle'));
+      await store.put(`${prefix}/meta.json`, Buffer.from(JSON.stringify({
+        version: 1, kind: 'checkpoint', sha: 'a'.repeat(40), base: null, branch: `b-${id}`, takenAt: now.toISOString(),
+        size: 6, sha256: 'b'.repeat(64), parts: 1, generation,
+      })));
+    }
+    const sleeps: Array<[string, () => void]> = [
+      ['suspended', () => { fleet.sandboxStatus = 'suspended'; }],
+      ['hibernated', () => { fleet.sandboxStatus = 'suspended'; fleet.hibernated = true; }],
+      ['gone', () => { fleet.sandboxStatus = 'stopped'; }],
+    ];
+
+    it.each(sleeps)('%s with a fresh checkpoint: the checkpoint is the archive, the box is not woken', async (_n, sleep) => {
+      sleep();
+      await seed('wb');
+      await putCheckpoint();
+      await setWb('wb', { workCheckedAt: ago(DAY) });
+      expect(await sweepIdleSessions(now)).toEqual(['wb']);
+      await settleArchivesForTests();
+      expect(fleet.execs).toHaveLength(0);
+      expect(fleet.resumes).toBe(0);
+      expect(fleet.deleted).toEqual(['box-wb']);
+      const done = await row('wb');
+      expect(done.archivedAt).not.toBeNull();
+      expect(done.settings).toMatchObject({ autoArchivedReason: 'idle' });
+      expect(await readWorkMeta({ workspaceId: 'ws', id: 'wb' }, 'archive')).toMatchObject({ kind: 'archive', generation, sha: 'a'.repeat(40) });
+      expect(await readWorkMeta({ workspaceId: 'ws', id: 'wb' }, 'checkpoint')).toBeNull();
+      const [note] = (await listEvents('chat-wb', 0, 100)).events.filter((e) => e.event.subtype === 'idle_archive');
+      expect(String(note.event.text)).toContain('did not run the archive script');
+      fleet.hibernated = false;
+      await restoreWorkbench('wb');
+      await settleArchivesForTests();
+      expect((await row('wb')).archivedAt).toBeNull();
+    });
+
+    it('a sleeping box with a save and no unsaved work: archives with nothing stored', async () => {
+      fleet.sandboxStatus = 'suspended';
+      await seed('wb');
+      await setWb('wb', { workCheckedAt: ago(DAY) });
+      expect(await sweepIdleSessions(now)).toEqual(['wb']);
+      await settleArchivesForTests();
+      expect(fleet.execs).toHaveLength(0);
+      expect(await readWorkMeta({ workspaceId: 'ws', id: 'wb' }, 'archive')).toBeNull();
+    });
+
+    it.each([
+      ['no save was ever confirmed', null],
+      ['the save is older than the last activity', 9 * DAY],
+    ])('skips and never wakes it: %s', async (_n, savedAgo) => {
+      fleet.sandboxStatus = 'suspended';
+      await seed('wb', 8 * DAY);
+      await putCheckpoint();
+      await setWb('wb', { workCheckedAt: savedAgo === null ? null : ago(savedAgo) });
+      await setChat('wb', { updatedAt: ago(8 * DAY - 1000) });
+      expect(await sweepIdleSessions(now)).toEqual([]);
+      expect(fleet.execs).toHaveLength(0);
+      expect(fleet.resumes).toBe(0);
+      expect((await row('wb')).archivedAt).toBeNull();
+    });
+
+    it('skips a box the fleet cannot be asked about', async () => {
+      await seed('wb');
+      vi.spyOn(fleet, 'getSandbox').mockRejectedValue(new Error('down'));
+      expect(await sweepIdleSessions(now)).toEqual([]);
+      expect(fleet.execs).toHaveLength(0);
+    });
+
+    it('a skipped session does not use up the pass limit', async () => {
+      fleet.sandboxStatus = 'suspended';
+      await seed('a', 12 * DAY);
+      await seed('b', 10 * DAY);
+      await setWb('b', { workCheckedAt: ago(DAY) });
+      expect(await sweepIdleSessions(now, 1)).toEqual(['b']);
+    });
+
+    it('a running box takes the ordinary archive', async () => {
+      fleet.sandboxStatus = 'idle';
+      await seed('wb');
+      await sweepIdleSessions(now);
+      await settleArchivesForTests();
+      expect((await row('wb')).settings).not.toMatchObject({ archiveFromSaved: true });
+      expect(fleet.execs.length).toBeGreaterThan(0);
+    });
   });
 
   it('two sweeps at once archive a session once', async () => {

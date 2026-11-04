@@ -5,6 +5,7 @@ import { workbenches } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { tryWithAdvisoryLock } from '../advisoryLock.js';
 import { archiveWorkbench } from './lifecycle.js';
+import { readFleetRecord } from './sandboxStatus.js';
 
 /**
  * Archive a session with no activity for the workspace's window (7 days by
@@ -16,14 +17,31 @@ import { archiveWorkbench } from './lifecycle.js';
  * restore). `workbenches.updated_at` is NOT used: status polling and diff
  * refreshes write it on sessions nobody touches.
  *
- * An hourly pass is enough for a window counted in days. It archives at most
- * IDLE_PASS_LIMIT sessions, one at a time, so the first pass after a deploy
- * does not save and delete hundreds of boxes at once; the rest follow on the
- * next passes.
+ * An archive normally wakes the box to run the archive script and save its
+ * work. An idle session's box almost always sleeps (suspended, or hibernated
+ * in storage, where waking it restores GiBs), so the sweep reads the fleet's
+ * record WITHOUT waking anything:
+ *  - the box runs: the ordinary archive;
+ *  - the box sleeps or is gone: nothing changed since it went to sleep, so if
+ *    a save confirmed storage holds all of its work after the last activity
+ *    (`work_checked_at`), the stored checkpoint becomes the archive and the box
+ *    is deleted, never woken. The archive script is skipped, and the note says so;
+ *  - otherwise the session is skipped and logged, and a person can archive it.
+ *
+ * An hourly pass is enough for a window counted in days. A pass takes at most
+ * IDLE_PASS_LIMIT sessions, one at a time. A running box still costs a save,
+ * and the limit stops the first pass after a deploy from saving hundreds at
+ * once. A sleeping box costs storage copies only, so 50 an hour clears a
+ * backlog in a day or two without a burst of storage traffic.
  */
 export const IDLE_POLLER = 'workbench-idle-archive-sweep';
 export const IDLE_SWEEP_INTERVAL_MS = 60 * 60_000;
 export const IDLE_PASS_LIMIT = 50;
+/** Rows read per pass, so sessions that are skipped cannot starve the ones behind them. */
+const IDLE_SCAN_LIMIT = 500;
+/** A skipped session is not read from the fleet again for this long, and is logged once. */
+const SKIP_RETRY_MS = 6 * 60 * 60_000;
+const skipped = new Map<string, number>();
 const IDLE_LOCK = 'workbench-idle-archive';
 
 const w = workbenches;
@@ -35,6 +53,11 @@ const windowDays = sql`(SELECT CASE
       THEN NULLIF((s.settings ->> 'autoArchiveIdleDays')::numeric, 0)
     ELSE NULL END
   FROM workspaces s WHERE s.id = ${w.workspaceId})`;
+
+const lastActivity = sql`GREATEST(
+      ${w.createdAt}, COALESCE(${w.lastActivityAt}, ${w.createdAt}),
+      COALESCE((SELECT max(GREATEST(c.updated_at, COALESCE(c.turn_started_at, c.created_at)))
+        FROM workbench_chats c WHERE c.workbench_id = ${w.id}), ${w.createdAt}))`;
 
 /**
  * Whether the row is an idle session that may be archived at `now`. Used to
@@ -51,11 +74,7 @@ export function idleArchiveGuard(now: Date): SQL {
     AND ${w.settings} ->> 'archiveOnIdle' IS NULL
     AND ${w.settings} -> 'resizeTo' IS NULL
     AND ${windowDays} IS NOT NULL
-    AND GREATEST(
-      ${w.createdAt}, COALESCE(${w.lastActivityAt}, ${w.createdAt}),
-      COALESCE((SELECT max(GREATEST(c.updated_at, COALESCE(c.turn_started_at, c.created_at)))
-        FROM workbench_chats c WHERE c.workbench_id = ${w.id}), ${w.createdAt})
-    ) < ${at} - ${windowDays} * interval '1 day'
+    AND ${lastActivity} < ${at} - ${windowDays} * interval '1 day'
     AND NOT EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${w.id}
       AND (c.status = 'running' OR c.drain_pending OR jsonb_array_length(c.queued_messages) > 0))
     AND NOT EXISTS (SELECT 1 FROM workbench_script_runs r WHERE r.workbench_id = ${w.id} AND r.running)
@@ -66,17 +85,47 @@ export function idleArchiveGuard(now: Date): SQL {
   )`;
 }
 
+/** Tests start with no remembered skips. */
+export function resetIdleSkipsForTests(): void { skipped.clear(); }
+
 /** One pass. Returns the ids it archived. */
 export async function sweepIdleSessions(now = new Date(), limit = IDLE_PASS_LIMIT): Promise<string[]> {
   const db = getPoolDbClient();
-  const candidates = await db.select({ id: w.id, workspaceId: w.workspaceId }).from(w)
-    .where(idleArchiveGuard(now)).orderBy(w.createdAt, w.id).limit(limit);
+  const candidates = await db.select({
+    id: w.id, workspaceId: w.workspaceId, fleetHost: w.fleetHost, sandboxId: w.sandboxId,
+    checkedAt: w.workCheckedAt, activityAt: sql<Date | string>`(${lastActivity})`,
+  }).from(w)
+    .where(idleArchiveGuard(now)).orderBy(w.createdAt, w.id).limit(Math.max(limit, IDLE_SCAN_LIMIT));
   const archived: string[] = [];
   for (const candidate of candidates) {
+    if (archived.length >= limit) break;
+    if ((skipped.get(candidate.id) ?? 0) > Date.now()) continue;
+    const skip = (why: string) => {
+      if (!skipped.has(candidate.id)) console.warn(`[workbench] idle archive of ${candidate.id} skipped: ${why}`);
+      skipped.set(candidate.id, Date.now() + SKIP_RETRY_MS);
+      if (skipped.size > 5000) skipped.clear();
+    };
     const [ws] = await db.select({ days: sql<string | null>`(${windowDays})` }).from(w).where(eq(w.id, candidate.id));
     const days = Math.max(1, Math.round(Number(ws?.days ?? DEFAULT_AUTO_ARCHIVE_IDLE_DAYS)));
     try {
-      const row = await archiveWorkbench(candidate.id, { idle: { guard: idleArchiveGuard(now), days } });
+      let fromSaved = false;
+      if (candidate.sandboxId) {
+        const read = await readFleetRecord(
+          { workspaceId: candidate.workspaceId, fleetHost: candidate.fleetHost, sandboxId: candidate.sandboxId }, Date.now(), { fresh: true },
+        );
+        // A failed read says nothing about the box: leave it rather than wake it.
+        if (!read.ok) { skip('the fleet did not answer'); continue; }
+        const awake = !read.terminal && !read.retired && ['queued', 'starting', 'idle', 'busy'].includes(read.sandbox.status);
+        if (!awake) {
+          const savedAfterActivity = candidate.checkedAt && candidate.checkedAt.getTime() >= new Date(candidate.activityAt).getTime();
+          if (!savedAfterActivity) {
+            skip('the box sleeps and no save is newer than its last activity');
+            continue;
+          }
+          fromSaved = true;
+        }
+      }
+      const row = await archiveWorkbench(candidate.id, { idle: { guard: idleArchiveGuard(now), days, fromSaved } });
       if (row) archived.push(candidate.id);
     } catch (err) {
       console.warn(`[workbench] idle archive of ${candidate.id} failed:`, err);

@@ -1690,6 +1690,8 @@ export async function chatIdsOf(workbenchIds: string[]): Promise<string[]> {
 export interface IdleArchiveClaim {
   guard: SQL;
   days: number;
+  /** The box sleeps: the archive is the stored checkpoint, and the box is not woken. */
+  fromSaved?: boolean;
 }
 
 export async function markArchive(id: string, autoForMergedPr = false, idle?: IdleArchiveClaim): Promise<WorkbenchRow | null> {
@@ -1710,7 +1712,7 @@ export async function markArchive(id: string, autoForMergedPr = false, idle?: Id
         ELSE (${workbenchesTable.settings} - 'archiveOnIdle') || jsonb_build_object('autoArchivedForPr',
           COALESCE(${workbenchesTable.settings} -> 'autoArchivedForPr', '[]'::jsonb)
           || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'
-          - 'autoArchivedReason')${idle ? sql` || jsonb_build_object('autoArchivedReason', 'idle')` : sql``}`,
+          - 'autoArchivedReason' - 'archiveFromSaved')${idle?.fromSaved ? sql` || jsonb_build_object('archiveFromSaved', true)` : sql``}${idle ? sql` || jsonb_build_object('autoArchivedReason', 'idle')` : sql``}`,
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
@@ -1723,7 +1725,8 @@ export async function markArchive(id: string, autoForMergedPr = false, idle?: Id
     )).returning(WORKBENCH_COLUMNS);
     if (archived && auto) {
       const text = idle
-        ? `Archived after ${idle.days} ${idle.days === 1 ? 'day' : 'days'} with no activity.`
+        ? `Archived after ${idle.days} ${idle.days === 1 ? 'day' : 'days'} with no activity.${idle.fromSaved
+          ? ' The sandbox was asleep, so Talyn used the last saved copy and did not run the archive script.' : ''}`
         : 'The pull request was merged, so Talyn archived this session.';
       await tx.execute(sql`
         WITH first_chat AS (

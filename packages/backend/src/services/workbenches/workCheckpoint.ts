@@ -140,6 +140,35 @@ export async function readWorkMeta(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>
   return meta;
 }
 
+/**
+ * Make the stored checkpoint the archive, in storage only: the parts are copied
+ * under the archive prefix and `meta.json` is written last, as a save does. No
+ * checkpoint means the box held no unsaved work, so any older archive goes.
+ * Returns whether a copy was promoted. Never touches the box.
+ */
+export async function promoteCheckpointToArchive(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>): Promise<boolean> {
+  const meta = await readWorkMeta(row, 'checkpoint');
+  if (!meta) {
+    await deleteSavedWork(row, ['archive']);
+    return false;
+  }
+  const store = workObjectStore();
+  const from = workPrefix(row, 'checkpoint');
+  const to = workPrefix(row, 'archive');
+  const previous = await readWorkMeta(row, 'archive').catch(() => null);
+  for (let i = 0; i < meta.parts; i++) {
+    const body = await store.get(partKey(from, meta.generation, i));
+    if (!body) throw new Error(`part ${i + 1} of ${meta.parts} of the saved work is missing`);
+    await store.put(partKey(to, meta.generation, i), body);
+  }
+  await store.put(metaKey(to), Buffer.from(JSON.stringify({ ...meta, kind: 'archive' satisfies WorkKind })));
+  if (previous && previous.generation !== meta.generation) {
+    const old = Array.from({ length: previous.parts }, (_, i) => partKey(to, previous.generation, i));
+    await store.remove(old).catch(() => undefined);
+  }
+  return true;
+}
+
 /** Delete every object of these kinds. Folders are found by listing, so a half-written generation goes too. */
 export async function deleteSavedWork(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>, kinds: WorkKind[] = ['checkpoint', 'archive']): Promise<void> {
   const store = workObjectStore();

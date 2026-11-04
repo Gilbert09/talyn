@@ -64,7 +64,7 @@ import {
   SANDBOX_WORK_ROOT,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
-import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
+import { checkpointWork, deleteSavedWork, promoteCheckpointToArchive, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor } from './talynMcp.js';
 import { isMaintenanceClaimHeld, withMaintenanceClaim } from './maintenanceClaim.js';
@@ -875,6 +875,16 @@ export async function processArchive(workbenchId: string): Promise<void> {
       const chats = await listChats(row.id);
       await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id));
       await checkLease();
+      await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await stopSandboxScripts(row.id, row.sandboxId);
+    } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && row.settings?.archiveFromSaved) {
+      // An idle archive of a sleeping box: the saved copy is the archive, and nothing here wakes the box.
+      await promoteCheckpointToArchive(row);
+      await checkLease();
+      await deleteSavedWork(row, ['checkpoint']).catch((err) =>
+        console.warn(`[workbench] removing the checkpoint of ${row.id} after its archive failed:`, err),
+      );
+      await clearWorkCheckpoint(row.id);
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {

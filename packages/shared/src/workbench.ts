@@ -110,6 +110,10 @@ export type WorkbenchDiffScope = 'combined' | 'uncommitted' | 'committed';
  * the repository's config file" (scripts) or "use Talyn's default" (prompts).
  */
 export interface WorkbenchSettings {
+  /** An idle archive of a sleeping box that uses the saved copy and does not wake it. Server-written. */
+  archiveFromSaved?: boolean;
+  /** Why the server archived the session on its own. Server-written. */
+  autoArchivedReason?: 'idle';
   prUnlinked?: number;
   fleetSandboxId?: string;
   /**
