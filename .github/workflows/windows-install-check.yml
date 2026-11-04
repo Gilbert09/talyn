@@ -32,7 +32,7 @@ on:
 
 jobs:
   check:
-    runs-on: windows-latest
+    runs-on: windows-2022
     if: github.repository == 'Gilbert09/talyn'
     steps:
       - name: Download the installer from the release

@@ -15,7 +15,8 @@ jobs:
 
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # windows-2022: see publish.yml (node-gyp cannot find Visual Studio 18).
+        os: [macos-latest, windows-2022, ubuntu-latest]
 
     steps:
       - name: Check out Git repository

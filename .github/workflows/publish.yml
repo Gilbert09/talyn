@@ -484,7 +484,9 @@ jobs:
       # hiccup shouldn't cost Windows users their build.
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # windows-2022, not windows-latest: the latest image ships Visual Studio 18,
+        # which the node-gyp in electron-builder cannot find, so node-pty fails to build.
+        os: [windows-2022, ubuntu-latest]
 
     steps:
       - name: Checkout git repo
