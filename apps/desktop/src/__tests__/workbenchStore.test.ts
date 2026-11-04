@@ -10,6 +10,7 @@ import {
   setChatFinishedListener,
   useWorkbenchStore,
   visibleChats,
+  wellFormedEvents,
 } from '../renderer/stores/workbenches';
 
 function ev(seq: number, turn = 1, type = 'assistant'): WorkbenchEvent {
@@ -101,6 +102,13 @@ describe('mergeWorkbenchEvents', () => {
   ])('lastSeq / lastTurn of %#', (events, seq, turn) => {
     expect(lastSeq(events)).toBe(seq);
     expect(lastTurn(events)).toBe(turn);
+  });
+});
+
+describe('wellFormedEvents', () => {
+  it('drops null and non-object entries and keeps the rest in order', () => {
+    const kept = [ev(1), ev(2)];
+    expect(wellFormedEvents([null, kept[0], undefined, 'x', { chatId: 'c1', seq: 3, turn: 1, event: null }, kept[1]])).toEqual(kept);
   });
 });
 

@@ -35,7 +35,7 @@ import { workbenchesOffered, type SlackNoticeEvent, type WorkbenchWsPayloads } f
 import { toast } from '../stores/toast';
 import { notifyMergeQueueReviewWait } from '../lib/mergeQueueReviewWait';
 import { trackEvent } from '../lib/analytics';
-import { useWorkbenchStore } from '../stores/workbenches';
+import { useWorkbenchStore, wellFormedEvents } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { handleSlackNotice, loadSlackPending } from '../lib/slackNotices';
@@ -505,11 +505,13 @@ export function useApiConnection() {
         useWorkbenchStore.getState().upsertChat(payload.chat);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:event']>('workbench:event', (payload) => {
-        toastPullRequestFailures(payload.chatId, payload.events);
-        syncCoderTurn(payload.chatId, payload.events);
+        const events = wellFormedEvents(payload.events);
+        if (events.length === 0) return;
+        toastPullRequestFailures(payload.chatId, events);
+        syncCoderTurn(payload.chatId, events);
         const buf = pendingWorkbenchEvents.get(payload.chatId);
-        if (buf) buf.push(...payload.events);
-        else pendingWorkbenchEvents.set(payload.chatId, [...payload.events]);
+        if (buf) buf.push(...events);
+        else pendingWorkbenchEvents.set(payload.chatId, events);
         scheduleWorkbenchEventFlush();
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:script']>('workbench:script', (payload) => {
