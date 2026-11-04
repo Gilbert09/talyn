@@ -215,13 +215,13 @@ describe('action prompts', () => {
 });
 
 describe('workbenches feature flag', () => {
-  it('is registered like loops: own env override, fallback off, gated', () => {
+  it('is registered like loops: own env override, fallback off, released', () => {
     expect(FEATURE_FLAGS.workbenches).toEqual({
       posthogKey: 'workbenches',
       envOverride: 'WORKBENCHES_ENABLED',
       fallback: false,
       description: expect.any(String),
-      availability: 'gated',
+      availability: 'general',
       releaseScopes: ['workbenches', 'slack'],
     });
   });
@@ -230,9 +230,9 @@ describe('workbenches feature flag', () => {
     expect(ACCOUNT_FEATURE_FLAGS).toContain('workbenches');
   });
 
-  it('withholds its release notes while gated', () => {
-    expect(isGatedFeature('workbenches')).toBe(true);
-    expect(gateForScope('workbenches')).toBe('workbenches');
+  it('announces its release notes now that it is released', () => {
+    expect(isGatedFeature('workbenches')).toBe(false);
+    expect(gateForScope('workbenches')).toBeNull();
   });
 
   it.each([

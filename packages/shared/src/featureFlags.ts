@@ -172,15 +172,20 @@ export const FEATURE_FLAGS = {
    * is still an exploration and has to run locally with no PostHog project
    * (`WORKBENCHES_ENABLED=true`).
    *
-   * `availability: 'gated'` until it ships, which withholds every
-   * `workbenches` highlight from everybody.
+   * RELEASED with usage billing: `availability` is 'general', so the
+   * withheld `workbenches` and `slack` highlights replay to everybody. The
+   * PostHog audience must go to everybody at the same time.
+   *
+   * `fallback` STAYS false, as for `mcpServers`. It answers "what do we say
+   * when PostHog is down", and a session box is long-lived fleet hardware
+   * that bills box-hours, so an outage must not open it to every account.
    */
   workbenches: {
     posthogKey: 'workbenches',
     envOverride: 'WORKBENCHES_ENABLED',
     fallback: false,
     description: 'Workbenches — a branch with an agent chat, diff and terminal, in a sandbox or a local worktree',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['workbenches', 'slack'],
   },
 
