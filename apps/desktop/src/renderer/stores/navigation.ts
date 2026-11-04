@@ -27,6 +27,7 @@ export type Route =
   | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
   | { view: 'history' }
+  | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
   | { view: 'automations'; tab: AutomationTab }
   | { view: 'settings'; section: SettingsSection };
@@ -69,6 +70,7 @@ export function isRoute(value: unknown): value is Route {
     case 'home':
       return r.mode === undefined || r.mode === 'session' || r.mode === 'thread';
     case 'history':
+    case 'insights':
       return true;
     case 'workbench':
       return typeof r.id === 'string' && r.id.length > 0;

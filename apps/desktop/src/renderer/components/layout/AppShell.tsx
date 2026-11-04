@@ -15,6 +15,7 @@ import { HomePage } from '../../pages/HomePage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
 import { AutomationsView } from '../../pages/AutomationsView';
+import { InsightsView } from '../../pages/InsightsView';
 import { WorkbenchPage } from '../../pages/WorkbenchPage';
 import { loadWorkbenches } from '../../lib/workbenchData';
 import { getLocalController } from '../../lib/localWorkbench';
@@ -106,6 +107,8 @@ export function RoutedView() {
       return <PullRequestsView tab={route.tab} />;
     case 'automations':
       return <AutomationsView tab={route.tab} />;
+    case 'insights':
+      return <InsightsView />;
     case 'settings':
       return <SettingsPanel />;
     default:

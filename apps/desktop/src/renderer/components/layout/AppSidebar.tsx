@@ -3,6 +3,7 @@ import { workbenchesOffered } from '@talyn/shared';
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   ChevronLeft,
   ChevronRight,
   FolderPlus,
@@ -18,6 +19,7 @@ import {
 import { cn, isMacDesktop } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
+import { insightsOffered } from '../../lib/insights';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSidebarWidth } from '../../lib/sidebarWidth';
 import { useNavigationStore } from '../../stores/navigation';
@@ -185,6 +187,16 @@ export function AppSidebar() {
                 if (route.view !== 'automations') navigate({ view: 'automations', tab: automationTabs[0] });
               }}
               dataAttr="nav-automations"
+            />
+          )}
+          {insightsOffered(features) && (
+            <SidebarItem
+              icon={BarChart3}
+              label="Insights"
+              collapsed={collapsed}
+              active={route.view === 'insights'}
+              onClick={() => navigate({ view: 'insights' })}
+              dataAttr="nav-insights"
             />
           )}
         </div>

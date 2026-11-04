@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Archive, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
+import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
 import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -10,6 +10,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { insightsOffered } from '../lib/insights';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
@@ -138,6 +139,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         icon: Workflow,
         route: { view: 'automations', tab },
       });
+    }
+    if (insightsOffered(features)) {
+      items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
       if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
