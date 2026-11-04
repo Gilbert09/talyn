@@ -212,7 +212,7 @@ describe('threads', () => {
       expect(agentTurn).not.toContain('talyn-pr');
       expect(fleet.scripts.some((s) => s.includes('talyn-user.md'))).toBe(true);
       expect(fleet.scripts.some((s) => s.includes('CLAUDE.local.md.talyn-tmp'))).toBe(false);
-      expect(fleet.scripts.some((s) => s.includes('info/exclude'))).toBe(false);
+      expect(fleet.scripts.some((s) => s.includes('touch "$ex"'))).toBe(false);
       expect(fleet.scripts.some((s) => s.includes('git commit-tree'))).toBe(false);
       expect(fleet.scripts.some((s) => s.includes('git diff'))).toBe(false);
       expect((await getChat(chatId))?.status).toBe('idle');

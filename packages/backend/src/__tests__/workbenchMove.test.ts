@@ -669,6 +669,11 @@ describe('moving a session to a fresh sandbox', () => {
   });
 
   describe('T2: low disk before a turn', () => {
+    // The first probe reports the low disk; a probe after a grow or move finds room.
+    const lowFirstProbe = (avail: number) => {
+      let probes = 0;
+      replies.probe = () => ({ stderr: `TALYN_DISK ${++probes === 1 ? avail : 10 * GIB} ${16 * GIB}` });
+    };
     const lowCheckpoint = (avail: number): ExecReply => ({
       stdout: `${'c'.repeat(40)}\n`,
       stderr: `TALYN_DISK ${avail} ${16 * GIB}`,
@@ -680,6 +685,7 @@ describe('moving a session to a fresh sandbox', () => {
       [8 * GIB, false],
     ])('with %d bytes free, moves: %s', async (avail, moves) => {
       replies.checkpoint = lowCheckpoint(avail);
+      lowFirstProbe(avail);
       await turns.sendMessage('chat-a', { text: 'go' });
       await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
       expect(fleet.has('export')).toBe(moves);
@@ -688,6 +694,7 @@ describe('moving a session to a fresh sandbox', () => {
 
     it('grows the disk instead when the fleet can, and does not move', async () => {
       replies.checkpoint = lowCheckpoint(GIB);
+      lowFirstProbe(GIB);
       fleet.grow = 'grown';
       fleet.sandbox = { status: 'idle', diskMib: 16384 };
       await turns.sendMessage('chat-a', { text: 'go' });
@@ -701,6 +708,7 @@ describe('moving a session to a fresh sandbox', () => {
 
       beforeEach(() => {
         replies.checkpoint = lowCheckpoint(GIB);
+        lowFirstProbe(GIB);
         fleet.grow = 'grown';
       });
 
@@ -749,6 +757,7 @@ describe('moving a session to a fresh sandbox', () => {
     it('does not move a box a disk move made and that is on the newest golden; says so once', async () => {
       await store.mergeWorkbenchSettings(WB, { movedForDiskTo: OLD_BOX });
       replies.checkpoint = lowCheckpoint(GIB);
+      lowFirstProbe(GIB);
       fleet.sandbox = { status: 'idle', goldenStale: false };
       for (const text of ['one', 'two']) {
         await vi.waitFor(async () => expect((await store.getChat('chat-a'))?.status).not.toBe('running'));
