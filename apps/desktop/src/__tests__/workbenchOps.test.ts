@@ -4,7 +4,7 @@
 import type { Workbench, WorkbenchLocalBridge } from '@talyn/shared';
 import { api as backendApi } from '../renderer/lib/api';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
-import { localOps, sandboxOps } from '../renderer/lib/workbenchOps';
+import { localOps, needsWake, sandboxOps } from '../renderer/lib/workbenchOps';
 import { openLocalPullRequest } from '../renderer/lib/localPullRequest';
 import { getDeviceId, resetDeviceIdCache } from '../renderer/lib/workbenchBridge';
 
@@ -78,7 +78,7 @@ describe('localOps', () => {
       if (has(steps, 'merge-base')) return { exitCode: 0, stdout: 'base' };
       return { exitCode: 0, stdout: 'patch' };
     });
-    expect(await localOps(wb(), bridge, null).diff('both.ts', scope)).toBe('patch');
+    expect(await localOps(wb(), bridge, null).diff('both.ts', scope)).toEqual({ patch: 'patch' });
     expect(exec).toHaveBeenLastCalledWith('/work/lisbon', [{
       argv: ['git', 'diff', '--no-color', '--find-renames', ...(scope === 'committed' ? ['base', 'HEAD'] : ['HEAD']), '--', 'both.ts'],
     }]);
@@ -132,7 +132,7 @@ describe('localOps', () => {
       if (has(steps, 'diff')) return { exitCode: 0, stdout: '' };
       return undefined;
     });
-    expect(await localOps(wb(), bridge, null).diff('new.txt')).toContain('+hi');
+    expect((await localOps(wb(), bridge, null).diff('new.txt')).patch).toContain('+hi');
   });
 
   it('restores the checkpoint taken before the given turn', async () => {
@@ -270,11 +270,28 @@ describe('openLocalPullRequest', () => {
 });
 
 describe('sandboxOps', () => {
+  it.each([
+    ['ready', { status: 'ready' }, null],
+    ['archived: its stored copy still reads', { status: 'archived', archivedAt: '2026-11-01T00:00:00Z' }, null],
+    ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],
+  ] as const)('readUnavailable: %s', (_n, over, expected) => {
+    expect(sandboxOps(wb(over as Partial<Workbench>)).readUnavailable).toBe(expected);
+  });
+
+  it.each([
+    ['a stored copy is missing', Object.assign(new Error('asleep'), { code: 'snapshot_unavailable' }), true],
+    ['another refusal', Object.assign(new Error('nope'), { code: 'not_ready' }), false],
+    ['a plain error', new Error('boom'), false],
+    ['not an error', { code: 'snapshot_unavailable' }, false],
+  ])('needsWake: %s', (_n, err, expected) => {
+    expect(needsWake(err)).toBe(expected);
+  });
+
   it.each(['uncommitted', 'committed', undefined] as const)('passes the diff scope: %s', async (scope) => {
     const diff = jest.spyOn(backendApi.workbenches, 'diff').mockResolvedValue({ patch: 'patch' });
     try {
-      expect(await sandboxOps(wb()).diff('a.ts', scope)).toBe('patch');
-      expect(diff).toHaveBeenCalledWith('wb1', 'a.ts', scope);
+      expect(await sandboxOps(wb()).diff('a.ts', scope)).toEqual({ patch: 'patch' });
+      expect(diff).toHaveBeenCalledWith('wb1', 'a.ts', scope, undefined);
     } finally {
       diff.mockRestore();
     }

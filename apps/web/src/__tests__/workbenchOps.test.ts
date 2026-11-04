@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api }));
 
-import { opsFor, sandboxOps } from '../lib/workbenchOps';
+import { needsWake, opsFor, sandboxOps } from '../lib/workbenchOps';
 import { useWorkbenchStore } from '../stores/workbenches';
 
 function wb(over: Partial<Workbench> = {}): Workbench {
@@ -48,10 +48,27 @@ beforeEach(() => {
 });
 
 describe('sandboxOps', () => {
+  it.each([
+    ['ready', { status: 'ready' }, null],
+    ['archived: its stored copy still reads', { status: 'archived', archivedAt: '2026-11-01T00:00:00Z' }, null],
+    ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],
+  ] as const)('readUnavailable: %s', (_n, over, expected) => {
+    expect(sandboxOps(wb(over as Partial<Workbench>)).readUnavailable).toBe(expected);
+  });
+
+  it.each([
+    ['a stored copy is missing', Object.assign(new Error('asleep'), { code: 'snapshot_unavailable' }), true],
+    ['another refusal', Object.assign(new Error('nope'), { code: 'not_ready' }), false],
+    ['a plain error', new Error('boom'), false],
+    ['not an error', { code: 'snapshot_unavailable' }, false],
+  ])('needsWake: %s', (_n, err, expected) => {
+    expect(needsWake(err)).toBe(expected);
+  });
+
   it.each(['uncommitted', 'committed', undefined] as const)('passes the diff scope: %s', async (scope) => {
     api.workbenches.diff.mockResolvedValue({ patch: 'patch' });
-    expect(await sandboxOps(wb()).diff('a.ts', scope)).toBe('patch');
-    expect(api.workbenches.diff).toHaveBeenCalledWith('wb1', 'a.ts', scope);
+    expect(await sandboxOps(wb()).diff('a.ts', scope)).toEqual({ patch: 'patch' });
+    expect(api.workbenches.diff).toHaveBeenCalledWith('wb1', 'a.ts', scope, undefined);
   });
 
   it.each([

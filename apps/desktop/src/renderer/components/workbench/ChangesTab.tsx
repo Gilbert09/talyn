@@ -13,18 +13,30 @@ import {
   X,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
-import type { Workbench, WorkbenchChangedFile, WorkbenchChanges, WorkbenchChat, WorkbenchDiffScope } from '@talyn/shared';
+import type {
+  Workbench,
+  WorkbenchChangedFile,
+  WorkbenchChanges,
+  WorkbenchChat,
+  WorkbenchDiff,
+  WorkbenchDiffScope,
+} from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
-import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { needsWake, type WorkbenchOps } from '../../lib/workbenchOps';
 import { newClientId } from '../../lib/workbenchBridge';
 import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
 import { toast } from '../../stores/toast';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
 import { createChatTab } from './ChatTabs';
-import { timeAgo } from './new/RecentWorkbenches';
+import { StoredBanner } from './StoredBanner';
 
-/** How often the list refreshes while it is on screen. */
+/**
+ * How often the list refreshes while it is on screen and a turn or a script
+ * runs. With nothing running, a poll would only keep an idle sandbox awake:
+ * the list then follows the session's `changesEtag` and diff stat instead.
+ */
 export const CHANGES_REFRESH_MS = 10_000;
 
 interface Selection {
@@ -74,10 +86,18 @@ export function ChangesTab({
   }, []);
   const merged = workbench.pr?.state === 'merged';
   const showChanges = !merged || showMergedDiff;
+  // Test doubles may leave `readUnavailable` out: then `unavailable` decides, as before.
+  const blocked = ops.readUnavailable !== undefined ? ops.readUnavailable : ops.unavailable;
+  const turnRunning = useWorkbenchStore((s) => (s.chats[workbench.id] ?? []).some((c) => c.status === 'running'));
+  const scriptRunning = useWorkbenchStore((s) => Object.values(s.scriptOutput[workbench.id] ?? {}).some((o) => o.running));
+  const active = turnRunning || scriptRunning || chat?.status === 'running';
+  const stored = Boolean(changes?.snapshotAt);
+  // A new stored copy, or a new diff stat, means the list moved.
+  const moved = `${workbench.changesEtag ?? ''}|${JSON.stringify([workbench.diffStat, workbench.uncommittedStats, workbench.committedStats])}`;
 
   // Only a person's refresh passes `live`: polls take the stored list of a sleeping box and never wake it.
   const refresh = useCallback(async (live = false) => {
-    if (ops.unavailable || loadingRef.current) return;
+    if (blocked || loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     try {
@@ -93,7 +113,7 @@ export function ChangesTab({
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [ops]);
+  }, [ops, blocked]);
 
   useEffect(() => {
     setChanges(null);
@@ -103,16 +123,18 @@ export function ChangesTab({
   }, [workbench.id]);
 
   useEffect(() => {
-    if (visible && showChanges && !ops.unavailable) void refresh();
-  }, [visible, showChanges, turnsEnded, refresh, ops.unavailable]);
+    if (visible && showChanges && !blocked) void refresh();
+  }, [visible, showChanges, turnsEnded, refresh, blocked, moved]);
 
+  // Poll only while a turn or a script can change files, and never a stored
+  // list: a poll of a running box resets its idle clock and keeps it awake.
   useEffect(() => {
-    if (!visible || !showChanges || ops.unavailable) return undefined;
+    if (!visible || !showChanges || blocked || stored || !active) return undefined;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, CHANGES_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [visible, showChanges, refresh, ops.unavailable]);
+  }, [visible, showChanges, refresh, blocked, stored, active]);
 
   const files = changes?.files ?? [];
   const groups = changes?.uncommitted && changes.committed ? [
@@ -132,7 +154,7 @@ export function ChangesTab({
     );
   }
 
-  if (ops.unavailable) return <p className="p-3 text-xs text-muted-foreground">{ops.unavailable}</p>;
+  if (blocked) return <p className="p-3 text-xs text-muted-foreground">{blocked}</p>;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -142,7 +164,7 @@ export function ChangesTab({
           type="button"
           onClick={() => void refresh(true)}
           className="rounded p-1 hover:bg-accent hover:text-foreground"
-          title={changes?.snapshotAt ? 'Wake the sandbox and refresh' : 'Refresh'}
+          title={stored ? 'Wake the sandbox and refresh' : 'Refresh'}
           aria-label="Refresh the changes"
         >
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
@@ -155,9 +177,7 @@ export function ChangesTab({
         </div>
       )}
       {changes?.snapshotAt && (
-        <p className="border-b px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="changes-asleep">
-          Sandbox is asleep. Showing changes from {agoText(changes.snapshotAt)}.
-        </p>
+        <StoredBanner changes={changes} what="changes" onRefresh={() => void refresh(true)} />
       )}
       {changes && (
         <div className="max-h-[40%] shrink-0 overflow-y-auto border-b">
@@ -204,7 +224,7 @@ export function ChangesTab({
             scope={selection.scope}
             ops={ops}
             refreshKey={turnsEnded}
-            asleep={Boolean(changes?.snapshotAt)}
+            tooLarge={Boolean(stored && changes?.patch?.tooLarge)}
             onComment={(c) => setComments([...comments, c])}
           />
         )}
@@ -212,11 +232,6 @@ export function ChangesTab({
       <CommentBar workbench={workbench} chat={chat} ops={ops} comments={comments} setComments={setComments} />
     </div>
   );
-}
-
-function agoText(iso: string): string {
-  const ago = timeAgo(iso);
-  return ago === 'now' ? 'just now' : `${ago} ago`;
 }
 
 function FileRow({
@@ -268,41 +283,48 @@ function FileDiffView({
   scope,
   ops,
   refreshKey,
-  asleep,
+  tooLarge,
   onComment,
 }: {
   file: WorkbenchChangedFile;
   scope: WorkbenchDiffScope;
   ops: WorkbenchOps;
   refreshKey: number;
-  /** The list came from the stored copy: loading the diff wakes the box first. */
-  asleep: boolean;
+  /** The stored copy has no diff because it was too large to store. */
+  tooLarge: boolean;
   onComment: (comment: DiffComment) => void;
 }) {
-  const [patch, setPatch] = useState<string | null>(null);
+  const [diff, setDiff] = useState<WorkbenchDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wake, setWake] = useState<'offer' | 'waking' | null>(null);
+  const [live, setLive] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [draft, setDraft] = useState('');
+  const patch = diff?.patch ?? null;
 
   useEffect(() => {
     let cancelled = false;
-    readWithReconnect(() => ops.diff(file.path, scope), {
+    setWake((w) => (w === 'offer' ? null : w));
+    readWithReconnect(() => ops.diff(file.path, scope, live ? { live: true } : undefined), {
       onReconnecting: (r) => !cancelled && setReconnecting(r),
       isCancelled: () => cancelled,
     })
-      .then((p) => {
+      .then((d) => {
         if (cancelled) return;
-        setPatch(p);
+        setDiff(d);
         setError(null);
+        setWake(null);
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (cancelled) return;
+        if (needsWake(err)) setWake('offer');
+        else setError(err.message);
       });
     return () => {
       cancelled = true;
     };
-  }, [file.path, scope, ops, refreshKey]);
+  }, [file.path, scope, ops, refreshKey, live]);
 
   const options = useMemo(
     () => ({
@@ -319,10 +341,20 @@ function FileDiffView({
   );
 
   if (error && !reconnecting) return <p className="p-3 text-xs text-destructive">{error}</p>;
+  if (wake === 'offer') {
+    return (
+      <div className="space-y-2 p-3 text-xs text-muted-foreground" data-testid="diff-not-stored">
+        <p>{tooLarge ? 'This diff is not stored (too large).' : 'This diff is not stored.'}</p>
+        <Button variant="outline" size="sm" onClick={() => { setWake('waking'); setLive(true); }}>
+          Wake the sandbox to see it
+        </Button>
+      </div>
+    );
+  }
   if (patch === null) {
     return (
       <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {reconnecting ? RECONNECTING_TEXT : asleep ? 'Waking the sandbox to load the diff…' : 'Loading diff…'}
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {reconnecting ? RECONNECTING_TEXT : wake === 'waking' ? 'Waking the sandbox to load the diff…' : 'Loading diff…'}
       </div>
     );
   }
@@ -339,6 +371,11 @@ function FileDiffView({
 
   return (
     <div>
+      {diff?.source === 'github' && (
+        <p className="border-b px-3 py-1 text-[11px] text-muted-foreground" data-testid="diff-from-github">
+          From GitHub{diff.mergeBase ? ` at ${diff.mergeBase.slice(0, 7)}` : ''}.
+        </p>
+      )}
       <div className="max-w-full overflow-x-auto">
         <PatchDiff
           patch={patch}

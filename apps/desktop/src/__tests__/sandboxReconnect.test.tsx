@@ -4,7 +4,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import type { Workbench, WorkbenchChanges } from '@talyn/shared';
+import type { Workbench, WorkbenchChanges, WorkbenchChat } from '@talyn/shared';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import {
   RECONNECT_DELAYS_MS,
@@ -14,6 +14,7 @@ import {
 } from '../renderer/lib/sandboxReconnect';
 import { ChangesTab, CHANGES_REFRESH_MS } from '../renderer/components/workbench/ChangesTab';
 import { FilesTab } from '../renderer/components/workbench/FilesTab';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
 
 jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() } }));
@@ -109,6 +110,9 @@ describe('readWithReconnect', () => {
 describe('Changes panel reconnect', () => {
   const renderTab = (ops: WorkbenchOps) =>
     render(<ChangesTab workbench={WB} chat={null} ops={ops} visible turnsEnded={0} comments={[]} setComments={() => {}} />);
+  // The list polls only while a turn runs.
+  beforeEach(() => useWorkbenchStore.setState({ chats: { [WB.id]: [{ id: 'c1', workbenchId: WB.id, status: 'running' } as WorkbenchChat] } }));
+  afterEach(() => useWorkbenchStore.setState({ chats: {} }));
 
   it('keeps the old list, shows the muted line and recovers', async () => {
     jest.useFakeTimers();
@@ -154,8 +158,8 @@ describe('Changes panel reconnect', () => {
 describe('Files panel reconnect', () => {
   it('shows the muted line, then the list', async () => {
     jest.useFakeTimers();
-    const listFiles = jest.fn().mockRejectedValueOnce(new Error(UNREACHABLE)).mockResolvedValue(['src/app.ts']);
-    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, listFiles } as unknown as WorkbenchOps} visible />);
+    const files = jest.fn().mockRejectedValueOnce(new Error(UNREACHABLE)).mockResolvedValue({ paths: ['src/app.ts'] });
+    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, files } as unknown as WorkbenchOps} visible />);
     await tick(0);
     expect(screen.getByTestId('sandbox-reconnecting')).toBeInTheDocument();
     expect(screen.queryByText(UNREACHABLE)).not.toBeInTheDocument();
@@ -166,8 +170,8 @@ describe('Files panel reconnect', () => {
 
   it('shows another error as before', async () => {
     jest.useFakeTimers();
-    const listFiles = jest.fn().mockRejectedValue(new Error('Boom'));
-    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, listFiles } as unknown as WorkbenchOps} visible />);
+    const files = jest.fn().mockRejectedValue(new Error('Boom'));
+    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, files } as unknown as WorkbenchOps} visible />);
     await tick(0);
     expect(screen.getByText('Boom')).toBeInTheDocument();
   });

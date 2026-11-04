@@ -143,7 +143,7 @@ function makeOps(over: Partial<WorkbenchOps> = {}): WorkbenchOps {
         ['b.ts', 2],
       ]),
     ),
-    diff: vi.fn(async (path?: string) => `patch of ${path}`),
+    diff: vi.fn(async (path?: string) => ({ patch: `patch of ${path}` })),
     ...over,
   } as unknown as WorkbenchOps;
 }
@@ -502,9 +502,9 @@ describe('Changes tab', () => {
     expect(committedHeader).toHaveTextContent('+7');
     expect(committedHeader).toHaveTextContent('−3');
     fireEvent.click(within(uncommitted).getByRole('button', { name: /both.ts/ }));
-    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'uncommitted'));
+    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'uncommitted', undefined));
     fireEvent.click(within(committed).getByRole('button', { name: /both.ts/ }));
-    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'committed'));
+    await waitFor(() => expect(ops.diff).toHaveBeenLastCalledWith('both.ts', 'committed', undefined));
     fireEvent.click(header);
     expect(header).toHaveAttribute('aria-expanded', 'false');
     expect(within(uncommitted).queryByText('both.ts')).not.toBeInTheDocument();
@@ -702,21 +702,83 @@ describe('Changes tab', () => {
       expect(screen.queryByTestId('changes-asleep')).not.toBeInTheDocument();
     });
 
-    it('never asks for live on the first load or a poll', async () => {
+    const tick = async (ms: number) => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+    const runningChat = (status: string) =>
+      useWorkbenchStore.setState({ chats: { [WB.id]: [{ ...chat, status }] as WorkbenchChat[] } });
+
+    it('never polls a stored list, and never asks for live on its own', async () => {
       vi.useFakeTimers();
       try {
+        runningChat('running');
         const changesFn = vi.fn(async () => asleep(60_000));
         renderTab(makeOps({ changes: changesFn }));
-        for (let i = 0; i < 3; i++) {
-          await act(async () => {
-            vi.advanceTimersByTime(CHANGES_REFRESH_MS);
-          });
-        }
-        expect(changesFn.mock.calls.length).toBeGreaterThan(1);
-        for (const args of changesFn.mock.calls as unknown[][]) expect(args[0]).toBeUndefined();
+        for (let i = 0; i < 3; i++) await tick(CHANGES_REFRESH_MS);
+        expect(changesFn).toHaveBeenCalledTimes(1);
+        expect((changesFn.mock.calls as unknown[][])[0][0]).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it.each([
+      ['a turn runs', 'running', true],
+      ['nothing runs', 'idle', false],
+    ])('polls a live list only while a turn or script runs: %s', async (_name, status, polls) => {
+      vi.useFakeTimers();
+      try {
+        runningChat(status);
+        const changesFn = vi.fn(async () => changes([['a.ts', 1]]));
+        render(<ChangesTab workbench={WB} chat={null} ops={makeOps({ changes: changesFn })} visible turnsEnded={0} comments={[]} setComments={vi.fn()} />);
+        for (let i = 0; i < 3; i++) await tick(CHANGES_REFRESH_MS);
+        if (polls) expect(changesFn.mock.calls.length).toBeGreaterThan(2);
+        else expect(changesFn).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('polls a live list while a script runs', async () => {
+      vi.useFakeTimers();
+      try {
+        useWorkbenchStore.setState({ chats: {}, scriptOutput: { [WB.id]: { run: { chunks: [], total: 0, running: true, exitCode: null } } } });
+        const changesFn = vi.fn(async () => changes([['a.ts', 1]]));
+        render(<ChangesTab workbench={WB} chat={null} ops={makeOps({ changes: changesFn })} visible turnsEnded={0} comments={[]} setComments={vi.fn()} />);
+        for (let i = 0; i < 3; i++) await tick(CHANGES_REFRESH_MS);
+        expect(changesFn.mock.calls.length).toBeGreaterThan(2);
+      } finally {
+        useWorkbenchStore.setState({ scriptOutput: {} });
+        vi.useRealTimers();
+      }
+    });
+
+    it('fetches again when the session gets a new stored copy or a new diff stat', async () => {
+      const changesFn = vi.fn(async () => asleep(60_000));
+      const ops = makeOps({ changes: changesFn });
+      const props = { chat, ops, visible: true, turnsEnded: 0, comments: [], setComments: vi.fn() };
+      const view = render(<ChangesTab workbench={{ ...WB, changesEtag: 'e1' }} {...props} />);
+      await waitFor(() => expect(changesFn).toHaveBeenCalledTimes(1));
+      view.rerender(<ChangesTab workbench={{ ...WB, changesEtag: 'e2' }} {...props} />);
+      await waitFor(() => expect(changesFn).toHaveBeenCalledTimes(2));
+      view.rerender(<ChangesTab workbench={{ ...WB, changesEtag: 'e2', diffStat: { added: 9, removed: 0, files: 1 } }} {...props} />);
+      await waitFor(() => expect(changesFn).toHaveBeenCalledTimes(3));
+    });
+
+    it('the banner button wakes the box', async () => {
+      const changesFn = vi.fn().mockResolvedValueOnce(asleep(60_000)).mockResolvedValue(changes([['a.ts', 1]]));
+      renderTab(makeOps({ changes: changesFn }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Refresh from the sandbox' }));
+      expect(changesFn).toHaveBeenLastCalledWith({ live: true });
+      await waitFor(() => expect(screen.queryByTestId('changes-asleep')).not.toBeInTheDocument());
+    });
+
+    it('says an archived session is archived, and offers no wake', async () => {
+      renderTab(makeOps({ changes: vi.fn(async () => ({ ...asleep(60_000), storedReason: 'archived' as const })) }));
+      expect(await screen.findByTestId('changes-asleep')).toHaveTextContent('This session is archived. Showing changes from 1m ago.');
+      expect(screen.queryByRole('button', { name: 'Refresh from the sandbox' })).not.toBeInTheDocument();
     });
 
     it('the refresh button wakes the box, spins while it runs, then shows the live list', async () => {
@@ -737,18 +799,44 @@ describe('Changes tab', () => {
       expect(refresh.querySelector('svg')).not.toHaveClass('animate-spin');
     });
 
-    it.each([
-      ['a stored list', true, 'Waking the sandbox to load the diff…'],
-      ['a live list', false, 'Loading diff…'],
-    ])('loading a diff of %s says what it waits for', async (_name, stored, text) => {
+    const notStored = () => Object.assign(new Error('The sandbox is asleep.'), { status: 409, code: 'snapshot_unavailable' });
+
+    it('loads the stored diff of a stored list, with no wake', async () => {
       const ops = makeOps({
-        changes: vi.fn(async () => (stored ? asleep(60_000) : changes([['a.ts', 1]]))),
-        diff: vi.fn(() => new Promise<string>(() => {})),
+        changes: vi.fn(async () => asleep(60_000)),
+        diff: vi.fn(() => new Promise<never>(() => {})),
       });
       renderTab(ops);
       fireEvent.click(await screen.findByRole('button', { name: /a\.ts/ }));
-      expect(await screen.findByText(text)).toBeInTheDocument();
-      expect(ops.diff).toHaveBeenCalledWith('a.ts', 'combined');
+      expect(await screen.findByText('Loading diff…')).toBeInTheDocument();
+      expect(ops.diff).toHaveBeenCalledWith('a.ts', 'combined', undefined);
+    });
+
+    it.each([
+      ['not stored', false, 'This diff is not stored.'],
+      ['too large to store', true, 'This diff is not stored (too large).'],
+    ])('a diff that is %s offers a wake, and the wake reads it live', async (_name, tooLarge, text) => {
+      const diff = vi.fn()
+        .mockRejectedValueOnce(notStored())
+        .mockImplementationOnce(() => new Promise<never>(() => {}));
+      renderTab(makeOps({
+        changes: vi.fn(async () => ({ ...asleep(60_000), patch: { available: false, ...(tooLarge ? { tooLarge: true } : {}) } })),
+        diff,
+      }));
+      fireEvent.click(await screen.findByRole('button', { name: /a\.ts/ }));
+      expect(await screen.findByTestId('diff-not-stored')).toHaveTextContent(text);
+      fireEvent.click(screen.getByRole('button', { name: 'Wake the sandbox to see it' }));
+      expect(await screen.findByText('Waking the sandbox to load the diff…')).toBeInTheDocument();
+      expect(diff).toHaveBeenLastCalledWith('a.ts', 'combined', { live: true });
+    });
+
+    it('says a diff came from GitHub', async () => {
+      renderTab(makeOps({
+        changes: vi.fn(async () => asleep(60_000)),
+        diff: vi.fn(async () => ({ patch: 'diff --git a/a.ts b/a.ts\n+x\n', source: 'github' as const, mergeBase: 'abcdef1234' })),
+      }));
+      fireEvent.click(await screen.findByRole('button', { name: /a\.ts/ }));
+      expect(await screen.findByTestId('diff-from-github')).toHaveTextContent('From GitHub at abcdef1.');
     });
   });
 });

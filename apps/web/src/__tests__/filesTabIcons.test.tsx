@@ -8,7 +8,7 @@ import { FilesTab } from '../components/workbench/FilesTab';
 
 const ops = {
   unavailable: null,
-  listFiles: vi.fn(async () => ['src/app.ts', 'package.json', 'notes.zzzz']),
+  files: vi.fn(async () => ({ paths: ['src/app.ts', 'package.json', 'notes.zzzz'] })),
 } as unknown as WorkbenchOps;
 
 afterEach(cleanup);

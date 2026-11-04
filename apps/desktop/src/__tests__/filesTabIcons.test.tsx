@@ -14,7 +14,7 @@ jest.mock('../renderer/lib/fileIconUrl', () => ({
 
 const ops = {
   unavailable: null,
-  listFiles: jest.fn(async () => ['src/app.ts', 'package.json', 'notes.zzzz']),
+  files: jest.fn(async () => ({ paths: ['src/app.ts', 'package.json', 'notes.zzzz'] })),
 } as unknown as WorkbenchOps;
 
 afterEach(cleanup);

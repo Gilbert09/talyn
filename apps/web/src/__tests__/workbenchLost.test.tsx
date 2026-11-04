@@ -23,7 +23,7 @@ it('shows the recovery message in Changes and Files without polling the lost box
   } as Workbench;
   const ops = sandboxOps(workbench);
   const changes = vi.spyOn(ops, 'changes');
-  const files = vi.spyOn(ops, 'listFiles');
+  const files = vi.spyOn(ops, 'files');
   render(
     <>
       <ChangesTab

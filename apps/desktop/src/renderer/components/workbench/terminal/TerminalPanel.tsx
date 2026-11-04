@@ -4,7 +4,7 @@ import type { Workbench, WorkbenchConfig } from '@talyn/shared';
 import { cn } from '../../../lib/utils';
 import { formatKeys } from '../../../lib/shortcuts';
 import { clampDockHeight } from '../../../lib/workbenchLayout';
-import type { WorkbenchOps } from '../../../lib/workbenchOps';
+import { needsWake, type WorkbenchOps } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useWorkbenchStore, type WorkbenchTerminalTab } from '../../../stores/workbenches';
 import { useSessionPreview } from '../../../hooks/useSessionPreview';
@@ -54,7 +54,8 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
       void ops.config().then((value) => {
         if (!cancelled) setLoaded({ id: workbench.id, config: value });
       }).catch((err) => {
-        if (!cancelled) toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
+        // A sleeping sandbox with no stored config: the scripts show once it wakes. Not an error.
+        if (!cancelled && !needsWake(err)) toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
       });
     }
     return () => { cancelled = true; };

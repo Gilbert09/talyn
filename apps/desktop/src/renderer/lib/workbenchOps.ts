@@ -22,6 +22,9 @@ import {
   type Workbench,
   type WorkbenchAttachment,
   type WorkbenchChanges,
+  type WorkbenchDiff,
+  type WorkbenchFileContent,
+  type WorkbenchFileList,
   type WorkbenchDiffScope,
   type WorkbenchChat,
   type WorkbenchConfig,
@@ -51,6 +54,11 @@ export interface WorkbenchOps {
   readonly runtime: Workbench['runtime'];
   /** Null when this client can act on the workbench; otherwise why not. */
   readonly unavailable: string | null;
+  /**
+   * Null when the Changes and Files tabs can read; otherwise why not. An
+   * archived sandbox session still reads the copy Talyn stored.
+   */
+  readonly readUnavailable: string | null;
   /** Whether a queued message can be taken back. */
   readonly canRemoveQueued: boolean;
   /** Whether pasted images can be attached. */
@@ -60,11 +68,17 @@ export interface WorkbenchOps {
   removeQueued(chatId: string, messageId: string): void;
   /** A sleeping sandbox answers with its stored list (`snapshotAt` set); `live` wakes it and reads it. */
   changes(opts?: { live?: boolean }): Promise<WorkbenchChanges>;
-  /** Unified diff text for one file, or the whole branch. */
-  diff(path?: string, scope?: WorkbenchDiffScope): Promise<string>;
+  /**
+   * Unified diff for one file, or the whole branch. A sleeping sandbox answers
+   * from the stored copy or GitHub (`source`), or refuses with
+   * `snapshot_unavailable` (see {@link needsWake}); `live` wakes it.
+   */
+  diff(path?: string, scope?: WorkbenchDiffScope, opts?: { live?: boolean }): Promise<WorkbenchDiff>;
   listFiles(): Promise<string[]>;
-  readFile(path: string): Promise<{ content: string; binary: boolean }>;
-  config(): Promise<WorkbenchConfig>;
+  /** The file list, with where it came from. `live` wakes a sleeping sandbox. */
+  files(opts?: { live?: boolean }): Promise<WorkbenchFileList>;
+  readFile(path: string, opts?: { live?: boolean }): Promise<WorkbenchFileContent>;
+  config(opts?: { live?: boolean }): Promise<WorkbenchConfig>;
   saveDetectedConfig(): Promise<void>;
   restoreCheckpoint(chatId: string, turn: number): Promise<void>;
   runScript(name: string): Promise<void>;
@@ -90,11 +104,22 @@ export function sandboxUnavailableReason(workbench: Workbench): string | null {
   return null;
 }
 
+/**
+ * True when a read was refused because the sandbox sleeps and Talyn stored no
+ * copy of what was asked for. Only a read with `live` wakes the box for it.
+ */
+export function needsWake(err: unknown): boolean {
+  return err instanceof Error && (err as { code?: unknown }).code === 'snapshot_unavailable';
+}
+
 export function sandboxOps(workbench: Workbench): WorkbenchOps {
   const id = workbench.id;
+  const unavailable = sandboxUnavailableReason(workbench);
   return {
     runtime: 'sandbox',
-    unavailable: sandboxUnavailableReason(workbench),
+    unavailable,
+    // An archived session has no box, but its stored copy still reads.
+    readUnavailable: workbench.status === 'archived' || workbench.archivedAt ? null : unavailable,
     canRemoveQueued: true,
     canAttach: true,
     send: (chat, input) => api.workbenches.sendMessage(chat.id, input),
@@ -106,10 +131,11 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
         .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
     },
     changes: (opts) => api.workbenches.changes(id, opts),
-    diff: async (path, scope) => (await api.workbenches.diff(id, path, scope)).patch,
+    diff: (path, scope, opts) => api.workbenches.diff(id, path, scope, opts),
     listFiles: async () => (await api.workbenches.files(id)).paths,
-    readFile: (path) => api.workbenches.file(id, path),
-    config: () => api.workbenches.config(id),
+    files: (opts) => api.workbenches.files(id, opts),
+    readFile: (path, opts) => api.workbenches.file(id, path, opts),
+    config: (opts) => api.workbenches.config(id, opts),
     saveDetectedConfig: () => api.workbenches.saveDetectedConfig(id),
     restoreCheckpoint: (chatId, turn) => api.workbenches.restoreCheckpoint(chatId, turn),
     runScript: async (name) => {
@@ -206,6 +232,7 @@ export function localOps(
   const ops: WorkbenchOps = {
     runtime: 'local',
     unavailable,
+    readUnavailable: unavailable,
     canRemoveQueued: true,
     canAttach: !unavailable,
     send: async (chat, input) => {
@@ -255,12 +282,13 @@ export function localOps(
     diff: async (file, scope = 'combined') => {
       const sha = scope === 'uncommitted' ? 'HEAD' : await base();
       const patch = await run([diffPatch(sha, file, scope === 'committed' ? 'HEAD' : undefined)]);
-      if (scope === 'committed' || patch.trim()) return patch;
-      if (file) return run([untrackedFilePatch(file)]);
+      if (scope === 'committed' || patch.trim()) return { patch };
+      if (file) return { patch: await run([untrackedFilePatch(file)]) };
       const paths = parseNulList(await run([untrackedFiles()]));
-      return patch + (await Promise.all(paths.map((rel) => run([untrackedFilePatch(rel)])))).join('');
+      return { patch: patch + (await Promise.all(paths.map((rel) => run([untrackedFilePatch(rel)])))).join('') };
     },
     listFiles: async () => parseNulList(await run([listFiles()])),
+    files: async () => ({ paths: parseNulList(await run([listFiles()])) }),
     readFile: (rel) => need().readFile(path, rel),
     config: async () => applyWorkbenchScriptOverrides(await need().readConfig(path), workbench.settings),
     saveDetectedConfig: () => need().saveDetectedConfig(path),

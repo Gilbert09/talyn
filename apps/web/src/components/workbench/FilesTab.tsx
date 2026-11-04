@@ -1,11 +1,13 @@
 import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, X } from 'lucide-react';
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchFileContent, WorkbenchFileList } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
-import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { needsWake, type WorkbenchOps } from '../../lib/workbenchOps';
 import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
 import { FileIcon } from './FileIcon';
+import { StoredBanner } from './StoredBanner';
+import { Button } from '../ui/button';
 import { lazyWithReload } from '../../lib/lazyWithReload';
 
 // Monaco is large, so it loads only when a file opens.
@@ -13,8 +15,10 @@ const CodeViewer = lazyWithReload(() => import('./CodeViewer'));
 
 /** Every file on the branch as a tree, and a read-only viewer for the one picked. */
 export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; ops: WorkbenchOps; visible: boolean }) {
-  const [paths, setPaths] = useState<string[] | null>(null);
+  const [list, setList] = useState<WorkbenchFileList | null>(null);
+  const paths = list?.paths ?? null;
   const [error, setError] = useState<string | null>(null);
+  const [wake, setWake] = useState(false);
   const [loading, setLoading] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const alive = useRef(true);
@@ -27,34 +31,42 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>(null);
 
-  const load = () => {
-    if (ops.unavailable) return;
+  // Test doubles may leave `readUnavailable` out: then `unavailable` decides, as before.
+  const blocked = ops.readUnavailable !== undefined ? ops.readUnavailable : ops.unavailable;
+  // Only a person's refresh passes `live`: it wakes a sleeping sandbox.
+  const load = (live = false) => {
+    if (blocked) return;
     setLoading(true);
-    readWithReconnect(() => ops.listFiles(), {
+    readWithReconnect(() => ops.files(live ? { live: true } : undefined), {
       onReconnecting: (r) => alive.current && setReconnecting(r),
       isCancelled: () => !alive.current,
     })
-      .then((p) => {
-        setPaths(p);
+      .then((next) => {
+        setList(next);
         setError(null);
+        setWake(false);
       })
-      .catch((err: Error) => setError(err.message))
+      .catch((err: Error) => {
+        if (needsWake(err)) setWake(true);
+        else setError(err.message);
+      })
       .finally(() => alive.current && setLoading(false));
   };
 
   useEffect(() => {
-    setPaths(null);
+    setList(null);
+    setWake(false);
     setSelected(null);
     setOpenDirs(new Set());
   }, [workbench.id]);
 
   useEffect(() => {
-    if (visible && paths === null) load();
-  }, [visible, paths, ops]);
+    if (visible && paths === null && !wake) load();
+  }, [visible, paths, ops, wake]);
 
   const tree = useMemo(() => buildFileTree(paths ?? []), [paths]);
 
-  if (ops.unavailable) return <p className="p-3 text-xs text-muted-foreground">{ops.unavailable}</p>;
+  if (blocked) return <p className="p-3 text-xs text-muted-foreground">{blocked}</p>;
 
   const toggle = (path: string) =>
     setOpenDirs((cur) => {
@@ -69,15 +81,30 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
         <span>{paths ? `${paths.length} files` : 'Files'}</span>
         <button
           type="button"
-          onClick={load}
+          onClick={() => load(true)}
           className="rounded p-1 hover:bg-accent hover:text-foreground"
-          title="Refresh"
+          title={list?.snapshotAt ? 'Wake the sandbox and refresh' : 'Refresh'}
           aria-label="Refresh the file list"
         >
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
         </button>
       </div>
       {reconnecting ? <p className="px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p> : error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
+      {list?.snapshotAt && (
+        <StoredBanner
+          changes={{ snapshotAt: list.snapshotAt, storedReason: workbench.archivedAt ? 'archived' : 'asleep' }}
+          what="files"
+          onRefresh={() => load(true)}
+        />
+      )}
+      {wake && (
+        <div className="space-y-2 border-b p-3 text-xs text-muted-foreground" data-testid="files-not-stored">
+          <p>The sandbox is asleep and Talyn has no stored copy of its files.</p>
+          <Button variant="outline" size="sm" onClick={() => load(true)}>
+            Wake the sandbox to see them
+          </Button>
+        </div>
+      )}
       <div
         data-testid="file-tree"
         className={cn('min-h-0 overflow-y-auto py-1', selected ? 'max-h-[40%] shrink-0 border-b' : 'flex-1')}
@@ -167,25 +194,31 @@ function TreeLevel({
 }
 
 function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; onClose: () => void }) {
-  const [file, setFile] = useState<{ content: string; binary: boolean } | null>(null);
+  const [file, setFile] = useState<WorkbenchFileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wake, setWake] = useState(false);
+  const [live, setLive] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    readWithReconnect(() => ops.readFile(path), {
+    readWithReconnect(() => (live ? ops.readFile(path, { live: true }) : ops.readFile(path)), {
       onReconnecting: (r) => !cancelled && setReconnecting(r),
       isCancelled: () => cancelled,
     })
       .then((f) => {
-        if (!cancelled) setFile(f);
+        if (cancelled) return;
+        setFile(f);
+        setWake(false);
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (cancelled) return;
+        if (needsWake(err) && !live) setWake(true);
+        else setError(err.message);
       });
     return () => {
       cancelled = true;
     };
-  }, [path, ops]);
+  }, [path, ops, live]);
 
   // Monaco stops the event when it uses Escape itself (to close find, say), so
   // only an Escape that nothing inside wanted reaches this handler.
@@ -204,6 +237,16 @@ function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; o
   let body: ReactNode;
   if (reconnecting) body = <p className="p-3 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p>;
   else if (error) body = <p className="p-3 text-xs text-destructive">{error}</p>;
+  else if (wake) {
+    body = (
+      <div className="space-y-2 p-3 text-xs text-muted-foreground" data-testid="file-not-stored">
+        <p>This file is not stored.</p>
+        <Button variant="outline" size="sm" onClick={() => { setWake(false); setLive(true); }}>
+          Wake the sandbox to see it
+        </Button>
+      </div>
+    );
+  }
   else if (!file) body = loading;
   else if (file.binary) body = <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>;
   else {
@@ -220,6 +263,11 @@ function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; o
         <span className="min-w-0 flex-1 truncate" title={path}>
           {path}
         </span>
+        {file?.source === 'github' && (
+          <span className="shrink-0 font-sans" data-testid="file-from-github">
+            from GitHub{file.ref ? ` at ${file.ref.slice(0, 7)}` : ''}
+          </span>
+        )}
         <button
           type="button"
           onClick={onClose}

@@ -1,8 +1,8 @@
-import { vi, describe, it, expect, afterEach } from 'vitest';
+import { vi, describe, it, expect, afterEach, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import type { Workbench, WorkbenchChanges } from '@talyn/shared';
+import type { Workbench, WorkbenchChanges, WorkbenchChat } from '@talyn/shared';
 import type { WorkbenchOps } from '../lib/workbenchOps';
 import {
   RECONNECT_DELAYS_MS,
@@ -12,6 +12,7 @@ import {
 } from '../lib/sandboxReconnect';
 import { ChangesTab, CHANGES_REFRESH_MS } from '../components/workbench/ChangesTab';
 import { FilesTab } from '../components/workbench/FilesTab';
+import { useWorkbenchStore } from '../stores/workbenches';
 
 vi.mock('@pierre/diffs/react', () => ({ PatchDiff: () => <div data-testid="patch-diff" /> }));
 vi.mock('../stores/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -107,6 +108,9 @@ describe('readWithReconnect', () => {
 describe('Changes panel reconnect', () => {
   const renderTab = (ops: WorkbenchOps) =>
     render(<ChangesTab workbench={WB} chat={null} ops={ops} visible turnsEnded={0} comments={[]} setComments={() => {}} />);
+  // The list polls only while a turn runs.
+  beforeEach(() => useWorkbenchStore.setState({ chats: { [WB.id]: [{ id: 'c1', workbenchId: WB.id, status: 'running' } as WorkbenchChat] } }));
+  afterEach(() => useWorkbenchStore.setState({ chats: {} }));
 
   it('keeps the old list, shows the muted line and recovers', async () => {
     vi.useFakeTimers();
@@ -152,8 +156,8 @@ describe('Changes panel reconnect', () => {
 describe('Files panel reconnect', () => {
   it('shows the muted line, then the list', async () => {
     vi.useFakeTimers();
-    const listFiles = vi.fn().mockRejectedValueOnce(new Error(UNREACHABLE)).mockResolvedValue(['src/app.ts']);
-    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, listFiles } as unknown as WorkbenchOps} visible />);
+    const files = vi.fn().mockRejectedValueOnce(new Error(UNREACHABLE)).mockResolvedValue({ paths: ['src/app.ts'] });
+    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, files } as unknown as WorkbenchOps} visible />);
     await tick(0);
     expect(screen.getByTestId('sandbox-reconnecting')).toBeInTheDocument();
     expect(screen.queryByText(UNREACHABLE)).not.toBeInTheDocument();
@@ -164,8 +168,8 @@ describe('Files panel reconnect', () => {
 
   it('shows another error as before', async () => {
     vi.useFakeTimers();
-    const listFiles = vi.fn().mockRejectedValue(new Error('Boom'));
-    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, listFiles } as unknown as WorkbenchOps} visible />);
+    const files = vi.fn().mockRejectedValue(new Error('Boom'));
+    render(<FilesTab workbench={WB} ops={{ runtime: 'sandbox', unavailable: null, files } as unknown as WorkbenchOps} visible />);
     await tick(0);
     expect(screen.getByText('Boom')).toBeInTheDocument();
   });
