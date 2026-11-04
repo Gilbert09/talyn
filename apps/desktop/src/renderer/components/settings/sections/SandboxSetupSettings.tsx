@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 import {
   userSetupStepCheck,
   type PutWorkspaceSandboxSetupInput,
@@ -9,6 +10,8 @@ import {
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Button } from '../../ui/button';
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../../ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { SettingsPage } from '../../ui/settings';
 import { SetupHostsEditor, SetupStepList, errorText } from '../../widgets/SetupList';
 
@@ -25,6 +28,59 @@ export function dotfilesProblem(slug: string, install: string): string | null {
     if (check.forceBox) return 'The install command reads a secret. The image build has no secrets.';
   }
   return null;
+}
+
+type DotfilesChoice = { slug: string; label: string };
+
+export function dotfilesChoices(repos: string[], query: string): DotfilesChoice[] {
+  const typed = query.trim();
+  const matches = repos.filter((name) => name.toLowerCase().includes(typed.toLowerCase()));
+  const choices = matches.map((slug) => ({ slug, label: slug }));
+  if (SLUG.test(typed) && !repos.some((name) => name.toLowerCase() === typed.toLowerCase())) {
+    choices.unshift({ slug: typed, label: `Use ${typed}` });
+  }
+  return choices;
+}
+
+function DotfilesRepoPicker({ repos, value, onChange }: {
+  repos: string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const choices = dotfilesChoices(repos, query);
+  const pick = (next: string) => {
+    onChange(next);
+    setQuery('');
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(''); }}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label="Dotfiles repository" className="flex w-full items-center gap-2 rounded border bg-background px-2 py-1 text-left font-mono">
+          <span className={`min-w-0 flex-1 truncate ${value ? '' : 'text-muted-foreground'}`}>{value || 'owner/dotfiles'}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+        <Command shouldFilter={false}>
+          <CommandInput value={query} onValueChange={setQuery} placeholder="Find a repository…" />
+          <CommandList className="max-h-72">
+            <CommandEmpty>No repository matches.</CommandEmpty>
+            {value && <CommandItem value="none" onSelect={() => pick('')}>None</CommandItem>}
+            {choices.map((choice) => (
+              <CommandItem key={choice.slug} value={choice.slug} onSelect={() => pick(choice.slug)}>
+                <span className="min-w-0 flex-1 truncate font-mono">{choice.label}</span>
+                {choice.slug === value && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function DotfilesForm({ workspaceId, dotfiles, busy, onSave }: {
@@ -64,20 +120,10 @@ function DotfilesForm({ workspaceId, dotfiles, busy, onSave }: {
     <div className="space-y-2 text-xs" data-attr="sandbox-dotfiles">
       <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Dotfiles</h2>
       <p className="max-w-prose text-muted-foreground">Each image clones this repository and runs its install command, before the steps below.</p>
-      <label className="block space-y-1">
+      <div className="space-y-1">
         <span>Repository</span>
-        <input
-          aria-label="Dotfiles repository"
-          list={`dotfiles-repos-${workspaceId}`}
-          value={slug}
-          onChange={(event) => { setSlug(event.target.value); setError(''); }}
-          placeholder="owner/dotfiles"
-          className="w-full rounded border bg-background px-2 py-1 font-mono"
-        />
-        <datalist id={`dotfiles-repos-${workspaceId}`}>
-          {repos.map((name) => <option key={name} value={name} />)}
-        </datalist>
-      </label>
+        <DotfilesRepoPicker repos={repos} value={slug} onChange={(next) => { setSlug(next); setError(''); }} />
+      </div>
       <label className="block space-y-1">
         <span>Branch, tag or commit</span>
         <input

@@ -4,6 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { SETUP_LIST_LIMITS, type SetupListStep, type WorkspaceSandboxSetup } from '@talyn/shared';
 import { SandboxSetupSettings, dotfilesProblem } from '../renderer/components/settings/sections/SandboxSetupSettings';
 
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+Element.prototype.scrollIntoView = jest.fn();
+
 const sandboxGet = jest.fn();
 const sandboxPut = jest.fn();
 const sandboxRetry = jest.fn();
@@ -62,20 +69,25 @@ test('shows the notes and offers the GitHub repositories', async () => {
   expect(sandboxGet).toHaveBeenCalledWith('ws1');
   expect(screen.getByText(/Private repositories are cloned with your GitHub connection, read-only/)).toBeInTheDocument();
   expect(screen.getByText(/A change here rebuilds your images for each repository/)).toBeInTheDocument();
-  await waitFor(() => expect(document.querySelectorAll('datalist option')).toHaveLength(2));
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  expect(await screen.findByText('tom/dotfiles')).toBeInTheDocument();
+  expect(screen.getByText('tom/other')).toBeInTheDocument();
   expect(listRepos).toHaveBeenCalledWith('ws1');
 });
 
 test('saves the dotfiles with an empty branch and auto-detected install', async () => {
   await renderWith(sandbox());
-  fireEvent.change(screen.getByLabelText('Dotfiles repository'), { target: { value: ' tom/dotfiles ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  fireEvent.change(screen.getByPlaceholderText('Find a repository…'), { target: { value: ' tom/dotfiles ' } });
+  fireEvent.click(await screen.findByText('tom/dotfiles'));
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   await waitFor(() => expect(sandboxPut).toHaveBeenCalledWith('ws1', { dotfiles: { slug: 'tom/dotfiles', ref: '', install: null } }));
 });
 
 test('saves a branch and an install command, then removes the dotfiles', async () => {
   await renderWith(sandbox());
-  fireEvent.change(screen.getByLabelText('Dotfiles repository'), { target: { value: 'tom/dotfiles' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  fireEvent.click(await screen.findByText('tom/dotfiles'));
   fireEvent.change(screen.getByLabelText('Dotfiles branch'), { target: { value: 'linux' } });
   fireEvent.change(screen.getByLabelText('Dotfiles install command'), { target: { value: './install.sh --minimal' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
@@ -84,14 +96,28 @@ test('saves a branch and an install command, then removes the dotfiles', async (
   await waitFor(() => expect(sandboxPut).toHaveBeenLastCalledWith('ws1', { dotfiles: null }));
 });
 
+test('selects a typed repository and clears it', async () => {
+  await renderWith(sandbox());
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  fireEvent.change(screen.getByPlaceholderText('Find a repository…'), { target: { value: 'tom/new' } });
+  fireEvent.click(await screen.findByText('Use tom/new'));
+  expect(screen.getByRole('button', { name: 'Dotfiles repository' })).toHaveTextContent('tom/new');
+  expect(screen.queryByPlaceholderText('Find a repository…')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  fireEvent.click(await screen.findByText('None'));
+  expect(screen.getByRole('button', { name: 'Dotfiles repository' })).toHaveTextContent('owner/dotfiles');
+});
+
 test.each([
-  { name: 'no slash', slug: 'dotfiles', install: '', problem: 'The repository must be owner/name.' },
   { name: 'empty', slug: '', install: '', problem: 'The repository must be owner/name.' },
   { name: 'a literal secret in install', slug: 'tom/dotfiles', install: 'TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 ./install.sh', problem: /looks like it contains a secret/ },
   { name: 'a secret variable in install', slug: 'tom/dotfiles', install: './install.sh "$GITHUB_TOKEN"', problem: 'The install command reads a secret. The image build has no secrets.' },
 ])('refuses dotfiles with $name', async ({ slug, install, problem }) => {
   await renderWith(sandbox());
-  fireEvent.change(screen.getByLabelText('Dotfiles repository'), { target: { value: slug } });
+  if (slug) {
+    fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+    fireEvent.click(await screen.findByText('tom/dotfiles'));
+  }
   fireEvent.change(screen.getByLabelText('Dotfiles install command'), { target: { value: install } });
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(problem);
@@ -101,6 +127,7 @@ test.each([
 test.each([
   { slug: 'tom/dotfiles', install: '', ok: true },
   { slug: 'tom/dot.files-2', install: 'make install', ok: true },
+  { slug: 'dotfiles', install: '', ok: false },
   { slug: 'tom/dotfiles/extra', install: '', ok: false },
 ])('dotfilesProblem($slug, $install)', ({ slug, install, ok }) => {
   expect(dotfilesProblem(slug, install) === null).toBe(ok);
@@ -158,7 +185,8 @@ test('saves the workspace hosts', async () => {
 test('shows a save error from the backend', async () => {
   sandboxPut.mockRejectedValue(new Error('The dotfiles branch is not a valid branch, tag or commit.'));
   await renderWith(sandbox());
-  fireEvent.change(screen.getByLabelText('Dotfiles repository'), { target: { value: 'tom/dotfiles' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Dotfiles repository' }));
+  fireEvent.click(await screen.findByText('tom/dotfiles'));
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   expect(await screen.findByText('The dotfiles branch is not a valid branch, tag or commit.')).toBeInTheDocument();
 });
