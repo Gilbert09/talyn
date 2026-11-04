@@ -1,21 +1,28 @@
 /**
  * Single source of truth for all marketing copy.
  * Edit here to retune the voice without touching component layout.
+ *
+ * House rules for the copy (the relaunch, November 2026): plain words, short
+ * sentences, second person, no em-dashes, no exclamation marks, sentence-case
+ * headings under about eight words. Each section is one headline, one or two
+ * sentences, then specifics. Every claim must be true of the shipped app.
  */
 
 export const site = {
   name: "Talyn",
   domain: "talyn.dev",
-  /** Canonical origin — the apex 308-redirects to www at the Vercel level. */
+  /** Canonical origin. The apex 308-redirects to www at the Vercel level. */
   url: "https://www.talyn.dev",
-  tagline: "Wake up to green PRs.",
+  tagline: "Give every task its own agent.",
   description:
-    "Talyn puts every one of your pull requests in one list, worst first, then sends AI agents to fix the failing tests, the clashes, and the review comments \u2014 so your work lands without you babysitting it.",
+    "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets its own branch, diff, terminal and a path to a merged pull request.",
   githubUrl: "https://github.com/Gilbert09/talyn",
-  /** The browser app — same product, nothing to install. */
+  /** The browser app: same product, nothing to install. */
   appUrl: "https://app.talyn.dev",
-  /** Support/contact channel — every Talyn user has a GitHub account. */
+  /** Support/contact channel. Every Talyn user has a GitHub account. */
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
+  /** The public API reference. It lives in the repository, which is public. */
+  apiDocsUrl: "https://github.com/Gilbert09/talyn/blob/main/docs/PUBLIC_API.md",
 };
 
 /**
@@ -23,12 +30,10 @@ export const site = {
  *
  * `href` is written WITHOUT a leading slash and the component prefixes one,
  * which is how the same array holds both a homepage anchor (`#how` → `/#how`)
- * and a real route (`compare` → `/compare`).
+ * and a real route (`pricing` → `/pricing`).
  *
- * The Features entry has no `href` of its own in the sense the others do: it
- * is a `group`, and the component draws it as a menu built from
- * `listFeaturePages()` rather than from a list typed out here. A hand-kept
- * copy would be one page behind from the first time somebody forgot.
+ * The Features entry is a `group`: the component draws it as a menu built
+ * from `listFeaturePages()` rather than from a list typed out here.
  */
 export interface NavItem {
   label: string;
@@ -39,338 +44,224 @@ export interface NavItem {
 }
 
 /**
- * Four entries, and the count matters — the desktop bar has a logo and three
- * buttons to fit beside them, and "Download for Windows" is a lot wider than
- * the "Download" it replaced.
- *
- * Two were dropped rather than squeezed. "Agents" pointed at /features/agents,
- * already the ninth item in the Features menu immediately to its left — the
- * only top-level link duplicating a dropdown entry. "Compare" went on Tom's
- * call; the eight comparison pages keep their own footer column, are linked
- * from the /features hub, and are what a person arrives on from a search
- * rather than something they go hunting for in a nav bar.
+ * Four entries. The desktop bar has a logo and three buttons to fit beside
+ * them, and "Download for Windows" is wide. Sessions and threads lead because
+ * the relaunch leads with them.
  */
 export const nav: NavItem[] = [
-  { label: "How it works", href: "#how" },
+  { label: "Sessions", href: "features/sessions" },
+  { label: "Threads", href: "features/threads" },
   { label: "Features", href: "features", group: "features" },
   { label: "Pricing", href: "pricing" },
-  { label: "FAQ", href: "#faq" },
 ];
 
 /**
- * The fold, rewritten against thirty days of real numbers rather than taste.
- *
- * Three things the data said, and what each one changed:
- *
- * 1. **The median visitor clicks at 27 seconds**, and 29 of 30 real download
- *    clicks came from the NAV button — the hero got one, all month. So the
- *    hero's job is not to convert. It is to say what this is, who it is for,
- *    and the one thing no competitor can say, inside the time somebody takes
- *    to find the button.
- * 2. **The subhead was 60 words across four sentences.** At 27 seconds that
- *    is not a subhead, it is an essay. Two sentences now.
- * 3. **"It'll merge that PR itself. Overnight included." is gone from the
- *    fold.** It reads as magic to an early adopter and as a hazard to anybody
- *    whose employer owns the repository, and the second group is most of the
- *    market. The claim is still on the page — further down, beside the fact
- *    that nothing merges unless you flagged it. Losing a careful reader in
- *    the first eight seconds costs more than the enthusiast it wins.
- *
- * What did NOT change: the headline. "Wake up to green PRs." is the brand and
- * it passes the only test worth applying to one — prefix it with "Now you
- * can" and it stays both compelling and true.
+ * The fold. The median visitor clicks at about 27 seconds and most clicks
+ * come from the nav button, so the hero's job is to say what this is and
+ * who it is for, fast. Two sentences of subhead, no more.
  */
 export const hero = {
   badge: "Public beta",
-  titleLead: "Wake up to",
-  titleAccent: "green PRs.",
-  // Leads with the subscription claim, not the dashboard claim. Every rival
-  // has a list of pull requests; none of them runs on the Claude or ChatGPT
-  // plan you already pay for.
-  sub: "Talyn lists every pull request you have open, worst first, and sends an AI agent at the broken ones to push the fix. It runs on the Claude or ChatGPT subscription you already pay for \u2014 no API key, no second bill.",
+  titleLead: "Give every task",
+  titleAccent: "its own agent.",
+  sub: "A Talyn session is a branch with its own coding agent, diff and terminal, in a cloud sandbox. Run several at once, on the Claude or ChatGPT plan you already pay for.",
   primaryCta: "Download for {platform}",
-  secondaryCta: "See how it works",
   webCta: "Open in browser",
-  // "For GitHub" is here because a GitLab user could previously read the
-  // entire homepage without discovering the product cannot work for them.
-  // Better to lose them in eight seconds than after an install.
-  microtrust: "For GitHub. macOS, Windows & Linux — or run it in your browser.",
+  // "For GitHub" stays: a GitLab user should find out in eight seconds, not
+  // after an install.
+  microtrust: "For GitHub. macOS, Windows and Linux, or in your browser.",
 };
 
-export const poweredBy = {
-  kicker: "Runs on the plan you already pay for",
-  blurb:
-    "Talyn conducts the coding agents you already trust — on your own subscription, not a second token bill.",
-  // Claude Code was REMOVED as a provider (Session 114 / migration 0050) — it
-  // billed metered API credits, and the fleet runs Claude on the workspace's
-  // own subscription instead. Do not re-add it here without a registered
-  // provider behind it: this section is the promise the download makes.
-  //
-  // Order matches CLOUD_PROVIDER_ORDER in `@talyn/shared`, which is what the
-  // app itself recommends and picks. Keep them the same: a site that leads
-  // with one provider and an app that leads with another is the kind of
-  // mismatch nobody notices until a new user asks why.
-  // The AGENT brands, not the provider names, because this strip's whole claim
-  // is "the plan you already pay for" — and what a reader recognises is the
-  // Claude and ChatGPT marks, not ours. Which fleet those two run on is the
-  // providers section's job, further down.
-  logos: [
-    { name: "Claude", mark: "claude" as const },
-    { name: "ChatGPT", mark: "codex" as const },
-    { name: "PostHog Code", mark: "posthog" as const },
-  ],
-};
-
-export const problem = {
-  kicker: "The PR tax",
-  title: "Writing the code got fast. Landing it didn't.",
-  body: "AI can write the change in minutes. Then the pull request sits there \u2014 a test fails for no obvious reason, someone else's work lands first, a reviewer asks for one small thing \u2014 and the last mile eats your afternoon.",
-  pains: [
-    {
-      title: "The refresh loop",
-      body: "Ten GitHub tabs open, hunting for which PR just broke, got a comment, or quietly went out of date.",
-    },
-    {
-      title: "One-line fixes, all afternoon",
-      body: "A trivial fix still means pulling the branch down, running everything again, pushing, and waiting. Again.",
-    },
-    {
-      title: "It was fine on Tuesday",
-      body: "You approved it Tuesday. It's Thursday, the project moved on, and now it clashes. Back to square one.",
-    },
-    {
-      title: "Watching the robot work",
-      body: "You set an AI agent going, then sat there reading its output so you could press merge yourself.",
-    },
-  ],
-};
-
-export const how = {
-  kicker: "How it works",
-  title: "Three steps from chaos to merged.",
-  sub: "Connect once. Talyn handles the loop.",
+/** How a session works. Carries the `#how` anchor older links point at. */
+export const sessions = {
+  kicker: "Sessions",
+  title: "From prompt to pull request.",
+  sub: "Describe the task and press Enter. Talyn makes the branch, starts the sandbox and hands the work to your agent.",
   steps: [
     {
-      n: "01",
-      title: "Connect GitHub",
-      body: "Sign in with GitHub and pick the projects you work on. Your pull requests show up right away. You only connect an AI agent when you send your first fix \u2014 not before.",
-      shot: "onboarding",
+      title: "Describe it",
+      body: "Type what you want done. Talyn names the session and its branch from your words.",
     },
     {
-      n: "02",
-      title: "Talyn watches every PR",
-      body: "One live dashboard puts your pull requests in order of what needs you. What's passing, what's broken, who's waiting on you, what's ready to go \u2014 at a glance, in real time.",
-      shot: "dashboard",
+      title: "Let it work",
+      body: "The agent reads, edits and runs commands in its own sandbox. Send more messages while it works and they wait their turn.",
     },
     {
-      n: "03",
-      title: "Delegate, or let it auto-fix",
-      body: "Hit \"fix this PR\" and an AI agent works out what broke, fixes it, and pushes the fix for you. Run one of your own playbooks on it instead \u2014 a review, a security check. Or stop deciding each time: write a workflow once and Talyn labels, reviews, fixes, and queues every matching PR on its own.",
-      shot: "task-running",
+      title: "Check it",
+      body: "Read the diff, browse the files, open a terminal or start your app with a run script. Roll the files back to any earlier message.",
+    },
+    {
+      title: "Ship it",
+      body: "One button opens the pull request. The same button then fixes checks, resolves conflicts and merges.",
+    },
+  ],
+  link: "How sessions work",
+};
+
+/** The sandbox facts: parallel, fast, free when asleep, safe. */
+export const sandboxes = {
+  kicker: "Sandboxes",
+  title: "Run sessions side by side.",
+  sub: "Each session has its own cloud sandbox, so agents never edit the same files. Start the next task while the last one runs.",
+  items: [
+    {
+      title: "Ready in seconds",
+      body: "Talyn builds an image of your repository with its setup already done. A new session starts from that image, not from a clean machine.",
+    },
+    {
+      title: "Asleep costs nothing",
+      body: "A sandbox that sits idle for 10 minutes goes to sleep, and a sleeping sandbox is free. Your next message wakes it.",
+    },
+    {
+      title: "Read it without waking it",
+      body: "Talyn keeps a copy of each session's changes and files. You can review a sleeping session without starting its sandbox.",
+    },
+    {
+      title: "Your setup, every time",
+      body: "Add setup steps and your dotfiles once. Talyn builds them into the image, and suggests steps it sees your sessions repeat.",
+    },
+    {
+      title: "Work is saved as you go",
+      body: "After every turn, Talyn saves the work you have not pushed. If a sandbox is lost, the next one restores it.",
+    },
+    {
+      title: "Sessions remember",
+      body: "Agents save short notes as they learn your codebase. The next session reads them, so you explain things once.",
     },
   ],
 };
 
-export const features = [
-  {
-    id: "dashboard",
-    eyebrow: "Mission control",
-    title: "Every PR, triaged. No tabs required.",
-    // "Needs attention, Mine, and Review" described a three-bucket page the
-    // app does not have. Shipped, those are two separate pages — My PRs, with
-    // a Needs-attention filter on it, and Reviews (its own entry below) —
-    // plus the Merge Queue. Copy that names a layout nobody will find is the
-    // kind of small lie a download exposes in the first ten seconds.
-    body: "A live dashboard puts every PR you've opened in one list, with a Needs-attention filter that pulls the blocked ones to the front. One glance tells you what's passing, who's waiting, and what won't merge yet.",
-    bullets: [
-      "Live status across every project you've connected",
-      "A Needs-attention filter that puts blockers first",
-      "Diffs, checks, and conversation right inside the app",
-    ],
-    shot: "dashboard",
-  },
-  {
-    id: "reviews",
-    eyebrow: "Reviews",
-    title: "Every review request, in one list.",
-    body: "The PRs waiting on you are scattered across repos and buried in notifications. Talyn keeps them on one page — every open PR where you're a requested reviewer and haven't reviewed yet — and tells you who asked, you directly or one of your teams. Filter to a single team, save the filter, and get on with it.",
-    bullets: [
-      "Every repo you've connected, one list, nothing to chase",
-      "See whether you were asked directly or through a team — and filter by it",
-      "Save a filter you use often, per workspace",
-      "Run one of your review playbooks on any of them with a cloud agent",
-    ],
-    shot: "reviews",
-  },
-  {
-    id: "code-review",
-    eyebrow: "Code review",
-    title: "Code review without the comment spam.",
-    // Every claim here is bounded by what the engine actually does. It writes
-    // NOTHING to GitHub during a review — that is enforced in the agent's own
-    // system prompt, and it is the differentiator, so it leads. Do not add
-    // "inline comments": that setting exists in the app and does nothing yet.
-    // Do not say it approves or requests changes; it never does either.
-    body: "Most AI reviewers announce themselves in your pull request. This one writes nothing to GitHub at all. Several reviewers read the change from different angles — logic, security, reliability, tests — then another pass looks for what they all missed, and a checker throws out everything it cannot stand behind. What is left is a short list in the app.",
-    bullets: [
-      "Findings live in Talyn — your pull request stays clean",
-      "Read from several angles at once, then swept again for what they missed",
-      "A checking pass drops the weak ones and records why it dropped them",
-      "Tick what is worth fixing and Talyn pushes one commit, not a thread per finding",
-    ],
-    shot: "code-review",
-  },
-  {
-    id: "delegate",
-    eyebrow: "Delegate the drudgery",
-    title: "Send a cloud agent. Get back a mergeable PR.",
-    body: "Point Talyn at a pull request that's broken or out of date and it sends an AI agent to fix it \u2014 the failing tests, the clashes, the review comments \u2014 pushing the fix straight to your branch. Watch it work live. What comes back is green ticks, ready to merge.",
-    bullets: [
-      "Fixes failing tests, clashes, and review comments",
-      "Watch it work, live, step by step",
-      "Green checks back on your existing PR, no new PR to wrangle",
-    ],
-    shot: "task-running",
-  },
-  {
-    id: "auto-merge",
-    eyebrow: "The merge queue",
-    title: "A merge queue that lands PRs for you.",
-    body: "Flag a PR keep-mergeable and Talyn watches it: the moment it falls behind main, hits a conflict, or goes red, a fix run dispatches automatically. Then the merge queue takes over. It lands your PRs in order the second they're green, rebasing and clearing conflicts along the way, and drains independent PRs concurrently so one slow branch never holds up the rest.",
-    bullets: [
-      "Lands ready PRs in order, the moment they go green",
-      "Rebases and resolves conflicts on the way in, no manual \"update branch\"",
-      "Independent PRs merge in parallel; one slow build can't stall the queue",
-      "Auto-fixes any PR that falls behind or breaks before it merges",
-    ],
-    shot: "merge-queue",
-  },
-  {
-    id: "workflows",
-    eyebrow: "Workflows",
-    title: "Write the rule once. It runs on every PR.",
-    body: "A workflow is a rule you set up in the app: when this happens on a pull request, do these things. Label it, pull in a reviewer, post a comment, add it to your list, send an agent to fix it, or drop it straight into the merge queue. It watches every PR in the repos you connect \u2014 including the ones you didn't open \u2014 and it runs whether or not the app is open.",
-    bullets: [
-      "Triggers on what actually happens: opened, checks failed, review requested, approved, commented, merged",
-      "Narrow it with conditions \u2014 this repo, this base branch, this label, this author, drafts or not",
-      "Actions that do real work: labels, reviewers, comments, a skill or prompt run, the merge queue",
-      "Every run is logged, per rule, so you can see what fired and what it did",
-    ],
-    shot: "workflows",
-  },
-  {
-    id: "loops",
-    eyebrow: "Loops",
-    title: "Work that happens on a schedule, not on a trigger.",
-    body: "A loop is a prompt you want run again and again: sweep yesterday's failing checks every weekday morning, keep dependencies current every Monday, draft the release notes every Friday at five. Pick a repository, write the prompt, choose when \u2014 and an agent does it on its own, opening a pull request when the work warrants one.",
-    bullets: [
-      "Say when in plain terms: hourly, daily, weekdays, weekly \u2014 or a cron expression if you want one",
-      "Runs in your timezone, so 09:00 means 09:00 to you and stays that way across the clocks changing",
-      "Every run is logged with what it did, including the ones it skipped because the last was still going",
-      "Start one by hand any time, without waiting for its next turn",
-    ],
-    shot: "loops",
-  },
-  {
-    id: "skills",
-    eyebrow: "Skills",
-    title: "Your playbooks, runnable on any PR.",
-    body: "Skills are reusable agent playbooks: a security sweep, your team's review checklist, a changelog writer. Talyn finds them everywhere they already live, whether that's committed to the repo, sitting in ~/.claude/skills on your machine, or saved to your workspace. Hit the wand on any PR, pick one, and a cloud agent runs it against that PR, posting the review or pushing the fix.",
-    bullets: [
-      "Picks up SKILL.md files from the repo, your machine, and your workspace, zero setup",
-      "Searchable picker with your most-used skills on top",
-      "Output lands on the PR: a single review comment, or commits to the branch",
-    ],
-    shot: "skill-picker",
-  },
-];
-
-/** Compact CTA band mid-page — the stretch between Features and Pricing had
- *  no action to take without scrolling to the bottom. */
-export const midCta = {
-  title: "Ready to stop babysitting CI?",
-  sub: "Open it in your browser or download the app, connect your repos, and clear the queue tonight.",
-  cta: "Download for {platform}",
-  secondary: "See pricing",
+/** Threads: one conversation that runs sessions across repositories. */
+export const threads = {
+  kicker: "Threads",
+  title: "One conversation, many repositories.",
+  sub: "A thread has no repository of its own. Tell it the goal, and it starts a session on each repository that needs a change.",
+  bullets: [
+    "It hears when a session finishes, opens a pull request or needs an answer.",
+    "Open any of its sessions to read the diff or step in.",
+    "It stops when its sessions stop making progress, and waits for you.",
+  ],
+  link: "How threads work",
 };
 
-// Headed by the AGENTS, not by our provider names.
-//
-// This section used to lead with a "Talyn Fleet" card, and readers did not
-// know what that was \u2014 which is fatal here, because this is the section that
-// answers "what am I signing in with?". Our own brand is the one name on the
-// page a visitor has no reason to recognise, and spending the most valuable
-// card on it asked them to learn our vocabulary before they could tell whether
-// the product was for them. The same argument the PoweredBy strip above
-// already makes.
-//
-// The fleet has not gone anywhere, and it is still the differentiator \u2014 it is
-// stated once in `note`, under the grid, as a description rather than a brand.
-export const providers = {
-  kicker: "Agents",
-  title: "No lock-in. Use the agent you already pay for.",
-  sub: "Talyn conducts coding agents rather than replacing them. Connect one or both, and switch per task.",
+/** PRs on autopilot: the GitHub panel, fix runs, the merge queue, review. */
+export const pullRequests = {
+  kicker: "Pull requests",
+  title: "Your pull requests, kept green.",
+  sub: "Talyn lists every pull request you have open and every review waiting on you, with the blocked ones first. One click sends the fix to an agent.",
   items: [
     {
-      name: "Claude",
+      title: "Fix it in one click",
+      body: "Failing checks, a merge conflict or a review comment. The agent pushes the fix to the same branch.",
+      href: "/features/fix-pull-requests",
+    },
+    {
+      title: "A merge queue that fixes",
+      body: "Queue a ready pull request and Talyn merges it when it is green. If it falls behind or breaks first, an agent fixes it.",
+      href: "/features/merge-queue",
+    },
+    {
+      title: "Code review in the app",
+      body: "Several reviewers read the change, then a check drops what it cannot back up. Findings reach GitHub only if you post them.",
+      href: "/features/code-review",
+    },
+  ],
+};
+
+/** Automation: loops, workflows, Slack, MCP servers, skills, the API. */
+export const automation = {
+  kicker: "Automation",
+  title: "Work that starts without you.",
+  sub: "Set it up once. It runs on Talyn's servers, with the app closed.",
+  items: [
+    {
+      title: "Loops",
+      body: "Run a prompt on a schedule. Every weekday at 9, every Monday, or any cron expression.",
+      href: "/features/loops",
+    },
+    {
+      title: "Workflows",
+      body: "Rules for pull request events. When checks fail on a dependency bump, send an agent. When a PR is approved and green, queue it.",
+      href: "/features/workflows",
+    },
+    {
+      title: "Slack",
+      body: "React with your emoji, mention Talyn or send it a message, and a session starts. Its status shows as reactions on your message.",
+      href: "/features/slack",
+    },
+    {
+      title: "MCP servers",
+      body: "Connect Linear, Sentry or your own server. The agent uses the tools, and the keys stay outside the sandbox.",
+      href: "/features/mcp-servers",
+    },
+    {
+      title: "Skills",
+      body: "Run your SKILL.md playbooks on any pull request: a security pass, a review checklist, a changelog.",
+      href: "/features/skills",
+    },
+    {
+      title: "Public API",
+      body: "Start sessions, send messages and read the results from your own scripts with a personal access token.",
+      href: site.apiDocsUrl,
+    },
+  ],
+};
+
+/**
+ * Headed by the AGENTS, not by our provider names. What a reader recognises
+ * is Claude and ChatGPT; "Talyn Fleet" is the one name on the page they have
+ * no reason to know. The fleet is stated once, in `note`, as a description.
+ */
+export const providers = {
+  kicker: "Agents",
+  title: "Bring your Claude or ChatGPT plan.",
+  sub: "Sessions run Claude Code or Codex on the subscription you already pay for. You pay Talyn for the sandboxes, not for tokens.",
+  items: [
+    {
+      name: "Claude Code",
       mark: "claude" as const,
-      meta: "Runs on your Claude Pro or Max plan",
-      body: "Sign in with Claude and every task runs on that subscription. No API key, no metered credits, no second bill for tokens.",
+      meta: "On your Claude Pro or Max plan",
+      body: "Sign in with Claude and every session uses that subscription. No API key and no metered credits.",
     },
     {
       name: "Codex",
       mark: "codex" as const,
-      meta: "Runs on your ChatGPT Plus or Pro plan",
-      body: "Sign in with ChatGPT and Talyn hands the work to Codex on your own plan \u2014 same deal, nothing metered on top.",
-    },
-    {
-      name: "PostHog Code",
-      mark: "posthog" as const,
-      meta: "Runs in your PostHog project",
-      body: "Already at PostHog? Connect PostHog Code and it powers the lot \u2014 fixes, clashes, and review replies, end to end.",
+      meta: "On your ChatGPT Plus or Pro plan",
+      body: "Sign in with ChatGPT and sessions run Codex on your plan. Connect both and pick per session.",
     },
   ],
-  // The sandbox claim has to survive losing the fleet card: it is the only
-  // thing in this section a competitor cannot match by adding a model.
-  // Stated once, below the grid, because it is true of both agents.
-  note: "Claude and Codex run on Talyn Fleet, our own hardware. Every task gets a fresh virtual machine; your credentials are attached from outside it, so no token is ever inside the machine running your code; and the machine is destroyed when the task ends.",
+  note: "Each sandbox is a Firecracker microVM on our own hardware. Your credentials are added from outside it, so no token is ever inside the machine that runs your code. PR fixes and loops can also run on PostHog Code.",
+  link: "How the sandbox and your credentials work",
 };
 
+/** The /features hub's "why" grid. */
 export const why = {
   kicker: "Why Talyn",
-  title: "Talyn fixes what other tools only flag.",
+  title: "From task to merged PR in one place.",
   cards: [
     {
-      title: "Triage that thinks",
-      body: "Every PR ranked by what needs you (blocked, behind, or ready) the moment you open the app.",
+      title: "Parallel by default",
+      body: "Every session has its own branch and sandbox. Run several at once and none of them touch each other's files.",
     },
     {
-      title: "Fixes, not just alerts",
-      body: "Other tools tell you CI broke. Talyn sends an agent to fix it and push the checks back to green.",
+      title: "Your own subscription",
+      body: "Claude Code and Codex run on the plan you already pay for. You never paste an API key.",
     },
     {
-      title: "Stays green on its own",
-      body: "Flag a PR keep-mergeable and Talyn re-fixes it the moment it falls behind or breaks.",
+      title: "Close the laptop",
+      body: "Sessions run in the cloud. Pick them up later from the desktop app or the browser.",
     },
     {
-      title: "Work that starts without you",
-      body: "Some work is not a reaction to anything \u2014 it just needs doing every morning. Write the prompt once, pick when, and Talyn runs it on a schedule with the app closed.",
+      title: "Past the pull request",
+      body: "Talyn opens the PR, fixes the checks, keeps it up to date and merges it when it is green.",
     },
     {
-      title: "Rules that run themselves",
-      body: "Write a workflow once \u2014 when this happens on a PR, do this \u2014 and it fires on every matching pull request in your repos, yours or not, app open or not.",
+      title: "Work across repositories",
+      body: "A thread runs sessions on several repositories and keeps track of each one for you.",
     },
     {
-      title: "Bring your own agent",
-      body: "Connect the agent you already trust. No model lock-in, and you can switch per task.",
-    },
-    {
-      title: "A merge queue that lands them",
-      body: "Queue your ready PRs and Talyn merges them in order the second they're green, rebasing and clearing conflicts on the way, and landing independent ones in parallel.",
-    },
-    {
-      title: "Built to live in",
-      body: "Real diffs, live transcripts, instant triage: the polish of a tool you keep open all day.",
+      title: "Runs with the app closed",
+      body: "Loops run on a schedule and workflows run on pull request events, with the app closed.",
     },
   ],
 };
@@ -397,7 +288,7 @@ export const pricing = {
         "10 box-hours a month",
         "Small and standard boxes",
         "Up to 2 boxes running at once",
-        "The whole PR dashboard, every repo, every workspace",
+        "Sessions, threads and the whole PR dashboard",
         "Skills, the merge queue, workflows, loops and code review",
         "Keep a PR mergeable on any PR you flag by hand",
         "Mobile app (coming soon)",
@@ -455,20 +346,6 @@ export const pricing = {
 };
 
 /**
- * The homepage FAQ.
- *
- * Deliberately the GENERAL questions only. It used to carry twelve, six of
- * which were "what are workflows", "what are loops", "what are skills", "how
- * does auto-keep-mergeable work" and two on code review — each of which is
- * now answered at length on that feature's own page, where the answer also
- * becomes `FAQPage` structured data pointing at the page a searcher wants.
- * Repeating them here would be asking Google to choose between two pages
- * answering one question, which it resolves by ranking neither.
- *
- * What stays is what somebody deciding whether to download needs: what it is,
- * what runs it, where the code goes, what it costs, what it runs on.
- */
-/**
  * Teams: seat billing. One person pays for N seats and every seat is a Pro
  * account with its own 200 box-hours. Nothing is shared between seats, and
  * the page says so, because a team lead asks about shared workspaces and SSO
@@ -492,14 +369,14 @@ export const teams = {
     "Two questions and anything else you want to add. It comes to me directly and I answer them myself.",
   modalCta: "Send it",
   modalFootnote:
-    "Your email is used to reply to you and nothing else — no list, no newsletter.",
+    "Your email is used to reply to you and nothing else. No list, no newsletter.",
 
   sentTitle: "Got it.",
   sentBody: "I read these myself and I will come back to you at",
 
   failedTitle: "That did not send.",
   failedBody:
-    "Something in your browser blocked it — usually an ad blocker or a privacy extension, because the form rides on our analytics. Rather than pretend otherwise: open a GitHub issue and I will pick it up there.",
+    "Something in your browser blocked it, usually an ad blocker or a privacy extension, because the form rides on our analytics. Rather than pretend otherwise: open a GitHub issue and I will pick it up there.",
 };
 
 /**
@@ -552,65 +429,65 @@ export const pricingFaq = [
   },
 ];
 
+/**
+ * The homepage FAQ: the general questions only. Questions about one feature
+ * are answered on that feature's own page, where they also become `FAQPage`
+ * structured data for the page a searcher wants.
+ */
 export const faq = [
   {
-    q: "What is Talyn, exactly?",
-    a: "A desktop app that tracks your GitHub PRs and delegates the routine work (fixing CI, clearing conflicts, replying to reviews) to cloud coding agents that run the loop and push the fix back to your PR. Think mission control for getting PRs to a mergeable state.",
+    q: "What is Talyn?",
+    a: "An app for running coding agents in the cloud. Each session is a branch with its own agent, sandbox, diff and terminal, and it ends in a pull request. Talyn also watches your open pull requests and sends an agent to fix the ones that break.",
   },
   {
-    q: "Which AI agents does it use?",
-    a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription \u2014 no separate API bill. PostHog Code is supported too, with more providers on the way. Talyn conducts whichever one you connect, and you can switch per task.",
+    q: "How is a session different from Claude Code on my laptop?",
+    a: "The agent runs in a cloud sandbox, not on your machine. You can run several at once, close the laptop, and open the same session later in the browser. Each session has its own branch, so two agents never edit the same files. On the desktop app you can also run a session in a local git worktree, or move a Claude Code conversation from your computer into a sandbox and carry on.",
   },
   {
-    q: "Where does the work actually happen?",
-    a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead. Either way, Talyn is the control surface that kicks it off, streams the progress live, and links the resulting PR back onto your dashboard.",
+    q: "Which agents does it use?",
+    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session. PR fixes and loops can also run on PostHog Code.",
+  },
+  {
+    q: "Where does my code run?",
+    a: "On Talyn Fleet: one Firecracker microVM per session, on our own hardware. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 10 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
   },
   {
     q: "Does it work with GitLab or Bitbucket?",
-    a: "No. Talyn is GitHub only, and there is no plan to change that soon. It installs as a GitHub App on the repositories you pick, reads their webhooks, and merges through GitHub's own API — none of which has an equivalent we have built elsewhere.",
+    a: "No. Talyn is GitHub only, and that will not change soon. It installs as a GitHub App on the repositories you pick.",
   },
   {
     q: "Will it merge something without me asking?",
-    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time, on every plan. Nothing you have not flagged is merged, rebased or pushed to. The one setting that widens that is the workspace default which flags every new pull request you open. It is part of Pro and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies exactly as you set it up.",
-  },
-  {
-    q: "Is my code safe?",
-    a: "Talyn talks to GitHub and your chosen provider over their official APIs using credentials you supply. The heavy lifting runs in the provider's sandbox under your account, and Talyn never stores your source.",
+    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time. The one setting that widens that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies as you set it up.",
   },
   {
     q: "What does it cost?",
-    a: "Free gives you the full app with 10 box-hours a month. Pro is $40 a month ($400 a year) and gives you 200 box-hours, every box size, up to 100 boxes at once, and auto-keep and auto-review on every new PR. A box-hour is one standard box running for one hour. If you need more, add credits and pay as you go, with sleeping boxes free. The model runs on your own Claude or ChatGPT subscription, so you pay us for the machines, not the model.",
+    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model.",
   },
   {
     q: "What platforms are supported?",
-    a: "All of them. There are desktop builds for macOS (Apple silicon), Windows and Linux, and a web app at app.talyn.dev that needs no install at all — same product, same account, your workspaces and PR queue follow you between them. The desktop app adds two things a browser can't: it reads skills from ~/.claude/skills on your machine, and it keeps your session in the OS keychain.",
+    a: "macOS (Apple silicon and Intel), Windows and Linux, and a web app at app.talyn.dev with nothing to install. Your sessions and pull requests follow you between them. The desktop app adds local sessions, previews of your app on localhost and skills from ~/.claude/skills.",
   },
 ];
 
 export const finalCta = {
-  titleLead: "Stop babysitting CI.",
-  titleAccent: "Let the talons out.",
-  sub: "In public beta. Bring your own agent. Clear your PR backlog tonight.",
+  titleLead: "Start a session.",
+  titleAccent: "Merge the PR.",
+  sub: "Free to start, on the Claude or ChatGPT plan you already have.",
   cta: "Download for {platform}",
 };
 
 export const footer = {
-  blurb: "Mission control for your GitHub PRs, powered by cloud coding agents.",
+  blurb: "Coding agents in cloud sandboxes, one session per task, from the first prompt to the merged pull request.",
   madeBy: "Made by night owls who were tired of babysitting CI.",
   columns: [
     {
-      // The per-feature links used to be homepage anchors (`/#workflows`).
-      // They now point at the pages, because the anchors survive only as ids
-      // on a grid card — a link that lands you on a one-line summary of the
-      // thing you clicked is a worse answer than the page about it. The
-      // Features column below is generated and carries the full list.
       title: "Product",
       links: [
-        { label: "How it works", href: "/#how" },
+        { label: "Sessions", href: "/features/sessions" },
+        { label: "Threads", href: "/features/threads" },
         { label: "All features", href: "/features" },
-        { label: "Compare", href: "/compare" },
         { label: "Pricing", href: "/pricing" },
-        { label: "Download", href: "/#download" },
+        { label: "Download", href: "/download" },
         { label: "Open the web app", href: site.appUrl },
       ],
     },
@@ -619,6 +496,8 @@ export const footer = {
       links: [
         { label: "About", href: "/about" },
         { label: "FAQ", href: "/#faq" },
+        { label: "Compare", href: "/compare" },
+        { label: "API docs", href: site.apiDocsUrl },
         { label: "GitHub", href: site.githubUrl },
         { label: "Support", href: site.supportUrl },
       ],

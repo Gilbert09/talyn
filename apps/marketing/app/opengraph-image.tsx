@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 import { OgCard, OG_SIZE } from "@/components/og/OgCard";
 
-export const alt = "Talyn — Wake up to green PRs.";
+export const alt = "Talyn: give every task its own agent.";
 export const size = OG_SIZE;
 export const contentType = "image/png";
 
@@ -12,9 +12,9 @@ export default function OgImage() {
   return new ImageResponse(
     (
       <OgCard
-        title="Wake up to"
-        titleAccent="green PRs."
-        sub="Cloud agents that fix CI, clear conflicts, and land your pull requests while you sleep."
+        title="Give every task"
+        titleAccent="its own agent."
+        sub="Parallel coding sessions in cloud sandboxes, on your Claude or ChatGPT plan. From the first prompt to the merged pull request."
         footer="talyn.dev · Public beta"
       />
     ),

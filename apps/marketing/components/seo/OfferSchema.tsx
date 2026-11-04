@@ -30,7 +30,7 @@ export function OfferSchema() {
       data={{
         "@context": "https://schema.org",
         "@type": "Product",
-        name: `${site.name} — ${paid.name}`,
+        name: `${site.name} ${paid.name}`,
         description: paid.blurb,
         url: `${site.url}/pricing`,
         brand: { "@type": "Brand", name: site.name },

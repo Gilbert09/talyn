@@ -15,7 +15,7 @@ import { WebAppButton } from "@/components/ui/WebAppButton";
  */
 export function PageCta({
   title = "Talyn does this for you.",
-  body = "Mission control for your GitHub pull requests, running on the Claude or ChatGPT subscription you already pay for. Free for three tasks at a time.",
+  body = "Coding agents in cloud sandboxes, from the first prompt to the merged pull request, on the Claude or ChatGPT plan you already pay for. Free with 10 box-hours a month.",
   placement,
   className = "mt-14",
 }: {

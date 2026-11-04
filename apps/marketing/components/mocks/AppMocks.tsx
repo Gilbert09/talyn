@@ -9,7 +9,6 @@ import {
   GitPullRequest,
   Eye,
   GitMerge,
-  ListTodo,
   ChevronsUpDown,
   CheckCircle2,
   XCircle,
@@ -27,13 +26,13 @@ import {
   Plus,
   AtSign,
   Users,
-  ScanSearch,
   ShieldAlert,
   CircleDot,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OwlMark } from "@/components/brand/Logo";
+import { MockSession, MockThread } from "@/components/mocks/SessionMocks";
 
 /** Mock components accept this so callers can toggle the filter bar. */
 type MockProps = { filters?: boolean };
@@ -125,15 +124,23 @@ function Sidebar({
   active?: string;
   collapsed?: boolean;
 }) {
+  // The app's own sidebar since sessions shipped: a new session first, then
+  // the PR area and Automations. Older ids map onto the item that now holds
+  // that page, so each mock still highlights where it lives.
   const items = [
-    { id: "prs", label: "My PRs", icon: GitPullRequest, badge: 4 },
-    { id: "reviews", label: "Reviews", icon: Eye, badge: 5 },
-    { id: "code-review", label: "Code review", icon: ScanSearch, badge: 3 },
-    { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 3 },
-    { id: "tasks", label: "Tasks", icon: ListTodo, badge: 2 },
-    { id: "workflows", label: "Workflows", icon: Workflow, badge: 3 },
-    { id: "loops", label: "Loops", icon: Repeat, badge: 3 },
+    { id: "new", label: "New session", icon: Plus, badge: 0 },
+    { id: "prs", label: "Pull requests", icon: GitPullRequest, badge: 4 },
+    { id: "reviews", label: "Review requests", icon: Eye, badge: 5 },
+    { id: "queue", label: "Merge queue", icon: GitMerge, badge: 3 },
+    { id: "automations", label: "Automations", icon: Workflow, badge: 3 },
   ];
+  const where: Record<string, string> = {
+    "code-review": "prs",
+    tasks: "prs",
+    workflows: "automations",
+    loops: "automations",
+  };
+  const current = where[active] ?? active;
   return (
     <div
       className={cn(
@@ -173,7 +180,7 @@ function Sidebar({
               collapsed
                 ? "relative justify-center py-2"
                 : "gap-2.5 px-2.5 py-1.5",
-              active === it.id
+              current === it.id
                 ? "bg-white font-medium text-ink shadow-soft"
                 : "text-ink-500"
             )}
@@ -183,13 +190,17 @@ function Sidebar({
               // A dot, not the count: at this width a numeral is unreadable,
               // and "there is something here" is the whole job of a badge in a
               // still image.
-              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-clay" />
+              it.badge > 0 && (
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-clay" />
+              )
             ) : (
               <>
                 <span className="flex-1">{it.label}</span>
-                <span className="rounded-full bg-paper-300 px-1.5 text-[10px] text-ink-600">
-                  {it.badge}
-                </span>
+                {it.badge > 0 && (
+                  <span className="rounded-full bg-paper-300 px-1.5 text-[10px] text-ink-600">
+                    {it.badge}
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -204,7 +215,7 @@ function Sidebar({
         {collapsed ? (
           <div className="flex flex-col items-center gap-2">
             <span
-              title="PostHog Code connected"
+              title="Talyn Fleet connected"
               className="h-1.5 w-1.5 rounded-full bg-status-green"
             />
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay text-[10px] font-semibold text-white">
@@ -215,7 +226,7 @@ function Sidebar({
           <>
             <div className="mb-2 flex flex-col gap-0.5 px-1 text-[10px] text-ink-400">
               <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> PostHog Code
+                <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> Talyn Fleet
               </span>
             </div>
             <div className="flex items-center gap-2 px-1">
@@ -1064,6 +1075,8 @@ export function MockLoops(_props: MockProps) {
 }
 
 export const MOCKS = {
+  session: MockSession,
+  thread: MockThread,
   dashboard: MockDashboard,
   reviews: MockReviews,
   "code-review": MockCodeReview,

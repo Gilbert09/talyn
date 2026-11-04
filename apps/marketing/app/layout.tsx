@@ -21,7 +21,7 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const title = `${site.name} — Wake up to green PRs.`;
+const title = `${site.name}: give every task its own coding agent`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),
@@ -42,17 +42,17 @@ export const metadata: Metadata = {
   // "please de-index me". Each page sets its own; the home page's lives in
   // app/page.tsx.
   keywords: [
-    "GitHub PR management",
-    "CI fixes",
+    "parallel coding agents",
+    "Claude Code in the cloud",
+    "Codex cloud sandbox",
     "cloud coding agents",
-    "PostHog Code",
+    "agent workspaces",
+    "AI coding sessions",
+    "GitHub PR management",
     "merge queue",
-    "auto-merge",
+    "AI code review",
     "PR automation",
-    "GitHub workflow automation",
     "scheduled AI agents",
-    "recurring developer tasks",
-    "AI developer tools",
   ],
   openGraph: {
     type: "website",

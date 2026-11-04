@@ -4,12 +4,12 @@ description: "CodeRabbit reviews your pull request by commenting on it. Talyn re
 competitor: "CodeRabbit"
 category: "AI code review"
 navLabel: "vs CodeRabbit"
-verdict: "You want a reviewer that participates in the pull request itself — inline comments your teammates can reply to, a walkthrough at the top, a bot you can chat with in the thread — and you are prepared to pay per developer for it."
+verdict: "You want a reviewer that participates in the pull request itself (inline comments your teammates can reply to, a walkthrough at the top, a bot you can chat with in the thread) and you are prepared to pay per developer for it."
 updated: "2026-09-28"
 sources:
   - label: "CodeRabbit pricing"
     url: "https://www.coderabbit.ai/pricing"
-  - label: "CodeRabbit docs — reviewing pull requests"
+  - label: "CodeRabbit docs: reviewing pull requests"
     url: "https://docs.coderabbit.ai/pr-reviews/coderabbit-review"
 related: ["greptile", "graphite"]
 relatedFeatures: ["code-review", "fix-pull-requests", "merge-queue"]
@@ -24,8 +24,8 @@ the change, and stays in the thread to be chatted with. That is a coherent
 design, and if you want an AI reviewer that is visibly part of the review, it
 is the one that commits hardest to the idea.
 
-Talyn's answer is the app. A review writes **nothing** to GitHub — no comments,
-no approval, no requested changes — and the findings appear in Talyn instead.
+Talyn's answer is the app. A review writes **nothing** to GitHub (no comments,
+no approval, no requested changes), and the findings appear in Talyn instead.
 
 Neither is obviously right. Which one suits you depends mostly on how many
 people read your pull requests.
@@ -37,7 +37,7 @@ As of September 2026, from its own documentation and pricing page:
 - Reviews pull requests on GitHub, GitLab and Bitbucket, plus an IDE
   integration and a CLI.
 - Posts **line-by-line inline comments** on the changed code, each with a
-  source line naming why it fired — coding guidelines, path instructions,
+  source line naming why it fired: coding guidelines, path instructions,
   learnings, an MCP tool, a linter, a failing pipeline.
 - Posts a **walkthrough** that reorganises the diff into grouped, ordered
   layers with per-range summaries.
@@ -52,16 +52,15 @@ free.
 
 ## What Talyn does differently
 
-**It does not comment.** This is the whole design, not a setting. The
-reviewing agent is instructed in its own system prompt that it writes nothing
-to GitHub, so the pull request after a Talyn review looks exactly as it did
-before one. The single thing it can post is one short summary comment *after*
-you ask it to fix something, saying what it changed — and that is off unless
-you turn it on.
+**It does not comment unless you ask.** The reviewing agent is instructed in
+its own system prompt that it writes nothing to GitHub, so the pull request
+after a Talyn review looks exactly as it did before one. When you want the
+findings on GitHub, you press Post to PR and Talyn posts one review, as a
+comment, from your own account.
 
 **Several readers, then a judge.** A review runs several reviewers over the
-same diff, each looking for something different — logic, security,
-reliability, tests, operability — none aware of what the others found. A sweep
+same diff, each looking for something different (logic, security,
+reliability, tests, operability), none aware of what the others found. A sweep
 then reads all their output together looking for what they all missed, and a
 judging pass throws out every candidate it cannot stand behind. On the first
 real review we ran, the judge kept one finding out of six.
@@ -116,7 +115,7 @@ generally worth reading, CodeRabbit's model gives you more than ours does.
 ## What CodeRabbit does not do
 
 Fix the pull request the rest of the way. A review is where CodeRabbit's job
-ends — there are one-click fixes and finishing touches on the higher tiers,
+ends: there are one-click fixes and finishing touches on the higher tiers,
 but nothing that watches the pull request afterwards.
 
 Talyn's review is one feature inside a loop: the same agent that fixes a
@@ -127,7 +126,7 @@ review is the smaller half of that.
 
 ## Which one
 
-**Use CodeRabbit if** the review conversation is the product — a team where
+**Use CodeRabbit if** the review conversation is the product: a team where
 several people read each pull request, where a bot comment is genuinely useful
 to somebody other than the author, and where per-seat pricing is normal.
 
@@ -135,5 +134,5 @@ to somebody other than the author, and where per-seat pricing is normal.
 the findings without the thread, and the thing you actually want back is a
 mergeable pull request rather than a list of observations.
 
-They are not mutually exclusive, and running both is not absurd — CodeRabbit
+They are not mutually exclusive, and running both is not absurd: CodeRabbit
 for the team-facing review, Talyn for getting the thing green and landed.

@@ -23,6 +23,12 @@ const nextConfig = {
         destination: "/github-merge-queue-alternative",
         permanent: true,
       },
+      // The relaunch (November 2026) names sessions and threads. These are
+      // the URLs somebody guesses, plus the internal name "workbench".
+      { source: "/sessions", destination: "/features/sessions", permanent: false },
+      { source: "/threads", destination: "/features/threads", permanent: false },
+      { source: "/workbenches", destination: "/features/sessions", permanent: false },
+      { source: "/features/workbenches", destination: "/features/sessions", permanent: false },
     ];
   },
 };

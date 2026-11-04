@@ -12,7 +12,7 @@ import { getGuide } from "@/lib/guides";
 
 const title = "Talyn vs the alternatives";
 const description =
-  "Honest comparisons against the AI review tools, merge queues, cloud coding agents and PR dashboards people weigh Talyn up against — including when you should pick theirs.";
+  "Honest comparisons against the AI review tools, merge queues, cloud coding agents and PR dashboards people weigh Talyn up against, including when you should pick theirs.";
 
 export const metadata: Metadata = {
   title,
@@ -113,7 +113,7 @@ export default function CompareHubPage() {
               placement="compare-hub"
               className="mx-auto max-w-3xl"
               title="The quickest comparison is the one you run yourself."
-              body="Connect GitHub, point Talyn at a pull request that is broken, and see what comes back. Free for three tasks at a time, on the agent subscription you already pay for."
+              body="Start a session on one of your repositories, or point Talyn at a pull request that is broken, and see what comes back. Free with 10 box-hours a month, on the agent subscription you already pay for."
             />
           </div>
         </section>

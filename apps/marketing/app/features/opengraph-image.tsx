@@ -20,7 +20,7 @@ export default function Image() {
         eyebrow="Features"
         title="Everything Talyn"
         titleAccent="does."
-        sub="A PR dashboard, code review that stays off your pull request, a merge queue that fixes before it lands, and agents on your own subscription."
+        sub="Sessions and threads for agent coding, PR fixes, a merge queue, code review and automation, on your own Claude or ChatGPT plan."
       />
     ),
     { ...size }

@@ -70,7 +70,7 @@ export default function AboutPage() {
           <p>
             Writing code stopped being the slow part. Landing it did not. A
             change that takes twenty minutes to write spends two days being a
-            pull request — a test fails for a reason nobody has read yet, the
+            pull request: a test fails for a reason nobody has read yet, the
             base branch moves underneath it, a reviewer asks for one small thing
             on a Friday afternoon. None of that is hard. All of it needs
             somebody present.
@@ -87,7 +87,7 @@ export default function AboutPage() {
             The merge queue drains Talyn&rsquo;s own pull requests. The code
             reviewer reviews its own code. When something on this site says a
             Standard review takes about half an hour, that is a measurement off
-            a real run, not a target — and it is published in that shape because
+            a real run, not a target, and it is published in that shape because
             promising &ldquo;a few minutes&rdquo; is how a feature that is
             working comes to feel broken.
           </p>
@@ -134,7 +134,7 @@ export default function AboutPage() {
         <PageCta
           placement="about"
           title="The quickest way to judge it is to point it at a red pull request."
-          body="Free for three tasks at a time, on the Claude or ChatGPT subscription you already pay for."
+          body="Free with 10 box-hours a month, on the Claude or ChatGPT subscription you already pay for."
         />
       </main>
       <Footer />

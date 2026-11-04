@@ -34,9 +34,8 @@ export function PricingBand() {
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-ink-500">
             Free includes 10 box-hours a month. Pro includes 200, every box
-            size, and credits when you need more. You pay us for the machines,
-            not the model, because the agent runs on your own Claude or ChatGPT
-            subscription.
+            size, and credits when you need more. A sleeping sandbox costs
+            nothing, and the model runs on your own Claude or ChatGPT plan.
           </p>
           <a
             href="/pricing"

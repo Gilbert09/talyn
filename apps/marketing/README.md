@@ -1,6 +1,6 @@
 # Talyn — marketing site
 
-The public marketing site for **Talyn** (`talyn.dev`): mission control for your GitHub PRs, powered by cloud coding agents. Light & warm aesthetic, single rich landing page. Independent of the Talyn backend/desktop — its own Next.js app, deploys to Vercel.
+The public marketing site for **Talyn** (`talyn.dev`): coding agents in cloud sandboxes, one session per task, from the first prompt to the merged pull request. Light & warm aesthetic, single rich landing page. Independent of the Talyn backend/desktop — its own Next.js app, deploys to Vercel.
 
 ## Stack
 
@@ -55,7 +55,7 @@ The hero and feature visuals render **in-browser mockups** of the real app (`com
 <ScreenshotPlaceholder shot="dashboard" src="/screenshots/dashboard.png" />
 ```
 
-Shot ids: `dashboard`, `task-running`, `merge-queue`, `skill-picker`, `pr-detail`, `onboarding`.
+Shot ids: `session`, `thread`, `dashboard`, `reviews`, `code-review`, `task-running`, `merge-queue`, `pr-detail`, `skill-picker`, `workflows`, `loops`, `onboarding`. The session and thread mocks live in `components/mocks/SessionMocks.tsx`.
 
 ### 3. Email capture — removed, and worth re-adding deliberately
 
@@ -73,7 +73,7 @@ time; it was taken out with the form.
 ## Brand quick reference
 
 - **Name:** Talyn (a stylized "talon" — the owl's grip that drags a failing PR to green)
-- **Tagline:** "Merge more. Babysit less."
+- **Tagline:** "Give every task its own agent."
 - **Palette:** warm paper `#f8f5f0`, charcoal ink `#23201b`, terracotta/clay accent `#c25e3a` (CTAs); status colors only inside the product mockups
 - **Type:** Space Grotesk (display) · Inter (body) · JetBrains Mono (code)
-- **Voice:** dry, dev-native, a little silly. Owl/talon/night puns used sparingly.
+- **Voice:** plain, specific and short. Second person, sentence-case headings, no em-dashes, no exclamation marks. See the house rules at the top of `lib/content.ts`.

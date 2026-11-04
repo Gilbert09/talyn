@@ -38,8 +38,8 @@ export function Hero() {
             <Badge dot>{hero.badge}</Badge>
           </div>
 
-          {/* Each part on its own line so a free-flowing wrap can't break it
-              mid-phrase ("Wake up to green / PRs.") at laptop widths. */}
+          {/* Each part on its own line so a free-flowing wrap cannot break
+              the phrase in an odd place at laptop widths. */}
           <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-tight text-ink sm:text-7xl">
             <span className="block">{hero.titleLead}</span>
             <span className="block text-clay">{hero.titleAccent}</span>
@@ -92,15 +92,15 @@ export function Hero() {
           <PlatformNote className="mx-auto mt-1.5 max-w-md" />
         </motion.div>
 
-        {/* mt-10 (was 16): keep the top of the screenshot above the fold on a
-            laptop viewport — the "most useful bit" shouldn't need a scroll. */}
+        {/* mt-10: keep the top of the session mock above the fold on a
+            laptop viewport. */}
         <motion.div
           initial={{ opacity: 0, y: 40, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.9, delay: 0.15, ease: [0.21, 0.47, 0.32, 0.98] }}
-          className="relative mx-auto mt-10 max-w-5xl"
+          className="relative mx-auto mt-10 max-w-6xl"
         >
-          <ScreenshotPlaceholder shot="dashboard" title="Talyn — My PRs" />
+          <ScreenshotPlaceholder shot="session" title="Talyn · Add CSV export" />
         </motion.div>
       </div>
     </section>

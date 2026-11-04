@@ -13,7 +13,7 @@ import { listComparePages } from "@/lib/compare";
 
 const title = "Everything Talyn does";
 const description =
-  "A PR dashboard, AI code review that stays out of your pull request, a merge queue that fixes before it lands, agents on your own subscription, workflows, loops, skills and MCP servers.";
+  "Sessions and threads for agent coding, a PR list that sends fixes, a merge queue, AI code review, loops, workflows, Slack and MCP servers. All on your own Claude or ChatGPT plan.";
 
 export const metadata: Metadata = {
   title,
@@ -116,8 +116,8 @@ export default function FeaturesHubPage() {
             <PageCta
               placement="features-hub"
               className="mx-auto max-w-3xl"
-              title="Start with the PR list. Everything else follows from it."
-              body="Connect GitHub, see every pull request you have open in one place, and send an agent at the first one that is broken. Free for three tasks at a time."
+              title="Start with one session."
+              body="Pick a repository, describe the task and watch the agent work. Free with 10 box-hours a month."
             />
           </div>
         </section>

@@ -52,13 +52,13 @@ export async function Proof() {
       icon: ShieldCheck,
       label: "Signed and notarized on macOS",
       detail:
-        "Windows is not signed yet and will warn you on first install — we would rather say so here.",
+        "Windows is not signed yet and will warn you on first install. We would rather say so here.",
     },
     {
       icon: Boxes,
       label: "Your token never enters the sandbox",
       detail:
-        "Each task gets a fresh microVM; credentials are attached from outside it and the machine is destroyed afterwards.",
+        "Each session runs in its own microVM. Your credentials are added from outside it.",
     },
   ].filter(Boolean) as Array<{
     icon: typeof Github;

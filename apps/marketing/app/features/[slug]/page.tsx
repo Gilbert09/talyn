@@ -139,7 +139,7 @@ export default function FeaturePageRoute({ params }: Params) {
                 <ScreenshotPlaceholder
                   shot={feature.heroMock}
                   filters={false}
-                  title={`Talyn — ${feature.navLabel}`}
+                  title={`Talyn · ${feature.navLabel}`}
                 />
               </Reveal>
             </div>

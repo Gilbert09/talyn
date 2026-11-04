@@ -33,7 +33,7 @@ type Release = {
   assets?: Array<{ name: string; browser_download_url: string }>;
 };
 
-type PlatformKey = "mac" | "windows" | "linux";
+export type PlatformKey = "mac" | "windows" | "linux";
 
 type Platform = {
   key: PlatformKey;
@@ -168,6 +168,7 @@ export function DownloadButton({
   variant = "primary",
   className,
   placement = "unknown",
+  platform: forced,
 }: {
   children?: React.ReactNode;
   size?: ButtonProps["size"];
@@ -175,13 +176,15 @@ export function DownloadButton({
   className?: string;
   /** Which CTA this is, for the event. See `placement` in the capture below. */
   placement?: string;
+  /** Offer this platform's build instead of the visitor's own (the /download page). */
+  platform?: PlatformKey;
 }) {
   const [loading, setLoading] = useState(false);
   // Resolved after mount, never during render: the server has no navigator,
   // so sniffing inline would hydrate-mismatch. Until then every visitor sees
   // the Mac label, which is what the page rendered before this existed.
-  const [platform, setPlatform] = useState<Platform>(PLATFORMS.mac);
-  useEffect(() => setPlatform(detectPlatform()), []);
+  const [platform, setPlatform] = useState<Platform>(PLATFORMS[forced ?? "mac"]);
+  useEffect(() => setPlatform(forced ? PLATFORMS[forced] : detectPlatform()), [forced]);
 
   // `loading` is React state, so it is still false in the closure of a second
   // click that lands before the re-render commits — which a double-click

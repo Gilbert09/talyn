@@ -15,7 +15,7 @@ export function Providers() {
           sub={providers.sub}
         />
 
-        <div className="mx-auto mt-14 grid max-w-5xl gap-4 md:grid-cols-3">
+        <div className="mx-auto mt-14 grid max-w-3xl gap-4 md:grid-cols-2">
           {providers.items.map((p, i) => (
             <Reveal key={p.name} delay={i * 0.08}>
               <GlowCard className="h-full" tone="clay">
@@ -38,8 +38,8 @@ export function Providers() {
           ))}
         </div>
 
-        {/* The sandbox claim, once, under the grid: it is true of two of the
-            three cards, and repeating it on both would read as filler. */}
+        {/* The sandbox claim, once, under the grid: it is true of both cards,
+            and repeating it on each would read as filler. */}
         <p className="mx-auto mt-6 max-w-3xl text-center text-sm leading-relaxed text-ink-400">
           {providers.note}
         </p>
@@ -49,7 +49,7 @@ export function Providers() {
             href="/features/agents"
             className="group inline-flex items-center gap-1.5 text-sm font-medium text-clay-600 hover:text-clay"
           >
-            How the sandbox and your credentials work
+            {providers.link}
             <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
           </a>
         </div>

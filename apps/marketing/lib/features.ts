@@ -90,12 +90,245 @@ const UPDATED = "2026-09-28";
 
 export const FEATURE_PAGES: FeaturePage[] = [
   {
+    slug: "sessions",
+    navLabel: "Sessions",
+    eyebrow: "Sessions",
+    tagline: "A branch, an agent, a sandbox",
+    title: "A coding agent with its own sandbox.",
+    seoTitle: "Run Claude Code and Codex in parallel cloud sandboxes",
+    description:
+      "A session is one task on one branch, with its own agent, chat, diff, files, terminal and run scripts, in a cloud sandbox. Run several at once on your Claude or ChatGPT plan, and open the pull request from the same screen.",
+    heroMock: "session",
+    bullets: [
+      "Its own branch and sandbox, so parallel agents never collide",
+      "Chat, diff, files, terminal and run scripts on one screen",
+      "One button to open the PR, fix checks, resolve conflicts and merge",
+      "Claude Code or Codex, on the subscription you already pay for",
+    ],
+    sections: [
+      {
+        heading: "What a session is",
+        paragraphs: [
+          "A session is one task. Pick a repository, describe what you want and press Enter. Talyn names the session, makes a branch, starts a sandbox and gives the task to your agent.",
+          "The agent is the real Claude Code or Codex command-line tool. Plan mode, slash commands and skills work the way they do on your laptop.",
+        ],
+        mock: "session",
+      },
+      {
+        heading: "Everything on one screen",
+        paragraphs: [
+          "The chat is in the middle. The panel on the right shows the branch, and a terminal dock sits below it.",
+        ],
+        bullets: [
+          "Changes: the diff against the base branch",
+          "All files: browse and read any file on the branch",
+          "Pull request: its status, checks, reviews and place in the merge queue",
+          "Sandbox: what the sandbox is doing and whether your work is saved",
+          "Setup, Run and Terminal: your scripts, their output, and a shell",
+        ],
+      },
+      {
+        heading: "Keep talking while it works",
+        paragraphs: [
+          "A message you send during a turn waits, then goes in when the turn ends. Each message you send is a checkpoint, so you can put the files back to how they were before it.",
+          "Open a second chat in the same session when you want another line of work on the same branch.",
+        ],
+      },
+      {
+        heading: "From diff to merged",
+        paragraphs: [
+          "One button in the header moves the session on. First it reads Create PR. The agent writes the title and description from your changes and your PR template, then Talyn commits, pushes and opens the pull request.",
+          "After that the same button offers the next step: resolve conflicts, fix checks, merge. When you are done, archive the session. Archiving saves any work you did not push.",
+        ],
+      },
+      {
+        heading: "Quick to start, free when idle",
+        paragraphs: [
+          "Talyn builds an image for each repository with its setup already run, plus your own setup steps and dotfiles. A new session starts from that image, not from a clean machine. Talyn also suggests setup steps it sees your sessions run again and again.",
+          "A sandbox that is idle for 10 minutes goes to sleep and costs nothing. Your next message wakes it. While it sleeps, you can still read its changes and files from Talyn's copy.",
+        ],
+      },
+      {
+        heading: "Your work is saved",
+        paragraphs: [
+          "After every turn, Talyn saves the work you have not pushed to its own storage. It pushes nothing to GitHub to do this. If a sandbox is lost, the next one restores the work and tells you when it was saved.",
+        ],
+      },
+      {
+        heading: "Run your app",
+        paragraphs: [
+          "Start your dev server with a run script. On the desktop app, Talyn forwards the sandbox's port to the same port on your machine, so you open it on localhost like any other dev server.",
+        ],
+      },
+      {
+        heading: "Local when you want it",
+        paragraphs: [
+          "On the desktop app, a session can also run in a git worktree on your own machine, with your own tools. You can also move a Claude Code conversation from your computer into a sandbox and carry on there.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Which agents can a session use?",
+        a: "Claude Code on your Claude Pro or Max plan, or Codex on your ChatGPT Plus or Pro plan. A sandbox session uses one agent, which you pick when you start it.",
+      },
+      {
+        q: "How many sessions can I run at once?",
+        a: "Two sandboxes at once on the free plan and up to 100 on Pro, counted across all your workspaces.",
+      },
+      {
+        q: "What does a session cost?",
+        a: "Its sandbox uses box-hours while it is awake: 10 a month on the free plan, 200 on Pro. A sleeping sandbox uses none. The model runs on your own subscription, so there is no token bill from us.",
+      },
+      {
+        q: "Does Talyn push my work to save it?",
+        a: "No. Saved work goes to Talyn's own storage, not to GitHub. A push happens when you open a pull request, or when the agent pushes because you asked it to.",
+      },
+      {
+        q: "Do my Conductor scripts work?",
+        a: "Yes. Talyn reads setup, run and archive scripts from .talyn/settings.toml, and also from conductor.json or .conductor/settings.toml, so existing scripts work unchanged.",
+      },
+    ],
+    planNote:
+      "Free: 10 box-hours a month and two sandboxes at once. Pro: 200 box-hours and up to 100 at once.",
+    related: ["threads", "fix-pull-requests", "agents"],
+    relatedCompare: ["conductor", "t3-code", "cursor-background-agents"],
+    updated: "2026-11-04",
+  },
+
+  {
+    slug: "threads",
+    navLabel: "Threads",
+    eyebrow: "Threads",
+    tagline: "One goal across repositories",
+    title: "One conversation, many repositories.",
+    seoTitle: "Run a coding agent across several repositories at once",
+    description:
+      "A thread is a conversation with no repository of its own. Give it a goal and it starts a session on each repository that needs a change, then follows each one until the work is done.",
+    heroMock: "thread",
+    bullets: [
+      "Starts a session on each repository the goal touches",
+      "Hears when a session finishes, opens a PR or needs an answer",
+      "Stops when its sessions stop making progress",
+      "Every session it starts is one you can open and steer",
+    ],
+    sections: [
+      {
+        heading: "When one change is three pull requests",
+        paragraphs: [
+          "A new API field needs the server, the client and the docs. That is three repositories, three branches and three agents, and somebody has to keep them in step.",
+          "A thread does that part. You describe the goal once. It works out which repositories need a change and starts a session on each.",
+        ],
+        mock: "thread",
+      },
+      {
+        heading: "It keeps track for you",
+        paragraphs: [
+          "Each session tells the thread when it starts, finishes a turn, opens a pull request or needs an answer. Most of these give the thread's agent a turn, so it can react: answer a question, or start the next step.",
+          "When it needs you, it says so in the thread, with a link to the session.",
+        ],
+      },
+      {
+        heading: "It knows when to stop",
+        paragraphs: [
+          "If its sessions make no progress between two of its turns, the thread stops waking itself and waits for you. It does not spin on a stuck problem all night.",
+        ],
+      },
+      {
+        heading: "Step in any time",
+        paragraphs: [
+          "Every session a thread starts is an ordinary session. Open it to read the diff, run the tests in its terminal or send it a message yourself. The thread's side panel lists its sessions and repositories.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "What is the difference between a thread and a session?",
+        a: "A session is one task on one branch of one repository. A thread has no repository. It starts sessions on the repositories a goal needs and follows them.",
+      },
+      {
+        q: "How do I start a thread?",
+        a: "On the new session page, choose New thread, describe the goal and press Enter.",
+      },
+      {
+        q: "What does a thread cost?",
+        a: "A thread and its sessions use box-hours while their sandboxes are awake, like any other session. The model runs on your own subscription.",
+      },
+    ],
+    planNote: "Threads use box-hours like sessions do. There is no separate limit on threads.",
+    related: ["sessions", "agents", "mcp-servers"],
+    updated: "2026-11-04",
+  },
+
+  {
+    slug: "slack",
+    navLabel: "Slack",
+    eyebrow: "Slack",
+    tagline: "Start a session from a message",
+    title: "Start a session from Slack.",
+    seoTitle: "Start a coding agent session from a Slack message",
+    description:
+      "React to a message with your trigger emoji, mention Talyn, or send it a direct message, and a session starts with the Slack thread as its brief. Talyn shows progress as reactions and never posts in your channels.",
+    heroMock: "session",
+    bullets: [
+      "Start from a reaction, a mention or a direct message",
+      "Talyn finds the repository, or asks you when it cannot tell",
+      "Progress shows as reactions on the message that started it",
+      "Talyn never posts in your channels",
+    ],
+    sections: [
+      {
+        heading: "Start where the work is reported",
+        paragraphs: [
+          "A bug report lands in a channel. React to it with your trigger emoji, mention Talyn, or send Talyn the message, and a session starts with that Slack thread as its brief.",
+          "Pick any emoji as your trigger, including your workspace's custom ones.",
+        ],
+      },
+      {
+        heading: "It finds the repository",
+        paragraphs: [
+          "Talyn picks the repository from a link or a name in the message, then from what this channel's sessions used before. If no repository is a clear winner, it does not guess. It asks you in the app.",
+        ],
+      },
+      {
+        heading: "Quiet in Slack",
+        paragraphs: [
+          "Talyn never posts in your channels. It shows a session's progress as reactions on the message that started it, and the session links back to the Slack thread.",
+        ],
+      },
+      {
+        heading: "Slack text is treated as untrusted",
+        paragraphs: [
+          "Anyone in a channel can write a message. Talyn keeps your own instruction apart from the quoted Slack text, and tells the agent that the quoted part is untrusted.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Does Talyn post in Slack?",
+        a: "No. It adds reactions to the message that started a session, and nothing else.",
+      },
+      {
+        q: "Who can start a session from Slack?",
+        a: "A person who has linked their Slack account to Talyn. The session starts in that person's Talyn workspace, on their own plan.",
+      },
+      {
+        q: "How do I set it up?",
+        a: "Install the Talyn app in your Slack workspace from Settings in Talyn, link your Slack account, and choose your trigger emoji.",
+      },
+    ],
+    planNote: "Sessions started from Slack use box-hours like any other session.",
+    related: ["sessions", "threads", "workflows"],
+    updated: "2026-11-04",
+  },
+
+  {
     slug: "pr-dashboard",
     navLabel: "PR dashboard",
     eyebrow: "Mission control",
     tagline: "Every PR, worst first",
     title: "Every pull request, triaged. No tabs required.",
-    seoTitle: "GitHub pull request dashboard — every PR in one list",
+    seoTitle: "GitHub pull request dashboard: every PR in one list",
     description:
       "One live list of every pull request you have open, across every repository you connect, with the blocked ones pulled to the front. Diffs, checks and conversation without leaving the app.",
     heroMock: "dashboard",
@@ -110,7 +343,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "The problem is not that GitHub is bad. It is that there is one of you and forty pull requests.",
         paragraphs: [
           "GitHub shows you a pull request very well. What it does not do is tell you which of yours needs you right now. The notifications inbox mixes a failing build into the same stream as a thumbs-up reaction. The pull request list sorts by when something was last touched, which is not the same as how much trouble it is in. So the working pattern becomes ten open tabs and a refresh key.",
-          "Talyn answers a narrower question: of everything you have open, what is blocked, and what is ready. That is one list, ordered by how much it needs you, and it is the first thing on screen when you open the app.",
+          "Talyn answers a narrower question: of everything you have open, what is blocked, and what is ready. That is one list, ordered by how much it needs you, and it is one click away from any session.",
         ],
         mock: "dashboard",
       },
@@ -138,7 +371,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "How it stays current",
         paragraphs: [
-          "Talyn is a GitHub App, so the primary signal is webhooks — a push, a check completing, a review landing, all arrive as they happen and go straight to the open app over a websocket. A reconciliation pass runs behind that as a safety net, because a webhook that never arrives is a state that never updates, and a dashboard that is quietly stale is worse than no dashboard.",
+          "Talyn is a GitHub App, so the primary signal is webhooks: a push, a check completing, a review landing, all arrive as they happen and go straight to the open app over a websocket. A reconciliation pass runs behind that as a safety net, because a webhook that never arrives is a state that never updates, and a dashboard that is quietly stale is worse than no dashboard.",
           "The practical result: you do not refresh. A check that goes red goes red on your screen.",
         ],
       },
@@ -146,7 +379,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "It runs where you are",
         paragraphs: [
           "There are desktop builds for macOS, Windows and Linux, and a browser app at app.talyn.dev that needs no install. Same account, same workspaces, same queue. The desktop app adds two things a browser cannot do: it reads skills from `~/.claude/skills` on your machine, and it keeps your session in the OS keychain.",
-          "Two honest caveats on the downloads. The Windows installer is not yet code-signed, so SmartScreen will warn you on first install until we buy an EV certificate. And the download button offers the Apple-silicon build on a Mac — if you are on an Intel Mac, take the x64 build from the releases page instead.",
+          "Two honest caveats on the downloads. The Windows installer is not yet code-signed, so SmartScreen will warn you on first install until we buy an EV certificate. And the download button offers the Apple-silicon build on a Mac. If you are on an Intel Mac, take the x64 build from the releases page instead.",
         ],
       },
     ],
@@ -157,7 +390,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Does it show pull requests I did not open?",
-        a: "Your own pull requests are the main list. Review requests — every open pull request where you are a requested reviewer and have not reviewed yet — live on their own page. Workflows act on every pull request in a connected repository, including ones you did not open.",
+        a: "Your own pull requests are the main list. Review requests (every open pull request where you are a requested reviewer and have not reviewed yet) live on their own page. Workflows act on every pull request in a connected repository, including ones you did not open.",
       },
       {
         q: "Does Talyn store my source code?",
@@ -178,10 +411,10 @@ export const FEATURE_PAGES: FeaturePage[] = [
     title: "Code review without the comment spam.",
     seoTitle: "AI code review that does not comment on your pull request",
     description:
-      "Most AI reviewers announce themselves in your pull request. This one writes nothing to GitHub at all. Several reviewers read the change from different angles, a checking pass throws out what it cannot stand behind, and what is left is a short list in the app.",
+      "Most AI reviewers announce themselves in your pull request. This one keeps its findings in the app until you choose to post them. Several reviewers read the change from different angles, a checking pass throws out what it cannot stand behind, and what is left is a short list.",
     heroMock: "code-review",
     bullets: [
-      "Findings live in Talyn — your pull request stays clean",
+      "Findings stay in Talyn until you press Post to PR",
       "Read from several angles at once, then swept again for what they missed",
       "A checking pass drops the weak ones and records why it dropped them",
       "Tick what is worth fixing and Talyn pushes one commit, not a thread per finding",
@@ -191,20 +424,20 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "The thing it does not do is the point",
         paragraphs: [
           "An AI reviewer that comments on your pull request has made a decision on your behalf: that its output is worth your teammates' attention. Most of the time it is not. The finding that turns out to be wrong is still there in the thread, and somebody has to reply to it, and the next reviewer scrolls past forty collapsed comments to reach the two that a human wrote.",
-          "Talyn's review writes nothing to GitHub. No comments, no approval, no requested changes. That is enforced in the reviewing agent's own system prompt, not left to its judgement. The findings appear in Talyn, and the pull request looks exactly as it did before you asked.",
-          "There is one thing it can put on GitHub, and only after you have asked it to fix something: a single short summary comment saying what it changed and what it left. That is off unless you turn it on.",
+          "Talyn's review writes nothing to GitHub while it runs. No comments, no approval, no requested changes. That is enforced in the reviewing agent's own system prompt, not left to its judgement. The findings appear in Talyn, and the pull request looks exactly as it did before you asked.",
+          "When you want the findings on the pull request, press Post to PR. Talyn posts one review from your own account, as a comment, never an approval or a request for changes. A finding goes inline only when its quoted code is verified to be on a changed line, and a finding is never posted twice.",
         ],
         mock: "code-review",
       },
       {
         heading: "Several readers, then somebody checking their work",
         paragraphs: [
-          "A single pass over a diff finds the obvious things and misses the rest, because one reader with one prompt has one set of concerns. So a review runs several reviewers over the same change, each looking for something different — logic, security, reliability, tests, operability — and none of them aware of what the others found.",
+          "A single pass over a diff finds the obvious things and misses the rest, because one reader with one prompt has one set of concerns. So a review runs several reviewers over the same change, each looking for something different (logic, security, reliability, tests, operability) and none of them aware of what the others found.",
           "Then two more passes. A sweep reads every reviewer's output together and looks for what they all missed, which is the largest amount of context the pipeline ever assembles. And a judging pass goes through the candidate findings and throws out everything it cannot stand behind.",
           "The judge is the part that decides whether the feature is useful. On the first real review it ran, it kept one finding out of six. A reviewer that surfaces six things when one is real has not saved you any time.",
         ],
         bullets: [
-          "Reviewers who disagree are shown as reviewers who disagree — you see which lenses raised a finding",
+          "Reviewers who disagree are shown as reviewers who disagree: you see which lenses raised a finding",
           "Two reviewers reaching the same conclusion is recorded as agreement, not duplicated as two findings",
           "A rejected finding keeps the judge's reason, so the pass that drops most of them is auditable",
         ],
@@ -212,21 +445,21 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "How long it takes, honestly",
         paragraphs: [
-          "Depth is a choice you make per review, and it is a real trade rather than a slider with no meaning behind it. Quick runs one reviewer and skips the sweep and the judge. Standard — the default — runs several reviewers plus both passes. Deep adds more reviewers, reads a large pull request in chunks, and uses the strongest model your connected subscription has.",
+          "Depth is a choice you make per review, and it is a real trade rather than a slider with no meaning behind it. Quick runs one reviewer and skips the sweep and the judge. Standard (the default) runs several reviewers plus both passes. Deep adds more reviewers, reads a large pull request in chunks, and uses the strongest model your connected subscription has.",
           "The numbers are measured, not aspirational. Quick is usually under ten minutes. Standard typically takes about half an hour. Deep can take an hour or more on a large pull request. We publish those because promising 'a few minutes' is how a feature that is working comes to feel broken.",
         ],
       },
       {
         heading: "Fixing is one commit, not a thread",
         paragraphs: [
-          "Tick the findings that are worth acting on and Talyn sends an agent to make those changes and push a single commit to the branch. Not a suggestion per finding for you to click through — one commit, with the work done.",
+          "Tick the findings that are worth acting on and Talyn sends an agent to make those changes and push a single commit to the branch. Not a suggestion per finding for you to click through: one commit, with the work done.",
           "There is an automatic version, and it is off by default and deliberately narrow. It will only act on a finding the judge confirmed, at or above a severity floor that defaults to blockers only, and whose quoted anchor was verified against the actual file. Each of those bounds comes from the first real review we ran, where the one finding that survived judging quoted code that was not at the line it named.",
         ],
       },
       {
         heading: "It can block a merge, if you want it to",
         paragraphs: [
-          "If a review turns up a blocker — blocker severity, confirmed by the judging pass, on a review of the current head, not dismissed — the merge queue parks the pull request rather than landing it. Dismiss the finding, land a fix, or push a new commit and the queue picks it up again.",
+          "If a review turns up a blocker (blocker severity, confirmed by the judging pass, on a review of the current head, not dismissed) the merge queue parks the pull request rather than landing it. Dismiss the finding, land a fix, or push a new commit and the queue picks it up again.",
           "Nothing about this touches your branch protection rules. It is Talyn declining to press merge, not Talyn overriding GitHub.",
         ],
       },
@@ -234,11 +467,11 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "Does the code review comment on my pull requests?",
-        a: "No. A review writes nothing to your pull request — no comments, no approval, no requested changes. The findings appear in Talyn, grouped by how much they matter, each one saying which reviewers raised it and what it is about. You tick the ones worth fixing and Talyn pushes a single commit. The only thing it can put on GitHub is one short summary comment after a fix, saying what it changed and what it left, and that is off unless you turn it on.",
+        a: "Not unless you ask. A review writes nothing to your pull request while it runs: no comments, no approval, no requested changes. The findings appear in Talyn, grouped by how much they matter, each one saying which reviewers raised it. You tick the ones worth fixing and Talyn pushes a single commit. To put the findings on GitHub, press Post to PR: Talyn posts one review, as a comment, from your own account.",
       },
       {
         q: "How long does a code review take?",
-        a: "It depends how deeply you ask it to look. Quick is usually under ten minutes. Standard — the default — typically takes about half an hour, because several reviewers read the change in parallel and then a further pass goes back over the whole thing. Deep can take an hour or more on a large pull request. You pick the depth per review, so a small change does not have to wait for the thorough treatment.",
+        a: "It depends how deeply you ask it to look. Quick is usually under ten minutes. Standard (the default) typically takes about half an hour, because several reviewers read the change in parallel and then a further pass goes back over the whole thing. Deep can take an hour or more on a large pull request. You pick the depth per review, so a small change does not have to wait for the thorough treatment.",
       },
       {
         q: "What happens if one of the reviewers fails?",
@@ -272,7 +505,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     heroMock: "merge-queue",
     bullets: [
       "Lands ready pull requests in order, the moment they go green",
-      "Rebases and clears conflicts on the way in — no manual \"update branch\"",
+      "Rebases and clears conflicts on the way in: no manual \"update branch\"",
       "Independent pull requests merge in parallel; one slow build cannot stall the queue",
       "Auto-fixes anything that falls behind or breaks before it merges",
     ],
@@ -281,14 +514,14 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "The gap between approved and merged",
         paragraphs: [
           "A pull request is approved on Tuesday. On Thursday the base branch has moved, the branch is behind, a test that passes on main fails on this diff, and the thing you already agreed to ship needs another afternoon. Nothing went wrong; time passed.",
-          "A merge queue is the standard answer, and GitHub's is good. The catch is eligibility — it wants an organisation and, historically, a plan most people reading this do not have — and its behaviour when something fails is to eject the pull request back to you. That is correct for a queue whose job is to protect the base branch. It is not much help to the person now holding a broken branch.",
+          "A merge queue is the standard answer, and GitHub's is good. The catch is eligibility (it wants an organisation and, historically, a plan most people reading this do not have) and its behaviour when something fails is to eject the pull request back to you. That is correct for a queue whose job is to protect the base branch. It is not much help to the person now holding a broken branch.",
         ],
         mock: "merge-queue",
       },
       {
         heading: "Fix first, then merge",
         paragraphs: [
-          "Talyn's queue does the fixing. When an entry falls behind its base it takes GitHub's free server-side 'Update branch' where that will work, and only spends an agent run when there is an actual conflict to resolve. When a check fails it dispatches a fix run, which pushes to the existing branch — no new pull request to reconcile.",
+          "Talyn's queue does the fixing. When an entry falls behind its base it takes GitHub's free server-side 'Update branch' where that will work, and only spends an agent run when there is an actual conflict to resolve. When a check fails it dispatches a fix run, which pushes to the existing branch: no new pull request to reconcile.",
           "Entries that do not depend on one another drain concurrently, so one slow test suite does not hold up four unrelated changes. Stacked pull requests are handled bottom-up, and a native GitHub stack is handed over at the top rung rather than fought with.",
         ],
         bullets: [
@@ -302,21 +535,21 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "It gives up on evidence, not on a timer",
         paragraphs: [
           "The hard part of an automated queue is knowing when to stop. Retrying forever burns your agent subscription on a problem no agent can solve. Stopping after N attempts stops on work that was making progress.",
-          "So the queue records a signature of what is currently blocking an entry. If it tries a fix and the same blocker comes back unchanged, that attempt achieved nothing and the entry parks. If a different blocker appears, that is progress — the first thing got fixed — and it keeps going. The unit is 'did anything change', not 'how many goes have we had'.",
+          "So the queue records a signature of what is currently blocking an entry. If it tries a fix and the same blocker comes back unchanged, that attempt achieved nothing and the entry parks. If a different blocker appears, that is progress: the first thing got fixed, and it keeps going. The unit is 'did anything change', not 'how many goes have we had'.",
           "It also parks, rather than retries, when an agent explicitly stands down: some gates need a person, and a run that says so is recorded as needing a human rather than as a crash.",
         ],
       },
       {
         heading: "Keep-mergeable: the part that runs overnight",
         paragraphs: [
-          "Flagging a pull request keep-mergeable puts a watcher on it. It does not wait for you to notice that main moved — the moment the branch falls behind, hits a conflict, or a check goes red, the fix dispatches. When it is green again the queue lands it.",
-          "This is the feature behind 'wake up to green PRs', and it is the one to try first. Flagging pull requests one at a time is free. Having every new pull request you open flagged automatically is part of Pro.",
+          "Flagging a pull request keep-mergeable puts a watcher on it. It does not wait for you to notice that main moved: the moment the branch falls behind, hits a conflict, or a check goes red, the fix dispatches. When it is green again the queue lands it.",
+          "This is the feature that keeps your pull requests green overnight, and it is the one to try first. Flagging pull requests one at a time is free. Having every new pull request you open flagged automatically is part of Pro.",
         ],
       },
       {
         heading: "What it does not do",
         paragraphs: [
-          "No speculative batch testing — it does not build hypothetical merge combinations ahead of time the way a large-scale queue does. No file-overlap analysis to decide which pull requests can be batched. And it cannot bypass your branch protection: if a required check or a required reviewer is missing, the queue waits, exactly as you configured GitHub to make it.",
+          "No speculative batch testing: it does not build hypothetical merge combinations ahead of time the way a large-scale queue does. No file-overlap analysis to decide which pull requests can be batched. And it cannot bypass your branch protection: if a required check or a required reviewer is missing, the queue waits, exactly as you configured GitHub to make it.",
           "If you already run GitHub's merge queue on a repository, Talyn detects the external gate and arms GitHub auto-merge instead of trying to merge around it.",
         ],
       },
@@ -336,7 +569,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "What happens if an agent cannot fix the problem?",
-        a: "The entry parks with the reason recorded, and it re-arms on its own if what is blocking it changes — a new commit, a different failure, a resolved conflict. It does not sit there retrying the same failed fix.",
+        a: "The entry parks with the reason recorded, and it re-arms on its own if what is blocking it changes: a new commit, a different failure, a resolved conflict. It does not sit there retrying the same failed fix.",
       },
     ],
     planNote:
@@ -359,7 +592,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     heroMock: "task-running",
     bullets: [
       "Fixes failing tests, conflicts, and review comments",
-      "Pushes to your existing branch — no second pull request to reconcile",
+      "Pushes to your existing branch: no second pull request to reconcile",
       "Watch the run live, step by step",
       "Runs on the Claude or ChatGPT subscription you already pay for",
     ],
@@ -375,7 +608,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "You can watch, but you do not have to",
         paragraphs: [
-          "The run streams into the app as it happens — the commands, the files it touched, the reasoning. That matters the first few times, when you are deciding whether to trust it, and it matters again when something goes strangely.",
+          "The run streams into the app as it happens: the commands, the files it touched, the reasoning. That matters the first few times, when you are deciding whether to trust it, and it matters again when something goes strangely.",
           "After that, the point is not to watch. The merge queue and keep-mergeable exist so that the common cases never need you at all: something breaks, a fix dispatches, the pull request lands, and the first you hear of it is that it merged.",
         ],
       },
@@ -385,9 +618,9 @@ export const FEATURE_PAGES: FeaturePage[] = [
           "Fixing a pull request is one of three things you can send. A review response reads the conversation and addresses what reviewers actually asked for. And a freeform task takes a prompt and a repository and opens a pull request of its own.",
         ],
         bullets: [
-          "Fix this pull request — failing checks, conflicts, a branch that fell behind",
-          "Respond to review — read the thread, make the changes, push",
-          "Do this thing — a prompt against a repository, which opens its own pull request",
+          "Fix this pull request: failing checks, conflicts, a branch that fell behind",
+          "Respond to review: read the thread, make the changes, push",
+          "Do this thing: a prompt against a repository, which opens its own pull request",
         ],
       },
       {
@@ -437,11 +670,11 @@ export const FEATURE_PAGES: FeaturePage[] = [
     title: "Write the rule once. It runs on every pull request.",
     seoTitle: "GitHub pull request automation without writing YAML",
     description:
-      "When this happens on a pull request, do these things. Label it, request a reviewer, post a comment, send an agent to fix it, or drop it in the merge queue. It watches every pull request in your repositories — including ones you did not open — and it runs with the app closed.",
+      "When this happens on a pull request, do these things. Label it, request a reviewer, post a comment, send an agent to fix it, or drop it in the merge queue. It watches every pull request in your repositories (including ones you did not open) and it runs with the app closed.",
     heroMock: "workflows",
     bullets: [
       "Triggers on what actually happens: opened, checks failed, review requested, approved, commented, merged",
-      "Narrow it with conditions — this repository, this base branch, this label, this author, drafts or not",
+      "Narrow it with conditions: this repository, this base branch, this label, this author, drafts or not",
       "Actions that do real work: labels, reviewers, comments, a skill or prompt run, the merge queue",
       "Every run is logged, per rule, so you can see what fired and what it did",
     ],
@@ -449,7 +682,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "The decision you keep making",
         paragraphs: [
-          "Every time a pull request touches the migrations directory you add the database reviewer. Every time CI fails on a dependency bump you send an agent at it. Every time something is approved and green you queue it. None of these are decisions any more — they are a rule you are executing by hand because nowhere holds it.",
+          "Every time a pull request touches the migrations directory you add the database reviewer. Every time CI fails on a dependency bump you send an agent at it. Every time something is approved and green you queue it. None of these are decisions any more: they are a rule you are executing by hand because nowhere holds it.",
           "A workflow is that rule, written down once, in the app. No YAML, nothing committed to the repository, and nothing that needs the app to be open.",
         ],
         mock: "workflows",
@@ -458,7 +691,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "It reads the event, not your list",
         paragraphs: [
           "A workflow fires off the GitHub webhook payload, not off Talyn's own list of tracked pull requests. That is a deliberate design choice and it is what makes the feature worth having: a rule applies to every pull request in a repository you have connected, including ones you did not open and ones nobody has looked at yet.",
-          "Where the event does not carry a fact — an issue comment payload describes an issue, so it has no base branch — a condition on that fact fails rather than quietly passing. A gate that passes when it cannot see is not a gate.",
+          "Where the event does not carry a fact (an issue comment payload describes an issue, so it has no base branch) a condition on that fact fails rather than quietly passing. A gate that passes when it cannot see is not a gate.",
         ],
       },
       {
@@ -478,7 +711,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "The guards, because automation that loops is expensive",
         paragraphs: [
           "Two of them. Talyn ignores events its own GitHub App produced, so a rule that adds a label does not then fire on the label it just added. And each pull request has a ceiling on how many workflow runs it can trigger in an hour, defaulting to five, with the refusal announced once rather than silently.",
-          "A rate-limited action is parked and retried when the limit clears, not lost — and the retry re-runs only the actions that had not already succeeded, so a rule whose comment posted and whose label was gated does not comment twice.",
+          "A rate-limited action is parked and retried when the limit clears, not lost, and the retry re-runs only the actions that had not already succeeded, so a rule whose comment posted and whose label was gated does not comment twice.",
         ],
       },
       {
@@ -499,7 +732,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Can a workflow run one of my skills?",
-        a: "Yes, as long as the skill is one the backend can read — committed in the repository or saved to your workspace. Skills that only exist in ~/.claude/skills on your machine are refused when you save the rule, because the server cannot see your disk.",
+        a: "Yes, as long as the skill is one the backend can read: committed in the repository or saved to your workspace. Skills that only exist in ~/.claude/skills on your machine are refused when you save the rule, because the server cannot see your disk.",
       },
       {
         q: "Is there a limit on how many workflows I can have?",
@@ -524,7 +757,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       "A prompt, a repository, an agent, and a time. Sweep yesterday's failing checks every weekday morning. Keep dependencies current every Monday. Draft the release notes every Friday at five. It opens a pull request when the work warrants one.",
     heroMock: "loops",
     bullets: [
-      "Say when in plain terms — hourly, daily, weekdays, weekly — or a cron expression if you want one",
+      "Say when in plain terms: hourly, daily, weekdays, weekly, or a cron expression if you want one",
       "Runs in your timezone, so 09:00 stays 09:00 when the clocks change",
       "Every run is logged, including the ones skipped because the last was still going",
       "Start one by hand any time, without waiting for its next turn",
@@ -541,19 +774,19 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "A loop is four choices",
         paragraphs: [
-          "The repository, the prompt, the agent and model, and the schedule. That is the whole editor. When it fires, it creates an ordinary cloud task — the same kind the fix button creates — so the transcript, the pull request link and the plan limits all work exactly as they do everywhere else. What loops add is the clock.",
+          "The repository, the prompt, the agent and model, and the schedule. That is the whole editor. When it fires, it creates an ordinary cloud task (the same kind the fix button creates) so the transcript, the pull request link and the plan limits all work exactly as they do everywhere else. What loops add is the clock.",
         ],
         bullets: [
-          "Hourly, daily, weekdays, weekly — or a raw cron expression",
+          "Hourly, daily, weekdays, weekly, or a raw cron expression",
           "Your timezone, correctly, including across daylight saving",
           "Pick the agent per loop: Claude, Codex, or PostHog Code",
-          "Choose what happens if the last run is still going — skip is the default",
+          "Choose what happens if the last run is still going: skip is the default",
         ],
       },
       {
         heading: "Missed occurrences fire once, not six times",
         paragraphs: [
-          "If Talyn is down or deploying when a loop is due, it catches up — once — and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and if you were out of box-hours it would be one run and five refusals.",
+          "If Talyn is down or deploying when a loop is due, it catches up (once) and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and if you were out of box-hours it would be one run and five refusals.",
           "Re-enabling a loop you switched off is a resume, not a backfill. It starts from the next occurrence.",
         ],
       },
@@ -561,13 +794,13 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "The internet switch, off by default",
         paragraphs: [
           "A loop's sandbox normally reaches its repository and its agent's API and nothing else. That is not a limitation we ran into; it is deliberate. A prompt that has just read untrusted pull request text should not have a route out to post it somewhere.",
-          "Some jobs genuinely need the web — checking an upstream changelog, reading an advisory. So internet access is a per-loop switch, off unless you turn it on, and the posture travels with the task rather than the loop, so a run that is retried later gets the setting it was created with. The choice is offered as 'Repository only' or 'Allow the internet'; you never have to think about routing tables. It is available on Talyn Fleet only.",
+          "Some jobs genuinely need the web: checking an upstream changelog, reading an advisory. So internet access is a per-loop switch, off unless you turn it on, and the posture travels with the task rather than the loop, so a run that is retried later gets the setting it was created with. The choice is offered as 'Repository only' or 'Allow the internet'; you never have to think about routing tables. It is available on Talyn Fleet only.",
         ],
       },
       {
         heading: "When the subscription runs out",
         paragraphs: [
-          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one, and then to PostHog Code. The exhaustion is remembered, so the next loop does not boot a machine to learn the same thing, and it is cleared by proof — a successful run, a fresh sign-in, or the vendor's own stated reset time.",
+          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one, and then to PostHog Code. The exhaustion is remembered, so the next loop does not boot a machine to learn the same thing, and it is cleared by proof: a successful run, a fresh sign-in, or the vendor's own stated reset time.",
           "A rate limit is treated differently and deliberately: that clears by waiting, and moving off it would spend money to avoid a short pause.",
         ],
       },
@@ -575,7 +808,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "What are loops?",
-        a: "Prompts that run on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when — hourly, daily, weekdays, weekly, or a cron expression — and an agent runs it on its own, opening a pull request when the work warrants one.",
+        a: "Prompts that run on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when (hourly, daily, weekdays, weekly, or a cron expression) and an agent runs it on its own, opening a pull request when the work warrants one.",
       },
       {
         q: "Do schedules survive the clocks changing?",
@@ -583,7 +816,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "What if a run is still going when the next one is due?",
-        a: "That is a per-loop setting, and skipping is the default — the skipped occurrence is recorded in the history rather than silently dropped. It is also what makes a tight schedule self-limiting, which is why there is no minimum interval.",
+        a: "That is a per-loop setting, and skipping is the default: the skipped occurrence is recorded in the history rather than silently dropped. It is also what makes a tight schedule self-limiting, which is why there is no minimum interval.",
       },
       {
         q: "Is there a limit on how many loops I can have?",
@@ -604,20 +837,20 @@ export const FEATURE_PAGES: FeaturePage[] = [
     title: "Your playbooks, runnable on any pull request.",
     seoTitle: "Run your Claude SKILL.md playbooks against a pull request",
     description:
-      "A security sweep, your team's review checklist, a changelog writer. Talyn finds the skills you already have — in the repository, in ~/.claude/skills, or saved to your workspace — and runs one against any pull request with a click.",
+      "A security sweep, your team's review checklist, a changelog writer. Talyn finds the skills you already have (in the repository, in ~/.claude/skills, or saved to your workspace) and runs one against any pull request with a click.",
     heroMock: "skill-picker",
     bullets: [
       "Picks up SKILL.md files from the repository, your machine, and your workspace",
       "Searchable picker with your most-used skills on top",
       "Output lands on the pull request: one review comment, or commits to the branch",
-      "The same format Claude Code uses — if you have skills, they already work",
+      "The same format Claude Code uses: if you have skills, they already work",
     ],
     sections: [
       {
         heading: "You have written the instructions already",
         paragraphs: [
           "Most teams have a review checklist. Somebody has written down what to look for in a migration, or what a good changelog entry contains, or the six things that have caused an incident before. It lives in a wiki page nobody opens, or in one person's head.",
-          "A skill is that written down in the standard SKILL.md format — the one Claude Code uses — and made runnable. Pick a pull request, pick a skill, and a cloud agent follows the playbook against that change.",
+          "A skill is that written down in the standard SKILL.md format (the one Claude Code uses) and made runnable. Pick a pull request, pick a skill, and a cloud agent follows the playbook against that change.",
         ],
         mock: "skill-picker",
       },
@@ -625,18 +858,18 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "Three places, no setup",
         paragraphs: [
           "Talyn looks for skills where they already are rather than asking you to import them. Committed in the repository, so the whole team gets them and they version with the code. Sitting in `~/.claude/skills` on your machine, which is where yours probably already are. Or saved to your workspace, for the ones that are not repository-specific and are not just yours.",
-          "One caveat worth knowing before you rely on it: reading `~/.claude/skills` needs the desktop app, because the browser cannot see your disk. Skills used by a workflow or a loop have to be repository or workspace ones for the same reason — those run on the server, with the app closed.",
+          "One caveat worth knowing before you rely on it: reading `~/.claude/skills` needs the desktop app, because the browser cannot see your disk. Skills used by a workflow or a loop have to be repository or workspace ones for the same reason: those run on the server, with the app closed.",
         ],
         bullets: [
-          "In the repository — versioned with the code, shared with the team",
-          "In ~/.claude/skills — desktop app only",
-          "Saved to the workspace — shared, and reachable by workflows and loops",
+          "In the repository: versioned with the code, shared with the team",
+          "In ~/.claude/skills: desktop app only",
+          "Saved to the workspace: shared, and reachable by workflows and loops",
         ],
       },
       {
         heading: "What comes back",
         paragraphs: [
-          "It depends what the skill asks for. A review-shaped skill posts a single review comment on the pull request. A fix-shaped skill commits to the branch. Either way it is one artefact, not a running commentary — the same restraint the code review feature is built around.",
+          "It depends what the skill asks for. A review-shaped skill posts a single review comment on the pull request. A fix-shaped skill commits to the branch. Either way it is one artefact, not a running commentary: the same restraint the code review feature is built around.",
           "Skills compose with the rest of Talyn: a workflow can run one automatically when a pull request opens, and a loop can run one on a schedule.",
         ],
       },
@@ -644,7 +877,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "What are skills?",
-        a: "Saved instructions you can re-run — a review checklist, a security pass, a changelog writer. Write one once and run it on any pull request with a click. Talyn finds the ones already in your project or on your machine, in the standard SKILL.md format, so if you use Claude Code you likely have some already.",
+        a: "Saved instructions you can re-run: a review checklist, a security pass, a changelog writer. Write one once and run it on any pull request with a click. Talyn finds the ones already in your project or on your machine, in the standard SKILL.md format, so if you use Claude Code you likely have some already.",
       },
       {
         q: "Do I have to write them in a special format?",
@@ -652,7 +885,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Can a workflow or a loop run a skill?",
-        a: "Yes, as long as it is a repository or workspace skill. A skill that only exists in ~/.claude/skills is refused when you save the rule, because the backend genuinely cannot read your machine — a rule that failed silently at 3am would be worse than one that refuses while you are looking at it.",
+        a: "Yes, as long as it is a repository or workspace skill. A skill that only exists in ~/.claude/skills is refused when you save the rule, because the backend genuinely cannot read your machine: a rule that failed silently at 3am would be worse than one that refuses while you are looking at it.",
       },
     ],
     planNote:
@@ -674,7 +907,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     heroMock: "reviews",
     bullets: [
       "Every repository you have connected, one list, nothing to chase",
-      "See whether you were asked directly or through a team — and filter by it",
+      "See whether you were asked directly or through a team, and filter by it",
       "Save a filter you use often, per workspace",
       "Run one of your review playbooks on any of them with a cloud agent",
     ],
@@ -712,23 +945,23 @@ export const FEATURE_PAGES: FeaturePage[] = [
         // which is the one the research could not separate from recency.
         heading: "The order explains itself",
         paragraphs: [
-          "The default sort is Priority, and the thing to know about it is that it is not a mystery score. Every row carries a chip saying why it is where it is — \"Asked directly\", \"Waited 3d\", \"All checks green\", \"Unblocks others\", \"Draft\", \"Conflicts\". Hover it and you get the full arithmetic, every term with its points. If you disagree with a placement you can see exactly what caused it, which is the difference between a ranked list you keep using and one you quietly stop reading.",
-          "Underneath, the list is cut into four bands before anything is scored. Pull requests that other work is stacked on, or that are queued to merge, come first — somebody besides the author is waiting on those. Then everything you could simply review. Then the ones where the ball is back with the author: conflicts, failing checks, changes already requested, because reviewing those now duplicates work they are already doing. Last, the ones that are not ready — drafts, and anything an agent is mid-way through pushing to.",
+          "The default sort is Priority, and the thing to know about it is that it is not a mystery score. Every row carries a chip saying why it is where it is: \"Asked directly\", \"Waited 3d\", \"All checks green\", \"Unblocks others\", \"Draft\", \"Conflicts\". Hover it and you get the full arithmetic, every term with its points. If you disagree with a placement you can see exactly what caused it, which is the difference between a ranked list you keep using and one you quietly stop reading.",
+          "Underneath, the list is cut into four bands before anything is scored. Pull requests that other work is stacked on, or that are queued to merge, come first: somebody besides the author is waiting on those. Then everything you could simply review. Then the ones where the ball is back with the author: conflicts, failing checks, changes already requested, because reviewing those now duplicates work they are already doing. Last, the ones that are not ready: drafts, and anything an agent is mid-way through pushing to.",
           "The bands are a hard partition, and that is the point. Scoring inside a band can never promote a draft above a pull request that needs nothing but your approval, which is exactly what a single additive score does the first time forty small nudges add up.",
         ],
         bullets: [
-          "Blocking others — something is stacked on it, or it is queued to merge",
-          "Actionable — you could review it right now",
-          "Waiting on the author — conflicts, failing checks, changes requested",
-          "Not ready — a draft, or an agent is pushing to it",
+          "Blocking others: something is stacked on it, or it is queued to merge",
+          "Actionable: you could review it right now",
+          "Waiting on the author: conflicts, failing checks, changes requested",
+          "Not ready: a draft, or an agent is pushing to it",
         ],
       },
       {
         heading: "What moves a pull request up, and what is capped",
         paragraphs: [
-          "Inside a band the ordering is ordinary arithmetic on things that are true right now. All checks green, everyone else has approved and only you are left, a human put your name on it rather than a team, the diff is small, you asked for changes and were re-requested — each of those is worth points, and each is nameable, which is why the chip can say one word. Machine-authored pull requests are pushed down hardest of anything that is not a band.",
-          "Waiting counts too, and it stops counting on purpose. The wait bonus climbs for about five days, holds to a fortnight, then drops away — because an ever-growing age bonus turns the list into a graveyard sorted by neglect, where the thing nobody will ever review is permanently first.",
-          "There is a personal term, and it is deliberately small. Talyn learns who you actually review, whose pull requests you tend to be reciprocated on, and which parts of the tree you know — from your own review history, per workspace. It only switches on after about 150 reviews, and only if it measurably beats the default on your own held-out history; until then everyone gets the same hand-set starting point. It is capped at twelve points, which is below the maximum the waiting bonus can reach, and that gap is the whole safety argument: familiarity can reorder your queue but can never bury something indefinitely.",
+          "Inside a band the ordering is ordinary arithmetic on things that are true right now. All checks green, everyone else has approved and only you are left, a human put your name on it rather than a team, the diff is small, you asked for changes and were re-requested: each of those is worth points, and each is nameable, which is why the chip can say one word. Machine-authored pull requests are pushed down hardest of anything that is not a band.",
+          "Waiting counts too, and it stops counting on purpose. The wait bonus climbs for about five days, holds to a fortnight, then drops away, because an ever-growing age bonus turns the list into a graveyard sorted by neglect, where the thing nobody will ever review is permanently first.",
+          "There is a personal term, and it is deliberately small. Talyn learns who you actually review, whose pull requests you tend to be reciprocated on, and which parts of the tree you know (from your own review history, per workspace). It only switches on after about 150 reviews, and only if it measurably beats the default on your own held-out history; until then everyone gets the same hand-set starting point. It is capped at twelve points, which is below the maximum the waiting bonus can reach, and that gap is the whole safety argument: familiarity can reorder your queue but can never bury something indefinitely.",
         ],
         bullets: [
           "Green checks, last approval outstanding, asked directly, small diff, re-review",
@@ -741,7 +974,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "It never reads your code",
         paragraphs: [
           "The ranker cannot see a pull request title, its description, its diff, or a single comment. The complete list of what it is allowed to look at is structural: draft or not, author, when it was created, mergeable state, what is blocking it, the review decision, check counts, how many threads are unresolved and who opened them, how many lines changed, whether you were asked directly or through a team, and the top-level directories touched.",
-          "That is not an oversight, it is the design. Ordering that depends on what a pull request says is ordering you cannot predict and cannot argue with — and it would mean shipping your code somewhere to sort a list.",
+          "That is not an oversight, it is the design. Ordering that depends on what a pull request says is ordering you cannot predict and cannot argue with, and it would mean shipping your code somewhere to sort a list.",
         ],
       },
       {
@@ -752,7 +985,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         ],
         bullets: [
           "Requested of you directly",
-          "Requested of a team you are in — and which team",
+          "Requested of a team you are in (and which team)",
           "Filter to one team, and save the filter",
         ],
       },
@@ -766,7 +999,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "Does it show pull requests I have already reviewed?",
-        a: "No. The list is what is still waiting on you — open pull requests where you are a requested reviewer and have not reviewed yet. Once you review, it leaves the list.",
+        a: "No. The list is what is still waiting on you: open pull requests where you are a requested reviewer and have not reviewed yet. Once you review, it leaves the list.",
       },
       {
         q: "Does it cover pull requests outside my own repositories?",
@@ -778,7 +1011,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "How is the Priority order decided?",
-        a: "By live state, not by guessing. The list is cut into four bands — blocking others, actionable, waiting on the author, not ready — and only then finely ordered inside each band by things like whether you were asked directly, how long it has waited, and whether the checks are green. Every row shows a chip naming the reason it is where it is.",
+        a: "By live state, not by guessing. The list is cut into four bands (blocking others, actionable, waiting on the author, not ready) and only then finely ordered inside each band by things like whether you were asked directly, how long it has waited, and whether the checks are green. Every row shows a chip naming the reason it is where it is.",
       },
       {
         q: "Does it learn from me?",
@@ -786,7 +1019,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Can it see my code?",
-        a: "No. The ranker never reads a pull request's title, description, diff or comments. It looks only at structural facts — draft state, checks, review decision, unresolved thread counts, lines changed, who requested you, and the top-level directories touched.",
+        a: "No. The ranker never reads a pull request's title, description, diff or comments. It looks only at structural facts: draft state, checks, review decision, unresolved thread counts, lines changed, who requested you, and the top-level directories touched.",
       },
       {
         q: "What if I just want newest first?",
@@ -807,12 +1040,12 @@ export const FEATURE_PAGES: FeaturePage[] = [
     title: "No lock-in. Use the agent you already pay for.",
     seoTitle: "Run Claude or Codex on your own subscription, in a sandbox",
     description:
-      "Sign in with Claude or ChatGPT and every task runs on that subscription — no API key, no metered credits, no second bill for tokens. Each task gets a fresh microVM, and the credentials are attached from outside it.",
+      "Sign in with Claude or ChatGPT and every task runs on that subscription: no API key, no metered credits, no second bill for tokens. Each task gets a fresh microVM, and the credentials are attached from outside it.",
     heroMock: "onboarding",
     bullets: [
       "Runs on your Claude Pro or Max plan, or your ChatGPT Plus or Pro plan",
       "A fresh Firecracker microVM per task, destroyed when the task ends",
-      "Credentials attached by a proxy outside the machine — no token inside the box running your code",
+      "Credentials attached by a proxy outside the machine: no token inside the box running your code",
       "Switch agent per task; PostHog Code is supported too",
     ],
     sections: [
@@ -820,16 +1053,16 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "You are already paying for a coding agent",
         paragraphs: [
           "Most tools in this space resell you inference. You connect an API key, or you buy their credits, and every run is a second bill on top of the Claude or ChatGPT subscription you already have sitting idle most of the day.",
-          "Talyn conducts agents rather than replacing them. You sign in with Claude or with ChatGPT, and the work runs on that plan. There is one flat price for Talyn and nothing metered on top of it.",
+          "Talyn conducts agents rather than replacing them. You sign in with Claude or with ChatGPT, and the work runs on that plan. You pay Talyn for the machines, and nothing is metered on top for the model.",
         ],
         mock: "onboarding",
       },
       {
         heading: "Talyn Fleet: where the work happens",
         paragraphs: [
-          "Claude and Codex tasks run on Talyn Fleet — Firecracker microVMs on our own hardware. Every task gets a fresh machine, and the machine is destroyed when the task ends.",
+          "Claude and Codex run on Talyn Fleet: Firecracker microVMs on our own hardware. A PR fix gets a fresh machine that is destroyed when the task ends. A session keeps its machine while you work on it, and the machine sleeps when it is idle.",
           "The credential handling is the part worth understanding, because it is the bit that is genuinely different. Your subscription token is never placed inside the sandbox. The machine talks to a proxy, and the proxy attaches the credential on the way out. So an agent that reads a hostile repository and decides to exfiltrate your token has nothing in its environment to find.",
-          "The egress route table is built per task from the model you picked, which means a Codex run has no network route to Anthropic's API at all, and vice versa. Not a policy — no route.",
+          "The egress route table is built per task from the model you picked, which means a Codex run has no network route to Anthropic's API at all, and vice versa. Not a policy: no route.",
         ],
       },
       {
@@ -839,23 +1072,23 @@ export const FEATURE_PAGES: FeaturePage[] = [
           "You can set a workspace default, or choose 'ask every time' and pick per task from the row itself.",
         ],
         bullets: [
-          "Claude — on your Claude Pro or Max plan",
-          "Codex — on your ChatGPT Plus or Pro plan",
-          "PostHog Code — in your own PostHog project",
+          "Claude: on your Claude Pro or Max plan",
+          "Codex: on your ChatGPT Plus or Pro plan",
+          "PostHog Code: in your own PostHog project",
         ],
       },
       {
         heading: "What happens when a plan runs out",
         paragraphs: [
           "A monthly quota that is spent is a different problem from a credential that is broken, and Talyn treats them differently. A revoked or expired grant fails visibly and asks you to reconnect, because somebody who chose to run on their own subscription should not be quietly moved onto metered credits to fix it.",
-          "An exhausted quota is just the month running out, and the work is still wanted — so that run moves to your other subscription if you have one, and then to PostHog Code. Each hop is recorded on the task. The exhaustion is remembered so the next task does not boot a machine to discover the same thing, and the hold clears on the vendor's own stated reset time, a successful run, or a fresh sign-in.",
+          "An exhausted quota is just the month running out, and the work is still wanted, so that run moves to your other subscription if you have one, and then to PostHog Code. Each hop is recorded on the task. The exhaustion is remembered so the next task does not boot a machine to discover the same thing, and the hold clears on the vendor's own stated reset time, a successful run, or a fresh sign-in.",
         ],
       },
       {
         heading: "What we do not offer",
         paragraphs: [
           "Claude Code is not a provider. It was one, and it was removed: it billed metered API credits, which is the opposite of what this page is about. Running Claude on the fleet, on your own subscription, is what replaced it.",
-          "Codex Cloud is deferred — OpenAI ships no server-to-server API for it, only a CLI and a GitHub mention flow. Running Codex on the fleet works and is a different thing.",
+          "Codex Cloud is deferred: OpenAI ships no server-to-server API for it, only a CLI and a GitHub mention flow. Running Codex on the fleet works and is a different thing.",
           "And the fleet is finite hardware. It paces itself, and it spills to the fall-back provider when it is full, but nobody should read this page as a promise of unlimited parallelism.",
         ],
       },
@@ -863,7 +1096,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "Which AI agents does Talyn use?",
-        a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription — no separate API bill. PostHog Code is supported too. Talyn conducts whichever one you connect, and you can switch per task.",
+        a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription: no separate API bill. PostHog Code is supported too. Talyn conducts whichever one you connect, and you can switch per task.",
       },
       {
         q: "Where does the work actually happen?",
@@ -897,7 +1130,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     heroMock: "task-running",
     bullets: [
       "Linear, Sentry, Supabase, Stripe, or any remote MCP server you run",
-      "The credential stays with Talyn — the sandbox gets a plain URL with no token on it",
+      "The credential stays with Talyn: the sandbox gets a plain URL with no token on it",
       "A per-server tool allow-list, so a server can be connected without being fully exposed",
       "Uncapped on every plan, including free",
     ],
@@ -921,10 +1154,10 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "Per-server tool allow-lists, and no arbitrary caps",
         paragraphs: [
           "Some servers expose a lot of tools, and not all of them should be reachable from a coding agent. So each connected server can carry an allow-list: exactly these tools, nothing else.",
-          "What there is not is a cap on how many servers a run may use, or how many tools a server may expose. Those were considered and dropped — they were round numbers with no reasoning behind them, and the allow-list gives you the same saving as a deliberate choice rather than an arbitrary ceiling. The one limit that stays is a 64-character tool name, because that is a hard provider limit and an over-long name fails the whole request rather than one call.",
+          "What there is not is a cap on how many servers a run may use, or how many tools a server may expose. Those were considered and dropped: they were round numbers with no reasoning behind them, and the allow-list gives you the same saving as a deliberate choice rather than an arbitrary ceiling. The one limit that stays is a 64-character tool name, because that is a hard provider limit and an over-long name fails the whole request rather than one call.",
         ],
         bullets: [
-          "All tools, a chosen subset, or none — three distinct states, and none of them is guessed",
+          "All tools, a chosen subset, or none: three distinct states, and none of them is guessed",
           "Remote streamable HTTP servers, over HTTPS",
           "OAuth servers connect with PKCE; API-key servers store the key sealed",
         ],
@@ -945,7 +1178,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "Which MCP servers can I connect?",
-        a: "Any remote streamable HTTP server over HTTPS — Linear, Sentry, Supabase, Stripe, or one you run yourself. There is a catalogue of common ones to save you finding the URL. Local stdio servers are not supported, because the sandbox is not your machine.",
+        a: "Any remote streamable HTTP server over HTTPS: Linear, Sentry, Supabase, Stripe, or one you run yourself. There is a catalogue of common ones to save you finding the URL. Local stdio servers are not supported, because the sandbox is not your machine.",
       },
       {
         q: "Can the agent see my API key?",
@@ -953,7 +1186,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Can I limit which tools a server exposes?",
-        a: "Yes, per server. Leave it unset for all tools, choose a subset, or choose none. Those are three genuinely different states and Talyn does not collapse them — reading an empty list as 'all' would make 'run this with no tools' the one thing you could not ask for.",
+        a: "Yes, per server. Leave it unset for all tools, choose a subset, or choose none. Those are three genuinely different states and Talyn does not collapse them: reading an empty list as 'all' would make 'run this with no tools' the one thing you could not ask for.",
       },
       {
         q: "Does this cost anything on the free plan?",

@@ -14,7 +14,7 @@ export default function Image() {
         eyebrow="Compare"
         title="Talyn vs the"
         titleAccent="alternatives."
-        sub="Honest comparisons against the AI reviewers, merge queues and cloud agents people weigh Talyn up against — including when to pick theirs."
+        sub="Honest comparisons against the AI reviewers, merge queues and cloud agents people weigh Talyn up against, including when to pick theirs."
       />
     ),
     { ...size }
