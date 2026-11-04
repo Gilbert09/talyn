@@ -1933,9 +1933,12 @@ describe('workbench routes', () => {
       const stored = await call('GET', `/workbenches/${wb.id}/config`);
       expect(stored.body.data).toEqual(live.body.data);
       expect(touches()).toEqual(before);
+      // Nothing stored: no scripts yet, and the box is neither woken nor refused.
       const none = await asleepWith(null);
-      const refused = await call('GET', `/workbenches/${none.id}/config`);
-      expect([refused.status, refused.body.code]).toEqual([409, 'snapshot_unavailable']);
+      const beforeNone = touches();
+      const empty = await call('GET', `/workbenches/${none.id}/config`);
+      expect([empty.status, empty.body.data?.run]).toEqual([200, []]);
+      expect(touches()).toEqual(beforeNone);
     });
 
     it('gives the preview sync the stored patch with its binary bodies, marked as stored', async () => {

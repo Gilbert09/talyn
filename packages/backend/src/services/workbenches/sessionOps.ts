@@ -7,6 +7,7 @@ import type {
   WorkbenchFileList,
   WorkbenchPreviewLink,
 } from '@talyn/shared';
+import { resolveWorkbenchConfig } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { mintPreviewTicket } from '../preview/previewLinks.js';
 import { previewBaseDomain } from '../preview/previewHost.js';
@@ -222,8 +223,8 @@ export async function readSessionConfig(row: WorkbenchRow, opts: { live?: boolea
   if (reason) {
     const stored = await storedConfig(row);
     if (stored) return stored;
-    const refusal = noStoredCopy(reason, 'the script config');
-    if (refusal) throw refusal;
+    // No scripts until the box wakes: a Run panel must not wake a sleeping box or fail on it.
+    if (reason === 'archived' || wouldWake(reason)) return resolveWorkbenchConfig({});
   }
   await requireReadySandbox(row, true);
   const config = await loadWorkbenchConfigWithDetection(row);
