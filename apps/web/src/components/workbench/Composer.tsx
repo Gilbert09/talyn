@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
+  WORKBENCH_MOVING_MESSAGE,
   type Workbench,
   type WorkbenchCapacityWait,
   type WorkbenchChat,
@@ -66,6 +67,7 @@ export function Composer({
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';
   const queue = chat?.queuedMessages ?? [];
+  const waitText = sandboxWaitText(workbench);
 
   useEffect(() => {
     setPaths(null);
@@ -263,15 +265,22 @@ export function Composer({
     >
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
-          {queue.map((m) => m.capacityWait ? (
+          {queue.map((m, index) => m.capacityWait ? (
             <CapacityWaitLine key={m.id} message={m} wait={m.capacityWait} chatId={chat?.id} ops={ops} />
           ) : (
             <li
               key={m.id}
+              data-attr={index === 0 && waitText ? 'workbench-sandbox-wait' : undefined}
               className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground"
             >
-              <span className="shrink-0 text-[10px] uppercase tracking-wide">{m.origin === 'talyn' ? 'From Talyn' : 'Queued'}</span>
-              <span className="min-w-0 flex-1 truncate">{m.text}</span>
+              {index === 0 && waitText && <Loader2 className="h-3 w-3 shrink-0 animate-spin" />}
+              <span className="shrink-0 text-[10px] uppercase tracking-wide">{m.origin === 'talyn' ? 'From Talyn' : index === 0 && waitText ? 'Waiting' : 'Queued'}</span>
+              {index === 0 && waitText ? (
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{m.text}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{waitText}</span>
+                </span>
+              ) : <span className="min-w-0 flex-1 truncate">{m.text}</span>}
               {ops.canRemoveQueued && chat && (
                 <button
                   type="button"
@@ -392,6 +401,17 @@ export function capacityWaitText(wait: WorkbenchCapacityWait, now: number): stri
   return Number.isFinite(seconds) && seconds > 0
     ? `Waiting for a free sandbox… (retrying in ${seconds}s)`
     : 'Waiting for a free sandbox…';
+}
+
+export function sandboxWaitText(workbench: Workbench): string | null {
+  const statusMessage = workbench.statusMessage?.trim().replace(/[….]+$/, '').trim();
+  if (workbench.status === 'provisioning') {
+    return statusMessage ? `Waiting for the sandbox to start: ${statusMessage}` : 'Waiting for the sandbox to start…';
+  }
+  if (workbench.status === 'moving') {
+    return statusMessage ? `Waiting for the sandbox: ${statusMessage}` : WORKBENCH_MOVING_MESSAGE;
+  }
+  return null;
 }
 
 /** A message that waits for a sandbox is the turn in progress, so it is a status line and not a queued chip. */
