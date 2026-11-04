@@ -711,7 +711,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       console.warn(`[workbench] keeping the start of ${sandboxId} failed:`, err));
     // 2. The repository and the branch: a checkout when the image holds the repository.
     const checkoutStartedAt = Date.now();
-    const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout }), {
+    const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout, firstBox: cause === 'new' }), {
       cwd: '/',
       timeoutMs: CLONE_TIMEOUT_MS,
     });

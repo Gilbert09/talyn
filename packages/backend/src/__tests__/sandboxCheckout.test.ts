@@ -50,7 +50,7 @@ function fixture() {
   git(root, 'clone', '--depth=1', '--single-branch', '--branch=main', pathToFileURL(origin).href, image);
   git(origin, 'update-ref', 'refs/heads/main', base);
   git(origin, 'tag', 'do-not-fetch', base);
-  const opts: CheckoutOptions = { boxLayer: boxLayerContextFrom({ layer: 'user', repoCommit: old }, []) };
+  const opts: CheckoutOptions = { boxLayer: boxLayerContextFrom({ layer: 'user', repoCommit: old }, []), firstBox: true };
 
   const run = (name: string, input = row, options = opts, prelude = '') => {
     const trace = join(root, 'trace.json');
@@ -125,6 +125,22 @@ describe.skipIf(process.platform === 'win32')('checkout from an older image', ()
       expect(result.commands.some(([command]) => command === 'ls-remote')).toBe(true);
       expect(result.commands.some((args) => args.some((arg) => arg.startsWith('--deepen=')))).toBe(true);
       expect(f.run(`${scenario.name}: retry`, { ...row, ...scenario, branch: 'existing' }).status).toBe(0);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a move, recovery or restore box (not the first box)", firstBox: false, pushedHeadShas: [] },
+    { name: "a first box with pushed commits", firstBox: true, pushedHeadShas: ["pushed"] },
+    { name: "a first box with no box flag", firstBox: undefined, pushedHeadShas: [] },
+  ])("probes the remote branch for ", (scenario) => {
+    const f = fixture();
+    try {
+      const opts = { ...f.opts, firstBox: scenario.firstBox };
+      const result = f.run(scenario.name, { ...row, pushedHeadShas: scenario.pushedHeadShas }, opts);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.commands.some(([command]) => command === "ls-remote")).toBe(true);
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

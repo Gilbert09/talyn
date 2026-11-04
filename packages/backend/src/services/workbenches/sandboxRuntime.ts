@@ -791,12 +791,12 @@ export const MERGE_BASE_DEEPEN_BY = 500;
 export function cloneScript(
   row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>
     & Partial<Pick<WorkbenchRow, 'allocatedBranch' | 'pushedHeadShas'>>,
-  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean } = {},
+  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean } = {},
 ): string {
   const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
   const depth = prebaked ? 50 : 200;
   const repoCommit = opts.boxLayer?.repoCommit;
-  const newBranch = prebaked && row.allocatedBranch === true && row.pushedHeadShas?.length === 0
+  const newBranch = prebaked && opts.firstBox === true && row.allocatedBranch === true && row.pushedHeadShas?.length === 0
     && row.branch !== row.baseBranch && repoCommit && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(repoCommit);
   const dir = shellQuote(repoDirFor(row));
   const golden = shellQuote(GOLDEN_REPO_DIR);
