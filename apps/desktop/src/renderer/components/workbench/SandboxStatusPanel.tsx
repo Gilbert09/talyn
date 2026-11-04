@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   Activity,
   Archive,
@@ -37,6 +37,69 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 
 /** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
 const POLL_MS = 10_000;
+const CHIP_POLL_MS = 30_000;
+
+type StatusSnapshot = { status: WorkbenchSandboxStatus | null; error: string | null; at: number | null };
+type StatusEntry = {
+  snapshot: StatusSnapshot;
+  listeners: Set<() => void>;
+  inFlight: Promise<void> | null;
+  seq: number;
+};
+
+const statusEntries = new Map<string, StatusEntry>();
+
+function statusEntry(id: string): StatusEntry {
+  let entry = statusEntries.get(id);
+  if (!entry) {
+    entry = {
+      snapshot: { status: null, error: null, at: null },
+      listeners: new Set(),
+      inFlight: null,
+      seq: 0,
+    };
+    statusEntries.set(id, entry);
+  }
+  return entry;
+}
+
+function subscribeToStatus(id: string, listener: () => void): () => void {
+  const entry = statusEntry(id);
+  entry.listeners.add(listener);
+  return () => {
+    entry.listeners.delete(listener);
+    if (entry.listeners.size === 0 && !entry.inFlight && statusEntries.get(id) === entry) statusEntries.delete(id);
+  };
+}
+
+function refreshStatus(id: string): Promise<void> {
+  const entry = statusEntry(id);
+  if (entry.inFlight) return entry.inFlight;
+  const mine = ++entry.seq;
+  const request = (async () => {
+    try {
+      const status = await api.workbenches.sandboxStatus(id);
+      if (mine !== entry.seq || statusEntries.get(id) !== entry) return;
+      entry.snapshot = { status, error: null, at: Date.now() };
+    } catch (err) {
+      if (mine !== entry.seq || statusEntries.get(id) !== entry) return;
+      entry.snapshot = {
+        ...entry.snapshot,
+        error: err instanceof Error ? err.message : 'Could not read the sandbox status.',
+        at: Date.now(),
+      };
+    }
+    entry.listeners.forEach((listener) => listener());
+  })();
+  entry.inFlight = request;
+  void request.finally(() => {
+    if (entry.inFlight === request) {
+      entry.inFlight = null;
+      if (entry.listeners.size === 0 && statusEntries.get(id) === entry) statusEntries.delete(id);
+    }
+  });
+  return request;
+}
 
 const STATE_ICON: Record<SandboxStatusState, { icon: typeof Cloud; className: string; spin?: boolean }> = {
   starting: { icon: Loader2, className: 'text-sky-500', spin: true },
@@ -95,37 +158,14 @@ export function sandboxStatusNeedsAttention(status: WorkbenchSandboxStatus | nul
   return null;
 }
 
-/**
- * Reads the sandbox status once on mount, again when the session row moves,
- * and every 10 s while the panel is open.
- */
+/** Shares status by session and polls every 10 s while the Sandbox tab is open. */
 export function useSandboxStatus(workbench: Workbench, open: boolean, enabled = true) {
-  const [status, setStatus] = useState<WorkbenchSandboxStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const seq = useRef(0);
   const id = workbench.id;
+  const subscribe = useCallback((listener: () => void) => subscribeToStatus(id, listener), [id]);
+  const getSnapshot = useCallback(() => statusEntry(id).snapshot, [id]);
+  const { status, error } = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const refresh = useCallback(async () => {
-    if (!enabled) return;
-    const mine = ++seq.current;
-    try {
-      const next = await api.workbenches.sandboxStatus(id);
-      if (mine !== seq.current) return;
-      setStatus(next);
-      setError(null);
-    } catch (err) {
-      if (mine !== seq.current) return;
-      setError(err instanceof Error ? err.message : 'Could not read the sandbox status.');
-    }
-  }, [id, enabled]);
-
-  useEffect(() => {
-    setStatus(null);
-    setError(null);
-    return () => {
-      seq.current++;
-    };
-  }, [id]);
+  const refresh = useCallback(() => enabled ? refreshStatus(id) : Promise.resolve(), [id, enabled]);
 
   useEffect(() => {
     void refresh();
@@ -138,7 +178,7 @@ export function useSandboxStatus(workbench: Workbench, open: boolean, enabled = 
     return () => window.clearInterval(timer);
   }, [open, enabled, refresh]);
 
-  return { status, error, refresh };
+  return { status: enabled ? status : null, error: enabled ? error : null, refresh };
 }
 
 /** A span as one short token for the chip: "6m", "2h", "3d". */
@@ -218,13 +258,21 @@ export function sandboxChipState(
 /** The Sandbox chip in the session header. It opens the Sandbox tab of the right panel. */
 export function SandboxStatusChip({ workbench, chat }: { workbench: Workbench; chat?: WorkbenchChat | null }) {
   const setSideTab = useWorkbenchStore((s) => s.setSideTab);
-  const { status } = useSandboxStatus(workbench, false);
+  const { status, refresh } = useSandboxStatus(workbench, false);
   const attention = sandboxStatusNeedsAttention(status);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
+    const update = () => {
+      setNow(Date.now());
+      void refresh();
+    };
+    const timer = window.setInterval(update, CHIP_POLL_MS);
+    window.addEventListener('focus', update);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', update);
+    };
+  }, [refresh]);
   const chip = sandboxChipState(workbench, chat?.status, status, now);
 
   return (

@@ -3,7 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type {
   SandboxStartInfo,
   SandboxStartLayer,
@@ -20,6 +20,7 @@ import {
   formatSpan,
   sandboxChipState,
   sandboxStatusNeedsAttention,
+  useSandboxStatus,
 } from '../renderer/components/workbench/SandboxStatusPanel';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
@@ -98,6 +99,7 @@ function renderPanel(s: WorkbenchSandboxStatus | null, extra: Partial<React.Comp
 
 afterEach(() => {
   cleanup();
+  jest.useRealTimers();
   jest.clearAllMocks();
 });
 
@@ -499,6 +501,56 @@ describe('sandboxChipState', () => {
 
 describe('SandboxStatusChip', () => {
   beforeEach(() => useWorkbenchStore.setState({ sideTab: 'files', rightPanelOpen: false }));
+
+  it('shares a status update across two hook instances', async () => {
+    sandboxStatus.mockResolvedValue(status());
+    const first = renderHook(() => useSandboxStatus(WB, false));
+    const second = renderHook(() => useSandboxStatus(WB, false));
+    await waitFor(() => expect(first.result.current.status?.state).toBe('running'));
+    expect(second.result.current.status?.state).toBe('running');
+    expect(sandboxStatus).toHaveBeenCalledTimes(1);
+
+    sandboxStatus.mockResolvedValue(status({ state: 'asleep' }));
+    await act(async () => { await second.result.current.refresh(); });
+    expect(first.result.current.status?.state).toBe('asleep');
+    expect(second.result.current.status?.state).toBe('asleep');
+    expect(sandboxStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('updates the chip when another hook refreshes', async () => {
+    sandboxStatus.mockResolvedValue(status());
+    render(<SandboxStatusChip workbench={WB} />);
+    const other = renderHook(() => useSandboxStatus(WB, false));
+    expect(await screen.findByTestId('sandbox-chip-word')).toHaveTextContent('Running');
+    await waitFor(() => expect(other.result.current.status?.state).toBe('running'));
+
+    sandboxStatus.mockResolvedValue(status({ state: 'waking' }));
+    await act(async () => { await other.result.current.refresh(); });
+    expect(screen.getByTestId('sandbox-chip-word')).toHaveTextContent('Waking');
+  });
+
+  it('refreshes the chip every 30 s', async () => {
+    jest.useFakeTimers();
+    sandboxStatus.mockResolvedValue(status());
+    render(<SandboxStatusChip workbench={WB} />);
+    await act(async () => {});
+    expect(sandboxStatus).toHaveBeenCalledTimes(1);
+
+    sandboxStatus.mockResolvedValue(status({ state: 'asleep' }));
+    await act(async () => { jest.advanceTimersByTime(30_000); });
+    expect(sandboxStatus).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('sandbox-chip-word')).toHaveTextContent('Asleep');
+  });
+
+  it('refreshes the chip when the window gains focus', async () => {
+    sandboxStatus.mockResolvedValue(status());
+    render(<SandboxStatusChip workbench={WB} />);
+    expect(await screen.findByTestId('sandbox-chip-word')).toHaveTextContent('Running');
+
+    sandboxStatus.mockResolvedValue(status({ state: 'asleep' }));
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByTestId('sandbox-chip-word')).toHaveTextContent('Asleep'));
+  });
 
   it.each<[string, WorkbenchSandboxStatus, 'warn' | 'danger' | null]>([
     ['healthy', status(), null],
