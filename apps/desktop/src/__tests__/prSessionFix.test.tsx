@@ -39,7 +39,7 @@ jest.mock('../renderer/stores/toast', () => ({
   toast: { success: (...a: unknown[]) => toastSuccess(...a), error: jest.fn(), info: jest.fn() },
 }));
 jest.mock('../renderer/stores/billing', () => ({ maybeHandleBillingLimit: jest.fn() }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/prClipboard', () => ({ copyRich: jest.fn() }));
 jest.mock('../renderer/components/panels/github/stacks', () => ({ buildCopyListPayload: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({

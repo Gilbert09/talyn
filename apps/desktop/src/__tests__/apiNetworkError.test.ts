@@ -27,6 +27,7 @@ async function settle<T>(promise: Promise<T>): Promise<T> {
 const ok = (data: unknown) =>
   ({
     status: 200,
+    ok: true,
     text: async () => JSON.stringify({ success: true, data }),
   }) as Response;
 

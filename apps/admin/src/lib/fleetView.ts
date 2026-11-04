@@ -226,7 +226,9 @@ export function countRuns(runs: AdminRunRow[], now: number = Date.now()): RunCou
 export function boxSizeLabel(run: Pick<AdminRunRow, 'memMib' | 'vcpuCount' | 'sandboxSize'>): string | null {
   const named = run.sandboxSize ? SANDBOX_SIZES[run.sandboxSize as keyof typeof SANDBOX_SIZES] : undefined;
   if (named && (run.memMib == null || run.memMib === named.memMib)) return named.label;
-  const byMemory = Object.values(SANDBOX_SIZES).find((size) => size.memMib === run.memMib);
+  const sameMemory = Object.values(SANDBOX_SIZES).filter((size) => size.memMib === run.memMib);
+  const byMemory =
+    sameMemory.find((size) => run.vcpuCount != null && size.milliVcpu === run.vcpuCount * 1000) ?? sameMemory[0];
   if (byMemory) return byMemory.label;
   if (run.memMib == null) return null;
   return run.vcpuCount ? `${mib(run.memMib)} · ${run.vcpuCount} vCPU` : mib(run.memMib);

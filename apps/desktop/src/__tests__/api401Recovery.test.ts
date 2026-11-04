@@ -39,7 +39,7 @@ const auth = (supabaseMock as unknown as {
 const state = (supabaseMock as unknown as { __state: { token: string } }).__state;
 
 function jsonResponse(status: number, body: unknown): Response {
-  return { status, text: async () => JSON.stringify(body) } as Response;
+  return { status, ok: status >= 200 && status < 300, text: async () => JSON.stringify(body) } as Response;
 }
 
 const ok = (data: unknown) => jsonResponse(200, { success: true, data });

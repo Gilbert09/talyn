@@ -274,7 +274,7 @@ describe('workbench routes', () => {
   describe('creating', () => {
     /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
     const withoutBoxStart = (settings: object | undefined) => {
-      const { boxStart: _boxStart, ...rest } = (settings ?? {}) as Record<string, unknown>;
+      const { boxStart: _boxStart, boxStarts: _boxStarts, ...rest } = (settings ?? {}) as Record<string, unknown>;
       return rest;
     };
 
@@ -478,7 +478,8 @@ describe('workbench routes', () => {
       await vi.waitFor(async () => expect((await getChat(chatId))?.turnCount).toBe(1));
       await idle(chatId);
       const events = await call('GET', `/workbenches/chats/${chatId}/events`);
-      expect(events.body.data.events[0].event).toMatchObject({
+      const turnEvents = events.body.data.events.filter((e: Loose) => e.event.subtype !== 'boot_metric');
+      expect(turnEvents[0].event).toMatchObject({
         type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'add a readme' }] },
       });
     });
@@ -505,18 +506,19 @@ describe('workbench routes', () => {
       await idle(chatId);
 
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
-      const events = page.body.data.events;
+      // The box's boot metric lands before the turn's own events.
+      const events = page.body.data.events.filter((e: Loose) => e.event.subtype !== 'boot_metric');
       expect(events.map((e: Loose) => e.event.type)).toEqual(['user', 'system', 'assistant', 'result']);
-      expect(events.map((e: Loose) => e.seq)).toEqual([1, 2, 3, 4]);
+      expect(events.map((e: Loose) => e.seq)).toEqual([2, 3, 4, 5]);
       expect(events.every((e: Loose) => e.turn === 1 && e.event.seq === e.seq)).toBe(true);
       // The other command's line carried a different nonce and never got in.
       expect(JSON.stringify(events)).not.toContain('foreign');
-      expect(page.body.data.cursor).toBe(4);
+      expect(page.body.data.cursor).toBe(5);
 
       const chat = await getChat(chatId);
       expect(chat).toMatchObject({ status: 'idle', agentSessionId: 'sess-1', turnCount: 1 });
       const live = emitted.filter((e) => e.type === 'workbench:event').flatMap((e) => (e.payload as Loose).events);
-      expect(live.map((e: Loose) => e.seq)).toEqual([1, 2, 3, 4]);
+      expect(live.map((e: Loose) => e.seq)).toEqual([2, 3, 4, 5]);
     });
 
     it('copies switched-on instruction files in before the CLI, and a failed copy does not fail the turn', async () => {
@@ -1449,7 +1451,7 @@ describe('workbench routes', () => {
       expect(res.body.data).toEqual({ chatId });
       await idle(chatId);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
-      expect(page.body.data.events[0].event.message.content[0].text).toBe(`Merge ${wb.branch} with main`);
+      expect(page.body.data.events.find((e: Loose) => e.event.type === 'user').event.message.content[0].text).toBe(`Merge ${wb.branch} with main`);
       expect((await call('POST', `/workbenches/${wb.id}/actions/dance`)).status).toBe(400);
     });
 

@@ -228,9 +228,12 @@ export function durationWords(ms: number): string {
 }
 
 function sizeOf(row: WorkbenchRow, sandbox: FleetSandbox | null): WorkbenchSandboxStatus['size'] {
-  const fromFleet = sandbox?.memMib
-    ? (Object.keys(SANDBOX_SIZES) as SandboxSize[]).find((k) => SANDBOX_SIZES[k].memMib === sandbox.memMib) ?? null
-    : null;
+  // Small and Standard share a memory size, so the vCPU count tells them apart.
+  const fleetMilli = sandbox?.milliVcpu ?? (sandbox?.vcpuCount ? sandbox.vcpuCount * 1000 : null);
+  const sameMemory = sandbox?.memMib
+    ? (Object.keys(SANDBOX_SIZES) as SandboxSize[]).filter((k) => SANDBOX_SIZES[k].memMib === sandbox.memMib)
+    : [];
+  const fromFleet = sameMemory.find((k) => fleetMilli !== null && SANDBOX_SIZES[k].milliVcpu === fleetMilli) ?? sameMemory[0] ?? null;
   // Without the fleet's answer, only a size the session chose is known; the repository's needs a GitHub read.
   const chosen = isSandboxSize(row.settings?.sandboxSize) ? row.settings.sandboxSize : null;
   const key = fromFleet ?? (sandbox?.memMib ? null : chosen);
@@ -239,7 +242,7 @@ function sizeOf(row: WorkbenchRow, sandbox: FleetSandbox | null): WorkbenchSandb
   const milli = sandbox?.milliVcpu ?? (sandbox?.vcpuCount ? sandbox.vcpuCount * 1000 : key ? SANDBOX_SIZES[key].milliVcpu : null);
   const vcpus = milli === null ? null : milli / 1000;
   const label = key
-    ? `${SANDBOX_SIZES[key].label}${vcpus ? `, ${vcpus} vCPU` : ''}`
+    ? `${SANDBOX_SIZES[key].label}${vcpus && !SANDBOX_SIZES[key].label.includes('vCPU') ? `, ${vcpus} vCPU` : ''}`
     : `${Math.round((memMib ?? 0) / 1024)} GB${vcpus ? `, ${vcpus} vCPU` : ''}`;
   return { key, label, memMib, vcpus };
 }

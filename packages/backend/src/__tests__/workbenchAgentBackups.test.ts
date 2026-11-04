@@ -364,7 +364,7 @@ describe('agent memory backups', () => {
     expect(scripts.some((script) => script.includes('git clone') && script.includes('test'))).toBe(true);
     expect(Buffer.concat(restored)).toEqual(source);
     expect((await getChat('chat'))?.agentSessionId).toBe(SESSION);
-    const note = (await listEvents('chat', 0, 10)).events[0].event;
+    const note = (await listEvents('chat', 0, 10)).events.find((e) => e.event.subtype !== 'boot_metric')!.event;
     expect(note).toMatchObject({ type: 'system', subtype: 'sandbox_recovered', text: `${NO_CHECKPOINT_NOTE} ${AGENT_MEMORY_RESTORED_NOTE}` });
   });
 

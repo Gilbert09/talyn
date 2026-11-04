@@ -91,7 +91,8 @@ describe('a turn waits for a free sandbox', () => {
         agentRuns++;
         return { stdout: claudeTurnLines('sess', 'done'), exitCode: 0 };
       }
-      if (script.includes('git commit-tree')) {
+      // The turn-start exec wakes the box: the checkpoint script, or just the disk probe on a fresh session.
+      if (script.includes('git commit-tree') || script.includes('df -B1')) {
         wakeTries++;
         if (refusal) throw refusal();
         return { stdout: `${'c'.repeat(40)}\n` };

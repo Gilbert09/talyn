@@ -245,14 +245,6 @@ describe('/v1 code reviews', () => {
       expect(res.body.error.code).toBe('no_reviewers');
     });
 
-    it('answers 402 code_review_limit_reached on a free plan with a cycle running', async () => {
-      vi.stubEnv('POLAR_ACCESS_TOKEN', 'polar-test');
-      await testDb.db.update(prCodeReviews).set({ phase: 'reviewing' }).where(eq(prCodeReviews.id, 'rev-1'));
-      const res = await call('POST', '/pull-requests/pr-2/code-reviews', {});
-      expect(res.status).toBe(402);
-      expect(res.body.error).toMatchObject({ type: 'plan_limit_error', code: 'code_review_limit_reached', limit: 1 });
-    });
-
     it.each([
       ['an unknown preset', { preset: 'huge' }, 'preset'],
       ['a camelCase field', { Reset: true }, 'Reset'],

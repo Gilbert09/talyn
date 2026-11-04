@@ -201,9 +201,9 @@ describe('one provision per session across instances', () => {
     expect(await claims()).toEqual([{ name: CLAIM, token: 'other-instance' }]);
   });
 
-  /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
+  /** The provision keeps the box's start times and size on the row too; these tests are about the other keys. */
   const withoutBoxStart = (settings: object | undefined) => {
-    const { boxStart: _boxStart, ...rest } = (settings ?? {}) as Record<string, unknown>;
+    const { boxStart: _boxStart, boxStarts: _boxStarts, boxSize: _boxSize, ...rest } = (settings ?? {}) as Record<string, unknown>;
     return rest;
   };
 

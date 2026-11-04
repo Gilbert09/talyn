@@ -484,7 +484,7 @@ describe('boxSizeLabel', () => {
     ['a size read from the memory', { sandboxSize: null, memMib: 4096, vcpuCount: 4 }, 'Standard · 4 GB'],
     ['a chosen size the box does not match', { sandboxSize: 'large', memMib: 8192, vcpuCount: 4 }, 'Medium · 8 GB'],
     ['a memory no size has', { sandboxSize: null, memMib: 3000, vcpuCount: 2 }, `${mib(3000)} · 2 vCPU`],
-    ['a chosen size with no live read', { sandboxSize: 'small', memMib: null, vcpuCount: null }, 'Small · 2 GB'],
+    ['a chosen size with no live read', { sandboxSize: 'small', memMib: null, vcpuCount: null }, 'Small · 2 vCPU'],
     ['nothing known', { sandboxSize: null, memMib: null, vcpuCount: null }, null],
   ])('names %s', (_label, input, expected) => {
     expect(boxSizeLabel(input)).toBe(expected);

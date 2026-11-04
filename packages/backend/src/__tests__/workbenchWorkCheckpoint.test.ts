@@ -1034,7 +1034,9 @@ describe('saved work in a session', () => {
       status: 'provisioning', sandboxState: 'lost', memoryRestorePending: 'lost', sandboxId: 'box-r1',
       workCheckpointSha: SHA, workCheckpointAt: new Date(T0),
     });
-    const firstNote = async () => (await listEvents('chat', 0, 10)).events.map((e) => e.event)[0];
+    // Boot metrics are system events too; these tests read the notes.
+    const notes = async () => (await listEvents('chat', 0, 10)).events.filter((e) => e.event.subtype !== 'boot_metric');
+    const firstNote = async () => (await notes()).map((e) => e.event)[0];
 
     it.each([
       ['restored', `RESTORED ${SHA} ${EPOCH} 2\n`, ['Talyn restored the work from a checkpoint taken at 2099-01-01 10:00 UTC, with 2 commits that had not been pushed.']],
@@ -1092,7 +1094,7 @@ describe('saved work in a session', () => {
       await updateWorkbench(WB, { status: 'provisioning', sandboxState: 'creating' });
       await provisionWorkbench(WB);
       expect(restoreScripts()).toHaveLength(0);
-      expect((await listEvents('chat', 0, 10)).events).toHaveLength(0);
+      expect(await notes()).toHaveLength(0);
     });
   });
 });

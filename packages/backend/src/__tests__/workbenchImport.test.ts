@@ -193,7 +193,7 @@ describe('workbench import', () => {
     const chat = (await listChats(wb.id))[0];
     expect(chat).toMatchObject({ turnCount: 2, agentSessionId: SESSION, status: 'idle' });
     const page = await listEvents(chat.id, 0, 100);
-    const events = (page as Loose).events ?? page;
+    const events = ((page as Loose).events ?? page).filter((e: Loose) => e.event.subtype !== 'boot_metric');
     expect(events.map((e: Loose) => `${e.turn}:${e.event.type}`)).toEqual([
       '1:user', '1:assistant', '1:user', '1:assistant', '2:user', '2:assistant', '2:system',
     ]);
@@ -237,7 +237,7 @@ describe('workbench import', () => {
     const chat = (await listChats(wb.id))[0];
     expect(chat).toMatchObject({ turnCount: 0, agentSessionId: null, status: 'idle', importedFrom: null });
     const page = await listEvents(chat.id, 0, 100);
-    expect((page as Loose).events ?? page).toHaveLength(0);
+    expect(((page as Loose).events ?? page).filter((e: Loose) => e.event.subtype !== 'boot_metric')).toHaveLength(0);
   });
 
   describe('refusals', () => {

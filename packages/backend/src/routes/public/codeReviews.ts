@@ -84,7 +84,7 @@ export const codeReviewRoutes: PublicRoute[] = [
     summary: 'Start a code review',
     description:
       'Starts a new review cycle on the pull request. If a cycle is already running, the answer is that cycle with status 200. ' +
-      'The free plan allows 1 cycle at a time: over that, 402 `code_review_limit_reached`. ' +
+      'Starting a review runs on a box, so the usage gates on box starts apply. ' +
       "409 `no_reviewers` when the workspace turned Talyn's reviewers off and has none of its own for this repository; " +
       '409 `pr_closed` for a pull request that is not open.',
     tag: 'Code reviews',
