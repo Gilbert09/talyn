@@ -13,6 +13,6 @@
     "link-modules": "node -r ts-node/register ../../.erb/scripts/link-modules.ts"
   },
   "dependencies": {
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.1.0"
   }
 }
