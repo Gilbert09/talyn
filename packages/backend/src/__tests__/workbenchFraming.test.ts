@@ -297,15 +297,15 @@ describe('sandbox naming and scripts', () => {
     // The wildcard is recognised as covering, never added.
     expect(script).not.toMatch(/git config --add remote\.origin\.fetch '?\+refs\/heads\/\*/);
     expect(script).toContain('git checkout -b feat/x --track origin/feat/x');
-    expect(script).toContain('git fetch --depth=200 origin "$@"');
-    expect(script).toContain('git fetch origin "$@"');
+    expect(script).toContain('git fetch --no-tags --depth=200 origin "$@"');
+    expect(script).toContain('git fetch --no-tags origin "$@"');
   });
 
   it('deepens a shallow clone in bounded steps until the merge base appears, then unshallows', () => {
     const script = cloneScript({ repoFullName: 'a/b', branch: 'feat', baseBranch: 'main' });
     expect(script).toContain(`while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD origin/main`);
-    expect(script).toContain(`if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --unshallow origin "$@"; break; fi`);
-    expect(script).toContain('git fetch --deepen=500 origin "$@"');
+    expect(script).toContain(`if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --no-tags --unshallow origin "$@"; break; fi`);
+    expect(script).toContain('git fetch --no-tags --deepen=500 origin "$@"');
     // After the checkout, so the merge base is HEAD's.
     expect(script.indexOf('git merge-base')).toBeGreaterThan(script.indexOf('git checkout --no-track'));
   });

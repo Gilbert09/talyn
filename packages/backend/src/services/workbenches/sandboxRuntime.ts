@@ -781,23 +781,23 @@ export const MERGE_BASE_DEEPEN_BY = 500;
  * hold its absolute path. Only when its origin is this repository: anything
  * else clones as before.
  *
- * The fetch names its two branches explicitly, so a shallow golden never pulls
- * the whole repository's pack. A shallow clone then deepens in steps until
- * `origin/<base>` and HEAD share a merge base, which the diff needs.
+ * A new allocated branch fetches only the base, from the image commit's date.
+ * Other branches use explicit refspecs and deepen until the diff has a merge base.
  *
  * `git` reaches GitHub through the guest's proxy rewrite, which attaches the
  * credential host-side; the token never enters the box. The fallback clone is
  * blobless, so a large repository is usable in seconds and blobs arrive as read.
  */
 export function cloneScript(
-  row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>,
+  row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>
+    & Partial<Pick<WorkbenchRow, 'allocatedBranch' | 'pushedHeadShas'>>,
   opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean } = {},
 ): string {
-  // The image holds the repository (a repo, user or legacy layer): a fetch of
-  // the two branches and a checkout, not a clone. The clone stays as the
-  // fallback for an image whose checkout is not this repository.
   const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
   const depth = prebaked ? 50 : 200;
+  const repoCommit = opts.boxLayer?.repoCommit;
+  const newBranch = prebaked && row.allocatedBranch === true && row.pushedHeadShas?.length === 0
+    && row.branch !== row.baseBranch && repoCommit && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(repoCommit);
   const dir = shellQuote(repoDirFor(row));
   const golden = shellQuote(GOLDEN_REPO_DIR);
   const url = shellQuote(`https://github.com/${row.repoFullName}.git`);
@@ -837,15 +837,42 @@ export function cloneScript(
     '}',
     `ensure_refspec ${baseSpec}`,
     `set -- ${baseSpec}`,
+    'shallow_since=',
+    ...(newBranch ? [
+      // Keep local work on retries. Missing image objects use the existing path.
+      `if ! git show-ref --verify --quiet ${localRef}; then`,
+      `  image_date=$(git show -s --format=%ct ${shellQuote(repoCommit)} -- 2>/dev/null || true)`,
+      '  case "$image_date" in',
+      "    ''|*[!0-9]*) ;;",
+      // Include the image commit, even if Git excludes the date boundary.
+      '    *) shallow_since="@$((image_date - 1))" ;;',
+      '  esac',
+      'fi',
+    ] : []),
     'remote_branch=',
-    `if git ls-remote --exit-code --heads origin ${branch} >/dev/null 2>&1; then`,
-    '  remote_branch=1',
-    `  ensure_refspec ${branchSpec}`,
-    `  set -- "$@" ${branchSpec}`,
+    'if [ -z "$shallow_since" ]; then',
+    `  if git ls-remote --exit-code --heads origin ${branch} >/dev/null; then`,
+    '    remote_branch=1',
+    `    ensure_refspec ${branchSpec}`,
+    `    set -- "$@" ${branchSpec}`,
+    '  else',
+    // Only status 2 means the branch is absent. A failed probe must stop checkout.
+    '    remote_status=$?',
+    '    if [ "$remote_status" -ne 2 ]; then exit "$remote_status"; fi',
+    '  fi',
     'fi',
     'shallow=',
     'if [ "$(git rev-parse --is-shallow-repository)" = true ]; then shallow=1; fi',
-    `if [ -n "$shallow" ]; then git fetch --depth=${depth} origin "$@"; else git fetch origin "$@"; fi`,
+    'if [ -n "$shallow" ]; then',
+    // A rewritten base can predate the image. Retry without the date limit.
+    '  if [ -n "$shallow_since" ]; then',
+    `    git fetch --no-tags --shallow-since="$shallow_since" origin "$@" || git fetch --no-tags --depth=${depth} origin "$@"`,
+    '  else',
+    `    git fetch --no-tags --depth=${depth} origin "$@"`,
+    '  fi',
+    'else',
+    '  git fetch --no-tags origin "$@"',
+    'fi',
     `if git show-ref --verify --quiet ${localRef}; then`,
     `  git checkout ${branch}`,
     'elif [ -n "$remote_branch" ]; then',
@@ -859,8 +886,8 @@ export function cloneScript(
     // unrelated histories, and `--unshallow` on a complete repo is an error.
     'tries=0',
     `while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD ${remoteBase} >/dev/null 2>&1; do`,
-    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --unshallow origin "$@"; break; fi`,
-    `  git fetch --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
+    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --no-tags --unshallow origin "$@"; break; fi`,
+    `  git fetch --no-tags --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
     '  tries=$((tries + 1))',
     'done',
     // What the box knows about its image, for the box setup (`BOX_LAYER_FILE`).
