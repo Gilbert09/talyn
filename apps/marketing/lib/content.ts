@@ -377,51 +377,81 @@ export const why = {
 
 export const pricing = {
   kicker: "Pricing",
-  title: "Start free. Upgrade when the queue gets serious.",
-  sub: "Talyn is the control tower. Your cloud agents do the flying, billed by the provider you connect. One flat price for the tower.",
+  title: "Pay for the machines. Bring your own model.",
+  sub: "Talyn runs your agents on its own boxes. You get a monthly allowance of box-hours, and you add credits only if you need more. The model runs on your own Claude or ChatGPT subscription.",
   footnote:
-    "Prices exclude agent usage: runs execute in your provider's cloud, on your account and credits. Upgrade, manage, or cancel anytime from Settings → Billing in the app.",
+    "Prices are in US dollars. The model is not included: runs use the Claude or ChatGPT subscription you connect, so you pay us for the machines, not the model. Manage or cancel any time from Settings → Billing in the app.",
   annualBadge: "2 months free",
+  boxHour:
+    "A box-hour is one standard box running for one hour. Smaller boxes use less of your allowance and bigger boxes use more. Billing is per running second, and a sleeping box costs nothing.",
   tiers: [
     {
       name: "Free",
       priceMonthly: "$0",
       priceAnnual: "$0",
+      priceAnnualTotal: "$0",
       period: "forever",
       periodAnnualNote: null,
-      blurb: "Full mission control, for a calmer queue.",
+      blurb: "The whole app, with a small monthly allowance.",
       features: [
+        "10 box-hours a month",
+        "Small and standard boxes",
+        "Up to 2 boxes running at once",
         "The whole PR dashboard, every repo, every workspace",
-        "All agent providers, switch per task",
-        "Skills, the merge queue & auto-keep-mergeable on any PR you flag",
-        "Up to 3 tasks running and 3 PRs queued at once",
-        "Up to 3 workflows \u2014 your rules, running on every PR they match",
-        "Up to 3 loops \u2014 your prompts, running on the schedule you set",
+        "Skills, the merge queue, workflows, loops and code review",
+        "Keep a PR mergeable on any PR you flag by hand",
+        "Mobile app (coming soon)",
       ],
       cta: "Download for {platform}",
       highlighted: false,
     },
     {
-      name: "Unlimited",
-      priceMonthly: "$15",
-      priceAnnual: "$12.50",
+      name: "Pro",
+      priceMonthly: "$40",
+      priceAnnual: "$33.33",
+      priceAnnualTotal: "$400",
       period: "/month",
-      periodAnnualNote: "billed annually ($150/yr)",
+      periodAnnualNote: "billed annually ($400/yr)",
       blurb: "For the weeks when everything ships at once.",
       features: [
         "Everything in Free",
-        "Unlimited concurrent tasks",
-        "Unlimited PRs in the merge queue",
-        "Unlimited workflows, so every rule you want is a rule you can keep",
-        "Unlimited loops, so every job worth doing on a schedule can have one",
-        "Keep every new PR green automatically, without flagging them one by one",
-        "Automation never waits for a slot: merge queue and auto-keep always dispatch",
-        "Cancel anytime, in-app",
+        "200 box-hours a month (100 hours of a large box)",
+        "Every box size",
+        "Up to 100 boxes running at once",
+        "Auto-keep on every new PR, and auto-review on every new PR",
+        "Credits with auto top-up, for anything above your allowance",
+        "Mobile app (coming soon)",
+        "Cancel any time, in the app",
       ],
       cta: "Download & upgrade in-app",
       highlighted: true,
     },
   ],
+  sizesTitle: "Pay as you go, above your plan",
+  sizesSub:
+    "When your box-hours run out, boxes draw on your credit balance at the hourly price for their size. Credits are in US dollars.",
+  sizes: [
+    { name: "Small", vcpu: 2, ram: 4, perHour: "$0.11", weight: "0.5 box-hours" },
+    { name: "Standard", vcpu: 4, ram: 4, perHour: "$0.22", weight: "1 box-hour" },
+    { name: "Medium", vcpu: 4, ram: 8, perHour: "$0.275", weight: "1.25 box-hours" },
+    { name: "Large", vcpu: 6, ram: 12, perHour: "$0.44", weight: "2 box-hours" },
+    { name: "XLarge", vcpu: 8, ram: 16, perHour: "$0.55", weight: "2.5 box-hours" },
+  ],
+  sizesNote:
+    "Free accounts can use small and standard boxes. Pro and Team can use every size. Your included hours are used first, then your credits.",
+  creditsTitle: "Credits",
+  creditPacks: [
+    { amount: "$25", bonus: null },
+    { amount: "$100", bonus: "+5% extra credit" },
+    { amount: "$500", bonus: "+10% extra credit" },
+  ],
+  creditPoints: [
+    "Credits last 12 months from the day you buy them.",
+    "Turn on auto top-up and pick the balance that triggers it and the amount to add.",
+    "Set a monthly limit on auto top-ups, so a busy month cannot surprise you.",
+    "Credits are on Pro and Team plans.",
+  ],
+  comingSoon: "The mobile app is coming soon, and it is included on every plan.",
 };
 
 /**
@@ -439,33 +469,23 @@ export const pricing = {
  * what runs it, where the code goes, what it costs, what it runs on.
  */
 /**
- * Teams — a per-seat discount, sold by conversation rather than by page.
- *
- * Deliberately quotes no number. Billing today is per account: there is no
- * seat model in the backend, no shared workspace, no SSO and no admin
- * console. Publishing "$12 a seat" would be a public commitment against
- * machinery that does not exist, and the first person to accept it would find
- * out. "Talk to me" commits to nothing, prices each conversation while the
- * shape is still being learned, and is the honest version of where this is.
- *
- * The copy also has to not oversell what happens after they press send. It
- * goes to PostHog and nowhere else, which is fine when the person is told
- * plainly that a human reads it and replies by email.
+ * Teams: seat billing. One person pays for N seats and every seat is a Pro
+ * account with its own 200 box-hours. Nothing is shared between seats, and
+ * the page says so, because a team lead asks about shared workspaces and SSO
+ * inside two minutes.
  */
 export const teams = {
-  kicker: "Teams",
+  kicker: "Team",
   title: "More than one of you?",
-  body: "Talyn is priced per account today, which stops making sense somewhere around the third person on a team paying for their own. There is a per-seat rate for teams — tell me how many of you there are and I will come back with it.",
+  body: "A team seat is $40 a month. Each seat is a Pro account with its own 200 box-hours, so one person's busy week does not use up anybody else's allowance. One invoice covers everyone.",
   bullets: [
-    "A per-seat price that gets better the more of you there are",
-    "One invoice instead of everybody expensing $15",
-    "Tell me what you need from shared workspaces and I will build toward it",
+    "$40 per seat, with Pro for every seat",
+    "200 box-hours a month for each person, not one pool for the team",
+    "One invoice instead of everybody expensing $40",
   ],
   cta: "Talk about a team plan",
-  // Said out loud rather than discovered: shared workspaces, SSO and admin
-  // controls do not exist, and a team lead will ask inside two minutes.
   caveat:
-    "Being straight with you: shared workspaces, SSO and admin controls are not built yet. A team plan today is a price, not a product tier — so tell me what you actually need and it will shape what gets built.",
+    "Each person keeps their own workspaces. Shared workspaces, SSO and admin controls are not built yet. Tell me what you need and it will shape what gets built.",
 
   modalTitle: "Tell me about your team",
   modalBody:
@@ -483,38 +503,52 @@ export const teams = {
 };
 
 /**
- * The four questions that stop somebody paying, answered on `/pricing`.
+ * The questions that stop somebody paying, answered on `/pricing`.
  *
- * Each one came out of auditing what the site already said and finding
- * nothing. They are not the general "what is Talyn" questions — those are on
- * the home page — they are the ones a person asks with a card in their hand:
- * is this priced per person, what is it about to do to my repository, what
- * does it cost me in agent quota, and can I stop it.
+ * They are the ones a person asks with a card in their hand: what is a
+ * box-hour, what happens when I run out, is this priced per person, what is
+ * it about to do to my repository, and can I stop it.
  */
 export const pricingFaq = [
   {
-    q: "Is $15 per person, or per account?",
-    a: "Per account. Talyn bills the person who signs in, and the limits — tasks, queued pull requests, workflows, loops — are counted across every workspace that person owns. If several of you want it, the team rate above is per seat and comes on one invoice. What a team plan does not add is sharing: every person keeps their own workspaces, and there is no SSO, so if you need those, Talyn is not ready for you.",
+    q: "What is a box-hour?",
+    a: "A box-hour is one standard box running for one hour. Every agent run happens on a box, which is a small cloud machine Talyn starts for you. A small box counts as half a box-hour for each hour it runs, a large box counts as two, and so on. We bill per running second, so a ten minute run uses a sixth of a box-hour on a standard box.",
+  },
+  {
+    q: "What happens when my hours run out?",
+    a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as loops and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
+  },
+  {
+    q: "Do idle boxes cost anything?",
+    a: "No. A box that has been idle for 10 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
+  },
+  {
+    q: "Do I pay for Claude or ChatGPT as well?",
+    a: "Yes, on your own account, and Talyn does not mark it up. You bring your Claude or ChatGPT subscription and the agent uses it. You pay us for the machines, not the model.",
+  },
+  {
+    q: "Is $40 per person, or per account?",
+    a: "Per account. Talyn bills the person who signs in, and the box-hours are counted across every workspace that person owns. If several of you want it, a team seat is $40 a month and each seat gets Pro with its own 200 box-hours. What a team plan does not add is sharing: every person keeps their own workspaces, and there is no SSO.",
+  },
+  {
+    q: "How do credits and auto top-up work?",
+    a: "Credits are a balance in US dollars. You buy a pack of $25, $100 (with 5% extra) or $500 (with 10% extra), and boxes draw on the balance at their hourly price once your included hours are gone. With auto top-up on, Talyn buys a pack when your balance drops below a level you pick, up to a monthly limit you set. Credits last 12 months. Included hours reset every month and do not roll over.",
   },
   {
     q: "What does the GitHub App actually get access to?",
-    a: "The repositories you pick, and nothing else — you choose them when you install and can change them later. It needs write access to code, because the whole point is that an agent pushes a fix to your branch. It does not need organisation admin, and it works on a personal private repository with no organisation at all. It never force-pushes, and it never touches a branch you have not pointed it at.",
+    a: "The repositories you pick, and nothing else. You choose them when you install and can change them later. It needs write access to code, because the whole point is that an agent pushes a fix to your branch. It does not need organisation admin, and it works on a personal private repository with no organisation at all. It never force-pushes, and it never touches a branch you have not pointed it at.",
   },
   {
     q: "How much of my Claude or ChatGPT quota will this burn?",
-    a: "As much as the work takes — Talyn does not meter or cap it for you, and we would rather say that plainly than pretend it is free. A fix run on a small pull request is a few minutes of agent time; a Deep code review on a large one can be an hour across several sandboxes. The free plan's three-concurrent-task limit is the real brake. If your subscription's quota does run out mid-run, Talyn moves that run to your other connected agent, and remembers so the next one does not waste a machine finding out.",
+    a: "As much as the work takes. Talyn does not meter or cap your subscription, and we would rather say that plainly than pretend it is free. A fix run on a small pull request is a few minutes of agent time. A deep code review on a large one can be an hour across several boxes. If your subscription's quota runs out mid-run, Talyn moves that run to your other connected agent, and remembers so the next one does not waste a machine finding out.",
   },
   {
     q: "Can it merge something without me asking?",
-    a: "Only on pull requests you flagged. Auto-keep-mergeable and the merge queue are both opt-in per pull request on every plan — nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every NEW pull request you open automatically, it is part of Unlimited, and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you configured it.",
+    a: "Only on pull requests you flagged. Auto-keep and the merge queue are opt-in per pull request on every plan, so nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you set it up.",
   },
   {
     q: "Can I cancel, and do I get a refund?",
-    a: "Cancel any time from Settings → Billing in the app; you keep Unlimited until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable — Talyn is in public beta and the free plan exists so you can find out whether it works for you before paying anything.",
-  },
-  {
-    q: "What happens if I go over the free limits?",
-    a: "Nothing breaks and nothing is charged. A fourth concurrent task is refused with an explanation rather than queued silently, and automation that hits the cap — a merge-queue fix, say — is deferred until a slot frees up rather than dropped. You are never billed for going over, because there is nothing to bill: the free plan has no payment method attached.",
+    a: "Cancel any time from Settings → Billing in the app. You keep Pro until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable. Talyn is in public beta, and the free plan exists so you can find out whether it works for you before paying anything.",
   },
 ];
 
@@ -537,7 +571,7 @@ export const faq = [
   },
   {
     q: "Will it merge something without me asking?",
-    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time, on every plan — nothing you have not flagged is merged, rebased or pushed to. The one setting that widens that is the workspace default which flags every new pull request you open, it is part of Unlimited, and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies exactly as you set it up.",
+    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time, on every plan. Nothing you have not flagged is merged, rebased or pushed to. The one setting that widens that is the workspace default which flags every new pull request you open. It is part of Pro and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies exactly as you set it up.",
   },
   {
     q: "Is my code safe?",
@@ -545,7 +579,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "The free plan is the full app with up to 3 tasks running, 3 PRs in the merge queue, 3 workflows and 3 loops, plus auto-keep-mergeable on any PR you flag by hand. Unlimited removes all four caps and keeps every new PR you open mergeable automatically, for $15/month (or $150/year, 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
+    a: "Free gives you the full app with 10 box-hours a month. Pro is $40 a month ($400 a year) and gives you 200 box-hours, every box size, up to 100 boxes at once, and auto-keep and auto-review on every new PR. A box-hour is one standard box running for one hour. If you need more, add credits and pay as you go, with sleeping boxes free. The model runs on your own Claude or ChatGPT subscription, so you pay us for the machines, not the model.",
   },
   {
     q: "What platforms are supported?",

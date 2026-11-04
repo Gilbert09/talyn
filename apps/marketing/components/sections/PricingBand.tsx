@@ -33,9 +33,10 @@ export function PricingBand() {
             outgrow it.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-ink-500">
-            Free gives you the whole app with three tasks running at once.
-            Unlimited removes the caps. Either way the agent runs go on the
-            subscription you already pay for.
+            Free includes 10 box-hours a month. Pro includes 200, every box
+            size, and credits when you need more. You pay us for the machines,
+            not the model, because the agent runs on your own Claude or ChatGPT
+            subscription.
           </p>
           <a
             href="/pricing"

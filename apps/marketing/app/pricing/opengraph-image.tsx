@@ -13,9 +13,9 @@ export default function Image() {
     (
       <OgCard
         eyebrow="Pricing"
-        title="Free for three tasks."
-        titleAccent="$15 for the rest."
-        sub="One flat price for the control tower. Agent runs go on the Claude or ChatGPT subscription you already pay for."
+        title="Free to start."
+        titleAccent="$40 for 200 box-hours."
+        sub="Pay for the machines, not the model. Agent runs go on the Claude or ChatGPT subscription you already pay for."
       />
     ),
     { ...size }

@@ -67,8 +67,8 @@ unchanged, and that attempt achieved nothing, so it parks. Get a *different*
 blocker and that is progress — the first thing got fixed — so it keeps going.
 The unit is "did anything change", not "how many attempts have we had".
 
-**It is flat-priced and not per-contributor.** $15/month, or free with three
-pull requests queued at once. Agent runs execute on the Claude or ChatGPT
+**It is priced by box-hours, not per contributor.** Free with 10 box-hours a
+month, or $40/month for 200. Agent runs execute on the Claude or ChatGPT
 subscription you already pay for.
 
 ## What Talyn does not do

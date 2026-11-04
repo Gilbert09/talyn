@@ -16,20 +16,21 @@ import { pricing } from "@/lib/content";
  * visible rather than hidden for crawlers. Hiding it would be cloaking.
  */
 const LIMITS: Array<{ label: string; free: string; paid: string }> = [
-  { label: "Price, billed monthly", free: "$0", paid: "$15 per month" },
-  { label: "Price, billed annually", free: "$0", paid: "$150 per year ($12.50 per month)" },
+  { label: "Price, billed monthly", free: "$0", paid: "$40 per month" },
+  { label: "Price, billed annually", free: "$0", paid: "$400 per year ($33.33 per month)" },
+  { label: "Box-hours included each month", free: "10", paid: "200 (100 hours of a large box)" },
+  { label: "Box sizes", free: "Small and standard", paid: "Small, standard, medium, large and xlarge" },
+  { label: "Boxes running at once", free: "2", paid: "Up to 100" },
+  { label: "Credits and auto top-up", free: "—", paid: "Included" },
   { label: "Pull request dashboard, all repositories", free: "Included", paid: "Included" },
   { label: "Agent providers (Claude, Codex, PostHog Code)", free: "All of them", paid: "All of them" },
-  { label: "Tasks running at once", free: "3", paid: "Unlimited" },
-  { label: "Pull requests in the merge queue", free: "3", paid: "Unlimited" },
-  { label: "Workflows", free: "3", paid: "Unlimited" },
-  { label: "Loops", free: "3", paid: "Unlimited" },
-  { label: "Code review cycles", free: "1", paid: "Unlimited" },
-  { label: "Connected MCP servers", free: "Unlimited", paid: "Unlimited" },
+  { label: "Merge queue, workflows, loops and code review", free: "Included", paid: "Included" },
+  { label: "Connected MCP servers", free: "Included", paid: "Included" },
   { label: "Keep a pull request mergeable, flagged by hand", free: "Included", paid: "Included" },
   { label: "Keep every new pull request mergeable automatically", free: "—", paid: "Included" },
   { label: "Review every new pull request automatically", free: "—", paid: "Included" },
-  { label: "Agent usage", free: "Your own subscription", paid: "Your own subscription" },
+  { label: "Mobile app (coming soon)", free: "Included", paid: "Included" },
+  { label: "Model usage", free: "Your own subscription", paid: "Your own subscription" },
 ];
 
 export function PlanTable() {
@@ -39,11 +40,12 @@ export function PlanTable() {
     <section className="border-t border-line bg-paper-100 py-20">
       <div className="container">
         <h2 className="font-display text-2xl font-semibold tracking-tight text-ink">
-          Every limit, side by side
+          Every plan, side by side
         </h2>
         <p className="mt-2 max-w-2xl text-ink-500">
-          Both prices, in full, so you do not have to flip a toggle to compare
-          them.
+          Both prices and every limit in full, so you do not have to flip a toggle to
+          compare them. A team seat is $40 a month and gets Pro with its own 200
+          box-hours.
         </p>
 
         <div className="mt-8 overflow-x-auto">
@@ -71,7 +73,58 @@ export function PlanTable() {
           </table>
         </div>
 
-        <p className="mt-6 max-w-2xl text-xs leading-relaxed text-ink-400">
+        <h2 className="mt-16 font-display text-2xl font-semibold tracking-tight text-ink">
+          {pricing.sizesTitle}
+        </h2>
+        <p className="mt-2 max-w-2xl text-ink-500">{pricing.sizesSub}</p>
+
+        <div className="mt-8 overflow-x-auto">
+          <table className="w-full min-w-[34rem] border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-line-strong">
+                <th className="py-3 pr-4 font-display text-base font-semibold text-ink">Box size</th>
+                <th className="py-3 pr-4 font-display text-base font-semibold text-ink">vCPU</th>
+                <th className="py-3 pr-4 font-display text-base font-semibold text-ink">Memory</th>
+                <th className="py-3 pr-4 font-display text-base font-semibold text-ink">Counts as</th>
+                <th className="py-3 font-display text-base font-semibold text-ink">Per hour</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pricing.sizes.map((row) => (
+                <tr key={row.name} className="border-b border-line">
+                  <td className="py-3 pr-4 text-ink-700">{row.name}</td>
+                  <td className="py-3 pr-4 text-ink-700">{row.vcpu}</td>
+                  <td className="py-3 pr-4 text-ink-700">{row.ram} GiB</td>
+                  <td className="py-3 pr-4 text-ink-700">{row.weight} per hour</td>
+                  <td className="py-3 text-ink-700">{row.perHour}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-4 max-w-2xl text-sm leading-relaxed text-ink-500">
+          {pricing.sizesNote} Billed per running second. Sleeping boxes are
+          free, and a box sleeps after 10 idle minutes.
+        </p>
+
+        <h3 className="mt-12 font-display text-xl font-semibold tracking-tight text-ink">
+          {pricing.creditsTitle}
+        </h3>
+        <div className="mt-4 grid max-w-xl gap-3 sm:grid-cols-3">
+          {pricing.creditPacks.map((pack) => (
+            <div key={pack.amount} className="rounded-xl border border-line bg-white p-4">
+              <p className="font-display text-2xl font-semibold text-ink">{pack.amount}</p>
+              <p className="mt-1 text-xs text-ink-500">{pack.bonus ?? "No bonus"}</p>
+            </div>
+          ))}
+        </div>
+        <ul className="mt-5 max-w-2xl list-disc space-y-1.5 pl-5 text-sm text-ink-600">
+          {pricing.creditPoints.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+
+        <p className="mt-10 max-w-2xl text-xs leading-relaxed text-ink-400">
           {pricing.footnote}
         </p>
       </div>

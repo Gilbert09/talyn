@@ -143,7 +143,7 @@ whose pull requests are generated faster than they can babysit them. The
 distinguishing feature is not the queue mechanics — it is that a failure gets an
 agent sent at it rather than being handed back.
 
-The free plan covers three pull requests in the queue at a time.
+Queued pull requests are not limited. Fix runs use the box-hours in your plan: 10 a month on the free plan, 200 on Pro.
 
 [docs]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
 [ga]: https://github.blog/changelog/2023-07-12-pull-request-merge-queue-is-now-generally-available/

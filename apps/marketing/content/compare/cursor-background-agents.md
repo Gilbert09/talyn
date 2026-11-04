@@ -63,8 +63,8 @@ pull request events with the app closed; loops run a prompt on a schedule.
 **It runs on the subscription you already have.** Cursor cloud agents bill at
 API pricing for the model you pick. Talyn's run on your **Claude Pro/Max or
 ChatGPT Plus/Pro plan** — you sign in with Claude or ChatGPT, and there is no
-API key and nothing metered on top. Talyn is $15/month flat, or free with three
-concurrent tasks.
+API key and nothing metered on top. Talyn is free with 10 box-hours a month, or $40/month for 200
+box-hours. You pay us for the machines, not the model.
 
 **The credential never enters the sandbox.** Each task gets a fresh Firecracker
 microVM, and your token is attached by a proxy outside the machine, so an agent
