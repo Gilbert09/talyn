@@ -3,7 +3,9 @@ import { Check, Loader2, Zap } from 'lucide-react';
 import {
   CREDIT_PACK_IDS,
   PLAN_LIMITS,
+  PLAN_PRICES,
   PLAN_TIER_LABELS,
+  SANDBOX_SIZES,
   formatBoxHoursLabel,
   formatCreditPack,
   formatUsd,
@@ -40,6 +42,8 @@ export function usageUpgradeCopy(input: {
   const reset = formatShortDate(notice?.periodEnd ?? input.periodEnd ?? '');
   const own = notice?.message?.trim() || null;
   switch (reason) {
+    case 'compare_plans':
+      return { title: 'Compare plans', body: 'See what each plan includes.' };
     case 'usage_exhausted':
       return {
         title: 'You are out of box-hours',
@@ -134,7 +138,7 @@ export function UsageUpgradeModal({
   }, [open]);
   const start = startRef.current;
   const movedToPro = start != null && start.tier !== 'pro' && status.tier === 'pro';
-  const creditsLanded = start != null && (status.credits?.balanceMicros ?? 0) > start.balance;
+  const creditsLanded = reason !== 'compare_plans' && start != null && (status.credits?.balanceMicros ?? 0) > start.balance;
 
   const pricing = pricingOf(status);
   const { tier } = status;
@@ -240,6 +244,69 @@ export function UsageUpgradeModal({
       />
     </div>
   );
+
+  if (reason === 'compare_plans') {
+    const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
+    if (tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
+    const current = tier === 'legacy_pro' ? tier : status.planSource === 'team' ? 'team' : tier;
+    return (
+      <Dialog open={open} onOpenChange={close}>
+        <DialogContent className="max-w-5xl" onClose={() => close(false)}>
+          <DialogHeader>
+            <DialogTitle>Compare plans</DialogTitle>
+            <DialogDescription>See what each plan includes.</DialogDescription>
+          </DialogHeader>
+          {(tier === 'free' || (tier === 'legacy_pro' && status.planSource === 'subscription')) && (
+            <div className="mb-4 max-w-sm">{periodPicker}</div>
+          )}
+          <div className={`grid gap-3 sm:grid-cols-2 ${plans.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+            {plans.map((plan) => {
+              const limits = PLAN_LIMITS[plan === 'team' ? 'pro' : plan];
+              const monthly = plan === 'free' ? PLAN_PRICES.free.monthlyMicros : plan === 'legacy_pro' ? pricing.legacyProMonthlyMicros : pricing.proMonthlyMicros;
+              const annual = plan === 'legacy_pro' ? PLAN_PRICES.legacy_pro.annualMicros : pricing.proAnnualMicros;
+              return (
+                <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-[13px]">
+                  <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>
+                  <div className="mt-1 font-medium">
+                    {formatUsd(monthly, 0)}/mo{plan === 'team' ? ' per seat' : ''}
+                  </div>
+                  {annual != null && plan !== 'free' && (
+                    <div className="text-muted-foreground">
+                      {formatUsd(annual, 0)}/yr{plan === 'team' ? ' per seat' : ''} · Save {formatUsd(monthly * 12 - annual, 0)}/yr
+                    </div>
+                  )}
+                  <ul className="my-3 space-y-1 text-muted-foreground">
+                    <li>{hours(plan === 'team' ? 'pro' : plan)} per month</li>
+                    <li>{limits.concurrentBoxes} concurrent boxes</li>
+                    <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
+                    <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
+                    {plan === 'team' && <li>Each seat has its own included box-hours.</li>}
+                  </ul>
+                  <div className="mt-auto space-y-2">
+                    {plan === current ? (
+                      <p className="font-medium text-primary">Your plan</p>
+                    ) : plan === 'pro' && tier === 'free' ? (
+                      <Button className="w-full" onClick={checkoutPro} disabled={busy !== null || waiting}>Upgrade to Pro</Button>
+                    ) : plan === 'pro' && tier === 'legacy_pro' && status.planSource === 'subscription' ? (
+                      <Button className="w-full" onClick={moveToPro} disabled={busy !== null || waiting}>Move to Pro</Button>
+                    ) : plan === 'team' ? (
+                      <Button className="w-full" variant="outline" onClick={() => { close(false); openSettings('teams'); }}>Explore Team</Button>
+                    ) : null}
+                    {limits.creditsAllowed && plan === current && (
+                      <button type="button" className="text-xs text-primary hover:underline" onClick={goToSettings}>Add credits</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {waiting && <p className="mt-3 text-[13px] text-muted-foreground">Finish in your browser. This updates by itself once payment completes.</p>}
+          {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
+          <DialogFooter><Button variant="ghost" onClick={() => close(false)}>Done</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={close}>

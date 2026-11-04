@@ -1,5 +1,5 @@
 import { Check, Zap } from 'lucide-react';
-import { PLAN_LIMITS } from '@talyn/shared';
+import { PLAN_LIMITS, PLAN_PRICES, PLAN_TIER_LABELS, SANDBOX_SIZES, formatBoxHoursLabel, boxHoursToWeightedSeconds, formatUsd, type PlanTier } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
@@ -37,6 +37,10 @@ export function usageModalCopy(
 ): UsageModalCopy {
   const { tier } = view;
   const said = notice ? refusalSentence(notice) : null;
+
+  if (reason === 'compare_plans') {
+    return { title: 'Compare plans', body: 'See what each plan includes.', offers: [] };
+  }
 
   if (tier === 'free') {
     const offers: UsageOffer[] = ['pro_checkout'];
@@ -139,6 +143,76 @@ export function UsageUpgradeModal({
   const copy = usageModalCopy(reason, notice, view);
 
   const close = () => onOpenChange(false);
+
+  if (reason === 'compare_plans') {
+    const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
+    if (view.tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
+    const current = view.tier === 'legacy_pro' ? view.tier : view.status.planSource === 'team' ? 'team' : view.tier;
+    const pricing = view.status.pricing;
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-5xl" onClose={close}>
+          <DialogHeader>
+            <DialogTitle>Compare plans</DialogTitle>
+            <DialogDescription>See what each plan includes.</DialogDescription>
+          </DialogHeader>
+          <div className={`grid gap-3 sm:grid-cols-2 ${plans.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+            {plans.map((plan) => {
+              const limits = PLAN_LIMITS[plan === 'team' ? 'pro' : plan];
+              const monthly = plan === 'free'
+                ? PLAN_PRICES.free.monthlyMicros
+                : plan === 'legacy_pro'
+                  ? pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros
+                  : pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros;
+              const annual = plan === 'free'
+                ? null
+                : plan === 'legacy_pro'
+                  ? PLAN_PRICES.legacy_pro.annualMicros
+                  : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
+              return (
+                <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-sm">
+                  <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>
+                  <div className="mt-1 font-medium">
+                    {formatUsd(monthly, 0)}/mo
+                    {plan === 'team' ? ' per seat' : ''}
+                  </div>
+                  {annual != null && (
+                    <div className="text-xs text-muted-foreground">
+                      {formatUsd(annual, 0)}/yr
+                      {plan === 'team' ? ' per seat' : ''}
+                      {' · Save '}{formatUsd(monthly * 12 - annual, 0)}/yr
+                    </div>
+                  )}
+                  <ul className="my-3 space-y-1 text-xs text-muted-foreground">
+                    <li>{formatBoxHoursLabel(boxHoursToWeightedSeconds(limits.includedBoxHours))} per month</li>
+                    <li>{limits.concurrentBoxes} concurrent boxes</li>
+                    <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
+                    <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
+                    {plan === 'team' && <li>Each seat has its own included box-hours.</li>}
+                  </ul>
+                  <div className="mt-auto space-y-2">
+                    {plan === current ? (
+                      <p className="font-medium text-primary">Your plan</p>
+                    ) : plan === 'pro' && view.tier === 'free' ? (
+                      <ProPlanForm mode="checkout" placement="upgrade_modal" />
+                    ) : plan === 'pro' && view.tier === 'legacy_pro' && view.status.planSource === 'subscription' ? (
+                      <ProPlanForm mode="change" placement="upgrade_modal" onChanged={close} />
+                    ) : plan === 'team' ? (
+                      <Button variant="outline" className="w-full" onClick={() => { trackEvent('team_offer_opened', { placement: 'upgrade_modal' }); close(); openSettings('teams'); }}>Explore Team</Button>
+                    ) : null}
+                    {limits.creditsAllowed && plan === current && (
+                      <button type="button" className="text-xs text-primary hover:underline" onClick={() => { close(); openSettings('billing'); }}>Add credits</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <DialogFooter><Button variant="ghost" onClick={close}>Done</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

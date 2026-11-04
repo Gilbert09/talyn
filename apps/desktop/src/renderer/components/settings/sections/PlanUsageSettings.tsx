@@ -226,7 +226,7 @@ function PlanCard({
             Manage billing
           </Button>
         )}
-        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true); }}>
+        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'compare_plans'); }}>
           Compare plans
         </Button>
       </div>

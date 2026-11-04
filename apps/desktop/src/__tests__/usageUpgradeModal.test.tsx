@@ -3,7 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { UpgradeModal } from '../renderer/components/modals/UpgradeModal';
 import { useBillingStore, type UpgradeReason } from '../renderer/stores/billing';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
@@ -77,6 +77,33 @@ describe('UpgradeModal with usage billing', () => {
     fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' }));
+  });
+
+  it('compares plans for Pro without credit packs', () => {
+    open(usageStatus('pro'), 'compare_plans');
+    expect(screen.getByText('Compare plans')).toBeInTheDocument();
+    expect(within(screen.getByTestId('compare-plan-pro')).getByText('Your plan')).toBeInTheDocument();
+    expect(screen.getByTestId('compare-plan-free')).toHaveTextContent('10 box-hours per month');
+    expect(screen.getByTestId('compare-plan-team')).toHaveTextContent('per seat');
+    expect(screen.queryByTestId('compare-plan-legacy_pro')).toBeNull();
+    expect(screen.queryByTestId('credit-packs')).toBeNull();
+    expect(screen.queryByRole('button', { name: '$25' })).toBeNull();
+  });
+
+  it('offers Pro checkout from the Free comparison', async () => {
+    checkout.mockResolvedValue({ url: 'https://polar.test/checkout' });
+    open(usageStatus('free'), 'compare_plans');
+    expect(within(screen.getByTestId('compare-plan-free')).getByText('Your plan')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('compare-plan-pro')).getByRole('button', { name: 'Upgrade to Pro' }));
+    await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'pro' }));
+  });
+
+  it('marks Legacy Pro as current in the comparison', () => {
+    open(usageStatus('legacy_pro'), 'compare_plans');
+    expect(within(screen.getByTestId('compare-plan-legacy_pro')).getByText('Your plan')).toBeInTheDocument();
+    expect(screen.getByTestId('compare-plan-legacy_pro')).toHaveTextContent('50 box-hours per month');
+    expect(within(screen.getByTestId('compare-plan-pro')).getByRole('button', { name: 'Move to Pro' })).toBeInTheDocument();
+    expect(screen.queryByTestId('credit-packs')).toBeNull();
   });
 
   it.each([

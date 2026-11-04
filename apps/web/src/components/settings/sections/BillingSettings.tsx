@@ -138,7 +138,7 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
               subscribed && <PortalButton />
             )}
             {tier === 'legacy_pro' && subscribed && <PortalButton secondary />}
-            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'upgrade'); }}>
+            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'compare_plans'); }}>
               Compare plans
             </Button>
           </div>

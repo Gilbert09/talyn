@@ -310,6 +310,7 @@ const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
  * it pitches a limit the user is nowhere near.
  */
 export type UpgradeReason =
+  | 'compare_plans'
   | 'task_limit'
   | 'merge_queue_limit'
   | 'workflow_limit'
