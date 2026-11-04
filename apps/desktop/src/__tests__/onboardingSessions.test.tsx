@@ -3,7 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
 import { api, type CloudProviderInfo } from '../renderer/lib/api';
-import { trackEvent } from '../renderer/lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { OnboardingWizard } from '../renderer/components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
@@ -28,7 +28,7 @@ jest.mock('../renderer/lib/api', () => ({
     ws: { on: jest.fn().mockReturnValue(() => {}) },
   },
 }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/localWorkbench', () => ({ createLocalWorkbench: jest.fn() }));
 
 const repos = [
@@ -213,6 +213,10 @@ it('keeps onboarding open after failure and lets the user retry', async () => {
   enterPrompt();
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not start this session.');
+  expect(captureAnalyticsException).toHaveBeenCalledWith(
+    expect.any(Error),
+    expect.objectContaining({ operation: 'create_session' }),
+  );
   expect(useWorkspaceStore.getState().onboardingComplete).toBe(false);
   expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
   expect(trackEvent).not.toHaveBeenCalledWith('first_session_created', expect.anything());

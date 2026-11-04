@@ -4,7 +4,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
 import { api, type CloudProviderInfo } from '../lib/api';
-import { trackEvent } from '../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import { OnboardingWizard } from '../components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../components/layout/SidebarWorkbenchList';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -29,7 +29,7 @@ vi.mock('../lib/api', () => ({
     ws: { on: vi.fn().mockReturnValue(() => {}) },
   },
 }));
-vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn() }));
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 
 const repos = [
   { id: 'r1', workspaceId: 'ws1', owner: 'acme', repo: 'app', fullName: 'acme/app' },
@@ -213,6 +213,10 @@ it('keeps onboarding open after failure and lets the user retry', async () => {
   enterPrompt();
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not start this session.');
+  expect(captureAnalyticsException).toHaveBeenCalledWith(
+    expect.any(Error),
+    expect.objectContaining({ operation: 'create_session' }),
+  );
   expect(useWorkspaceStore.getState().onboardingComplete).toBe(false);
   expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
   expect(trackEvent).not.toHaveBeenCalledWith('first_session_created', expect.anything());
