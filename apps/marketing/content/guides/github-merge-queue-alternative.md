@@ -1,6 +1,6 @@
 ---
 title: "Talyn vs GitHub's merge queue"
-description: "An honest comparison. GitHub's merge queue is very good and most people searching for an alternative are not eligible for it — here is how the two actually differ, and when you should use theirs instead."
+description: "An honest comparison. GitHub's merge queue is very good and most people searching for an alternative are not eligible for it: here is how the two actually differ, and when you should use theirs instead."
 navLabel: "Talyn vs GitHub merge queue"
 updated: "2026-09-21"
 related: ["keep-pr-up-to-date", "claude-code-pull-requests"]
@@ -28,7 +28,7 @@ not a feature you have. If your repositories live under your personal account
 rather than an organisation, likewise. No amount of configuration changes that.
 
 There is a second gate even when you are eligible: enabling it requires
-**repository administrator** rights, because it is a branch protection setting —
+**repository administrator** rights, because it is a branch protection setting,
 *"Repository administrators can require a merge queue by enabling the branch
 protection setting 'Require merge queue'"*. ([GitHub Docs][docs]) If you are a
 contributor rather than an admin on the repo you work in, it is not yours to
@@ -39,8 +39,8 @@ turn on.
 Genuinely well, and it is worth understanding because it is the thing a
 simpler tool gives up.
 
-When a pull request enters the queue, GitHub builds a temporary branch —
-prefixed `gh-readonly-queue/{base_branch}` — containing the latest base branch
+When a pull request enters the queue, GitHub builds a temporary branch (
+prefixed `gh-readonly-queue/{base_branch}`) containing the latest base branch
 *plus the changes from every pull request ahead of it in the queue*. CI runs
 against that combination. ([GitHub Docs][docs])
 
@@ -52,13 +52,13 @@ either lands is the only way to find that without merging first and apologising
 after.
 
 It also batches, so a queue of ten pull requests does not cost ten sequential CI
-runs. At high volume that efficiency is the whole point — it is how GitHub
+runs. At high volume that efficiency is the whole point: it is how GitHub
 themselves ship.
 
 ## Where it stops
 
 One behaviour defines the boundary: **when a pull request in the queue fails its
-checks, GitHub removes it.** The documentation is direct about this — the queue
+checks, GitHub removes it.** The documentation is direct about this: the queue
 "automatically removes pull request #1 from the merge queue" and rebuilds the
 temporary branch without it. ([GitHub Docs][docs])
 
@@ -75,14 +75,14 @@ Talyn's merge queue is a different shape, aimed at a different problem.
 
 **It needs no administrator, no organisation and no plan.** It merges through
 GitHub's ordinary pull request merge API as you (or as the Talyn GitHub App), so
-it works on any repository you can already push to — personal account, private
+it works on any repository you can already push to: personal account, private
 repo, free plan.
 
 **It fixes instead of evicting.** A queued pull request that goes red, conflicts,
 or falls behind gets a coding agent dispatched at it, which pushes the fix to the
 existing branch. If the base branch has merely moved on with no conflict, that is
-one API call rather than a paid agent run — GitHub's own server-side "Update
-branch" — and then it waits for CI to re-run.
+one API call rather than a paid agent run (GitHub's own server-side "Update
+branch") and then it waits for CI to re-run.
 
 **It gives up on evidence, not on a timer.** After each fix run it records a
 signature of what is still blocking the PR, including *which* checks are failing.
@@ -100,7 +100,7 @@ Being straight about this is the only way the rest of the page is worth reading.
 **No speculative batch testing.** This is the real gap. Talyn updates the actual
 branch and waits for that pull request's own CI, in order. It never builds a
 trial branch combining several pull requests, which means at volume it costs more
-CI than GitHub's approach — and it means the "individually fine, broken together"
+CI than GitHub's approach, and it means the "individually fine, broken together"
 case is caught one merge later than GitHub would catch it, rather than before
 anything lands.
 
@@ -113,21 +113,21 @@ conservative) and merging everything the moment it is individually clean
 
 **It cannot bypass branch protection.** It merges through GitHub's own API, so
 every rule you have configured still applies. If a ruleset excludes the App,
-Talyn is refused and says so rather than finding a way around — and a fix run
+Talyn is refused and says so rather than finding a way around, and a fix run
 cannot grant merge permission it does not have.
 
 ## If you already have GitHub's merge queue
 
 They are not mutually exclusive, and Talyn does not fight it.
 
-When the base branch is governed by an external merge gate, Talyn detects it —
-from the branch rules, or by learning from a refused merge — and stops trying to
+When the base branch is governed by an external merge gate, Talyn detects it (
+from the branch rules, or by learning from a refused merge) and stops trying to
 merge directly. It arms GitHub's auto-merge instead, which is how a pull request
 is handed to GitHub's queue, and where no such door exists it says plainly that
 the PR has to be merged through that system rather than retrying forever.
 
-The division of labour in that setup: Talyn takes the pull request *to* green —
-fix runs, branch updates, re-running checks — then hands it over, and picks it
+The division of labour in that setup: Talyn takes the pull request *to* green (
+fix runs, branch updates, re-running checks) then hands it over, and picks it
 back up if the queue sends it back.
 
 ## So which one
@@ -140,7 +140,7 @@ plan.
 **Talyn is for a different situation**: private repos outside Enterprise Cloud,
 personal-account repositories, contributors who are not repo admins, and anybody
 whose pull requests are generated faster than they can babysit them. The
-distinguishing feature is not the queue mechanics — it is that a failure gets an
+distinguishing feature is not the queue mechanics: it is that a failure gets an
 agent sent at it rather than being handed back.
 
 Queued pull requests are not limited. Fix runs use the box-hours in your plan: 10 a month on the free plan, 200 on Pro.

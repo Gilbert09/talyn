@@ -1,6 +1,6 @@
 ---
 title: "Fixing failing GitHub Actions with an AI agent"
-description: "What it actually takes to get a red workflow back to green automatically — where the failure signal comes from, why re-running the job is the wrong reflex, and the four ways an agent gets this wrong."
+description: "What it actually takes to get a red workflow back to green automatically: where the failure signal comes from, why re-running the job is the wrong reflex, and the four ways an agent gets this wrong."
 navLabel: "Fix failing GitHub Actions"
 updated: "2026-09-21"
 related: ["claude-code-pull-requests", "keep-pr-up-to-date"]
@@ -12,7 +12,7 @@ two-line fix in a file you were not thinking about. Twenty minutes, most of it
 spent getting to the information rather than acting on it.
 
 That loop is worth automating, and most attempts at automating it fail in the
-same few ways. This page is about the mechanism — what the failure signal
+same few ways. This page is about the mechanism: what the failure signal
 actually is, what an agent needs in order to act on it, and the specific
 mistakes that make an automated fix worse than no fix.
 
@@ -21,8 +21,8 @@ mistakes that make an automated fix worse than no fix.
 GitHub does not have one "CI status". It has two related APIs and it matters
 which one you are reading.
 
-**Check runs** are the modern one. A GitHub App — including GitHub Actions
-itself — creates a check run against a commit SHA, updates it while the job
+**Check runs** are the modern one. A GitHub App (including GitHub Actions
+itself) creates a check run against a commit SHA, updates it while the job
 executes, and closes it with a `conclusion`: `success`, `failure`,
 `cancelled`, `timed_out`, `action_required`, `neutral`, or `skipped`. Several
 check runs group into a **check suite**, one per app per commit.
@@ -36,12 +36,12 @@ Two consequences fall out of that, and both bite naive implementations:
 **Status is attached to a commit, not to a pull request.** A PR "being red" is
 shorthand for "the check runs against the current head commit include a
 failure". Push a new commit and you have a new head with no checks at all
-yet — not green, not red, *absent*. Any automation that treats missing checks as
+yet: not green, not red, *absent*. Any automation that treats missing checks as
 passing will merge things it should not.
 
 **The events arrive continuously and out of order.** A `check_run` webhook fires
 on `created`, on `rerequested`, and on `completed`. A busy repository emits
-these constantly — dozens per commit across a matrix — and they are the firehose
+these constantly (dozens per commit across a matrix) and they are the firehose
 in any PR-tracking system. If you are polling the REST API instead, you are both
 slower and burning rate limit for the privilege.
 
@@ -68,14 +68,14 @@ agent, because navigation is free for something that can grep a log.
 Four things, and missing any one of them produces a confident wrong answer.
 
 **1. The failing job's own log, for the current head.** Not a summary, not a
-status badge, and emphatically not a comment somebody left on the PR earlier —
+status badge, and emphatically not a comment somebody left on the PR earlier,
 including a comment the agent itself wrote on a previous run. CI configuration
 moves. A verdict that was correct on Tuesday can be wrong on Thursday, and an
 agent that trusts its own stale note will cheerfully re-assert a fixed problem.
 Re-derive from the live log, every time.
 
 **2. The workflow definition.** The log tells you what failed; the workflow file
-tells you what was supposed to happen — which runner, which Node version, which
+tells you what was supposed to happen: which runner, which Node version, which
 services, what was cached. A surprising share of CI failures are environmental
 and are invisible from the log alone.
 
@@ -102,7 +102,7 @@ a file the PR touches, it is the PR's to fix.
 
 **Treating a flake as a pass.** A test fails, the agent re-runs it, it passes,
 the agent moves on. Re-running once to *confirm* flakiness is reasonable. Filing
-it as fixed is not — the correct outcome is a note on the PR saying the test is
+it as fixed is not: the correct outcome is a note on the PR saying the test is
 flaky, and an attempt at the root cause.
 
 **Bypassing the check.** `--no-verify`, skipping a required check, marking
@@ -127,7 +127,7 @@ The instructions the agent gets are opinionated about all four failure modes
 above: read the failing job's own log for the current head and treat earlier
 status comments as not-evidence; prove any "pre-existing" claim against that log
 before standing down; confirm a flake by re-running once but still attempt the
-root cause and note it on the PR; never bypass a check — no `--no-verify`, no
+root cause and note it on the PR; never bypass a check: no `--no-verify`, no
 skipping required checks. The fix is published as a commit on the existing
 branch, and you watch the whole thing stream live rather than waiting for a
 verdict.
@@ -136,7 +136,7 @@ Two things worth knowing. The prompt is a workspace setting, so if your repo has
 conventions the default does not know about, you edit it rather than working
 around it. And agents run on the Claude or ChatGPT subscription you already pay
 for, inside a per-task virtual machine where your credentials are attached from
-outside the sandbox — the machine running agent-generated code never holds your
+outside the sandbox: the machine running agent-generated code never holds your
 tokens, and it is destroyed when the task ends.
 
 If you would rather not press the button each time, a **workflow** can do it on

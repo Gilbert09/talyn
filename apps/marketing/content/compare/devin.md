@@ -4,7 +4,7 @@ description: "Devin is an autonomous engineer you assign work to. Talyn is missi
 competitor: "Devin"
 category: "Cloud coding agents"
 navLabel: "vs Devin"
-verdict: "You want to hand over whole tasks — a ticket, a migration, a feature — and have something go away and come back with a pull request. That is what Devin is for, and Talyn does not try to be it."
+verdict: "You want to hand over whole tasks (a ticket, a migration, a feature) and have something go away and come back with a pull request. That is what Devin is for, and Talyn does not try to be it."
 updated: "2026-09-28"
 sources:
   - label: "Devin pricing"
@@ -46,8 +46,8 @@ you are paying per unit of work at API rates.
 
 ## What Talyn does
 
-Talyn assumes the code got written — possibly by Devin, possibly by Claude
-Code, possibly by you — and that the pull request is now sitting there.
+Talyn assumes the code got written (possibly by Devin, possibly by Claude
+Code, possibly by you) and that the pull request is now sitting there.
 
 - **One list of every pull request you have open**, across every repository you
   connect, with the blocked ones pulled to the front.
@@ -69,7 +69,7 @@ Devin sells you inference. The allowance refreshes, and past it you pay API
 rates for the work.
 
 Talyn sells you the control surface and nothing else. Every run executes on the
-**Claude Pro/Max or ChatGPT Plus/Pro subscription you already pay for** — you
+**Claude Pro/Max or ChatGPT Plus/Pro subscription you already pay for**, you
 sign in with Claude or with ChatGPT, and there is no API key and no metered
 token bill from us. Talyn itself is free with 10 box-hours a month, or $40/month
 for 200 box-hours. You pay us for the machines, not the model.
@@ -85,8 +85,8 @@ subscription and watch it sit idle most of the day.
 ## What Talyn does not do
 
 - **It is not an autonomous engineer.** There is no "here is a ticket, go build
-  it" mode aimed at a whole feature. Loops come closest — a scheduled prompt
-  that opens a pull request — but they are a recurring chore, not a project.
+  it" mode aimed at a whole feature. Loops come closest: a scheduled prompt
+  that opens a pull request, but they are a recurring chore, not a project.
 - **No IDE, no CLI, no desktop coding surface.** Talyn is a pull request
   dashboard, not a place you write code.
 - **No agent memory of your organisation** in the way Devin markets it.
@@ -98,7 +98,7 @@ subscription and watch it sit idle most of the day.
 ## What Devin does not do
 
 Watch the pull request after it opens one. If CI goes red an hour later, if
-main moves and the branch conflicts, if a reviewer asks for something — that is
+main moves and the branch conflicts, if a reviewer asks for something, that is
 back to you, and it is the exact stretch Talyn exists for.
 
 It also has no concept of *your* pull requests as a set. There is no list of
@@ -111,7 +111,7 @@ opened it or not.
 This is a genuinely reasonable setup and worth saying plainly: Devin writes the
 change and opens the pull request, Talyn watches it, fixes it when it drifts,
 and merges it when it is green. Talyn does not care which agent opened a pull
-request — it reads GitHub, and a pull request is a pull request.
+request: it reads GitHub, and a pull request is a pull request.
 
 ## Which one
 

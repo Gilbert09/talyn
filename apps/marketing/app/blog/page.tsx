@@ -17,7 +17,7 @@ export function generateMetadata(): Metadata {
   return {
     title: "Writing",
     description:
-      "Engineering write-ups from building Talyn — running agents against real credentials, scheduling on disposable infrastructure, and the failures that look like successes.",
+      "Engineering write-ups from building Talyn: running agents against real credentials, scheduling on disposable infrastructure, and the failures that look like successes.",
     alternates: { canonical: "/blog" },
   };
 }

@@ -4,7 +4,7 @@ description: "Mergify is a mature merge queue with rule-based automation and CI 
 competitor: "Mergify"
 category: "Merge queues"
 navLabel: "vs Mergify"
-verdict: "You need a battle-tested queue with speculative batching, partition rules and CI failure analytics across a busy repository with many contributors — the queue itself is the product you are shopping for, and you want the mature one."
+verdict: "You need a battle-tested queue with speculative batching, partition rules and CI failure analytics across a busy repository with many contributors: the queue itself is the product you are shopping for, and you want the mature one."
 updated: "2026-09-28"
 sources:
   - label: "Mergify pricing"
@@ -31,10 +31,10 @@ Those are different jobs and it is worth being clear about which one you have.
 
 As of September 2026, from its own site and pricing page:
 
-- **Merge Queue** — orders pull requests, tests them against the base, and
+- **Merge Queue**: orders pull requests, tests them against the base, and
   handles the batching and ordering that a high-traffic repository needs.
-- **Merge Protections** — rules about what may merge.
-- **CI Insights** and **Test Insights** — analytics over your CI runs and test
+- **Merge Protections**: rules about what may merge.
+- **CI Insights** and **Test Insights**: analytics over your CI runs and test
   results, including flakiness.
 - Rule-based automation over pull requests in general, not only merging.
 
@@ -58,13 +58,13 @@ pull request and hand it back to you; Talyn's is to have a go at it.
 
 **Keep-mergeable runs outside the queue too.** Flag a pull request and a
 watcher sits on it: the moment it falls behind, conflicts, or goes red, the fix
-dispatches — before it ever reaches the front of a queue. That is the part that
+dispatches, before it ever reaches the front of a queue. That is the part that
 happens overnight.
 
 **It gives up on evidence, not on a timer.** The queue records a signature of
 what is currently blocking an entry. Try a fix, get the same blocker back
 unchanged, and that attempt achieved nothing, so it parks. Get a *different*
-blocker and that is progress — the first thing got fixed — so it keeps going.
+blocker and that is progress (the first thing got fixed), so it keeps going.
 The unit is "did anything change", not "how many attempts have we had".
 
 **It is priced by box-hours, not per contributor.** Free with 10 box-hours a
@@ -99,8 +99,8 @@ Both products let you write rules. Mergify's are configuration in your
 repository, expressed as conditions and actions, and they are more powerful
 than ours for the merge-adjacent cases.
 
-Talyn's workflows live in the app rather than in a committed file — no YAML, no
-pull request to change a rule — and their distinguishing action is not a label
+Talyn's workflows live in the app rather than in a committed file (no YAML, no
+pull request to change a rule) and their distinguishing action is not a label
 or a comment but *send a coding agent*. A rule that says "when checks fail on a
 dependency bump, fix it" is not something a rule engine without an agent behind
 it can express.
@@ -113,6 +113,6 @@ latency, or a team that wants CI analytics alongside. Its free tier covers five
 contributors, which for a small team is most of the value at no cost.
 
 **Use Talyn if** your pull requests are not stuck behind each other, they are
-stuck behind *you* — a conflict nobody has resolved, a test nobody has looked
+stuck behind *you*: a conflict nobody has resolved, a test nobody has looked
 at, a branch that went stale while you were doing something else. A queue that
 ejects those hands them straight back. Talyn's sends something to fix them.

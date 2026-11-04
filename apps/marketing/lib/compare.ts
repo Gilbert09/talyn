@@ -114,11 +114,11 @@ function readComparePage(fileName: string): ComparePage {
     throw new Error(`content/compare/${fileName}: missing \`competitor\``);
   if (!verdict)
     throw new Error(
-      `content/compare/${fileName}: missing \`verdict\` — every comparison has to say when to pick theirs`
+      `content/compare/${fileName}: missing \`verdict\`: every comparison has to say when to pick theirs`
     );
   if (sources.length === 0)
     throw new Error(
-      `content/compare/${fileName}: no \`sources\` — every claim about somebody else's product needs one`
+      `content/compare/${fileName}: no \`sources\`: every claim about somebody else's product needs one`
     );
   if (!ISO_DATE.test(updated))
     throw new Error(

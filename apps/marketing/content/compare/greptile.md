@@ -4,12 +4,12 @@ description: "Greptile reviews a pull request against a graph of your whole code
 competitor: "Greptile"
 category: "AI code review"
 navLabel: "vs Greptile"
-verdict: "The reviews you need are the ones only whole-codebase context can catch — a change that quietly breaks a caller three directories away — and you want that flagged inline, on the line, where the rest of your team will see it."
+verdict: "The reviews you need are the ones only whole-codebase context can catch (a change that quietly breaks a caller three directories away) and you want that flagged inline, on the line, where the rest of your team will see it."
 updated: "2026-09-28"
 sources:
   - label: "Greptile pricing"
     url: "https://www.greptile.com/pricing"
-  - label: "Greptile — AI code review"
+  - label: "Greptile: AI code review"
     url: "https://www.greptile.com/"
 related: ["coderabbit", "graphite"]
 relatedFeatures: ["code-review", "fix-pull-requests"]
@@ -32,8 +32,8 @@ tool does with a finding once it has one.
 
 As of September 2026, from its own site and pricing page:
 
-- Builds a graph of the codebase — files, functions, classes, directories and
-  their relationships — and reviews a pull request against it, tracing which
+- Builds a graph of the codebase (files, functions, classes, directories and
+  their relationships) and reviews a pull request against it, tracing which
   dependencies a change affects.
 - Posts a **pull request summary** and **inline comments** tied to specific
   lines, with a **confidence score** on each finding.
@@ -53,7 +53,7 @@ get free or discounted access.
 **On the confidence problem.** Both tools know that a reviewer which surfaces
 everything it notices is useless. Greptile's answer is to score each finding
 and show you the score. Talyn's is to run a separate judging pass whose job is
-to reject, and to only show you what it kept — with the reason it kept or
+to reject, and to only show you what it kept, with the reason it kept or
 dropped each one recorded.
 
 A score hands the filtering decision back to you, which is honest and puts the
@@ -61,7 +61,7 @@ work in your lap. A judge makes the decision and has to be right. Ours keeps a
 minority of candidates; on the first real review it ran, one of six.
 
 **On where it goes.** Greptile comments on the pull request. Talyn does not
-write to GitHub at all during a review — no comments, no approval, no
+write to GitHub at all during a review: no comments, no approval, no
 requested changes, enforced in the reviewing agent's own system prompt. The
 findings live in the app, grouped by severity, each naming which of the
 reviewers raised it.
@@ -103,8 +103,8 @@ in order the moment it is ready.
 
 ## Which one
 
-**Use Greptile if** the reviews that matter to you are cross-cutting — the
-change that is fine locally and breaks a caller elsewhere — and you want that
+**Use Greptile if** the reviews that matter to you are cross-cutting (the
+change that is fine locally and breaks a caller elsewhere) and you want that
 raised inline with a confidence score, in front of whoever else is reading.
 Its indexing approach is built for exactly that and Talyn's is not.
 

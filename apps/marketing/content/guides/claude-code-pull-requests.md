@@ -11,8 +11,8 @@ superpower. By the end of the week you have eleven open pull requests, four of
 them red, two with conflicts, and one you cannot remember asking for.
 
 The bottleneck moved. It used to be writing the change; now it is landing it.
-This page is about why that happens mechanically — it is not a discipline
-problem — and what actually fixes it.
+This page is about why that happens mechanically (it is not a discipline
+problem) and what actually fixes it.
 
 ## The mechanism: every merge invalidates every other branch
 
@@ -22,7 +22,7 @@ started.
 
 The moment the first pull request merges, `main` moves to `T₁`. Every other open
 branch is now based on a parent that is no longer the tip. Nothing broke, and
-nothing is wrong with those branches yet — but each one has entered a race it
+nothing is wrong with those branches yet, but each one has entered a race it
 did not know it was in.
 
 With **N** open agent branches, merging them all means **N** mutations of `main`,
@@ -39,7 +39,7 @@ different responses:
 still applies. Harmless until your branch protection requires branches be up to
 date, at which point it blocks the merge and needs a rebase and a full CI run.
 
-**Conflicted.** Two branches edited the same region. Someone — or something —
+**Conflicted.** Two branches edited the same region. Someone (or something)
 has to make a judgement about intent. This is the only one of the three that
 genuinely needs a brain.
 
@@ -74,20 +74,20 @@ lands.
 
 ## What actually works
 
-**Serialise the merges, not the work.** The agents can run in parallel — that is
+**Serialise the merges, not the work.** The agents can run in parallel. That is
 the point. Merging is where the order has to exist. Pick a sequence, land the
 first, rebase only the next one, land it, continue. Each branch pays for exactly
 one update, at the moment it is worth something.
 
-**Only touch what conflicts.** If two branches are genuinely independent — no
-overlapping files, no shared symbols — they do not need serialising against each
+**Only touch what conflicts.** If two branches are genuinely independent (no
+overlapping files, no shared symbols) they do not need serialising against each
 other at all, and forcing them into a single queue is throughput you have thrown
 away. GitHub's own merge queue batches for this reason; the lesson generalises.
 
 **Let the failures be fixed, not just reported.** This is where agent-generated
 PRs differ from human ones. A human whose PR goes red comes back to it. An agent
 finished its session, has no memory of the work, and will not be returning. If
-nothing fixes a red agent PR, it sits there until you do it yourself — and the
+nothing fixes a red agent PR, it sits there until you do it yourself, and the
 whole point was not to do it yourself.
 
 **Decide what you actually want merged.** Worth saying because volume makes this
@@ -99,7 +99,7 @@ and quite a lot if you keep it warm for a fortnight.
 
 Talyn puts every pull request across every connected repository in one list,
 sorted by what needs you, with check status, review state and merge state on
-each row — so the eleven are a list you can act on rather than eleven browser
+each row: so the eleven are a list you can act on rather than eleven browser
 tabs.
 
 For the rest:
@@ -121,5 +121,5 @@ which is roughly the point at which this stops being a manual problem.
 
 Worth being straight about the limits: Talyn cannot tell you whether a change
 was a good idea, and a semantically-broken merge still needs a test suite that
-would catch it. What it removes is the part that is pure tax — the rebasing, the
+would catch it. What it removes is the part that is pure tax: the rebasing, the
 re-running, the checking back.

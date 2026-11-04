@@ -34,14 +34,14 @@ export function PlatformNote({ className }: { className?: string }) {
 
   useEffect(() => {
     if (isMobileDevice()) {
-      setNote(<>Talyn is a desktop and browser app — open it in your browser here.</>);
+      setNote(<>Talyn is a desktop and browser app: open it in your browser here.</>);
       return;
     }
     const platform = detectPlatform();
     if (platform.key === "windows") {
       setNote(
         <>
-          Windows will show a SmartScreen warning on first install — choose{" "}
+          Windows will show a SmartScreen warning on first install: choose{" "}
           <strong className="font-medium text-ink-500">More info</strong> then{" "}
           <strong className="font-medium text-ink-500">Run anyway</strong>. We
           have not bought a signing certificate yet.
@@ -68,7 +68,7 @@ export function PlatformNote({ className }: { className?: string }) {
     }
     setNote(
       <>
-        AppImage — <code className="font-mono">chmod +x</code> it and run. Other
+        AppImage: <code className="font-mono">chmod +x</code> it and run. Other
         builds are on the{" "}
         <a
           href={RELEASES_URL}

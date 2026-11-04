@@ -11,7 +11,7 @@ Which file did you change. Which ticket is this. Which pull request did you
 open. The model knows, it says so in its final message, and the message is
 right there in the response body. So you read it out of the text.
 
-This is the bug. Not a mistake in how you parse the text — the decision to
+This is the bug. Not a mistake in how you parse the text: the decision to
 parse it at all.
 
 ## The failure
@@ -27,7 +27,7 @@ GitHub PR URL it found:
 const url = JSON.stringify(run).match(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/)?.[0]
 ```
 
-That ran for weeks. Then a scheduled job — the same prompt, every morning —
+That ran for weeks. Then a scheduled job (the same prompt, every morning)
 started filing its results against a pull request that had been merged the
 previous day.
 
@@ -71,13 +71,13 @@ const prUrl = run.output?.pr_url ?? run.sandbox?.prUrl ?? null
 ```
 
 No fallback to scraping. That was the part that took an argument to settle,
-because a fallback looks free — you only reach it when the structured field is
+because a fallback looks free: you only reach it when the structured field is
 missing, and surely a guess beats nothing?
 
 It does not. A missing link renders as nothing, and a person looking at a task
 with no PR attached can see that the link is missing and go and find it. A wrong
 link renders exactly like a right one. It reads as a fact, it is clickable, and
-the only way to discover it is wrong is to click it and recognise the contents —
+the only way to discover it is wrong is to click it and recognise the contents:
 which nobody does, because why would you check a link that says it is the answer.
 
 **Silence is a state your interface can express. A confident wrong answer is
@@ -87,7 +87,7 @@ not.**
 
 A language model's prose is a rendering of its state for a human reader. It is
 not a serialisation format, even when it looks like one, and it is least
-trustworthy exactly where it is most useful — when it is discussing the same
+trustworthy exactly where it is most useful, when it is discussing the same
 kind of entity you are trying to extract.
 
 So: if you need a fact from a model, give it somewhere to put the fact. A tool
@@ -96,7 +96,7 @@ nothing else may emit. Then read that place and only that place. If the fact
 is not there, you do not have it.
 
 The version of this we could not avoid is instructive. We needed agents to
-report a refusal — "a human has to approve this, I am standing down" — and
+report a refusal ("a human has to approve this, I am standing down") and
 neither platform has a field for that, because it is our concept and not theirs.
 So the agent emits a sentinel on the last line of its final message, we parse
 only the last non-empty line, and we require an exact prefix. An agent that

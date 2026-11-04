@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Payment complete",
-  description: "Payment complete — head back to Talyn.",
+  description: "Payment complete: head back to Talyn.",
   // Post-checkout landing only — never useful in search results.
   robots: { index: false, follow: false },
 };

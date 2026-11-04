@@ -22,7 +22,7 @@ GitHub answers this in two separate fields, and conflating them is the first
 mistake.
 
 **`mergeable`** is a three-state value: `MERGEABLE`, `CONFLICTING`, or
-`UNKNOWN`. It answers one question — does this diff still apply? — and nothing
+`UNKNOWN`. It answers one question (does this diff still apply?) and nothing
 else.
 
 **`mergeStateStatus`** is the fuller picture: `CLEAN`, `BEHIND`, `BLOCKED`,
@@ -39,7 +39,7 @@ responses:
 
 | State | What happened | What fixes it |
 |---|---|---|
-| Behind | Base moved, no conflict | One API call — merge base into head |
+| Behind | Base moved, no conflict | One API call: merge base into head |
 | Conflicting | Two branches touched the same lines | Judgement |
 | Required check failing | CI is red | A code change |
 | Changes requested | A reviewer asked for something | A code change, or a reply |
@@ -50,21 +50,21 @@ expensive.
 ## Two traps in the API
 
 **`UNKNOWN` is not a state, it is a pending computation.** GitHub calculates
-mergeability lazily. The first request after anything that invalidates it — a
-push to the head, or a push to the *base* — answers `UNKNOWN` and starts a
+mergeability lazily. The first request after anything that invalidates it: a
+push to the head, or a push to the *base*, answers `UNKNOWN` and starts a
 background job. The answer is usually ready a second or two later.
 
 Any automation that reads `UNKNOWN` as "not mergeable" is acting on a value
 GitHub has not computed yet. The fix is small and has to be deliberate: re-ask
 after a short backoff, a couple of times, and if it is still `UNKNOWN`, keep it
-as unknown rather than guessing. Do that *off* the hot path — resolving it
+as unknown rather than guessing. Do that *off* the hot path: resolving it
 inline turns every webhook into a blocking retry loop.
 
 **`BLOCKED` is ambiguous, and dangerously so.** GitHub reports
 `mergeStateStatus: BLOCKED` both when a required check has *failed* and when
 required checks simply have not *finished*. Those are opposite situations and
 you cannot tell them apart from that field alone. You need the check
-breakdown — specifically how many are still in progress — to know whether you
+breakdown, specifically how many are still in progress, to know whether you
 are looking at a failure or at a pipeline that is merely still running.
 
 Get this wrong and your automation fires an expensive fix run three seconds
@@ -76,20 +76,20 @@ Say the watcher fires a fix run, the run finishes, and the PR is still not
 mergeable. Do you try again?
 
 The obvious design is a counter: allow three attempts, then stop. It is wrong in
-both directions — three is too many when the agent is stuck on something it
+both directions: three is too many when the agent is stuck on something it
 cannot move, and too few when each attempt is making real progress through a
 stack of independent failures.
 
 The better question is not *how many times have we tried* but **did the last
 attempt change anything**. Record a signature of what is blocking the PR after
 each run: the blocking reason, the mergeable state, the review decision, the
-number of failing checks and — critically — *which* checks are failing. A
+number of failing checks and (critically) *which* checks are failing. A
 signature not seen before on this commit means the attempt moved the problem, so
 continue. A signature already recorded means the attempt failed at exactly what
 it failed at last time, so stop.
 
 That "which checks" part is load-bearing. A count alone reads four failing
-before and four failing after — identical — whether the run fixed nothing or
+before and four failing after, identical, whether the run fixed nothing or
 fixed one check and uncovered another. Calling the second case "no progress" is
 precisely the judgement a retry budget gets wrong.
 
@@ -103,7 +103,7 @@ has not changed at all.
 The case people miss: sometimes the agent is right to stop. A merge gate only a
 human can clear, a credential the sandbox does not have, a product decision
 nobody delegated. That is a *refusal*, and it needs recording differently from a
-crash — if it lands as a generic failure it is indistinguishable from the agent
+crash: if it lands as a generic failure it is indistinguishable from the agent
 falling over, and you will debug the wrong thing.
 
 It also must not spend an attempt. An attempt budget measures "have we tried
@@ -119,7 +119,7 @@ moved since the agent said it was stuck.
 
 Flag a pull request **keep mergeable** and Talyn watches it on a one-minute
 loop. When it needs work, Talyn dispatches a coding agent to fix it and push to
-the existing branch — no second pull request.
+the existing branch: no second pull request.
 
 What counts as needing work, precisely: merge conflicts, a failing **required**
 check, changes requested by a reviewer, or unresolved review threads left by
@@ -129,7 +129,7 @@ because it would not have blocked the merge either.
 One thing worth being straight about, given this page's URL: **"behind the base
 branch" is deliberately not on that list.** Being behind is a one-API-call fix,
 not agent work, so Talyn handles it in the merge queue rather than in this
-watcher — a PR you have *queued* gets its branch updated server-side and waits
+watcher: a PR you have *queued* gets its branch updated server-side and waits
 for CI to re-run; a PR you have merely flagged does not. If keeping up with
 `main` is the thing you actually want, the queue is the feature, not this one.
 
@@ -141,5 +141,5 @@ Claude or ChatGPT subscription you already pay for, with credentials attached
 from outside the sandbox.
 
 Flagging individual pull requests is free. Turning it on as the default for
-every new PR in a workspace is a Pro feature — and a workspace that
+every new PR in a workspace is a Pro feature, and a workspace that
 already had it on keeps it.

@@ -40,7 +40,7 @@ export default function TermsPage() {
       <p>
         You are responsible for the GitHub and cloud-agent accounts you connect,
         for keeping your credentials secure, and for all activity you authorize
-        Talyn to perform — including dispatching agent runs and queuing merges.
+        Talyn to perform, including dispatching agent runs and queuing merges.
         You must have the right to grant Talyn access to the repositories you
         connect.
       </p>
@@ -68,7 +68,7 @@ export default function TermsPage() {
       <p>
         Purchases are processed by our merchant of record,{" "}
         <a href="https://polar.sh">Polar</a> (Polar Software Inc.), which is the
-        seller of record for the transaction — your payment details are
+        seller of record for the transaction: your payment details are
         collected by Polar, not by us, and each purchase is also subject to
         Polar&apos;s own terms and privacy policy. Subscriptions{" "}
         <strong>renew automatically</strong> at the end of each billing period

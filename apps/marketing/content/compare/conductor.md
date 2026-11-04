@@ -33,7 +33,7 @@ As of September 2026, from its own site and pricing page:
 - Gives you one interface to watch their progress and then **review and merge
   their changes**.
 - **macOS**, with cloud workspaces on the paid tiers.
-- **Bring your own subscriptions and keys** — Conductor does not sell you
+- **Bring your own subscriptions and keys**: Conductor does not sell you
   inference.
 - **Pricing**: Free with local workspaces on your Mac, Pro at $50/month adding
   cloud workspace hours, multiplayer, an API and a mobile app, Teams at
@@ -56,8 +56,8 @@ open, sorted by what is blocking each one. You do not start from an agent; you
 start from the thing that is not merged.
 
 **It closes the loop after the pull request opens.** Fix the failing check.
-Resolve the conflict when main moves. Address the review comments. Then land it
-— a merge queue takes the ready ones in order and fixes the ones that break on
+Resolve the conflict when main moves. Address the review comments. Then land it:
+a merge queue takes the ready ones in order and fixes the ones that break on
 the way in.
 
 **Work that starts without you.** Workflows fire on pull request events, with
@@ -76,7 +76,7 @@ real and generous if you are happy running everything locally.
 ## What Talyn does not do
 
 - **No local agents and no local worktrees.** If you want the agent's working
-  tree on your own disk so you can poke at it, Talyn is the wrong shape —
+  tree on your own disk so you can poke at it, Talyn is the wrong shape,
   everything happens in a sandbox you do not have a shell on.
 - **No parallel-workspace view of several agents on one machine.**
 - **No Cursor as an agent.** Claude, Codex and PostHog Code.
@@ -99,7 +99,7 @@ The thing both apps have is a well-made desktop surface for watching agents
 work. If you have one of them you have that.
 
 What decides between them is whether your bottleneck is **producing changes**
-or **landing them**. Conductor is very good at the first — several agents
+or **landing them**. Conductor is very good at the first: several agents
 going at once, on your machine, on your subscription. Talyn is built for the
 second, and in particular for the part that happens when you are not there.
 
@@ -113,5 +113,5 @@ request.
 review it before it becomes a pull request.
 
 **Use Talyn if** the pull requests exist already and the problem is the two
-days they spend going stale — and you would like that fixed while you are
+days they spend going stale, and you would like that fixed while you are
 asleep.

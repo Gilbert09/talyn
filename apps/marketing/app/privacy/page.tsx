@@ -44,25 +44,25 @@ export default function PrivacyPage() {
         <li>
           <strong>Billing &amp; subscription data.</strong> If you subscribe to a
           paid plan, the purchase is handled by our merchant of record,{" "}
-          <a href="https://polar.sh">Polar</a> — Polar collects your name,
+          <a href="https://polar.sh">Polar</a>: Polar collects your name,
           email, billing address, and payment details (we never see your card).
           We store your plan, subscription status, renewal date, and order
           history, and we pass Polar an account identifier so your purchase
           links back to your Talyn account.
         </li>
         <li>
-          <strong>Usage &amp; device data.</strong> Standard analytics — pages
+          <strong>Usage &amp; device data.</strong> Standard analytics: pages
           viewed, clicks (such as &ldquo;Download&rdquo;), approximate location
-          derived from IP, browser and device type — collected via PostHog (see
+          derived from IP, browser and device type, collected via PostHog (see
           §4).
         </li>
         <li>
           <strong>Team enquiries.</strong> If you submit the team-pricing form
           on our <a href="/pricing">pricing page</a>, we collect the email
           address, team size, and any note you enter. It is recorded as an
-          analytics event in PostHog (§4) — we do not operate a separate
-          mailing list — and it is used to reply to you about team pricing and
-          nothing else. We do not add you to a newsletter, and we do not use it
+          analytics event in PostHog (§4), because we do not operate a
+          separate mailing list. It is used to reply to you about team pricing
+          and nothing else. We do not add you to a newsletter, and we do not use it
           to identify you across the rest of the Service.
         </li>
       </ul>
@@ -97,14 +97,14 @@ export default function PrivacyPage() {
       <h2>5. How we share information</h2>
       <p>
         Agent runs execute in your chosen provider&apos;s cloud under your own
-        account — Talyn orchestrates them, it does not store or train on your
+        account: Talyn orchestrates them, it does not store or train on your
         source code. We share data only with the services you connect or that we
         rely on to run the Service: <strong>GitHub</strong> (repositories and
         PRs), your <strong>cloud-agent provider</strong>, <strong>Polar</strong>{" "}
         (payments &amp; subscriptions, as merchant of record),{" "}
         <strong>Supabase</strong> (authentication and database),{" "}
         <strong>Railway</strong> (backend hosting), <strong>PostHog</strong>{" "}
-        (analytics), and <strong>Vercel</strong> (website hosting) — or where
+        (analytics), and <strong>Vercel</strong> (website hosting), or where
         required by law. Your use of those services is also governed by their own
         privacy policies. We do not sell or rent personal data.
       </p>
