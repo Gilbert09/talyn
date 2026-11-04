@@ -68,8 +68,9 @@ function rowKnowsBetter(row: Pick<WorkbenchRow, 'diffStat'>, lists: WorkbenchCha
 }
 
 function staleOf(row: WorkbenchRow, meta: ChangesMeta, lists: WorkbenchChanges): WorkbenchChanges['stale'] {
-  if (meta.listNewer || rowKnowsBetter(row, lists)) return 'list_newer';
-  return row.sandboxId && row.sandboxId !== meta.sandboxId ? 'sandbox_replaced' : undefined;
+  // A replaced box says more than a newer list: the copy is from another box.
+  if (row.sandboxId && row.sandboxId !== meta.sandboxId) return 'sandbox_replaced';
+  return meta.listNewer || rowKnowsBetter(row, lists) ? 'list_newer' : undefined;
 }
 
 /** The stored changes list, newest first: the full copy, else the list-only copy. */
