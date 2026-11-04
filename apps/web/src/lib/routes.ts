@@ -14,6 +14,9 @@ export const PANEL_PATHS = {
   settings: '/settings',
 } as const satisfies Record<ActivePanel, string>;
 
+/** Insights is a page, not a panel: it has no `activePanel` of its own. */
+export const INSIGHTS_PATH = '/insights';
+
 export const PATH_TO_PANEL: Record<string, ActivePanel> = Object.fromEntries(
   Object.entries(PANEL_PATHS).map(([panel, path]) => [path, panel as ActivePanel])
 );
@@ -33,6 +36,8 @@ export function pathForRoute(route: Route): string {
       return `/settings/${route.section}`;
     case 'mcp_servers':
       return PANEL_PATHS.mcp_servers;
+    case 'insights':
+      return INSIGHTS_PATH;
   }
 }
 
@@ -42,6 +47,7 @@ export function routeForPath(pathname: string): Route | null {
   if (path === '/history') return { view: 'history' };
   if (path === '/settings') return { view: 'settings', section: 'workspace' };
   if (path === '/mcp-servers') return { view: 'mcp_servers' };
+  if (path === INSIGHTS_PATH) return { view: 'insights' };
   const session = /^\/s\/([^/]+)$/.exec(path);
   if (session) {
     try {

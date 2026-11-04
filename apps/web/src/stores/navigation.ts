@@ -12,6 +12,7 @@ export type Route =
   | { view: 'workbench'; id: string }
   | { view: 'history' }
   | { view: 'mcp_servers' }
+  | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
   | { view: 'automations'; tab: AutomationTab }
   | { view: 'settings'; section: SettingsSection };
@@ -47,6 +48,7 @@ export function isRoute(value: unknown): value is Route {
     case 'home':
     case 'history':
     case 'mcp_servers':
+    case 'insights':
       return true;
     case 'workbench':
       return typeof r.id === 'string' && r.id.length > 0;

@@ -104,6 +104,8 @@ export function RoutedView() {
       return <AutomationsView tab={route.tab} />;
     case 'mcp_servers':
       return mcpServersOffered(features) ? <McpServersPanel /> : null;
+    case 'insights':
+      return <InsightsView />;
     case 'settings':
       return <SettingsPanel />;
     default:
@@ -133,6 +135,8 @@ const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m)
 const WorkbenchPage = lazyWithReload(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
 
 const SettingsPanel = lazyWithReload(() => import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel })));
+
+const InsightsView = lazyWithReload(() => import('../../pages/InsightsView').then((m) => ({ default: m.InsightsView })));
 
 const McpServersPanel = lazyWithReload(() =>
   import('../panels/mcpServers/McpServersPanel').then((m) => ({ default: m.McpServersPanel }))
