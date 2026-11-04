@@ -14,6 +14,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      # Run every OS to the end: one red OS must not hide the others.
+      fail-fast: false
       matrix:
         # windows-2022: see publish.yml (node-gyp cannot find Visual Studio 18).
         os: [macos-latest, windows-2022, ubuntu-latest]
