@@ -89,6 +89,7 @@ import {
   liveWorkbenchNames,
   moveProvisionToSandboxId,
   provisioningWorkbenchIds,
+  recordBootMetric,
   recordProvisionedSandbox,
   requeueDroppedMessages,
   resetFailedChats,
@@ -304,11 +305,14 @@ async function createWaitingForCapacity(
     noted = true;
     row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
     recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${why}: waiting for a free sandbox`, false);
+    await recordBootMetric(row.id, 'capacity_wait_start', { why, sandboxId }).catch((err) =>
+      console.warn(`[workbench] recording the capacity wait of ${row.id} failed:`, err));
     console.warn(`[workbench] no free sandbox for ${row.id} (${why}); waiting`);
   };
   const superseded = () => new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
   const waited = () => (startedAt === null ? 0 : Date.now() - startedAt);
 
+  try {
   for (let attempt = 0; ;) {
     let created: CreatedWorkbenchSandbox;
     try {
@@ -380,6 +384,10 @@ async function createWaitingForCapacity(
     ownSandboxId = nextId;
     sandboxId = nextId;
     await emitWorkbenchUpdated(await publicWorkbench(row));
+  }
+  } finally {
+    if (noted) await recordBootMetric(row.id, 'capacity_wait_end', { sandboxId, ms: waited() }).catch((err) =>
+      console.warn(`[workbench] recording the capacity wait end of ${row.id} failed:`, err));
   }
 }
 
@@ -693,7 +701,14 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
 
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
-    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
+    if (isThread(row)) {
+      await writeBoxStart(row.id, { ...boxStartRecord(sandboxId, {
+        cause, requestedAtMs: createStartedAt, capacityWaitMs: waited.waitMs,
+        boxReadyMs, layer: boxLayer.layer,
+      }), totalMs: boxReadyMs }).catch((err: unknown) =>
+        console.warn(`[workbench] keeping the start of ${sandboxId} failed:`, err));
+      return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
+    }
     void noteBoxImage(row, created.record, boxLayer);
     const startFacts: BoxTiming = {
       cause,

@@ -268,9 +268,9 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn' } = {},
+  opts: { origin?: 'talyn'; sentAt?: string } = {},
 ): Promise<{ queued: boolean }> {
-  const receivedAt = new Date().toISOString();
+  const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
@@ -569,6 +569,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
     talyn: {
       kind: 'user_message',
       messageId: message.id,
+      sentAt: message.queuedAt,
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),

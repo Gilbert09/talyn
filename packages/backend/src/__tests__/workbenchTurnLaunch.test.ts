@@ -133,6 +133,16 @@ describe('workbench turn launch', () => {
     } finally { release(); }
     await settled('idle');
     expect(agentRuns).toBe(1);
+    expect((await events()).filter((event) => event.subtype === 'boot_metric').map((event) => event.metric))
+      .toEqual(['wake_start', 'wake_end']);
+  });
+
+  it('stores the route receipt time with the user message', async () => {
+    const sentAt = '2026-11-04T09:00:00.000Z';
+    await sendMessage('chat', { text: 'go' }, { sentAt });
+    await settled('idle');
+    const user = (await events()).find((event) => (event.talyn as { kind?: string } | undefined)?.kind === 'user_message');
+    expect(user?.talyn).toMatchObject({ sentAt });
   });
 
   it.each(['credentials', 'attachments', 'instructions', 'skills'] as const)('propagates a fatal %s failure after other steps finish', async (step) => {

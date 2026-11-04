@@ -121,6 +121,11 @@ describe('a provision waits for a free sandbox', () => {
     expect(messages).toContain(WAITING_FOR_SANDBOX_MESSAGE);
     expect(messages.filter((m) => m === WAITING_FOR_SANDBOX_MESSAGE)).toHaveLength(1);
     expect(await failureEvents()).toEqual([]);
+    const metrics = (await listEvents('chat', 0, 50)).events.map(({ event }) => event)
+      .filter((event) => event.subtype === 'boot_metric');
+    expect(metrics.map((event) => event.metric)).toEqual(['capacity_wait_start', 'capacity_wait_end', 'box_created']);
+    expect(metrics[1].ms).toBeGreaterThanOrEqual(0);
+    expect(metrics[2]).toMatchObject({ cause: 'new', totalMs: expect.any(Number) });
     expect(await claims()).toEqual([]);
   });
 

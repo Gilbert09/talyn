@@ -51,6 +51,7 @@ export const chatRoutes: PublicRoute[] = [
     body: SendMessageBody,
     responses: { 202: { description: 'The message is accepted.', schema: MessageReceipt } },
     async handler({ params, body, token }) {
+      const sentAt = new Date().toISOString();
       const chat = await authorizedChat(token, params.id);
       refuseLocalRuntime(await authorizedSession(token, chat.workbenchId));
       if (chat.closedAt) throw new PublicApiError(409, 'chat_closed', 'This chat is closed.');
@@ -59,7 +60,7 @@ export const chatRoutes: PublicRoute[] = [
         ...(body.model !== undefined ? { model: body.model } : {}),
         ...(body.effort !== undefined ? { effort: body.effort as WorkbenchEffort } : {}),
         ...(body.plan_mode !== undefined ? { planMode: body.plan_mode } : {}),
-      });
+      }, { sentAt });
       return { status: 202, body: { object: 'message_receipt', chat_id: chat.id, queued } };
     },
   }),

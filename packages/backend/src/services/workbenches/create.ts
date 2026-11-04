@@ -85,7 +85,7 @@ export interface CreateWorkbenchServiceInput extends CreateWorkbenchInput {
   namingText?: string;
 }
 
-export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: ReadinessUser): Promise<Workbench> {
+export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: ReadinessUser, sentAt = new Date().toISOString()): Promise<Workbench> {
   const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
   if (body.runtime !== 'sandbox' && body.runtime !== 'local') throw refuse(400, 'runtime must be "sandbox" or "local"');
   if (body.agent !== 'claude' && body.agent !== 'codex') throw refuse(400, 'agent must be "claude" or "codex"');
@@ -98,7 +98,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   if (body.kind !== undefined && !WORKBENCH_KINDS.includes(body.kind)) {
     throw refuse(400, `kind must be one of: ${WORKBENCH_KINDS.join(', ')}`);
   }
-  if (body.kind === 'thread') return createThread(body, workspaceId, actor);
+  if (body.kind === 'thread') return createThread(body, workspaceId, actor, sentAt);
   if (body.fromSessionId !== undefined) throw refuse(400, 'fromSessionId is only for a thread.');
   const threadId = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
 
@@ -171,7 +171,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
     throw refuse(400, 'name must be lowercase letters, digits and hyphens.');
   }
   const prompt = typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt : null;
-  const firstMessage: WorkbenchQueuedMessage | null = prompt ? normaliseMessage({ text: prompt }) : null;
+  const firstMessage: WorkbenchQueuedMessage | null = prompt ? { ...normaliseMessage({ text: prompt }), queuedAt: sentAt } : null;
   const naming = typeof body.namingText === 'string' && body.namingText.trim() ? body.namingText : prompt;
 
   // The name is unique among live workbenches. It comes from the first
@@ -266,7 +266,7 @@ async function requireThread(threadId: unknown, workspaceId: string): Promise<st
  * plans work and starts sessions on repositories. With `fromSessionId`, the
  * session joins the thread and the first message recaps the session's chat.
  */
-async function createThread(body: CreateWorkbenchServiceInput, workspaceId: string, actor: ReadinessUser): Promise<Workbench> {
+async function createThread(body: CreateWorkbenchServiceInput, workspaceId: string, actor: ReadinessUser, sentAt: string): Promise<Workbench> {
   if (body.repositoryId !== undefined) throw refuse(400, 'A thread takes no repository.');
   if (body.branch !== undefined || body.baseBranch !== undefined || body.fromPullRequestId !== undefined) {
     throw refuse(400, 'A thread takes no branch or pull request.');
@@ -283,7 +283,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
   }
   const prompt = typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt : null;
   let naming = typeof body.namingText === 'string' && body.namingText.trim() ? body.namingText : prompt;
-  let firstMessage: WorkbenchQueuedMessage | null = prompt ? normaliseMessage({ text: prompt }) : null;
+  let firstMessage: WorkbenchQueuedMessage | null = prompt ? { ...normaliseMessage({ text: prompt }), queuedAt: sentAt } : null;
   let fromSession: WorkbenchRow | null = null;
   if (body.fromSessionId !== undefined) {
     fromSession = typeof body.fromSessionId === 'string' && body.fromSessionId ? await getWorkbench(body.fromSessionId) : null;
@@ -293,6 +293,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
     const recap = await sessionRecap(fromSession);
     firstMessage = {
       ...normaliseMessage({ text: continueAsThreadMessage(fromSession, recap, prompt) }),
+      queuedAt: sentAt,
       origin: 'talyn',
     };
     naming = fromSession.title || fromSession.name;

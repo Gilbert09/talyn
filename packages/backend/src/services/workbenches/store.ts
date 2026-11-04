@@ -1472,6 +1472,21 @@ export interface EventDraftInput {
   event: Record<string, unknown>;
 }
 
+/** Store a small session metric in its first chat. The transcript hides this system subtype. */
+export async function recordBootMetric(workbenchId: string, metric: string, fields: Record<string, unknown> = {}): Promise<void> {
+  const [chat] = await db().select({ id: chatsTable.id, turn: chatsTable.turnCount })
+    .from(chatsTable).where(eq(chatsTable.workbenchId, workbenchId))
+    .orderBy(asc(chatsTable.createdAt), asc(chatsTable.id)).limit(1);
+  if (!chat) return;
+  await appendEvents(chat.id, [{ turn: chat.turn, event: { type: 'system', subtype: 'boot_metric', metric, at: new Date().toISOString(), ...fields } }]);
+}
+
+export async function recordSandboxBootMetric(sandboxId: string, metric: string, fields: Record<string, unknown> = {}): Promise<void> {
+  const [row] = await db().select({ id: workbenchesTable.id }).from(workbenchesTable)
+    .where(eq(workbenchesTable.sandboxId, sandboxId)).limit(1);
+  if (row) await recordBootMetric(row.id, metric, { sandboxId, ...fields });
+}
+
 /**
  * Append events to a chat's transcript, assigning their `seq`.
  *

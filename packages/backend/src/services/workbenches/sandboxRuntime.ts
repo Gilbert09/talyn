@@ -69,7 +69,7 @@ import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import { recordSandboxWake } from './boxStart.js';
-import { getWorkbenchBySandboxId, type WorkbenchRow } from './store.js';
+import { getWorkbenchBySandboxId, recordSandboxBootMetric, type WorkbenchRow } from './store.js';
 
 /**
  * The sandbox runtime's plumbing: which fleet client, which sandbox, which
@@ -279,22 +279,26 @@ export function resumeOnce(
   if (!pending) {
     console.log(`[workbench] resuming ${from === 'storage' ? 'hibernated' : 'suspended'} sandbox ${sandboxId}`);
     const startedAt = Date.now();
-    const note = (ok: boolean, ms: number) =>
-      recordSandboxWake({ sandboxId, at: new Date(startedAt).toISOString(), ms, from, ok });
+    const started = recordSandboxBootMetric(sandboxId, 'wake_start', { at: new Date(startedAt).toISOString(), from })
+      .catch((err) => console.warn(`[workbench] recording the wake start of ${sandboxId} failed:`, err));
+    const note = async (ok: boolean, ms: number) => {
+      await started;
+      await recordSandboxWake({ sandboxId, at: new Date(startedAt).toISOString(), ms, from, ok });
+    };
     pending = resumeCredentials(credentials)
       .then((creds) => client.resumeSandbox(sandboxId, creds ? { credentials: creds } : {}))
       .then(
-        () => {
+        async () => {
           const ms = Date.now() - startedAt;
           console.log(`[workbench] resumed sandbox ${sandboxId} in ${ms} ms`);
           debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms, from } });
-          void note(true, ms);
+          await note(true, ms);
         },
-        (error: unknown) => {
+        async (error: unknown) => {
           const ms = Date.now() - startedAt;
           console.warn(`[workbench] resuming sandbox ${sandboxId} failed after ${ms} ms:`, error);
           debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms, from } });
-          void note(false, ms);
+          await note(false, ms);
           throw error;
         },
       )

@@ -17,7 +17,7 @@ import {
 import { getPoolDbClient } from '../../db/client.js';
 import { repositories, setupSteps, workbenches } from '../../db/schema.js';
 import type { FleetSandbox } from '../selfHosted/client.js';
-import type { WorkbenchRow } from './store.js';
+import { recordBootMetric, recordSandboxBootMetric, type WorkbenchRow } from './store.js';
 
 /**
  * "How this box started" in the Sandbox panel: the image, the start timeline,
@@ -30,7 +30,7 @@ import type { WorkbenchRow } from './store.js';
  * `recordBoxSetupResults` already keeps, read as a few numbers in SQL.
  */
 
-export const BOX_START_SETTINGS_KEYS = ['boxStart', 'lastWake'] as const;
+export const BOX_START_SETTINGS_KEYS = ['boxStart', 'boxStarts', 'lastWake', 'wakes'] as const;
 
 export type BoxStartCause = 'new' | 'move' | 'lost' | 'restore';
 
@@ -85,22 +85,56 @@ const db = () => getPoolDbClient();
 
 /** Keep a box's start on its session. A jsonb merge: it never overwrites another settings key. */
 export async function writeBoxStart(workbenchId: string, record: StoredBoxStart): Promise<void> {
+  const value = JSON.stringify(record);
+  const history = sql`(
+    SELECT coalesce(jsonb_agg(entry ORDER BY ord), '[]'::jsonb)
+    FROM (
+      SELECT entry, ord FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(${workbenches.settings} -> 'boxStarts') = 'array'
+          THEN ${workbenches.settings} -> 'boxStarts' ELSE '[]'::jsonb END
+        || jsonb_build_array(${value}::jsonb)
+      ) WITH ORDINALITY AS starts(entry, ord)
+      ORDER BY ord DESC LIMIT 10
+    ) AS recent
+  )`;
   await db()
     .update(workbenches)
-    .set({ settings: sql`coalesce(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('boxStart', ${JSON.stringify(record)}::jsonb)` })
+    .set({ settings: record.totalMs === null
+      ? sql`coalesce(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('boxStart', ${value}::jsonb)`
+      : sql`coalesce(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('boxStart', ${value}::jsonb, 'boxStarts', ${history})` })
     .where(eq(workbenches.id, workbenchId));
+  if (record.totalMs !== null) {
+    await recordBootMetric(workbenchId, 'box_created', {
+      sandboxId: record.sandboxId, cause: record.cause, layer: record.layer, totalMs: record.totalMs,
+    }).catch((err) => console.warn(`[workbench] recording the start of ${record.sandboxId} failed:`, err));
+  }
 }
 
 /** Keep the last wake of a box on the session that names it. Never throws: a wake must not fail on this. */
 export async function recordSandboxWake(wake: StoredWake): Promise<void> {
   try {
+    const value = JSON.stringify(wake);
+    const history = sql`(
+      SELECT coalesce(jsonb_agg(entry ORDER BY ord), '[]'::jsonb)
+      FROM (
+        SELECT entry, ord FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(${workbenches.settings} -> 'wakes') = 'array'
+            THEN ${workbenches.settings} -> 'wakes' ELSE '[]'::jsonb END
+          || jsonb_build_array(${value}::jsonb)
+        ) WITH ORDINALITY AS wakes(entry, ord)
+        ORDER BY ord DESC LIMIT 10
+      ) AS recent
+    )`;
     await db()
       .update(workbenches)
-      .set({ settings: sql`coalesce(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('lastWake', ${JSON.stringify(wake)}::jsonb)` })
+      .set({ settings: sql`coalesce(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('lastWake', ${value}::jsonb, 'wakes', ${history})` })
       .where(eq(workbenches.sandboxId, wake.sandboxId));
   } catch (err) {
     console.warn(`[workbench] recording the wake of sandbox ${wake.sandboxId} failed:`, err);
   }
+  const endedAt = wake.ms === null ? new Date().toISOString() : new Date(Date.parse(wake.at) + wake.ms).toISOString();
+  await recordSandboxBootMetric(wake.sandboxId, 'wake_end', { at: endedAt, from: wake.from, ms: wake.ms, ok: wake.ok }).catch((err) =>
+    console.warn(`[workbench] recording the wake end of ${wake.sandboxId} failed:`, err));
 }
 
 /** The names of the box's steps. The dotfiles entry is not a row. */
