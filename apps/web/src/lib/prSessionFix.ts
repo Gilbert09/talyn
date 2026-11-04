@@ -47,7 +47,7 @@ export async function sendPrFixToSession(row: PRRow, session: PrSessionRef): Pro
     chats.find((c) => c.id === store.selectedChatByWorkbench[workbench.id]) ?? chats[chats.length - 1] ?? null;
   await ops.runAction(sessionFixAction(row), chat);
 
-  toast.success(`Sent to session ${session.name}`, `${row.owner}/${row.repo}#${row.number}`, {
+  toast.success('Sent to the session', `${row.owner}/${row.repo}#${row.number}`, {
     label: 'Open',
     onClick: () => navigateToWorkbench(session.id),
   });

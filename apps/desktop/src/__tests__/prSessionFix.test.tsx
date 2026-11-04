@@ -124,7 +124,7 @@ describe('Fix on a PR a session works', () => {
     expect(runAction).toHaveBeenCalledWith('fix_checks', null);
     expect(navigate).not.toHaveBeenCalled();
     expect(toastSuccess).toHaveBeenCalledWith(
-      'Sent to session paris',
+      'Sent to the session',
       'acme/w#7',
       expect.objectContaining({ label: 'Open' })
     );

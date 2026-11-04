@@ -70,7 +70,7 @@ describe('PR session fixes', () => {
     expect(await result.current.createPostHogTask({ ...row, session })).toBe(true);
     expect(createTask).not.toHaveBeenCalled();
     expect(runAction).toHaveBeenCalledWith('fix_checks', null);
-    expect(toastSuccess).toHaveBeenCalledWith('Sent to session paris', 'acme/w#7', expect.objectContaining({ label: 'Open' }));
+    expect(toastSuccess).toHaveBeenCalledWith('Sent to the session', 'acme/w#7', expect.objectContaining({ label: 'Open' }));
     toastSuccess.mock.calls[0][2].onClick();
     expect(navigate).toHaveBeenCalledWith('wb1');
   });
