@@ -643,22 +643,48 @@ async function withOwnerSerialized<T>(
     return fn();
   }
 
-  // Watcher path: ONE pool transaction does everything. The xact lock, the
-  // count and `fn`'s writes all run on this connection (it is installed as
-  // the scoped handle), so the holder never needs a second connection while
-  // waiters each hold exactly one. `withBlockingAdvisoryLock` ran the callback
-  // on other connections, which is how a burst deadlocked the pool on
-  // 2026-09-30. Commit releases the lock, so the next caller's count sees
-  // this caller's row.
+  // Watcher path: ONE pool transaction does the lock, the count and `fn`'s
+  // writes (installed as the scoped handle). A WAITER holds nothing: it tries
+  // the lock, and on a miss ends its transaction (freeing the connection) and
+  // sleeps outside it before retrying. A blocking wait held one pooled
+  // connection per waiter, so a burst could starve the holder of the second
+  // connection a gated callback may still take (2026-09-30). Commit releases
+  // the lock, so the next caller's count sees this caller's row.
   const key = advisoryLockKey(lockName).toString();
-  return getPoolDbClient().transaction(async (tx) => {
-    const txDb = tx as unknown as Database;
-    await txDb.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
-    return runInScopedDb(txDb, async () => {
-      await assertWithinLimit(txDb);
-      return fn();
+  const deadline = Date.now() + BOX_GATE_MAX_WAIT_MS;
+  for (;;) {
+    const outcome = await getPoolDbClient().transaction(async (tx) => {
+      const txDb = tx as unknown as Database;
+      const res = await txDb.execute(sql`select pg_try_advisory_xact_lock(${key}::bigint) as acquired`);
+      const row = (Array.isArray(res) ? res[0] : (res as { rows?: unknown[] })?.rows?.[0]) as
+        | { acquired?: unknown }
+        | undefined;
+      if (!row?.acquired) return { acquired: false as const };
+      const result = await runInScopedDb(txDb, async () => {
+        await assertWithinLimit(txDb);
+        return fn();
+      });
+      return { acquired: true as const, result };
     });
-  });
+    if (outcome.acquired) return outcome.result;
+    if (Date.now() >= deadline) throw new BoxGateBusyError(lockName);
+    await new Promise((resolve) => setTimeout(resolve, 25 + Math.random() * 175));
+  }
+}
+
+/** How long a gate caller waits for the per-owner lock before giving up. */
+const BOX_GATE_MAX_WAIT_MS = 10_000;
+
+/**
+ * The per-owner gate lock stayed busy for the whole wait. Transient: not a
+ * plan refusal (so no 402), and the unattended callers' ordinary retry
+ * (due-scan, watcher tick) picks the start up again.
+ */
+export class BoxGateBusyError extends Error {
+  constructor(readonly lockName: string) {
+    super(`The box gate for ${lockName} is busy; try again shortly.`);
+    this.name = 'BoxGateBusyError';
+  }
 }
 
 /**
