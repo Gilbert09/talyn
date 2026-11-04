@@ -2,6 +2,7 @@ import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import { backfillMergeArchives, MERGE_BACKFILL_POLLER } from './mergeBackfill.js';
 import { reapWorkbenchSandboxes, REAPER_POLLER } from './reaper.js';
+import { backfillUsageInsights, USAGE_INSIGHTS_BACKFILL } from '../insights/backfill.js';
 
 const timers: NodeJS.Timeout[] = [];
 export function initWorkbenchMaintenance(): void {
@@ -9,6 +10,7 @@ export function initWorkbenchMaintenance(): void {
   for (const [name, interval, description, run] of [
     [MERGE_BACKFILL_POLLER, 10 * 60_000, 'Removes stale PR links and archives sessions after a merge.', backfillMergeArchives],
     [REAPER_POLLER, 5 * 60_000, 'Deletes unused session sandboxes after the grace period.', reapWorkbenchSandboxes],
+    [USAGE_INSIGHTS_BACKFILL, 60_000, 'Fills the Insights usage tables from stored events, a batch of chats a minute, once.', backfillUsageInsights],
   ] as const) {
     let running = false;
     const tick = async () => {

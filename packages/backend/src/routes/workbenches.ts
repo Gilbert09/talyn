@@ -76,6 +76,7 @@ import {
   stopSessionScript,
 } from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
+import { scheduleTurnUsage } from '../services/insights/turnUsage.js';
 import { getSandboxStatus } from '../services/workbenches/sandboxStatus.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
@@ -367,6 +368,10 @@ export function workbenchRoutes(): Router {
     const stored = await storeNumberedEvents(found.chat.id, events);
     // Other clients (a second window, the web app) follow a local turn through this.
     emitWorkbenchEvents(found.chat.workspaceId, found.chat.id, events);
+    // A local turn ends when its result event arrives: record its token use for Insights.
+    for (const turn of new Set(events.filter((e) => e.event.type === 'result').map((e) => e.turn))) {
+      scheduleTurnUsage(found.chat.id, turn);
+    }
     ok(res, { stored });
   });
 

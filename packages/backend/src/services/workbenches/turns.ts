@@ -37,6 +37,7 @@ import { TURN_OWNER, isWorkbenchDraining, isWorkbenchDetached } from './ownershi
 import { runWithoutScope } from '../../db/client.js';
 import { scheduleAgentBackup } from './agentBackups.js';
 import { scheduleTurnInsights } from './turnInsights.js';
+import { scheduleTurnUsage } from '../insights/turnUsage.js';
 import { clearRecoveryRecap, recoveryRecap } from './agentRecap.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import {
@@ -436,6 +437,7 @@ async function runTurnLoopBody(
       scheduleAgentBackup(chatId);
       // The time report and setup learning: in the background, never in the turn's way.
       scheduleTurnInsights(chatId, heldTurn);
+      scheduleTurnUsage(chatId, heldTurn);
       const wb = await getWorkbench(fin.chat.workbenchId);
       if (wb?.sandboxId) await removeTurnLogs(wb, chatId, heldTurn);
     }

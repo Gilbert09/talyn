@@ -28,6 +28,7 @@ import { slackPublicRoutes, slackRoutes } from './slack.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { apiTokenRoutes } from './apiTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
+import { insightsRoutes } from './insights.js';
 import { mcpRoutes } from '../mcp/transport.js';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -230,6 +231,12 @@ export function setupRoutes(app: Express): void {
   // Developer. Pre-ownerScope: `api_tokens` is a backend-pool-only table, so
   // every handler passes req.user.id itself. See routes/apiTokens.ts.
   app.use(`${api}/api-tokens`, mount(apiTokenRoutes()));
+
+  // Insights: one workspace's usage analytics. Pre-ownerScope for the billing
+  // reason: the usage tables are backend-pool-only, so every query runs on the
+  // pool and the handler checks that the caller owns the workspace. See
+  // routes/insights.ts.
+  app.use(`${api}/insights`, mount(insightsRoutes()));
 
   // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
   // Pre-ownerScope for the billing reason, and more so: most handlers wait on

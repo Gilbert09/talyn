@@ -1335,6 +1335,8 @@ export const mergeQueueEvents = pgTable(
   },
   (t) => ({
     entryAtIdx: index('idx_mqev_entry').on(t.entryId, t.at),
+    // Insights counts landings in a window (migration 0111).
+    mergedAtIdx: index('idx_merge_queue_events_merged_at').on(t.at).where(sql`${t.toStatus} = 'merged'`),
   })
 );
 
@@ -2047,6 +2049,7 @@ export const prCodeReviewRuns = pgTable(
     sandboxIdx: index('idx_pr_code_review_runs_sandbox')
       .on(t.sandboxId)
       .where(sql`${t.sandboxId} IS NOT NULL`),
+    workspaceCreatedIdx: index('idx_pr_code_review_runs_workspace_created').on(t.workspaceId, t.createdAt),
   })
 );
 
@@ -2148,6 +2151,7 @@ export const prCodeReviewFindings = pgTable(
     fixTaskIdx: index('idx_pr_code_review_findings_fix_task')
       .on(t.fixTaskId)
       .where(sql`${t.fixTaskId} IS NOT NULL`),
+    workspaceCreatedIdx: index('idx_pr_code_review_findings_workspace_created').on(t.workspaceId, t.createdAt),
   })
 );
 
@@ -2399,6 +2403,81 @@ export const workbenchTurnTimings = pgTable(
     workbenchIdx: index('idx_workbench_turn_timings_workbench').on(t.workbenchId, t.createdAt),
   })
 );
+
+/**
+ * One turn's token use for one model (migration 0111). Written when the turn's
+ * result event is stored, and by the one-off backfill. Insights reads this,
+ * never the transcript. Turn-level columns are set on the main model's row
+ * (`isPrimary`) only. No FK to the session or chat: a deleted session still
+ * counts in the window it ran in.
+ */
+export const workbenchTurnUsage = pgTable(
+  'workbench_turn_usage',
+  {
+    chatId: text('chat_id').notNull(),
+    turn: integer('turn').notNull(),
+    model: text('model').notNull(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    workbenchId: text('workbench_id').notNull(),
+    /** `WorkbenchAgent`. */
+    agent: text('agent').notNull(),
+    isPrimary: boolean('is_primary').notNull().default(true),
+    /** Input tokens not read from the prompt cache. */
+    inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
+    outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
+    cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }).notNull().default(0),
+    cacheWriteTokens: bigint('cache_write_tokens', { mode: 'number' }).notNull().default(0),
+    /** The agent's own estimate at API prices. Null: the agent reported none. */
+    costEstimateMicros: bigint('cost_estimate_micros', { mode: 'number' }),
+    durationMs: bigint('duration_ms', { mode: 'number' }),
+    agentSteps: integer('agent_steps'),
+    firstReplyMs: bigint('first_reply_ms', { mode: 'number' }),
+    isError: boolean('is_error').notNull().default(false),
+    endedAt: timestamp('ended_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_turn_usage_pkey', columns: [t.chatId, t.turn, t.model] }),
+    workspaceEndedIdx: index('idx_workbench_turn_usage_workspace_ended').on(t.workspaceId, t.endedAt),
+    workbenchEndedIdx: index('idx_workbench_turn_usage_workbench_ended').on(t.workbenchId, t.endedAt),
+  })
+);
+
+/** A box start or a successful wake, mirrored from its `boot_metric` event (migration 0111). */
+export const workbenchBootSamples = pgTable(
+  'workbench_boot_samples',
+  {
+    chatId: text('chat_id').notNull(),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    workbenchId: text('workbench_id').notNull(),
+    /** 'box_start' | 'wake'. */
+    kind: text('kind').notNull(),
+    ms: bigint('ms', { mode: 'number' }).notNull(),
+    cause: text('cause'),
+    layer: text('layer'),
+    /** For a wake: 'host' or 'storage'. */
+    source: text('source'),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_boot_samples_pkey', columns: [t.chatId, t.seq] }),
+    workspaceAtIdx: index('idx_workbench_boot_samples_workspace_at').on(t.workspaceId, t.kind, t.at),
+  })
+);
+
+/** The cursor of the one-off Insights backfill (migration 0111). */
+export const usageInsightsBackfill = pgTable('usage_insights_backfill', {
+  name: text('name').primaryKey(),
+  cursor: text('cursor'),
+  chatsDone: integer('chats_done').notNull().default(0),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** The setup recipe before the Setup list (migration 0099). Not written since 0106; dropped in a later migration. */
 export const repositorySetupSteps = pgTable(

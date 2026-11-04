@@ -118,6 +118,8 @@ export * from './publicApi.js';
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
+// Insights: per-workspace usage analytics (compute, tokens, output, speed).
+export * from './insights.js';
 export * from './workbenchTitle.js';
 export * from './workbenchBranchName.js';
 export * from './workbenchGit.js';

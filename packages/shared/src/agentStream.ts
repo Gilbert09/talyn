@@ -593,9 +593,13 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}, s
             ...base(),
             is_error: false,
             result: lastAgentMessage,
+            // Codex's own numbers, unchanged: totals for the whole thread (they
+            // grow across turns and resumes), and input_tokens includes the
+            // cached tokens. Insights turns them into one turn's usage.
             usage: {
               input_tokens: num(u.input_tokens),
               cache_read_input_tokens: num(u.cached_input_tokens),
+              cache_creation_input_tokens: num(u.cache_write_input_tokens),
               output_tokens: num(u.output_tokens),
             },
           });

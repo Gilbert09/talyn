@@ -78,6 +78,9 @@ import type {
   BillingOrder,
   BillingStatus,
   BillingUsageResponse,
+  InsightsQuery,
+  InsightsResponseBySection,
+  InsightsSection,
   ChangePlanRequest,
   CheckoutSessionResponse,
   CreateCheckoutRequest,
@@ -2285,6 +2288,19 @@ class WebSocketClient {
     this.send({ type: 'ping' });
   }
 }
+
+// Insights — one workspace's usage analytics, one section per request.
+// 403 `insights_unavailable` when the caller is outside the `usage-insights`
+// flag; `GET /features` → `usageInsights` decides whether to draw the page.
+export const insights = {
+  get: <S extends InsightsSection>(section: S, query: InsightsQuery) => {
+    const params = new URLSearchParams({ workspaceId: query.workspaceId });
+    if (query.range) params.set('range', query.range);
+    if (query.from) params.set('from', query.from);
+    if (query.to) params.set('to', query.to);
+    return request<InsightsResponseBySection[S]>('GET', `/insights/${section}?${params.toString()}`);
+  },
+};
 
 // Billing — plan status, hosted checkout, hosted customer portal, usage and
 // credits. The usage-billing routes (usage, credits, changePlan, autoTopup)

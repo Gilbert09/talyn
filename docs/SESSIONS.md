@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Insights: usage analytics per workspace (2026-11-04)
+
+**What it is.** A new Insights page in both apps, behind the `usage-insights` flag (`usageInsights`, fallback off, `availability: 'gated'`, `USAGE_INSIGHTS_ENABLED` override). It shows one workspace's box-hours, agent tokens and models, output, speed and top lists for 7 days, 30 days, this billing period or a custom range (UTC days, both ends included in the picker).
+
+**Data.** Migration `0111` adds `workbench_turn_usage` (one row per chat, turn and model), `workbench_boot_samples` (box starts and successful wakes, keyed by their `boot_metric` event) and `usage_insights_backfill` (the backfill cursor). A page view reads these, the usage ledger and scalar columns only; it never reads `workbench_events` (`insightsQueries.test.ts` holds this).
+- The turn writer (`services/insights/turnUsage.ts`) runs after a sandbox turn ends (`turns.ts`) and when a local session uploads a result event. It reads the turn's events once and keeps scalars and the result's `usage` only.
+- **Codex reports thread totals.** `turn.completed` usage grows across turns and `codex exec resume` (measured on codex-cli 0.159.2: 21,905 then 43,828 input tokens for two short turns), and its `input_tokens` includes the cached tokens. The writer stores the difference from the chat's previous result, and starts again on a new `session_id` or a counter that went down. Claude's result usage is per run; a relaunched turn's runs are added.
+- Cost is the agent's own `costUSD`/`total_cost_usd`; Codex reports none, so its cost is null and the UI says so.
+- The backfill is a maintenance poller (`usage-insights-backfill`, 40 chats a minute under the shared claim). It reads the transcript table once in total, writes with `ON CONFLICT DO NOTHING`, and stamps `completed_at` when done.
+
+**Open.** The Codex context meter (`createCodexStreamParser.contextUsage`) still reads the cumulative `input_tokens`, so it overstates after the first turn. A cancelled turn reports no result event and is not counted.
+
 ## Opening a session no longer wakes its sandbox (2026-11-04)
 
 **What was wrong.** The owner opened an existing session and its Sandbox tab said "Up for less than a minute". The app called `POST /workbenches/:id/wake` on every open (`WorkbenchView`), and the fleet journal on scaleway-1 shows five sleeping posthog sessions resumed at 12:48:13-12:48:27 UTC. No line said "resumed a suspended sandbox for a request that needs its guest", so no exec, pty or port request woke them: each was an explicit `POST /v1/sandboxes/{id}/resume`. Talyn sends that from three places only: the wake route, `withWake` (a hibernated box) and the lost-box recovery. Railway logs were not readable, so the one that fired is not proved; the wake route on open fits best. A manual archive of a hibernated box also pulled 6.7 GB back to run the archive script and save, and that resume then failed.

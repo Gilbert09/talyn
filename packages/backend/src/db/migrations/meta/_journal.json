@@ -771,6 +771,13 @@
       "when": 1790900000030,
       "tag": "0110_usage_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1790900000031,
+      "tag": "0111_usage_insights",
+      "breakpoints": true
     }
   ]
 }

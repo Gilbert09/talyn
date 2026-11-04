@@ -30,6 +30,7 @@ import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
 import { cleanJsonbString, stringifyJsonbSafe, toJsonbSafe } from './jsonSafe.js';
 import { BOX_START_SETTINGS_KEYS } from './boxStart.js';
+import { bootSampleFromMetric, storeBootSamples } from '../insights/bootSamples.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -1475,11 +1476,17 @@ export interface EventDraftInput {
 
 /** Store a small session metric in its first chat. The transcript hides this system subtype. */
 export async function recordBootMetric(workbenchId: string, metric: string, fields: Record<string, unknown> = {}): Promise<void> {
-  const [chat] = await db().select({ id: chatsTable.id, turn: chatsTable.turnCount })
+  const [chat] = await db().select({ id: chatsTable.id, turn: chatsTable.turnCount, workspaceId: chatsTable.workspaceId })
     .from(chatsTable).where(eq(chatsTable.workbenchId, workbenchId))
     .orderBy(asc(chatsTable.createdAt), asc(chatsTable.id)).limit(1);
   if (!chat) return;
-  await appendEvents(chat.id, [{ turn: chat.turn, event: { type: 'system', subtype: 'boot_metric', metric, at: new Date().toISOString(), ...fields } }]);
+  const [stored] = await appendEvents(chat.id, [{ turn: chat.turn, event: { type: 'system', subtype: 'boot_metric', metric, at: new Date().toISOString(), ...fields } }]);
+  // Insights reads box starts and wakes from a small table, not the transcript.
+  const sample = bootSampleFromMetric(metric, fields);
+  if (sample && stored) {
+    await storeBootSamples([{ ...sample, chatId: chat.id, seq: stored.seq, workspaceId: chat.workspaceId, workbenchId, at: new Date() }])
+      .catch((err) => console.warn(`[workbench] recording the ${metric} sample of ${workbenchId} failed:`, err));
+  }
 }
 
 export async function recordSandboxBootMetric(sandboxId: string, metric: string, fields: Record<string, unknown> = {}): Promise<void> {
