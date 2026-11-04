@@ -61,6 +61,9 @@ const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { resetSandboxStatusCacheForTests } = await import('../services/workbenches/sandboxStatus.js');
+const { resetChangesStoreForTests } = await import('../services/workbenches/changesStore.js');
+const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
+const { storeChangesCopy } = await import('./helpers/storedChanges.js');
 const { getChat, getWorkbench, updateWorkbench } = await import('../services/workbenches/store.js');
 const { startScript, stopScript } = await import('../services/workbenches/scripts.js');
 const { createWorkbenchPullRequest } = await import('../services/workbenches/pullRequest.js');
@@ -271,6 +274,7 @@ describe('/v1 session work', () => {
       const whole = await call('GET', `/sessions/${session.id}/diff`);
       expect(whole.body).toEqual({
         object: 'diff', session_id: session.id, path: null, scope: 'combined', patch: 'diff --git a/src/a.ts b/src/a.ts\n+hello\n',
+        source: 'live', snapshot_at: null,
       });
       const one = await call('GET', `/sessions/${session.id}/diff?path=src/a.ts&scope=uncommitted`);
       expect(one.body).toMatchObject({ path: 'src/a.ts', scope: 'uncommitted' });
@@ -289,10 +293,66 @@ describe('/v1 session work', () => {
 
     it('lists files and reads one', async () => {
       const list = await call('GET', `/sessions/${session.id}/files`);
-      expect(list.body).toEqual({ object: 'file_list', session_id: session.id, paths: ['README.md', 'src/a.ts'] });
+      expect(list.body).toEqual({ object: 'file_list', session_id: session.id, paths: ['README.md', 'src/a.ts'], source: 'live', snapshot_at: null });
       const file = await call('GET', `/sessions/${session.id}/files/content?path=src/a.ts`);
       expect(file.body).toEqual({
         object: 'file_content', session_id: session.id, path: 'src/a.ts', encoding: 'utf8', content: 'export const a = 1;\n',
+        source: 'live', snapshot_at: null,
+      });
+    });
+
+    describe('of a sleeping sandbox', () => {
+      const MB = 'a'.repeat(40);
+      const PATCH = 'diff --git a/src/a.ts b/src/a.ts\n+stored\n';
+      beforeEach(async () => {
+        const row = (await getWorkbench(session.id))!;
+        const file = { path: 'src/a.ts', status: 'modified' as const, added: 1, removed: 0, binary: false };
+        await storeChangesCopy(store, { workspaceId: 'ws-a', id: session.id, sandboxId: row.sandboxId! }, {
+          changes: { files: [file], uncommitted: [file], committed: [], base: MB, headSha: 'b'.repeat(40) },
+          patch: PATCH, patchUncommitted: PATCH, patchCommitted: '',
+          files: ['README.md', 'src/a.ts'],
+          contents: { 'src/a.ts': 'stored\n' },
+        });
+        fleet.sandboxStatus = 'suspended';
+        resetSandboxStatusCacheForTests();
+        resetChangesStoreForTests();
+        resetChangesStoredForTests();
+      });
+
+      it.each([
+        ['the diff', '/diff', { object: 'diff', patch: PATCH, source: 'stored', snapshot_at: '2026-11-01T10:00:00.000Z' }],
+        ['the file list', '/files', { object: 'file_list', paths: ['README.md', 'src/a.ts'], source: 'stored', snapshot_at: '2026-11-01T10:00:00.000Z' }],
+        ['a changed file', '/files/content?path=src/a.ts', { object: 'file_content', content: 'stored\n', source: 'stored' }],
+      ])('answers %s from the stored copy and never touches the sandbox', async (_name, suffix, body) => {
+        const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
+        const res = await call('GET', `/sessions/${session.id}${suffix}`);
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject(body);
+        expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
+      });
+
+      it('reads a file the session did not change from GitHub', async () => {
+        vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: '# read me\n', size: 10, bytes: Buffer.from('# read me\n') });
+        const res = await call('GET', `/sessions/${session.id}/files/content?path=README.md`);
+        expect(res.body).toMatchObject({ content: '# read me\n', source: 'github', encoding: 'utf8' });
+      });
+
+      it.each(['/diff?live=true', '/files?live=true', '/files/content?path=src/a.ts&live=true'])('reads the sandbox for %s', async (suffix) => {
+        const before = fleet.scripts.length;
+        const res = await call('GET', `/sessions/${session.id}${suffix}`);
+        expect(res.status).toBe(200);
+        expect(res.body.source).toBe('live');
+        expect(fleet.scripts.length).toBe(before + 1);
+      });
+
+      it.each(['/diff', '/files', '/files/content?path=src/a.ts'])('refuses %s with snapshot_unavailable when nothing is stored', async (suffix) => {
+        store.objects.clear();
+        resetChangesStoreForTests();
+        resetChangesStoredForTests();
+        const before = fleet.scripts.length;
+        const res = await call('GET', `/sessions/${session.id}${suffix}`);
+        expect([res.status, res.body.error.code]).toEqual([409, 'snapshot_unavailable']);
+        expect(fleet.scripts.length).toBe(before);
       });
     });
 

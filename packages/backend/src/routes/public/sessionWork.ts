@@ -10,6 +10,7 @@ import {
   GetChangesQuery,
   GetDiffQuery,
   GetFileQuery,
+  ListFilesQuery,
   ListScriptsQuery,
   PreviewLink,
   PreviewList,
@@ -90,9 +91,9 @@ const ThreadSessionsQuery = z.object(PageQuery).strict();
  * The work inside a session: its changes, diff and files, its scripts and
  * previews, the pull request actions, threads, timing and resize.
  *
- * Reads that need the sandbox wake it. The changes list and the scripts list
- * do not: they answer from what Talyn stored unless the caller sends
- * `live=true`.
+ * Reads of a sleeping sandbox do not wake it: the changes, the diff, the
+ * files and the scripts list answer from what Talyn stored (or GitHub) unless
+ * the caller sends `live=true`.
  */
 export const sessionWorkRoutes: PublicRoute[] = [
   // ---- Changes, diff and files ----
@@ -124,7 +125,10 @@ export const sessionWorkRoutes: PublicRoute[] = [
     path: '/sessions/{id}/diff',
     operationId: 'getSessionDiff',
     summary: 'Read the diff',
-    description: 'A unified diff of the whole session, or of one file with `path`. Reads the sandbox, and wakes it if it sleeps.',
+    description:
+      'A unified diff of the whole session, or of one file with `path`. A sleeping sandbox answers from the copy Talyn stored, ' +
+      'or from GitHub when all the work is pushed; `source` says which. With neither, it answers 409 `snapshot_unavailable`. ' +
+      'Send `live=true` to read the sandbox now; that wakes it.',
     tag: 'Session work',
     scope: 'sessions:read',
     sessions: true,
@@ -133,10 +137,13 @@ export const sessionWorkRoutes: PublicRoute[] = [
     responses: { 200: { description: 'The diff.', schema: SessionDiff } },
     async handler({ params, query, token }) {
       const { row } = await authorizedWorkbench(token, params.id);
-      const { patch } = await readSessionDiff(row, query.path, query.scope);
+      const diff = await readSessionDiff(row, query.path, query.scope, { live: query.live === true });
       return {
         status: 200,
-        body: { object: 'diff', session_id: row.id, path: query.path ?? null, scope: query.scope ?? 'combined', patch },
+        body: {
+          object: 'diff', session_id: row.id, path: query.path ?? null, scope: query.scope ?? 'combined', patch: diff.patch,
+          source: diff.source ?? 'live', snapshot_at: diff.snapshotAt ?? null,
+        },
       };
     },
   }),
@@ -146,16 +153,22 @@ export const sessionWorkRoutes: PublicRoute[] = [
     path: '/sessions/{id}/files',
     operationId: 'listSessionFiles',
     summary: 'List files',
-    description: 'Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. Wakes the sandbox.',
+    description:
+      'Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. ' +
+      'A sleeping sandbox answers from the copy Talyn stored, or 409 `snapshot_unavailable`. Send `live=true` to wake it.',
     tag: 'Session work',
     scope: 'sessions:read',
     sessions: true,
     params: IdParams,
+    query: ListFilesQuery,
     responses: { 200: { description: 'The paths.', schema: FileList } },
-    async handler({ params, token }) {
+    async handler({ params, query, token }) {
       const { row } = await authorizedWorkbench(token, params.id);
-      const { paths } = await listSessionFiles(row);
-      return { status: 200, body: { object: 'file_list', session_id: row.id, paths } };
+      const list = await listSessionFiles(row, { live: query.live === true });
+      return {
+        status: 200,
+        body: { object: 'file_list', session_id: row.id, paths: list.paths, source: list.source ?? 'live', snapshot_at: list.snapshotAt ?? null },
+      };
     },
   }),
 
@@ -166,7 +179,9 @@ export const sessionWorkRoutes: PublicRoute[] = [
     summary: 'Read a file',
     description:
       'One file as it is in the sandbox now. Text comes back as UTF-8, a binary file as base64. ' +
-      'A file over 4 MiB answers 413 `file_too_large`. Wakes the sandbox.',
+      'A file over 4 MiB answers 413 `file_too_large`. A sleeping sandbox answers a changed file from the copy Talyn stored, ' +
+      'and a file the session did not change from GitHub at the merge base; `source` says which. With neither, it answers ' +
+      '409 `snapshot_unavailable`. Send `live=true` to read the sandbox now; that wakes it.',
     tag: 'Session work',
     scope: 'sessions:read',
     sessions: true,
@@ -175,10 +190,13 @@ export const sessionWorkRoutes: PublicRoute[] = [
     responses: { 200: { description: 'The file.', schema: FileContent } },
     async handler({ params, query, token }) {
       const { row } = await authorizedWorkbench(token, params.id);
-      const file = await readSessionFile(row, query.path);
+      const file = await readSessionFile(row, query.path, { live: query.live === true });
       return {
         status: 200,
-        body: { object: 'file_content', session_id: row.id, path: query.path, encoding: file.binary ? 'base64' : 'utf8', content: file.content },
+        body: {
+          object: 'file_content', session_id: row.id, path: query.path, encoding: file.binary ? 'base64' : 'utf8', content: file.content,
+          source: file.source ?? 'live', snapshot_at: file.snapshotAt ?? null,
+        },
       };
     },
   }),

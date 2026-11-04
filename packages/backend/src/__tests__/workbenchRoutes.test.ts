@@ -6,6 +6,7 @@ import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
+import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
 import { userFacingError } from '../services/workbenches/errors.js';
@@ -64,6 +65,10 @@ const { changesSnapshotKey, resetChangesSnapshotsForTests } = await import('../s
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { resetSandboxStatusCacheForTests } = await import('../services/workbenches/sandboxStatus.js');
+const { resetChangesStoreForTests } = await import('../services/workbenches/changesStore.js');
+const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
+const { resetChangesGithubForTests } = await import('../services/workbenches/changesGithub.js');
+const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
@@ -1652,6 +1657,278 @@ describe('workbench routes', () => {
       const wb = await sleepingWorkbench();
       expect((await call('DELETE', `/workbenches/${wb.id}`)).status).toBe(200);
       expect(storedSnapshot(wb)).toBeNull();
+    });
+  });
+
+  describe('the diff, files and file of a sleeping box', () => {
+    const MB = 'a'.repeat(40);
+    const HEAD = 'b'.repeat(40);
+    const PATCH_A = 'diff --git a/src/a.ts b/src/a.ts\nindex 1..2 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n';
+    const PATCH_IMG = 'diff --git a/img.png b/img.png\nnew file mode 100644\nindex 0..3\nGIT binary patch\nliteral 3\nKcmZ\n\nliteral 0\n';
+    const fileOf = (path: string) => ({ path, status: 'modified' as const, added: 1, removed: 1, binary: false });
+    const listOf = (uncommitted: string[], committed: string[]) => ({
+      files: [...uncommitted, ...committed].map(fileOf),
+      uncommitted: uncommitted.map(fileOf),
+      committed: committed.map(fileOf),
+      uncommittedStats: { added: uncommitted.length, removed: uncommitted.length, files: uncommitted.length },
+      committedStats: { added: committed.length, removed: committed.length, files: committed.length },
+      base: MB,
+      headSha: HEAD,
+    });
+    let store: ReturnType<typeof memoryWorkObjectStore>;
+    const touches = () => ({ scripts: fleet.scripts.length, resumes: fleet.resumes });
+
+    /** A ready session whose box sleeps, with `copy` stored for it. */
+    async function asleepWith(copy: Partial<StoredCopy> | null = {}, extra: Record<string, unknown> = {}): Promise<Loose> {
+      const wb = await createSandboxWorkbench();
+      if (Object.keys(extra).length) await updateWorkbench(wb.id, extra);
+      const row = (await getWorkbench(wb.id))!;
+      if (copy) {
+        await storeChangesCopy(store, { workspaceId: row.workspaceId, id: row.id, sandboxId: row.sandboxId! }, {
+          changes: listOf(['src/a.ts', 'img.png'], []),
+          patch: PATCH_A + PATCH_IMG,
+          patchUncommitted: PATCH_A + PATCH_IMG,
+          patchCommitted: '',
+          files: ['README.md', 'src/a.ts', 'img.png'],
+          contents: {
+            'src/a.ts': 'new\n',
+            'img.png': Buffer.from([0x89, 0, 1]),
+            'big.bin': { size: 5 * 1024 * 1024 },
+            'mid.bin': { size: 2 * 1024 * 1024 },
+          },
+          ...copy,
+        });
+      }
+      fleet.sandboxStatus = 'suspended';
+      resetSandboxStatusCacheForTests();
+      resetChangesStoreForTests();
+      resetChangesStoredForTests();
+      return wb;
+    }
+
+    beforeEach(() => {
+      resetChangesSnapshotsForTests();
+      resetSandboxStatusCacheForTests();
+      resetChangesStoreForTests();
+      resetChangesStoredForTests();
+      resetChangesGithubForTests();
+      store = memoryWorkObjectStore();
+      setWorkObjectStoreForTests(store);
+    });
+
+    it('answers the diff from the stored copy and never touches the box', async () => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' });
+      expect(res.body.data.patch).toContain('+new');
+      expect(res.body.data.patch).toContain('Binary files /dev/null and b/img.png differ');
+      expect(res.body.data.patch).not.toContain('GIT binary patch');
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['one file', '?path=src/a.ts', (p: string) => expect(p).toBe(PATCH_A)],
+      ['the uncommitted scope', '?scope=uncommitted', (p: string) => expect(p).toContain('src/a.ts')],
+      ['the committed scope', '?scope=committed', (p: string) => expect(p).toBe('')],
+    ])('answers %s from the stored copy', async (_name, query, check) => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+      expect(res.status).toBe(200);
+      check(res.body.data.patch);
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['nothing is stored', null, /no stored copy of this diff\./],
+      ['the patch was too large to store', { tooLarge: ['patch'] as const }, /too large/],
+    ])('refuses the diff with a way to wake the box when %s', async (_name, copy, words) => {
+      const wb = await asleepWith(copy as Partial<StoredCopy> | null);
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+      expect(res.body.error).toMatch(words);
+      expect(res.body.error).toContain('Refresh from the sandbox');
+      expect(touches()).toEqual(before);
+    });
+
+    it('wakes the box for live=1', async () => {
+      const wb = await asleepWith(null);
+      const before = fleet.scripts.length;
+      const res = await call('GET', `/workbenches/${wb.id}/diff?live=1`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.source).toBeUndefined();
+      expect(fleet.scripts.length).toBe(before + 1);
+    });
+
+    it('reads a running box live even with a copy stored', async () => {
+      const wb = await asleepWith();
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+      const before = fleet.scripts.length;
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect(res.body.data.source).toBeUndefined();
+      expect(fleet.scripts.length).toBe(before + 1);
+    });
+
+    describe('from GitHub', () => {
+      const compare = () => vi.spyOn(githubService, 'compareCommits');
+      /** A session whose work is all pushed, with only the list stored. */
+      async function pushedAsleep(extra: Record<string, unknown> = { pushedHeadShas: [HEAD] }): Promise<Loose> {
+        const wb = await asleepWith(null, extra);
+        store.objects.set(changesSnapshotKey(wb), Buffer.from(JSON.stringify({
+          version: 1, takenAt: '2026-11-01T09:00:00.000Z', changes: listOf([], ['src/a.ts', 'src/gone.ts', 'src/new.ts']),
+        })));
+        return wb;
+      }
+
+      it('builds the diff from GitHub when the work is all pushed', async () => {
+        const spy = compare().mockResolvedValue({ files: [
+          { filename: 'src/a.ts', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' },
+          { filename: 'src/gone.ts', status: 'removed', patch: '@@ -1 +0,0 @@\n-x' },
+          { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed' },
+          { filename: 'logo.png', status: 'added' },
+        ] });
+        const wb = await pushedAsleep();
+        const before = touches();
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ source: 'github', mergeBase: MB, headSha: HEAD, snapshotAt: '2026-11-01T09:00:00.000Z' });
+        expect(res.body.data.patch).toContain('diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n');
+        expect(res.body.data.patch).toContain('diff --git a/src/gone.ts b/src/gone.ts\ndeleted file mode 100644\n--- a/src/gone.ts\n+++ /dev/null\n');
+        expect(res.body.data.patch).toContain('rename from src/old.ts\nrename to src/new.ts\n');
+        expect(res.body.data.patch).toContain('Binary files /dev/null and b/logo.png differ');
+        expect(spy).toHaveBeenCalledWith('ws-a', 'acme', 'app', MB, HEAD);
+        // One file, from the cached answer.
+        const one = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts`);
+        expect(one.body.data.patch.match(/^diff --git /gm)).toHaveLength(1);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(touches()).toEqual(before);
+      });
+
+      it('answers the empty uncommitted scope without asking GitHub', async () => {
+        const spy = compare();
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff?scope=uncommitted`);
+        expect(res.body.data).toMatchObject({ patch: '', source: 'github' });
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['the head commit is not pushed', { pushedHeadShas: ['c'.repeat(40)] }, () => compare().mockResolvedValue({ files: [] })],
+        ['GitHub rate-limits the read', { pushedHeadShas: [HEAD] }, () => compare().mockRejectedValue(new GitHubRateLimitError('rate limited', 60_000))],
+        ['GitHub does not know the commits', { pushedHeadShas: [HEAD] }, () => compare().mockResolvedValue(null)],
+      ])('refuses with a way to wake the box when %s', async (_name, extra, arrange) => {
+        arrange();
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const wb = await pushedAsleep(extra);
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+      });
+
+      it('does not use GitHub when work is uncommitted', async () => {
+        const spy = compare();
+        const wb = await asleepWith(null, { pushedHeadShas: [HEAD] });
+        store.objects.set(changesSnapshotKey(wb), Buffer.from(JSON.stringify({
+          version: 1, takenAt: '2026-11-01T09:00:00.000Z', changes: listOf(['src/a.ts'], []),
+        })));
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(409);
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
+    it('answers the file list from the stored copy, and refuses with none', async () => {
+      const wb = await asleepWith();
+      const none = await asleepWith(null);
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/files`);
+      expect(res.body.data).toEqual({ paths: ['README.md', 'src/a.ts', 'img.png'], snapshotAt: '2026-11-01T10:00:00.000Z', source: 'stored' });
+      const refused = await call('GET', `/workbenches/${none.id}/files`);
+      expect([refused.status, refused.body.code]).toEqual([409, 'snapshot_unavailable']);
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['a changed file', 'src/a.ts', 200, { content: 'new\n', binary: false, source: 'stored' }],
+      ['a changed binary file', 'img.png', 200, { content: Buffer.from([0x89, 0, 1]).toString('base64'), binary: true, source: 'stored' }],
+      ['a deleted or unknown file', 'nope.ts', 404, undefined],
+      ['a changed file too large to open', 'big.bin', 413, undefined],
+      ['a changed file whose content was not stored', 'mid.bin', 409, undefined],
+    ])('answers %s from the stored copy', async (_name, path, status, data) => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=${encodeURIComponent(path)}`);
+      expect(res.status).toBe(status);
+      if (data) expect(res.body.data).toMatchObject(data);
+      expect(touches()).toEqual(before);
+    });
+
+    it('reads a file the session did not change from GitHub at the merge base', async () => {
+      const spy = vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: '# hi\n', size: 5, bytes: Buffer.from('# hi\n') });
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect(res.body.data).toMatchObject({ content: '# hi\n', binary: false, source: 'github', ref: MB });
+      expect(spy).toHaveBeenCalledWith('ws-a', 'acme', 'app', 'README.md', MB, 1024 * 1024);
+      await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(touches()).toEqual(before);
+    });
+
+    it('refuses an unchanged file when GitHub rate-limits the read', async () => {
+      vi.spyOn(githubService, 'getFileContent').mockRejectedValue(new GitHubRateLimitError('rate limited', 60_000));
+      const wb = await asleepWith();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+    });
+
+    it('answers the script config with the one last read from the box', async () => {
+      const wb = await asleepWith();
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+      const live = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(live.status).toBe(200);
+      await vi.waitFor(() => expect(store.objects.has(`ws-a/${wb.id}/changes/config.json`)).toBe(true));
+      fleet.sandboxStatus = 'suspended';
+      resetSandboxStatusCacheForTests();
+      const before = touches();
+      const stored = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(stored.body.data).toEqual(live.body.data);
+      expect(touches()).toEqual(before);
+      const none = await asleepWith(null);
+      const refused = await call('GET', `/workbenches/${none.id}/config`);
+      expect([refused.status, refused.body.code]).toEqual([409, 'snapshot_unavailable']);
+    });
+
+    it('gives the preview sync the stored patch with its binary bodies', async () => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/patch`);
+      expect(res.body.data).toEqual({ base: MB, patch: PATCH_A + PATCH_IMG });
+      expect(touches()).toEqual(before);
+    });
+
+    it('answers the changes with an etag, and 304 when it did not move', async () => {
+      const wb = await asleepWith();
+      const res = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a' } });
+      const body = (await res.json()) as Json['body'];
+      expect(body.data).toMatchObject({ source: 'stored', storedReason: 'asleep', patch: { available: true }, fileList: { available: true } });
+      const etag = res.headers.get('etag');
+      expect(etag).toBe(`"${body.data.etag}"`);
+      const again = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': etag! } });
+      expect(again.status).toBe(304);
+      const other = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': '"nope"' } });
+      expect(other.status).toBe(200);
+    });
+
+    it('answers an archived session from its stored copy', async () => {
+      const wb = await asleepWith();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      const res = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts`);
+      expect(res.body.data).toMatchObject({ patch: PATCH_A, source: 'stored' });
     });
   });
 

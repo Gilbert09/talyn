@@ -23,6 +23,7 @@ import {
   type WorkbenchTiming,
   type Workbench,
   type WorkbenchChanges,
+  type WorkbenchDiff,
   type WorkbenchChat,
   type WorkbenchEvent,
 } from '@talyn/shared';
@@ -807,8 +808,13 @@ export const SESSIONS = [
   ),
   defineTool(
     'get_session_diff',
-    'Get the unified diff of a session against its base branch. Pass path to read one file. Large diffs are cut.',
-    { ...sessionIdSchema, path: { type: 'string', description: 'Limit the diff to this file.' } },
+    'Get the unified diff of a session against its base branch. Pass path to read one file. Large diffs are cut. ' +
+      'A sleeping sandbox answers from the copy Talyn stored, or from GitHub when the work is all pushed. Pass live=true to wake it and read it now.',
+    {
+      ...sessionIdSchema,
+      path: { type: 'string', description: 'Limit the diff to this file.' },
+      live: { type: 'boolean', description: 'Read the sandbox now, and wake it if it sleeps. Default false.' },
+    },
     ['session_id'],
     { readOnlyHint: true },
     async (ownerId, args) =>
@@ -817,14 +823,20 @@ export const SESSIONS = [
         await loadSandboxSession(ownerId, id);
         const params = new URLSearchParams();
         if (str(args.path)) params.set('path', str(args.path)!);
+        if (args.live !== undefined && bool(args, 'live')) params.set('live', '1');
         const query = params.toString();
-        const { patch } = await callApi<{ patch: string }>(
+        const diff = await callApi<WorkbenchDiff>(
           ownerId,
           'GET',
           `/workbenches/${encodeURIComponent(id)}/diff${query ? `?${query}` : ''}`
         );
-        if (!patch) return 'No diff.';
-        return capped(patch, 'Pass path to read one file at a time. Use talyn_get_session_changes to list the files.');
+        const asOf = diff.source === 'stored'
+          ? `As of ${diff.snapshotAt} (sandbox asleep; Talyn's stored copy).\n`
+          : diff.source === 'github'
+            ? `From GitHub, ${diff.mergeBase?.slice(0, 8)}..${diff.headSha?.slice(0, 8)} (sandbox asleep).\n`
+            : '';
+        if (!diff.patch) return `${asOf}No diff.`;
+        return asOf + capped(diff.patch, 'Pass path to read one file at a time. Use talyn_get_session_changes to list the files.');
       }),
     FEATURE
   ),

@@ -2903,6 +2903,24 @@
           "patch": {
             "type": "string",
             "description": "A unified diff, as `git diff` writes it. Untracked files are diffs against /dev/null."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
@@ -2910,7 +2928,9 @@
           "session_id",
           "path",
           "scope",
-          "patch"
+          "patch",
+          "source",
+          "snapshot_at"
         ]
       },
       "FileList": {
@@ -2933,12 +2953,32 @@
               "type": "string"
             },
             "description": "Tracked and untracked files. Files that git ignores are not listed."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
           "object",
           "session_id",
-          "paths"
+          "paths",
+          "source",
+          "snapshot_at"
         ]
       },
       "FileContent": {
@@ -2968,6 +3008,24 @@
           },
           "content": {
             "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
@@ -2975,7 +3033,9 @@
           "session_id",
           "path",
           "encoding",
-          "content"
+          "content",
+          "source",
+          "snapshot_at"
         ]
       },
       "Script": {
@@ -13191,7 +13251,7 @@
       "get": {
         "operationId": "getSessionDiff",
         "summary": "Read the diff",
-        "description": "A unified diff of the whole session, or of one file with `path`. Reads the sandbox, and wakes it if it sleeps.\n\nScope: `sessions:read`.",
+        "description": "A unified diff of the whole session, or of one file with `path`. A sleeping sandbox answers from the copy Talyn stored, or from GitHub when all the work is pushed; `source` says which. With neither, it answers 409 `snapshot_unavailable`. Send `live=true` to read the sandbox now; that wakes it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -13235,6 +13295,15 @@
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
             "in": "query"
           }
         ],
@@ -13342,7 +13411,7 @@
       "get": {
         "operationId": "listSessionFiles",
         "summary": "List files",
-        "description": "Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. Wakes the sandbox.\n\nScope: `sessions:read`.",
+        "description": "Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. A sleeping sandbox answers from the copy Talyn stored, or 409 `snapshot_unavailable`. Send `live=true` to wake it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -13362,6 +13431,15 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
+            "in": "query"
           }
         ],
         "responses": {
@@ -13468,7 +13546,7 @@
       "get": {
         "operationId": "getSessionFile",
         "summary": "Read a file",
-        "description": "One file as it is in the sandbox now. Text comes back as UTF-8, a binary file as base64. A file over 4 MiB answers 413 `file_too_large`. Wakes the sandbox.\n\nScope: `sessions:read`.",
+        "description": "One file as it is in the sandbox now. Text comes back as UTF-8, a binary file as base64. A file over 4 MiB answers 413 `file_too_large`. A sleeping sandbox answers a changed file from the copy Talyn stored, and a file the session did not change from GitHub at the merge base; `source` says which. With neither, it answers 409 `snapshot_unavailable`. Send `live=true` to read the sandbox now; that wakes it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -13498,6 +13576,15 @@
             },
             "required": true,
             "name": "path",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
             "in": "query"
           }
         ],

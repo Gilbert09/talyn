@@ -1,13 +1,24 @@
-import type { WorkbenchChanges, WorkbenchConfig, WorkbenchDiffScope, WorkbenchPreviewLink } from '@talyn/shared';
+import type {
+  WorkbenchChanges,
+  WorkbenchConfig,
+  WorkbenchDiff,
+  WorkbenchDiffScope,
+  WorkbenchFileContent,
+  WorkbenchFileList,
+  WorkbenchPreviewLink,
+} from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { mintPreviewTicket } from '../preview/previewLinks.js';
 import { previewBaseDomain } from '../preview/previewHost.js';
-import { emptyChanges, getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from './changes.js';
-import { readChangesSnapshot } from './changesSnapshot.js';
+import { getPreviewPatch } from '../preview/workbenchPatch.js';
+import { assertRepoPath, emptyChanges, getChanges, getPatch, listRepoFiles, readRepoFile, storeDiffStat } from './changes.js';
+import { githubDiff, githubFileAt } from './changesGithub.js';
+import { listsKey, readChangesMeta, storeConfig } from './changesStore.js';
+import { storedChanges, storedConfig, storedFile, storedFileList, storedPatch, storedPreviewPatch } from './changesStored.js';
 import { emitWorkbenchChat, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, refuseThread, WorkbenchError } from './errors.js';
 import { startStaleGoldenMove } from './move.js';
-import { chooseReadSource } from './sandboxReadSource.js';
+import { chooseReadSource, type StoredReadReason } from './sandboxReadSource.js';
 import { publicWorkbench } from './prLink.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
@@ -23,7 +34,7 @@ import {
   type WorkbenchRow,
 } from './store.js';
 import { cancelTurn, endCapacityWait, sendMessage } from './turns.js';
-import { noteDiffStatFresh } from './workCheckpoint.js';
+import { noteChangesStale, noteDiffStatFresh } from './workCheckpoint.js';
 
 /**
  * Session operations that the app's routes (`routes/workbenches.ts`) and the
@@ -53,13 +64,39 @@ export async function requireReadySandbox(row: WorkbenchRow, checkGolden = false
 }
 
 /**
- * The changed files. A box that is not running cannot have changed since the
- * last read, so its stored list answers at once; only `live` wakes it. The
- * fleet's record decides whether the box runs (see `sandboxReadSource.ts`),
- * because Talyn does not write `suspended` into the row. An archived session
- * answers from its stored list too. With no stored list, `wakeWithoutSnapshot`
- * decides: the app wakes the box, the public API refuses with
- * `snapshot_unavailable` so a caller never wakes a box it did not ask to.
+ * Where a read without `live` comes from. A box that is not running cannot
+ * have changed, so Talyn's stored copy answers; the fleet's record decides
+ * (see `sandboxReadSource.ts`), because Talyn does not write `suspended` into
+ * the row. Null means "read the box": it runs, or `live` was asked for.
+ */
+async function storedSource(row: WorkbenchRow, live: boolean): Promise<StoredReadReason | null> {
+  if (live || row.runtime !== 'sandbox') return null;
+  const source = await chooseReadSource(row);
+  return source.live ? null : source.reason;
+}
+
+/**
+ * Nothing usable is stored for a read of a box that does not run. An archived
+ * session has no box to wake. A fleet that did not answer may still run the
+ * box, so the read goes on to it (null). Anything else is a refusal that
+ * names the way to wake the box: only a person's refresh does that.
+ */
+function noStoredCopy(reason: StoredReadReason, what: string): WorkbenchError | null {
+  if (reason === 'archived') return notReadyError('archived');
+  if (reason === 'fleet_unreachable') return null;
+  return new WorkbenchError(
+    `The sandbox is asleep and Talyn has no stored copy of ${what}. Use "Refresh from the sandbox" to wake it, or ask again with live=true.`,
+    409,
+    'snapshot_unavailable',
+  );
+}
+
+/**
+ * The changed files. A box that is not running answers from its stored list
+ * at once; only `live` wakes it. An archived session answers from its stored
+ * list too. With no stored list, `wakeWithoutSnapshot` decides: the app wakes
+ * the box, the public API refuses with `snapshot_unavailable` so a caller
+ * never wakes a box it did not ask to.
  */
 export async function readSessionChanges(
   row: WorkbenchRow,
@@ -67,18 +104,16 @@ export async function readSessionChanges(
 ): Promise<WorkbenchChanges> {
   // A thread has no repository: nothing changed, and no box needs to wake to say so.
   if (isThread(row)) return emptyChanges();
-  if (!opts.live && row.runtime === 'sandbox') {
-    const source = await chooseReadSource(row);
-    if (!source.live) {
-      const snapshot = await readChangesSnapshot(row);
-      if (snapshot) return snapshot;
-      if (!opts.wakeWithoutSnapshot && source.reason !== 'archived') {
-        throw new WorkbenchError(
-          'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
-          409,
-          'snapshot_unavailable',
-        );
-      }
+  const reason = await storedSource(row, opts.live);
+  if (reason) {
+    const stored = await storedChanges(row, reason);
+    if (stored) return stored;
+    if (!opts.wakeWithoutSnapshot && reason !== 'archived') {
+      throw new WorkbenchError(
+        'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
+        409,
+        'snapshot_unavailable',
+      );
     }
   }
   await requireReadySandbox(row, true);
@@ -87,35 +122,111 @@ export async function readSessionChanges(
   void storeDiffStat(row, changes).catch((err) =>
     console.warn(`[workbench] storing the diff stat for ${row.id} failed:`, err),
   );
+  // The stored diff no longer matches: take a new copy soon, while the box is awake.
+  void readChangesMeta(row).then((meta) => {
+    if (meta && (meta.listsKey !== listsKey(changes) || meta.sandboxId !== row.sandboxId)) noteChangesStale(row.id);
+  }).catch(() => undefined);
   return changes;
 }
 
+/**
+ * The diff. A sleeping box answers from the stored patch; with none (too
+ * large, or not taken yet), GitHub answers when the work is all pushed;
+ * otherwise the read is refused with a way to wake the box.
+ */
 export async function readSessionDiff(
   row: WorkbenchRow,
   path: string | undefined,
   scope: WorkbenchDiffScope | undefined,
-): Promise<{ patch: string }> {
+  opts: { live?: boolean } = {},
+): Promise<WorkbenchDiff> {
   if (isThread(row)) return { patch: '' };
+  const reason = await storedSource(row, opts.live === true);
+  if (reason) {
+    const stored = await storedPatch(row, scope ?? 'combined', path);
+    if (stored && !('tooLarge' in stored)) return { patch: stored.patch, snapshotAt: stored.snapshotAt, source: 'stored' };
+    const list = await storedChanges(row, reason);
+    const fromGithub = list ? await githubDiff(row, list, scope ?? 'combined', path ? assertRepoPath(path) : undefined) : null;
+    if (fromGithub) return fromGithub;
+    const refusal = noStoredCopy(reason, stored ? 'this diff, because it is too large' : 'this diff');
+    if (refusal) throw refusal;
+  }
   await requireReadySandbox(row);
   return getPatch(row, path, scope);
 }
 
-export async function readSessionFile(row: WorkbenchRow, path: string): Promise<{ content: string; binary: boolean }> {
+/**
+ * One file. A sleeping box answers a changed file from the stored copy, and a
+ * file the session did not change from GitHub at the merge base.
+ */
+export async function readSessionFile(row: WorkbenchRow, path: string, opts: { live?: boolean } = {}): Promise<WorkbenchFileContent> {
+  const reason = isThread(row) ? null : await storedSource(row, opts.live === true);
+  if (reason) {
+    const stored = await storedFile(row, path);
+    if (stored?.kind === 'file') return stored.file;
+    if (stored?.kind === 'missing') throw new WorkbenchError(`${assertRepoPath(path)} does not exist.`, 404, 'file_not_found');
+    if (stored?.kind === 'unchanged') {
+      const meta = await readChangesMeta(row);
+      const answer = await githubFileAt(row, stored.mergeBase, assertRepoPath(path), meta?.takenAt);
+      if (answer && 'content' in answer) return answer;
+      if (answer && 'missing' in answer && stored.known === false) {
+        throw new WorkbenchError(`${assertRepoPath(path)} does not exist.`, 404, 'file_not_found');
+      }
+    }
+    const refusal = noStoredCopy(reason, 'this file');
+    if (refusal) throw refusal;
+  }
   await requireReadySandbox(row);
   return readRepoFile(row, path);
 }
 
-export async function listSessionFiles(row: WorkbenchRow): Promise<{ paths: string[] }> {
+export async function listSessionFiles(row: WorkbenchRow, opts: { live?: boolean } = {}): Promise<WorkbenchFileList> {
   if (isThread(row)) return { paths: [] };
+  const reason = await storedSource(row, opts.live === true);
+  if (reason) {
+    const stored = await storedFileList(row);
+    if (stored) return stored;
+    const refusal = noStoredCopy(reason, 'the file list');
+    if (refusal) throw refusal;
+  }
   await requireReadySandbox(row, true);
   return listRepoFiles(row);
 }
 
-/** The session's script config, read from the box (a thread has none). */
-export async function readSessionConfig(row: WorkbenchRow): Promise<WorkbenchConfig> {
+/**
+ * The session's script config (a thread has none). A sleeping box answers
+ * with the config Talyn last read from it.
+ */
+export async function readSessionConfig(row: WorkbenchRow, opts: { live?: boolean } = {}): Promise<WorkbenchConfig> {
   if (isThread(row)) return loadWorkbenchConfig(row);
+  const reason = await storedSource(row, opts.live === true);
+  if (reason) {
+    const stored = await storedConfig(row);
+    if (stored) return stored;
+    const refusal = noStoredCopy(reason, 'the script config');
+    if (refusal) throw refusal;
+  }
   await requireReadySandbox(row, true);
-  return loadWorkbenchConfigWithDetection(row);
+  const config = await loadWorkbenchConfigWithDetection(row);
+  void storeConfig(row, config);
+  return config;
+}
+
+/**
+ * The patch the preview sync applies. A sleeping box answers from the stored
+ * patch when there is one; otherwise the box wakes, as before, because the
+ * sync has no other source.
+ */
+export async function readSessionPreviewPatch(row: WorkbenchRow, opts: { live?: boolean } = {}): Promise<{ base: string; patch: string }> {
+  refuseThread(row);
+  const reason = await storedSource(row, opts.live === true);
+  if (reason) {
+    const stored = await storedPreviewPatch(row);
+    if (stored) return stored;
+    if (reason === 'archived') throw notReadyError('archived');
+  }
+  await requireReadySandbox(row);
+  return getPreviewPatch(row);
 }
 
 export async function startSessionScript(row: WorkbenchRow, name: string): Promise<void> {

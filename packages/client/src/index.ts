@@ -154,6 +154,9 @@ import type {
   Workbench,
   WorkbenchConfig,
   WorkbenchChanges,
+  WorkbenchDiff,
+  WorkbenchFileContent,
+  WorkbenchFileList,
   WorkbenchDiffScope,
   WorkbenchChat,
   WorkbenchCheckpoint,
@@ -3039,17 +3042,24 @@ export const workbenches = {
       'GET',
       `/workbenches/${enc(id)}/changes${opts.live ? '?live=1' : ''}`
     ),
-  diff: (id: string, path?: string, scope?: WorkbenchDiffScope) => {
+  /**
+   * A sleeping box answers from Talyn's stored copy (`source: 'stored'`) or
+   * GitHub (`source: 'github'`), and is not woken. With neither, the answer is
+   * 409 `snapshot_unavailable` with `wake: true`. `live: true` wakes the box.
+   */
+  diff: (id: string, path?: string, scope?: WorkbenchDiffScope, opts: { live?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (path) qs.set('path', path);
     if (scope) qs.set('scope', scope);
-    return request<{ patch: string }>('GET', `/workbenches/${enc(id)}/diff${qs.size ? `?${qs}` : ''}`);
+    if (opts.live) qs.set('live', '1');
+    return request<WorkbenchDiff>('GET', `/workbenches/${enc(id)}/diff${qs.size ? `?${qs}` : ''}`);
   },
-  file: (id: string, path: string) =>
-    request<{ content: string; binary: boolean }>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}`),
+  file: (id: string, path: string, opts: { live?: boolean } = {}) =>
+    request<WorkbenchFileContent>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}${opts.live ? '&live=1' : ''}`),
   attachmentBlob: async (id: string, path: string): Promise<Blob> =>
     (await rawRequest('GET', `/workbenches/${enc(id)}/attachments/raw?path=${enc(path)}`)).blob(),
-  files: (id: string) => request<{ paths: string[] }>('GET', `/workbenches/${enc(id)}/files`),
+  files: (id: string, opts: { live?: boolean } = {}) =>
+    request<WorkbenchFileList>('GET', `/workbenches/${enc(id)}/files${opts.live ? '?live=1' : ''}`),
   /**
    * The preview proxy for a port a script listens on in the sandbox. Bearer
    * auth like every route, so it is for fetches, not for an iframe `src`.
@@ -3071,7 +3081,9 @@ export const workbenches = {
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
 
   // ---- Scripts (output arrives as `workbench:script` WS frames) ----
-  config: (id: string) => request<WorkbenchConfig>('GET', `/workbenches/${enc(id)}/config`),
+  /** A sleeping box answers with the config Talyn last read from it; `live: true` wakes it. */
+  config: (id: string, opts: { live?: boolean } = {}) =>
+    request<WorkbenchConfig>('GET', `/workbenches/${enc(id)}/config${opts.live ? '?live=1' : ''}`),
   saveDetectedConfig: (id: string) => request<void>('POST', `/workbenches/${enc(id)}/config/detected`),
   scriptOutput: (id: string) => request<import('@talyn/shared').WorkbenchScriptFrame[]>('GET', `/workbenches/${enc(id)}/scripts/output`),
   runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {})) =>

@@ -395,15 +395,29 @@ describe('session tools', () => {
   });
 
   it.each([
-    [{ session_id: 's1' }, null],
-    [{ session_id: 's1', path: 'src/a b.ts' }, 'src/a b.ts'],
-  ])('get_session_diff %j', async (args, path) => {
+    [{ session_id: 's1' }, null, null],
+    [{ session_id: 's1', path: 'src/a b.ts' }, 'src/a b.ts', null],
+    [{ session_id: 's1', live: true }, null, '1'],
+    [{ session_id: 's1', live: false }, null, null],
+  ])('get_session_diff %j', async (args, path, live) => {
     const { calls } = mockApi({
       'GET /api/v1/workbenches/s1': () => session(),
       'GET /api/v1/workbenches/s1/diff': () => ({ patch: 'diff --git a b' }),
     });
     expect(await tool('get_session_diff').handler(OWNER, args)).toBe('diff --git a b');
     expect(calls[1].url.searchParams.get('path')).toBe(path);
+    expect(calls[1].url.searchParams.get('live')).toBe(live);
+  });
+
+  it.each([
+    [{ source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' }, "As of 2026-11-01T10:00:00.000Z (sandbox asleep; Talyn's stored copy)."],
+    [{ source: 'github', mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40) }, 'From GitHub, aaaaaaaa..bbbbbbbb (sandbox asleep).'],
+  ])('get_session_diff says where a diff of a sleeping sandbox came from: %j', async (extra, line) => {
+    mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'GET /api/v1/workbenches/s1/diff': () => ({ patch: 'diff --git a b', ...extra }),
+    });
+    expect(await tool('get_session_diff').handler(OWNER, { session_id: 's1' })).toBe(`${line}\ndiff --git a b`);
   });
 
   it('get_session_diff caps a large diff and says how to read less', async () => {

@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A sleeping session shows its changes without waking its sandbox (2026-11-04)
+
+**What was wrong.** The stored changes list (`changesSnapshot.ts`) was never used in production. The read used it only when `sandbox_state` was not `running`, but nothing writes `suspended` there: an asleep ready session keeps `running`. So every Changes poll ran an exec, the exec woke the box, and the 10 s poll then kept it awake for ever (the fleet measures idle time on requests). The diff, the file list, a file, the script config and the preview patch always read the box.
+
+**What changed.**
+- The fleet's record decides (`sandboxReadSource.ts`, `chooseReadSource`). Its sandbox read never wakes a box and is cached 10 s. Idle and busy read live. Suspended, queued, starting, a lost box, an archived session and a fleet that does not answer read Talyn's stored copy. A read never writes `suspended` into the row. The admin "asleep" filter reads the fleet record too.
+- A full copy of the changes (`changesCapture.ts`, `changesCaptureScript.ts`, `changesStore.ts`): the list, three patches (combined, uncommitted, committed, all tree to tree through a temporary index, `--binary --find-renames`), the work tree's file list, and the changed files' contents. One exec stages it in tmpfs and prints `UNCHANGED` when the merge base, HEAD and tree are those of the last copy. The backend reads each object out in 2 MiB parts into storage, then replaces `meta.json`, then deletes the old generation. Two identical patches are stored once. Caps: 20 MiB per patch, 8 MiB file list, 16 MiB contents and 1 MiB per file (over a cap: `TOO_LARGE`, never cut). Measured on a 266-file, 57,000-line diff of this repository: 1.7 s on macOS, about 2.2 MB stored.
+- A copy is taken after every work checkpoint (same lock, after the save), when a box is ready (start, move, recovery), before an archive deletes the box, and soon after a live list read that found other changes. A list-only write that moves past the copy marks it `listNewer`, and its patches are not served until the next copy.
+- Two columns, `changes_at` and `changes_etag` (migration `0107`), tell clients that a new copy exists. Nothing big goes in Postgres.
+- Reads of a box that does not run: `/changes` (with an `ETag` and 304), `/diff` (stored patch, sliced per file, binary bodies replaced by git's one line), `/files`, `/file`, `/config` (the last answer read from the box) and `/patch` (with binary bodies). With no stored diff, GitHub answers when the work is all pushed (`compareCommits`, cached 10 min). A file the session did not change comes from GitHub at the merge base. A rate limit is a "no", never a wait. Otherwise a 409 `snapshot_unavailable` with `wake: true`; only `live=1` wakes the box. The public API and the MCP tools take `live` and say where an answer came from.
+
+**Open.** No pre-sleep capture (the capture runs on activity, so an idle box already has its last state) and no retention sweep for archived sessions. The Run panel's config is stored only after a live read of it.
+
 ## Operator console: session boxes on the Runs page, a Sessions page, host health (2026-11-03)
 
 **What was wrong.** The Runs page joined fleet sandboxes only to `talyn-<task>` ids. Every session and thread box (`talyn-wb-<24 hex>[-rN]--<hash>`) showed "orphan" with no owner. The gateway's sandbox index names no host, so HOST was blank for every box. The backend folds `suspended` into the `running` run status, so every sleeping box showed "wedged?". Run detail, events and Cancel dialled the host directly with `FLEET_API_TOKEN`, which resolves to the fleet's empty tenant and cannot see a gateway-placed box: Cancel read "no such sandbox" as "already gone" and reported success.

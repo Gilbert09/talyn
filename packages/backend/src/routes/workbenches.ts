@@ -1,5 +1,4 @@
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
-import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
 import { forwardRequestHeaders, isSafePreviewPath, proxyBody, proxyPortRequest } from '../services/preview/portsHttp.js';
 import { PREVIEW_TICKET_RATE } from '../services/preview/previewLinks.js';
@@ -67,6 +66,7 @@ import {
   readSessionConfig,
   readSessionDiff,
   readSessionFile,
+  readSessionPreviewPatch,
   requireReadySandbox,
   resizeSession,
   startSessionScript,
@@ -163,11 +163,19 @@ function fail(res: Response, err: unknown): void {
   const refusal = fleetErrorAsRefusal(err);
   if (refusal) {
     if (!(err instanceof WorkbenchError)) console.warn('[workbench] fleet request failed:', err);
+    // `wake`: the box sleeps and nothing is stored; a read with `live=1` wakes it.
+    if (refusal.code === 'snapshot_unavailable') {
+      res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, wake: true });
+      return;
+    }
     bad(res, refusal.status, refusal.message, refusal.code);
     return;
   }
   throw err;
 }
+
+/** `?live=1` or `?live=true`: read the box now, and wake it if it sleeps. Only a person's refresh sends it. */
+const wantsLive = (req: Request) => req.query.live === '1' || req.query.live === 'true';
 
 export function workbenchRoutes(): Router {
   const router = Router();
@@ -850,8 +858,16 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       // Only `?live=1` (a person's refresh) wakes a box that has a stored list.
-      const live = req.query.live === '1' || req.query.live === 'true';
-      ok(res, await readSessionChanges(row, { live, wakeWithoutSnapshot: true }));
+      const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: true });
+      if (changes.etag) {
+        res.setHeader('ETag', `"${changes.etag}"`);
+        const match = req.headers['if-none-match'];
+        if (typeof match === 'string' && match.split(',').some((tag) => tag.trim().replace(/^W\//, '') === `"${changes.etag}"`)) {
+          res.status(304).end();
+          return;
+        }
+      }
+      ok(res, changes);
     } catch (err) {
       fail(res, err);
     }
@@ -867,7 +883,7 @@ export function workbenchRoutes(): Router {
         await requireReadySandbox(row);
         return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
       }
-      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
+      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -881,7 +897,7 @@ export function workbenchRoutes(): Router {
         await requireReadySandbox(row);
         return bad(res, 400, 'path is required');
       }
-      ok(res, await readSessionFile(row, req.query.path));
+      ok(res, await readSessionFile(row, req.query.path, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -891,7 +907,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      ok(res, await listSessionFiles(row));
+      ok(res, await listSessionFiles(row, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -904,7 +920,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     if (isThread(row)) return ok(res, await loadWorkbenchConfig(row));
     try {
-      ok(res, await readSessionConfig(row));
+      ok(res, await readSessionConfig(row, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -1003,9 +1019,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      refuseThread(row);
-      await requireReadySandbox(row);
-      ok(res, await getPreviewPatch(row));
+      ok(res, await readSessionPreviewPatch(row, { live: wantsLive(req) }));
     } catch (err) { fail(res, err); }
   });
 

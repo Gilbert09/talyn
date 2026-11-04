@@ -1589,7 +1589,7 @@ class GitHubService extends EventEmitter {
     ref: string | undefined,
     maxBytes: number,
     followDepth: number = SYMLINK_FOLLOW_DEPTH
-  ): Promise<{ content: string | null; size: number } | null> {
+  ): Promise<{ content: string | null; size: number; bytes?: Buffer } | null> {
     const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : '';
     let entry: GitHubContentsEntry;
     try {
@@ -1616,7 +1616,7 @@ class GitHubService extends EventEmitter {
     if (entry.encoding !== 'base64' || typeof entry.content !== 'string') {
       return { content: null, size };
     }
-    return { content: Buffer.from(entry.content, 'base64').toString('utf8'), size };
+    return { content: Buffer.from(entry.content, 'base64').toString('utf8'), size, bytes: Buffer.from(entry.content, 'base64') };
   }
 
   /**
@@ -2988,6 +2988,32 @@ class GitHubService extends EventEmitter {
     patch?: string;
   }>> {
     return this.apiRequest(workspaceId, `/repos/${owner}/${repo}/pulls/${number}/files`);
+  }
+
+  /**
+   * The files that changed between two commits, with their patches
+   * (`GET /repos/{owner}/{repo}/compare/{base}...{head}`). GitHub lists at
+   * most 300 files on this route and leaves out a patch that is too large.
+   * Null when GitHub does not know one of the commits (404 or 422).
+   */
+  async compareCommits(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    base: string,
+    head: string
+  ): Promise<{
+    files: Array<{ filename: string; previous_filename?: string; status: string; patch?: string }>;
+  } | null> {
+    try {
+      const result = await this.apiRequest<{
+        files?: Array<{ filename: string; previous_filename?: string; status: string; patch?: string }>;
+      }>(workspaceId, `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100`);
+      return { files: result.files ?? [] };
+    } catch (err) {
+      if (isGitHubNotFound(err) || isGitHubUnprocessable(err)) return null;
+      throw err;
+    }
   }
 
   /**
