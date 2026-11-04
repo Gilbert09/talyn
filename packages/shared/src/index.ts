@@ -575,7 +575,39 @@ export function normaliseFleetSwitchAtPercent(
   return { ok: true, value };
 }
 
+export const DEFAULT_AUTO_ARCHIVE_IDLE_DAYS = 7;
+export const MAX_AUTO_ARCHIVE_IDLE_DAYS = 365;
+
+/**
+ * Check an `autoArchiveIdleDays` value from a client: a whole number of days
+ * from 1 to MAX_AUTO_ARCHIVE_IDLE_DAYS, or 0 or null to turn the archive off.
+ * The cap is one year: a longer window is the same as off for a session
+ * that keeps a sandbox.
+ */
+export function normaliseAutoArchiveIdleDays(
+  value: unknown
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (value === null || value === 0) return { ok: true, value: null };
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_AUTO_ARCHIVE_IDLE_DAYS
+  ) {
+    return {
+      ok: false,
+      error: `settings.autoArchiveIdleDays must be a whole number from 1 to ${MAX_AUTO_ARCHIVE_IDLE_DAYS}, or 0 or null to turn it off`,
+    };
+  }
+  return { ok: true, value };
+}
+
 export interface WorkspaceSettings {
+  /**
+   * Days of no activity after which a session is archived on its own.
+   * Unset means DEFAULT_AUTO_ARCHIVE_IDLE_DAYS. 0 or null turns it off.
+   */
+  autoArchiveIdleDays?: number | null;
   continuousBuild?: ContinuousBuildSettings;
   /**
    * The usage level, in percent, at which a fleet account counts as spent and

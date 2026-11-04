@@ -44,6 +44,7 @@ import {
   codeReviewReviewersProblem,
   codeReviewSettingsPatch,
   normaliseBranchPrefix,
+  normaliseAutoArchiveIdleDays,
   normaliseFleetSwitchAtPercent,
   resolveCodeReviewSettings,
   type CodeReviewSettings,
@@ -409,6 +410,12 @@ export function workspaceRoutes(): Router {
       }
       if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
+      }
+      if (body.settings.autoArchiveIdleDays !== undefined) {
+        const idleDays = normaliseAutoArchiveIdleDays(body.settings.autoArchiveIdleDays);
+        if (!idleDays.ok) return res.status(400).json({ success: false, error: idleDays.error });
+        // Stored as a 0, never a JSON null: absent means the default, so "off" has to be a value.
+        body.settings.autoArchiveIdleDays = idleDays.value ?? 0;
       }
       if (body.settings.fleetSwitchAtPercent !== undefined) {
         const switchAt = normaliseFleetSwitchAtPercent(body.settings.fleetSwitchAtPercent);

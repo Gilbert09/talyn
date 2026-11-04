@@ -750,6 +750,13 @@
       "when": 1790900000027,
       "tag": "0107_workbench_changes_capture",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1790900000028,
+      "tag": "0108_workbench_last_activity",
+      "breakpoints": true
     }
   ]
 }

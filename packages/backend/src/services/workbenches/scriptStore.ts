@@ -5,7 +5,7 @@ import { getPoolDbClient } from '../../db/client.js';
 import { workbenchScriptRuns as runs } from '../../db/schema.js';
 import { cleanJsonbString } from './jsonSafe.js';
 import { TURN_OWNER } from './ownership.js';
-import type { WorkbenchRow } from './store.js';
+import { touchWorkbenchActivity, type WorkbenchRow } from './store.js';
 
 const columns = {
   id: runs.id, sandboxId: runs.sandboxId, workbenchId: runs.workbenchId, workspaceId: runs.workspaceId, name: runs.name,
@@ -17,6 +17,7 @@ export async function claimScript(row: WorkbenchRow, name: string): Promise<Scri
     sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null, startedAt: new Date() };
   const [claimed] = await getPoolDbClient().insert(runs).values(values)
     .onConflictDoUpdate({ target: runs.id, set: values, setWhere: or(eq(runs.running, false), ne(runs.sandboxId, row.sandboxId!), sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`) }).returning(columns);
+  if (claimed) touchWorkbenchActivity(row.id, true);
   return claimed ?? null;
 }
 function owned(lease: ScriptLease) {

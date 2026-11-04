@@ -2122,6 +2122,8 @@ export const workbenches = pgTable(
     changesAt: timestamp('changes_at', { withTimezone: true }),
     /** The stored copy's etag. A client fetches the changes again when it moves. */
     changesEtag: text('changes_etag'),
+    /** Activity the chat tables do not show: terminal input, a script start, a restore (migration 0108). */
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -1,5 +1,6 @@
 import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
+import { IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
@@ -73,7 +74,7 @@ import {
   clearWorkCheckpoint,
   requestArchiveRestore, cancelPendingArchive, releaseArchive, ensureSandboxGeneration,
   finishArchive,
-  markArchive,
+  markArchive, type IdleArchiveClaim,
   pendingArchives,
   renewArchive,
   deleteWorkbenchRow,
@@ -821,10 +822,12 @@ async function finishThreadProvision(
 
 /** Archive answers after the durable marker is written. */
 export function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow>;
-export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true }): Promise<WorkbenchRow | null>;
-export async function archiveWorkbench(workbenchId: string, opts?: { autoForMergedPr: true }): Promise<WorkbenchRow | null> {
-  const row = await markArchive(workbenchId, opts?.autoForMergedPr);
-  if (!row && opts?.autoForMergedPr) return null;
+export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true } | { idle: IdleArchiveClaim }): Promise<WorkbenchRow | null>;
+export async function archiveWorkbench(
+  workbenchId: string, opts?: { autoForMergedPr: true } | { idle: IdleArchiveClaim },
+): Promise<WorkbenchRow | null> {
+  const row = await markArchive(workbenchId, Boolean(opts && 'autoForMergedPr' in opts), opts && 'idle' in opts ? opts.idle : undefined);
+  if (!row && opts) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
   scheduleArchive(row.id);
@@ -1011,7 +1014,7 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
   const name = taken.includes(row.name) ? pickWorkbenchName(taken) : row.name;
 
   if (row.runtime !== 'sandbox') {
-    return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+    return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name, lastActivityAt: new Date() });
   }
   if (row.sandboxId && row.sandboxState !== 'deleted') {
     try {
@@ -1021,12 +1024,13 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
         await stopScript(row, 'archive');
         await killMarker(row, archiveSaveMarker(interruptedArchive));
       }
-      return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+      return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name, lastActivityAt: new Date() });
     } catch (error) { if (!fleetHoldsNoBox(error)) throw error; }
   }
   row = await setRow(row, {
     archivedAt: null,
     restoreRequestedAt: null,
+    lastActivityAt: new Date(),
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
@@ -1149,6 +1153,7 @@ async function turnSweepTick(): Promise<void> {
 let bootTimer: NodeJS.Timeout | null = null;
 let moveSweepTimer: NodeJS.Timeout | null = null;
 let archiveSweepTimer: NodeJS.Timeout | null = null;
+let idleSweepTimer: NodeJS.Timeout | null = null;
 let archiveSweepRunning = false;
 const ARCHIVE_POLLER = 'workbench-archive-sweep';
 
@@ -1251,6 +1256,11 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
     archiveSweepTimer = setInterval(() => void archiveSweepTick(), 60_000);
     archiveSweepTimer.unref();
   }
+  if (!idleSweepTimer) {
+    debugBus.registerPoller(IDLE_POLLER, IDLE_SWEEP_INTERVAL_MS, 'Archives sessions with no activity for the workspace window (7 days by default).');
+    idleSweepTimer = setInterval(() => void idleArchiveTick(), IDLE_SWEEP_INTERVAL_MS);
+    idleSweepTimer.unref();
+  }
   if (!moveSweepTimer) {
     debugBus.registerPoller(
       MOVE_SWEEP_POLLER,
@@ -1269,6 +1279,8 @@ export function stopWorkbenches(): void {
   turnSweepTimer = null;
   if (archiveSweepTimer) clearInterval(archiveSweepTimer);
   archiveSweepTimer = null;
+  if (idleSweepTimer) clearInterval(idleSweepTimer);
+  idleSweepTimer = null;
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
   provisionSweepArmed = false;

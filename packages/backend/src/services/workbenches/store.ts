@@ -1686,7 +1686,16 @@ export async function chatIdsOf(workbenchIds: string[]): Promise<string[]> {
 }
 
 /** Mark the archive before any sandbox work starts. Preserve an active move's lease. */
-export async function markArchive(id: string, autoForMergedPr = false): Promise<WorkbenchRow | null> {
+/** An archive by the idle sweep: the guard is re-checked inside the claiming UPDATE. */
+export interface IdleArchiveClaim {
+  guard: SQL;
+  days: number;
+}
+
+export async function markArchive(id: string, autoForMergedPr = false, idle?: IdleArchiveClaim): Promise<WorkbenchRow | null> {
+  const noRunningChat = sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
+    WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`;
+  const auto = autoForMergedPr || Boolean(idle);
   const row = await db().transaction(async (tx) => {
     const [archived] = await tx.update(workbenchesTable).set({
       archivedAt: new Date(),
@@ -1695,22 +1704,27 @@ export async function markArchive(id: string, autoForMergedPr = false): Promise<
       status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
       statusMessage: null,
       // An archive also ends a request to archive after the turn, so a restore does not archive again.
-      settings: sql`(CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
+      // The reason of an earlier idle archive goes too, so a later manual one does not wear it.
+      settings: sql`((CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
         THEN ${workbenchesTable.settings}
         ELSE (${workbenchesTable.settings} - 'archiveOnIdle') || jsonb_build_object('autoArchivedForPr',
           COALESCE(${workbenchesTable.settings} -> 'autoArchivedForPr', '[]'::jsonb)
-          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'`,
+          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'
+          - 'autoArchivedReason')${idle ? sql` || jsonb_build_object('autoArchivedReason', 'idle')` : sql``}`,
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
-      autoForMergedPr ? and(
-        isNull(workbenchesTable.archivedAt),
-        sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
-        sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
-          WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`,
-      ) : or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')),
+      idle ? and(isNull(workbenchesTable.archivedAt), noRunningChat, idle.guard)
+        : autoForMergedPr ? and(
+          isNull(workbenchesTable.archivedAt),
+          sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
+          noRunningChat,
+        ) : or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')),
     )).returning(WORKBENCH_COLUMNS);
-    if (archived && autoForMergedPr) {
+    if (archived && auto) {
+      const text = idle
+        ? `Archived after ${idle.days} ${idle.days === 1 ? 'day' : 'days'} with no activity.`
+        : 'The pull request was merged, so Talyn archived this session.';
       await tx.execute(sql`
         WITH first_chat AS (
           SELECT id FROM workbench_chats WHERE workbench_id = ${id} ORDER BY created_at, id LIMIT 1
@@ -1720,14 +1734,31 @@ export async function markArchive(id: string, autoForMergedPr = false): Promise<
         )
         INSERT INTO workbench_events (chat_id, seq, turn, event)
         SELECT id, next_seq, turn_count, ${JSON.stringify({
-          type: 'system', subtype: 'pr_merged_archive',
-          text: 'The pull request was merged, so Talyn archived this session.',
+          type: 'system', subtype: idle ? 'idle_archive' : 'pr_merged_archive', text,
         })}::jsonb FROM alloc
       `);
     }
     return archived;
   });
-  return row ?? (autoForMergedPr ? null : getWorkbench(id));
+  return row ?? (auto ? null : getWorkbench(id));
+}
+
+const ACTIVITY_WRITE_EVERY_MS = 5 * 60_000;
+const lastActivityWrite = new Map<string, number>();
+
+/**
+ * Record activity the chat tables do not show (terminal input, a script start).
+ * A burst of typing is one write per five minutes per session and process;
+ * never throws, never waits.
+ */
+export function touchWorkbenchActivity(id: string, force = false): void {
+  const now = Date.now();
+  if (!force && now - (lastActivityWrite.get(id) ?? 0) < ACTIVITY_WRITE_EVERY_MS) return;
+  lastActivityWrite.set(id, now);
+  if (lastActivityWrite.size > 5000) lastActivityWrite.clear();
+  void db().update(workbenchesTable).set({ lastActivityAt: new Date(now) })
+    .where(eq(workbenchesTable.id, id))
+    .catch((err) => console.warn(`[workbench] noting activity on ${id} failed:`, err));
 }
 
 const archiveAvailable = () => or(isNull(workbenchesTable.archiveLeaseUntil), lt(workbenchesTable.archiveLeaseUntil, new Date()));
