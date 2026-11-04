@@ -15,7 +15,9 @@ import { billingEnabled, buildBillingStatus } from './entitlements.js';
 import {
   creditPackForProduct,
   isTeamProductId,
+  personalProductTier,
   polarWebhookSecret,
+  subscriptionProductLabel,
   teamIdFromCustomerExternalId,
   teamProductTier,
 } from './polar.js';
@@ -107,6 +109,8 @@ export interface ApplyResult {
    * — see {@link describeSubscriptionEvent}. Absent when nothing was applied.
    */
   previouslyGranting?: boolean;
+  /** The prior product of this same subscription, when an update changed it. */
+  previousProductId?: string;
 }
 
 function subscriptionFromEvent(data: unknown): PolarSubscription | null {
@@ -323,6 +327,7 @@ export async function applyTeamSubscriptionEvent(
       subscriptionId: teamsTable.polarSubscriptionId,
       eventAt: teamsTable.subscriptionEventAt,
       status: teamsTable.subscriptionStatus,
+      productId: teamsTable.polarProductId,
     })
     .from(teamsTable)
     .where(eq(teamsTable.id, teamId))
@@ -367,6 +372,9 @@ export async function applyTeamSubscriptionEvent(
     teamId,
     previouslyGranting,
     firstActivation: grants && !current?.subscriptionId,
+    ...(eventType === 'subscription.updated' && sameSubscription && current?.productId && sub.productId && current.productId !== sub.productId
+      ? { previousProductId: current.productId }
+      : {}),
   };
 }
 
@@ -393,6 +401,7 @@ export async function applySubscriptionEvent(
       // For the notification, not for the state machine — the stored status is
       // what says whether this subscription was already running.
       status: usersTable.subscriptionStatus,
+      productId: usersTable.polarProductId,
     })
     .from(usersTable)
     .where(eq(usersTable.id, userId))
@@ -428,7 +437,14 @@ export async function applySubscriptionEvent(
     })
     .where(eq(usersTable.id, userId));
 
-  return { applied: true, userId, previouslyGranting };
+  return {
+    applied: true,
+    userId,
+    previouslyGranting,
+    ...(eventType === 'subscription.updated' && sameSubscription && current[0]?.productId && sub.productId && current[0].productId !== sub.productId
+      ? { previousProductId: current[0].productId }
+      : {}),
+  };
 }
 
 /**
@@ -561,6 +577,75 @@ function notifyCreditOrder(eventType: string, order: PolarOrder, result: OrderAp
         polar_event_type: eventType,
       }),
       dedupeKey: `polar:${eventId}`,
+      occurredAt: occurredAt.toISOString(),
+    };
+  });
+}
+
+function notifyPlanChange(result: ApplyResult, sub: PolarSubscription, eventId: string, occurredAt: Date): void {
+  if (!result.previousProductId || !sub.productId) return;
+  const team = Boolean(result.teamId);
+  const oldProductId = result.previousProductId;
+  const oldPlan = subscriptionProductLabel(oldProductId, team) ?? oldProductId;
+  const newPlan = subscriptionProductLabel(sub.productId, team) ?? sub.product?.name ?? sub.productId;
+  const oldTier = team ? teamProductTier(oldProductId) : personalProductTier(oldProductId);
+  const newTier = team ? teamProductTier(sub.productId) : personalProductTier(sub.productId);
+  const level: TodiexLevel = oldTier === 'legacy_pro' && newTier === 'pro' ? 'success' : 'info';
+
+  notifyTodiex(async () => {
+    if (result.teamId) {
+      const [storedTeam] = await getPoolDbClient()
+        .select({ name: teamsTable.name })
+        .from(teamsTable)
+        .where(eq(teamsTable.id, result.teamId))
+        .limit(1);
+      return {
+        kind: 'team.plan_changed',
+        level,
+        title: `Talyn plan changed: ${oldPlan} → ${newPlan}${storedTeam?.name ? ` — ${storedTeam.name}` : ''}`,
+        message: summarizeSubscription(sub),
+        metadata: compactMetadata({
+          team_id: result.teamId,
+          team_name: storedTeam?.name ?? null,
+          old_plan: oldPlan,
+          new_plan: newPlan,
+          old_product_id: oldProductId,
+          new_product_id: sub.productId,
+          product: sub.product?.name ?? null,
+          price: formatSubscriptionPrice(sub.amount, sub.currency),
+          billing_interval: sub.recurringInterval ?? null,
+          status: sub.status,
+          subscription_id: sub.id,
+          polar_event_type: 'subscription.updated',
+        }),
+        dedupeKey: `polar:${eventId}:plan_changed`,
+        occurredAt: occurredAt.toISOString(),
+      };
+    }
+
+    const stored = await describeUser(result.userId!, { refresh: true });
+    const person = { ...stored, email: stored.email ?? sub.customer?.email ?? null };
+    const who = personLabel(person);
+    const title = `Talyn plan changed: ${oldPlan} → ${newPlan}`;
+    return {
+      kind: 'subscription.plan_changed',
+      level,
+      title: who ? `${title} — ${who}` : title,
+      message: summarizeSubscription(sub),
+      metadata: compactMetadata({
+        ...personMetadata(person),
+        old_plan: oldPlan,
+        new_plan: newPlan,
+        old_product_id: oldProductId,
+        new_product_id: sub.productId,
+        product: sub.product?.name ?? null,
+        price: formatSubscriptionPrice(sub.amount, sub.currency),
+        billing_interval: sub.recurringInterval ?? null,
+        status: sub.status,
+        subscription_id: sub.id,
+        polar_event_type: 'subscription.updated',
+      }),
+      dedupeKey: `polar:${eventId}:plan_changed`,
       occurredAt: occurredAt.toISOString(),
     };
   });
@@ -787,6 +872,10 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
         };
       });
     }
+  }
+
+  if (sub && result.applied && result.previousProductId) {
+    notifyPlanChange(result, sub, eventId, occurredAt);
   }
 
   res.status(200).json({ success: true });

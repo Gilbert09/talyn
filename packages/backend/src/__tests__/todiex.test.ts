@@ -6,15 +6,17 @@ import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import type { CloudTaskProvider } from '../services/cloudProviders/types.js';
 import {
   describeSubscriptionEvent,
+  applySubscriptionEvent,
   formatPeriodEnd,
   formatSubscriptionPrice,
   summarizeSubscription,
 } from '../services/billing/webhook.js';
+import { subscriptionProductLabel } from '../services/billing/polar.js';
 import {
   personMetadata,
   resetTodiexContextCacheForTests,
 } from '../services/todiexContext.js';
-import { createTestDb, seedUser } from './helpers/testDb.js';
+import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 
@@ -274,6 +276,44 @@ describe('which subscription transitions are worth a notification', () => {
         describeSubscriptionEvent(eventType, status, { previouslyGranting: true })?.kind
       ).toBe(kind);
     });
+  });
+});
+
+describe('stored subscription product changes', () => {
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    await seedUser(testDb.db);
+    vi.stubEnv('POLAR_PRODUCT_ID_MONTHLY', 'legacy-month');
+    vi.stubEnv('POLAR_PRODUCT_ID_PRO_MONTHLY', 'pro-month');
+    vi.stubEnv('POLAR_PRODUCT_ID_PRO_ANNUAL', 'pro-year');
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await cleanup();
+  });
+
+  const sub = (productId: string | undefined, status = 'active') => ({
+    id: 'sub-1',
+    status,
+    customer: { externalId: TEST_USER_ID },
+    productId,
+  });
+
+  it('returns the old product only for an existing subscription that changes product', async () => {
+    expect((await applySubscriptionEvent('subscription.created', sub('legacy-month'), new Date(1000))).previousProductId).toBeUndefined();
+    expect((await applySubscriptionEvent('subscription.updated', sub('pro-month'), new Date(2000))).previousProductId).toBe('legacy-month');
+    expect((await applySubscriptionEvent('subscription.updated', sub('pro-month'), new Date(3000))).previousProductId).toBeUndefined();
+    expect((await applySubscriptionEvent('subscription.updated', sub(undefined), new Date(4000))).previousProductId).toBeUndefined();
+  });
+
+  it('uses the billing product map for the title labels', () => {
+    expect(subscriptionProductLabel('legacy-month', false)).toBe('Legacy Pro (monthly)');
+    expect(subscriptionProductLabel('pro-month', false)).toBe('Pro (monthly)');
+    expect(subscriptionProductLabel('pro-year', false)).toBe('Pro (annual)');
   });
 });
 

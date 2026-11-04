@@ -26,6 +26,8 @@ import { sandboxRefusal, workbenchReadiness, type ReadinessUser } from './readin
 import { sandboxIdFor } from './sandboxRuntime.js';
 import { sendWebhookSignal } from '../apiWebhooks/signals.js';
 import { conversationRecap } from './agentRecap.js';
+import { notifyTodiex } from '../todiex.js';
+import { describeWorkspace, ownerLine, workspaceLabel, workspaceMetadata } from '../todiexContext.js';
 import {
   getWorkbench,
   insertChat,
@@ -252,7 +254,25 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   const data = await publicWorkbench(row);
   sendWebhookSignal({ kind: 'session_created', workspaceId, sessionId: row.id });
   await emitWorkbenchUpdated(data);
-  if (row.runtime === 'sandbox') scheduleProvision(row.id);
+  if (row.runtime === 'sandbox') {
+    scheduleProvision(row.id);
+    notifyTodiex(async () => {
+      const ws = await describeWorkspace(workspaceId);
+      return {
+        kind: 'workspace.first_session',
+        level: 'success',
+        title: `${workspaceLabel(ws)} started its first Talyn session`,
+        message: [`Session started for ${repoFullName}.`, ownerLine(ws)].filter(Boolean).join(' '),
+        metadata: {
+          repository: repoFullName,
+          repository_id: repo.id,
+          ...workspaceMetadata(ws),
+          session_id: row.id,
+        },
+        dedupeKey: `workspace:${workspaceId}:first_session`,
+      };
+    });
+  }
   return data;
 }
 

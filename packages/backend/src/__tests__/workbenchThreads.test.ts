@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
+import { resetTodiexContextCacheForTests } from '../services/todiexContext.js';
 
 /**
  * Threads, end to end against a fake fleet: a workbench with no repository
@@ -65,6 +66,9 @@ describe('threads', () => {
   let server: Server;
   let base: string;
   let fleet: FakeFleet;
+  const inboxRequests: Record<string, unknown>[] = [];
+  const inboxEvents: Record<string, unknown>[] = [];
+  const inboxKeys = new Set<string>();
 
   async function call(method: string, path: string, body?: unknown, user = 'owner-a'): Promise<Json> {
     const resp = await fetch(`${base}${path}`, {
@@ -106,6 +110,10 @@ describe('threads', () => {
 
   beforeEach(async () => {
     emitted.length = 0;
+    inboxRequests.length = 0;
+    inboxEvents.length = 0;
+    inboxKeys.clear();
+    resetTodiexContextCacheForTests();
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
     vi.stubEnv('FLEET_API_TOKEN', 'fleet-token');
     vi.stubEnv('FLEET_PINNED_ENDPOINT', '');
@@ -130,6 +138,16 @@ describe('threads', () => {
 
     const app = express();
     app.use(express.json());
+    app.post('/api/ingest/events', (req, res) => {
+      const event = req.body as Record<string, unknown>;
+      inboxRequests.push(event);
+      const key = String(event.dedupeKey);
+      if (!inboxKeys.has(key)) {
+        inboxKeys.add(key);
+        inboxEvents.push(event);
+      }
+      res.json({ ok: true });
+    });
     app.use((req, _res, next) => {
       const id = req.headers['x-user'] as string;
       req.user = { id, email: `${id}@example.test`, isAdmin: false };
@@ -154,6 +172,29 @@ describe('threads', () => {
   });
 
   describe('creating a thread', () => {
+    it('announces the first sandbox session once and ignores later sessions and threads', async () => {
+      vi.stubEnv('TODIEX_URL', base);
+      vi.stubEnv('TODIEX_TOKEN', 'tdx_test');
+
+      const first = await createSession();
+      await vi.waitFor(() => expect(inboxEvents).toHaveLength(1));
+      expect(inboxEvents[0]).toMatchObject({
+        kind: 'workspace.first_session',
+        level: 'success',
+        title: 'A started its first Talyn session',
+        metadata: { workspace_id: 'ws-a', repository: 'acme/app', session_id: first.id },
+        dedupeKey: 'workspace:ws-a:first_session',
+      });
+      expect(inboxEvents[0].message).toContain('acme/app');
+
+      await createSession();
+      await vi.waitFor(() => expect(inboxRequests).toHaveLength(2));
+      await createThread();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(inboxRequests).toHaveLength(2);
+      expect(inboxEvents).toHaveLength(1);
+    });
+
     it('stores no repository and boots the smallest box with no clone', async () => {
       const thread = await createThread();
       expect(thread).toMatchObject({ kind: 'thread', repositoryId: null, repoFullName: '', branch: '', threadId: null });

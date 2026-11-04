@@ -763,6 +763,21 @@ describe('team subscription webhook', () => {
     expect((await userRow(BUYER)).plan).toBe('free');
   });
 
+  it('captures the prior team product once when the product changes', async () => {
+    const previousPro = process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY;
+    process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY = 'prod-team-pro-monthly';
+    try {
+      const { id: teamId } = await createTeam(BUYER, 'Acme');
+      await applySubscriptionEvent('subscription.created', teamSub(teamId), new Date(1000));
+      const changed = teamSub(teamId, { productId: 'prod-team-pro-monthly' });
+      expect((await applySubscriptionEvent('subscription.updated', changed, new Date(2000))).previousProductId).toBe('prod-team-monthly');
+      expect((await applySubscriptionEvent('subscription.updated', changed, new Date(3000))).previousProductId).toBeUndefined();
+    } finally {
+      if (previousPro === undefined) delete process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY;
+      else process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY = previousPro;
+    }
+  });
+
   it('an unknown team is recorded as no_team and touches no users row', async () => {
     const result = await applySubscriptionEvent(
       'subscription.active',
@@ -846,6 +861,54 @@ describe('team subscription webhook', () => {
       expect(seats.map((s) => s.githubUserId)).toEqual([BUYER_GH]);
       expect(await resolveEntitlement(BUYER)).toEqual({ tier: 'legacy_pro', source: 'team' });
       expect(emit).toHaveBeenCalledWith(BUYER, expect.objectContaining({ planSource: 'team' }));
+    });
+
+    it('announces a team product upgrade once', async () => {
+      const previousPro = process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY;
+      const previousUrl = process.env.TODIEX_URL;
+      const previousToken = process.env.TODIEX_TOKEN;
+      process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY = 'prod-team-pro-monthly';
+      const received: Record<string, unknown>[] = [];
+      const inbox = express();
+      inbox.post('/api/ingest/events', express.json(), (req, res) => {
+        received.push(req.body as Record<string, unknown>);
+        res.json({ ok: true });
+      });
+      const inboxServer = createServer(inbox);
+      await new Promise<void>((r) => inboxServer.listen(0, '127.0.0.1', () => r()));
+      process.env.TODIEX_URL = `http://127.0.0.1:${(inboxServer.address() as AddressInfo).port}`;
+      process.env.TODIEX_TOKEN = 'tdx_test';
+
+      try {
+        const { id: teamId } = await createTeam(BUYER, 'Acme');
+        await post('evt-team-start', { type: 'subscription.created', data: teamSub(teamId) });
+        await vi.waitFor(() => expect(received).toHaveLength(1));
+        received.length = 0;
+
+        const upgraded = teamSub(teamId, { productId: 'prod-team-pro-monthly' });
+        await post('evt-team-upgrade', { type: 'subscription.updated', data: upgraded }, 1_780_000_100);
+        await vi.waitFor(() => expect(received).toHaveLength(1));
+        expect(received[0]).toMatchObject({
+          kind: 'team.plan_changed',
+          level: 'success',
+          title: 'Talyn plan changed: Team Legacy Pro (monthly) → Team Pro (monthly) — Acme',
+          metadata: { team_id: teamId, old_product_id: 'prod-team-monthly', new_product_id: 'prod-team-pro-monthly' },
+        });
+        await post('evt-team-renewal', { type: 'subscription.updated', data: upgraded }, 1_780_000_200);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(received).toHaveLength(1);
+      } finally {
+        if (previousPro === undefined) delete process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY;
+        else process.env.POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY = previousPro;
+        if (previousUrl === undefined) delete process.env.TODIEX_URL;
+        else process.env.TODIEX_URL = previousUrl;
+        if (previousToken === undefined) delete process.env.TODIEX_TOKEN;
+        else process.env.TODIEX_TOKEN = previousToken;
+        await new Promise<void>((r) => {
+          inboxServer.closeAllConnections();
+          inboxServer.close(() => r());
+        });
+      }
     });
 
     it('gives an admin whose seat has gone a seat again on the next team event', async () => {

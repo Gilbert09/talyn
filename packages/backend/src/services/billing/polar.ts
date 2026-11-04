@@ -106,6 +106,20 @@ export function teamProductTier(productId: string | null | undefined): TeamTier 
   return null;
 }
 
+/** Name a subscription product from the same ids that determine its tier. */
+export function subscriptionProductLabel(productId: string, team: boolean): string | null {
+  const tier = team ? teamProductTier(productId) : personalProductTier(productId);
+  if (!tier) return null;
+  const products = team
+    ? tier === 'pro' ? TEAM_PRO_PRODUCT_ENV : TEAM_LEGACY_PRODUCT_ENV
+    : tier === 'pro' ? PRO_PRODUCT_ENV : LEGACY_PRODUCT_ENV;
+  const period = (Object.keys(products) as BillingPeriod[]).find(
+    (candidate) => envProduct(products[candidate]) === productId,
+  );
+  const name = `${team ? 'Team ' : ''}${tier === 'pro' ? 'Pro' : 'Legacy Pro'}`;
+  return period ? `${name} (${period})` : name;
+}
+
 /** Where the web app shows billing. Checkout comes back here. */
 export const BILLING_PAGE_PATH = '/settings/billing';
 

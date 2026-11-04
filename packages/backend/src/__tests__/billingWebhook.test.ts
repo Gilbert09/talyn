@@ -39,6 +39,8 @@ const POLAR_ENV = {
   POLAR_ENVIRONMENT: 'sandbox',
   POLAR_PRODUCT_ID_MONTHLY: 'prod-monthly',
   POLAR_PRODUCT_ID_ANNUAL: 'prod-annual',
+  POLAR_PRODUCT_ID_PRO_MONTHLY: 'prod-pro-monthly',
+  POLAR_PRODUCT_ID_PRO_ANNUAL: 'prod-pro-annual',
 } as const;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -382,6 +384,59 @@ describe('what the inbox is told about a subscription', () => {
       subscription_id: 'sub-1',
       polar_event_type: 'subscription.created',
     });
+  });
+
+  it.each([
+    ['prod-monthly', 'prod-pro-monthly', 'Legacy Pro (monthly)', 'Pro (monthly)', 'success'],
+    ['prod-pro-monthly', 'prod-pro-annual', 'Pro (monthly)', 'Pro (annual)', 'info'],
+    ['prod-pro-annual', 'prod-monthly', 'Pro (annual)', 'Legacy Pro (monthly)', 'info'],
+  ])('announces one product change from %s to %s', async (oldProductId, newProductId, oldPlan, newPlan, level) => {
+    await post('evt-plan-start', {
+      type: 'subscription.created',
+      data: subscription({ productId: oldProductId }),
+    });
+    await nextInboxEvent();
+    received.length = 0;
+
+    const changed = subscription({ productId: newProductId });
+    await post('evt-plan-change', { type: 'subscription.updated', data: changed }, { timestamp: 1_780_000_100 });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(received[0]).toMatchObject({
+      kind: 'subscription.plan_changed',
+      level,
+      title: `Talyn plan changed: ${oldPlan} → ${newPlan} — ${TEST_USER_ID}@example.test`,
+      metadata: {
+        old_plan: oldPlan,
+        new_plan: newPlan,
+        old_product_id: oldProductId,
+        new_product_id: newProductId,
+        user_id: TEST_USER_ID,
+      },
+      dedupeKey: 'polar:evt-plan-change:plan_changed',
+    });
+
+    await post('evt-plan-renewal', { type: 'subscription.updated', data: changed }, { timestamp: 1_780_000_200 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(received).toHaveLength(1);
+  });
+
+  it('does not announce a renewal or status update with the same product', async () => {
+    await post('evt-status-start', {
+      type: 'subscription.created',
+      data: subscription({ productId: 'prod-pro-monthly' }),
+    });
+    await nextInboxEvent();
+    received.length = 0;
+    await post('evt-status-renewal', {
+      type: 'subscription.updated',
+      data: subscription({ productId: 'prod-pro-monthly', currentPeriodEnd: '2027-08-06T00:00:00.000Z' }),
+    }, { timestamp: 1_780_000_100 });
+    await post('evt-status-update', {
+      type: 'subscription.updated',
+      data: subscription({ productId: 'prod-pro-monthly', cancelAtPeriodEnd: true }),
+    }, { timestamp: 1_780_000_200 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(received).toHaveLength(0);
   });
 
   it('reports the plan this very event just granted', async () => {
