@@ -40,13 +40,14 @@ vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => (
   },
 }));
 
+// Loaded first, so these bind to the mocked sandboxRuntime before the routes pull in the import cycle through recovery.
+const { putInstructionFile, ruleFileName, syncInstructionFiles, CODEX_BLOCK_END, CODEX_BLOCK_START, MEMORY_RULE_FILE } =
+  await import('../services/workbenches/instructions.js');
+const { writeSandboxFiles } = await import('../services/workbenches/sandboxFiles.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
-const { putInstructionFile, ruleFileName, syncInstructionFiles, CODEX_BLOCK_END, CODEX_BLOCK_START, MEMORY_RULE_FILE } =
-  await import('../services/workbenches/instructions.js');
-const { writeSandboxFiles } = await import('../services/workbenches/sandboxFiles.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;

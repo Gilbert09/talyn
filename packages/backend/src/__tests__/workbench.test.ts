@@ -150,7 +150,7 @@ describe('action prompts', () => {
   const actions = Object.keys(DEFAULT_WORKBENCH_ACTION_PROMPTS) as WorkbenchPromptAction[];
 
   it('has a default for every action, and Create PR is not one', () => {
-    expect(actions.sort()).toEqual(['fix_checks', 'rename_branch', 'resolve_conflicts']);
+    expect(actions.sort()).toEqual(['address_review', 'fix_checks', 'rename_branch', 'resolve_conflicts']);
   });
 
   it.each(actions.map((a) => [a]))('%s mentions the fleet proxy', (action) => {

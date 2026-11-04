@@ -137,7 +137,7 @@ describe('githubService contents API', () => {
     const file = await githubService.getFileContent(
       'ws1', 'acme', 'widgets', '.claude/skills/x/SKILL.md', undefined, 1024
     );
-    expect(file).toEqual({ content: '# skill body', size: 12 });
+    expect(file).toEqual({ content: '# skill body', size: 12, bytes: Buffer.from('# skill body', 'utf8') });
   });
 
   it('reports the resolved path alongside a symlinked listing', async () => {
