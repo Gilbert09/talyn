@@ -64,7 +64,7 @@ const CLEANUP_TIMEOUT_MS = 15_000;
 const LISTS_MAX_BYTES = 32 * 1024 * 1024;
 
 export type CaptureOutcome =
-  | { kind: 'captured'; meta: ChangesMeta; changes: WorkbenchChanges }
+  | { kind: 'captured'; meta: ChangesMeta; changes: WorkbenchChanges; /** Set on the way out of the lock; see {@link captureChanges}. */ after?: { row: WorkbenchRow; observedAt: Date } }
   | { kind: 'unchanged'; meta: ChangesMeta }
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; detail: string };
@@ -118,7 +118,14 @@ function capturable(row: WorkbenchRow, archiving: boolean): row is WorkbenchRow 
 export function captureChanges(row: WorkbenchRow, reason: string): Promise<CaptureOutcome> {
   if (!capturable(row, reason === 'archive')) return Promise.resolve({ kind: 'skipped', reason: 'no running sandbox' });
   if (!isWorkStorageConfigured()) return Promise.resolve({ kind: 'skipped', reason: 'storage is not configured' });
-  return withChangesLock(row.id, () => capture(row, reason)).catch((err): CaptureOutcome => {
+  return withChangesLock(row.id, () => capture(row, reason)).then(async (outcome): Promise<CaptureOutcome> => {
+    if (outcome.kind !== 'captured' || !outcome.after) return outcome;
+    const { row: updated, observedAt } = outcome.after;
+    delete outcome.after;
+    // After the lock is released: storing the list calls `noteListRead`, which takes the same lock and would wait for this capture forever.
+    await storeDiffStat(updated, outcome.changes, { observedAt }).catch((err) => console.warn(`[workbench] storing the diff stat of ${row.id} failed:`, err));
+    return outcome;
+  }).catch((err): CaptureOutcome => {
     if (err instanceof WorkStorageUnavailableError) return { kind: 'skipped', reason: 'storage is not configured' };
     return { kind: 'failed', detail: userFacingError(err) };
   });
@@ -239,11 +246,10 @@ async function capture(row: WorkbenchRow & { sandboxId: string }, reason: string
         console.warn(`[workbench] removing the old stored changes of ${row.id} failed:`, err),
       );
     }
-    // The sidebar's number and the list-only copy follow the same read, unless a newer list is already stored.
-    await storeDiffStat(updated, changes, { observedAt }).catch((err) => console.warn(`[workbench] storing the diff stat of ${row.id} failed:`, err));
     const bytes = Object.values(objects).reduce((sum, o) => sum + ('bytes' in o && !o.from ? o.bytes : 0), 0);
     record(row, reason, `stored ${meta.etag} (${bytes} bytes) in ${Date.now() - started} ms`, true);
-    return { kind: 'captured', meta, changes };
+    // The sidebar's number and the list-only copy follow the same read, unless a newer list is already stored (see captureChanges).
+    return { kind: 'captured', meta, changes, after: { row: updated, observedAt } };
   } catch (err) {
     if (err instanceof FleetRunNotFoundError) {
       staged = false;

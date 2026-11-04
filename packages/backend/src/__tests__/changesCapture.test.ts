@@ -37,7 +37,12 @@ vi.mock('../services/workbenches/prLink.js', async (importOriginal) => ({
 }));
 vi.mock('../services/workbenches/changes.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/workbenches/changes.js')>()),
-  storeDiffStat: vi.fn(async (row: WorkbenchRow) => row),
+  // As the real one does: it stores the list, which takes the changes lock (a capture must not hold it meanwhile).
+  storeDiffStat: vi.fn(async (row: WorkbenchRow, changes: WorkbenchChanges) => {
+    const { noteListRead } = await import('../services/workbenches/changesStore.js');
+    await noteListRead(row, changes);
+    return row;
+  }),
 }));
 vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/workbenches/sandboxRuntime.js')>()),
@@ -501,6 +506,30 @@ describe.skipIf(process.platform === 'win32')('the stored changes of a real repo
     current = { ...current, sandboxId: 'box-3' };
     expect((await storedChanges(current, 'asleep'))?.stale).toBe('sandbox_replaced');
   });
+
+  it('says the copy is stale when the row stat is newer than the copy, and not when they agree', async () => {
+    const first = await capture();
+    if (first.kind !== 'captured') throw new Error(first.kind);
+    const stat = (files: number) => ({ added: files, removed: 0, files });
+    current = { ...current, diffStat: { ...first.changes.uncommittedStats!, uncommittedStats: first.changes.uncommittedStats!, committedStats: first.changes.committedStats! } };
+    expect((await storedChanges(current, 'asleep'))?.stale).toBeUndefined();
+    current = { ...current, diffStat: { ...stat(0), uncommittedStats: stat(0), committedStats: stat(first.changes.committedStats!.files + 2) } };
+    expect((await storedChanges(current, 'asleep'))?.stale).toBe('list_newer');
+    current = { ...current, diffStat: null };
+    expect((await storedChanges(current, 'asleep'))?.stale).toBeUndefined();
+  });
+
+  it('captures again after the work moved, and moves changes_at (a capture never holds the lock its diff-stat write needs)', async () => {
+    const first = await Promise.race([capture(), new Promise((r) => setTimeout(() => r('hung'), 5000))]);
+    expect(first).toMatchObject({ kind: 'captured' });
+    const at = current.changesAt;
+    write('later.txt', 'committed after the first copy\n');
+    commit('later');
+    await new Promise((r) => setTimeout(r, 15));
+    const second = await Promise.race([capture(), new Promise((r) => setTimeout(() => r('hung'), 5000))]);
+    expect(second).toMatchObject({ kind: 'captured' });
+    expect(current.changesAt!.getTime()).toBeGreaterThan(at!.getTime());
+  }, 20_000);
 
   it('stops serving the patches when a later list read found other changes, and serves them again after a capture', async () => {
     const first = await capture();

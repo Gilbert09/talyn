@@ -3,6 +3,7 @@ import type {
   WorkbenchChanges,
   WorkbenchConfig,
   WorkbenchDiff,
+  WorkbenchDiffStat,
   WorkbenchDiffScope,
   WorkbenchFileContent,
   WorkbenchFileList,
@@ -49,8 +50,25 @@ async function usableMeta(row: WorkbenchRow): Promise<ChangesMeta | null> {
   return meta && !meta.listNewer ? meta : null;
 }
 
-function staleOf(row: WorkbenchRow, meta: ChangesMeta): WorkbenchChanges['stale'] {
-  if (meta.listNewer) return 'list_newer';
+const sameStats = (a: WorkbenchDiffStat, b: WorkbenchDiffStat) => a.added === b.added && a.removed === b.removed && a.files === b.files;
+
+/**
+ * True when the row's stored diff stat (written at every turn end and every
+ * live read) disagrees with the copy's list: the copy was taken before work
+ * the row already knows about. A missing stat on either side proves nothing.
+ */
+function rowKnowsBetter(row: Pick<WorkbenchRow, 'diffStat'>, lists: WorkbenchChanges): boolean {
+  const known = row.diffStat;
+  if (!known) return false;
+  const pairs: Array<[WorkbenchDiffStat | undefined, WorkbenchDiffStat | undefined]> = [
+    [known.uncommittedStats, lists.uncommittedStats],
+    [known.committedStats, lists.committedStats],
+  ];
+  return pairs.some(([a, b]) => a && b && !sameStats(a, b));
+}
+
+function staleOf(row: WorkbenchRow, meta: ChangesMeta, lists: WorkbenchChanges): WorkbenchChanges['stale'] {
+  if (meta.listNewer || rowKnowsBetter(row, lists)) return 'list_newer';
   return row.sandboxId && row.sandboxId !== meta.sandboxId ? 'sandbox_replaced' : undefined;
 }
 
@@ -61,7 +79,7 @@ export async function storedChanges(row: WorkbenchRow, reason: WorkbenchStoredRe
     const lists = await readGenerationJson<WorkbenchChanges>(listsKeyOf(row, meta.generation));
     if (lists && Array.isArray(lists.files)) {
       const patch = meta.objects.patch;
-      const stale = staleOf(row, meta);
+      const stale = staleOf(row, meta, lists);
       return {
         ...lists,
         snapshotAt: meta.takenAt,
