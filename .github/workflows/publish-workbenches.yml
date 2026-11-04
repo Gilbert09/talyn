@@ -73,6 +73,15 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Install Python for node-gyp
+        if: steps.changed.outputs.build == 'true'
+        # node-pty is rebuilt from source and its node-gyp still imports
+        # distutils, which Python 3.12 removed. The macOS runner's default
+        # python3 moved past 3.11 on 2026-11-04 and failed the stable release.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Resolve the version
         if: steps.changed.outputs.build == 'true'
         # The next stable patch, then the channel and the run number. The run
