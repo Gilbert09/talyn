@@ -85,6 +85,32 @@ export function idleArchiveGuard(now: Date): SQL {
   )`;
 }
 
+/**
+ * How an archive that a person or a merge asked for treats the box, read
+ * without waking it. `running`: the ordinary archive (also when the fleet did
+ * not answer, because the archive was asked for). `from_saved`: the box sleeps
+ * or is gone, and a save newer than the last activity holds all of its work,
+ * so the stored checkpoint becomes the archive. `wake`: the box sleeps and no
+ * such save exists, so the archive wakes it to save the work.
+ */
+export type ArchiveBoxSource = 'running' | 'from_saved' | 'wake';
+
+export async function archiveBoxSource(id: string): Promise<ArchiveBoxSource> {
+  const [row] = await getPoolDbClient().select({
+    workspaceId: w.workspaceId, fleetHost: w.fleetHost, sandboxId: w.sandboxId, runtime: w.runtime, kind: w.kind,
+    sandboxState: w.sandboxState, checkedAt: w.workCheckedAt, activityAt: sql<Date | string>`(${lastActivity})`,
+  }).from(w).where(eq(w.id, id));
+  if (!row?.sandboxId || row.runtime !== 'sandbox' || row.kind === 'thread' || row.sandboxState === 'deleted') return 'running';
+  const read = await readFleetRecord(
+    { workspaceId: row.workspaceId, fleetHost: row.fleetHost, sandboxId: row.sandboxId }, Date.now(), { fresh: true },
+  );
+  if (!read.ok) return 'running';
+  const awake = !read.terminal && !read.retired && ['queued', 'starting', 'idle', 'busy'].includes(read.sandbox.status);
+  if (awake) return 'running';
+  const savedAfterActivity = row.checkedAt && row.checkedAt.getTime() >= new Date(row.activityAt).getTime();
+  return savedAfterActivity ? 'from_saved' : 'wake';
+}
+
 /** Tests start with no remembered skips. */
 export function resetIdleSkipsForTests(): void { skipped.clear(); }
 

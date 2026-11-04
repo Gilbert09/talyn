@@ -1590,11 +1590,24 @@ describe('workbench routes', () => {
     });
 
     it.each([
+      ['no list is stored', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
+      ['storage is not configured', () => setWorkObjectStoreForTests(null)],
+      ['the stored list is not readable', (wb: Loose) => store.objects.set(changesSnapshotKey(wb), Buffer.from('{oops'))],
+    ])('refuses without waking the sleeping box when %s', async (_name, arrange) => {
+      const wb = await sleepingWorkbench();
+      arrange(wb);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const before = { reads: changesReads(), resumes: fleet.resumes };
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+      expect({ reads: changesReads(), resumes: fleet.resumes }).toEqual(before);
+      expect(startStaleGoldenMove).not.toHaveBeenCalled();
+    });
+
+    it.each([
       ['the client asks for live (live=1)', '?live=1', () => undefined],
       ['the client asks for live (live=true)', '?live=true', () => undefined],
-      ['no list is stored', '', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
-      ['storage is not configured', '', () => setWorkObjectStoreForTests(null)],
-      ['the stored list is not readable', '', (wb: Loose) => store.objects.set(changesSnapshotKey(wb), Buffer.from('{oops'))],
+      ['live and no list is stored', '?live=1', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
     ])('reads the box as before when %s', async (_name, query, arrange) => {
       const wb = await sleepingWorkbench();
       arrange(wb);

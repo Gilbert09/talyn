@@ -7,6 +7,7 @@ import { userFacingError } from './errors.js';
 import { moveReadChunkScript } from './move.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
 import { recordWorkbenchEvent, runCapture } from './sandboxRuntime.js';
+import { chooseReadSource } from './sandboxReadSource.js';
 import {
   appendEvents,
   clearWorkCheckpoint,
@@ -380,14 +381,23 @@ function liveSandbox(row: WorkbenchRow | null): row is WorkbenchRow & { sandboxI
   return Boolean(row && row.runtime === 'sandbox' && row.sandboxId && row.status === 'ready' && !row.archivedAt && !row.archivePendingAt);
 }
 
+/**
+ * The throttles fire up to minutes after the activity that armed them, and the
+ * box may sleep by then. Their exec would wake it, and only a person's action
+ * or a prompt may do that: a box the fleet does not report running is skipped.
+ */
+async function boxRunsNow(row: WorkbenchRow): Promise<boolean> {
+  return (await chooseReadSource(row)).live;
+}
+
 async function refreshDiffStatOf(id: string): Promise<void> {
   const row = await getWorkbench(id);
-  if (liveSandbox(row)) await refreshDiffStat(row);
+  if (liveSandbox(row) && await boxRunsNow(row)) await refreshDiffStat(row);
 }
 
 async function checkpointOf(id: string): Promise<void> {
   const row = await getWorkbench(id);
-  if (row) await checkpointWork(row, 'during_turn');
+  if (liveSandbox(row) && await boxRunsNow(row)) await checkpointWork(row, 'during_turn');
 }
 
 let checkpointClock = realClock;

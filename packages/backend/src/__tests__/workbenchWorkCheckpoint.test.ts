@@ -10,6 +10,7 @@ import { repositories, workbenchChats, workbenches, workbenchTurnTimings, worksp
 import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
+import * as readSource from '../services/workbenches/sandboxReadSource.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { provisionWorkbench } from '../services/workbenches/lifecycle.js';
 import { AGENT_MEMORY_RECAP_NOTE } from '../services/workbenches/recovery.js';
@@ -582,6 +583,7 @@ describe('saved work in a session', () => {
       return { exitCode: r.exitCode ?? 0, stdout, stderr: r.stderr ?? '', stdoutBytes: Buffer.from(stdout) };
     });
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
+    vi.spyOn(readSource, 'chooseReadSource').mockResolvedValue({ live: true });
     store = memoryWorkObjectStore();
     setWorkObjectStoreForTests(store);
     clock = fakeClock();
@@ -836,6 +838,18 @@ describe('saved work in a session', () => {
       await flush();
       expect(saves()).toHaveLength(1);
     });
+
+    it.each(['asleep', 'waking', 'fleet_unreachable'] as const)(
+      'never wakes the box: a later save or diff stat is skipped when the box is %s',
+      async (reason) => {
+        vi.mocked(readSource.chooseReadSource).mockResolvedValue({ live: false, reason });
+        noteWorkActivity(WB);
+        clock.advance(CHECKPOINT_DURING_TURN_MS);
+        await flush();
+        expect(saves()).toHaveLength(0);
+        expect(changes.refreshDiffStat).not.toHaveBeenCalled();
+      },
+    );
 
     it('saves nothing for a session that is not ready', async () => {
       await updateWorkbench(WB, { status: 'provisioning' });

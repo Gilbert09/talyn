@@ -26,21 +26,19 @@ export function resetLostRecoveryForTests(): void {
 /**
  * Before replacing a box, ask the fleet whether it is merely asleep. A
  * `suspended` box (in memory, on disk or hibernated to object storage) is
- * resumed and kept, with all its work. Only a box the fleet reports as gone,
- * retired or terminal is replaced. An answer that cannot be read keeps the old
+ * kept, with all its work, and it is NOT resumed: recovery also runs from
+ * reads and background work, and only a person's action or a prompt may wake
+ * a box. The next exec wakes it (the fleet's `ensureRunning`, or `withWake` in
+ * sandboxRuntime.ts for a hibernated box), and a hibernated copy that cannot
+ * be restored is replaced then. Only a box the fleet reports as gone, retired
+ * or terminal is replaced. An answer that cannot be read keeps the old
  * behaviour: the call that failed already said the box is not there.
- *
- * Exec calls already wake a suspended box (the fleet's `ensureRunning`) and a
- * hibernated one (`withWake` in sandboxRuntime.ts), so this mostly catches a
- * box that went to sleep between the failed call and now.
  */
-async function resumeIfSuspended(row: WorkbenchRow & { sandboxId: string }): Promise<boolean> {
+async function isSuspended(row: WorkbenchRow & { sandboxId: string }): Promise<boolean> {
   try {
     const client = await fleetClientFor(row.workspaceId, row.fleetHost);
     const { sandbox, terminal, retired } = await client.getSandbox(row.sandboxId);
-    if (terminal || retired || sandbox?.status !== 'suspended') return false;
-    await client.resumeSandbox(row.sandboxId);
-    return true;
+    return !terminal && !retired && sandbox?.status === 'suspended';
   } catch {
     return false;
   }
@@ -69,9 +67,9 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
   const sandboxId = row.sandboxId;
   const hibernationLost = isHibernationLost(err);
   const work = runWithoutScope(async () => {
-    // The resume just failed; another one would download the copy again.
-    if (!hibernationLost && await resumeIfSuspended({ ...row, sandboxId })) {
-      recordWorkbenchEvent(row, 'sandbox_resumed', `sandbox ${sandboxId} was suspended, not lost; resumed it`);
+    // A failed resume says the hibernated copy is lost, however the record reads.
+    if (!hibernationLost && await isSuspended({ ...row, sandboxId })) {
+      recordWorkbenchEvent(row, 'sandbox_kept', `sandbox ${sandboxId} was suspended, not lost; kept it asleep`);
       return;
     }
     await stopSandboxScripts(row.id, sandboxId);

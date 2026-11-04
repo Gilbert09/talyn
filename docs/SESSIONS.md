@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Opening a session no longer wakes its sandbox (2026-11-04)
+
+**What was wrong.** The owner opened an existing session and its Sandbox tab said "Up for less than a minute". The app called `POST /workbenches/:id/wake` on every open (`WorkbenchView`), and the fleet journal on scaleway-1 shows five sleeping posthog sessions resumed at 12:48:13-12:48:27 UTC. No line said "resumed a suspended sandbox for a request that needs its guest", so no exec, pty or port request woke them: each was an explicit `POST /v1/sandboxes/{id}/resume`. Talyn sends that from three places only: the wake route, `withWake` (a hibernated box) and the lost-box recovery. Railway logs were not readable, so the one that fired is not proved; the wake route on open fits best. A manual archive of a hibernated box also pulled 6.7 GB back to run the archive script and save, and that resume then failed.
+
+**What changed.**
+- Back end: the app's `/changes` refuses with `snapshot_unavailable` when a sleeping box has no stored list (it used to wake the box). The ports route answers `sandbox_asleep` for a sleeping box when the request carries `X-Talyn-No-Wake: 1`. The lost-box recovery keeps a suspended box and no longer resumes it. The throttled checkpoint and diff stat skip a box the fleet does not report running. A manual archive and a merge archive use the storage-only branch (`archiveBoxSource`, `settings.archiveFromSaved`) when the box sleeps and a save is newer than the last activity; with no such save the archive wakes the box, and a chat note says so.
+- Front end (`tom/workbenches`, both apps): opening a session reads it and does not wake it. The terminal connects on a click in it or the first key, never on mount. The Changes tab offers "Wake the sandbox" when nothing is stored. The desktop's on-open port check sends the no-wake header.
+- Guard: `workbenchOpenNoWake.test.ts` sends every open-time read to a suspended fake box and allows only `getSandbox`.
+
+**Open.** Typing in the composer still wakes the box (throttled to 30 s), as a prewarm for the prompt. The backup sweep runs its backup when the fleet does not answer `getSandbox`.
+
 ## A sleeping session shows its changes without waking its sandbox (2026-11-04)
 
 **What was wrong.** The stored changes list (`changesSnapshot.ts`) was never used in production. The read used it only when `sandbox_state` was not `running`, but nothing writes `suspended` there: an asleep ready session keeps `running`. So every Changes poll ran an exec, the exec woke the box, and the 10 s poll then kept it awake for ever (the fleet measures idle time on requests). The diff, the file list, a file, the script config and the preview patch always read the box.

@@ -39,6 +39,7 @@ import { importClaudeSession, importTargetChat, parseImportBody } from '../servi
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
+import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
@@ -153,6 +154,9 @@ function parseKinds(raw: unknown): WorkbenchKind[] | null {
 }
 
 const ok = <T>(res: Response, data: T) => res.json({ success: true, data } as ApiResponse<T>);
+/** A request header that asks a box read not to wake a sleeping box. Never forwarded to the box. */
+const NO_WAKE_HEADER = 'x-talyn-no-wake';
+
 const bad = (res: Response, status: number, error: string, code?: string) =>
   res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
 
@@ -858,8 +862,8 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      // Only `?live=1` (a person's refresh) wakes a box that has a stored list.
-      const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: true });
+      // Only `?live=1` (a person's refresh) wakes a sleeping box, with or without a stored list.
+      const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: false });
       const etag = changesResponseEtag(changes);
       if (etag) {
         res.setHeader('ETag', etag);
@@ -1054,6 +1058,10 @@ export function workbenchRoutes(): Router {
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
     try {
+      // The app's check of a preview port, sent with no user action: a sleeping box stays asleep.
+      if (req.headers[NO_WAKE_HEADER] === '1' && !(await chooseReadSource(row)).live) {
+        return bad(res, 409, 'The sandbox is asleep. Talyn does not wake it to check a preview port.', 'sandbox_asleep');
+      }
       await requireReadySandbox(row);
       const body = await proxyBody(req);
       if (body === 'too_large') return bad(res, 413, 'That request body is too large to forward.');

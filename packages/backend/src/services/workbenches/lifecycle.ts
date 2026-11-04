@@ -1,6 +1,6 @@
 import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
-import { IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
+import { archiveBoxSource, IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
@@ -826,7 +826,10 @@ export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: t
 export async function archiveWorkbench(
   workbenchId: string, opts?: { autoForMergedPr: true } | { idle: IdleArchiveClaim },
 ): Promise<WorkbenchRow | null> {
-  const row = await markArchive(workbenchId, Boolean(opts && 'autoForMergedPr' in opts), opts && 'idle' in opts ? opts.idle : undefined);
+  const idle = opts && 'idle' in opts ? opts.idle : undefined;
+  // A person's or a merge's archive of a sleeping box: a fresh save is the archive, so nothing wakes the box.
+  const source = idle ? 'running' : await archiveBoxSource(workbenchId);
+  const row = await markArchive(workbenchId, Boolean(opts && 'autoForMergedPr' in opts), idle, source === 'running' ? undefined : source);
   if (!row && opts) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
@@ -878,7 +881,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && row.settings?.archiveFromSaved) {
-      // An idle archive of a sleeping box: the saved copy is the archive, and nothing here wakes the box.
+      // An archive of a sleeping box with a fresh save: the saved copy is the archive, and nothing here wakes the box.
       await promoteCheckpointToArchive(row);
       await checkLease();
       await deleteSavedWork(row, ['checkpoint']).catch((err) =>

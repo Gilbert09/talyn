@@ -113,9 +113,9 @@ function noStoredCopy(reason: StoredReadReason, what: string): WorkbenchError | 
 /**
  * The changed files. A box that is not running answers from its stored list
  * at once; only `live` wakes it. An archived session answers from its stored
- * list too. With no stored list, `wakeWithoutSnapshot` decides: the app wakes
- * the box, the public API refuses with `snapshot_unavailable` so a caller
- * never wakes a box it did not ask to.
+ * list too. With no stored list, `wakeWithoutSnapshot` decides. Both the app
+ * and the public API pass false: the read refuses with `snapshot_unavailable`,
+ * so opening a session never wakes its box.
  */
 export async function readSessionChanges(
   row: WorkbenchRow,
@@ -128,11 +128,7 @@ export async function readSessionChanges(
     const stored = await storedChanges(row, reason);
     if (stored) return stored;
     if (!opts.wakeWithoutSnapshot && wouldWake(reason)) {
-      throw new WorkbenchError(
-        'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
-        409,
-        'snapshot_unavailable',
-      );
+      throw noStoredCopy(reason, 'its changes')!;
     }
   }
   await requireReadySandbox(row, true);
