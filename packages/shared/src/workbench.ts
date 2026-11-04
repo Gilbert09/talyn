@@ -225,6 +225,13 @@ export interface Workbench {
    * A Slack source lets the UI draw "Open thread" (`permalink`).
    */
   source?: WorkbenchSource | null;
+  /**
+   * When Talyn last stored a copy of the changes (diff, file list and changed
+   * files), so they show while the sandbox sleeps. Absent on older servers.
+   */
+  changesAt?: string | null;
+  /** The stored copy's etag. Fetch the changes again when it moves. */
+  changesEtag?: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -373,6 +380,59 @@ export interface WorkbenchChanges {
    * asleep: the ISO time the copy was taken. Absent on a live read.
    */
   snapshotAt?: string;
+  /** `stored` when the answer came from Talyn's copy. Absent on a live read and on older servers. */
+  source?: WorkbenchChangesSource;
+  /** Why the stored copy answered. */
+  storedReason?: WorkbenchStoredReason;
+  /** The stored copy's etag. Send it as `If-None-Match` to get a 304 when nothing moved. */
+  etag?: string;
+  /** The sandbox the copy was taken on. */
+  sandboxId?: string;
+  /** The merge base the stored diff was taken against. */
+  mergeBase?: string;
+  /** Whether the stored copy has the diff. Absent: a live read, or a server with no stored diff. */
+  patch?: { available: boolean; tooLarge?: boolean };
+  /** Whether the stored copy has the repository's file list (`files` is the changed files). */
+  fileList?: { available: boolean };
+  /**
+   * Set when the copy may be out of date: `sandbox_replaced` when the session
+   * moved to a new sandbox after the copy, `list_newer` when a later list
+   * read found other changes than the stored diff.
+   */
+  stale?: 'sandbox_replaced' | 'list_newer';
+}
+
+/** Where a read of a session's work came from. */
+export type WorkbenchChangesSource = 'live' | 'stored' | 'github';
+
+/** Why a stored copy answered instead of the sandbox. */
+export type WorkbenchStoredReason = 'asleep' | 'waking' | 'archived' | 'lost' | 'starting' | 'fleet_unreachable';
+
+/** A diff of the session. Set `snapshotAt` and `source` when it did not come from the sandbox now. */
+export interface WorkbenchDiff {
+  patch: string;
+  snapshotAt?: string;
+  source?: WorkbenchChangesSource;
+  /** For a `github` answer: the commits the diff is between. */
+  mergeBase?: string;
+  headSha?: string;
+}
+
+/** The repository's files. `snapshotAt` is set when the list is Talyn's stored copy. */
+export interface WorkbenchFileList {
+  paths: string[];
+  snapshotAt?: string;
+  source?: WorkbenchChangesSource;
+}
+
+/** One file. `source` and `snapshotAt` say where it came from when not the sandbox now. */
+export interface WorkbenchFileContent {
+  content: string;
+  binary: boolean;
+  snapshotAt?: string;
+  source?: WorkbenchChangesSource;
+  /** For a `github` answer: the commit the file was read at. */
+  ref?: string;
 }
 
 /** The agent's to-do list, from Claude's `TodoWrite` or Codex's `todo_list` item. */
