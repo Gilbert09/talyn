@@ -18,6 +18,7 @@ const { team, state, refresh } = vi.hoisted(() => ({
     removeAdmin: vi.fn(),
     searchGithubUsers: vi.fn(),
     checkout: vi.fn(),
+    changePlan: vi.fn(),
   },
   state: { teamsOffered: true },
   refresh: vi.fn(),
@@ -69,6 +70,7 @@ function detail(overrides: Partial<TeamDetail> = {}): TeamDetail {
     id: 'team-1',
     name: 'Acme',
     active: true,
+    tier: 'legacy_pro',
     planSource: 'subscription',
     seatsPurchased: 3,
     seatsUsed: 1,
@@ -103,6 +105,30 @@ afterEach(() => {
 });
 
 describe('TeamBilling', () => {
+  it.each([
+    ['pro', { tier: 'pro' as const }, false],
+    ['override', { planSource: 'override' as const }, false],
+    ['inactive', { active: false }, false],
+    ['legacy subscription', {}, true],
+  ])('shows the team move card for %s only when eligible', async (_name, overrides, visible) => {
+    team.get.mockResolvedValue(detail(overrides));
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+    await screen.findByText('Team: Acme');
+    expect(screen.queryByTestId('team-move-to-pro') !== null).toBe(visible);
+  });
+
+  it('sends the chosen period and waits for the tier update', async () => {
+    team.get.mockResolvedValue(detail());
+    team.changePlan.mockResolvedValue(undefined);
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+    await screen.findByTestId('team-move-to-pro');
+    fireEvent.click(screen.getByRole('button', { name: 'Annual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
+    await waitFor(() => expect(team.changePlan).toHaveBeenCalledWith('team-1', { period: 'annual' }));
+    expect(await screen.findByText('Moving to Pro. Seats change as soon as Polar confirms.')).toBeTruthy();
+    expect(team.get).toHaveBeenCalledTimes(2);
+  });
+
   it('tells a seated member who pays, even with the teams flag off', () => {
     state.teamsOffered = false;
     render(<TeamBilling status={status(MEMBERSHIP)} />);

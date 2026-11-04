@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, CreditCard, Download, Loader2, UserPlus, Users, X } from 'lucide-react';
 import {
+  PLAN_LIMITS,
   TEAM_MIN_SEATS,
   teamPriceFor,
   type BillingOrder,
@@ -9,7 +10,7 @@ import {
   type TeamPricing,
   type GitHubAccountSuggestion,
 } from '@talyn/shared';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { useBillingStore } from '../../stores/billing';
@@ -382,6 +383,10 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
         </Card>
       </div>
 
+      {team.tier === 'legacy_pro' && team.planSource === 'subscription' && team.active && (
+        <MoveTeamToProCard team={team} pricing={pricing} onChanged={load} onStarted={startCheckoutPollBurst} />
+      )}
+
       {team.active && (
         <SeatList
           team={team}
@@ -404,6 +409,68 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
       )}
 
       {orders.length > 0 && <TeamOrders teamId={teamId} orders={orders} />}
+    </div>
+  );
+}
+
+function MoveTeamToProCard({
+  team,
+  pricing,
+  onChanged,
+  onStarted,
+}: {
+  team: TeamDetail;
+  pricing: TeamPricing | null;
+  onChanged: () => Promise<void>;
+  onStarted: () => void;
+}) {
+  const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly');
+  const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tiers = pricing?.[period] ?? null;
+  const price = tiers ? teamPriceFor(tiers, team.seatsPurchased) : null;
+
+  const move = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.billing.team.changePlan(team.id, { period });
+      setWaiting(true);
+      onStarted();
+      await onChanged();
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.code === 'no_subscription'
+          ? 'This team has no subscription to change.'
+          : errorText(err, 'Could not change the team plan')
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Move to Pro</h3>
+      <Card className="p-3 space-y-3" data-testid="team-move-to-pro">
+        <p className="text-xs text-muted-foreground">
+          Each seat goes from {PLAN_LIMITS.legacy_pro.includedBoxHours} to {PLAN_LIMITS.pro.includedBoxHours} box-hours a month, with every box size, credits and auto top-up.{price !== null && tiers && (<> For your {team.seatsPurchased} seats, Pro costs {formatMoney(price, tiers.currency)} a {period === 'monthly' ? 'month' : 'year'}.</>)} You pay the difference for the rest of this billing period now.
+        </p>
+        <div className="flex items-center gap-2">
+          {(['monthly', 'annual'] as const).map((choice) => (
+            <Button key={choice} size="sm" variant={period === choice ? 'default' : 'outline'} disabled={busy || waiting} onClick={() => setPeriod(choice)}>
+              {choice === 'monthly' ? 'Monthly' : 'Annual'}
+            </Button>
+          ))}
+          <Button size="sm" disabled={busy || waiting} onClick={() => void move()}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />}
+            Move to Pro
+          </Button>
+        </div>
+        {waiting && <p className="text-xs text-muted-foreground">Moving to Pro. Seats change as soon as Polar confirms.</p>}
+        {error && <p className="text-xs text-destructive">{error}</p>}
+      </Card>
     </div>
   );
 }
