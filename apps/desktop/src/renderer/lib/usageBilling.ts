@@ -67,6 +67,16 @@ export function gaugeTone(usage: Pick<UsageSummary, 'percent' | 'exhausted'>): G
   return 'ok';
 }
 
+export function leftPercent(percent: number, exhausted: boolean): number {
+  return exhausted ? 0 : Math.min(100, Math.max(0, 100 - percent));
+}
+
+export function formatLeftPercent(percent: number, exhausted: boolean): string {
+  const left = leftPercent(percent, exhausted);
+  if (left > 0 && left < 1) return 'Less than 1% left';
+  return `${left.toFixed(left < 10 && left > 0 ? 1 : 0)}% left`;
+}
+
 export const GAUGE_BAR_CLASS: Record<GaugeTone, string> = {
   ok: 'bg-primary',
   notice: 'bg-amber-500',
@@ -84,15 +94,21 @@ export const GAUGE_TEXT_CLASS: Record<GaugeTone, string> = {
 /** The gauge's one action. */
 export type GaugeAction = 'upgrade' | 'add_credits';
 
+/** "Add credits" shows only when less than this share of the period's hours is left. */
+export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
+
 /**
- * "Upgrade" for Free and Legacy Pro, "Add credits" for Pro or for anyone at
- * 80% or more who can hold credits. Free cannot buy credits, so it always
- * gets "Upgrade".
+ * The card's button, or null for none. Free cannot buy credits, so it always
+ * gets "Upgrade". A paid plan gets "Add credits" only when less than
+ * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
+ * gets no button and Legacy Pro gets "Upgrade".
  */
-export function gaugeAction(status: UsageBillingStatus): GaugeAction {
+export function gaugeAction(status: UsageBillingStatus): GaugeAction | null {
   if (status.tier === 'free') return 'upgrade';
-  if (status.tier === 'pro') return 'add_credits';
-  return status.usage.percent >= 80 || status.usage.exhausted ? 'add_credits' : 'upgrade';
+  const { includedWsec, usedWsec, exhausted } = status.usage;
+  const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
+  if (low) return 'add_credits';
+  return status.tier === 'pro' ? null : 'upgrade';
 }
 
 export const GAUGE_ACTION_LABELS: Record<GaugeAction, string> = {

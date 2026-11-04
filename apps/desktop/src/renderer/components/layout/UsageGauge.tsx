@@ -13,10 +13,12 @@ import {
   GAUGE_ACTION_LABELS,
   GAUGE_BAR_CLASS,
   GAUGE_TEXT_CLASS,
+  formatLeftPercent,
   formatShortDate,
   gaugeAction,
   gaugeTone,
   hasUsageBilling,
+  leftPercent,
   type GaugeTone,
   type UsageBillingStatus,
 } from '../../lib/usageBilling';
@@ -71,6 +73,9 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
   const action = gaugeAction(status);
   const exhausted = usage.exhausted;
   const usageText = formatBoxHoursUsage(usage.usedWsec, usage.includedWsec);
+  const left = leftPercent(usage.percent, exhausted);
+  const leftText = formatLeftPercent(usage.percent, exhausted);
+  const usageDetail = `${leftText} (${usageText} used)`;
   const reset = formatShortDate(usage.periodEnd);
   const balance = status.credits?.balanceMicros ?? 0;
   const warnings = agentWarnings(providers, posthogNeedsReauth);
@@ -79,12 +84,13 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
   const openPlan = () => openSettings('billing');
   const runAction = () => {
     if (action === 'upgrade') setUpgradeModalOpen(true, exhausted ? 'usage_exhausted' : null);
-    else openSettings('billing');
+    else if (action === 'add_credits') openSettings('billing');
   };
 
   const summary = [
     `${tierLabel} plan`,
-    exhausted ? 'Out of hours: new boxes paused' : usageText,
+    ...(exhausted ? ['Out of hours: new boxes paused'] : []),
+    usageDetail,
     `Resets ${reset}`,
     ...(balance > 0 ? [`Credits ${formatUsd(balance)}`] : []),
     ...warnings,
@@ -102,7 +108,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
               data-attr="usage-gauge-collapsed"
               className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
             >
-              <UsageRing percent={exhausted ? 100 : usage.percent} tone={tone} />
+              <UsageRing percent={left} tone={tone} />
               {warnings.length > 0 && (
                 <span aria-hidden className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500 ring-2 ring-card" />
               )}
@@ -110,7 +116,8 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
           </TooltipTrigger>
           <TooltipContent side="right" className="max-w-[16rem] space-y-0.5">
             <p className="font-medium">{tierLabel} plan</p>
-            <p>{exhausted ? 'Out of hours: new boxes paused' : usageText}</p>
+            {exhausted && <p>Out of hours: new boxes paused</p>}
+            <p>{usageDetail}</p>
             <p className="text-muted-foreground">Resets {reset}</p>
             {balance > 0 && <p className="text-muted-foreground">Credits {formatUsd(balance)}</p>}
             {warnings.map((w) => (
@@ -142,43 +149,45 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
           <div
             className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="Box-hours used"
+            aria-label="Box-hours left"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={exhausted ? 100 : usage.percent}
+            aria-valuenow={left}
           >
             <div
               className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])}
-              style={{ width: `${exhausted ? 100 : usage.percent}%` }}
+              style={{ width: `${left}%` }}
             />
           </div>
           {exhausted ? (
             <p className="mt-1 text-xs font-medium text-destructive">Out of hours: new boxes paused</p>
           ) : (
             <p className={cn('mt-1 text-xs', tone === 'ok' ? 'text-foreground' : GAUGE_TEXT_CLASS[tone])}>
-              {usageText}
+              {leftText}
             </p>
           )}
           {balance > 0 && <p className="text-[11px] text-muted-foreground">Credits {formatUsd(balance)}</p>}
         </button>
-        <button
-          type="button"
-          onClick={runAction}
-          data-attr={`usage-gauge-${action}`}
-          className={cn(
-            'w-full rounded-md border px-2 py-1 text-xs font-medium transition-colors',
-            exhausted || tone === 'warning'
-              ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
-              : 'hover:bg-accent',
-          )}
-        >
-          {GAUGE_ACTION_LABELS[action]}
-        </button>
+        {action !== null && (
+          <button
+            type="button"
+            onClick={runAction}
+            data-attr={`usage-gauge-${action}`}
+            className={cn(
+              'w-full rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+              exhausted || tone === 'warning'
+                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'hover:bg-accent',
+            )}
+          >
+            {GAUGE_ACTION_LABELS[action]}
+          </button>
+        )}
         {warnings.map((w) => (
           <button
             key={w}
             type="button"
-            onClick={() => openSettings('integrations')}
+            onClick={() => openSettings('agents')}
             className="flex w-full items-center gap-1.5 rounded-md text-left text-[11px] text-amber-600 hover:underline dark:text-amber-400"
           >
             <AlertTriangle className="h-3 w-3 shrink-0" />

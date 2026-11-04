@@ -62,14 +62,18 @@ describe('SidebarAccountStatus', () => {
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
-  it('shows tier, box-hours, reset date and Upgrade on Free', () => {
+  it('shows the remaining share, reset date and Upgrade on Free', () => {
     useBillingStore.setState({ status: usageStatus('free', { usedHours: 3.75 }) });
     renderGauge();
     expect(screen.queryByText('Agents')).toBeNull();
     expect(screen.getByText('Free')).toBeInTheDocument();
-    expect(screen.getByText('3.7 of 10 box-hours')).toBeInTheDocument();
+    expect(screen.getByText('63% left')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Plan and usage/ })).toHaveAccessibleName(
+      expect.stringContaining('63% left (3.7 of 10 box-hours used)'),
+    );
     expect(screen.getByText(/^Resets /)).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '37');
+    expect(screen.getByRole('progressbar', { name: 'Box-hours left' })).toHaveAttribute('aria-valuenow', '63');
+    expect(screen.getByRole('progressbar').firstChild).toHaveStyle({ width: '63%' });
     expect(screen.queryByText(/^Credits/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
     expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
@@ -87,19 +91,29 @@ describe('SidebarAccountStatus', () => {
     expect(screen.getByRole('progressbar').firstChild).toHaveClass(cls);
   });
 
-  it('shows the credit balance and Add credits on Pro, and the action opens the plan page', () => {
+  it('shows the credit balance without an action on Pro', () => {
     useBillingStore.setState({ status: usageStatus('pro', { usedHours: 37.5, balanceMicros: 12_500_000 }) });
     renderGauge();
     expect(screen.getByText('Pro')).toBeInTheDocument();
-    expect(screen.getByText('37.5 of 200 box-hours')).toBeInTheDocument();
+    expect(screen.getByText('82% left')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Plan and usage/ })).toHaveAccessibleName(
+      expect.stringContaining('82% left (37.5 of 200 box-hours used)'),
+    );
     expect(screen.getByText('Credits $12.50')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Upgrade' })).toBeNull();
+  });
+
+  it('opens the plan page from Add credits when Pro is nearly out', () => {
+    useBillingStore.setState({ status: usageStatus('pro', { usedHours: 191 }) });
+    renderGauge();
     fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
     expect(mockOpenSettings).toHaveBeenCalledWith('billing');
   });
 
   it.each([
     [10, 'Upgrade'],
-    [45, 'Add credits'],
+    [48, 'Add credits'],
   ])('Legacy Pro at %i of 50 box-hours offers %s', (usedHours, label) => {
     useBillingStore.setState({ status: usageStatus('legacy_pro', { usedHours }) });
     renderGauge();
@@ -111,7 +125,8 @@ describe('SidebarAccountStatus', () => {
     useBillingStore.setState({ status: usageStatus('free', { usedHours: 10, exhausted: true }) });
     renderGauge();
     expect(screen.getByText('Out of hours: new boxes paused')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByRole('progressbar').firstChild).toHaveStyle({ width: '0%' });
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
     expect(useBillingStore.getState().upgradeReason).toBe('usage_exhausted');
   });
@@ -123,12 +138,20 @@ describe('SidebarAccountStatus', () => {
     expect(mockOpenSettings).toHaveBeenCalledWith('billing');
   });
 
-  it('keeps an agent that needs reconnecting visible, and opens integrations', () => {
+  it('opens Agents from an agent reconnect warning', () => {
     mockProviders = [fleet({ connectedAgents: ['claude', 'codex'], reauthAgents: ['claude'] })];
     useBillingStore.setState({ status: usageStatus('pro') });
     renderGauge();
     fireEvent.click(screen.getByRole('button', { name: 'Claude needs reconnecting' }));
-    expect(mockOpenSettings).toHaveBeenCalledWith('integrations');
+    expect(mockOpenSettings).toHaveBeenCalledWith('agents');
+  });
+
+  it('opens Agents from a PostHog Code reconnect warning', () => {
+    mockProviders = [fleet(), { type: 'posthog_code', displayName: 'PostHog Code', connected: true, needsReconnect: true }];
+    useBillingStore.setState({ status: usageStatus('pro') });
+    renderGauge();
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog Code needs reconnecting' }));
+    expect(mockOpenSettings).toHaveBeenCalledWith('agents');
   });
 
   it('lists no healthy agents', () => {
@@ -143,11 +166,21 @@ describe('SidebarAccountStatus', () => {
     useBillingStore.setState({ status: usageStatus('pro', { usedHours: 37.5, balanceMicros: 5_000_000 }) });
     renderGauge(true);
     const ring = screen.getByRole('button', { name: /Pro plan/ });
-    expect(ring).toHaveAccessibleName(expect.stringContaining('37.5 of 200 box-hours'));
+    expect(ring).toHaveAccessibleName(expect.stringContaining('82% left (37.5 of 200 box-hours used)'));
+    const stroke = ring.querySelectorAll('circle')[1];
+    expect(Number(stroke.getAttribute('stroke-dasharray')?.split(' ')[0])).toBeCloseTo(2 * Math.PI * 6 * 0.82);
     expect(ring).toHaveAccessibleName(expect.stringContaining('Credits $5.00'));
     expect(ring).toHaveAccessibleName(expect.stringContaining('Claude needs reconnecting'));
     expect(screen.queryByRole('progressbar')).toBeNull();
     fireEvent.click(ring);
     expect(mockOpenSettings).toHaveBeenCalledWith('billing');
+  });
+
+  it('empties the collapsed ring when exhausted', () => {
+    useBillingStore.setState({ status: usageStatus('free', { usedHours: 10, exhausted: true }) });
+    renderGauge(true);
+    const ring = screen.getByRole('button', { name: /Free plan/ });
+    expect(ring).toHaveAccessibleName(expect.stringContaining('0% left (10 of 10 box-hours used)'));
+    expect(ring.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dasharray', `0 ${2 * Math.PI * 6}`);
   });
 });

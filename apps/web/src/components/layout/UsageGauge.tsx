@@ -12,6 +12,7 @@ import {
   gaugeActionLabel,
   gaugeSummary,
   gaugeTone,
+  leftPercent,
   usageBillingOf,
   type UsageBillingView,
 } from '../../lib/usageBilling';
@@ -70,11 +71,12 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
   const summary = gaugeSummary(view);
   const action = gaugeAction(view);
   const warnings = agentWarnings(providers, posthogNeedsReauth);
-  const percent = Math.min(100, Math.max(0, view.usage.percent));
+  const left = leftPercent(view.usage.percent, view.usage.exhausted);
 
   const tooltip = [
     `${summary.tierLabel} plan`,
-    summary.exhaustedText ?? summary.usageText,
+    summary.exhaustedText,
+    summary.usageText,
     summary.resetText,
     summary.creditsText,
     ...warnings,
@@ -93,7 +95,7 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
           aria-label={tooltip}
           className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
         >
-          <UsageRing percent={percent} className={GAUGE_TEXT_CLASS[tone]} />
+          <UsageRing percent={left} className={GAUGE_TEXT_CLASS[tone]} />
           {warnings.length > 0 && (
             <span
               aria-hidden
@@ -117,14 +119,16 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
           >
             {summary.tierLabel} plan
           </button>
-          <button
-            type="button"
-            data-attr="usage-gauge-action"
-            onClick={() => openUpgrade(true, action)}
-            className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
-          >
-            {gaugeActionLabel(action)}
-          </button>
+          {action !== null && (
+            <button
+              type="button"
+              data-attr="usage-gauge-action"
+              onClick={() => openUpgrade(true, action)}
+              className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+            >
+              {gaugeActionLabel(action)}
+            </button>
+          )}
         </div>
         <button
           type="button"
@@ -135,16 +139,17 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
           <div
             className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
             role="progressbar"
+            aria-label="Box-hours left"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={percent}
+            aria-valuenow={left}
           >
-            <div className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])} style={{ width: `${percent}%` }} />
+            <div className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])} style={{ width: `${left}%` }} />
           </div>
           {summary.exhaustedText ? (
             <p className="mt-1 text-xs font-medium text-destructive">{summary.exhaustedText}</p>
           ) : (
-            <p className="mt-1 text-xs text-foreground">{summary.usageText}</p>
+            <p className="mt-1 text-xs text-foreground">{summary.leftText}</p>
           )}
           <p className="text-[11px] text-muted-foreground">
             {summary.resetText}
@@ -167,7 +172,7 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
   );
 }
 
-/** A small ring that fills with the share of included hours used. */
+/** A small ring that shows the share of included hours left. */
 function UsageRing({ percent, className }: { percent: number; className?: string }) {
   const radius = 7;
   const circumference = 2 * Math.PI * radius;

@@ -6,9 +6,11 @@ import {
   boxRefusalFromPayload,
   deferralNotice,
   deferralTitle,
+  formatLeftPercent,
   gaugeAction,
   gaugeSummary,
   gaugeTone,
+  leftPercent,
   refusalSentence,
   refusalTitle,
   upgradeReasonForCode,
@@ -53,20 +55,40 @@ describe('gaugeTone', () => {
   });
 });
 
+describe('leftPercent and formatLeftPercent', () => {
+  it.each([
+    [0, false, 100, '100% left'],
+    [0.25, false, 99.75, '100% left'],
+    [4.5, false, 95.5, '96% left'],
+    [13.2, false, 86.8, '87% left'],
+    [95.5, false, 4.5, '4.5% left'],
+    [99, false, 1, '1.0% left'],
+    [99.75, false, 0.25, 'Less than 1% left'],
+    [100, false, 0, '0% left'],
+    [120, false, 0, '0% left'],
+    [13.2, true, 0, '0% left'],
+  ] as const)('used=%s exhausted=%s gives %s and %s', (percent, exhausted, left, text) => {
+    expect(leftPercent(percent, exhausted)).toBeCloseTo(left);
+    expect(formatLeftPercent(percent, exhausted)).toBe(text);
+  });
+});
+
 describe('gaugeAction', () => {
   it.each([
-    ['free', 0, false, 'upgrade'],
-    ['free', 90, false, 'upgrade'],
-    ['free', 100, true, 'upgrade'],
-    ['legacy_pro', 10, false, 'upgrade'],
-    ['legacy_pro', 79, false, 'upgrade'],
-    ['legacy_pro', 80, false, 'add_credits'],
-    ['legacy_pro', 30, true, 'add_credits'],
-    ['pro', 0, false, 'add_credits'],
-    ['pro', 100, true, 'add_credits'],
-  ] as const)('%s at %i%% exhausted=%s offers %s', (tier, percent, exhausted, action) => {
-    const view = usageBillingOf(usageStatus(tier))!;
-    expect(gaugeAction({ ...view, usage: { ...view.usage, percent, exhausted } })).toBe(action);
+    ['free', 1, false, 'upgrade'],
+    ['free', 9, false, 'upgrade'],
+    ['free', 10, true, 'upgrade'],
+    ['pro', 10, false, null],
+    ['pro', 170, false, null],
+    ['pro', 190, false, null],
+    ['pro', 191, false, 'add_credits'],
+    ['pro', 200, true, 'add_credits'],
+    ['legacy_pro', 40, false, 'upgrade'],
+    ['legacy_pro', 48, false, 'add_credits'],
+    ['legacy_pro', 50, true, 'add_credits'],
+  ] as const)('%s with %i hours used and exhausted=%s offers %s', (tier, usedHours, exhausted, action) => {
+    const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted }))!;
+    expect(gaugeAction(view)).toBe(action);
   });
 });
 
@@ -75,7 +97,8 @@ describe('gaugeSummary', () => {
     const view = usageBillingOf(usageStatus('pro', { usedHours: 37.5, balanceMicros: 12_500_000 }))!;
     const summary = gaugeSummary(view);
     expect(summary.tierLabel).toBe('Pro');
-    expect(summary.usageText).toBe('37.5 of 200 box-hours');
+    expect(summary.leftText).toBe('82% left');
+    expect(summary.usageText).toBe('82% left (37.5 of 200 box-hours used)');
     expect(summary.resetText).toMatch(/^Resets /);
     expect(summary.creditsText).toBe('$12.50 credits');
     expect(summary.exhaustedText).toBeNull();
@@ -84,7 +107,8 @@ describe('gaugeSummary', () => {
   it('leaves the credits out at zero and says when the hours are out', () => {
     const view = usageBillingOf(usageStatus('free', { usedHours: 10, exhausted: true }))!;
     const summary = gaugeSummary(view);
-    expect(summary.usageText).toBe('10 of 10 box-hours');
+    expect(summary.leftText).toBe('0% left');
+    expect(summary.usageText).toBe('0% left (10 of 10 box-hours used)');
     expect(summary.creditsText).toBeNull();
     expect(summary.exhaustedText).toBe('Out of hours: new boxes paused');
   });

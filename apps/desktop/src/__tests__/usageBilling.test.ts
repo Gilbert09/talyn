@@ -12,9 +12,11 @@ import {
   _resetUsageAlertGuard,
   claimUsageAlert,
   codeForDeferredReason,
+  formatLeftPercent,
   gaugeAction,
   gaugeTone,
   hasUsageBilling,
+  leftPercent,
   noticeFromDetails,
   usageAlertKey,
   usageReasonForCode,
@@ -59,18 +61,39 @@ describe('gaugeTone', () => {
   });
 });
 
+describe('leftPercent and formatLeftPercent', () => {
+  it.each([
+    [0, false, 100, '100% left'],
+    [0.25, false, 99.75, '100% left'],
+    [4.5, false, 95.5, '96% left'],
+    [13.2, false, 86.8, '87% left'],
+    [95.5, false, 4.5, '4.5% left'],
+    [99, false, 1, '1.0% left'],
+    [99.75, false, 0.25, 'Less than 1% left'],
+    [100, false, 0, '0% left'],
+    [120, false, 0, '0% left'],
+    [13.2, true, 0, '0% left'],
+  ])('used=%s exhausted=%s gives %s and %s', (percent, exhausted, left, text) => {
+    expect(leftPercent(percent, exhausted)).toBeCloseTo(left);
+    expect(formatLeftPercent(percent, exhausted)).toBe(text);
+  });
+});
+
 describe('gaugeAction', () => {
   const status = (tier: 'free' | 'pro' | 'legacy_pro', usedHours: number, exhausted = false) =>
     usageStatus(tier, { usedHours, exhausted }) as UsageBillingStatus;
 
   it.each([
-    ['free under 80%', status('free', 1), 'upgrade'],
-    ['free over 80%', status('free', 9), 'upgrade'],
+    ['free with hours left', status('free', 1), 'upgrade'],
+    ['free nearly out', status('free', 9), 'upgrade'],
     ['free exhausted', status('free', 10, true), 'upgrade'],
-    ['pro under 80%', status('pro', 10), 'add_credits'],
-    ['pro over 80%', status('pro', 170), 'add_credits'],
-    ['legacy under 80%', status('legacy_pro', 10), 'upgrade'],
-    ['legacy at 80%', status('legacy_pro', 40), 'add_credits'],
+    ['pro with hours left', status('pro', 10), null],
+    ['pro with 15% left', status('pro', 170), null],
+    ['pro with 5% left', status('pro', 190), null],
+    ['pro with 4.5% left', status('pro', 191), 'add_credits'],
+    ['pro exhausted', status('pro', 200, true), 'add_credits'],
+    ['legacy with 20% left', status('legacy_pro', 40), 'upgrade'],
+    ['legacy with 4% left', status('legacy_pro', 48), 'add_credits'],
     ['legacy exhausted', status('legacy_pro', 50, true), 'add_credits'],
   ])('%s → %s', (_label, s, action) => {
     expect(gaugeAction(s)).toBe(action);

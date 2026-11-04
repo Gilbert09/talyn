@@ -36,14 +36,20 @@ describe('SidebarUsageSlot', () => {
     expect(document.querySelector('[data-attr="usage-gauge"]')).toBeNull();
   });
 
-  it('shows the tier, the hours, the reset and the credits', () => {
+  it('shows the tier, remaining share, reset and credits', () => {
     setup(usageStatus('pro', { usedHours: 37.5, balanceMicros: 12_500_000 }));
     render(<SidebarUsageSlot collapsed={false} />);
     expect(screen.queryByText('Agents')).toBeNull();
     expect(screen.getByText('Pro plan')).toBeInTheDocument();
-    expect(screen.getByText('37.5 of 200 box-hours')).toBeInTheDocument();
+    expect(screen.getByText('82% left')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open plan and usage/ })).toHaveAccessibleName(
+      expect.stringContaining('82% left (37.5 of 200 box-hours used)'),
+    );
     expect(screen.getByText(/Resets .* · \$12\.50 credits/)).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '18');
+    expect(screen.getByRole('progressbar', { name: 'Box-hours left' })).toHaveAttribute('aria-valuenow', '82');
+    expect(screen.getByRole('progressbar').firstElementChild).toHaveStyle({ width: '82%' });
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Upgrade' })).toBeNull();
   });
 
   it.each([
@@ -51,8 +57,8 @@ describe('SidebarUsageSlot', () => {
     ['free', 5, 'Upgrade', 'bg-amber-400'],
     ['free', 8, 'Upgrade', 'bg-orange-500'],
     ['legacy_pro', 10, 'Upgrade', 'bg-primary'],
-    ['legacy_pro', 45, 'Add credits', 'bg-orange-500'],
-    ['pro', 20, 'Add credits', 'bg-primary'],
+    ['legacy_pro', 48, 'Add credits', 'bg-orange-500'],
+    ['pro', 191, 'Add credits', 'bg-orange-500'],
   ] as const)('%s with %i box-hours used offers %s and colours the bar %s', (tier, usedHours, action, barClass) => {
     setup(usageStatus(tier, { usedHours }));
     render(<SidebarUsageSlot collapsed={false} />);
@@ -66,6 +72,8 @@ describe('SidebarUsageSlot', () => {
     expect(screen.getByText('Out of hours: new boxes paused')).toBeInTheDocument();
     expect(screen.queryByText('10 of 10 box-hours')).toBeNull();
     expect(screen.getByRole('progressbar').firstElementChild).toHaveClass('bg-destructive');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByRole('progressbar').firstElementChild).toHaveStyle({ width: '0%' });
   });
 
   it('opens the plan page on a click and the modal from the action', () => {
@@ -77,10 +85,17 @@ describe('SidebarUsageSlot', () => {
     expect(useBillingStore.getState()).toMatchObject({ upgradeModalOpen: true, upgradeReason: 'upgrade' });
   });
 
-  it('keeps an agent that needs reconnecting visible and opens integrations', () => {
+  it('opens cloud providers from an agent reconnect warning', () => {
     setup(usageStatus('pro'), [{ ...FLEET, reauthAgents: ['claude'] }, POSTHOG]);
     render(<SidebarUsageSlot collapsed={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Claude needs reconnecting' }));
+    expect(openSettings).toHaveBeenCalledWith('integrations');
+  });
+
+  it('opens cloud providers from a PostHog Code reconnect warning', () => {
+    setup(usageStatus('pro'), [FLEET, { ...POSTHOG, connected: true, needsReconnect: true }]);
+    render(<SidebarUsageSlot collapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog Code needs reconnecting' }));
     expect(openSettings).toHaveBeenCalledWith('integrations');
   });
 
@@ -97,12 +112,21 @@ describe('SidebarUsageSlot', () => {
     const button = document.querySelector('[data-attr="usage-gauge"]') as HTMLElement;
     const title = button.getAttribute('title') ?? '';
     expect(title).toContain('Pro plan');
-    expect(title).toContain('100 of 200 box-hours');
+    expect(title).toContain('50% left (100 of 200 box-hours used)');
     expect(title).toContain('$5.00 credits');
     expect(title).toContain('Claude needs reconnecting');
     expect(button.querySelector('svg')).not.toBeNull();
+    expect(button.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dashoffset', `${Math.PI * 7}`);
     fireEvent.click(button);
     expect(openSettings).toHaveBeenCalledWith('billing');
+  });
+
+  it('empties the collapsed ring when exhausted', () => {
+    setup(usageStatus('free', { usedHours: 10, exhausted: true }));
+    render(<SidebarUsageSlot collapsed />);
+    const button = document.querySelector('[data-attr="usage-gauge"]') as HTMLElement;
+    expect(button.getAttribute('title')).toContain('0% left (10 of 10 box-hours used)');
+    expect(button.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dashoffset', `${2 * Math.PI * 7}`);
   });
 });
 
