@@ -92,9 +92,8 @@ function WorkbenchRow({
   const state = sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen);
   const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
-  const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
-  const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : suspended ? 'Sandbox (asleep)' : 'Sandbox';
+  const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : 'Sandbox';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
   const diff = stats && stats.files > 0 ? stats : null;
 
@@ -138,7 +137,7 @@ function WorkbenchRow({
             <span className={cn(
               'min-w-[5rem] flex-1 truncate',
               isUnread ? 'font-semibold' : 'font-normal',
-              (suspended || done) && !selected && 'opacity-60'
+              done && !selected && 'opacity-60'
             )}>{workbenchDisplayName(workbench)}</span>
             {diff && !done && (
               // All or nothing: when the counts do not fit, they wrap to a hidden second line.
@@ -155,7 +154,7 @@ function WorkbenchRow({
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
             <RuntimeIcon
-              className={cn('h-3 w-3 shrink-0 text-muted-foreground', (suspended || done) && !selected && 'opacity-60')}
+              className={cn('h-3 w-3 shrink-0 text-muted-foreground', done && !selected && 'opacity-60')}
               aria-label={runtimeLabel}
             />
           </button>

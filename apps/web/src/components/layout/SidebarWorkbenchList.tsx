@@ -87,7 +87,6 @@ function WorkbenchRow({
   const state = sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen);
   const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
-  const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
   const diff = stats && stats.files > 0 ? stats : null;
 
@@ -131,7 +130,7 @@ function WorkbenchRow({
               className={cn(
                 'min-w-[5rem] flex-1 truncate',
                 isUnread ? 'font-semibold' : 'font-normal',
-                (suspended || done) && !selected && 'opacity-60'
+                done && !selected && 'opacity-60'
               )}
             >
               {workbenchDisplayName(workbench)}
