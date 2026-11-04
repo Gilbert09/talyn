@@ -3151,7 +3151,7 @@ export const workbenches = {
     request<AdoptWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request/adopt`, head),
 
   /** Run a header action (Fix checks, Resolve conflicts, Merge, Archive), optionally in a given chat. */
-  action: (id: string, action: Exclude<WorkbenchNextAction, null>, chatId?: string) =>
+  action: (id: string, action: Exclude<WorkbenchNextAction, null> | 'address_review', chatId?: string) =>
     request<{ chatId?: string }>(
       'POST',
       `/workbenches/${enc(id)}/actions/${enc(action)}`,

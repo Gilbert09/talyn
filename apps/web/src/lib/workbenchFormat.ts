@@ -247,7 +247,8 @@ export function workbenchNextAction(workbench: Pick<Workbench, 'diffStat' | 'com
   return nextWorkbenchAction(nextActionInput(workbench, pr));
 }
 
-export const NEXT_ACTION_LABEL: Record<Exclude<WorkbenchNextAction, null>, string> = {
+export const NEXT_ACTION_LABEL: Record<Exclude<WorkbenchNextAction, null> | 'address_review', string> = {
+  address_review: 'Address review comments',
   create_pr: 'Create PR',
   resolve_conflicts: 'Resolve conflicts',
   fix_checks: 'Fix checks',

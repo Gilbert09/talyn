@@ -28,7 +28,7 @@ it('reconnects with the same terminal id and clears replayed output without an e
   globalThis.WebSocket = Socket as unknown as typeof WebSocket;
   const terminal = { reset: vi.fn(), write: vi.fn(), writeln: vi.fn(),
     onData: () => ({ dispose: vi.fn() }) };
-  const dispose = connectSandbox(terminal as unknown as Terminal, 'wb', { current: null }, { current: null });
+  const { dispose } = connectSandbox(terminal as unknown as Terminal, 'wb', { current: null }, { current: null });
   await Promise.resolve();
   sockets[0].onopen?.();
   sockets[0].onmessage?.({ data: 'first screen' });
