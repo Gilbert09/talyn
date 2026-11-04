@@ -9,7 +9,7 @@ import type {
   WorkbenchDiffScope,
   WorkbenchChat,
   WorkbenchConfig,
-  WorkbenchNextAction,
+  WorkbenchPromptAction,
 } from '@talyn/shared';
 import { api } from './api';
 import { toast } from '../stores/toast';
@@ -20,7 +20,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
  * `runtime`. The desktop app also has a local runtime; the browser has only
  * the sandbox, which calls the backend.
  */
-export type WorkbenchPromptActionKind = Exclude<WorkbenchNextAction, 'create_pr' | 'merge' | 'archive' | null>;
+export type WorkbenchPromptActionKind = Exclude<WorkbenchPromptAction, 'rename_branch'>;
 
 export interface PastedFile {
   name: string;

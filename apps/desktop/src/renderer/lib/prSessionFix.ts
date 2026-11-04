@@ -26,11 +26,25 @@ export function sessionFromConflict(err: unknown): PrSessionRef | null {
   return { id, name: typeof name === 'string' ? name : 'session' };
 }
 
-/** Conflicts get their own prompt; everything else is a checks fix. */
-export function sessionFixAction(row: PRRow): 'resolve_conflicts' | 'fix_checks' {
-  return row.summary.blockingReason === 'merge_conflicts' || row.summary.mergeable === 'CONFLICTING'
-    ? 'resolve_conflicts'
-    : 'fix_checks';
+/**
+ * What to send the session, by the PR's real state. Conflicts first (a fix
+ * reruns the checks anyway), then failing CI, then open review comments. With
+ * both CI and threads open, the checks go first: the backend adds the thread
+ * count to that prompt, so the next press is the review-comments one. Anything
+ * else stays a checks fix, as before.
+ */
+export function sessionFixAction(row: PRRow): 'resolve_conflicts' | 'fix_checks' | 'address_review' {
+  const s = row.summary;
+  if (s.blockingReason === 'merge_conflicts' || s.mergeable === 'CONFLICTING') return 'resolve_conflicts';
+  if (s.blockingReason === 'checks_failed' || s.ciStatus === 'failing_required') return 'fix_checks';
+  if (
+    (s.unresolvedReviewThreads ?? 0) > 0 ||
+    s.blockingReason === 'changes_requested' ||
+    s.reviewDecision === 'CHANGES_REQUESTED'
+  ) {
+    return 'address_review';
+  }
+  return 'fix_checks';
 }
 
 export async function sendPrFixToSession(row: PRRow, session: PrSessionRef): Promise<void> {

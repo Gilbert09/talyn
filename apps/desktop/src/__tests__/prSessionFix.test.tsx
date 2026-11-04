@@ -201,12 +201,21 @@ describe('sessionFromConflict', () => {
 
 describe('sessionFixAction', () => {
   it.each([
-    ['merge_conflicts', 'MERGEABLE', 'resolve_conflicts'],
-    ['blocked', 'CONFLICTING', 'resolve_conflicts'],
-    ['checks_failed', 'MERGEABLE', 'fix_checks'],
-    ['changes_requested', 'MERGEABLE', 'fix_checks'],
-  ])('%s / %s → %s', (blockingReason, mergeable, expected) => {
-    const row = { ...baseRow, summary: { ...baseRow.summary, blockingReason, mergeable } } as PRRow;
+    ['conflict reason', { blockingReason: 'merge_conflicts', mergeable: 'MERGEABLE' }, 'resolve_conflicts'],
+    ['conflicting state', { blockingReason: 'blocked', mergeable: 'CONFLICTING' }, 'resolve_conflicts'],
+    ['conflicts beat failing checks and threads', { blockingReason: 'merge_conflicts', ciStatus: 'failing_required', unresolvedReviewThreads: 3 }, 'resolve_conflicts'],
+    ['failing checks reason', { blockingReason: 'checks_failed' }, 'fix_checks'],
+    ['failing required ci', { blockingReason: 'blocked', ciStatus: 'failing_required' }, 'fix_checks'],
+    ['failing checks beat threads', { blockingReason: 'checks_failed', unresolvedReviewThreads: 3 }, 'fix_checks'],
+    ['green ci with open threads', { blockingReason: 'blocked', ciStatus: 'passing', unresolvedReviewThreads: 3 }, 'address_review'],
+    ['one bot thread, no ci verdict', { blockingReason: null, unresolvedReviewThreads: 1 }, 'address_review'],
+    ['changes requested reason', { blockingReason: 'changes_requested' }, 'address_review'],
+    ['changes requested decision', { blockingReason: null, reviewDecision: 'CHANGES_REQUESTED' }, 'address_review'],
+    ['zero threads, green', { blockingReason: null, ciStatus: 'passing', unresolvedReviewThreads: 0 }, 'fix_checks'],
+    ['optional failure only, no threads', { blockingReason: null, ciStatus: 'failing_optional' }, 'fix_checks'],
+    ['nothing known', { blockingReason: null }, 'fix_checks'],
+  ])('%s -> %s', (_name, patch, expected) => {
+    const row = { ...baseRow, summary: { ...baseRow.summary, mergeable: 'MERGEABLE', ...patch } } as unknown as PRRow;
     expect(sessionFixAction(row)).toBe(expected);
   });
 });

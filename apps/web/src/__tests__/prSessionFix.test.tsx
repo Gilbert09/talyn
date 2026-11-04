@@ -85,11 +85,22 @@ describe('PR session fixes', () => {
   });
 
   it.each([
-    ['merge_conflicts', 'MERGEABLE', 'resolve_conflicts'],
-    ['checks_failed', 'CONFLICTING', 'resolve_conflicts'],
-    ['checks_failed', 'MERGEABLE', 'fix_checks'],
-  ])('chooses %s and %s', (blockingReason, mergeable, expected) => {
-    expect(sessionFixAction({ ...row, summary: { ...row.summary, blockingReason, mergeable } } as PRRow)).toBe(expected);
+    ['conflict reason', { blockingReason: 'merge_conflicts' }, 'resolve_conflicts'],
+    ['conflicting state', { blockingReason: 'checks_failed', mergeable: 'CONFLICTING' }, 'resolve_conflicts'],
+    ['conflicts beat checks and threads', { blockingReason: 'merge_conflicts', ciStatus: 'failing_required', unresolvedReviewThreads: 3 }, 'resolve_conflicts'],
+    ['failing checks reason', { blockingReason: 'checks_failed' }, 'fix_checks'],
+    ['failing required ci', { blockingReason: 'blocked', ciStatus: 'failing_required' }, 'fix_checks'],
+    ['failing checks beat threads', { blockingReason: 'checks_failed', unresolvedReviewThreads: 3 }, 'fix_checks'],
+    ['green ci with open threads', { blockingReason: 'blocked', ciStatus: 'passing', unresolvedReviewThreads: 3 }, 'address_review'],
+    ['one bot thread, no ci verdict', { blockingReason: null, unresolvedReviewThreads: 1 }, 'address_review'],
+    ['changes requested reason', { blockingReason: 'changes_requested' }, 'address_review'],
+    ['changes requested decision', { blockingReason: null, reviewDecision: 'CHANGES_REQUESTED' }, 'address_review'],
+    ['zero threads, green', { blockingReason: null, ciStatus: 'passing', unresolvedReviewThreads: 0 }, 'fix_checks'],
+    ['optional failure only', { blockingReason: null, ciStatus: 'failing_optional' }, 'fix_checks'],
+    ['nothing known', { blockingReason: null }, 'fix_checks'],
+  ])('chooses for %s', (_name, patch, expected) => {
+    const summary = { ...row.summary, mergeable: 'MERGEABLE', ...patch };
+    expect(sessionFixAction({ ...row, summary } as unknown as PRRow)).toBe(expected);
   });
 
   it('ignores other conflicts', () => {

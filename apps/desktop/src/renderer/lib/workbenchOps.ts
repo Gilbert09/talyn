@@ -29,7 +29,7 @@ import {
   type WorkbenchChat,
   type WorkbenchConfig,
   type WorkbenchLocalBridge,
-  type WorkbenchNextAction,
+  type WorkbenchPromptAction,
 } from '@talyn/shared';
 import { api } from './api';
 import { getDeviceId, getWorkbenchBridge } from './workbenchBridge';
@@ -42,7 +42,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
  * The sandbox implementation calls the backend; the local one drives the
  * Electron bridge with the shared git steps and parsers.
  */
-export type WorkbenchPromptActionKind = Exclude<WorkbenchNextAction, 'create_pr' | 'merge' | 'archive' | null>;
+export type WorkbenchPromptActionKind = Exclude<WorkbenchPromptAction, 'rename_branch'>;
 
 export interface PastedFile {
   name: string;
