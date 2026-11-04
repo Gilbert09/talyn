@@ -40,7 +40,9 @@ import {
   getPoolDbClient,
   getScopedDb,
   isRealPostgres,
+  runInScopedDb,
   runWithoutScope,
+  type Database,
 } from '../../db/client.js';
 import {
   autoTopupSettings as autoTopupSettingsTable,
@@ -56,7 +58,7 @@ import {
   workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
-import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
+import { advisoryLockKey } from '../advisoryLock.js';
 import { readBudget, type UsageBudget } from './usage/charge.js';
 import { liveLots } from './usage/credits.js';
 import { getBudget } from './usage/index.js';
@@ -475,12 +477,12 @@ export function budgetAllowsNewBox(budget: Pick<UsageBudget, 'includedLeftWsec' 
  * NOT EXISTS would see nothing through an owner-scoped client and count every
  * running task twice. Exported unexecuted for the egress test.
  */
-export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: string) {
+export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: string, db: Database = getPoolDbClient()) {
   const conditions = [
     eq(workspacesTable.ownerId, ownerId),
     inArray(tasksTable.status, [...ACTIVE_TASK_STATUSES]),
     notExists(
-      getPoolDbClient()
+      db
         .select({ one: sql`1` })
         .from(usageIntervalsTable)
         .where(
@@ -493,7 +495,7 @@ export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: stri
     ),
   ];
   if (excludeTaskId) conditions.push(ne(tasksTable.id, excludeTaskId));
-  return getPoolDbClient()
+  return db
     .select({ count: sql<number>`cast(count(*) as int)` })
     .from(tasksTable)
     .innerJoin(workspacesTable, eq(tasksTable.workspaceId, workspacesTable.id))
@@ -501,8 +503,8 @@ export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: stri
 }
 
 /** Boxes with an open usage interval. Exported unexecuted for the egress test. */
-export function countOpenBoxesForGateQuery(ownerId: string) {
-  return getPoolDbClient()
+export function countOpenBoxesForGateQuery(ownerId: string, db: Database = getPoolDbClient()) {
+  return db
     .select({ count: sql<number>`cast(count(*) as int)` })
     .from(usageIntervalsTable)
     .where(and(eq(usageIntervalsTable.ownerId, ownerId), isNull(usageIntervalsTable.endedAt)));
@@ -517,10 +519,14 @@ export function countOpenBoxesForGateQuery(ownerId: string) {
  * A task on a provider that runs no box (PostHog Code) has no interval and
  * counts while active, like the old active-task cap counted it.
  */
-export async function countBoxesInUse(ownerId: string, excludeTaskId?: string): Promise<number> {
+export async function countBoxesInUse(
+  ownerId: string,
+  excludeTaskId?: string,
+  db: Database = getPoolDbClient()
+): Promise<number> {
   const [[open], [pending]] = await Promise.all([
-    countOpenBoxesForGateQuery(ownerId),
-    countPendingTaskBoxesQuery(ownerId, excludeTaskId),
+    countOpenBoxesForGateQuery(ownerId, db),
+    countPendingTaskBoxesQuery(ownerId, excludeTaskId, db),
   ]);
   return Number(open?.count ?? 0) + Number(pending?.count ?? 0);
 }
@@ -553,7 +559,8 @@ export async function checkBoxGate(ownerId: string, options: BoxGateOptions): Pr
  * Race safety: only the concurrency check needs it, and only on Free (a cap of
  * 2, where losing a race doubles the allowance). That check runs under a
  * per-owner transaction-scoped advisory lock, held until `fn`'s insert
- * commits (route path) or inside a pool mutex (watcher path); pglite skips
+ * commits (route path) or inside one pool transaction that also runs the count
+ * and `fn` (watcher path, no second connection); pglite skips
  * it. Paid tiers (a cap of 100) skip the lock: a lost race costs one box.
  * Size and budget are read before the lock, so the lock is never held across
  * the budget's charge step.
@@ -566,7 +573,7 @@ export async function withBoxGate<T>(
   const pre = await precheckBoxGate(ownerId, options);
   if (!pre.enforced || skipsConcurrency(options)) return fn(pre);
   const tier = pre.tier!;
-  const assertWithinCap = () => assertConcurrency(ownerId, tier, options);
+  const assertWithinCap = (db?: Database) => assertConcurrency(ownerId, tier, options, db);
   if (PLAN_LIMITS[tier].concurrentBoxes > SERIALIZE_AT_OR_BELOW) {
     await assertWithinCap();
     return fn(pre);
@@ -604,16 +611,21 @@ async function precheckBoxGate(ownerId: string, options: BoxGateOptions): Promis
   return decision;
 }
 
-async function assertConcurrency(ownerId: string, tier: PlanTier, options: BoxGateOptions): Promise<void> {
+async function assertConcurrency(
+  ownerId: string,
+  tier: PlanTier,
+  options: BoxGateOptions,
+  db?: Database
+): Promise<void> {
   const limit = PLAN_LIMITS[tier].concurrentBoxes;
-  const active = await countBoxesInUse(ownerId, options.excludeTaskId);
+  const active = await countBoxesInUse(ownerId, options.excludeTaskId, db);
   if (active >= limit) throw new ConcurrentBoxLimitError(limit, active, tier, options.workspaceId);
 }
 
 /** The count-then-act choreography for a small cap. */
 async function withOwnerSerialized<T>(
   lockName: string,
-  assertWithinLimit: () => Promise<void>,
+  assertWithinLimit: (db?: Database) => Promise<void>,
   fn: () => Promise<T>
 ): Promise<T> {
   if (!isRealPostgres()) {
@@ -631,10 +643,21 @@ async function withOwnerSerialized<T>(
     return fn();
   }
 
-  // Watcher path: dedicated mutex transaction on the pool.
-  return withBlockingAdvisoryLock(getPoolDbClient(), lockName, async () => {
-    await assertWithinLimit();
-    return fn();
+  // Watcher path: ONE pool transaction does everything. The xact lock, the
+  // count and `fn`'s writes all run on this connection (it is installed as
+  // the scoped handle), so the holder never needs a second connection while
+  // waiters each hold exactly one. `withBlockingAdvisoryLock` ran the callback
+  // on other connections, which is how a burst deadlocked the pool on
+  // 2026-09-30. Commit releases the lock, so the next caller's count sees
+  // this caller's row.
+  const key = advisoryLockKey(lockName).toString();
+  return getPoolDbClient().transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await txDb.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
+    return runInScopedDb(txDb, async () => {
+      await assertWithinLimit(txDb);
+      return fn();
+    });
   });
 }
 
