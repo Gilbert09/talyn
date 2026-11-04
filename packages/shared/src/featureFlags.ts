@@ -356,7 +356,7 @@ export const FEATURE_FLAGS = {
     envOverride: 'PUBLIC_API_ENABLED',
     fallback: false,
     description: 'Public API — personal access tokens and the /v1 endpoints',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['api', 'public-api'],
   },
 } as const satisfies Record<string, FeatureFlagDefinition>;
