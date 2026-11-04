@@ -23,11 +23,11 @@ export function PrSessionChip({
       type="button"
       data-attr="pr-session-chip"
       onClick={open}
-      className="inline-flex max-w-[10rem] items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+      className="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
       title={`Open session ${session.name}`}
+      aria-label={`Open session ${session.name}`}
     >
-      <SquareTerminal className="h-3 w-3 shrink-0" />
-      <span className="truncate">Session</span>
+      <SquareTerminal className="h-3.5 w-3.5" />
     </button>
   );
 }
