@@ -53,7 +53,7 @@ export interface SessionState {
 
 export function sessionState(
   workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>,
-  chats: Pick<WorkbenchChat, 'id' | 'status'>[],
+  chats: (Pick<WorkbenchChat, 'id' | 'status'> & { queuedMessages?: WorkbenchChat['queuedMessages'] })[],
   unread: Record<string, true>,
   pr: SessionPr | null,
   prOnlyUnseen = false
@@ -66,6 +66,8 @@ export function sessionState(
     return { kind: 'starting', label: 'Starting' };
   }
   if (chats.some((c) => c.status === 'running')) return { kind: 'working', label: 'Working' };
+  // A message that waits for the box is work in progress, not an idle session.
+  if (chats.some((c) => (c.queuedMessages?.length ?? 0) > 0)) return { kind: 'working', label: 'A message waits for the sandbox' };
   if (chats.some((c) => c.status === 'awaiting_input')) {
     return { kind: 'needs_reply', label: 'Waiting for your answer' };
   }

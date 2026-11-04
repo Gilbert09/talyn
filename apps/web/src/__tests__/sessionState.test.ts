@@ -23,6 +23,8 @@ describe('sessionState', () => {
     ['starting', { status: 'provisioning', sandboxState: 'creating' }, [], {}, null, 'starting'],
     ['moving to a fresh sandbox, with the turn that asked for it', { status: 'moving' }, [chat('running')], {}, pr('open'), 'working'],
     ['working', {}, [chat('running')], {}, pr('open'), 'working'],
+    ['a message waits for the sandbox', {}, [{ ...chat('idle'), queuedMessages: [{ id: 'q1', text: 'go', queuedAt: '2026-11-04T00:00:00Z' }] } as ReturnType<typeof chat>], {}, pr('open'), 'working'],
+    ['an empty queue is not work', {}, [{ ...chat('idle'), queuedMessages: [] } as ReturnType<typeof chat>], {}, null, 'idle'],
     ['waiting for an answer', {}, [chat('awaiting_input')], {}, pr('open'), 'needs_reply'],
     ['an unread reply', {}, [chat('idle')], { c1: true }, pr('open'), 'needs_reply'],
     ['merged is done', {}, [chat('idle')], {}, pr('merged'), 'merged'],

@@ -39,9 +39,11 @@ export function threadRepositories(children: Pick<Workbench, 'repoFullName'>[]):
 /** How many of these sessions have a chat that runs now. */
 export function runningSessionCount(
   children: Pick<Workbench, 'id'>[],
-  chatsByWorkbench: Record<string, Pick<WorkbenchChat, 'status'>[] | undefined>
+  chatsByWorkbench: Record<string, (Pick<WorkbenchChat, 'status'> & { queuedMessages?: WorkbenchChat['queuedMessages'] })[] | undefined>
 ): number {
-  return children.filter((c) => (chatsByWorkbench[c.id] ?? []).some((chat) => chat.status === 'running')).length;
+  return children.filter((c) =>
+    (chatsByWorkbench[c.id] ?? []).some((chat) => chat.status === 'running' || (chat.queuedMessages?.length ?? 0) > 0),
+  ).length;
 }
 
 /** The short summary on a thread's sidebar row: "2 running", or "idle". */
