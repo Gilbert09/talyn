@@ -177,7 +177,7 @@ export function ChangesTab({
         </div>
       )}
       {changes?.snapshotAt && (
-        <StoredBanner changes={changes} what="changes" onRefresh={() => void refresh(true)} />
+        <StoredBanner changes={changes} stale={changes.stale} what="changes" onRefresh={() => void refresh(true)} />
       )}
       {changes && (
         <div className="max-h-[40%] shrink-0 overflow-y-auto border-b">
