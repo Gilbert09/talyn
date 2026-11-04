@@ -3400,6 +3400,7 @@
             "enum": [
               "fix_checks",
               "resolve_conflicts",
+              "address_review",
               "merge"
             ]
           },
@@ -14997,6 +14998,182 @@
         "operationId": "resolveSessionConflicts",
         "summary": "Ask the agent to resolve conflicts",
         "description": "Sends the agent the app's prompt to merge the base branch and resolve the conflicts. The message queues behind a running turn. A cloud task that works on the same pull request answers 409 `task_active`.\n\nScope: `sessions:write`.",
+        "tags": [
+          "Session work"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "sessions:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The prompt is sent.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The plan limit is reached. `error.code` says which limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}/address_review": {
+      "post": {
+        "operationId": "addressSessionReviews",
+        "summary": "Ask the agent to address review comments",
+        "description": "Sends the agent the app's prompt to read and address the unresolved review comments of the linked pull request. The message queues behind a running turn. A cloud task that works on the same pull request answers 409 `task_active`.\n\nScope: `sessions:write`.",
         "tags": [
           "Session work"
         ],
