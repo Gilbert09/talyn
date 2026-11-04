@@ -122,6 +122,17 @@ const EMPTY_EVENTS: ChatEventsState = {
 };
 
 /**
+ * The entries of a `workbench:event` broadcast that are event objects. One
+ * null entry would otherwise throw in the handler and drop the whole batch.
+ */
+export function wellFormedEvents(events: unknown[]): WorkbenchEvent[] {
+  return events.filter((e): e is WorkbenchEvent => {
+    const event = (e as { event?: unknown } | null)?.event;
+    return typeof event === 'object' && event !== null;
+  });
+}
+
+/**
  * Merge `incoming` into `existing`, de-duplicated on `seq` and in `seq` order.
  *
  * Returns `existing` itself when nothing new arrived, so a caller can skip the
