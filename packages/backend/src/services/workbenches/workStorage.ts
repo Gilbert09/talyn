@@ -103,6 +103,11 @@ export function setWorkObjectStoreForTests(store: WorkObjectStore | null): void 
   override = store;
 }
 
+/** True when a store is set up, so a write is worth preparing. */
+export function isWorkStorageConfigured(): boolean {
+  return override !== null || isSupabaseConfigured();
+}
+
 export function workObjectStore(): WorkObjectStore {
   if (override) return override;
   return isSupabaseConfigured() ? supabaseStore : unavailableStore;

@@ -2118,6 +2118,10 @@ export const workbenches = pgTable(
     workSaveFailures: integer('work_save_failures').notNull().default(0),
     workSaveFailedAt: timestamp('work_save_failed_at', { withTimezone: true }),
     workSaveError: text('work_save_error'),
+    /** When the newest stored copy of the changes was taken (migration 0107). The copy is in storage. */
+    changesAt: timestamp('changes_at', { withTimezone: true }),
+    /** The stored copy's etag. A client fetches the changes again when it moves. */
+    changesEtag: text('changes_etag'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

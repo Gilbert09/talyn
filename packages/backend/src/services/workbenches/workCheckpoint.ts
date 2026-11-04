@@ -1,6 +1,7 @@
 import type { AgentEventDraft } from '@talyn/shared';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { refreshDiffStat } from './changes.js';
+import { captureChanges } from './changesCapture.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { userFacingError } from './errors.js';
 import { moveReadChunkScript } from './move.js';
@@ -398,6 +399,18 @@ export function noteWorkActivity(workbenchId: string): void {
   }
 }
 
+/**
+ * A live read found other changes than the stored copy: take a checkpoint,
+ * and with it a new copy, within one interval. Never throws, never waits.
+ */
+export function noteChangesStale(workbenchId: string): void {
+  try {
+    checkpointThrottle.poke(workbenchId);
+  } catch (err) {
+    console.warn(`[workbench] noting stale changes on ${workbenchId} failed:`, err);
+  }
+}
+
 /** The Changes route just read the box: the stat it stored is fresh. */
 export function noteDiffStatFresh(workbenchId: string): void {
   diffThrottle.mark(workbenchId);
@@ -468,6 +481,9 @@ async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason:
   } catch (err) {
     console.warn(`[workbench] recording the work checkpoint for ${row.id} failed:`, err);
   }
+  // A copy of the changes for the Changes tab while the box sleeps. After the
+  // save and under the same lock, so the two never run on the box at once.
+  if (!lost) await captureChanges(row, reason);
   return result;
 }
 

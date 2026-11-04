@@ -151,6 +151,8 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
     openTerminals.get(workbenchId)?.delete(close);
     clearTimeout(handshakeTimer);
     clearTimeout(expiryTimer);
+    // A closed terminal may leave changes the last typing did not save yet: save them, and their copy, soon.
+    if (session) noteWorkActivity(workbenchId);
     session?.close();
     session = null;
     try {

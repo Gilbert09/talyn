@@ -24,6 +24,7 @@ import {
   withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
+import { captureChanges } from './changesCapture.js';
 import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
@@ -772,7 +773,9 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     assertOwned(claim);
     row = await setProvisioningRow(row, sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
-    void refreshDiffStat(row);
+    // A new box (a start, a move, a recovery): store its changes, which refreshes the stat too.
+    const readyRow = row;
+    void captureChanges(readyRow, 'ready').then((c) => (c.kind === 'captured' ? undefined : refreshDiffStat(readyRow)));
     // The archive's work is on this box now: make it the checkpoint, so a loss before the first turn keeps it.
     if (restoringArchive) void checkpointWork(row, 'restored');
 
@@ -887,6 +890,9 @@ export async function processArchive(workbenchId: string): Promise<void> {
       const saved = await saveWork(row, 'archive', { marker: archiveSaveMarker(row) });
       if (saved.kind === 'too_large') throw new Error(archiveTooLargeMessage(saved.size));
       if (saved.kind === 'failed') throw saved.error ?? new Error(`Could not save the session: ${saved.detail}`);
+      await checkLease();
+      // The archived session shows its changes from this copy. Best effort: it never fails the archive.
+      await captureChanges(row, 'archive');
       await checkLease();
       // The archive supersedes the checkpoint; a stale one must not come back after a restore.
       await deleteSavedWork(row, ['checkpoint']).catch((err) =>

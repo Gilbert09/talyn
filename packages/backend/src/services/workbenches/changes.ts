@@ -82,7 +82,7 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
 }
 
 /** A list read from the box: every field set, and never a stored copy. */
-type LiveChanges = Required<Omit<WorkbenchChanges, 'snapshotAt'>>;
+type LiveChanges = Pick<Required<WorkbenchChanges>, 'files' | 'uncommitted' | 'committed' | 'uncommittedStats' | 'committedStats' | 'base' | 'headSha'>;
 
 /** A thread's changes: none. It has no repository. */
 export function emptyChanges(): LiveChanges {
@@ -90,35 +90,31 @@ export function emptyChanges(): LiveChanges {
   return { files: [], uncommitted: [], committed: [], uncommittedStats: zero, committedStats: { ...zero }, base: '', headSha: '' };
 }
 
-export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
-  if (row.kind === 'thread') return emptyChanges();
-  const script = [
-    'set -e -o pipefail',
-    mergeBaseLine(row),
-    'head=$(git rev-parse HEAD)',
-    sectionsScript([
-      { label: 'MB', command: 'printf %s "$mb"' },
-      { label: 'HEAD', command: 'printf %s "$head"' },
-      { label: 'NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" --' },
-      { label: 'NAMES', command: 'git diff --name-status -z --find-renames "$mb" --' },
-      { label: 'UNCOMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$head" --' },
-      { label: 'UNCOMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$head" --' },
-      { label: 'COMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" "$head" --' },
-      { label: 'COMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$mb" "$head" --' },
-      { label: 'UNTRACKED', command: 'git ls-files --others --exclude-standard -z' },
-      {
-        label: 'COUNTS',
-        command:
-          `git ls-files --others --exclude-standard -z | { head -z -n ${MAX_COUNTED_UNTRACKED}; cat >/dev/null; } | ` +
-          `while IFS= read -r -d '' f; do printf '%s\\t%s\\n' "$f" "$(awk 'END{print NR}' "$f" 2>/dev/null)"; done`,
-      },
-    ]),
-  ].join('\n');
-  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
-  if (r.exitCode !== 0) {
-    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
-  }
-  const s = parseSections(r.stdout);
+/**
+ * The git commands behind a changes list, by section label. The capture in
+ * `changesCapture.ts` runs the same ones, so a stored list and a live list of
+ * the same work are equal. Each needs `$mb` and `$head` set. Portable to the
+ * BSD tools a macOS test runs on: no `head -z`.
+ */
+export const CHANGE_LIST_SECTIONS: ReadonlyArray<{ label: string; command: string }> = [
+  { label: 'NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" --' },
+  { label: 'NAMES', command: 'git diff --name-status -z --find-renames "$mb" --' },
+  { label: 'UNCOMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$head" --' },
+  { label: 'UNCOMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$head" --' },
+  { label: 'COMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" "$head" --' },
+  { label: 'COMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$mb" "$head" --' },
+  { label: 'UNTRACKED', command: 'git ls-files --others --exclude-standard -z' },
+  {
+    label: 'COUNTS',
+    command:
+      `git ls-files --others --exclude-standard -z | { n=0; while IFS= read -r -d '' f; do ` +
+      `n=$((n+1)); [ "$n" -le ${MAX_COUNTED_UNTRACKED} ] || { cat >/dev/null; break; }; ` +
+      `printf '%s\\t%s\\n' "$f" "$(awk 'END{print NR}' "$f" 2>/dev/null)"; done; }`,
+  },
+];
+
+/** A changes list from its sections (see {@link CHANGE_LIST_SECTIONS}), plus `MB` and `HEAD`. */
+export function parseChangeLists(s: Record<string, string>): LiveChanges {
   const counts: Record<string, number> = {};
   for (const line of (s.COUNTS ?? '').split('\n')) {
     const tab = line.lastIndexOf('\t');
@@ -149,6 +145,25 @@ export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
     base: (s.MB ?? '').trim(),
     headSha: (s.HEAD ?? '').trim(),
   };
+}
+
+export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
+  if (row.kind === 'thread') return emptyChanges();
+  const script = [
+    'set -e -o pipefail',
+    mergeBaseLine(row),
+    'head=$(git rev-parse HEAD)',
+    sectionsScript([
+      { label: 'MB', command: 'printf %s "$mb"' },
+      { label: 'HEAD', command: 'printf %s "$head"' },
+      ...CHANGE_LIST_SECTIONS,
+    ]),
+  ].join('\n');
+  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
+  if (r.exitCode !== 0) {
+    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
+  }
+  return parseChangeLists(parseSections(r.stdout));
 }
 
 /** The patch for one scope. An absent scope keeps the combined diff. */

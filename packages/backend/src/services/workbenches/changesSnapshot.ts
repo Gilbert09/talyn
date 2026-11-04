@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { WorkbenchChanges } from '@talyn/shared';
 import type { WorkbenchRow } from './store.js';
+import { deleteAllChanges, noteListRead } from './changesStore.js';
 import { WorkStorageUnavailableError, workObjectStore } from './workStorage.js';
 
 /**
@@ -42,6 +43,8 @@ async function put(row: SnapshotRow, changes: WorkbenchChanges, hash: string): P
   try {
     await workObjectStore().put(changesSnapshotKey(row), Buffer.from(JSON.stringify(body)));
     lastWritten.set(row.id, hash);
+    // The full copy's patches do not match a list that moved past them.
+    await noteListRead(row, changes);
   } catch (err) {
     lastWritten.delete(row.id);
     if (err instanceof WorkStorageUnavailableError) return;
@@ -80,7 +83,7 @@ export async function readChangesSnapshot(row: SnapshotRow): Promise<WorkbenchCh
   }
 }
 
-/** Remove the stored list. Called when the session is deleted. */
+/** Remove the stored list and the full stored copy (`changesStore.ts`). Called when the session is deleted. */
 export async function deleteChangesSnapshot(row: SnapshotRow): Promise<void> {
   lastWritten.delete(row.id);
   try {
@@ -88,6 +91,7 @@ export async function deleteChangesSnapshot(row: SnapshotRow): Promise<void> {
   } catch (err) {
     if (!(err instanceof WorkStorageUnavailableError)) throw err;
   }
+  await deleteAllChanges(row);
 }
 
 /** Tests start each case with no memory of earlier writes. */
