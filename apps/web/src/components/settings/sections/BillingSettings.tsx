@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, CreditCard, Download, Loader2, Lock, Smartphone, Zap } from 'lucide-react';
+import { AlertCircle, CreditCard, Download, Loader2, Lock, Smartphone, Zap } from 'lucide-react';
 import {
   PLAN_LIMITS,
   PLAN_TIER_LABELS,
   SANDBOX_SIZES,
-  USAGE_ALERT_THRESHOLDS,
   formatBoxHoursUsage,
   formatPricePerHour,
   formatUsd,
@@ -15,22 +14,26 @@ import {
 import { api } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
 import { openExternal } from '../../../lib/openExternal';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { useBillingStore } from '../../../stores/billing';
 import {
   FREE_INCLUDED_TEXT,
   GAUGE_BAR_CLASS,
   LEGACY_INCLUDED_TEXT,
   PRO_INCLUDED_TEXT,
+  formatLeftPercent,
   formatLongDate,
+  formatShortDate,
   gaugeTone,
   goToHostedPage,
+  leftPercent,
   usageBillingOf,
   type UsageBillingView,
 } from '../../../lib/usageBilling';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
-import { CreditPackButtons, ProPlanForm, legacyMonthlyPrice, proPrices } from '../../billing/BillingActions';
+import { CreditPackButtons, legacyMonthlyPrice, proPrices } from '../../billing/BillingActions';
 import { AutoTopupForm } from './AutoTopupForm';
 import { LegacyBillingSettings, formatOrderAmount } from './LegacyBillingSettings';
 
@@ -52,15 +55,10 @@ function tierPrice(tier: PlanTier, view: UsageBillingView): string {
   return `${prices.monthly}/month or ${prices.annual}/year`;
 }
 
-const PRO_BENEFITS = [
-  `${PRO_INCLUDED_TEXT} every month (100 hours of a large box)`,
-  'Every box size, up to 100 boxes at once',
-  'Credits and auto top-up when you need more',
-  'Keep new PRs green and review them automatically',
-];
-
 export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   const refresh = useBillingStore((s) => s.refresh);
+  const openUpgrade = useBillingStore((s) => s.setUpgradeModalOpen);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const { status, tier } = view;
   const limits = PLAN_LIMITS[tier];
 
@@ -81,13 +79,13 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
         <Card className="space-y-4 p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm text-muted-foreground">Current plan</p>
+              <p className="text-sm text-muted-foreground">Your plan</p>
               <p className="flex items-center gap-2 font-medium">
                 {PLAN_TIER_LABELS[tier]}
                 {tier !== 'free' && <Zap className="h-4 w-4 text-primary" />}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {tierPrice(tier, view)}.{' '}
+                {tier !== 'free' && !comped && !teamPaid && <>Plan prices: {tierPrice(tier, view)}. </>}
                 {tier === 'free' &&
                   `${FREE_INCLUDED_TEXT} a month, small and standard boxes, ${limits.concurrentBoxes} at once.`}
                 {tier === 'pro' && `${PRO_INCLUDED_TEXT} a month, every size, up to ${limits.concurrentBoxes} at once.`}
@@ -98,10 +96,17 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
               {teamPaid && status.team && (
                 <p className="mt-1 text-sm text-muted-foreground">Paid for by your team, {status.team.name}.</p>
               )}
+              <p className={cn('mt-1 text-sm', pastDue ? 'text-destructive' : 'text-muted-foreground')}>
+                {pastDue
+                  ? 'Payment failed'
+                  : status.cancelAtPeriodEnd
+                    ? `Cancels${status.currentPeriodEnd ? ` on ${formatLongDate(status.currentPeriodEnd)}` : ' at the end of this period'}`
+                    : 'Active'}
+              </p>
               {subscribed && status.currentPeriodEnd && (
                 <p className="mt-1 text-sm text-muted-foreground">
                   {status.cancelAtPeriodEnd
-                    ? `${PLAN_TIER_LABELS[tier]} until ${formatLongDate(status.currentPeriodEnd)}, then Free.`
+                    ? `Ends ${formatLongDate(status.currentPeriodEnd)}`
                     : `Renews ${formatLongDate(status.currentPeriodEnd)}.`}
                 </p>
               )}
@@ -112,65 +117,55 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <p className="text-sm">
-                Your last payment failed. Update your payment method to keep your plan. The plan drops to Free if
-                the retries run out.
+                Your last payment failed. Update your payment method to keep your plan. The plan drops to Free if the
+                retries run out.
               </p>
             </div>
           )}
 
-          {subscribed && <PortalButton cancelAtPeriodEnd={status.cancelAtPeriodEnd} />}
+          <div className="flex flex-wrap items-center gap-2">
+            {tier === 'free' || (tier === 'legacy_pro' && subscribed) ? (
+              <Button data-attr="plan-upgrade" onClick={() => openUpgrade(true, 'upgrade')}>
+                {tier === 'free' ? 'Upgrade' : 'Move to Pro'}
+              </Button>
+            ) : teamPaid ? (
+              <Button data-attr="plan-manage-billing" onClick={() => openSettings('teams')}>
+                Manage billing
+              </Button>
+            ) : (
+              subscribed && <PortalButton />
+            )}
+            {tier === 'legacy_pro' && subscribed && <PortalButton secondary />}
+            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => openUpgrade(true, 'upgrade')}>
+              Compare plans
+            </Button>
+          </div>
         </Card>
       </div>
 
       <UsageCard view={view} />
 
-      {tier === 'free' && (
-        <div>
-          <h3 className="mb-4 text-lg font-semibold">Upgrade to Pro</h3>
-          <Card className="space-y-4 p-4">
-            <ProPlanForm mode="checkout" placement="billing_settings" />
-            <ul className="space-y-1.5 text-sm text-muted-foreground">
-              {PRO_BENEFITS.map((line) => (
-                <li key={line} className="flex items-center gap-2">
-                  <Check className="h-4 w-4 shrink-0" /> {line}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </div>
-      )}
+      {limits.creditsAllowed && <CreditsCard view={view} />}
 
-      {tier === 'legacy_pro' && subscribed && <MoveToProCard view={view} />}
-
-      <SizesCard tier={tier} view={view} />
-
-      {limits.creditsAllowed ? (
-        <CreditsCard view={view} />
-      ) : (
-        <div>
-          <h3 className="mb-4 text-lg font-semibold">Credits</h3>
-          <Card className="p-4">
+      <details className="rounded-lg border bg-card p-4" data-attr="usage-explanation">
+        <summary className="cursor-pointer text-sm font-medium">How usage is counted</summary>
+        <div className="mt-4 space-y-4">
+          <p className="text-sm text-muted-foreground">
+            One box-hour is a standard box running for one hour. Sleeping boxes use nothing. Included hours go first,
+            then credits. Boxes use credits at their hourly price. Credits expire 12 months after you buy them.
+          </p>
+          {!limits.creditsAllowed && (
             <p className="text-sm text-muted-foreground">
-              Credits and auto top-up come with Pro. When your included hours run out, credits keep new boxes
-              starting.
+              Credits and auto top-up come with Pro. Credits let you start new boxes after your included hours run out.
             </p>
-          </Card>
+          )}
+          <SizesCard tier={tier} view={view} />
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Smartphone className="h-4 w-4 shrink-0" />
+            The mobile app is coming soon. It is included in every plan.
+          </p>
         </div>
-      )}
-
-      {limits.creditsAllowed && status.autoTopup && (
-        <div>
-          <h3 className="mb-4 text-lg font-semibold">Auto top-up</h3>
-          <Card className="p-4">
-            <AutoTopupForm settings={status.autoTopup} />
-          </Card>
-        </div>
-      )}
-
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Smartphone className="h-4 w-4 shrink-0" />
-        The mobile app is coming soon. It is included in every plan.
-      </p>
+      </details>
 
       <BillingTeamNotice status={status} />
 
@@ -179,7 +174,7 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   );
 }
 
-function PortalButton({ cancelAtPeriodEnd }: { cancelAtPeriodEnd: boolean }) {
+function PortalButton({ secondary = false }: { secondary?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const open = async () => {
@@ -195,9 +190,15 @@ function PortalButton({ cancelAtPeriodEnd }: { cancelAtPeriodEnd: boolean }) {
   };
   return (
     <div className="space-y-2">
-      <Button variant="outline" onClick={() => void open()} disabled={busy} className="gap-2">
+      <Button
+        variant={secondary ? 'link' : 'default'}
+        data-attr="plan-manage-billing"
+        onClick={() => void open()}
+        disabled={busy}
+        className="gap-2"
+      >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-        {cancelAtPeriodEnd ? 'Resume or manage subscription' : 'Manage subscription'}
+        Manage billing
       </Button>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
@@ -207,28 +208,29 @@ function PortalButton({ cancelAtPeriodEnd }: { cancelAtPeriodEnd: boolean }) {
 export function UsageCard({ view }: { view: UsageBillingView }) {
   const { usage, status } = view;
   const tone = gaugeTone(usage);
-  const percent = Math.min(100, Math.max(0, usage.percent));
+  const percent = leftPercent(usage.percent, usage.exhausted);
   return (
     <div>
       <h3 className="mb-4 text-lg font-semibold">This period</h3>
       <Card className="space-y-3 p-4">
         <div className="flex items-baseline justify-between gap-2 text-sm">
           <span className="font-medium" data-attr="usage-text">
-            {formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)}
+            {formatLeftPercent(usage.percent, usage.exhausted)}
           </span>
-          <span className="text-muted-foreground">Resets on {formatLongDate(usage.periodEnd)}</span>
+          <span className="text-muted-foreground">Resets {formatShortDate(usage.periodEnd)}</span>
         </div>
         <div
           className="relative h-2 overflow-hidden rounded-full bg-muted"
           role="progressbar"
+          aria-label="Box-hours left"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
         >
-          <div className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])} style={{ width: `${percent}%` }} />
-          {USAGE_ALERT_THRESHOLDS.filter((t) => t < 100).map((t) => (
-            <span key={t} aria-hidden className="absolute inset-y-0 w-px bg-background/80" style={{ left: `${t}%` }} />
-          ))}
+          <div
+            className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])}
+            style={{ width: `${percent}%` }}
+          />
         </div>
         {usage.exhausted && (
           <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
@@ -241,9 +243,7 @@ export function UsageCard({ view }: { view: UsageBillingView }) {
             </p>
           </div>
         )}
-        <p className="text-sm text-muted-foreground">
-          One box-hour is a standard box running for one hour. Sleeping boxes use nothing.
-        </p>
+        <p className="text-sm text-muted-foreground">{formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used</p>
         {status.concurrentBoxes && (
           <p className="text-sm text-muted-foreground" data-attr="concurrent-boxes">
             Boxes running now: {status.concurrentBoxes.used} of {status.concurrentBoxes.limit}
@@ -254,28 +254,15 @@ export function UsageCard({ view }: { view: UsageBillingView }) {
   );
 }
 
-function MoveToProCard({ view }: { view: UsageBillingView }) {
-  const prices = proPrices(view.status.pricing);
-  return (
-    <div>
-      <h3 className="mb-4 text-lg font-semibold">Move to Pro</h3>
-      <Card className="space-y-4 p-4">
-        <ul className="space-y-1.5 text-sm">
-          <li>
-            Box-hours each month: {PLAN_LIMITS.legacy_pro.includedBoxHours} → {PLAN_LIMITS.pro.includedBoxHours}
-          </li>
-          <li>
-            Price: {legacyMonthlyPrice(view.status.pricing)} → {prices.monthly} a month (or {prices.annual} a year)
-          </li>
-          <li className="text-muted-foreground">Everything else stays the same. The change applies to your subscription now.</li>
-        </ul>
-        <ProPlanForm mode="change" placement="billing_settings" />
-      </Card>
-    </div>
-  );
-}
-
-export function SizesCard({ tier, view }: { tier: PlanTier; view: UsageBillingView }) {
+export function SizesCard({
+  tier,
+  view,
+  showPrices = false,
+}: {
+  tier: PlanTier;
+  view: UsageBillingView;
+  showPrices?: boolean;
+}) {
   const rows = view.status.sizePrices ?? sizePriceTable(tier);
   return (
     <div>
@@ -284,14 +271,20 @@ export function SizesCard({ tier, view }: { tier: PlanTier; view: UsageBillingVi
         {rows.map((row) => {
           const size = SANDBOX_SIZES[row.size];
           return (
-            <div key={row.size} className="flex items-center gap-3 px-4 py-2.5 text-sm" data-attr={`size-row-${row.size}`}>
+            <div
+              key={row.size}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm"
+              data-attr={`size-row-${row.size}`}
+            >
               <div className="min-w-0 flex-1">
                 <p className={cn('font-medium', !row.allowed && 'text-muted-foreground')}>{size?.label ?? row.size}</p>
                 <p className="text-xs text-muted-foreground">
                   Uses {row.weight} box-hour{row.weight === 1 ? '' : 's'} per hour
                 </p>
               </div>
-              <span className="tabular-nums text-muted-foreground">{formatPricePerHour(row.priceMicrosPerHour)}</span>
+              {showPrices && (
+                <span className="tabular-nums text-muted-foreground">{formatPricePerHour(row.priceMicrosPerHour)}</span>
+              )}
               {!row.allowed && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                   <Lock className="h-3 w-3" /> Pro
@@ -301,14 +294,12 @@ export function SizesCard({ tier, view }: { tier: PlanTier; view: UsageBillingVi
           );
         })}
       </Card>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Included hours go first. After that, boxes use credits at the price shown.
-      </p>
     </div>
   );
 }
 
 function CreditsCard({ view }: { view: UsageBillingView }) {
+  const [addingCredits, setAddingCredits] = useState(false);
   const credits = view.status.credits;
   const balance = credits?.balanceMicros ?? 0;
   const lots = (credits?.lots ?? []).filter((lot) => lot.remainingMicros > 0);
@@ -321,6 +312,10 @@ function CreditsCard({ view }: { view: UsageBillingView }) {
           <p className="text-2xl font-semibold tabular-nums" data-attr="credit-balance">
             {formatUsd(balance)}
           </p>
+          <p className="text-sm text-muted-foreground">Auto top-up: {view.status.autoTopup?.enabled ? 'On' : 'Off'}</p>
+          {view.status.autoTopup?.lastFailure && (
+            <p className="text-sm text-destructive">The last auto top-up failed.</p>
+          )}
           {credits && credits.expiringSoonMicros > 0 && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
               {formatUsd(credits.expiringSoonMicros)} expires in the next 30 days.
@@ -339,11 +334,28 @@ function CreditsCard({ view }: { view: UsageBillingView }) {
             ))}
           </ul>
         )}
-        <div className="space-y-2">
-          <p className="text-sm font-medium">Buy credits</p>
-          <CreditPackButtons placement="billing_settings" />
-          <p className="text-xs text-muted-foreground">Credits expire 12 months after you buy them.</p>
-        </div>
+        <Button
+          variant="outline"
+          data-attr="plan-add-credits"
+          aria-expanded={addingCredits}
+          aria-controls="add-credits-panel"
+          onClick={() => setAddingCredits(!addingCredits)}
+        >
+          Add credits
+        </Button>
+        {addingCredits && (
+          <div id="add-credits-panel" className="space-y-4">
+            <CreditPackButtons placement="billing_settings" />
+            <p className="text-xs text-muted-foreground">Credits expire 12 months after you buy them.</p>
+            <SizesCard tier={view.tier} view={view} showPrices />
+            {view.status.autoTopup && (
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium">Auto top-up</h4>
+                <AutoTopupForm settings={view.status.autoTopup} />
+              </div>
+            )}
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -417,7 +429,11 @@ function OrderHistory() {
               disabled={busy !== null}
               className="shrink-0 gap-1.5"
             >
-              {busy === order.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              {busy === order.id ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
               Invoice
             </Button>
           </div>

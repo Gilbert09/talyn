@@ -28,11 +28,14 @@ import { cn } from '../../../lib/utils';
 import {
   GAUGE_BAR_CLASS,
   GAUGE_TEXT_CLASS,
+  formatLeftPercent,
   formatShortDate,
   gaugeTone,
+  leftPercent,
   pricingOf,
   type UsageBillingStatus,
 } from '../../../lib/usageBilling';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { toast } from '../../../stores/toast';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
@@ -43,20 +46,18 @@ import { Select } from '../../ui/select';
 import { SettingsPage } from '../../ui/settings';
 import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
 
-type Period = 'monthly' | 'annual';
-
 const hours = (tier: PlanTier) => formatBoxHoursLabel(boxHoursToWeightedSeconds(PLAN_LIMITS[tier].includedBoxHours));
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</h3>;
 }
 
-/** Settings → Billing on a backend with usage billing: plan, box-hours, sizes, credits and auto top-up. */
+/** Show the plan, usage left, and controls for credits. */
 export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
   const refresh = useBillingStore((s) => s.refresh);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
   const [busy, setBusy] = useState<string | null>(null);
-  const [waiting, setWaiting] = useState<null | 'plan' | 'credits'>(null);
+  const [waiting, setWaiting] = useState<null | 'credits'>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Live numbers on entry: the meter moves while the app sits open.
@@ -83,23 +84,6 @@ export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
     }
   };
 
-  const checkoutPro = (period: Period) =>
-    run(`checkout-${period}`, async () => {
-      trackEvent('checkout_started', { period, plan: 'pro', placement: 'settings' });
-      const { url } = await api.billing.checkout({ period, plan: 'pro' });
-      await openExternal(url);
-      startCheckoutPollBurst('plan');
-      setWaiting('plan');
-    });
-
-  const moveToPro = (period: Period) =>
-    run(`change-${period}`, async () => {
-      trackEvent('plan_change_started', { period, from: status.tier, placement: 'settings' });
-      await api.billing.changePlan({ to: 'pro', period });
-      startCheckoutPollBurst('plan');
-      setWaiting('plan');
-    });
-
   const buyCredits = (pack: CreditPackId) =>
     run(`pack-${pack}`, async () => {
       trackEvent('credit_checkout_started', { pack, placement: 'settings' });
@@ -118,23 +102,36 @@ export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
 
   const { tier } = status;
   const creditsAllowed = PLAN_LIMITS[tier].creditsAllowed;
-  const hasCredits = (status.credits?.balanceMicros ?? 0) > 0 || (status.credits?.lots.length ?? 0) > 0;
 
   return (
     <SettingsPage title="Plan and usage">
-      <PlanCard status={status} busy={busy} onPortal={openPortal} onCheckout={checkoutPro} onMoveToPro={moveToPro} waiting={waiting === 'plan'} />
+      <PlanCard status={status} busy={busy} onPortal={openPortal} />
       {error && <p className="text-xs text-destructive">{error}</p>}
-      <BillingTeamNotice status={status} />
       <UsageCard status={status} />
-      {(creditsAllowed || hasCredits) && (
-        <CreditsCard status={status} busy={busy} onBuy={buyCredits} waiting={waiting === 'credits'} />
-      )}
-      {creditsAllowed && <AutoTopupCard status={status} onBuy={buyCredits} />}
-      <SizesCard tier={tier} status={status} />
-      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Smartphone className="h-3.5 w-3.5" />
-        The mobile app is coming soon, and it is included on every plan.
-      </p>
+      {creditsAllowed && <CreditsCard status={status} busy={busy} onBuy={buyCredits} waiting={waiting === 'credits'} />}
+      <details className="rounded-lg border bg-card p-3" data-attr="usage-explanation">
+        <summary className="cursor-pointer text-[13px] font-medium">How usage is counted</summary>
+        <div className="mt-3 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            One box-hour is a standard box running for one hour. Sleeping boxes use nothing. Included hours go first,
+            then credits. Boxes use credits at their hourly price. Credits expire 12 months after you buy them.
+          </p>
+          <SizesCard tier={tier} status={status} />
+          {!creditsAllowed && status.credits && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Credits you hold still work. Buying credits comes with Pro.
+              </p>
+              <CreditBalance credits={status.credits} />
+            </div>
+          )}
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Smartphone className="h-3.5 w-3.5" />
+            The mobile app is coming soon. It is included on every plan.
+          </p>
+        </div>
+      </details>
+      <BillingTeamNotice status={status} />
       <OrderHistory planKey={tier} />
     </SettingsPage>
   );
@@ -143,156 +140,96 @@ export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
 function PlanCard({
   status,
   busy,
-  waiting,
   onPortal,
-  onCheckout,
-  onMoveToPro,
 }: {
   status: UsageBillingStatus;
   busy: string | null;
-  waiting: boolean;
   onPortal: () => void;
-  onCheckout: (period: Period) => void;
-  onMoveToPro: (period: Period) => void;
 }) {
-  const [period, setPeriod] = useState<Period>('annual');
+  const openUpgrade = useBillingStore((s) => s.setUpgradeModalOpen);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const pricing = pricingOf(status);
   const { tier } = status;
   const comped = status.planSource === 'override';
   const teamPaid = status.planSource === 'team';
   const pastDue = status.subscriptionStatus === 'past_due';
-  const price =
-    tier === 'free'
-      ? '$0'
-      : tier === 'legacy_pro'
-        ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)}/month`
-        : `${formatUsd(pricing.proMonthlyMicros, 0)}/month or ${formatUsd(pricing.proAnnualMicros, 0)}/year`;
   const canManage = tier !== 'free' && !comped && !teamPaid;
-  const disabled = busy !== null || waiting;
+  const canMove = tier === 'legacy_pro' && !teamPaid;
+  const price =
+    tier === 'legacy_pro'
+      ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)}/month`
+      : `${formatUsd(pricing.proMonthlyMicros, 0)}/month or ${formatUsd(pricing.proAnnualMicros, 0)}/year`;
 
   return (
-    <div className="space-y-3">
-      <Card className="space-y-2 p-3" data-testid="plan-card">
-        <div>
-          <p className="text-xs text-muted-foreground">Current plan</p>
-          <p className="flex items-center gap-2 text-[13px] font-medium">
-            {PLAN_TIER_LABELS[tier]}
-            {tier !== 'free' && <Zap className="h-3.5 w-3.5 text-primary" />}
-            {!comped && !teamPaid && <span className="text-xs font-normal text-muted-foreground">{price}</span>}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {hours(tier)} a month, {PLAN_LIMITS[tier].concurrentBoxes} boxes at once,{' '}
-            {tier === 'free' ? 'small and standard boxes.' : 'every box size, credits and auto top-up.'}
-          </p>
-          {comped && <p className="mt-0.5 text-xs text-muted-foreground">Complimentary plan. Nothing to pay.</p>}
-          {teamPaid && status.team && (
-            <p className="mt-0.5 text-xs text-muted-foreground">Paid for by your team, {status.team.name}.</p>
-          )}
-          {canManage && status.currentPeriodEnd && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {status.cancelAtPeriodEnd
-                ? `${PLAN_TIER_LABELS[tier]} until ${formatRenewalDate(status.currentPeriodEnd)}, then Free.`
-                : `Renews ${formatRenewalDate(status.currentPeriodEnd)}.`}
-            </p>
-          )}
-        </div>
-
-        {pastDue && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-            <p className="text-xs">
-              Your last payment failed. Update your payment method to keep your plan. It drops to Free if the retries
-              run out.
-            </p>
-          </div>
+    <Card className="space-y-3 p-3" data-testid="plan-card">
+      <div>
+        <SectionTitle>Your plan</SectionTitle>
+        <p className="flex items-center gap-2 text-[13px] font-medium">
+          {PLAN_TIER_LABELS[tier]}
+          {tier !== 'free' && <Zap className="h-3.5 w-3.5 text-primary" />}
+        </p>
+        {tier !== 'free' && !comped && !teamPaid && (
+          <p className="mt-1 text-xs text-muted-foreground">Plan prices: {price}</p>
         )}
-
-        {canManage && (
-          <Button variant="outline" size="sm" onClick={onPortal} disabled={busy !== null}>
-            {busy === 'portal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CreditCard className="h-3.5 w-3.5" />}
-            {status.cancelAtPeriodEnd ? 'Resume or manage subscription' : 'Manage subscription'}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {hours(tier)} a month, {PLAN_LIMITS[tier].concurrentBoxes} boxes at once,{' '}
+          {tier === 'free' ? 'small and standard boxes.' : 'every box size, credits and auto top-up.'}
+        </p>
+        {comped && <p className="mt-1 text-xs text-muted-foreground">Complimentary plan. Nothing to pay.</p>}
+        {teamPaid && status.team && (
+          <p className="mt-1 text-xs text-muted-foreground">Paid for by your team, {status.team.name}.</p>
+        )}
+        <p className={cn('mt-1 text-xs', pastDue ? 'text-destructive' : 'text-muted-foreground')}>
+          {pastDue
+            ? 'Payment failed'
+            : status.cancelAtPeriodEnd
+              ? `Cancels${status.currentPeriodEnd ? ` on ${formatRenewalDate(status.currentPeriodEnd)}` : ' at the end of this period'}`
+              : 'Active'}
+        </p>
+        {canManage && status.currentPeriodEnd && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {status.cancelAtPeriodEnd ? 'Ends' : 'Renews'} {formatRenewalDate(status.currentPeriodEnd)}
+          </p>
+        )}
+      </div>
+      {pastDue && (
+        <p className="text-xs text-destructive">
+          Your last payment failed. Update your payment method to keep your plan. The plan drops to Free if the retries
+          run out.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {tier === 'free' || canMove ? (
+          <Button size="sm" data-attr="plan-upgrade" onClick={() => openUpgrade(true)}>
+            {canMove ? 'Move to Pro' : 'Upgrade'}
+          </Button>
+        ) : (
+          (canManage || teamPaid) && (
+            <Button
+              size="sm"
+              data-attr="plan-manage-billing"
+              onClick={teamPaid ? () => openSettings('teams') : onPortal}
+              disabled={busy !== null}
+            >
+              {busy === 'portal' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CreditCard className="h-3.5 w-3.5" />
+              )}
+              Manage billing
+            </Button>
+          )
+        )}
+        {canMove && canManage && (
+          <Button variant="link" size="sm" data-attr="plan-manage-billing" onClick={onPortal} disabled={busy !== null}>
+            Manage billing
           </Button>
         )}
-      </Card>
-
-      {tier === 'free' && (
-        <div data-testid="upgrade-pro">
-          <SectionTitle>Upgrade to Pro</SectionTitle>
-          <div className="grid grid-cols-2 gap-3">
-            <Card className="relative flex flex-col gap-3 border-primary/40 p-3">
-              <span className="absolute right-3 top-3 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                2 months free
-              </span>
-              <div>
-                <p className="text-[13px] font-medium">Annual</p>
-                <p className="text-lg font-semibold">
-                  {formatUsd(pricing.proAnnualMicros, 0)}
-                  <span className="text-xs font-normal text-muted-foreground"> /year</span>
-                </p>
-              </div>
-              <Button onClick={() => onCheckout('annual')} disabled={disabled} className="mt-auto">
-                {busy === 'checkout-annual' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                Upgrade annual
-              </Button>
-            </Card>
-            <Card className="flex flex-col gap-3 p-3">
-              <div>
-                <p className="text-[13px] font-medium">Monthly</p>
-                <p className="text-lg font-semibold">
-                  {formatUsd(pricing.proMonthlyMicros, 0)}
-                  <span className="text-xs font-normal text-muted-foreground"> /month</span>
-                </p>
-              </div>
-              <Button variant="outline" onClick={() => onCheckout('monthly')} disabled={disabled} className="mt-auto">
-                {busy === 'checkout-monthly' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                Upgrade monthly
-              </Button>
-            </Card>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Pro includes {hours('pro')} a month (100 hours of a large box), every box size, up to{' '}
-            {PLAN_LIMITS.pro.concurrentBoxes} boxes at once, credits and auto top-up.
-          </p>
-          {waiting && <WaitingLine />}
-        </div>
-      )}
-
-      {tier === 'legacy_pro' && !teamPaid && (
-        <Card className="space-y-2 p-3" data-testid="move-to-pro">
-          <p className="text-[13px] font-medium">Move to Pro</p>
-          <ul className="space-y-0.5 text-xs text-muted-foreground">
-            <li>
-              {hours('legacy_pro')} a month becomes {hours('pro')}.
-            </li>
-            <li>
-              {formatUsd(pricing.legacyProMonthlyMicros, 0)} a month becomes{' '}
-              {period === 'annual'
-                ? `${formatUsd(pricing.proAnnualMicros, 0)} a year`
-                : `${formatUsd(pricing.proMonthlyMicros, 0)} a month`}
-              .
-            </li>
-            <li>The change starts now. Your next invoice is adjusted for the days left.</li>
-          </ul>
-          <div className="flex items-center gap-2">
-            <Select
-              aria-label="Billing period"
-              className="h-8 w-32 text-xs"
-              value={period}
-              disabled={disabled}
-              onChange={(e) => setPeriod(e.target.value as Period)}
-            >
-              <option value="annual">Annual</option>
-              <option value="monthly">Monthly</option>
-            </Select>
-            <Button size="sm" onClick={() => onMoveToPro(period)} disabled={disabled}>
-              {busy?.startsWith('change-') ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-              Move to Pro
-            </Button>
-          </div>
-          {waiting && <WaitingLine />}
-        </Card>
-      )}
-    </div>
+        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => openUpgrade(true)}>
+          Compare plans
+        </Button>
+      </div>
+    </Card>
   );
 }
 
@@ -308,28 +245,29 @@ function WaitingLine() {
 function UsageCard({ status }: { status: UsageBillingStatus }) {
   const { usage } = status;
   const tone = gaugeTone(usage);
-  const percent = usage.exhausted ? 100 : usage.percent;
+  const percent = leftPercent(usage.percent, usage.exhausted);
   return (
     <div>
       <SectionTitle>This period</SectionTitle>
       <Card className="space-y-2 p-3" data-testid="usage-card">
         <div className="flex items-baseline justify-between gap-2 text-xs">
           <span className={cn('text-[13px] font-medium', tone !== 'ok' && GAUGE_TEXT_CLASS[tone])}>
-            {formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)}
+            {formatLeftPercent(usage.percent, usage.exhausted)}
           </span>
-          <span className="text-muted-foreground">Resets on {formatShortDate(usage.periodEnd)}</span>
+          <span className="text-muted-foreground">Resets {formatShortDate(usage.periodEnd)}</span>
         </div>
         <div
           className="relative h-2 overflow-hidden rounded-full bg-muted"
           role="progressbar"
-          aria-label="Box-hours used"
+          aria-label="Box-hours left"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
         >
-          <div className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])} style={{ width: `${percent}%` }} />
-          <span aria-hidden className="absolute inset-y-0 left-1/2 w-px bg-background/80" />
-          <span aria-hidden className="absolute inset-y-0 left-[80%] w-px bg-background/80" />
+          <div
+            className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])}
+            style={{ width: `${percent}%` }}
+          />
         </div>
         {usage.exhausted && (
           <p className="text-xs font-medium text-destructive">
@@ -339,10 +277,7 @@ function UsageCard({ status }: { status: UsageBillingStatus }) {
               : 'Upgrade to Pro, or wait for the reset.'}
           </p>
         )}
-        <p className="text-xs text-muted-foreground">
-          One box-hour is a standard box running for one hour. Sleeping boxes use nothing. Included hours go first, then
-          credits.
-        </p>
+        <p className="text-xs text-muted-foreground">{formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used</p>
         {status.concurrentBoxes && (
           <p className="text-xs text-muted-foreground" data-testid="open-boxes">
             {status.concurrentBoxes.used} of {status.concurrentBoxes.limit} boxes running now
@@ -353,7 +288,15 @@ function UsageCard({ status }: { status: UsageBillingStatus }) {
   );
 }
 
-function SizesCard({ tier, status }: { tier: PlanTier; status: UsageBillingStatus }) {
+function SizesCard({
+  tier,
+  status,
+  showPrices = false,
+}: {
+  tier: PlanTier;
+  status: UsageBillingStatus;
+  showPrices?: boolean;
+}) {
   const rows = status.sizePrices ?? sizePriceTable(tier);
   return (
     <div>
@@ -364,7 +307,7 @@ function SizesCard({ tier, status }: { tier: PlanTier; status: UsageBillingStatu
             <tr className="border-b text-left text-muted-foreground">
               <th className="px-3 py-1.5 font-medium">Size</th>
               <th className="px-3 py-1.5 font-medium">Box-hours per hour</th>
-              <th className="px-3 py-1.5 font-medium">Price above your plan</th>
+              {showPrices && <th className="px-3 py-1.5 font-medium">Price above your plan</th>}
             </tr>
           </thead>
           <tbody>
@@ -381,7 +324,9 @@ function SizesCard({ tier, status }: { tier: PlanTier; status: UsageBillingStatu
                   </span>
                 </td>
                 <td className="px-3 py-1.5 tabular-nums">{row.weight}</td>
-                <td className="px-3 py-1.5 tabular-nums">{formatPricePerHour(row.priceMicrosPerHour)}</td>
+                {showPrices && (
+                  <td className="px-3 py-1.5 tabular-nums">{formatPricePerHour(row.priceMicrosPerHour)}</td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -404,6 +349,37 @@ function lotSourceLabel(lot: CreditLot): string {
   }
 }
 
+function CreditBalance({ credits }: { credits: UsageBillingStatus['credits'] }) {
+  const balance = credits?.balanceMicros ?? 0;
+  const expiring = credits?.expiringSoonMicros ?? 0;
+  return (
+    <>
+      <div>
+        <p className="text-xs text-muted-foreground">Balance</p>
+        <p className="text-lg font-semibold tabular-nums">{formatUsd(balance)}</p>
+        {expiring > 0 && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {formatUsd(expiring)} expires in the next 30 days.
+          </p>
+        )}
+      </div>
+      {credits && credits.lots.length > 0 && (
+        <ul className="divide-y rounded-md border text-xs" data-testid="credit-lots">
+          {credits.lots.map((lot) => (
+            <li key={lot.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <span>
+                {formatUsd(lot.remainingMicros)} of {formatUsd(lot.totalMicros)}
+                <span className="text-muted-foreground"> · {lotSourceLabel(lot)}</span>
+              </span>
+              <span className="text-muted-foreground">Expires {formatShortDate(lot.expiresAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 function CreditsCard({
   status,
   busy,
@@ -415,55 +391,44 @@ function CreditsCard({
   waiting: boolean;
   onBuy: (pack: CreditPackId) => void;
 }) {
-  const credits = status.credits;
-  const canBuy = PLAN_LIMITS[status.tier].creditsAllowed;
-  const balance = credits?.balanceMicros ?? 0;
-  const expiring = credits?.expiringSoonMicros ?? 0;
+  const [addingCredits, setAddingCredits] = useState(false);
   return (
     <div id="billing-credits">
       <SectionTitle>Credits</SectionTitle>
       <Card className="space-y-3 p-3" data-testid="credits-card">
-        <div>
-          <p className="text-lg font-semibold tabular-nums">{formatUsd(balance)}</p>
-          <p className="text-xs text-muted-foreground">
-            Boxes use credits at their size&apos;s hourly price once your included box-hours are spent. Credits expire
-            12 months after you buy them.
-          </p>
-          {expiring > 0 && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {formatUsd(expiring)} expires in the next 30 days.
-            </p>
-          )}
-        </div>
-        {credits && credits.lots.length > 0 && (
-          <ul className="divide-y rounded-md border text-xs" data-testid="credit-lots">
-            {credits.lots.map((lot) => (
-              <li key={lot.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
-                <span>
-                  {formatUsd(lot.remainingMicros)} of {formatUsd(lot.totalMicros)}
-                  <span className="text-muted-foreground"> · {lotSourceLabel(lot)}</span>
-                </span>
-                <span className="text-muted-foreground">Expires {formatShortDate(lot.expiresAt)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {canBuy ? (
-          <div className="grid grid-cols-3 gap-2" data-testid="credit-packs">
-            {CREDIT_PACK_IDS.map((pack) => (
-              <Button
-                key={pack}
-                variant="outline"
-                size="sm"
-                onClick={() => onBuy(pack)}
-                disabled={busy !== null || waiting}
-              >
-                {busy === `pack-${pack}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : formatCreditPack(pack)}
-              </Button>
-            ))}
+        <CreditBalance credits={status.credits} />
+        <p className="text-xs text-muted-foreground">Auto top-up: {status.autoTopup?.enabled ? 'On' : 'Off'}</p>
+        {status.autoTopup?.lastFailure && <p className="text-xs text-destructive">The last auto top-up failed.</p>}
+        <Button
+          size="sm"
+          variant="outline"
+          data-attr="plan-add-credits"
+          aria-expanded={addingCredits}
+          aria-controls="add-credits-panel"
+          onClick={() => setAddingCredits(!addingCredits)}
+        >
+          Add credits
+        </Button>
+        {addingCredits && (
+          <div id="add-credits-panel" className="space-y-3">
+            <div className="grid grid-cols-3 gap-2" data-testid="credit-packs">
+              {CREDIT_PACK_IDS.map((pack) => (
+                <Button
+                  key={pack}
+                  data-attr={`credit-pack-${pack}`}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onBuy(pack)}
+                  disabled={busy !== null || waiting}
+                >
+                  {busy === `pack-${pack}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : formatCreditPack(pack)}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Credits expire 12 months after you buy them.</p>
+            <SizesCard tier={status.tier} status={status} showPrices />
+            <AutoTopupCard status={status} onBuy={onBuy} />
           </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">Buying credits comes with Pro. Credits you hold still work.</p>
         )}
         {waiting && <WaitingLine />}
       </Card>
@@ -482,7 +447,12 @@ function fromDollars(text: string): number {
 
 function AutoTopupCard({ status, onBuy }: { status: UsageBillingStatus; onBuy: (pack: CreditPackId) => void }) {
   const refresh = useBillingStore((s) => s.refresh);
-  const saved = status.autoTopup ?? { ...AUTO_TOPUP_DEFAULTS, monthSpentMicros: 0, lastFailure: null, lastFailureAt: null };
+  const saved = status.autoTopup ?? {
+    ...AUTO_TOPUP_DEFAULTS,
+    monthSpentMicros: 0,
+    lastFailure: null,
+    lastFailureAt: null,
+  };
   const [enabled, setEnabled] = useState(saved.enabled);
   const [trigger, setTrigger] = useState(toDollars(saved.triggerMicros));
   const [pack, setPack] = useState<CreditPackId>(saved.pack);
@@ -549,7 +519,7 @@ function AutoTopupCard({ status, onBuy }: { status: UsageBillingStatus; onBuy: (
               </p>
               <p className="text-muted-foreground">Buy credits now, or fix your payment method and save again.</p>
             </div>
-            <Button size="sm" variant="outline" onClick={() => onBuy(saved.pack)}>
+            <Button size="sm" variant="outline" data-attr="auto-topup-buy-credits" onClick={() => onBuy(saved.pack)}>
               Buy credits
             </Button>
           </div>
@@ -604,7 +574,7 @@ function AutoTopupCard({ status, onBuy }: { status: UsageBillingStatus; onBuy: (
             {p}
           </p>
         ))}
-        <Button size="sm" onClick={() => void save()} disabled={saving || !dirty}>
+        <Button size="sm" data-attr="auto-topup-save" onClick={() => void save()} disabled={saving || !dirty}>
           {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           Save
         </Button>
