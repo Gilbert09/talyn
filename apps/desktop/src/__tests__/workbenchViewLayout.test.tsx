@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Workbench } from '@talyn/shared';
 import { WorkbenchView } from '../renderer/components/workbench/WorkbenchView';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
+import { loadWorkbench } from '../renderer/lib/workbenchData';
+import { wakeWorkbench } from '../renderer/lib/wakeWorkbench';
 
 jest.mock('../renderer/lib/workbenchData', () => ({ loadWorkbench: jest.fn(), ensureChatHistory: jest.fn(), loadOlderEvents: jest.fn() }));
 jest.mock('../renderer/lib/wakeWorkbench', () => ({ wakeWorkbench: jest.fn() }));
@@ -32,6 +34,13 @@ const WB = {
 
 beforeEach(() => useWorkbenchStore.setState({ rightPanelOpen: true, rightPanelWidth: 340, sideTab: 'files', terminalOpen: false }));
 afterEach(cleanup);
+
+it('opening a session, or switching to another, reads it and never wakes its sandbox', () => {
+  const { rerender } = render(<WorkbenchView workbench={WB} />);
+  rerender(<WorkbenchView workbench={{ ...WB, id: 'wb2' }} />);
+  expect(jest.mocked(loadWorkbench).mock.calls.map(([id]) => id)).toEqual(expect.arrayContaining(['wb1', 'wb2']));
+  expect(wakeWorkbench).not.toHaveBeenCalled();
+});
 
 it('places the header above both columns and keeps the panel controls working', () => {
   const { container } = render(<WorkbenchView workbench={WB} />);

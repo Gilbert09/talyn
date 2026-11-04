@@ -88,7 +88,8 @@ export function useSessionPreview(workbench: Workbench) {
     let cancelled = false;
     for (const port of portsKey ? portsKey.split(',').map(Number) : []) {
       if (usePreviewStatusStore.getState().ports[previewKey(workbench.id, port)]) continue;
-      void previewPortAnswers(workbench.id, port).then((live) => {
+      // A check on open, not a person's click: it must not wake a sleeping box.
+      void previewPortAnswers(workbench.id, port, { wake: false }).then((live) => {
         if (!cancelled && live && runScriptRunning(workbench.id)) usePreviewStatusStore.getState().set(workbench.id, port, 'live');
       });
     }

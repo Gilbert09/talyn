@@ -72,6 +72,8 @@ export function ChangesTab({
   const [changes, setChanges] = useState<WorkbenchChanges | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The box sleeps and Talyn has no stored list: say so, and wake it only when the person asks.
+  const [asleep, setAsleep] = useState(false);
   const [selection, setSelection] = useState<{ path: string; scope: WorkbenchDiffScope } | null>(null);
   const [collapsed, setCollapsed] = useState<Partial<Record<WorkbenchDiffScope, boolean>>>({});
   const [showMergedDiff, setShowMergedDiff] = useState(false);
@@ -107,8 +109,12 @@ export function ChangesTab({
       });
       setChanges(next);
       setError(null);
+      setAsleep(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load the changes.');
+      if (needsWake(err) && !live) {
+        setAsleep(true);
+        setError(null);
+      } else setError(err instanceof Error ? err.message : 'Could not load the changes.');
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -117,6 +123,7 @@ export function ChangesTab({
 
   useEffect(() => {
     setChanges(null);
+    setAsleep(false);
     setSelection(null);
     setCollapsed({});
     setShowMergedDiff(false);
@@ -171,6 +178,14 @@ export function ChangesTab({
         </button>
       </div>
       {reconnecting ? <p className="px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="sandbox-reconnecting">{RECONNECTING_TEXT}</p> : error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
+      {asleep && !changes && !loading && (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5 text-[11px] text-muted-foreground" data-testid="changes-asleep-empty">
+          <span className="min-w-0 flex-1">Sandbox is asleep. Talyn has no stored copy of its changes yet.</span>
+          <button type="button" onClick={() => void refresh(true)} className="shrink-0 rounded px-1 underline-offset-2 hover:text-foreground hover:underline">
+            Wake the sandbox
+          </button>
+        </div>
+      )}
       {!changes && loading && (
         <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading changes…

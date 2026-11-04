@@ -11,6 +11,10 @@ export const TERMINAL_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000];
 /** Close codes after which a retry cannot help. */
 const FATAL_CLOSE_CODES = new Set([4401, 4403, 4404]);
 
+/** Shown until a person asks for the shell. Opening a session must never wake its sandbox. */
+export const TERMINAL_CONNECT_HINT =
+  '\x1b[90m[Click here or start typing to connect. This wakes the sandbox if it is asleep.]\x1b[0m';
+
 /**
  * An interactive shell in the workbench. Sandbox: a WebSocket to the backend's
  * terminal bridge — the auth frame first, keystrokes as binary frames, a
@@ -27,27 +31,55 @@ export function ShellTerminal({ workbench, active }: { workbench: Workbench; act
     },
   });
 
+  const startRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     if (!term) return undefined;
     if (workbench.runtime === 'local') return connectLocal(term, workbench, sizeRef, resizeSink);
-    return connectSandbox(term, workbench.id, sizeRef, resizeSink);
+    // Mounting (a session opened with the dock already open) connects nothing: a click or a key does.
+    const terminal = connectSandbox(term, workbench.id, sizeRef, resizeSink, { onDemand: true });
+    startRef.current = terminal.start;
+    return () => {
+      startRef.current = null;
+      terminal.dispose();
+    };
   }, [term, workbench.id, workbench.runtime, workbench.localPath]);
 
   useEffect(() => {
     if (active) term?.focus();
   }, [active, term]);
 
-  return <div ref={ref} className="h-full w-full px-2 py-1" />;
+  return <div ref={ref} onPointerDown={() => startRef.current?.()} className="h-full w-full px-2 py-1" />;
 }
 
 type SizeRef = { current: { cols: number; rows: number } | null };
 type SinkRef = { current: ((cols: number, rows: number) => void) | null };
 
-export function connectSandbox(term: Terminal, workbenchId: string, sizeRef: SizeRef, sinkRef: SinkRef): () => void {
+/** The sandbox shell. `start` connects; it does nothing once the shell has started. */
+export interface SandboxTerminal {
+  start: () => void;
+  dispose: () => void;
+}
+
+/**
+ * Connect the sandbox shell. A socket to the terminal wakes a sleeping box, so
+ * with `onDemand` nothing connects until `start` or the first key: keys typed
+ * before the first socket opens are sent once it does.
+ */
+export function connectSandbox(
+  term: Terminal,
+  workbenchId: string,
+  sizeRef: SizeRef,
+  sinkRef: SinkRef,
+  opts: { onDemand?: boolean } = {},
+): SandboxTerminal {
   let ws: WebSocket | null = null;
   let attempt = 0;
   let timer: number | null = null;
   let disposed = false;
+  let started = false;
+  let opened = false;
+  let pending: string[] = [];
   const encoder = new TextEncoder();
 
   const sendResize = (cols: number, rows: number) => {
@@ -56,6 +88,11 @@ export function connectSandbox(term: Terminal, workbenchId: string, sizeRef: Siz
   sinkRef.current = sendResize;
   const input = term.onData((data) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+    else if (!opened) {
+      // Until the first socket opens, keys wait for it, and the first one connects.
+      pending.push(data);
+      start();
+    }
   });
 
   const connect = async () => {
@@ -72,6 +109,9 @@ export function connectSandbox(term: Terminal, workbenchId: string, sizeRef: Siz
     socket.onopen = () => {
       socket.send(auth);
       if (sizeRef.current) sendResize(sizeRef.current.cols, sizeRef.current.rows);
+      opened = true;
+      for (const data of pending) socket.send(encoder.encode(data));
+      pending = [];
     };
     let firstOutput = true;
     socket.onmessage = (e) => {
@@ -92,14 +132,23 @@ export function connectSandbox(term: Terminal, workbenchId: string, sizeRef: Siz
       timer = window.setTimeout(() => void connect(), delay);
     };
   };
-  void connect();
+  const start = () => {
+    if (started || disposed) return;
+    started = true;
+    void connect();
+  };
+  if (opts.onDemand) term.writeln(TERMINAL_CONNECT_HINT);
+  else start();
 
-  return () => {
-    disposed = true;
-    sinkRef.current = null;
-    input.dispose();
-    if (timer !== null) window.clearTimeout(timer);
-    ws?.close();
+  return {
+    start,
+    dispose: () => {
+      disposed = true;
+      sinkRef.current = null;
+      input.dispose();
+      if (timer !== null) window.clearTimeout(timer);
+      ws?.close();
+    },
   };
 }
 

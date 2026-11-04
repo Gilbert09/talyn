@@ -197,6 +197,8 @@ it('waits until the app answers before it opens the browser, and then says it is
   expect(open).not.toHaveBeenCalled();
   await act(() => opened);
   expect(answers).toHaveBeenCalledTimes(2);
+  // The person's click may wake the box: its checks send no no-wake flag.
+  expect(answers.mock.calls.every((args) => args.length === 2)).toBe(true);
   expect(open).toHaveBeenCalledWith('http://localhost:5174');
   expect(result.current.status(5173)).toBe('live');
 }, 10_000);
@@ -206,6 +208,8 @@ it('shows a running app as live without opening anything, and clears it when the
   const { result } = renderHook(() => useSessionPreview(wb));
   await waitFor(() => expect(result.current.status(5173)).toBe('live'));
   expect(open).not.toHaveBeenCalled();
+  // A check nobody clicked for: it asks the backend not to wake a sleeping box.
+  expect(answers).toHaveBeenCalledWith('wb1', 5173, { wake: false });
   act(() => useWorkbenchStore.setState({ scriptOutput: { wb1: { run: { chunks: [], total: 0, running: false, exitCode: 0 } } } }));
   await waitFor(() => expect(result.current.status(5173)).toBeNull());
 });

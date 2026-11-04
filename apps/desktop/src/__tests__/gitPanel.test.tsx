@@ -695,6 +695,19 @@ describe('Changes tab', () => {
 
     const notStored = () => Object.assign(new Error('The sandbox is asleep.'), { status: 409, code: 'snapshot_unavailable' });
 
+    it('a sleeping box with no stored list says so and wakes only on the button', async () => {
+      const changesFn = jest.fn()
+        .mockRejectedValueOnce(notStored())
+        .mockImplementationOnce(() => new Promise<never>(() => {}));
+      renderTab(makeOps({ changes: changesFn }));
+      expect(await screen.findByTestId('changes-asleep-empty')).toHaveTextContent('Sandbox is asleep.');
+      expect(changesFn).toHaveBeenCalledTimes(1);
+      expect(changesFn).toHaveBeenLastCalledWith(undefined);
+      expect(screen.queryByText('The sandbox is asleep.')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Wake the sandbox' }));
+      expect(changesFn).toHaveBeenLastCalledWith({ live: true });
+    });
+
     it('loads the stored diff of a stored list, with no wake', async () => {
       const ops = makeOps({
         changes: jest.fn(async () => asleep(60_000)),

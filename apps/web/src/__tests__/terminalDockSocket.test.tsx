@@ -1,7 +1,7 @@
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Workbench } from '@talyn/shared';
-import { ShellTerminal } from '../components/workbench/terminal/ShellTerminal';
+import { ShellTerminal, TERMINAL_CONNECT_HINT } from '../components/workbench/terminal/ShellTerminal';
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -61,14 +61,58 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function render_() {
+  let view!: ReturnType<typeof render>;
   await act(async () => {
-    render(<ShellTerminal workbench={{ id: 'wb1', runtime: 'sandbox' } as Workbench} active />);
+    view = render(<ShellTerminal workbench={{ id: 'wb1', runtime: 'sandbox' } as Workbench} active />);
+  });
+  return view;
+}
+
+/** Mount, then click the terminal: the person's action that connects it. */
+async function mount() {
+  const view = await render_();
+  await act(async () => {
+    fireEvent.pointerDown(view.container.firstElementChild!);
   });
   return Socket.sockets[0];
 }
 
 describe('sandbox terminal', () => {
+  it('connects nothing on mount, so opening a session never wakes its sandbox', async () => {
+    await render_();
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(mocks.auth).not.toHaveBeenCalled();
+    expect(Socket.sockets).toHaveLength(0);
+    expect(mocks.term.focus).toHaveBeenCalled();
+    expect(mocks.term.writeln).toHaveBeenCalledWith(TERMINAL_CONNECT_HINT);
+  });
+
+  it.each([
+    ['a click in the terminal', async (view: ReturnType<typeof render>) => { fireEvent.pointerDown(view.container.firstElementChild!); }],
+    ['the first key', async () => { mocks.input?.('l'); }],
+  ])('connects on %s, once', async (_name, act_) => {
+    const view = await render_();
+    await act(async () => { await act_(view); });
+    await act(async () => { await act_(view); });
+    expect(Socket.sockets).toHaveLength(1);
+  });
+
+  it('sends the keys typed before the socket opened after authentication', async () => {
+    await render_();
+    await act(async () => {
+      mocks.input?.('l');
+    });
+    const socket = Socket.sockets[0];
+    mocks.input?.('s');
+    socket.open();
+    expect(socket.send.mock.calls.map(([frame]) => frame)).toEqual([
+      '{"type":"auth","token":"test-token"}',
+      new TextEncoder().encode('l'),
+      new TextEncoder().encode('s'),
+    ]);
+  });
+
   it('sends authentication first, then resize and binary input', async () => {
     const socket = await mount();
     mocks.resize?.(80, 24);

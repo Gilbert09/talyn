@@ -6,7 +6,6 @@ import { toast } from '../../stores/toast';
 import { chatInsights } from '../../lib/workbenchFormat';
 import { ensureChatHistory, loadOlderEvents, loadWorkbench } from '../../lib/workbenchData';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
-import { wakeWorkbench } from '../../lib/wakeWorkbench';
 import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
 import { ChatTabs } from './ChatTabs';
@@ -34,9 +33,9 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   useEffect(() => () => openPrDetail(null), [workbench.id, openPrDetail]);
 
   // A fresh read on open: the list may be minutes old, and it carries the chats when the backend embeds them.
+  // Opening never wakes the sandbox: only a prompt or a person's action does (the composer, the terminal, a refresh).
   useEffect(() => {
     void loadWorkbench(workbench.id);
-    wakeWorkbench(workbench.id);
   }, [workbench.id]);
 
   return (
