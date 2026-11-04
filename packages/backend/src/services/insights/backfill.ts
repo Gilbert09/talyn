@@ -1,4 +1,4 @@
-import { asc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
 import { usageInsightsBackfill, workbenchChats } from '../../db/schema.js';
 import { withMaintenanceClaim } from '../workbenches/maintenanceClaim.js';
@@ -9,8 +9,14 @@ import { loadChatFacts, loadTurnFacts, rowsForChat, storeTurnUsageRows } from '.
  * The one-off backfill of Insights' tables from the events stored before the
  * live writers shipped.
  *
- * It walks `workbench_chats` in id order, a batch of chats per tick, and keeps
- * its cursor in `usage_insights_backfill`. Each batch reads the chats' events
+ * Owner's scope: only chats with activity in the last {@link BACKFILL_ACTIVE_DAYS}
+ * days (`workbench_chats.updated_at`, which every event append bumps), and
+ * only inside the night window ({@link inBackfillWindow}); outside it a tick
+ * does nothing and the next night resumes from the cursor. Older history
+ * stays empty.
+ *
+ * It walks those chats in id order, a batch per tick, and keeps its cursor in
+ * `usage_insights_backfill`. Each batch reads the chats' events
  * ONCE (scalars and the result events' `usage` objects only, never a whole
  * event), so the whole run reads the transcript table once. Rows already there
  * win (`ON CONFLICT DO NOTHING`), so a re-run, an overlap with the live writer,
@@ -25,6 +31,18 @@ export const USAGE_INSIGHTS_BACKFILL = 'usage-insights-backfill';
  * hold a few thousand events, so a batch stays well under the 2-minute claim.
  */
 export const BACKFILL_BATCH_CHATS = 40;
+
+/** Chats older than this (no event since) are not backfilled. */
+export const BACKFILL_ACTIVE_DAYS = 30;
+
+/** The night window, UTC hours, start included and end not: 01:00 to 06:00. */
+export const BACKFILL_WINDOW_UTC = { startHour: 1, endHour: 6 } as const;
+
+/** Pure: may the backfill run at `now`? */
+export function inBackfillWindow(now: Date): boolean {
+  const hour = now.getUTCHours();
+  return hour >= BACKFILL_WINDOW_UTC.startHour && hour < BACKFILL_WINDOW_UTC.endHour;
+}
 
 const db = () => getPoolDbClient();
 
@@ -69,7 +87,7 @@ async function loadBootSamples(chatIds: readonly string[], chats: Map<string, { 
 }
 
 /** One batch. Exported for tests; production runs {@link backfillUsageInsights}. */
-export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS): Promise<BackfillTick> {
+export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS, now = new Date()): Promise<BackfillTick> {
   const [state] = await db()
     .select({ cursor: usageInsightsBackfill.cursor, completedAt: usageInsightsBackfill.completedAt })
     .from(usageInsightsBackfill)
@@ -80,7 +98,10 @@ export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS): Promise<B
   const batch = await db()
     .select({ id: workbenchChats.id })
     .from(workbenchChats)
-    .where(state?.cursor ? gt(workbenchChats.id, state.cursor) : undefined)
+    .where(and(
+      gte(workbenchChats.updatedAt, new Date(now.getTime() - BACKFILL_ACTIVE_DAYS * 86_400_000)),
+      state?.cursor ? gt(workbenchChats.id, state.cursor) : undefined,
+    ))
     .orderBy(asc(workbenchChats.id))
     .limit(batchSize);
   const ids = batch.map((c) => c.id);
@@ -101,23 +122,28 @@ export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS): Promise<B
   const cursor = ids.length > 0 ? ids[ids.length - 1] : state?.cursor ?? null;
   await db()
     .insert(usageInsightsBackfill)
-    .values({ name: USAGE_INSIGHTS_BACKFILL, cursor, chatsDone: ids.length, completedAt: completed ? new Date() : null })
+    .values({ name: USAGE_INSIGHTS_BACKFILL, cursor, chatsDone: ids.length, completedAt: completed ? now : null })
     .onConflictDoUpdate({
       target: usageInsightsBackfill.name,
       set: {
         cursor,
         chatsDone: sql`${usageInsightsBackfill.chatsDone} + ${ids.length}`,
-        completedAt: completed ? new Date() : null,
-        updatedAt: new Date(),
+        completedAt: completed ? now : null,
+        updatedAt: now,
       },
     });
   return { chats: ids.length, turnRows, bootSamples, completed };
 }
 
-/** One tick of the maintenance poller: a batch under the shared claim, so one replica works at a time. */
-export async function backfillUsageInsights(): Promise<boolean> {
+/**
+ * One tick of the maintenance poller: a batch under the shared claim, so one
+ * replica works at a time. Outside the night window it does nothing, not even
+ * take the claim.
+ */
+export async function backfillUsageInsights(now = new Date()): Promise<boolean> {
+  if (!inBackfillWindow(now)) return false;
   return withMaintenanceClaim(USAGE_INSIGHTS_BACKFILL, async (renew) => {
     await renew();
-    await backfillBatch();
+    await backfillBatch(BACKFILL_BATCH_CHATS, now);
   });
 }

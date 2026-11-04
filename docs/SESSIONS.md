@@ -10,7 +10,7 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 - The turn writer (`services/insights/turnUsage.ts`) runs after a sandbox turn ends (`turns.ts`) and when a local session uploads a result event. It reads the turn's events once and keeps scalars and the result's `usage` only.
 - **Codex reports thread totals.** `turn.completed` usage grows across turns and `codex exec resume` (measured on codex-cli 0.159.2: 21,905 then 43,828 input tokens for two short turns), and its `input_tokens` includes the cached tokens. The writer stores the difference from the chat's previous result, and starts again on a new `session_id` or a counter that went down. Claude's result usage is per run; a relaunched turn's runs are added.
 - Cost is the agent's own `costUSD`/`total_cost_usd`; Codex reports none, so its cost is null and the UI says so.
-- The backfill is a maintenance poller (`usage-insights-backfill`, 40 chats a minute under the shared claim). It reads the transcript table once in total, writes with `ON CONFLICT DO NOTHING`, and stamps `completed_at` when done.
+- The backfill is a maintenance poller (`usage-insights-backfill`, 40 chats a minute under the shared claim). Owner's call: only chats active in the last 30 days (`workbench_chats.updated_at`), and only from 01:00 to 06:00 UTC; outside the window a tick does nothing and the next night resumes from the cursor. Older history stays empty. It writes with `ON CONFLICT DO NOTHING` and stamps `completed_at` when done.
 
 **Open.** The Codex context meter (`createCodexStreamParser.contextUsage`) still reads the cumulative `input_tokens`, so it overstates after the first turn. A cancelled turn reports no result event and is not counted.
 

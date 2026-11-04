@@ -5,13 +5,19 @@ import type { Database } from '../db/client.js';
 import {
   usageInsightsBackfill,
   workbenchBootSamples,
+  workbenchChats,
   workbenchEvents,
   workbenchTurnUsage,
   workspaces,
 } from '../db/schema.js';
 import { insertChat, insertWorkbench, recordBootMetric } from '../services/workbenches/store.js';
 import { recordTurnUsage, scheduleTurnUsage, settleTurnUsageForTests } from '../services/insights/turnUsage.js';
-import { backfillBatch, USAGE_INSIGHTS_BACKFILL } from '../services/insights/backfill.js';
+import {
+  backfillBatch,
+  backfillUsageInsights,
+  inBackfillWindow,
+  USAGE_INSIGHTS_BACKFILL,
+} from '../services/insights/backfill.js';
 
 const T0 = new Date('2026-11-01T10:00:00.000Z');
 const at = (s: number) => new Date(T0.getTime() + s * 1000);
@@ -157,6 +163,40 @@ describe('Insights writers', () => {
         ['box_start', 5000, 'move', null],
         ['wake', 1200, null, 'storage'],
       ]);
+    });
+
+    it('skips chats with no activity in the last 30 days', async () => {
+      const now = new Date();
+      await db.update(workbenchChats).set({ updatedAt: new Date(now.getTime() - 31 * 86_400_000) }).where(eq(workbenchChats.id, 'chat-codex'));
+      await db.update(workbenchChats).set({ updatedAt: new Date(now.getTime() - 29 * 86_400_000) }).where(eq(workbenchChats.id, 'chat-claude'));
+      expect(await backfillBatch(10, now)).toMatchObject({ chats: 1, turnRows: 2, completed: true });
+      expect([...new Set((await usageRows()).map((r) => r.chatId))]).toEqual(['chat-claude']);
+    });
+
+    it.each<[string, string, boolean]>([
+      ['before the window', '2026-11-05T00:59:59Z', false],
+      ['at the window start', '2026-11-05T01:00:00Z', true],
+      ['inside the window', '2026-11-05T05:59:59Z', true],
+      ['at the window end', '2026-11-05T06:00:00Z', false],
+      ['midday', '2026-11-05T12:00:00Z', false],
+    ])('runs only in the night window: %s', async (_label, iso, runs) => {
+      const now = new Date(iso);
+      // Chats active in the 30 days before that night.
+      await db.update(workbenchChats).set({ updatedAt: new Date(now.getTime() - 86_400_000) });
+      expect(inBackfillWindow(now)).toBe(runs);
+      expect(await backfillUsageInsights(now)).toBe(runs);
+      expect((await usageRows()).length).toBe(runs ? 4 : 0);
+      expect((await state())?.cursor ?? null).toBe(runs ? 'chat-codex' : null);
+    });
+
+    it('resumes from its cursor on the next night', async () => {
+      const night = new Date('2026-11-05T05:59:00Z');
+      await db.update(workbenchChats).set({ updatedAt: new Date(night.getTime() - 86_400_000) });
+      expect(await backfillBatch(1, night)).toMatchObject({ chats: 1, completed: false });
+      expect(await backfillUsageInsights(new Date('2026-11-05T09:00:00Z'))).toBe(false);
+      expect(await state()).toMatchObject({ cursor: 'chat-claude', completedAt: null });
+      expect(await backfillBatch(1, new Date('2026-11-06T01:00:00Z'))).toMatchObject({ chats: 1, completed: false });
+      expect(await state()).toMatchObject({ cursor: 'chat-codex', chatsDone: 2 });
     });
 
     it('is safe to re-run and keeps rows the live writer already stored', async () => {
