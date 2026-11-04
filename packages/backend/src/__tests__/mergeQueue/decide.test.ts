@@ -333,6 +333,94 @@ describe('decide — settled blockers fire the fix run', () => {
   });
 });
 
+describe('decide — failing required checks after the rerun reach the live session', () => {
+  // PostHog/posthog 2026-11-04: a batch of PRs sat in awaiting_external /
+  // awaiting_ci with red required CI and fix_attempts=0. Each must be handed to
+  // its live session once the one rerun has reported, in every waiting state.
+  const redCi = (s: Partial<PRMergeableSummary> = {}) =>
+    pr(
+      { mergeStateStatus: 'BLOCKED' },
+      { blockingReason: 'checks_failed', checks: { total: 5, failed: 1, inProgress: 0 }, ...s }
+    );
+  const minutesAgo = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+  const idle = { id: 'wb1', name: 'paris', activity: 'idle' as const };
+  const sendFix = (d: Decision) => d.actions.find((a) => a.kind === 'send_fix_to_session');
+  const spent = (o: Partial<EntrySnapshot>) =>
+    entry({ rerunAttempts: 1, lastErrorAt: minutesAgo(10), ...o });
+  const ext = (state: ExternalQueueState) =>
+    ({ provider: 'trunk', state, source: 'comment', evidence: 'x' }) as const;
+
+  it.each([
+    ['awaiting_ci', spent({ status: 'awaiting_ci' }), null],
+    [
+      'awaiting_external, trunk not ready',
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      ext('not_ready'),
+    ],
+    [
+      'awaiting_external, trunk has not seen the submit',
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      null,
+    ],
+  ])('sends the fix to an idle session (%s)', (_label, e, externalQueue) => {
+    const d = decide(
+      e,
+      redCi(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, ...(externalQueue ? { externalQueue } : {}) })
+    );
+    expect(sendFix(d)).toEqual({ kind: 'send_fix_to_session', resign: false });
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it.each([
+    ['awaiting_ci', spent({ status: 'awaiting_ci' })],
+    ['awaiting_external', spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) })],
+  ])('fires a cloud fix run when no session is live (%s)', (_label, e) => {
+    const d = decide(
+      e,
+      redCi(),
+      ctx({
+        externalGate: 'confirmed',
+        ...(e.status === 'awaiting_external' ? { externalQueue: ext('not_ready') } : {}),
+      })
+    );
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+  });
+
+  it('waits while the rerun is still reporting, with no fix', () => {
+    const d = decide(
+      entry({ status: 'awaiting_ci', rerunAttempts: 1, lastErrorAt: minutesAgo(1) }),
+      redCi(),
+      ctx({ liveSession: idle })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it.each([
+    ['awaiting_ci', entry({ status: 'awaiting_ci', rerunAttempts: 1 })],
+    ['awaiting_external', entry({ status: 'awaiting_external', rerunAttempts: 1, externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) })],
+  ])('sends no fix when only an OPTIONAL check is red (%s)', (_label, e) => {
+    const d = decide(
+      e,
+      optionalFailPr(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, externalQueue: ext('not_ready') })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('leaves a PR trunk is actively testing alone, since a push would eject it', () => {
+    const d = decide(
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      redCi(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, externalQueue: ext('testing') })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+  });
+});
+
 describe('decide — re-run failed CI once before the first fix run', () => {
   // PostHog/posthog#125410: a runner timeout cost two fix runs that found
   // nothing to fix, and no rerun was ever tried.
