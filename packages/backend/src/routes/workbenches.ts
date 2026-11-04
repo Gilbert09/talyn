@@ -1135,7 +1135,7 @@ function validateSettings(input: unknown): WorkbenchSettings | string {
     const p = raw.prompts;
     if (!p || typeof p !== 'object' || Array.isArray(p)) return 'settings.prompts must be an object';
     const prompts: NonNullable<WorkbenchSettings['prompts']> = {};
-    for (const key of ['create_pr', 'fix_checks', 'resolve_conflicts', 'rename_branch'] as const) {
+    for (const key of ['create_pr', 'fix_checks', 'resolve_conflicts', 'address_review', 'rename_branch'] as const) {
       const v = p[key];
       if (v === undefined) continue;
       if (typeof v !== 'string') return `settings.prompts.${key} must be a string`;

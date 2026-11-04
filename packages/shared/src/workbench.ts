@@ -74,7 +74,7 @@ export const DEFAULT_WORKBENCH_EFFORT: WorkbenchEffort = 'high';
  * The prompt-driven actions whose wording a workbench may override. Create PR
  * is not one: Talyn opens the PR itself (see `workbenchPullRequest.ts`).
  */
-export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'rename_branch';
+export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'address_review' | 'rename_branch';
 
 /**
  * Why a message was sent, when it was not typed. `create_pr`: the agent gets
@@ -1214,6 +1214,24 @@ export const DEFAULT_WORKBENCH_ACTION_PROMPTS: Readonly<Record<WorkbenchPromptAc
     '5. Reply with the files that conflicted and how you resolved each one.',
     '',
     'Do not rebase and do not force-push: the branch may already have reviews on it.',
+    '',
+    SANDBOX_GIT_NOTE,
+  ].join('\n'),
+  address_review: [
+    'This branch\'s pull request has unresolved review comments. Address them.',
+    '',
+    '1. Read the unresolved review threads: `gh pr view --comments` for the conversation, and',
+    '   `gh api graphql` with a `reviewThreads` query (`isResolved`, `isOutdated`, `path`, `line`,',
+    '   `comments { author { login } body }`) for the inline threads. Note who wrote each one.',
+    '2. Human reviewers: implement what they ask unless you have a concrete, code-backed reason not to.',
+    '   Bots and automated reviewers: their comments are advice. Check each against the code and act',
+    '   only when it is right. Do not widen the scope of the pull request on a bot\'s say-so.',
+    '3. Where no change is right, reply on the thread and say why. Be brief and specific.',
+    '4. Do not resolve any thread yourself, unless the repository\'s own convention says that the',
+    '   author resolves threads. The reviewer closes a thread when they agree it is done.',
+    '5. Run the checks for the code you touched. Commit the changes and push the current branch with',
+    '   `git push`.',
+    '6. Reply with one line per thread: what you changed, or why you changed nothing.',
     '',
     SANDBOX_GIT_NOTE,
   ].join('\n'),

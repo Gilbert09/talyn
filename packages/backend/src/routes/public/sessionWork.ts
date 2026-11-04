@@ -401,16 +401,24 @@ export const sessionWorkRoutes: PublicRoute[] = [
     },
   }),
 
-  ...(['fix_checks', 'resolve_conflicts'] as const).map((action) =>
+  ...(['fix_checks', 'resolve_conflicts', 'address_review'] as const).map((action) =>
     definePublicRoute({
       method: 'post',
       path: `/sessions/{id}/${action}`,
-      operationId: action === 'fix_checks' ? 'fixSessionChecks' : 'resolveSessionConflicts',
-      summary: action === 'fix_checks' ? 'Ask the agent to fix failing checks' : 'Ask the agent to resolve conflicts',
+      operationId:
+        action === 'fix_checks' ? 'fixSessionChecks' : action === 'address_review' ? 'addressSessionReviews' : 'resolveSessionConflicts',
+      summary:
+        action === 'fix_checks'
+          ? 'Ask the agent to fix failing checks'
+          : action === 'address_review'
+            ? 'Ask the agent to address review comments'
+            : 'Ask the agent to resolve conflicts',
       description:
         (action === 'fix_checks'
           ? "Sends the agent the app's fix-checks prompt with the failing checks of the linked pull request. "
-          : "Sends the agent the app's prompt to merge the base branch and resolve the conflicts. ") +
+          : action === 'address_review'
+            ? "Sends the agent the app's prompt to read and address the unresolved review comments of the linked pull request. "
+            : "Sends the agent the app's prompt to merge the base branch and resolve the conflicts. ") +
         'The message queues behind a running turn. A cloud task that works on the same pull request answers 409 `task_active`.',
       tag: 'Session work',
       scope: 'sessions:write',

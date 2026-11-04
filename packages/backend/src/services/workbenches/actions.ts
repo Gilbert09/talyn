@@ -30,6 +30,7 @@ export const WORKBENCH_ACTIONS: ReadonlyArray<Exclude<WorkbenchNextAction, null>
 const PROMPT_ACTIONS: ReadonlySet<string> = new Set<WorkbenchPromptAction>([
   'fix_checks',
   'resolve_conflicts',
+  'address_review',
   'rename_branch',
 ]);
 
@@ -54,7 +55,7 @@ export async function runWorkbenchAction(
   }
   // A cloud task already pushing to this PR's branch would collide with the
   // session's own fix. One agent per PR, either way round.
-  if ((action === 'fix_checks' || action === 'resolve_conflicts') && row.pullRequestId) {
+  if ((action === 'fix_checks' || action === 'resolve_conflicts' || action === 'address_review') && row.pullRequestId) {
     if (await activePrTaskId(row.workspaceId, row.pullRequestId)) {
       throw new WorkbenchError(
         'A cloud task is already working on this pull request. Stop it, or wait for it to finish.',
@@ -89,6 +90,8 @@ export async function runWorkbenchAction(
   if (action === 'fix_checks') {
     const context = await readFixChecksContext(row);
     if (context) text = `${text}\n\n${context}`;
+    const threads = await readUnresolvedThreadCount(row);
+    if (threads > 0) text = `${text}\n\n${formatUnresolvedThreadsNote(threads)}`;
   }
   // The intent makes the end of the turn read the new branch, so the row follows it.
   await sendMessage(chat.id, { text, ...(action === 'rename_branch' ? { intent: 'rename_branch' as const } : {}) });
@@ -174,6 +177,31 @@ export function formatFixChecksContext(input: FixChecksContextInput): string {
     lines.push('', 'Fix the required checks first. An optional check does not block the merge.');
   }
   return lines.join('\n');
+}
+
+export function formatUnresolvedThreadsNote(threads: number): string {
+  return (
+    `This pull request also has ${threads} unresolved review thread${threads === 1 ? '' : 's'}. ` +
+    'Fix the checks first. Do not change code for the threads in this turn. ' +
+    'At the end, tell the user that the threads still need a separate "address review comments" turn.'
+  );
+}
+
+/** The unresolved review thread count on the PR this workbench opened, or 0. Never throws. */
+export async function readUnresolvedThreadCount(
+  row: Pick<WorkbenchRow, 'workspaceId' | 'pullRequestId'>,
+): Promise<number> {
+  if (!row.pullRequestId) return 0;
+  try {
+    const rows = await getPoolDbClient()
+      .select({ n: sql<number | null>`(${prTable.lastSummary} ->> 'unresolvedReviewThreads')::int` })
+      .from(prTable)
+      .where(and(eq(prTable.id, row.pullRequestId), eq(prTable.workspaceId, row.workspaceId)))
+      .limit(1);
+    return rows[0]?.n ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**

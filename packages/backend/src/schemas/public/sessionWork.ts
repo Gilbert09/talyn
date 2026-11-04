@@ -231,7 +231,7 @@ export const PullRequestReceipt = z
   })
   .openapi('PullRequestReceipt');
 
-export const SESSION_ACTIONS = ['fix_checks', 'resolve_conflicts', 'merge'] as const;
+export const SESSION_ACTIONS = ['fix_checks', 'resolve_conflicts', 'address_review', 'merge'] as const;
 
 export const PromptActionBody = z
   .object({
