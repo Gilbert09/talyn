@@ -1,3 +1,4 @@
+import { trackEvent } from '../lib/analytics';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
@@ -13,6 +14,7 @@ const mockForget = vi.fn();
 const mockListEmoji = vi.fn();
 const assign = vi.fn();
 
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 vi.mock('../lib/api', () => ({
   api: {
     slack: {
@@ -220,6 +222,7 @@ describe('SlackSettings', () => {
       expect(mockForget).not.toHaveBeenCalled();
       fireEvent.click(screen.getByText('Disconnect'));
       await waitFor(() => expect(mockForget).toHaveBeenCalledWith('T1'));
+      await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('slack_disconnected', { connection_kind: 'workspace' }));
     });
 
     it('hides Disconnect from a non-installer', async () => {
@@ -289,6 +292,7 @@ describe('SlackSettings', () => {
       await waitFor(() =>
         expect(mockUpdateLink).toHaveBeenCalledWith('link1', { triggerEmojis: ['white_check_mark'] })
       );
+      expect(trackEvent).toHaveBeenCalledWith('slack_trigger_saved', { trigger_kind: 'emoji' });
     });
 
     it('puts a removed chip back when the save fails', async () => {

@@ -8,6 +8,7 @@ import {
   type WorkspaceSandboxSetup,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Button } from '../../ui/button';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../../ui/command';
@@ -178,9 +179,22 @@ export function SandboxSetupSettings() {
     setBusy(true);
     setError('');
     try {
-      setSetup(await api.workspaces.sandboxSetup.put(workspaceId, input));
+      const next = await api.workspaces.sandboxSetup.put(workspaceId, input);
+      setSetup(next);
+      if (input.dotfiles) trackEvent('dotfiles_saved', { has_install: Boolean(input.dotfiles.install), workspace_id: workspaceId });
+      if (input.steps) {
+        const before = setup?.steps ?? [];
+        const added = next.steps.find((step) => step.origin === 'user' && !before.some((old) => old.id === step.id));
+        const removed = before.find((step) => step.origin === 'user' && !input.steps?.some((item) => item.id === step.id));
+        const edited = before.find((step) => input.steps?.some((item) => item.id === step.id &&
+          (item.name !== step.name || item.command !== undefined || item.runOn !== step.runOn || item.timeoutSec !== step.timeoutSec)));
+        if (added) trackEvent('setup_step_added', { scope: 'sandbox', step_kind: added.kind, workspace_id: workspaceId });
+        else if (removed) trackEvent('setup_step_removed', { scope: 'sandbox', step_kind: removed.kind, workspace_id: workspaceId });
+        else if (edited) trackEvent('setup_step_edited', { scope: 'sandbox', step_kind: next.steps.find((step) => step.id === edited.id)?.kind ?? edited.kind, workspace_id: workspaceId });
+      }
       return true;
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'sandbox_setup_save' });
       setError(errorText(err, 'Could not save the sandbox setup.'));
       return false;
     } finally {
@@ -196,6 +210,7 @@ export function SandboxSetupSettings() {
       const next = await api.workspaces.sandboxSetup.retryStep(workspaceId, step.id);
       setSetup((current) => current && { ...current, steps: current.steps.map((other) => (other.id === next.id ? next : other)) });
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'sandbox_setup_retry' });
       setError(errorText(err, 'Could not retry the step.'));
     } finally {
       setBusy(false);

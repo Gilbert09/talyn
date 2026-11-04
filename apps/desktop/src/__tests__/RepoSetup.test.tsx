@@ -1,3 +1,4 @@
+import { trackEvent } from '../renderer/lib/analytics';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -10,6 +11,7 @@ const acceptStep = jest.fn();
 const dismissStep = jest.fn();
 const retryStep = jest.fn();
 
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
     repositories: {
@@ -196,10 +198,12 @@ describe('row actions', () => {
     await renderWith(setup([step({ origin: 'learned', status: 'suggested' })]));
     fireEvent.click(within(rowOf('s1')).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(acceptStep).toHaveBeenCalledWith('r1', 's1'));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('learned_step_accepted', { scope: 'repo', repository_id: 'r1' }));
     cleanup();
     await renderWith(setup([step({ origin: 'learned', status: 'suggested' })]));
     fireEvent.click(within(rowOf('s1')).getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(dismissStep).toHaveBeenCalledWith('r1', 's1'));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('learned_step_dismissed', { scope: 'repo', repository_id: 'r1' }));
   });
 
   test('a suggestion that Talyn removed says Restore and shows the reason', async () => {
@@ -241,6 +245,7 @@ describe('row actions', () => {
     fireEvent.click(within(rowOf('s1')).getByRole('button', { name: 'Remove' }));
     fireEvent.click(within(rowOf('s1')).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(setupPut).toHaveBeenCalledWith('r1', { steps: [{ id: 's2', name: 'Two', runOn: 'image', timeoutSec: null }] }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('setup_step_removed', { scope: 'repo', step_kind: 'apt', repository_id: 'r1' }));
   });
 
   test('a learned step has no edit or remove', async () => {
@@ -258,6 +263,7 @@ describe('row actions', () => {
     await waitFor(() => expect(setupPut).toHaveBeenCalledWith('r1', {
       steps: [{ id: 's1', name: 'Install libpq', runOn: 'image', timeoutSec: 90, command: 'apt-get install -y libpq-dev postgresql-client' }],
     }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('setup_step_edited', { scope: 'repo', step_kind: 'apt', repository_id: 'r1' }));
   });
 });
 
@@ -320,6 +326,7 @@ describe('reorder', () => {
 
 describe('add step', () => {
   test('adds a new step at the end of the list', async () => {
+    setupPut.mockResolvedValueOnce(setup([step(), step({ id: 's2', name: 'Start Redis', kind: 'service' })]));
     await renderWith(setup([step()]));
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     fireEvent.change(screen.getByLabelText('Step name'), { target: { value: 'Start Redis' } });
@@ -332,6 +339,7 @@ describe('add step', () => {
         { name: 'Start Redis', command: 'redis-server --daemonize yes', runOn: 'box', timeoutSec: null },
       ],
     }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('setup_step_added', { scope: 'repo', step_kind: 'service', repository_id: 'r1' }));
   });
 
   test.each([
@@ -427,6 +435,7 @@ describe('footer', () => {
     fireEvent.change(screen.getByLabelText('Allowed extra hosts'), { target: { value: 'b.example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add host' }));
     await waitFor(() => expect(setupPut).toHaveBeenCalledWith('r1', { hosts: ['a.example.com', 'b.example.com'] }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove host a.example.com' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Remove host a.example.com' }));
     await waitFor(() => expect(setupPut).toHaveBeenLastCalledWith('r1', { hosts: ['b.example.com'] }));
   });

@@ -6,6 +6,7 @@ import {
   type McpServerInput,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
 
@@ -123,10 +124,19 @@ export function useMcpServers(): UseMcpServers {
     setTesting(id);
     try {
       const probe = await api.mcpServers.test(id);
+      trackEvent('mcp_server_test_result', {
+        ok: probe.ok,
+        error_code: probe.ok ? null : (probe.status ?? 'unknown'),
+        failure_reason: probe.ok ? null : (probe.status === 401 || probe.status === 403 ? 'auth' : probe.status ? 'http' : 'connection'),
+      });
       // Spliced in rather than re-listed: the server stores the probe too, so
       // the two agree, and a re-list would flicker the whole page for one row.
       setServers((prev) => (prev ?? []).map((s) => (s.id === id ? { ...s, lastProbe: probe } : s)));
       return probe;
+    } catch (err) {
+      trackEvent('mcp_server_test_result', { ok: false, error_code: (err as { code?: string })?.code ?? 'request_failed', failure_reason: 'request_failed' });
+      captureAnalyticsException(err, { flow: 'mcp_server_test' });
+      throw err;
     } finally {
       setTesting(null);
     }

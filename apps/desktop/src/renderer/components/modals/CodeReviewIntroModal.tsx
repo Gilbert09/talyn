@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore, maybeHandleBillingLimit } from '../../stores/billing';
-import { trackEvent } from '../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 
@@ -50,11 +50,13 @@ export function CodeReviewIntroModal({
     if (!example) return;
     setBusy(true);
     try {
-      await api.pullRequests.startCodeReview(example.id);
+      const review = await api.pullRequests.startCodeReview(example.id);
+      trackEvent('code_review_started', { preset: review.preset, depth: review.preset });
       trackEvent('code_review_intro_converted', { action: 'reviewed_pr', plan: status?.plan });
       onClose();
       onOpenPr(example.id);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_intro' });
       if (!maybeHandleBillingLimit(err, 'code_review_intro')) onClose();
     } finally {
       setBusy(false);
@@ -71,6 +73,7 @@ export function CodeReviewIntroModal({
       trackEvent('code_review_intro_converted', { action: 'enabled_auto', plan: status?.plan });
       onClose();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_intro' });
       if (!maybeHandleBillingLimit(err, 'code_review_intro')) onClose();
     } finally {
       setBusy(false);

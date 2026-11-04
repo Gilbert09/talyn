@@ -1,3 +1,4 @@
+import { trackEvent, captureAnalyticsException } from '../renderer/lib/analytics';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -10,6 +11,7 @@ const mockRevoke = jest.fn();
 const mockOpenExternal = jest.fn();
 const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
 const mockState: { features: { publicApi?: boolean } | null } = { features: { publicApi: true } };
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
     apiTokens: {
@@ -197,7 +199,7 @@ describe('ApiTokensSettings create', () => {
         .getAllByRole('radio')
         .map((r) => r.textContent);
     expect(options('Workspaces')).toEqual(['None', 'Read']);
-    expect(options('Repositories')).toEqual(['None', 'Read']);
+    expect(options('Repositories')).toEqual(['None', 'Read', 'Read & write']);
     expect(options('Sessions')).toEqual(['None', 'Read', 'Read & write']);
   });
 
@@ -227,6 +229,7 @@ describe('ApiTokensSettings create', () => {
     fireEvent.click(submitButton(dialog));
     await waitFor(() => expect(mockCreate).toHaveBeenCalled());
     expect(mockCreate.mock.calls[0][0].expiresInDays).toBe(expected);
+    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 3, expiry_set: value !== 'none' });
   });
 
   it('keeps Create off with no name, or with no access picked', async () => {
@@ -280,6 +283,7 @@ describe('ApiTokensSettings new token', () => {
     expect(screen.getByText(/won't see this token again/i)).toBeInTheDocument();
     expect(screen.getByText(CURL)).toBeInTheDocument();
     expect(screen.getAllByTestId('api-token-row')).toHaveLength(1);
+    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 3, expiry_set: true });
   });
 
   it.each([
@@ -403,6 +407,7 @@ describe('ApiTokensSettings revoke', () => {
     await waitFor(() => expect(screen.queryByText('CI script')).toBeNull());
     expect(screen.getByText('Other')).toBeInTheDocument();
     expect(mockToast.success).toHaveBeenCalledWith('Token revoked');
+    expect(trackEvent).toHaveBeenCalledWith('api_token_revoked');
   });
 
   it('keeps the row and reports the error when revoke fails', async () => {
@@ -413,5 +418,6 @@ describe('ApiTokensSettings revoke', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Revoke token' }));
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Token not found'));
     expect(screen.getAllByTestId('api-token-row')).toHaveLength(1);
+    expect(captureAnalyticsException).toHaveBeenCalledWith(expect.any(Error), { flow: 'api_token_revoke' });
   });
 });

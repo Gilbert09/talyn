@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Pencil, Play, Plus, Repeat, Trash2 } from 'l
 import type { LoopInput, LoopWithStats } from '@talyn/shared';
 import {
   describeSchedule,
+  presetForCron,
   LOOP_DISABLED_REASON_LABELS,
   LOOP_RUN_STATUS_LABELS,
 } from '@talyn/shared';
@@ -11,7 +12,7 @@ import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
-import { trackEvent } from '../../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useLoops } from './useLoops';
@@ -219,6 +220,7 @@ export function LoopsPanel() {
   const save = async (input: LoopInput) => {
     if (view.mode === 'edit' && view.loop) {
       await update(view.loop.id, input);
+      trackEvent('loop_saved', { new: false, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
       toast.success('Loop saved');
     } else {
       try {
@@ -227,9 +229,13 @@ export function LoopsPanel() {
         // A free plan that filled its last slot elsewhere (another window,
         // another workspace) only finds out here. The modal explains it, so
         // swallow the throw and leave the editor open with the user's work in it.
-        if (maybeHandleBillingLimit(err, 'loop_create')) return;
+        if (maybeHandleBillingLimit(err, 'loop_create')) {
+          captureAnalyticsException(err, { flow: 'loop_save' });
+          return;
+        }
         throw err;
       }
+      trackEvent('loop_saved', { new: true, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
       toast.success('Loop created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
@@ -266,11 +272,13 @@ export function LoopsPanel() {
       // Closed only on success, so a failure leaves the dialog open with the
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
+      trackEvent('loop_deleted');
       toast.success('Loop deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'loop_delete' });
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
     } finally {
       setDeleting(false);
@@ -282,9 +290,11 @@ export function LoopsPanel() {
       await runNow(loop.id);
       // Deliberately not "started": a run-now can legitimately end as
       // "waiting for a task slot", and the history is where the answer is.
+      trackEvent('loop_run_now');
       setExpandedId(loop.id);
       toast.info('Run requested', 'Watch the history for what it did.');
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'loop_run_now' });
       toast.error('Could not run that', err instanceof Error ? err.message : undefined);
     }
   };
@@ -341,12 +351,12 @@ export function LoopsPanel() {
                 onDelete={() => setPendingDelete(loop)}
                 onRunNow={() => void doRunNow(loop)}
                 onSetEnabled={(enabled) => {
-                  void setEnabled(loop, enabled).catch((err: unknown) =>
-                    toast.error(
-                      'Could not change that',
-                      err instanceof Error ? err.message : undefined
-                    )
-                  );
+                  void setEnabled(loop, enabled)
+                    .then(() => trackEvent(enabled ? 'loop_enabled' : 'loop_disabled'))
+                    .catch((err: unknown) => {
+                      captureAnalyticsException(err, { flow: 'loop_toggle' });
+                      toast.error('Could not change that', err instanceof Error ? err.message : undefined);
+                    });
                 }}
               />
             ))}

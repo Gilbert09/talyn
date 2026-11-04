@@ -22,7 +22,7 @@ import { api } from '../../../lib/api';
 import { Markdown } from '../../../lib/markdown';
 import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { trackEvent } from '../../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 
 
 /**
@@ -159,8 +159,9 @@ export function McpServerEditorPage({
               }));
           }
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           if (cancelled) return;
+          captureAnalyticsException(err, { flow: 'mcp_auth_discovery' });
           trackEvent('mcp_auth_discovery_completed', {
             mcp_server_host: analyticsHost(input.url),
             mcp_from_catalog: Boolean(input.catalogHandle),
@@ -168,6 +169,7 @@ export function McpServerEditorPage({
             method_count: 0,
             methods: [],
             source: 'error',
+            failure_reason: 'request_failed',
           });
           setDiscovery({
             methods: [],
@@ -255,6 +257,7 @@ export function McpServerEditorPage({
         if (version === connectionVersion.current) setProbe(result);
       }
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'mcp_server_save' });
       setSaveError(err instanceof Error ? err.message : 'Could not save this MCP server');
     } finally {
       setSaving(false);
@@ -287,6 +290,7 @@ export function McpServerEditorPage({
       const result = await onTest(saved.id);
       if (version === connectionVersion.current) setProbe(result);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'mcp_server_test' });
       setSaveError(err instanceof Error ? err.message : 'Could not reach this MCP server');
     } finally {
       setProbing(false);
@@ -303,7 +307,10 @@ export function McpServerEditorPage({
         if (!cancelled && version === connectionVersion.current) setProbe(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setSaveError(err instanceof Error ? err.message : 'Could not load tools.');
+        if (!cancelled) {
+          captureAnalyticsException(err, { flow: 'mcp_server_test' });
+          setSaveError(err instanceof Error ? err.message : 'Could not load tools.');
+        }
       })
       .finally(() => {
         if (version === connectionVersion.current) setProbing(false);
@@ -786,6 +793,7 @@ function SignIn({
       trackEvent('mcp_oauth_finished', {
         mcp_server_host: analyticsHost(hostUrl),
         outcome,
+        failure_reason: outcome === 'connected' || outcome === 'superseded' ? null : outcome,
         opened_browser: opened,
         duration_ms: Date.now() - startedAt,
       });
@@ -829,6 +837,7 @@ function SignIn({
         setError('Sign-in took too long. Try again.');
       }
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'mcp_oauth_connect' });
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
@@ -854,6 +863,7 @@ function SignIn({
       setGrant(next.oauth ?? null);
       onStatusChange(false);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'mcp_oauth_disconnect' });
       setError(err instanceof Error ? err.message : 'Could not disconnect.');
     } finally {
       setBusy(false);

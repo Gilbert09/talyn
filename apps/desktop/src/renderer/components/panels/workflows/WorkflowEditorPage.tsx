@@ -1,3 +1,4 @@
+import { captureAnalyticsException } from '../../../lib/analytics';
 import { useCallback, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
@@ -462,6 +463,7 @@ export function WorkflowEditorPage({
     try {
       await onSave(input);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'workflow_save' });
       setSaveError(err instanceof Error ? err.message : 'Could not save this workflow');
     } finally {
       setSaving(false);

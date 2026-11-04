@@ -10,6 +10,7 @@ import {
   type SetupTiming,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { cn } from '../../lib/utils';
 import { SetupHostsEditor, SetupStepList, errorText, formatWhen } from './SetupList';
 
@@ -104,15 +105,17 @@ export function RepoSetup({ repositoryId, onChange }: {
     return () => { active = false; };
   }, [repositoryId]);
 
-  const act = async (fn: () => Promise<RepositorySetup>, failure: string): Promise<boolean> => {
+  const act = async (fn: () => Promise<RepositorySetup>, failure: string, event?: string): Promise<boolean> => {
     setBusy(true);
     setError('');
     try {
       const next = await fn();
       setSetup(next);
       onChange?.(next);
+      if (event) trackEvent(event, { scope: 'repo', repository_id: repositoryId });
       return true;
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'repo_setup_save' });
       setError(errorText(err, failure));
       return false;
     } finally {
@@ -120,7 +123,20 @@ export function RepoSetup({ repositoryId, onChange }: {
     }
   };
   const put = (input: PutRepositorySetupInput, failure = 'Could not save the setup.') =>
-    act(() => api.repositories.setup.put(repositoryId, input), failure);
+    act(async () => {
+      const next = await api.repositories.setup.put(repositoryId, input);
+      if (input.steps) {
+        const before = setup?.steps ?? [];
+        const added = next.steps.find((step) => step.origin === 'user' && !before.some((old) => old.id === step.id));
+        const removed = before.find((step) => step.origin === 'user' && !input.steps?.some((item) => item.id === step.id));
+        const edited = before.find((step) => input.steps?.some((item) => item.id === step.id &&
+          (item.name !== step.name || item.command !== undefined || item.runOn !== step.runOn || item.timeoutSec !== step.timeoutSec)));
+        if (added) trackEvent('setup_step_added', { scope: 'repo', step_kind: added.kind, repository_id: repositoryId });
+        else if (removed) trackEvent('setup_step_removed', { scope: 'repo', step_kind: removed.kind, repository_id: repositoryId });
+        else if (edited) trackEvent('setup_step_edited', { scope: 'repo', step_kind: next.steps.find((step) => step.id === edited.id)?.kind ?? edited.kind, repository_id: repositoryId });
+      }
+      return next;
+    }, failure);
 
   if (loadError) return <p role="alert" className="text-xs text-destructive" data-attr="repo-setup">{loadError}</p>;
   if (!setup) return <p className="text-xs text-muted-foreground" data-attr="repo-setup">Loading the setup…</p>;
@@ -173,8 +189,8 @@ export function RepoSetup({ repositoryId, onChange }: {
         emptyText="No steps yet. Add a step, or Talyn suggests one when sessions install something this repository needs."
         onPut={(steps) => put({ steps })}
         actions={{
-          onAccept: (step) => void act(() => api.repositories.setup.acceptStep(repositoryId, step.id), 'Could not add the step.'),
-          onDismiss: (step) => void act(() => api.repositories.setup.dismissStep(repositoryId, step.id), 'Could not dismiss the step.'),
+          onAccept: (step) => void act(() => api.repositories.setup.acceptStep(repositoryId, step.id), 'Could not add the step.', 'learned_step_accepted'),
+          onDismiss: (step) => void act(() => api.repositories.setup.dismissStep(repositoryId, step.id), 'Could not dismiss the step.', 'learned_step_dismissed'),
           onRetry: (step) => void act(() => api.repositories.setup.retryStep(repositoryId, step.id), 'Could not retry the step.'),
         }}
       />

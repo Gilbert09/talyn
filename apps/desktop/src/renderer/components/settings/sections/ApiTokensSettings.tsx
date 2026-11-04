@@ -9,6 +9,7 @@ import {
   type ApiToken,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { openExternal } from '../../../lib/openExternal';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -155,10 +156,12 @@ export function ApiTokensSettings() {
     setRevokeBusy(true);
     try {
       await api.apiTokens.revoke(revoking.id);
+      trackEvent('api_token_revoked');
       setTokens((prev) => prev?.filter((t) => t.id !== revoking.id) ?? prev);
       toast.success('Token revoked');
       setRevoking(null);
     } catch (e) {
+      captureAnalyticsException(e, { flow: 'api_token_revoke' });
       toast.error(e instanceof Error ? e.message : 'Could not revoke the token');
     } finally {
       setRevokeBusy(false);
@@ -358,9 +361,11 @@ function CreateTokenDialog({
         workspaceIds: workspaceId === ALL_WORKSPACES ? null : [workspaceId],
         expiresInDays: expiryDays === NO_EXPIRY ? null : Number(expiryDays),
       });
+      trackEvent('api_token_created', { scopes_count: scopes.length, expiry_set: expiryDays !== NO_EXPIRY });
       setSecret(res.token);
       onCreated(res.apiToken);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'api_token_create' });
       setError(err instanceof Error ? err.message : 'Could not create the token');
     } finally {
       setCreating(false);

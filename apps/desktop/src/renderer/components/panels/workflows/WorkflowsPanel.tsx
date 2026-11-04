@@ -11,7 +11,7 @@ import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
-import { trackEvent } from '../../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
@@ -214,6 +214,7 @@ export function WorkflowsPanel() {
   const save = async (input: WorkflowInput) => {
     if (view.mode === 'edit' && view.workflow) {
       await update(view.workflow.id, input);
+      trackEvent('workflow_saved', { new: false, actions_count: input.actions.length, events_count: input.events.length });
       toast.success('Workflow saved');
     } else {
       try {
@@ -222,9 +223,13 @@ export function WorkflowsPanel() {
         // A free plan that filled its last slot elsewhere (another window, another
         // workspace) only finds out here. The modal explains it, so swallow the
         // throw and leave the editor open with the user's work in it.
-        if (maybeHandleBillingLimit(err, 'workflow_create')) return;
+        if (maybeHandleBillingLimit(err, 'workflow_create')) {
+          captureAnalyticsException(err, { flow: 'workflow_save' });
+          return;
+        }
         throw err;
       }
+      trackEvent('workflow_saved', { new: true, actions_count: input.actions.length, events_count: input.events.length });
       toast.success('Workflow created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
@@ -262,11 +267,13 @@ export function WorkflowsPanel() {
       // Closed only on success, so a failure leaves the dialog open with the
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
+      trackEvent('workflow_deleted');
       toast.success('Workflow deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'workflow_delete' });
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
     } finally {
       setDeleting(false);
@@ -321,12 +328,12 @@ export function WorkflowsPanel() {
                 onEdit={() => openEditor(workflow)}
                 onDelete={() => setPendingDelete(workflow)}
                 onSetEnabled={(enabled) => {
-                  void setEnabled(workflow, enabled).catch((err: unknown) =>
-                    toast.error(
-                      'Could not change that',
-                      err instanceof Error ? err.message : undefined
-                    )
-                  );
+                  void setEnabled(workflow, enabled)
+                    .then(() => trackEvent(enabled ? 'workflow_enabled' : 'workflow_disabled'))
+                    .catch((err: unknown) => {
+                      captureAnalyticsException(err, { flow: 'workflow_toggle' });
+                      toast.error('Could not change that', err instanceof Error ? err.message : undefined);
+                    });
                 }}
               />
             ))}

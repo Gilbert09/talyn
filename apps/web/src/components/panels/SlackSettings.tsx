@@ -13,6 +13,7 @@ import {
   type SlackUserLinkView,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { toast } from '../../stores/toast';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { cn } from '../../lib/utils';
@@ -247,7 +248,9 @@ function TriggerEmojiRow({
     setEmojis(next);
     try {
       await api.slack.updateLink(link.id, { triggerEmojis: next });
+      trackEvent('slack_trigger_saved', { trigger_kind: 'emoji' });
     } catch (e) {
+      captureAnalyticsException(e, { flow: 'slack_trigger_save' });
       if (seq === saveSeq.current) setEmojis(previous);
       toast.error('Could not save trigger emojis', errorMessage(e, 'Try again.'));
     }
@@ -352,7 +355,8 @@ function TargetWorkspaceRow({
       setState('saved');
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setState('idle'), 2000);
-    } catch {
+    } catch (err) {
+      captureAnalyticsException(err, { flow: 'slack_target_save' });
       setValue(previous);
       setState('error');
       failed.current = next;
@@ -478,10 +482,12 @@ function TeamCard({
     setWorking(true);
     try {
       await api.slack.unlink(link.id);
+      trackEvent('slack_disconnected', { connection_kind: 'account' });
       toast.success('Slack account unlinked');
       setConfirm(null);
       await onChanged();
     } catch (e) {
+      captureAnalyticsException(e, { flow: 'slack_unlink' });
       toast.error('Could not unlink', errorMessage(e, 'Try again.'));
     } finally {
       setWorking(false);
@@ -492,10 +498,12 @@ function TeamCard({
     setWorking(true);
     try {
       const res = await api.slack.forgetInstallation(team.teamId);
+      trackEvent('slack_disconnected', { connection_kind: 'workspace' });
       toast.success('Slack workspace disconnected', res.message);
       setConfirm(null);
       await onChanged();
     } catch (e) {
+      captureAnalyticsException(e, { flow: 'slack_disconnect' });
       toast.error('Could not disconnect', errorMessage(e, 'Try again.'));
     } finally {
       setWorking(false);
@@ -676,8 +684,14 @@ export function SlackSettings() {
     const params = new URLSearchParams(window.location.search);
     const result = params.get('slack');
     if (!result) return;
-    if (result === 'installed') setBanner({ ok: true, text: 'Slack workspace connected.' });
-    else if (result === 'linked') setBanner({ ok: true, text: 'Slack account linked.' });
+    if (result === 'installed') {
+      trackEvent('slack_connected', { connection_kind: 'workspace' });
+      setBanner({ ok: true, text: 'Slack workspace connected.' });
+    }
+    else if (result === 'linked') {
+      trackEvent('slack_connected', { connection_kind: 'account' });
+      setBanner({ ok: true, text: 'Slack account linked.' });
+    }
     else
       setBanner({ ok: false, text: params.get('message') || 'Slack could not be connected.' });
     params.delete('slack');
@@ -697,6 +711,7 @@ export function SlackSettings() {
       // A full-page redirect: the callback returns to /settings?slack=… in this tab.
       window.location.assign(authorizeUrl);
     } catch (e) {
+      captureAnalyticsException(e, { flow: 'slack_connect' });
       if (errorCode(e) === SLACK_NOT_CONFIGURED_CODE) {
         setNotConfigured(errorMessage(e, 'Slack is not set up on this deployment.'));
       } else {

@@ -1,3 +1,4 @@
+import { trackEvent } from '../renderer/lib/analytics';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, render, fireEvent, waitFor, cleanup, screen } from '@testing-library/react';
@@ -23,6 +24,8 @@ jest.mock('../renderer/lib/api', () => ({
     pullRequests: {
       codeReview: jest.fn(),
       postCodeReviewFindings: jest.fn(),
+      startCodeReview: jest.fn(),
+      fixCodeReviewFindings: jest.fn(),
       codeReviewFinding: jest.fn(),
     },
   },
@@ -35,7 +38,7 @@ jest.mock('../renderer/stores/billing', () => ({ maybeHandleBillingLimit: jest.f
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/markdown', () => ({
   Markdown: ({ text }: { text: string }) => <span>{text}</span>,
 }));
@@ -44,6 +47,8 @@ jest.mock('@pierre/diffs/react', () => ({ PatchDiff: () => null }));
 const mocked = api.pullRequests as unknown as {
   codeReview: jest.Mock;
   postCodeReviewFindings: jest.Mock;
+  startCodeReview: jest.Mock;
+  fixCodeReviewFindings: jest.Mock;
 };
 
 function review(over: Partial<CodeReviewPublic> = {}): CodeReviewPublic {
@@ -259,6 +264,7 @@ describe('FindingsTab: Post to PR', () => {
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Posted 1 finding to the pull request')
     );
+    expect(trackEvent).toHaveBeenCalledWith('code_review_posted_to_pr', { findings_count: 1 });
     await waitFor(() =>
       expect(document.querySelectorAll('[data-attr="code-review-finding-posted"]')).toHaveLength(1)
     );
@@ -305,5 +311,23 @@ describe('FindingsTab: Post to PR', () => {
     expect(screen.queryByText('Post findings to the pull request?')).toBeNull();
     expect(toast.success).not.toHaveBeenCalled();
     expect(postButton()).toBeEnabled();
+  });
+});
+
+describe('code review analytics', () => {
+  it('records the selected review depth', async () => {
+    mocked.codeReview.mockResolvedValue({ review: null, findings: [], defaultPreset: 'standard', pullRequest: null });
+    mocked.startCodeReview.mockResolvedValue(review({ preset: 'standard' }));
+    render(<FindingsTab pullRequestId="pr1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review this pull request' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('code_review_started', { preset: 'standard', depth: 'standard' }));
+  });
+
+  it('records a fix request with the finding count', async () => {
+    serve([finding('f-1')]);
+    mocked.fixCodeReviewFindings.mockResolvedValue({});
+    await renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Fix all 1' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('code_review_fix_started', { findings_count: 1 }));
   });
 });

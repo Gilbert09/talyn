@@ -1,3 +1,4 @@
+import { trackEvent } from '../renderer/lib/analytics';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
@@ -13,6 +14,7 @@ const mockForget = jest.fn();
 const mockListEmoji = jest.fn();
 const mockOpenExternal = jest.fn();
 
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
     slack: {
@@ -219,6 +221,7 @@ describe('SlackSettings', () => {
       expect(mockForget).not.toHaveBeenCalled();
       fireEvent.click(screen.getByText('Disconnect'));
       await waitFor(() => expect(mockForget).toHaveBeenCalledWith('T1'));
+      await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('slack_disconnected', { connection_kind: 'workspace' }));
     });
 
     it('hides Disconnect from a non-installer', async () => {
@@ -288,6 +291,7 @@ describe('SlackSettings', () => {
       await waitFor(() =>
         expect(mockUpdateLink).toHaveBeenCalledWith('link1', { triggerEmojis: ['white_check_mark'] })
       );
+      expect(trackEvent).toHaveBeenCalledWith('slack_trigger_saved', { trigger_kind: 'emoji' });
     });
 
     it('puts a removed chip back when the save fails', async () => {

@@ -39,7 +39,7 @@ import { api } from '../../../lib/api';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { toast } from '../../../stores/toast';
-import { trackEvent } from '../../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { Progress } from '../../ui/progress';
@@ -266,8 +266,10 @@ export function FindingsTab({
         ...(opts.reset ? { reset: true } : {}),
       });
       setReview(next);
+      trackEvent('code_review_started', { preset: next.preset, depth: next.preset });
       await load();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_start' });
       // The free plan's one-cycle rule arrives as a 402 with its own code; the
       // billing store turns that into the upgrade modal rather than a red banner.
       if (!maybeHandleBillingLimit(err, 'code_review_start')) {
@@ -293,9 +295,11 @@ export function FindingsTab({
     setNotice(null);
     try {
       await api.pullRequests.fixCodeReviewFindings(pullRequestId, ids);
+      trackEvent('code_review_fix_started', { findings_count: ids.length });
       setSelected(new Set());
       await load();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_fix' });
       if (maybeHandleBillingLimit(err, 'code_review_fix')) return;
       const message = err instanceof Error ? err.message : String(err);
       // A deferral is not a failure: the fix is owed and starts when a task slot
@@ -312,8 +316,7 @@ export function FindingsTab({
    * Write findings onto the pull request as one GitHub review.
    *
    * Runs only from the confirmation: this writes on GitHub under the user's own
-   * name, and Talyn cannot take it back. No analytics event here, because the
-   * route sends the one event for a post.
+   * name, and Talyn cannot take it back.
    */
   async function postFindings(ids: string[]) {
     if (!ids.length) return;
@@ -322,6 +325,7 @@ export function FindingsTab({
     setNotice(null);
     try {
       const result = await api.pullRequests.postCodeReviewFindings(pullRequestId, ids);
+      trackEvent('code_review_posted_to_pr', { findings_count: result.posted });
       if (result.review) setReview(result.review);
       setSelected(new Set());
       toast.success(
@@ -329,6 +333,7 @@ export function FindingsTab({
       );
       await load();
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_post' });
       if (maybeHandleBillingLimit(err, 'code_review_post')) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {

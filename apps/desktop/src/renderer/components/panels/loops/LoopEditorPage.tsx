@@ -1,3 +1,4 @@
+import { captureAnalyticsException } from '../../../lib/analytics';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import type { CloudAgentChoice, LoopInput, LoopWithStats } from '@talyn/shared';
@@ -165,6 +166,7 @@ export function LoopEditorPage({
     try {
       await onSave(input);
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'loop_save' });
       setSaveError(err instanceof Error ? err.message : 'Could not save this loop');
     } finally {
       setSaving(false);

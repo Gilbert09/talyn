@@ -13,7 +13,7 @@ import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { Input } from '../../ui/input';
 import { toast } from '../../../stores/toast';
-import { trackEvent } from '../../../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useMcpServers } from './useMcpServers';
@@ -68,10 +68,12 @@ export function McpServersPanel() {
     if (view.mode === 'edit' && view.server) {
       const next = await update(view.server.id, input);
       setView({ mode: 'edit', server: next });
+      trackEvent('mcp_server_saved', { auth_method: input.authKind, tools_restricted: input.tools !== null && input.tools !== undefined });
       toast.success('MCP server saved');
       return next;
     }
     const made = await create(input);
+    trackEvent('mcp_server_saved', { auth_method: input.authKind, tools_restricted: input.tools !== null && input.tools !== undefined });
     toast.success('MCP server saved');
     // Stay on the editor and switch it into edit mode, because connecting is
     // rarely the last step: the tool list needs a probe, and that needs a saved
@@ -110,8 +112,10 @@ export function McpServersPanel() {
       // Closed only on success, so a failure leaves the dialog open with the
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
+      trackEvent('mcp_server_deleted');
       toast.success('MCP server removed');
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'mcp_server_delete' });
       toast.error('Could not remove', err instanceof Error ? err.message : undefined);
     } finally {
       setDeleting(false);

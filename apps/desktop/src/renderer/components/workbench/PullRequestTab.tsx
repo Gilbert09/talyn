@@ -21,6 +21,7 @@ import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { api, type PRChecks, type PRRow } from '../../lib/api';
 import { toast } from '../../stores/toast';
+import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
@@ -103,9 +104,11 @@ export function PullRequestTab({
     setReviewBusy(true);
     try {
       const next = await api.pullRequests.startCodeReview(pr.id);
+      trackEvent('code_review_started', { preset: next.preset, depth: next.preset });
       usePullRequestStore.getState().patchRow(pr.id, { codeReview: next });
       toast.info('Code review started', 'The findings show here when it finishes.');
     } catch (err) {
+      captureAnalyticsException(err, { flow: 'code_review_start' });
       if (!maybeHandleBillingLimit(err, 'code_review_start')) {
         toast.error('Could not start the code review', err instanceof Error ? err.message : undefined);
       }

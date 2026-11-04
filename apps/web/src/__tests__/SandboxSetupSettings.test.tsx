@@ -1,3 +1,4 @@
+import { trackEvent, captureAnalyticsException } from '../lib/analytics';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -16,6 +17,7 @@ const sandboxPut = vi.fn();
 const sandboxRetry = vi.fn();
 const listRepos = vi.fn();
 
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 vi.mock('../lib/api', () => ({
   api: {
     workspaces: {
@@ -82,6 +84,7 @@ test('saves the dotfiles with an empty branch and auto-detected install', async 
   fireEvent.click(await screen.findByText('tom/dotfiles'));
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   await waitFor(() => expect(sandboxPut).toHaveBeenCalledWith('ws1', { dotfiles: { slug: 'tom/dotfiles', ref: '', install: null } }));
+  await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('dotfiles_saved', { has_install: false, workspace_id: 'ws1' }));
 });
 
 test('saves a branch and an install command, then removes the dotfiles', async () => {
@@ -92,6 +95,7 @@ test('saves a branch and an install command, then removes the dotfiles', async (
   fireEvent.change(screen.getByLabelText('Dotfiles install command'), { target: { value: './install.sh --minimal' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   await waitFor(() => expect(sandboxPut).toHaveBeenCalledWith('ws1', { dotfiles: { slug: 'tom/dotfiles', ref: 'linux', install: './install.sh --minimal' } }));
+  await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('dotfiles_saved', { has_install: true, workspace_id: 'ws1' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Remove dotfiles' }));
   await waitFor(() => expect(sandboxPut).toHaveBeenLastCalledWith('ws1', { dotfiles: null }));
 });
@@ -156,6 +160,7 @@ test('retry replaces the one step', async () => {
 });
 
 test('adds a step to the workspace list', async () => {
+  sandboxPut.mockResolvedValueOnce(sandbox({ steps: [step({ name: 'Shell' })] }));
   await renderWith(sandbox());
   fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
   fireEvent.change(screen.getByLabelText('Step name'), { target: { value: 'Shell' } });
@@ -164,6 +169,7 @@ test('adds a step to the workspace list', async () => {
   await waitFor(() => expect(sandboxPut).toHaveBeenCalledWith('ws1', {
     steps: [{ name: 'Shell', command: 'sudo apt-get install -y zsh', runOn: 'image', timeoutSec: null }],
   }));
+  await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('setup_step_added', { scope: 'sandbox', step_kind: 'apt', workspace_id: 'ws1' }));
 });
 
 test('refuses a literal secret in a new step', async () => {
@@ -189,4 +195,5 @@ test('shows a save error from the backend', async () => {
   fireEvent.click(await screen.findByText('tom/dotfiles'));
   fireEvent.click(screen.getByRole('button', { name: 'Save dotfiles' }));
   expect(await screen.findByText('The dotfiles branch is not a valid branch, tag or commit.')).toBeInTheDocument();
+  expect(captureAnalyticsException).toHaveBeenCalledWith(expect.any(Error), { flow: 'sandbox_setup_save' });
 });
