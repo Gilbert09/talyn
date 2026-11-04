@@ -7,7 +7,7 @@ import { publicWorkbench } from './prLink.js';
 import { fleetClientFor, nextSandboxId, recordWorkbenchEvent } from './sandboxRuntime.js';
 import { NO_CHECKPOINT_NOTE } from './workCheckpointScripts.js';
 import { meterWorkbenchBoxGone } from './usageMeter.js';
-import { appendEvents, claimLostWorkbench, failLostWorkbench, listChats, rowToChat, updateChat, type WorkbenchRow } from './store.js';
+import { appendEvents, claimLostWorkbench, failLostWorkbench, listChats, recordBootMetric, rowToChat, updateChat, type WorkbenchRow } from './store.js';
 
 export const SANDBOX_LOST_MESSAGE = 'The sandbox was lost. Talyn is starting a new one.';
 /** The message when the session ends in `error` after a loss and no replacement is starting. */
@@ -80,6 +80,8 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
       if (failed) await meterWorkbenchBoxGone(row, sandboxId, 'vanished');
       if (failed) {
         recordWorkbenchEvent(failed, 'sandbox_lost', `sandbox ${sandboxId} was lost again`, false);
+        await recordBootMetric(failed.id, 'lost', { sandboxId, reason: 'repeated' }).catch((error) =>
+          console.warn(`[workbench] recording the loss of ${sandboxId} failed:`, error));
         await emitWorkbenchUpdated(await publicWorkbench(failed));
       }
       return;
@@ -97,6 +99,8 @@ export async function recoverLostSandbox(row: WorkbenchRow, err: unknown): Promi
         ? `sandbox ${sandboxId} could not be restored from its hibernated copy; kept it for an operator`
         : `sandbox ${sandboxId} was lost`;
       recordWorkbenchEvent(claimed, 'sandbox_lost', detail, false, hibernationLost ? err : undefined);
+      await recordBootMetric(claimed.id, 'lost', { sandboxId, reason: hibernationLost ? 'storage' : 'missing' }).catch((error) =>
+        console.warn(`[workbench] recording the loss of ${sandboxId} failed:`, error));
       await emitWorkbenchUpdated(await publicWorkbench(claimed));
     } finally {
       const { scheduleProvision } = await import('./lifecycle.js');

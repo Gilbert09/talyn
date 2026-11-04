@@ -81,6 +81,7 @@ export const sessionRoutes: PublicRoute[] = [
     body: CreateSessionBody,
     responses: { 201: { description: 'The new session. `status` is `provisioning`.', schema: Session } },
     async handler({ body, token }) {
+      const sentAt = new Date().toISOString();
       const workspaceId = await resolveWorkspaceId(token, body.workspace_id);
       const input: CreateWorkbenchServiceInput = {
         workspaceId,
@@ -101,7 +102,7 @@ export const sessionRoutes: PublicRoute[] = [
       if ((body.kind ?? 'session') === 'session' && body.repository_id === undefined) {
         throw new PublicApiError(400, 'missing_parameter', 'repository_id is required for a session.', { param: 'repository_id' });
       }
-      const created = await createWorkbench(input, { id: token.ownerId, email: token.email });
+      const created = await createWorkbench(input, { id: token.ownerId, email: token.email }, sentAt);
       return { status: 201, body: await sessionWithChats(created.id) };
     },
   }),

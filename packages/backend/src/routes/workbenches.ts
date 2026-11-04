@@ -277,11 +277,12 @@ export function workbenchRoutes(): Router {
   });
 
   router.post('/chats/:chatId/messages', async (req, res) => {
+    const sentAt = new Date().toISOString();
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
     try {
       if (found.chat.closedAt) throw new WorkbenchError('This chat is closed.', 409, 'chat_closed');
-      ok(res, await sendMessage(found.chat.id, req.body ?? {}));
+      ok(res, await sendMessage(found.chat.id, req.body ?? {}, { sentAt }));
     } catch (err) {
       fail(res, err);
     }
@@ -533,6 +534,7 @@ export function workbenchRoutes(): Router {
   });
 
   router.post('/', async (req, res) => {
+    const sentAt = new Date().toISOString();
     const body = (req.body ?? {}) as CreateWorkbenchInput;
     const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
     if (!(await gate(req, res, workspaceId))) return;
@@ -542,7 +544,7 @@ export function workbenchRoutes(): Router {
       const input: CreateWorkbenchServiceInput = { ...body, workspaceId };
       delete input.source;
       delete input.namingText;
-      ok(res, await createWorkbench(input, { id: user.id, email: user.email }));
+      ok(res, await createWorkbench(input, { id: user.id, email: user.email }, sentAt));
     } catch (err) {
       fail(res, err);
     }

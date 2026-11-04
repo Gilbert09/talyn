@@ -293,8 +293,9 @@ describe('workbench instruction files', () => {
       const gate = new Promise<void>((resolve) => { release = resolve; });
       const write = vi.fn().mockImplementationOnce(() => gate).mockResolvedValue(undefined);
       const io = { repoDir: sandbox.repo, write };
-      const first = syncSessionFiles(row(), 'instructions-codex', 'instructions', [[], { after: 'true' }], io);
-      const second = syncSessionFiles(row(), 'skills', 'skills', [[], { after: 'true' }], io);
+      const file = { path: '~/x', base64: '' };
+      const first = syncSessionFiles(row(), 'instructions-codex', 'instructions', [[file], { after: 'true' }], io);
+      const second = syncSessionFiles(row(), 'skills', 'skills', [[file], { after: 'true' }], io);
       try {
         await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
       } finally { release(); }

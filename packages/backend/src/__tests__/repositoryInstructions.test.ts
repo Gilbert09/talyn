@@ -37,6 +37,7 @@ const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { putInstructionFile, syncInstructionFiles } = await import('../services/workbenches/instructions.js');
+const { observeSessionFiles, sessionFileProbe } = await import('../services/workbenches/sessionFileSync.js');
 const { putRepositoryInstructions, removeRepositoryInstructions, SUMMARY_COLUMNS, TURN_COLUMNS } = await import(
   '../services/workbenches/repositoryInstructions.js'
 );
@@ -236,6 +237,9 @@ describe('repository instructions', () => {
     const excludeLines = async () => (await read(path.join(sandbox.repo, '.git', 'info', 'exclude'))).split('\n');
 
     it('runs no exec for a repository that never had instructions', async () => {
+      // The turn's first exec reports what is on the box; a clean box needs no clearing.
+      const probed = spawnSync('bash', [bashScriptFile(sessionFileProbe(sandbox.repo))], { env: { ...process.env, HOME: sandbox.home }, encoding: 'utf8' });
+      observeSessionFiles(row('repo-a2'), probed.stderr);
       await syncInstructionFiles(row('repo-a2'), 'claude');
       await syncInstructionFiles(row('repo-a2'), 'codex');
       expect(sandbox.calls).toEqual([]);

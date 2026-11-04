@@ -28,6 +28,7 @@ import {
   listChats,
   mergeWorkbenchSettings,
   otherRunningChats,
+  recordBootMetric,
   recordMoveFailure,
   releaseMove,
   rowToChat,
@@ -867,6 +868,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     // The copy of the work runs between the clone and the setup, so the total is the parts, not the clock.
     const startFacts: BoxTiming = {
       cause: 'move',
+      requestedAtMs: createStartedAt,
       boxReadyMs,
       checkoutMs: Date.now() - checkoutStartedAt,
       layer: madeLayer.layer,
@@ -1114,6 +1116,8 @@ async function afterCommit(
 ): Promise<void> {
   staleChecks.delete(old.id);
   recordWorkbenchEvent(committed, 'moved', `${old.sandboxId} → ${committed.sandboxId} (${reason})`);
+  await recordBootMetric(committed.id, 'moved', { reason, from: old.sandboxId, to: committed.sandboxId }).catch((err) =>
+    console.warn(`[workbench] recording the move of ${committed.id} failed:`, err));
   await bestEffort(committed, 'announcing the new sandbox', async () => {
     const current = await getWorkbench(committed.id);
     if (current) await emitWorkbenchUpdated(await publicWorkbench(current));
