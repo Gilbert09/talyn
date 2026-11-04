@@ -6,6 +6,7 @@ import type { BillingStatus } from '@talyn/shared';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { usageModalCopy } from '../components/modals/UsageUpgradeModal';
 import { maybeHandleBillingLimit, useBillingStore, type UpgradeReason } from '../stores/billing';
+import { captureAnalyticsException } from '../lib/analytics';
 import type { BoxRefusalNotice } from '../lib/usageBilling';
 import { oldStatus, usageStatus } from './usageBillingFixtures';
 
@@ -24,7 +25,7 @@ vi.mock('@talyn/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@talyn/client')>();
   return { ...actual, api: { ...actual.api, billing } };
 });
-vi.mock('../lib/analytics', () => ({ trackEvent }));
+vi.mock('../lib/analytics', () => ({ trackEvent, captureAnalyticsException: vi.fn() }));
 vi.mock('../lib/usageBilling', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/usageBilling')>()),
   goToHostedPage,
@@ -126,10 +127,13 @@ describe('UpgradeModal', () => {
   });
 
   it('shows a credit checkout refusal in the modal', async () => {
-    billing.creditCheckout.mockRejectedValue(new ApiError('Credits need a paid plan.', 402, 'credits_require_paid_plan'));
+    const err = new ApiError('Credits need a paid plan.', 402, 'credits_require_paid_plan');
+    billing.creditCheckout.mockRejectedValue(err);
     open(usageStatus('pro'), 'add_credits');
     fireEvent.click(document.querySelector('[data-attr="credit-pack-25"]') as HTMLElement);
     expect(await screen.findByText('Credits need a paid plan.')).toBeInTheDocument();
+    expect(trackEvent).toHaveBeenCalledWith('credit_checkout_failed', { stage: 'create_checkout', code: 'credits_require_paid_plan', status: 402 });
+    expect(captureAnalyticsException).toHaveBeenCalledWith(err, { stage: 'create_checkout', code: 'credits_require_paid_plan', status: 402 });
   });
 });
 

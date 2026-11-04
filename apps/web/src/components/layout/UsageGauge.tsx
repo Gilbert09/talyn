@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react';
 import { cloudProviderStatus } from '@talyn/shared';
 import type { CloudProviderInfo } from '../../lib/api';
 import { cn } from '../../lib/utils';
+import { trackEvent } from '../../lib/analytics';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import {
@@ -123,7 +124,7 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
             <button
               type="button"
               data-attr="usage-gauge-action"
-              onClick={() => openUpgrade(true, action)}
+              onClick={() => { if (action === 'add_credits') trackEvent('add_credits_clicked', { where: 'sidebar' }); openUpgrade(true, action); }}
               className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
             >
               {gaugeActionLabel(action)}

@@ -11,6 +11,7 @@ import {
 } from '@talyn/shared';
 import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
+import { trackBillingFailure } from '../../stores/billing';
 import { goToHostedPage } from '../../lib/usageBilling';
 import { useBillingStore } from '../../stores/billing';
 import { toast } from '../../stores/toast';
@@ -45,9 +46,12 @@ export function CreditPackButtons({ placement, className }: { placement: string;
     setError(null);
     trackEvent('credits_checkout_started', { pack, placement });
     try {
+      useBillingStore.getState().markCreditCheckoutStarted(pack);
       const { url } = await api.billing.creditCheckout({ pack });
       goToHostedPage(url);
     } catch (err) {
+      useBillingStore.getState().clearCreditCheckout();
+      trackBillingFailure('credit_checkout_failed', 'create_checkout', err);
       setError(errorText(err, 'Could not start the checkout.'));
       setBusy(null);
     }
@@ -150,12 +154,15 @@ export function ProPlanForm({
         return;
       }
       trackEvent('plan_change_started', { period, to: 'pro', placement });
+      useBillingStore.getState().markPlanChangeStarted(period);
       await api.billing.changePlan({ to: 'pro', period });
       await useBillingStore.getState().refresh();
       toast.success('You are on Pro now', `${PLAN_LIMITS.pro.includedBoxHours} box-hours a month start today.`);
       setBusy(false);
       onChanged?.();
     } catch (err) {
+      trackBillingFailure(mode === 'checkout' ? 'checkout_failed' : 'plan_change_failed', 'create_checkout', err);
+      if (mode === 'change') useBillingStore.getState().clearPlanChange();
       if (err instanceof ApiError && err.code === 'already_subscribed') {
         setError('You already have a subscription. Use "Move to Pro" to change it.');
       } else if (err instanceof ApiError && err.code === 'no_subscription') {

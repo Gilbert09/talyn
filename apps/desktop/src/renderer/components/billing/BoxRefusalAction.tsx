@@ -5,6 +5,7 @@ import {
   type PlanTier,
 } from '@talyn/shared';
 import { usageReasonForCode, type BoxNotice } from '../../lib/usageBilling';
+import { trackEvent } from '../../lib/analytics';
 import { useBillingStore, type SessionRefusal } from '../../stores/billing';
 import { Button } from '../ui/button';
 
@@ -64,7 +65,7 @@ export function BoxRefusalAction({
     <Button
       variant="outline"
       className={className ?? 'h-6 px-2 text-xs'}
-      onClick={() => useBillingStore.getState().setUpgradeModalOpen(true, usageReasonForCode(code), notice ?? null)}
+      onClick={() => { if (label === 'Add credits') trackEvent('add_credits_clicked', { where: 'refusal' }); useBillingStore.getState().setUpgradeModalOpen(true, usageReasonForCode(code), notice ?? null); }}
     >
       {label}
     </Button>

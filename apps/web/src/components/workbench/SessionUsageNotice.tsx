@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { PLAN_LIMITS, USAGE_EXHAUSTED_ERROR_CODE as USAGE_EXHAUSTED_CODE } from '@talyn/shared';
 import { useBillingStore } from '../../stores/billing';
+import { trackEvent } from '../../lib/analytics';
 import { useWakeRefusalStore } from '../../lib/wakeWorkbench';
 import {
   refusalSentence,
@@ -59,7 +60,7 @@ export function SessionUsageNotice({ workbenchId }: { workbenchId: string }) {
       {actionLabel && (
         <button
           type="button"
-          onClick={() => openUpgrade(true, upgradeReasonForCode(notice.code), notice)}
+          onClick={() => { if (actionLabel === 'Add credits') trackEvent('add_credits_clicked', { where: 'refusal' }); openUpgrade(true, upgradeReasonForCode(notice.code), notice); }}
           className="shrink-0 rounded px-2 py-0.5 font-medium text-primary hover:bg-primary/10"
         >
           {actionLabel}

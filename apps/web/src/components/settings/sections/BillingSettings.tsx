@@ -12,6 +12,8 @@ import {
   type PlanTier,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
+import { trackEvent } from '../../../lib/analytics';
+import { trackBillingFailure } from '../../../stores/billing';
 import { cn } from '../../../lib/utils';
 import { openExternal } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -136,7 +138,7 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
               subscribed && <PortalButton />
             )}
             {tier === 'legacy_pro' && subscribed && <PortalButton secondary />}
-            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => openUpgrade(true, 'upgrade')}>
+            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'upgrade'); }}>
               Compare plans
             </Button>
           </div>
@@ -184,6 +186,7 @@ function PortalButton({ secondary = false }: { secondary?: boolean }) {
       const { url } = await api.billing.portal();
       goToHostedPage(url);
     } catch (err) {
+      trackBillingFailure('plan_change_failed', 'portal', err);
       setError(err instanceof Error ? err.message : 'Could not open the billing portal.');
       setBusy(false);
     }
@@ -339,7 +342,7 @@ function CreditsCard({ view }: { view: UsageBillingView }) {
           data-attr="plan-add-credits"
           aria-expanded={addingCredits}
           aria-controls="add-credits-panel"
-          onClick={() => setAddingCredits(!addingCredits)}
+          onClick={() => { trackEvent('add_credits_clicked', { where: 'plan_page' }); setAddingCredits(!addingCredits); }}
         >
           Add credits
         </Button>

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
+  CREDIT_PACKS,
+  CREDIT_PACK_IDS,
   AUTO_REVIEW_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   REVIEW_CYCLE_LIMIT_ERROR_CODE,
@@ -16,7 +18,7 @@ import {
   type UsageExhaustedEvent,
 } from '@talyn/shared';
 import { api, type ApiError } from '../lib/api';
-import { trackEvent } from '../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import {
   CREDITS_REQUIRE_PAID_PLAN_CODE,
   claimUsageAlert,
@@ -70,6 +72,8 @@ interface BillingState {
   refresh: () => Promise<void>;
   /** Start (or restart) the post-checkout poll burst. */
   startCheckoutPollBurst: (kind?: CheckoutKind) => void;
+  markPlanChangeStarted: (period: 'monthly' | 'annual') => void;
+  clearPlanChange: () => void;
   stopCheckoutPollBurst: () => void;
   /** `billing:usage_alert`: refresh, and say so once per threshold per period. */
   handleUsageAlert: (event: UsageAlertEvent) => void;
@@ -81,6 +85,16 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollDeadline = 0;
 /** What the running burst compares against to know its checkout landed. */
 let burstBaseline: { kind: CheckoutKind; plan: string | null; balanceMicros: number } | null = null;
+let pendingPlanChange: { from: string; period: 'monthly' | 'annual' } | null = null;
+let returnFailureReported = false;
+
+export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
+  const error = err && typeof err === 'object' ? err as { code?: unknown; status?: unknown } : null;
+  const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code) ? error.code : undefined;
+  const status = typeof error?.status === 'number' ? error.status : undefined;
+  trackEvent(event, { stage, code, status });
+  captureAnalyticsException(err, { stage, code, status });
+}
 
 export const useBillingStore = create<BillingState>((set, get) => ({
   status: null,
@@ -98,6 +112,20 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     // account on startup doesn't count as an upgrade.
     if (prev?.plan === 'free' && status.plan !== 'free') {
       trackEvent('upgrade_completed', { plan_source: status.planSource });
+    }
+    if (prev) {
+      const priorLots = new Set(prev.credits?.lots.map((lot) => lot.id) ?? []);
+      for (const lot of prev.credits ? (status.credits?.lots ?? []) : []) {
+        if (priorLots.has(lot.id) || (lot.source !== 'purchase' && lot.source !== 'auto_topup')) continue;
+        const pack = CREDIT_PACK_IDS.find((id) => CREDIT_PACKS[id].creditMicros === lot.totalMicros);
+        if (pack) trackEvent('credit_purchase_completed', { pack, amount_micros: CREDIT_PACKS[pack].priceMicros, source: lot.source === 'auto_topup' ? 'auto_topup' : 'manual' });
+      }
+      const from = prev.tier ?? prev.plan;
+      const to = status.tier ?? status.plan;
+      if (pendingPlanChange && from === pendingPlanChange.from && to !== from) {
+        trackEvent('plan_changed', { from, to, period: pendingPlanChange.period });
+        pendingPlanChange = null;
+      }
     }
     // Box-hours came back (a reset, credits, an upgrade): a session refused
     // on wake may start again, so its notice must not linger.
@@ -139,13 +167,18 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   refresh: async () => {
     try {
       get().setStatus(await api.billing.status());
-    } catch {
+    } catch (err) {
+      if (pollTimer && !returnFailureReported) {
+        trackBillingFailure(pendingPlanChange ? 'plan_change_failed' : burstBaseline?.kind === 'credits' ? 'credit_checkout_failed' : 'checkout_failed', 'return', err);
+        returnFailureReported = true;
+      }
       // Transient (offline / backend restart) — keep the last snapshot; the
       // next focus/WS/poll tick retries. Enforcement is server-side anyway.
     }
   },
 
   startCheckoutPollBurst: (kind = 'plan') => {
+    returnFailureReported = false;
     pollDeadline = Date.now() + POLL_BURST_MAX_MS;
     const current = get().status;
     burstBaseline = {
@@ -162,6 +195,12 @@ export const useBillingStore = create<BillingState>((set, get) => ({
       void get().refresh();
     }, POLL_BURST_INTERVAL_MS);
   },
+
+  markPlanChangeStarted: (period) => {
+    const current = get().status;
+    pendingPlanChange = current ? { from: current.tier ?? current.plan, period } : null;
+  },
+  clearPlanChange: () => { pendingPlanChange = null; },
 
   stopCheckoutPollBurst: () => {
     if (pollTimer) {

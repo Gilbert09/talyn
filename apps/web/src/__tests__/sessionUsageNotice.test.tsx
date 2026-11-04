@@ -5,6 +5,7 @@ import type { AgentEvent } from '@talyn/shared';
 import { SessionUsageNotice } from '../components/workbench/SessionUsageNotice';
 import { AgentBlocks } from '../components/workbench/AgentBlocks';
 import { useBillingStore } from '../stores/billing';
+import { trackEvent } from '../lib/analytics';
 import { useWakeRefusalStore, wakeWorkbench } from '../lib/wakeWorkbench';
 import { oldStatus, usageStatus } from './usageBillingFixtures';
 
@@ -50,6 +51,7 @@ describe('SessionUsageNotice', () => {
     expect(screen.getByText('Out of hours: new boxes paused')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: action }));
     expect(useBillingStore.getState()).toMatchObject({ upgradeModalOpen: true, upgradeReason: 'usage_exhausted' });
+    if (action === 'Add credits') expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'refusal' });
   });
 
   it('shows the wake refusal for this session only', () => {

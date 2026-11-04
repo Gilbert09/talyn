@@ -6,6 +6,7 @@ import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { useWorkspaceStore } from '../stores/workspace';
 import { BillingSettings } from '../components/settings/sections/BillingSettings';
 import { useBillingStore } from '../stores/billing';
+import { trackEvent } from '../lib/analytics';
 import { oldStatus, usageStatus } from './usageBillingFixtures';
 
 const { billing, goToHostedPage } = vi.hoisted(() => ({
@@ -26,7 +27,7 @@ vi.mock('@talyn/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@talyn/client')>();
   return { ...actual, api: { ...actual.api, billing } };
 });
-vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn() }));
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 vi.mock('../lib/usageBilling', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/usageBilling')>()),
   goToHostedPage,
@@ -56,6 +57,14 @@ describe('BillingSettings', () => {
     billing.orders.mockResolvedValue([]);
   });
   afterEach(cleanup);
+
+  it('captures plan page clicks with their locations', () => {
+    show(usageStatus('pro'));
+    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
+    expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
+    expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
+  });
 
   it('draws the old page on a backend without usage billing', () => {
     show(oldStatus());

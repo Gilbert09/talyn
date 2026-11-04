@@ -3,26 +3,30 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { BillingStatus, TeamDetail } from '@talyn/shared';
 import { TeamBilling } from '../renderer/components/panels/TeamBilling';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { oldStatus } from '../testing/billingStatus';
 
 const get = jest.fn();
 const pricing = jest.fn();
 const orders = jest.fn();
 const changePlan = jest.fn();
+const checkout = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   api: { billing: { team: {
     get: (...args: unknown[]) => get(...args),
     pricing: (...args: unknown[]) => pricing(...args),
     orders: (...args: unknown[]) => orders(...args),
     changePlan: (...args: unknown[]) => changePlan(...args),
+    checkout: (...args: unknown[]) => checkout(...args),
   } } },
   ApiError: class ApiError extends Error {},
 }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: unknown) => unknown) => selector({ features: { teams: true } }),
 }));
 jest.mock('../renderer/stores/billing', () => ({
+  trackBillingFailure: jest.requireActual('../renderer/stores/billing').trackBillingFailure,
   useBillingStore: (selector: (state: unknown) => unknown) => selector({
     status: null,
     refresh: jest.fn(),
@@ -78,5 +82,26 @@ describe('TeamBilling plan change', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
     await waitFor(() => expect(changePlan).toHaveBeenCalledWith('team-1', { period: 'annual' }));
     expect(await screen.findByText('Moving to Pro. Seats change as soon as Polar confirms.')).toBeInTheDocument();
+  });
+
+  it('captures team_plan_changed when the refreshed team tier changes', async () => {
+    get.mockResolvedValueOnce(detail()).mockResolvedValue(detail({ tier: 'pro' }));
+    changePlan.mockResolvedValue(undefined);
+    show();
+    await screen.findByTestId('team-move-to-pro');
+    fireEvent.click(screen.getByRole('button', { name: 'Annual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('team_plan_changed', { from: 'legacy_pro', to: 'pro', period: 'annual' }));
+  });
+
+  it('captures team_checkout_failed when seat checkout fails', async () => {
+    const err = new Error('Checkout unavailable');
+    get.mockResolvedValue(detail({ active: false, planSource: 'none', seatsPurchased: 0, seatsUsed: 0 }));
+    pricing.mockResolvedValue({ monthly: { currency: 'usd', tierType: 'volume', minimumSeats: 2, maximumSeats: null, tiers: [{ minSeats: 2, maxSeats: null, pricePerSeat: 1200 }] }, annual: null });
+    checkout.mockRejectedValue(err);
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Buy 3 seats' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('team_checkout_failed', { stage: 'create_checkout', code: undefined, status: undefined }));
+    expect(captureAnalyticsException).toHaveBeenCalledWith(err, { stage: 'create_checkout', code: undefined, status: undefined });
   });
 });

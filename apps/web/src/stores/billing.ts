@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
+  CREDIT_PACKS,
+  CREDIT_PACK_IDS,
+  type CreditPackId,
   AUTO_REVIEW_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   REVIEW_CYCLE_LIMIT_ERROR_CODE,
@@ -13,7 +16,7 @@ import {
   type BillingStatus,
 } from '@talyn/shared';
 import { api, ApiError } from '../lib/api';
-import { trackEvent } from '../lib/analytics';
+import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import {
   CREDITS_REQUIRE_PAID_PLAN_ERROR_CODE,
   boxRefusalFromError,
@@ -51,11 +54,38 @@ interface BillingState {
   refresh: () => Promise<void>;
   /** Start (or restart) the post-checkout poll burst. */
   startCheckoutPollBurst: () => void;
+  markPlanChangeStarted: (period: 'monthly' | 'annual') => void;
+  clearPlanChange: () => void;
+  markCreditCheckoutStarted: (pack: CreditPackId) => void;
+  clearCreditCheckout: () => void;
   stopCheckoutPollBurst: () => void;
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollDeadline = 0;
+let pendingPlanChange: { from: string; period: 'monthly' | 'annual' } | null = null;
+let returnFailureReported = false;
+const CREDIT_CHECKOUT_KEY = 'billing_credit_checkout';
+
+function pendingCreditCheckout(): { pack: CreditPackId; ids: string[] } | null {
+  try {
+    const raw = sessionStorage.getItem(CREDIT_CHECKOUT_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as { pack?: CreditPackId; ids?: unknown };
+    if (!CREDIT_PACK_IDS.includes(value.pack as CreditPackId) || !Array.isArray(value.ids)) return null;
+    return { pack: value.pack as CreditPackId, ids: value.ids.filter((id): id is string => typeof id === 'string') };
+  } catch {
+    return null;
+  }
+}
+
+export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
+  const error = err && typeof err === 'object' ? err as { code?: unknown; status?: unknown } : null;
+  const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code) ? error.code : undefined;
+  const status = typeof error?.status === 'number' ? error.status : undefined;
+  trackEvent(event, { stage, code, status });
+  captureAnalyticsException(err, { stage, code, status });
+}
 
 export const useBillingStore = create<BillingState>((set, get) => ({
   status: null,
@@ -72,6 +102,25 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     // account on startup doesn't count as an upgrade.
     if (prev?.plan === 'free' && status.plan !== 'free') {
       trackEvent('upgrade_completed', { plan_source: status.planSource });
+    }
+    const priorLots = new Set(prev?.credits?.lots.map((lot) => lot.id) ?? []);
+    const pending = pendingCreditCheckout();
+    const knownLots = prev ? priorLots : new Set(pending?.ids ?? []);
+    if (prev?.credits || pending) {
+      for (const lot of status.credits?.lots ?? []) {
+        if (knownLots.has(lot.id) || (lot.source !== 'purchase' && lot.source !== 'auto_topup')) continue;
+        const pack = CREDIT_PACK_IDS.find((id) => CREDIT_PACKS[id].creditMicros === lot.totalMicros);
+        if (pack) trackEvent('credit_purchase_completed', { pack, amount_micros: CREDIT_PACKS[pack].priceMicros, source: lot.source === 'auto_topup' ? 'auto_topup' : 'manual' });
+        if (pending && lot.source === 'purchase' && pack === pending.pack) get().clearCreditCheckout();
+      }
+    }
+    if (prev) {
+      const from = prev.tier ?? prev.plan;
+      const to = status.tier ?? status.plan;
+      if (pendingPlanChange && from === pendingPlanChange.from && to !== from) {
+        trackEvent('plan_changed', { from, to, period: pendingPlanChange.period });
+        pendingPlanChange = null;
+      }
     }
     // The burst exists to catch the plan flip; once we're not free (or
     // billing turns out to be off) there's nothing left to poll for.
@@ -91,13 +140,19 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   refresh: async () => {
     try {
       get().setStatus(await api.billing.status());
-    } catch {
+    } catch (err) {
+      const creditReturn = pendingCreditCheckout() !== null;
+      if (!returnFailureReported && (pollTimer || pendingPlanChange || creditReturn)) {
+        trackBillingFailure(pendingPlanChange ? 'plan_change_failed' : creditReturn ? 'credit_checkout_failed' : 'checkout_failed', 'return', err);
+        returnFailureReported = true;
+      }
       // Transient (offline / backend restart) — keep the last snapshot; the
       // next focus/WS/poll tick retries. Enforcement is server-side anyway.
     }
   },
 
   startCheckoutPollBurst: () => {
+    returnFailureReported = false;
     pollDeadline = Date.now() + POLL_BURST_MAX_MS;
     if (pollTimer) return; // already running — just extended the deadline
     pollTimer = setInterval(() => {
@@ -107,6 +162,22 @@ export const useBillingStore = create<BillingState>((set, get) => ({
       }
       void get().refresh();
     }, POLL_BURST_INTERVAL_MS);
+  },
+
+  markPlanChangeStarted: (period) => {
+    returnFailureReported = false;
+    const current = get().status;
+    pendingPlanChange = current ? { from: current.tier ?? current.plan, period } : null;
+  },
+  clearPlanChange: () => { pendingPlanChange = null; },
+  markCreditCheckoutStarted: (pack) => {
+    returnFailureReported = false;
+    try {
+      sessionStorage.setItem(CREDIT_CHECKOUT_KEY, JSON.stringify({ pack, ids: get().status?.credits?.lots.map((lot) => lot.id) ?? [] }));
+    } catch { /* Checkout still works without session storage. */ }
+  },
+  clearCreditCheckout: () => {
+    try { sessionStorage.removeItem(CREDIT_CHECKOUT_KEY); } catch { /* Storage can be disabled. */ }
   },
 
   stopCheckoutPollBurst: () => {

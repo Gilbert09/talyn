@@ -3,6 +3,7 @@ import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import type { BillingStatus, TeamDetail } from '@talyn/shared';
 import { BillingTeamNotice, TeamBilling } from '../components/panels/TeamBilling';
+import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 
 const { team, state, refresh } = vi.hoisted(() => ({
   team: {
@@ -25,12 +26,13 @@ const { team, state, refresh } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { billing: { team } } }));
 vi.mock('../lib/openExternal', () => ({ openExternal: vi.fn() }));
-vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn() }));
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 vi.mock('../stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({ features: { teams: state.teamsOffered } }),
 }));
-vi.mock('../stores/billing', () => ({
+vi.mock('../stores/billing', async (importOriginal) => ({
+  trackBillingFailure: (await importOriginal<typeof import('../stores/billing')>()).trackBillingFailure,
   useBillingStore: (selector: (s: unknown) => unknown) =>
     selector({ status: null, refresh, startCheckoutPollBurst: vi.fn() }),
 }));
@@ -127,6 +129,16 @@ describe('TeamBilling', () => {
     await waitFor(() => expect(team.changePlan).toHaveBeenCalledWith('team-1', { period: 'annual' }));
     expect(await screen.findByText('Moving to Pro. Seats change as soon as Polar confirms.')).toBeTruthy();
     expect(team.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures team_plan_changed when the refreshed team tier changes', async () => {
+    team.get.mockResolvedValueOnce(detail()).mockResolvedValue(detail({ tier: 'pro' }));
+    team.changePlan.mockResolvedValue(undefined);
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+    await screen.findByTestId('team-move-to-pro');
+    fireEvent.click(screen.getByRole('button', { name: 'Annual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('team_plan_changed', { from: 'legacy_pro', to: 'pro', period: 'annual' }));
   });
 
   it('tells a seated member who pays, even with the teams flag off', () => {
@@ -269,6 +281,16 @@ describe('TeamBilling', () => {
       annual: null,
     });
   }
+
+  it('captures team_checkout_failed when seat checkout fails', async () => {
+    const err = new Error('Checkout unavailable');
+    pricedAt(2);
+    team.checkout.mockRejectedValue(err);
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false, active: false })} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Buy 3 seats' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('team_checkout_failed', { stage: 'create_checkout', code: undefined, status: undefined }));
+    expect(captureAnalyticsException).toHaveBeenCalledWith(err, { stage: 'create_checkout', code: undefined, status: undefined });
+  });
 
   it('sells a one-seat team', async () => {
     pricedAt(1);

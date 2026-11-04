@@ -8,6 +8,7 @@ import type { CloudProviderInfo } from '@talyn/client';
 import { SidebarAccountStatus } from '../renderer/components/layout/UsageGauge';
 import { TooltipProvider } from '../renderer/components/ui/tooltip';
 import { useBillingStore } from '../renderer/stores/billing';
+import { trackEvent } from '../renderer/lib/analytics';
 import { oldStatus, usageStatus } from '../testing/billingStatus';
 
 let mockProviders: CloudProviderInfo[] = [];
@@ -109,6 +110,7 @@ describe('SidebarAccountStatus', () => {
     renderGauge();
     fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
     expect(mockOpenSettings).toHaveBeenCalledWith('billing');
+    expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'sidebar' });
   });
 
   it.each([

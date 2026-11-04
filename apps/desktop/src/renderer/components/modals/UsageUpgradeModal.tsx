@@ -16,6 +16,7 @@ import { Button } from '../ui/button';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
+import { trackBillingFailure } from '../../stores/billing';
 import { formatShortDate, pricingOf, type BoxNotice, type UsageBillingStatus } from '../../lib/usageBilling';
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -156,6 +157,9 @@ export function UsageUpgradeModal({
     try {
       await fn();
     } catch (err) {
+      const event = key === 'checkout' ? 'checkout_failed' : key === 'change' ? 'plan_change_failed' : 'credit_checkout_failed';
+      trackBillingFailure(event, 'create_checkout', err);
+      if (key === 'change') useBillingStore.getState().clearPlanChange();
       setError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
     } finally {
       setBusy(null);
@@ -174,6 +178,7 @@ export function UsageUpgradeModal({
   const moveToPro = () =>
     run('change', async () => {
       trackEvent('plan_change_started', { period, from: tier, reason });
+      useBillingStore.getState().markPlanChangeStarted(period);
       await api.billing.changePlan({ to: 'pro', period });
       startCheckoutPollBurst('plan');
       setWaiting(true);

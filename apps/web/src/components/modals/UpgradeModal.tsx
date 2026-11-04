@@ -17,7 +17,7 @@ import { Button } from '../ui/button';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
-import { useBillingStore } from '../../stores/billing';
+import { trackBillingFailure, useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usageBillingOf } from '../../lib/usageBilling';
 import { UsageUpgradeModal } from './UsageUpgradeModal';
@@ -181,6 +181,7 @@ function LegacyUpgradeModal({
       startCheckoutPollBurst();
       setWaiting(true);
     } catch (err) {
+      trackBillingFailure('checkout_failed', 'create_checkout', err);
       setError(err instanceof Error ? err.message : 'Could not start checkout');
     } finally {
       setOpening(false);

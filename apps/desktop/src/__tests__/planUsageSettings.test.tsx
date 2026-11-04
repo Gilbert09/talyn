@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { UpgradeModal } from '../renderer/components/modals/UpgradeModal';
 import { BillingSettings } from '../renderer/components/settings/sections/BillingSettings';
 import { useBillingStore } from '../renderer/stores/billing';
+import { trackEvent } from '../renderer/lib/analytics';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { oldStatus, usageStatus } from '../testing/billingStatus';
 
@@ -32,7 +33,7 @@ jest.mock('../renderer/lib/api', () => ({
   ApiError: class ApiError extends Error {},
 }));
 jest.mock('../renderer/lib/openExternal', () => ({ openExternal: jest.fn() }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { error: jest.fn(), success: jest.fn(), info: jest.fn() } }));
 
@@ -64,6 +65,14 @@ describe('BillingSettings with usage billing', () => {
   afterEach(() => {
     useBillingStore.getState().stopCheckoutPollBurst();
     cleanup();
+  });
+
+  it('captures plan page clicks with their locations', () => {
+    show(usageStatus('pro'));
+    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
+    expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
+    expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
   });
 
   it('keeps the old page on an older backend', async () => {

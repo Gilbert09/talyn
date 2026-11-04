@@ -7,6 +7,7 @@ import { AgentBlocks } from '../renderer/components/terminal/AgentConversation';
 import { sessionRefusalText } from '../renderer/components/billing/BoxRefusalAction';
 import { deferralNotice } from '../renderer/hooks/useDeferredRuns';
 import { useBillingStore } from '../renderer/stores/billing';
+import { trackEvent } from '../renderer/lib/analytics';
 import type { PRRow } from '../renderer/lib/api';
 import { usageStatus } from '../testing/billingStatus';
 
@@ -37,6 +38,7 @@ describe('chat notes for a refused turn', () => {
     expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
     expect(useBillingStore.getState().upgradeReason).toBe(reason);
     expect(useBillingStore.getState().upgradeNotice).toEqual({ message: text });
+    if (label === 'Add credits') expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'refusal' });
   });
 
   it('offers no button when money does not help (a full box cap on Pro)', () => {

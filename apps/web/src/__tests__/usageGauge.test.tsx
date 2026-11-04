@@ -5,6 +5,7 @@ import type { CloudProviderInfo } from '@talyn/client';
 import type { BillingStatus } from '@talyn/shared';
 import { SidebarUsageSlot, agentWarnings } from '../components/layout/UsageGauge';
 import { useBillingStore } from '../stores/billing';
+import { trackEvent } from '../lib/analytics';
 import { useWorkspaceStore } from '../stores/workspace';
 import { oldStatus, usageStatus } from './usageBillingFixtures';
 
@@ -83,6 +84,13 @@ describe('SidebarUsageSlot', () => {
     expect(openSettings).toHaveBeenCalledWith('billing');
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
     expect(useBillingStore.getState()).toMatchObject({ upgradeModalOpen: true, upgradeReason: 'upgrade' });
+  });
+
+  it('captures Add credits from the sidebar', () => {
+    setup(usageStatus('pro', { usedHours: 191 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add credits' }));
+    expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'sidebar' });
   });
 
   it('opens cloud providers from an agent reconnect warning', () => {

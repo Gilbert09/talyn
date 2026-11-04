@@ -12,9 +12,9 @@ import {
   SIZE_REQUIRES_PRO_ERROR_CODE,
   USAGE_EXHAUSTED_ERROR_CODE,
 } from '@talyn/shared';
-import { ApiError } from '../renderer/lib/api';
-import { maybeHandleBillingLimit, useBillingStore } from '../renderer/stores/billing';
-import { trackEvent } from '../renderer/lib/analytics';
+import { api, ApiError } from '../renderer/lib/api';
+import { maybeHandleBillingLimit, trackBillingFailure, useBillingStore } from '../renderer/stores/billing';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { toast } from '../renderer/stores/toast';
 import { _resetUsageAlertGuard } from '../renderer/lib/usageBilling';
 import { applyWakeAnswer } from '../renderer/lib/wakeWorkbench';
@@ -27,9 +27,10 @@ jest.mock('../renderer/lib/supabase', () => ({
   },
 }));
 
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), info: jest.fn(), error: jest.fn() } }));
 const trackEventMock = trackEvent as jest.Mock;
+const captureExceptionMock = captureAnalyticsException as jest.Mock;
 const toastMock = toast as unknown as { success: jest.Mock; info: jest.Mock; error: jest.Mock };
 
 function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
@@ -61,6 +62,7 @@ function mockStatusFetch(payload: BillingStatus) {
 
 function reset() {
   useBillingStore.getState().stopCheckoutPollBurst();
+  useBillingStore.getState().clearPlanChange();
   useBillingStore.setState({ status: null, upgradeModalOpen: false, upgradeReason: null, upgradeNotice: null, sessionRefusals: {} });
 }
 
@@ -74,6 +76,7 @@ describe('billing store', () => {
   afterEach(() => {
     useBillingStore.getState().stopCheckoutPollBurst();
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   describe('maybeHandleBillingLimit', () => {
@@ -164,6 +167,45 @@ describe('billing store', () => {
         .setStatus(status({ plan: 'unlimited', planSource: 'subscription', activeTaskLimit: null }));
       expect(trackEventMock).not.toHaveBeenCalledWith('upgrade_completed', expect.anything());
     });
+  });
+
+  it.each(['purchase', 'auto_topup'] as const)('captures one credit_purchase_completed for a new %s lot', (source) => {
+    const lot = { id: 'lot-1', totalMicros: 105_000_000, remainingMicros: 105_000_000, source, purchasedAt: '2026-11-04', expiresAt: '2027-11-04' };
+    useBillingStore.getState().setStatus(usageStatus('pro'));
+    useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 105_000_000, lots: [lot] }));
+    useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 105_000_000, lots: [lot] }));
+    expect(trackEventMock.mock.calls.filter(([event]) => event === 'credit_purchase_completed')).toEqual([
+      ['credit_purchase_completed', { pack: '100', amount_micros: 100_000_000, source: source === 'purchase' ? 'manual' : 'auto_topup' }],
+    ]);
+  });
+
+  it('captures plan_changed once after a started change lands', () => {
+    useBillingStore.getState().setStatus(usageStatus('legacy_pro'));
+    useBillingStore.getState().markPlanChangeStarted('annual');
+    useBillingStore.getState().setStatus(usageStatus('pro'));
+    useBillingStore.getState().setStatus(usageStatus('pro'));
+    expect(trackEventMock.mock.calls.filter(([event]) => event === 'plan_changed')).toEqual([
+      ['plan_changed', { from: 'legacy_pro', to: 'pro', period: 'annual' }],
+    ]);
+  });
+
+  it.each(['checkout_failed', 'plan_change_failed', 'credit_checkout_failed', 'team_checkout_failed'] as const)('captures %s and its exception', (event) => {
+    const err = new ApiError('No', 402, 'no_subscription');
+    trackBillingFailure(event, 'create_checkout', err);
+    expect(trackEventMock).toHaveBeenCalledWith(event, { stage: 'create_checkout', code: 'no_subscription', status: 402 });
+    expect(captureExceptionMock).toHaveBeenCalledWith(err, { stage: 'create_checkout', code: 'no_subscription', status: 402 });
+  });
+
+  it('captures one return-stage failure during a credit refresh', async () => {
+    const err = new ApiError('Unavailable', 503, 'unavailable');
+    jest.spyOn(api.billing, 'status').mockRejectedValue(err);
+    useBillingStore.getState().setStatus(usageStatus('pro'));
+    useBillingStore.getState().startCheckoutPollBurst('credits');
+    await useBillingStore.getState().refresh();
+    await useBillingStore.getState().refresh();
+    expect(trackEventMock.mock.calls.filter(([event]) => event === 'credit_checkout_failed')).toEqual([
+      ['credit_checkout_failed', { stage: 'return', code: 'unavailable', status: 503 }],
+    ]);
   });
 
   describe('checkout poll burst', () => {
@@ -258,6 +300,7 @@ describe('usage billing in the billing store', () => {
   afterEach(() => {
     useBillingStore.getState().stopCheckoutPollBurst();
     useBillingStore.setState({ refresh: realRefresh });
+    jest.useRealTimers();
   });
 
   it.each([
@@ -352,6 +395,7 @@ describe('usage billing in the billing store', () => {
 
   describe('checkout poll burst', () => {
     it('waits for credits to land, then announces them', () => {
+      jest.useFakeTimers();
       useBillingStore.getState().setStatus(usageStatus('pro', { balanceMicros: 1_000_000 }));
       useBillingStore.getState().startCheckoutPollBurst('credits');
       // A refresh with the same balance keeps polling.

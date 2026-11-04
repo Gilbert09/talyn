@@ -36,7 +36,7 @@ import {
   type UsageBillingStatus,
 } from '../../../lib/usageBilling';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
+import { maybeHandleBillingLimit, trackBillingFailure, useBillingStore } from '../../../stores/billing';
 import { toast } from '../../../stores/toast';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
 import { Button } from '../../ui/button';
@@ -77,6 +77,7 @@ export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
     try {
       await fn();
     } catch (err) {
+      trackBillingFailure(key === 'portal' ? 'plan_change_failed' : 'credit_checkout_failed', key === 'portal' ? 'portal' : 'create_checkout', err);
       if (maybeHandleBillingLimit(err, 'billing_settings')) return;
       setError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
     } finally {
@@ -225,7 +226,7 @@ function PlanCard({
             Manage billing
           </Button>
         )}
-        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => openUpgrade(true)}>
+        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true); }}>
           Compare plans
         </Button>
       </div>
@@ -405,7 +406,7 @@ function CreditsCard({
           data-attr="plan-add-credits"
           aria-expanded={addingCredits}
           aria-controls="add-credits-panel"
-          onClick={() => setAddingCredits(!addingCredits)}
+          onClick={() => { trackEvent('add_credits_clicked', { where: 'plan_page' }); setAddingCredits(!addingCredits); }}
         >
           Add credits
         </Button>

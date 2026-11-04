@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, CreditCard, Download, Loader2, UserPlus, Users, X } from 'lucide-react';
 import {
   PLAN_LIMITS,
@@ -13,7 +13,7 @@ import {
 import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
-import { useBillingStore } from '../../stores/billing';
+import { trackBillingFailure, useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
@@ -282,10 +282,16 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
   const [orders, setOrders] = useState<BillingOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const pendingPlanChange = useRef<{ from: TeamDetail['tier']; period: 'monthly' | 'annual' } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setTeam(await api.billing.team.get(teamId));
+      const latest = await api.billing.team.get(teamId);
+      if (pendingPlanChange.current && latest.tier !== pendingPlanChange.current.from) {
+        trackEvent('team_plan_changed', { from: pendingPlanChange.current.from, to: latest.tier, period: pendingPlanChange.current.period });
+        pendingPlanChange.current = null;
+      }
+      setTeam(latest);
       setLoadError(null);
     } catch (err) {
       setLoadError(errorText(err, 'Could not load the team'));
@@ -384,7 +390,7 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
       </div>
 
       {team.tier === 'legacy_pro' && team.planSource === 'subscription' && team.active && (
-        <MoveTeamToProCard team={team} pricing={pricing} onChanged={load} onStarted={startCheckoutPollBurst} />
+        <MoveTeamToProCard team={team} pricing={pricing} onChanged={load} onStarted={(period) => { pendingPlanChange.current = { from: team.tier, period }; startCheckoutPollBurst(); }} />
       )}
 
       {team.active && (
@@ -422,7 +428,7 @@ function MoveTeamToProCard({
   team: TeamDetail;
   pricing: TeamPricing | null;
   onChanged: () => Promise<void>;
-  onStarted: () => void;
+  onStarted: (period: 'monthly' | 'annual') => void;
 }) {
   const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly');
   const [busy, setBusy] = useState(false);
@@ -437,9 +443,10 @@ function MoveTeamToProCard({
     try {
       await api.billing.team.changePlan(team.id, { period });
       setWaiting(true);
-      onStarted();
+      onStarted(period);
       await onChanged();
     } catch (err) {
+      trackBillingFailure('plan_change_failed', 'create_checkout', err);
       setError(
         err instanceof ApiError && err.code === 'no_subscription'
           ? 'This team has no subscription to change.'
@@ -594,6 +601,7 @@ function BuySeats({
       onStarted();
       setWaiting(true);
     } catch (err) {
+      trackBillingFailure('team_checkout_failed', 'create_checkout', err);
       setError(errorText(err, 'Could not start checkout'));
     } finally {
       setBusy(false);

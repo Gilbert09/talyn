@@ -9,6 +9,7 @@ import {
 } from '@talyn/shared';
 import type { CloudProviderInfo } from '@talyn/client';
 import { cn } from '../../lib/utils';
+import { trackEvent } from '../../lib/analytics';
 import {
   GAUGE_ACTION_LABELS,
   GAUGE_BAR_CLASS,
@@ -84,7 +85,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
   const openPlan = () => openSettings('billing');
   const runAction = () => {
     if (action === 'upgrade') setUpgradeModalOpen(true, exhausted ? 'usage_exhausted' : null);
-    else if (action === 'add_credits') openSettings('billing');
+    else if (action === 'add_credits') { trackEvent('add_credits_clicked', { where: 'sidebar' }); openSettings('billing'); }
   };
 
   const summary = [

@@ -6,6 +6,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { UpgradeModal } from '../renderer/components/modals/UpgradeModal';
 import { useBillingStore, type UpgradeReason } from '../renderer/stores/billing';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import type { BoxNotice } from '../renderer/lib/usageBilling';
 import { oldStatus, usageStatus } from '../testing/billingStatus';
@@ -27,7 +28,7 @@ jest.mock('../renderer/lib/api', () => ({
 }));
 const openExternal = jest.fn();
 jest.mock('../renderer/lib/openExternal', () => ({ openExternal: (...a: unknown[]) => openExternal(...a) }));
-jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
 const openSettings = jest.fn();
@@ -129,10 +130,13 @@ describe('UpgradeModal with usage billing', () => {
   });
 
   it('shows the error when checkout fails', async () => {
-    checkout.mockRejectedValue(new Error('Polar is down'));
+    const err = new Error('Polar is down');
+    checkout.mockRejectedValue(err);
     open(usageStatus('free'));
     fireEvent.click(screen.getByRole('button', { name: /Upgrade to Pro:/ }));
     expect(await screen.findByText('Polar is down')).toBeInTheDocument();
+    expect(trackEvent).toHaveBeenCalledWith('checkout_failed', { stage: 'create_checkout', code: undefined, status: undefined });
+    expect(captureAnalyticsException).toHaveBeenCalledWith(err, { stage: 'create_checkout', code: undefined, status: undefined });
   });
 
   it('flips to a success state when the plan becomes Pro', () => {
