@@ -15,11 +15,13 @@ import { assertRepoPath, emptyChanges, getChanges, getPatch, listRepoFiles, read
 import { githubDiff, githubFileAt } from './changesGithub.js';
 import { listsKey, readChangesMeta, storeConfig } from './changesStore.js';
 import { storedChanges, storedConfig, storedFile, storedFileList, storedPatch, storedPreviewPatch } from './changesStored.js';
+import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { emitWorkbenchChat, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, refuseThread, WorkbenchError } from './errors.js';
 import { startStaleGoldenMove } from './move.js';
 import { chooseReadSource, type StoredReadReason } from './sandboxReadSource.js';
 import { publicWorkbench } from './prLink.js';
+import { recoverLostSandbox } from './recovery.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
 import { startScript, stopScript } from './scripts.js';
@@ -72,20 +74,36 @@ export async function requireReadySandbox(row: WorkbenchRow, checkGolden = false
 async function storedSource(row: WorkbenchRow, live: boolean): Promise<StoredReadReason | null> {
   if (live || row.runtime !== 'sandbox') return null;
   const source = await chooseReadSource(row);
-  return source.live ? null : source.reason;
+  if (source.live) return null;
+  // The row still says `running`, but the fleet no longer has the box. A
+  // read of the box used to find that out and start the replacement; a read
+  // answered from storage must start it too, or the session never recovers.
+  if (source.reason === 'lost' && row.sandboxState === 'running' && row.sandboxId) {
+    void recoverLostSandbox(row, new FleetRunNotFoundError(`The fleet no longer runs sandbox ${row.sandboxId}.`))
+      .catch((err) => console.warn(`[workbench] starting the recovery of ${row.id} failed:`, err));
+  }
+  return source.reason;
+}
+
+/** Reasons where a read of the box would wake a sleeping one. Only these refuse when nothing is stored. */
+function wouldWake(reason: StoredReadReason): boolean {
+  return reason === 'asleep' || reason === 'waking';
 }
 
 /**
  * Nothing usable is stored for a read of a box that does not run. An archived
- * session has no box to wake. A fleet that did not answer may still run the
- * box, so the read goes on to it (null). Anything else is a refusal that
- * names the way to wake the box: only a person's refresh does that.
+ * session has no box to wake. Null means the read goes on to the box path,
+ * which answers as it did before stored copies: a fleet that did not answer
+ * may still run the box; a starting session answers `not_ready`; a lost box
+ * answers the fleet's error and its replacement starts. A sleeping or waking
+ * box is refused with the way to wake it: only a person's refresh does that.
  */
 function noStoredCopy(reason: StoredReadReason, what: string): WorkbenchError | null {
   if (reason === 'archived') return notReadyError('archived');
-  if (reason === 'fleet_unreachable') return null;
+  if (!wouldWake(reason)) return null;
   return new WorkbenchError(
-    `The sandbox is asleep and Talyn has no stored copy of ${what}. Use "Refresh from the sandbox" to wake it, or ask again with live=true.`,
+    `The sandbox is ${reason === 'waking' ? 'starting' : 'asleep'} and Talyn has no stored copy of ${what}. ` +
+      'Use "Refresh from the sandbox" to wake it, or ask again with live=true.',
     409,
     'snapshot_unavailable',
   );
@@ -108,7 +126,7 @@ export async function readSessionChanges(
   if (reason) {
     const stored = await storedChanges(row, reason);
     if (stored) return stored;
-    if (!opts.wakeWithoutSnapshot && reason !== 'archived') {
+    if (!opts.wakeWithoutSnapshot && wouldWake(reason)) {
       throw new WorkbenchError(
         'The sandbox is asleep and Talyn has no stored list of its changes. Ask again with live=true to wake it.',
         409,
@@ -165,6 +183,7 @@ export async function readSessionFile(row: WorkbenchRow, path: string, opts: { l
     const stored = await storedFile(row, path);
     if (stored?.kind === 'file') return stored.file;
     if (stored?.kind === 'missing') throw new WorkbenchError(`${assertRepoPath(path)} does not exist.`, 404, 'file_not_found');
+    if (stored?.kind === 'deleted') throw new WorkbenchError(`${assertRepoPath(path)} was deleted in this session.`, 404, 'file_not_found');
     if (stored?.kind === 'unchanged') {
       const meta = await readChangesMeta(row);
       const answer = await githubFileAt(row, stored.mergeBase, assertRepoPath(path), meta?.takenAt);
@@ -213,16 +232,22 @@ export async function readSessionConfig(row: WorkbenchRow, opts: { live?: boolea
 }
 
 /**
- * The patch the preview sync applies. A sleeping box answers from the stored
- * patch when there is one; otherwise the box wakes, as before, because the
- * sync has no other source.
+ * The patch the preview sync applies. A box known not to run answers from
+ * the stored patch when there is one, marked `source: 'stored'` with its
+ * time; otherwise the box is read (and wakes), as before, because the sync
+ * has no other source.
  */
-export async function readSessionPreviewPatch(row: WorkbenchRow, opts: { live?: boolean } = {}): Promise<{ base: string; patch: string }> {
+export async function readSessionPreviewPatch(
+  row: WorkbenchRow,
+  opts: { live?: boolean } = {},
+): Promise<{ base: string; patch: string; source?: 'stored'; snapshotAt?: string }> {
   refuseThread(row);
   const reason = await storedSource(row, opts.live === true);
-  if (reason) {
+  // A fleet that did not answer may still run the box, and the sync must
+  // apply what is in it now: only a box known not to run answers from storage.
+  if (reason && reason !== 'fleet_unreachable') {
     const stored = await storedPreviewPatch(row);
-    if (stored) return stored;
+    if (stored) return { ...stored, source: 'stored' };
     if (reason === 'archived') throw notReadyError('archived');
   }
   await requireReadySandbox(row);

@@ -15,10 +15,14 @@ import type { WorkbenchRow } from '../services/workbenches/store.js';
  */
 
 let current: WorkbenchRow;
+/** Set when a case deletes the session: the store then answers as for a deleted row. */
+let deleted = false;
 
 vi.mock('../services/workbenches/store.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/workbenches/store.js')>()),
+  getWorkbench: vi.fn(async () => (deleted ? null : current)),
   updateWorkbench: vi.fn(async (_id: string, patch: Partial<WorkbenchRow>) => {
+    if (deleted) return null;
     current = { ...current, ...patch };
     return current;
   }),
@@ -56,6 +60,7 @@ const { slicePatch, storedChanges, storedFile, storedFileList, storedPatch, stor
 const { getChanges, parseChangeLists, CHANGE_LIST_SECTIONS } = await import('../services/workbenches/changes.js');
 const { memoryWorkObjectStore, setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { emitWorkbenchUpdated } = await import('../services/workbenches/emit.js');
+const { storeDiffStat } = await import('../services/workbenches/changes.js');
 
 const WB = 'wb-cap-1111';
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 1, 2, 3, 0, 255]);
@@ -86,8 +91,11 @@ describe.skipIf(process.platform === 'win32')('the stored changes of a real repo
   };
 
   /** Run a script as the box does: bash, in the repository, or in `/` for a part read. */
+  /** What the fleet says of the box when a cleanup asks. */
+  let boxRuns = true;
   const runner = {
     get tmpDir() { return tmp; },
+    isRunning: vi.fn(async () => boxRuns),
     run: async (_row: WorkbenchRow, script: string, opts: { cwd?: string; env?: Record<string, string> }) => {
       execs.push(script);
       const r = spawnSync('bash', ['-c', script], { cwd: opts.cwd ?? box, env: env(opts.env), maxBuffer: 256 * 1024 * 1024 });
@@ -147,9 +155,13 @@ describe.skipIf(process.platform === 'win32')('the stored changes of a real repo
     resetChangesStoredForTests();
     execs = [];
     current = row();
+    deleted = false;
+    boxRuns = true;
+    runner.isRunning.mockClear();
   });
 
   afterEach(() => {
+    if (vi.isMockFunction(runner.run)) vi.mocked(runner.run).mockRestore();
     setWorkObjectStoreForTests(null);
     setCaptureRunnerForTests(null);
     setCaptureLimitsForTests(null);
@@ -256,7 +268,8 @@ describe.skipIf(process.platform === 'win32')('the stored changes of a real repo
     ['an untracked file', 'dir/untracked.txt', { kind: 'file', file: { content: 'fresh\n', binary: false } }],
     ['a binary file', 'img.png', { kind: 'file', file: { content: PNG.toString('base64'), binary: true } }],
     ['a file the session did not change', 'same.txt', { kind: 'unchanged', known: true }],
-    ['a deleted file', 'gone.txt', { kind: 'missing' }],
+    ['a deleted file', 'gone.txt', { kind: 'deleted' }],
+    ['the old path of a renamed file', 'old-name.txt', { kind: 'deleted' }],
     ['a file that never was', 'nope.txt', { kind: 'missing' }],
   ])('answers %s', async (_name, path, expected) => {
     await capture();
@@ -268,6 +281,160 @@ describe.skipIf(process.platform === 'win32')('the stored changes of a real repo
     await capture();
     expect(await storedFile(current, 'big.txt')).toEqual({ kind: 'not_stored', size: 1024 * 1024 + 10 });
     expect(await storedFile(current, 'b.txt')).toMatchObject({ kind: 'file' });
+  });
+
+  describe('with no stored file list', () => {
+    const dropFileList = async () => {
+      const meta = await readChangesMeta(current, { fresh: true });
+      if (!meta) throw new Error('no meta');
+      delete meta.objects.files;
+      await store_.writeChangesMeta(current, meta);
+      resetChangesStoredForTests();
+    };
+
+    it.each([
+      ['a deleted file', 'gone.txt', { kind: 'deleted' }],
+      ['the old path of a renamed file', 'old-name.txt', { kind: 'deleted' }],
+      ['a changed file', 'b.txt', { kind: 'file' }],
+      ['a file the lists show as not changed', 'same.txt', { kind: 'unchanged', known: false }],
+      ['a file the lists do not name', 'nope.txt', { kind: 'unchanged', known: false }],
+    ])('answers %s from the changes list', async (_name, path, expected) => {
+      await capture();
+      await dropFileList();
+      expect(await storedFile(current, path)).toMatchObject(expected);
+    });
+
+    it.each(['gone.txt', 'same.txt'])('cannot say anything of %s when the changes list is unreadable', async (path) => {
+      const outcome = await capture();
+      if (outcome.kind !== 'captured') throw new Error(outcome.kind);
+      await dropFileList();
+      store.objects.delete(store_.listsKeyOf(current, outcome.meta.generation));
+      resetChangesStoreForTests();
+      expect(await storedFile(current, path)).toEqual({ kind: 'unknown' });
+    });
+  });
+
+  it.each([
+    ['the box still runs', true],
+    ['the box went to sleep', false],
+  ])('cleans the staging after the capture exec throws when %s', async (_name, runs, ) => {
+    boxRuns = runs;
+    const real = runner.run;
+    vi.spyOn(runner, 'run').mockImplementation(async (r, script, opts) => {
+      const answer = await real(r, script, opts);
+      if (script.includes('echo "CAPTURE')) throw new Error('the exec timed out');
+      return answer;
+    });
+    expect(await capture()).toMatchObject({ kind: 'failed', detail: expect.stringContaining('timed out') });
+    expect(runner.isRunning).toHaveBeenCalledTimes(1);
+    const cleanups = execs.filter((e) => e.startsWith('rm -rf --'));
+    expect(cleanups).toHaveLength(runs ? 1 : 0);
+    expect(spawnSync('ls', ['-A', tmp], { encoding: 'utf8' }).stdout.trim() === '').toBe(runs);
+    expect(store.objects.has(changesMetaKey(current))).toBe(false);
+  });
+
+  it('cleans the staging without asking the fleet after a capture that failed on the box', async () => {
+    const real = runner.run;
+    vi.spyOn(runner, 'run').mockImplementation(async (r, script, opts) => {
+      const answer = await real(r, script, opts);
+      return script.includes('echo "CAPTURE') ? { ...answer, exitCode: 1, stderr: 'disk full' } : answer;
+    });
+    expect(await capture()).toMatchObject({ kind: 'failed' });
+    expect(runner.isRunning).not.toHaveBeenCalled();
+    expect(execs.filter((e) => e.startsWith('rm -rf --'))).toHaveLength(1);
+  });
+
+  it.each([
+    ['with no copy before it', false],
+    ['over an older copy', true],
+  ])('removes the parts it uploaded when a capture fails half-way, %s', async (_name, withPrevious) => {
+    const first = withPrevious ? await capture() : null;
+    if (first && first.kind !== 'captured') throw new Error(first.kind);
+    write('b.txt', 'moved on\n');
+    const real = runner.run;
+    vi.spyOn(runner, 'run').mockImplementation(async (r, script, opts) => {
+      if (script.startsWith('tail -c') && script.includes('/files.gz')) throw new Error('the box went away');
+      return real(r, script, opts);
+    });
+    expect(await capture()).toMatchObject({ kind: 'failed' });
+    const generations = new Set(keys().filter((k) => k.startsWith(`${changesPrefix(current)}/`) && k.split('/').length > 4).map((k) => k.split('/')[3]));
+    expect([...generations]).toEqual(first?.kind === 'captured' ? [first.meta.generation] : []);
+    expect((await readChangesMeta(current, { fresh: true }))?.generation).toBe(first?.kind === 'captured' ? first.meta.generation : undefined);
+  });
+
+  it.each([
+    ['while its parts are read', 'parts'],
+    ['while the new copy is announced', 'announce'],
+  ] as const)('puts nothing back for a session deleted %s', async (_name, when) => {
+    const real = runner.run;
+    if (when === 'parts') {
+      vi.spyOn(runner, 'run').mockImplementation(async (r, script, opts) => {
+        if (script.startsWith('tail -c') && script.includes('/lists.gz')) deleted = true;
+        return real(r, script, opts);
+      });
+    } else {
+      const { updateWorkbench } = await import('../services/workbenches/store.js');
+      vi.mocked(updateWorkbench).mockImplementationOnce(async () => {
+        deleted = true;
+        return null;
+      });
+    }
+    expect(await capture()).toEqual({ kind: 'skipped', reason: 'the session was deleted' });
+    expect(keys().filter((k) => k.startsWith(changesPrefix(current)))).toEqual([]);
+  });
+
+  it('announces the new copy before it deletes the old one', async () => {
+    const first = await capture();
+    if (first.kind !== 'captured') throw new Error(first.kind);
+    write('b.txt', 'next\n');
+    const seen: boolean[] = [];
+    vi.mocked(emitWorkbenchUpdated).mockImplementationOnce(async () => {
+      seen.push(keys().some((k) => k.includes(`/${first.meta.generation}/`)));
+    });
+    const second = await capture();
+    if (second.kind !== 'captured') throw new Error(second.kind);
+    expect(seen).toEqual([true]);
+    expect(keys().some((k) => k.includes(`/${first.meta.generation}/`))).toBe(false);
+  });
+
+  it('passes the time it read the box to the diff stat, so a newer stored list is kept', async () => {
+    const before = Date.now();
+    const outcome = await capture();
+    if (outcome.kind !== 'captured') throw new Error(outcome.kind);
+    const call = vi.mocked(storeDiffStat).mock.calls.at(-1);
+    const observedAt = call?.[2]?.observedAt;
+    expect(observedAt).toBeInstanceOf(Date);
+    expect(observedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(observedAt!.getTime()).toBeLessThanOrEqual(Date.parse(outcome.meta.takenAt));
+  });
+
+  it.each([
+    ['an older stored list', -60_000, true],
+    ['no stored list', null, true],
+    ['a newer stored list', 60_000, false],
+  ] as const)('a capture writes its list over %s only when it is newer', async (_name, offset, writes) => {
+    const actual = await vi.importActual<typeof import('../services/workbenches/changes.js')>('../services/workbenches/changes.js');
+    const { readChangesSnapshot, resetChangesSnapshotsForTests, changesSnapshotKey } = await import('../services/workbenches/changesSnapshot.js');
+    const { updateWorkbench } = await import('../services/workbenches/store.js');
+    resetChangesSnapshotsForTests();
+    const observedAt = new Date('2099-01-01T10:00:00Z');
+    const newer = { files: [], base: 'b'.repeat(40), headSha: 'n'.repeat(40) } as unknown as WorkbenchChanges;
+    if (offset !== null) {
+      store.objects.set(changesSnapshotKey(current), Buffer.from(JSON.stringify({
+        version: 1, takenAt: new Date(observedAt.getTime() + offset).toISOString(), changes: newer,
+      })));
+    }
+    vi.mocked(updateWorkbench).mockClear();
+    const older = {
+      files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, binary: false }],
+      base: 'b'.repeat(40), headSha: 'o'.repeat(40),
+      uncommittedStats: { added: 1, removed: 1, files: 1 }, committedStats: { added: 0, removed: 0, files: 0 },
+    } as unknown as WorkbenchChanges;
+    await actual.storeDiffStat(current, older, { observedAt });
+    const stored = await readChangesSnapshot(current);
+    expect(stored?.headSha).toBe(writes ? 'o'.repeat(40) : 'n'.repeat(40));
+    expect(vi.mocked(updateWorkbench).mock.calls.length > 0).toBe(writes);
+    if (writes) expect(stored?.snapshotAt).toBe(observedAt.toISOString());
   });
 
   it('marks a patch over its cap TOO_LARGE and stores the rest', async () => {

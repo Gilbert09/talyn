@@ -248,6 +248,19 @@ describe('/v1 session work', () => {
         expect([res.status, res.body.error.code]).toEqual([409, 'snapshot_unavailable']);
         expect(fleet.scripts.length).toBe(before);
       });
+
+      it.each<[string, () => Promise<unknown> | void, number, string | null]>([
+        ['the fleet does not answer', () => { fleet.getSandbox = async () => { throw new Error('fleet down'); }; }, 200, null],
+        ['the session is still starting', () => updateWorkbench(session.id, { status: 'provisioning', sandboxState: 'creating' }), 409, 'not_ready'],
+      ])('answers as before stored copies when nothing is stored and %s', async (_name, arrange, status, code) => {
+        store.objects.clear();
+        await arrange();
+        resetSandboxStatusCacheForTests();
+        const res = await call('GET', `/sessions/${session.id}/changes`);
+        expect(res.status).toBe(status);
+        if (code) expect(res.body.error.code).toBe(code);
+        else expect(res.body).toMatchObject({ snapshot_at: null, files: [{ path: 'src/a.ts' }] });
+      });
     });
 
     it('answers a thread with no changes', async () => {

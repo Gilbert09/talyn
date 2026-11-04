@@ -36,6 +36,7 @@ import {
   noteWorkActivity,
   nextCheckpointGapMs,
   setWorkCheckpointClockForTests,
+  settledCapturesForTests,
   settleTurnActivity,
   WORK_PART_BYTES,
   type ThrottleClock,
@@ -587,7 +588,8 @@ describe('saved work in a session', () => {
     setWorkCheckpointClockForTests(clock.clock);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await settledCapturesForTests();
     setWorkCheckpointClockForTests(null);
     setWorkObjectStoreForTests(null);
     vi.restoreAllMocks();
@@ -664,6 +666,7 @@ describe('saved work in a session', () => {
   it('never throws, and records nothing, when the box or storage fails', async () => {
     reply = (script) => (script.includes('talyn work checkpoint') ? { exitCode: 1, stderr: 'could not stage the work' } : null);
     expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toMatchObject({ kind: 'failed', detail: 'could not stage the work' });
+    await settledCapturesForTests();
     vi.mocked(runtime.runCapture).mockRejectedValueOnce(new Error('offline'));
     expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toMatchObject({ kind: 'failed', detail: 'offline' });
     setWorkObjectStoreForTests(null);
@@ -684,11 +687,53 @@ describe('saved work in a session', () => {
     expect(scripts).toHaveLength(0);
   });
 
-  it('runs one checkpoint at a time per session', async () => {
+  it.each<[string, Array<'turn_end' | 'during_turn'>, number]>([
+    ['one ask', ['turn_end'], 1],
+    ['a turn end while a save runs', ['during_turn', 'turn_end'], 2],
+    ['three asks while a save runs', ['during_turn', 'turn_end', 'during_turn', 'turn_end'], 2],
+  ])('runs one checkpoint at a time per session, and one more for %s', async (_name, reasons, expected) => {
     const row = (await getWorkbench(WB))!;
-    const [a, b] = await Promise.all([checkpointWork(row, 'turn_end'), checkpointWork(row, 'during_turn')]);
-    expect(a).toEqual(b);
+    const results = await Promise.all(reasons.map((r) => checkpointWork(row, r)));
+    expect(saves()).toHaveLength(expected);
+    // Every ask after the first joins the one follow-up.
+    for (const r of results.slice(2)) expect(r).toBe(results[1]);
+    expect(results.every((r) => r?.kind === 'saved')).toBe(true);
+  });
+
+  it('runs the follow-up on the row as it is then, and not at all when the box is gone', async () => {
+    const row = (await getWorkbench(WB))!;
+    const first = checkpointWork(row, 'during_turn');
+    const second = checkpointWork(row, 'turn_end');
+    await updateWorkbench(WB, { sandboxId: null });
+    await first;
+    expect(await second).toBeNull();
     expect(saves()).toHaveLength(1);
+  });
+
+  it('never makes a save wait behind a slow changes capture, and captures again once after it', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let captures = 0;
+    const run = vi.mocked(runtime.runCapture).getMockImplementation()!;
+    vi.mocked(runtime.runCapture).mockImplementation(async (wb, script, opts) => {
+      if (script.includes('echo "CAPTURE') && ++captures === 1) await held;
+      return run(wb, script, opts);
+    });
+    try {
+      await checkpointWork((await getWorkbench(WB))!, 'turn_end');
+      await flush();
+      expect(captures).toBe(1);
+      // The first capture is held on the box; two more saves still run at once.
+      expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toMatchObject({ kind: 'saved' });
+      expect(await checkpointWork((await getWorkbench(WB))!, 'turn_end')).toMatchObject({ kind: 'saved' });
+      expect(saves()).toHaveLength(3);
+      expect(captures).toBe(1);
+    } finally {
+      release();
+    }
+    await settledCapturesForTests();
+    // The held one, then one for the two saves that ran meanwhile.
+    expect(captures).toBe(2);
   });
 
   it('ignores a late checkpoint from a box the session no longer names', async () => {
@@ -858,6 +903,38 @@ describe('saved work in a session', () => {
       expect(saves()).toHaveLength(1);
       clock.advance(1);
       await flush();
+      expect(saves()).toHaveLength(2);
+    });
+
+    it('counts the changes capture after a save when it sets the next gap', async () => {
+      const row = (await getWorkbench(WB))!;
+      const base = reply;
+      reply = (script) => {
+        if (!script.includes('echo "CAPTURE')) return base(script);
+        clock.advance(30_000);
+        return null;
+      };
+      noteTurnActivity(row, [toolUse('Edit')]);
+      await flush();
+      expect(saves()).toHaveLength(1);
+
+      noteTurnActivity(row, [toolUse('Write')]);
+      clock.advance(120_000 - 1);
+      await flush();
+      expect(saves()).toHaveLength(1);
+      clock.advance(1);
+      await flush();
+      expect(saves()).toHaveLength(2);
+    });
+
+    it('a turn end asked while a save runs is saved after it', async () => {
+      const row = (await getWorkbench(WB))!;
+      noteTurnActivity(row, [toolUse('Edit')]);
+      // The during-turn save has started; the turn ends before it finishes.
+      settleTurnActivity(WB);
+      const end = checkpointWork(row, 'turn_end');
+      await flush();
+      await end;
       expect(saves()).toHaveLength(2);
     });
 

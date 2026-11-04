@@ -272,8 +272,18 @@ function sameStat(a: WorkbenchDiffStat | null, b: WorkbenchDiffStat): boolean {
  * The whole list also goes to storage, without waiting, so the Changes tab can
  * show it while the box sleeps (see `changesSnapshot.ts`).
  */
-export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges): Promise<WorkbenchRow> {
-  void writeChangesSnapshot(row, changes);
+/**
+ * Store a list read from the box: the list-only copy and the sidebar's stat.
+ * `observedAt` is when the box was read, for a caller whose read is slow (a
+ * capture): when a list read after it is already stored, nothing is written,
+ * so an older list never replaces a newer one.
+ */
+export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges, opts: { observedAt?: Date } = {}): Promise<WorkbenchRow> {
+  if (opts.observedAt) {
+    if (!(await writeChangesSnapshot(row, changes, { observedAt: opts.observedAt }))) return row;
+  } else {
+    void writeChangesSnapshot(row, changes);
+  }
   const uncommittedStats = changes.uncommittedStats ?? { added: 0, removed: 0, files: 0 };
   const committedStats = changes.committedStats ?? { added: 0, removed: 0, files: 0 };
   if (sameStat(row.diffStat ?? null, uncommittedStats)

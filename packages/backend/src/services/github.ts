@@ -3003,11 +3003,11 @@ class GitHubService extends EventEmitter {
     base: string,
     head: string
   ): Promise<{
-    files: Array<{ filename: string; previous_filename?: string; status: string; patch?: string }>;
+    files: Array<{ filename: string; previous_filename?: string; status: string; patch?: string; changes?: number }>;
   } | null> {
     try {
       const result = await this.apiRequest<{
-        files?: Array<{ filename: string; previous_filename?: string; status: string; patch?: string }>;
+        files?: Array<{ filename: string; previous_filename?: string; status: string; patch?: string; changes?: number }>;
       }>(workspaceId, `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100`);
       return { files: result.files ?? [] };
     } catch (err) {

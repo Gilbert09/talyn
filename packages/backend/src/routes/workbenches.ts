@@ -34,6 +34,7 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
+import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
@@ -859,10 +860,11 @@ export function workbenchRoutes(): Router {
     try {
       // Only `?live=1` (a person's refresh) wakes a box that has a stored list.
       const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: true });
-      if (changes.etag) {
-        res.setHeader('ETag', `"${changes.etag}"`);
+      const etag = changesResponseEtag(changes);
+      if (etag) {
+        res.setHeader('ETag', etag);
         const match = req.headers['if-none-match'];
-        if (typeof match === 'string' && match.split(',').some((tag) => tag.trim().replace(/^W\//, '') === `"${changes.etag}"`)) {
+        if (typeof match === 'string' && match.split(',').some((tag) => tag.trim().replace(/^W\//, '') === etag)) {
           res.status(304).end();
           return;
         }

@@ -34,6 +34,16 @@ import type { WorkbenchRow } from './store.js';
 export const FLEET_READ_TTL_MS = 10_000;
 /** A fleet read slower than this answers `unknown`. The panel must not hang on the fleet. */
 const FLEET_READ_TIMEOUT_MS = 5_000;
+/**
+ * How long a FAILED fleet read is reused, from when it was asked. Reads that
+ * arrive while it is in flight share it anyway; this only stops a burst
+ * that follows a fast refusal from dialling again at once. A read of a
+ * session's work decides "box or stored copy" on this answer, so a failure
+ * must not stand for the full {@link FLEET_READ_TTL_MS}: one dropped
+ * connection would send ten seconds of reads to a stale copy while the box
+ * runs. A failure that took the full timeout is already past this window.
+ */
+export const FLEET_READ_FAILURE_TTL_MS = 1_000;
 /** A start this old with no wait for capacity is stuck: Retry is offered. */
 export const STUCK_START_MS = 15 * 60_000;
 /** The problem notes looked for, newest first, among a chat's latest events. */
@@ -58,7 +68,7 @@ export type FleetRead =
   | { ok: true; sandbox: FleetSandbox; terminal: boolean; retired: boolean }
   | { ok: false; error: string };
 
-const fleetCache = new Map<string, { at: number; read: Promise<FleetRead> }>();
+const fleetCache = new Map<string, { at: number; read: Promise<FleetRead>; failed?: boolean }>();
 
 /** Tests start with no cached reads. */
 export function resetSandboxStatusCacheForTests(): void {
@@ -76,14 +86,18 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** The fleet's record of the box. Never throws: a failure is `{ ok: false }`, cached like an answer. */
+/**
+ * The fleet's record of the box. Never throws: a failure is `{ ok: false }`,
+ * reused only for {@link FLEET_READ_FAILURE_TTL_MS}.
+ */
 export function readFleetRecord(
   row: Pick<WorkbenchRow, 'workspaceId' | 'fleetHost'> & { sandboxId: string },
   now = Date.now(),
   opts: { fresh?: boolean } = {},
 ): Promise<FleetRead> {
   const cached = fleetCache.get(row.sandboxId);
-  if (cached && !opts.fresh && now - cached.at < FLEET_READ_TTL_MS) return cached.read;
+  const ttl = cached?.failed ? FLEET_READ_FAILURE_TTL_MS : FLEET_READ_TTL_MS;
+  if (cached && !opts.fresh && now - cached.at < ttl) return cached.read;
   const read = (async (): Promise<FleetRead> => {
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);
@@ -93,10 +107,12 @@ export function readFleetRecord(
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   })();
-  fleetCache.set(row.sandboxId, { at: now, read });
+  const entry: { at: number; read: Promise<FleetRead>; failed?: boolean } = { at: now, read };
+  fleetCache.set(row.sandboxId, entry);
+  void read.then((r) => { if (!r.ok) entry.failed = true; });
   // Bounded: a long-lived process sees many boxes.
   if (fleetCache.size > 2000) {
-    for (const [key, entry] of fleetCache) if (now - entry.at >= FLEET_READ_TTL_MS) fleetCache.delete(key);
+    for (const [key, old] of fleetCache) if (now - old.at >= FLEET_READ_TTL_MS) fleetCache.delete(key);
   }
   return read;
 }

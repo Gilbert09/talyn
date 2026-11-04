@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   WorkbenchChanges,
   WorkbenchConfig,
@@ -192,9 +193,17 @@ export type StoredFileAnswer =
   | { kind: 'file'; file: WorkbenchFileContent }
   /** Changed, but its content was not stored (too large, or past the budget). */
   | { kind: 'not_stored'; size: number }
-  /** Not changed since the merge base: read it there. `known` is false when the file list was not stored. */
+  /**
+   * Not changed since the merge base: read it there. `known` is false when
+   * the file list was not stored, so only the changes list says it is not
+   * changed, and it may not exist at all.
+   */
   | { kind: 'unchanged'; mergeBase: string; known: boolean }
   | { kind: 'missing' }
+  /** The session deleted it, or renamed it away. The merge base still has it, so GitHub must not answer. */
+  | { kind: 'deleted' }
+  /** The stored copy cannot say whether the file changed. Neither it nor GitHub may answer. */
+  | { kind: 'unknown' }
   | null;
 
 const contentsCache = new Map<string, { at: number; files: Map<string, CapturedFile> }>();
@@ -239,17 +248,37 @@ export async function storedFile(row: WorkbenchRow, path: string): Promise<Store
       },
     };
   }
-  // Not a changed file: the same as at the merge base, if it exists at all.
+  // Not a changed file with content. The changes list tells a file the
+  // session removed (its content is not captured) from one it did not touch.
+  const lists = await readGenerationJson<WorkbenchChanges>(listsKeyOf(row, meta.generation));
+  if (!lists || !Array.isArray(lists.files)) return { kind: 'unknown' };
+  if (lists.files.some((f) => (f.status === 'deleted' && f.path === safePath) || (f.oldPath === safePath && f.path !== safePath))) {
+    return { kind: 'deleted' };
+  }
+  // In the changes list but not in the contents: the two disagree, so neither proves anything.
+  if (lists.files.some((f) => f.path === safePath)) return { kind: 'unknown' };
+  // Not changed: the same as at the merge base, if it exists at all.
   const list = await storedFileList(row);
   if (!list) return { kind: 'unchanged', mergeBase: meta.mergeBase, known: false };
   return list.paths.includes(safePath) ? { kind: 'unchanged', mergeBase: meta.mergeBase, known: true } : { kind: 'missing' };
 }
 
 /** The combined patch with binary bodies, for the preview sync. Null when it is not stored. */
-export async function storedPreviewPatch(row: WorkbenchRow): Promise<{ base: string; patch: string } | null> {
+export async function storedPreviewPatch(row: WorkbenchRow): Promise<{ base: string; patch: string; snapshotAt?: string } | null> {
   const answer = await storedPatch(row, 'combined', undefined, { keepBinary: true });
   if (!answer || 'tooLarge' in answer) return null;
-  return { base: answer.mergeBase, patch: answer.patch };
+  return { base: answer.mergeBase, patch: answer.patch, ...(answer.snapshotAt ? { snapshotAt: answer.snapshotAt } : {}) };
+}
+
+/**
+ * The HTTP ETag of a changes answer. The copy's own etag fixes its content,
+ * but the answer also says why the copy answered and whether it is stale,
+ * and a 304 must not keep a banner that no longer holds.
+ */
+export function changesResponseEtag(changes: WorkbenchChanges): string | null {
+  if (!changes.etag) return null;
+  const facts = [changes.etag, changes.source ?? '', changes.storedReason ?? '', changes.stale ?? '', changes.snapshotAt ?? ''];
+  return `"${createHash('sha256').update(JSON.stringify(facts)).digest('hex').slice(0, 24)}"`;
 }
 
 /** The last script config read from the box. */

@@ -71,6 +71,7 @@ const { resetChangesGithubForTests } = await import('../services/workbenches/cha
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
+const recovery = await import('../services/workbenches/recovery.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -1563,14 +1564,17 @@ describe('workbench routes', () => {
     );
 
     it.each([
-      ['the fleet does not answer', () => { fleet.getSandbox = async () => { throw new Error('fleet down'); }; }],
-      ['the fleet no longer runs the box', () => { fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }); }],
-      ['the fleet reports the box stopped', () => { fleet.sandboxStatus = 'stopped'; }],
-    ])('answers from the stored list when %s', async (_name, arrange) => {
+      ['the fleet does not answer', () => { fleet.getSandbox = async () => { throw new Error('fleet down'); }; }, false],
+      ['the fleet no longer runs the box', () => { fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }); }, true],
+      ['the fleet reports the box stopped', () => { fleet.sandboxStatus = 'stopped'; }, true],
+    ])('answers from the stored list when %s', async (_name, arrange, recovers) => {
+      const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
       const wb = await sleepingWorkbench('idle');
       arrange();
       resetSandboxStatusCacheForTests();
       await expectStoredWithoutTouchingTheBox(wb);
+      // A lost box gets its replacement started, as a read of the box would have.
+      expect(recover).toHaveBeenCalledTimes(recovers ? 1 : 0);
     });
 
     it('reads the box when the fleet does not answer and no list is stored', async () => {
@@ -1788,8 +1792,8 @@ describe('workbench routes', () => {
         const spy = compare().mockResolvedValue({ files: [
           { filename: 'src/a.ts', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' },
           { filename: 'src/gone.ts', status: 'removed', patch: '@@ -1 +0,0 @@\n-x' },
-          { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed' },
-          { filename: 'logo.png', status: 'added' },
+          { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed', changes: 0 },
+          { filename: 'logo.png', status: 'added', changes: 0 },
         ] });
         const wb = await pushedAsleep();
         const before = touches();
@@ -1826,6 +1830,37 @@ describe('workbench routes', () => {
         const wb = await pushedAsleep(extra);
         const res = await call('GET', `/workbenches/${wb.id}/diff`);
         expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+      });
+
+      const fullCompare = () => [
+        { filename: 'src/a.ts', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new', changes: 2 },
+        { filename: 'src/gone.ts', status: 'removed', patch: '@@ -1 +0,0 @@\n-x', changes: 1 },
+        { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed', changes: 0 },
+      ];
+      const many = (n: number) => Array.from({ length: n }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b', changes: 2 }));
+
+      it.each([
+        ['GitHub listed its maximum of 300 files', () => many(300), ''],
+        ['GitHub listed fewer files than the stored list', () => fullCompare().slice(0, 2), ''],
+        ['GitHub left out a large patch', () => fullCompare().map((f) => (f.filename === 'src/a.ts' ? { ...f, patch: undefined } : f)), ''],
+        ['GitHub left out the patch of the file asked for', () => fullCompare().map((f) => (f.filename === 'src/a.ts' ? { ...f, patch: undefined } : f)), '?path=src/a.ts'],
+        ['GitHub cut its list before the file asked for', () => many(300), '?path=src/a.ts'],
+      ])('refuses with a way to wake the box, never part of the diff, when %s', async (_name, files, query) => {
+        compare().mockResolvedValue({ files: files() as never });
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+        expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+      });
+
+      it.each([
+        ['a file GitHub listed in full from a cut list', [...many(299), fullCompare()[0]], '?path=src/a.ts', /\+new/],
+        ['a binary file, which has no patch and no line changes', [...fullCompare(), { filename: 'logo.png', status: 'modified', changes: 0 }], '', /Binary files a\/logo\.png and b\/logo\.png differ/],
+      ])('answers %s', async (_name, files, query, pattern) => {
+        compare().mockResolvedValue({ files: files as never });
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+        expect(res.status).toBe(200);
+        expect(res.body.data.patch).toMatch(pattern);
       });
 
       it('does not use GitHub when work is uncommitted', async () => {
@@ -1903,11 +1938,11 @@ describe('workbench routes', () => {
       expect([refused.status, refused.body.code]).toEqual([409, 'snapshot_unavailable']);
     });
 
-    it('gives the preview sync the stored patch with its binary bodies', async () => {
+    it('gives the preview sync the stored patch with its binary bodies, marked as stored', async () => {
       const wb = await asleepWith();
       const before = touches();
       const res = await call('GET', `/workbenches/${wb.id}/patch`);
-      expect(res.body.data).toEqual({ base: MB, patch: PATCH_A + PATCH_IMG });
+      expect(res.body.data).toEqual({ base: MB, patch: PATCH_A + PATCH_IMG, source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' });
       expect(touches()).toEqual(before);
     });
 
@@ -1917,11 +1952,145 @@ describe('workbench routes', () => {
       const body = (await res.json()) as Json['body'];
       expect(body.data).toMatchObject({ source: 'stored', storedReason: 'asleep', patch: { available: true }, fileList: { available: true } });
       const etag = res.headers.get('etag');
-      expect(etag).toBe(`"${body.data.etag}"`);
+      expect(etag).toMatch(/^"[0-9a-f]{24}"$/);
       const again = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': etag! } });
       expect(again.status).toBe(304);
       const other = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': '"nope"' } });
       expect(other.status).toBe(200);
+    });
+
+    it.each([
+      ['the session is archived', (id: string) => updateWorkbench(id, { archivedAt: new Date(), sandboxState: 'deleted' }), { storedReason: 'archived' }],
+      ['the box was replaced after the copy', (id: string) => updateWorkbench(id, { sandboxId: 'box-new' }), { stale: 'sandbox_replaced' }],
+    ])('does not answer 304 for the same copy when %s', async (_name, change, expected) => {
+      const wb = await asleepWith();
+      const first = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a' } });
+      const etag = first.headers.get('etag')!;
+      const copyEtag = ((await first.json()) as Json['body']).data.etag;
+      await change(wb.id);
+      resetSandboxStatusCacheForTests();
+      const again = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': etag } });
+      expect(again.status).toBe(200);
+      const body = (await again.json()) as Json['body'];
+      expect(body.data).toMatchObject({ etag: copyEtag, ...expected });
+      expect(again.headers.get('etag')).not.toBe(etag);
+    });
+
+    describe('when the fleet does not answer', () => {
+      const fleetDown = () => {
+        fleet.getSandbox = async () => { throw new Error('fleet down'); };
+        resetSandboxStatusCacheForTests();
+      };
+
+      it.each([
+        ['the diff', (id: string) => `/workbenches/${id}/diff`],
+        ['the file list', (id: string) => `/workbenches/${id}/files`],
+        ['a file', (id: string) => `/workbenches/${id}/file?path=src/a.ts`],
+        ['the script config', (id: string) => `/workbenches/${id}/config`],
+        ['the preview patch', (id: string) => `/workbenches/${id}/patch`],
+      ])('reads %s from the box when nothing is stored, as before', async (_name, path) => {
+        const wb = await asleepWith(null);
+        fleetDown();
+        const before = fleet.scripts.length;
+        const res = await call('GET', path(wb.id));
+        expect(res.body.code).not.toBe('snapshot_unavailable');
+        // The fake box answers some reads with output they cannot parse; what matters is that the box was read.
+        expect(fleet.scripts.length).toBeGreaterThan(before);
+      });
+
+      it('reads the preview patch from the box even with a copy stored, because the box may run', async () => {
+        const wb = await asleepWith();
+        fleetDown();
+        const before = fleet.scripts.length;
+        const res = await call('GET', `/workbenches/${wb.id}/patch`);
+        expect(res.body.data?.source).toBeUndefined();
+        expect(fleet.scripts.length).toBe(before + 1);
+      });
+
+      it('asks the fleet again a second later rather than reuse its failure for ten seconds', async () => {
+        const wb = await asleepWith();
+        let reads = 0;
+        fleet.getSandbox = async () => { reads++; throw new Error('fleet down'); };
+        resetSandboxStatusCacheForTests();
+        await call('GET', `/workbenches/${wb.id}/diff`);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(reads).toBe(2);
+      });
+    });
+
+    it.each([
+      ['the diff', (id: string) => `/workbenches/${id}/diff`],
+      ['the file list', (id: string) => `/workbenches/${id}/files`],
+      ['a file', (id: string) => `/workbenches/${id}/file?path=src/a.ts`],
+      ['the script config', (id: string) => `/workbenches/${id}/config`],
+    ])('answers %s of a starting session with not_ready, as before', async (_name, path) => {
+      const wb = await asleepWith(null, { status: 'provisioning', sandboxState: 'creating' });
+      const res = await call('GET', path(wb.id));
+      expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
+    });
+
+    describe('a box the fleet no longer runs', () => {
+      const gone = () => {
+        fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }) as never;
+        resetSandboxStatusCacheForTests();
+      };
+
+      it.each([
+        ['with a copy stored', {}, 200],
+        ['with nothing stored', null, undefined],
+      ] as const)('starts its replacement on a read %s', async (_name, copy, status) => {
+        const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
+        const wb = await asleepWith(copy);
+        gone();
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        if (status) expect(res.status).toBe(status);
+        expect(res.body.code).not.toBe('snapshot_unavailable');
+        await vi.waitFor(() => expect(recover).toHaveBeenCalled());
+        expect(recover.mock.calls[0][0]).toMatchObject({ id: wb.id });
+      });
+
+      it('does not start a second replacement when the row already says lost', async () => {
+        const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
+        const wb = await asleepWith({}, { sandboxState: 'lost' });
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(200);
+        expect(recover).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('a file the session deleted, with no stored file list', () => {
+      const changes = {
+        ...listOf([], ['src/a.ts']),
+        files: [
+          fileOf('src/a.ts'),
+          { path: 'src/gone.ts', status: 'deleted' as const, added: 0, removed: 1, binary: false },
+          { path: 'src/new.ts', oldPath: 'src/old.ts', status: 'renamed' as const, added: 0, removed: 0, binary: false },
+        ],
+      };
+
+      it.each([
+        ['a deleted file', 'src/gone.ts', 404],
+        ['the old path of a renamed file', 'src/old.ts', 404],
+        ['an unchanged file', 'README.md', 200],
+      ])('answers %s without serving the merge base as now', async (_name, path, status) => {
+        const spy = vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: 'base\n', size: 5, bytes: Buffer.from('base\n') });
+        const wb = await asleepWith({ changes, files: undefined, contents: { 'src/a.ts': 'new\n', 'src/new.ts': 'moved\n' } });
+        const res = await call('GET', `/workbenches/${wb.id}/file?path=${encodeURIComponent(path)}`);
+        expect(res.status).toBe(status);
+        expect(spy).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+        if (status === 200) expect(res.body.data).toMatchObject({ source: 'github', ref: MB });
+      });
+
+      it('refuses with a way to wake the box when the changes list cannot be read', async () => {
+        const spy = vi.spyOn(githubService, 'getFileContent');
+        const wb = await asleepWith({ changes, files: undefined, contents: { 'src/a.ts': 'new\n' } });
+        for (const key of [...store.objects.keys()]) if (key.endsWith('/lists.json')) store.objects.delete(key);
+        resetChangesStoreForTests();
+        const res = await call('GET', `/workbenches/${wb.id}/file?path=src/gone.ts`);
+        expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+        expect(spy).not.toHaveBeenCalled();
+      });
     });
 
     it('answers an archived session from its stored copy', async () => {

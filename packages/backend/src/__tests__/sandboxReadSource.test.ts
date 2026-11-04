@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FleetClient, FleetSandbox } from '../services/selfHosted/client.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
-import { resetSandboxStatusCacheForTests } from '../services/workbenches/sandboxStatus.js';
+import { FLEET_READ_FAILURE_TTL_MS, FLEET_READ_TTL_MS, resetSandboxStatusCacheForTests } from '../services/workbenches/sandboxStatus.js';
 import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import type { WorkbenchRow } from '../services/workbenches/store.js';
 
@@ -84,6 +84,25 @@ describe('chooseReadSource', () => {
     await chooseReadSource(row(), NOW);
     await chooseReadSource(row(), NOW + 1000);
     expect(reads).toBe(1);
+  });
+
+  it.each([
+    ['half a second later', 500, 1, { live: false, reason: 'fleet_unreachable' }],
+    ['a second later', 1_000, 2, { live: true }],
+    ['five seconds later', 5_000, 2, { live: true }],
+  ])('reuses a failed fleet read only briefly: asked again %s', async (_name, later, expectedReads, expected) => {
+    answers = [new Error('fleet down'), { sandbox: { status: 'idle' } }];
+    expect(await chooseReadSource(row(), NOW)).toEqual({ live: false, reason: 'fleet_unreachable' });
+    expect(await chooseReadSource(row(), NOW + later)).toEqual(expected);
+    expect(reads).toBe(expectedReads);
+  });
+
+  it('keeps a good fleet read for the full ten seconds', async () => {
+    answers = [{ sandbox: { status: 'suspended' } }, { sandbox: { status: 'idle' } }];
+    await chooseReadSource(row(), NOW);
+    expect(await chooseReadSource(row(), NOW + FLEET_READ_TTL_MS - 1)).toEqual({ live: false, reason: 'asleep' });
+    expect(reads).toBe(1);
+    expect(FLEET_READ_FAILURE_TTL_MS).toBeLessThan(FLEET_READ_TTL_MS);
   });
 
   it('asks the fleet again when a cached idle record is past its idle time', async () => {

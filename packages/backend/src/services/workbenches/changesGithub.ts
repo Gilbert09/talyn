@@ -22,7 +22,13 @@ const GITHUB_FILE_MAX_BYTES = 1024 * 1024;
 const diffCache = new Map<string, { at: number; files: CompareFile[] | null }>();
 const fileCache = new Map<string, { at: number; file: { bytes: Buffer | null; size: number } | null }>();
 
-type CompareFile = { filename: string; previous_filename?: string; status: string; patch?: string };
+type CompareFile = { filename: string; previous_filename?: string; status: string; patch?: string; changes?: number };
+
+/**
+ * The compare route lists at most this many files. A list this long may be
+ * cut, and a diff built from it would leave files out without saying so.
+ */
+export const GITHUB_COMPARE_MAX_FILES = 300;
 
 export function resetChangesGithubForTests(): void {
   diffCache.clear();
@@ -56,7 +62,7 @@ function block(f: CompareFile): string {
   const from = f.status === 'added' ? '/dev/null' : `a/${old}`;
   const to = f.status === 'removed' ? '/dev/null' : `b/${path}`;
   if (!f.patch) {
-    // GitHub sends no patch for a binary file, or for one too large to show.
+    // Only a file with no line changes gets here (see `patchOmitted`): a binary file, or a pure rename.
     if (f.status !== 'renamed') lines.push(`Binary files ${from} and ${to} differ`);
     return `${lines.join('\n')}\n`;
   }
@@ -65,12 +71,27 @@ function block(f: CompareFile): string {
 }
 
 /**
+ * GitHub sends no patch for a binary file, and none for a file whose diff is
+ * too large to show. The second must never read as "Binary files differ".
+ * A binary file has no line changes (`changes` is 0), and the stored list
+ * knows which files are binary; anything else with no patch was left out.
+ */
+function patchOmitted(f: CompareFile, binary: Set<string>): boolean {
+  if (f.patch) return false;
+  if (binary.has(f.filename)) return false;
+  return f.changes === undefined || f.changes > 0;
+}
+
+/**
  * The diff between the merge base and the head commit, from GitHub. Null
- * when GitHub does not have it, cannot say now, or the work is not all pushed.
+ * when GitHub does not have it, cannot say now, or the work is not all
+ * pushed; and null when GitHub's answer is incomplete (its file list was
+ * cut, or it left a file's patch out), so the caller refuses with a wake
+ * rather than show part of the diff as all of it.
  */
 export async function githubDiff(
   row: WorkbenchRow,
-  changes: Pick<WorkbenchChanges, 'uncommitted' | 'headSha' | 'base' | 'snapshotAt'>,
+  changes: Pick<WorkbenchChanges, 'uncommitted' | 'headSha' | 'base' | 'snapshotAt'> & Partial<Pick<WorkbenchChanges, 'files' | 'committed'>>,
   scope: WorkbenchDiffScope,
   path: string | undefined,
 ): Promise<WorkbenchDiff | null> {
@@ -97,7 +118,13 @@ export async function githubDiff(
     bounded(diffCache, key, { at: Date.now(), files });
   }
   if (!files) return null;
+  const listed = changes.committed ?? changes.files;
+  const cut = files.length >= GITHUB_COMPARE_MAX_FILES || (listed !== undefined && listed.length > files.length);
   const picked = path ? files.filter((f) => f.filename === path || f.previous_filename === path) : files;
+  // One file that GitHub did list in full is still right when the list was cut.
+  if (cut && (!path || picked.length === 0)) return null;
+  const binary = new Set((listed ?? []).filter((f) => f.binary).map((f) => f.path));
+  if (picked.some((f) => patchOmitted(f, binary))) return null;
   return { patch: picked.map(block).join(''), ...meta };
 }
 

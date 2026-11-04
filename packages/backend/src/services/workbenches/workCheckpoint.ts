@@ -427,7 +427,11 @@ export function settleTurnActivity(workbenchId: string): void {
 // Checkpoint and restore
 // ============================================================================
 
+type CheckpointReason = 'turn_end' | 'during_turn' | 'restored';
+
 const inFlight = new Map<string, Promise<SaveOutcome | null>>();
+/** One run asked for while another ran, per session. Further asks join it. */
+const followUps = new Map<string, { reason: CheckpointReason; job: Promise<SaveOutcome | null> }>();
 /** Sessions already told that their work is too large to save, until a save works again. */
 const tooLargeNoted = new Set<string>();
 
@@ -437,15 +441,44 @@ async function noteTooLarge(row: WorkbenchRow, size: number): Promise<void> {
   await noteChats(row, 'work_checkpoint_too_large', tooLargeNote(size));
 }
 
+/** The reason a joined follow-up keeps: a turn end says more than a save during the turn. */
+function strongerReason(a: CheckpointReason, b: CheckpointReason): CheckpointReason {
+  const rank: Record<CheckpointReason, number> = { during_turn: 0, restored: 1, turn_end: 2 };
+  return rank[b] > rank[a] ? b : a;
+}
+
 /**
  * Checkpoint the session's unsaved work into Talyn's storage. Null when the
  * session has no live box. Never throws; one at a time per session.
+ *
+ * An ask while a save runs is never dropped: that save may have read the box
+ * before the work the ask is about (a turn end is the usual case). Exactly one
+ * more save runs after the current one, on the row as it is then; any further
+ * asks join that one.
  */
-export function checkpointWork(row: WorkbenchRow, reason: 'turn_end' | 'during_turn' | 'restored'): Promise<SaveOutcome | null> {
+export function checkpointWork(row: WorkbenchRow, reason: CheckpointReason): Promise<SaveOutcome | null> {
   // A thread has no repository, so no work to save.
   if (!liveSandbox(row) || row.kind === 'thread') return Promise.resolve(null);
   const running = inFlight.get(row.id);
-  if (running) return running;
+  if (!running) return startCheckpoint(row, reason);
+  const queued = followUps.get(row.id);
+  if (queued) {
+    queued.reason = strongerReason(queued.reason, reason);
+    return queued.job;
+  }
+  const entry: { reason: CheckpointReason; job: Promise<SaveOutcome | null> } = { reason, job: Promise.resolve(null) };
+  entry.job = running.catch(() => null).then(async () => {
+    followUps.delete(row.id);
+    const latest = await getWorkbench(row.id).catch(() => null);
+    if (!liveSandbox(latest) || latest.kind === 'thread') return null;
+    // A save that started after this ask covers it.
+    return inFlight.get(row.id) ?? startCheckpoint(latest, entry.reason);
+  });
+  followUps.set(row.id, entry);
+  return entry.job;
+}
+
+function startCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason: CheckpointReason): Promise<SaveOutcome | null> {
   const job = takeCheckpoint(row, reason).finally(() => inFlight.delete(row.id));
   inFlight.set(row.id, job);
   return job;
@@ -455,13 +488,15 @@ async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason:
   let result: SaveOutcome;
   let lost = false;
   const startedAt = checkpointClock.now();
+  let saveMs = 0;
   try {
     result = await saveWork(row, 'checkpoint', { previousSha: row.workCheckpointSha });
   } catch (err) {
     lost = err instanceof FleetRunNotFoundError;
     result = { kind: 'failed', detail: err instanceof Error ? err.message : String(err) };
   } finally {
-    checkpointThrottle.recordDuration(row.id, Math.max(0, checkpointClock.now() - startedAt));
+    saveMs = Math.max(0, checkpointClock.now() - startedAt);
+    checkpointThrottle.recordDuration(row.id, saveMs);
   }
   try {
     if (result.kind === 'saved') {
@@ -481,10 +516,63 @@ async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason:
   } catch (err) {
     console.warn(`[workbench] recording the work checkpoint for ${row.id} failed:`, err);
   }
-  // A copy of the changes for the Changes tab while the box sleeps. After the
-  // save and under the same lock, so the two never run on the box at once.
-  if (!lost) await captureChanges(row, reason);
+  // A copy of the changes for the Changes tab while the box sleeps. Outside
+  // this save's lock, so the next save never waits behind a capture.
+  if (!lost) requestCapture(row, reason, saveMs);
   return result;
+}
+
+// ============================================================================
+// The changes capture after a save
+// ============================================================================
+
+/** The capture running per session, and at most one asked for while it runs. */
+const captures = new Map<string, { running: Promise<void>; next: { reason: string; saveMs: number } | null }>();
+
+/**
+ * Capture the changes after a save, one at a time per session. An ask while
+ * one runs queues exactly one more, on the row as it is then. The capture's
+ * time counts with its save's in the checkpoint gap: both run on the box.
+ */
+function requestCapture(row: WorkbenchRow, reason: string, saveMs: number): void {
+  const current = captures.get(row.id);
+  if (current) {
+    current.next = { reason: current.next?.reason === 'turn_end' ? 'turn_end' : reason, saveMs };
+    return;
+  }
+  const entry: { running: Promise<void>; next: { reason: string; saveMs: number } | null } = { running: Promise.resolve(), next: null };
+  const run = async (target: WorkbenchRow, why: string, ms: number): Promise<void> => {
+    // A save that started meanwhile goes first: two git reads at once on a box near its memory ceiling is worse than a wait.
+    await inFlight.get(target.id)?.catch(() => null);
+    const startedAt = checkpointClock.now();
+    try {
+      await captureChanges(target, why);
+    } finally {
+      checkpointThrottle.recordDuration(target.id, ms + Math.max(0, checkpointClock.now() - startedAt));
+    }
+  };
+  entry.running = (async () => {
+    try {
+      await run(row, reason, saveMs);
+      while (entry.next) {
+        const { reason: why, saveMs: ms } = entry.next;
+        entry.next = null;
+        const latest = await getWorkbench(row.id).catch(() => null);
+        if (!liveSandbox(latest) || latest.kind === 'thread') break;
+        await run(latest, why, ms);
+      }
+    } catch (err) {
+      console.warn(`[workbench] the changes capture of ${row.id} failed:`, err);
+    } finally {
+      captures.delete(row.id);
+    }
+  })();
+  captures.set(row.id, entry);
+}
+
+/** Tests wait for the capture a checkpoint started. */
+export async function settledCapturesForTests(): Promise<void> {
+  while (captures.size > 0) await Promise.all([...captures.values()].map((c) => c.running));
 }
 
 /** Put one system note in each open chat of the session. */
