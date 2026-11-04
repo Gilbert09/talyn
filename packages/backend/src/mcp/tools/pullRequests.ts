@@ -1,4 +1,5 @@
 import type { Task } from '@talyn/shared';
+import type { ClosePullRequestResult } from '../../services/prClose.js';
 import { McpApiError, callApi, type PrSummary, type PublicPr } from '../api.js';
 import {
   str,
@@ -292,6 +293,56 @@ export const PULLREQUESTS: McpToolDefinition[] = [
       return result.merged
         ? `Merged PR ${id}.`
         : `Not merged: ${result.message ?? 'unknown reason'}`;
+    },
+  },
+  {
+    name: 'talyn_close_pull_request',
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    description:
+      "Close a pull request as you, with an optional Markdown comment first (for example, a link to the PR that replaces it). Pass pull_request_id, or repository and number. Talyn closes only your own pull requests, or pull requests that a Talyn session opened. A merged PR is refused. An already closed PR stays as it is, and Talyn does not post the comment. Inside a session, the PR must be in the session's repository, and Talyn refuses the session's own PR.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pull_request_id: { type: 'string', description: 'Talyn PR id.' },
+        repository: { type: 'string', description: 'owner/name. Use with number.' },
+        number: { type: 'integer', minimum: 1, description: 'The PR number on GitHub.' },
+        comment: {
+          type: 'string',
+          description: 'Markdown that Talyn posts on the PR before it closes it. Posted only when the close is allowed.',
+        },
+        workspace_id: {
+          type: 'string',
+          description: "With repository and number. Default: your only workspace, or the session's workspace.",
+        },
+      },
+    },
+    handler: async (ownerId, args, ctx) => {
+      const pullRequestId = str(args.pull_request_id);
+      const repository = str(args.repository);
+      if (!pullRequestId && (!repository || args.number === undefined)) {
+        throw new Error('Pass pull_request_id, or repository and number.');
+      }
+      if (args.comment !== undefined && typeof args.comment !== 'string') {
+        throw new Error('comment must be a string');
+      }
+      const sessionId = ctx?.session?.workbenchId;
+      const body: Record<string, unknown> = {};
+      if (pullRequestId) {
+        body.pullRequestId = pullRequestId;
+      } else {
+        body.repository = repository;
+        body.number = args.number;
+        if (str(args.workspace_id) || !sessionId) body.workspaceId = await resolveWorkspace(ownerId, args);
+      }
+      const comment = str(args.comment);
+      if (comment) body.comment = args.comment;
+      if (sessionId) body.sessionId = sessionId;
+      const result = await callApi<ClosePullRequestResult>(ownerId, 'POST', '/pull-requests/close', body);
+      const ref = `${result.owner}/${result.repo}#${result.number}`;
+      if (result.alreadyClosed) {
+        return `${ref} is already closed. Nothing changed${comment ? ', and Talyn did not post the comment' : ''}.  ${result.url}`;
+      }
+      return `Closed ${ref}${result.commentPosted ? ' after posting the comment' : ''}.  ${result.url}`;
     },
   },
   {

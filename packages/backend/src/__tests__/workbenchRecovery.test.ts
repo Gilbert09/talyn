@@ -89,21 +89,24 @@ describe('lost workbench recovery', () => {
       expect(scheduleProvision).toHaveBeenCalledTimes(1);
       expect(await getWorkbench(old.id)).toMatchObject({ sandboxState: 'lost', sandboxId: 'talyn-wb-wbrecovery-r1' });
     } else {
-      expect(resumeSandbox).toHaveBeenCalledWith('talyn-wb-wbrecovery');
+      // Kept, and left asleep: only a person's action or a prompt wakes a box.
+      expect(resumeSandbox).not.toHaveBeenCalled();
       expect(scheduleProvision).not.toHaveBeenCalled();
       expect(await getWorkbench(old.id)).toMatchObject({ status: 'ready', sandboxState: 'running', sandboxId: 'talyn-wb-wbrecovery' });
     }
   });
 
-  it('replaces the box when the resume itself fails', async () => {
+  it('never tries a resume to find out whether a suspended box can come back', async () => {
+    const resumeSandbox = vi.fn().mockRejectedValue(new Error('hibernation_unusable'));
     setWorkbenchFleetClientForTests(async () => ({
       quietExec: vi.fn().mockRejectedValue(new FleetRunNotFoundError('gone')),
       getSandbox: vi.fn().mockResolvedValue({ sandbox: { status: 'suspended' }, terminal: false }),
-      resumeSandbox: vi.fn().mockRejectedValue(new Error('hibernation_unusable')),
+      resumeSandbox,
     }) as unknown as FleetClient);
     const old = (await getWorkbench('wb-recovery'))!;
     await expect(runCapture(old, 'true', { quiet: true })).rejects.toBeInstanceOf(FleetRunNotFoundError);
-    expect(scheduleProvision).toHaveBeenCalledTimes(1);
+    expect(resumeSandbox).not.toHaveBeenCalled();
+    expect(scheduleProvision).not.toHaveBeenCalled();
   });
 
   describe('a hibernated copy the fleet cannot restore', () => {

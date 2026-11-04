@@ -11,6 +11,7 @@ import { ROUTES, routeTo } from '../../lib/routes';
 import { useAdminMutation } from '../../hooks/useAdminMutation';
 import { ConfirmMutationDialog } from '../../components/admin/ConfirmMutationDialog';
 import { useCapability } from '../../components/auth/AdminGate';
+import { BoxCounts, ConditionPills, DiskPressurePill } from '../../components/fleet/HostHealth';
 
 /**
  * The fleet's front page.
@@ -75,7 +76,21 @@ export function HostsPage() {
         </span>
       ),
     },
-    { key: 'disk', header: 'Disk free', cell: (h) => <span className="tabular-nums">{mib(h.diskFreeMib)}</span> },
+    {
+      key: 'disk',
+      header: 'Fleet store',
+      cell: (h) =>
+        h.health ? (
+          <DiskPressurePill health={h.health} />
+        ) : (
+          // An older fleetd, or no live read: the registry's last free figure.
+          <span className="tabular-nums" title="From the last report">
+            {mib(h.diskFreeMib)} free
+          </span>
+        ),
+    },
+    { key: 'boxes', header: 'Boxes', cell: (h) => <BoxCounts host={h} /> },
+    { key: 'alerts', header: 'Alerts', cell: (h) => <ConditionPills conditions={h.online ? h.conditions : null} /> },
     {
       key: 'idle',
       header: 'Max idle',

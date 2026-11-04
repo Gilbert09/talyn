@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type {
+  AdminFleetAlerts,
   AdminFleetHostDetail,
   AdminGoldensView,
   AdminIncident,
@@ -9,13 +10,18 @@ import type {
   ApiResponse,
 } from '@talyn/shared';
 import {
+  adminSandboxClient,
   fleetClientForHost,
   handleFleetProxyError,
+  hostHealthFromStats,
   listAdminFleetHosts,
   probe,
+  readAdminSandbox,
   toAdminHost,
 } from '../../services/admin/fleetProxy.js';
-import { adminRunFromFleet, listAdminRuns } from '../../services/admin/runIndex.js';
+import { adminRunFromFleet, applyClassification, listAdminRuns } from '../../services/admin/runIndex.js';
+import { classifySandbox, loadSandboxClaims } from '../../services/admin/sandboxClaims.js';
+import { listHostAlerts } from '../../services/admin/hostAlerts.js';
 import { retiredEvents, retiredRun } from '../../services/admin/retiredRuns.js';
 import { listFleetIncidents } from '../../services/admin/incidents.js';
 import { getFleetHost } from '../../services/fleetHosts.js';
@@ -92,6 +98,15 @@ export function adminFleetRoutes(): Router {
   });
 
   /**
+   * The host alerts every console page shows as a banner. Cached for a few
+   * seconds server-side, because every open page polls it.
+   */
+  router.get('/alerts', async (_req, res) => {
+    const data = await listHostAlerts();
+    res.json({ success: true, data } as ApiResponse<AdminFleetAlerts>);
+  });
+
+  /**
    * One host, with whatever live detail we can get.
    *
    * Still 200 when the host is unreachable: an operator who explicitly asked
@@ -128,6 +143,7 @@ export function adminFleetRoutes(): Router {
       };
       detail.liveMetrics = stats.value.metrics ?? null;
       detail.runsByStatus = stats.value.runsByStatus ?? null;
+      Object.assign(detail, hostHealthFromStats(stats.value));
     } else {
       detail.liveError = stats.error;
       detail.liveErrorCode = stats.code;
@@ -161,11 +177,20 @@ export function adminFleetRoutes(): Router {
     const index = await listAdminRuns({
       host: req.query.host,
       status: req.query.status,
+      kind: req.query.kind,
+      owner: req.query.owner,
       limit: req.query.limit,
       before: req.query.before,
     });
     res.json({ success: true, data: index } as ApiResponse<typeof index>);
   });
+
+  /**
+   * The `:name` segment of a run route, or null for the placeholder the
+   * console sends when no host is known (`-`). Through the gateway the host
+   * is not needed to find a sandbox; it is only a label.
+   */
+  const knownHost = (name: string): string | null => (name && name !== '-' ? name : null);
 
   /** Whether the host simply no longer has this sandbox (retired, or never
    *  had it). Matches both the pre-merge "run" phrasings and the sandbox ones:
@@ -179,13 +204,17 @@ export function adminFleetRoutes(): Router {
 
   router.get('/hosts/:name/runs/:runId', async (req, res) => {
     try {
-      const { client } = await fleetClientForHost(req.params.name);
-      const { sandbox, terminal } = await client.getSandbox(req.params.runId);
+      const { sandbox, terminal, host } = await readAdminSandbox(req.params.runId, req.params.name);
       // Mapped to the SAME row shape the list uses, so the detail page does
       // not reimplement idle time, wedge detection and the status pill
-      // against a second set of field names.
+      // against a second set of field names. Classified the same way too, so
+      // a session box says whose it is here as well.
+      const claims = await loadSandboxClaims([sandbox.id]);
       const data: AdminRunDetail = {
-        run: adminRunFromFleet(sandbox, req.params.name),
+        run: applyClassification(
+          adminRunFromFleet(sandbox, host ?? knownHost(req.params.name)),
+          classifySandbox(sandbox.id, claims),
+        ),
         terminal,
       };
       res.json({ success: true, data } as ApiResponse<AdminRunDetail>);
@@ -193,7 +222,7 @@ export function adminFleetRoutes(): Router {
       // The host eventually drops a terminal sandbox's tombstone, so "no such
       // sandbox" is the NORMAL answer for anything old enough — not an error
       // worth showing. The task row outlives it.
-      const retired = isRunNotFound(err) ? await retiredRun(req.params.runId, req.params.name) : null;
+      const retired = isRunNotFound(err) ? await retiredRun(req.params.runId, knownHost(req.params.name)) : null;
       if (retired) {
         const data: AdminRunDetail = { run: retired, terminal: true };
         res.json({ success: true, data } as ApiResponse<AdminRunDetail>);
@@ -214,7 +243,7 @@ export function adminFleetRoutes(): Router {
     const after = Number(req.query.after);
     const limit = Number(req.query.limit);
     try {
-      const { client } = await fleetClientForHost(req.params.name);
+      const { client } = await adminSandboxClient(req.params.name);
       const page = await client.getEvents(
         req.params.runId,
         Number.isFinite(after) && after > 0 ? after : 0,
@@ -325,7 +354,7 @@ export function adminFleetRoutes(): Router {
     const after = Number(req.query.after);
     let client;
     try {
-      ({ client } = await fleetClientForHost(req.params.name));
+      ({ client } = await adminSandboxClient(req.params.name));
     } catch (err) {
       if (!handleFleetProxyError(err, res)) {
         res.status(502).json({
@@ -441,7 +470,7 @@ export function adminFleetRoutes(): Router {
           params: { host: req.params.name },
         },
         async () => {
-          const { client } = await fleetClientForHost(req.params.name);
+          const { client } = await adminSandboxClient(req.params.name);
           try {
             await client.cancelSandbox(req.params.runId);
           } catch (err) {

@@ -11,6 +11,7 @@ import { writeChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { FleetHttpError } from '../selfHosted/client.js';
 import { WorkbenchError } from './errors.js';
+import { describeExecFailure } from './execFailures.js';
 import { parseSections, sectionsScript } from './execFraming.js';
 import { publicWorkbench } from './prLink.js';
 import { fleetClientFor, MERGE_BASE_DEEPEN_BY, repoDirFor, runCapture } from './sandboxRuntime.js';
@@ -29,6 +30,21 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 /** Untracked files whose lines are counted for the diff stat. Beyond it they count 0 — a cosmetic number, not worth a slow diff. */
 const MAX_COUNTED_UNTRACKED = 1000;
+
+/**
+ * The fleet's own error text for a box whose exec ran nothing (exit -1, no
+ * output). Best effort: a failed look gives no reason, never a new error.
+ */
+async function fleetReasonFor(row: WorkbenchRow, r: { exitCode: number; stderr: string }): Promise<string | null> {
+  if (r.exitCode !== -1 || r.stderr.trim() || !row.sandboxId) return null;
+  try {
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const { sandbox } = await client.getSandbox(row.sandboxId);
+    return sandbox?.error ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** A path the user or the agent named, refused unless it stays inside the repository. */
 export function assertRepoPath(path: string): string {
@@ -66,7 +82,7 @@ export function mergeBaseLine(row: Pick<WorkbenchRow, 'baseBranch'>): string {
 }
 
 /** A list read from the box: every field set, and never a stored copy. */
-type LiveChanges = Required<Omit<WorkbenchChanges, 'snapshotAt'>>;
+type LiveChanges = Pick<Required<WorkbenchChanges>, 'files' | 'uncommitted' | 'committed' | 'uncommittedStats' | 'committedStats' | 'base' | 'headSha'>;
 
 /** A thread's changes: none. It has no repository. */
 export function emptyChanges(): LiveChanges {
@@ -74,35 +90,31 @@ export function emptyChanges(): LiveChanges {
   return { files: [], uncommitted: [], committed: [], uncommittedStats: zero, committedStats: { ...zero }, base: '', headSha: '' };
 }
 
-export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
-  if (row.kind === 'thread') return emptyChanges();
-  const script = [
-    'set -e -o pipefail',
-    mergeBaseLine(row),
-    'head=$(git rev-parse HEAD)',
-    sectionsScript([
-      { label: 'MB', command: 'printf %s "$mb"' },
-      { label: 'HEAD', command: 'printf %s "$head"' },
-      { label: 'NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" --' },
-      { label: 'NAMES', command: 'git diff --name-status -z --find-renames "$mb" --' },
-      { label: 'UNCOMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$head" --' },
-      { label: 'UNCOMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$head" --' },
-      { label: 'COMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" "$head" --' },
-      { label: 'COMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$mb" "$head" --' },
-      { label: 'UNTRACKED', command: 'git ls-files --others --exclude-standard -z' },
-      {
-        label: 'COUNTS',
-        command:
-          `git ls-files --others --exclude-standard -z | { head -z -n ${MAX_COUNTED_UNTRACKED}; cat >/dev/null; } | ` +
-          `while IFS= read -r -d '' f; do printf '%s\\t%s\\n' "$f" "$(awk 'END{print NR}' "$f" 2>/dev/null)"; done`,
-      },
-    ]),
-  ].join('\n');
-  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
-  if (r.exitCode !== 0) {
-    throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
-  }
-  const s = parseSections(r.stdout);
+/**
+ * The git commands behind a changes list, by section label. The capture in
+ * `changesCapture.ts` runs the same ones, so a stored list and a live list of
+ * the same work are equal. Each needs `$mb` and `$head` set. Portable to the
+ * BSD tools a macOS test runs on: no `head -z`.
+ */
+export const CHANGE_LIST_SECTIONS: ReadonlyArray<{ label: string; command: string }> = [
+  { label: 'NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" --' },
+  { label: 'NAMES', command: 'git diff --name-status -z --find-renames "$mb" --' },
+  { label: 'UNCOMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$head" --' },
+  { label: 'UNCOMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$head" --' },
+  { label: 'COMMITTED_NUMSTAT', command: 'git diff --numstat -z --find-renames "$mb" "$head" --' },
+  { label: 'COMMITTED_NAMES', command: 'git diff --name-status -z --find-renames "$mb" "$head" --' },
+  { label: 'UNTRACKED', command: 'git ls-files --others --exclude-standard -z' },
+  {
+    label: 'COUNTS',
+    command:
+      `git ls-files --others --exclude-standard -z | { n=0; while IFS= read -r -d '' f; do ` +
+      `n=$((n+1)); [ "$n" -le ${MAX_COUNTED_UNTRACKED} ] || { cat >/dev/null; break; }; ` +
+      `printf '%s\\t%s\\n' "$f" "$(awk 'END{print NR}' "$f" 2>/dev/null)"; done; }`,
+  },
+];
+
+/** A changes list from its sections (see {@link CHANGE_LIST_SECTIONS}), plus `MB` and `HEAD`. */
+export function parseChangeLists(s: Record<string, string>): LiveChanges {
   const counts: Record<string, number> = {};
   for (const line of (s.COUNTS ?? '').split('\n')) {
     const tab = line.lastIndexOf('\t');
@@ -135,6 +147,25 @@ export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
   };
 }
 
+export async function getChanges(row: WorkbenchRow): Promise<LiveChanges> {
+  if (row.kind === 'thread') return emptyChanges();
+  const script = [
+    'set -e -o pipefail',
+    mergeBaseLine(row),
+    'head=$(git rev-parse HEAD)',
+    sectionsScript([
+      { label: 'MB', command: 'printf %s "$mb"' },
+      { label: 'HEAD', command: 'printf %s "$head"' },
+      ...CHANGE_LIST_SECTIONS,
+    ]),
+  ].join('\n');
+  const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
+  if (r.exitCode !== 0) {
+    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
+  }
+  return parseChangeLists(parseSections(r.stdout));
+}
+
 /** The patch for one scope. An absent scope keeps the combined diff. */
 export async function getPatch(row: WorkbenchRow, path?: string, scope: WorkbenchDiffScope = 'combined'): Promise<{ patch: string }> {
   if (row.kind === 'thread') return { patch: '' };
@@ -165,7 +196,7 @@ export async function getPatch(row: WorkbenchRow, path?: string, scope: Workbenc
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
   if (r.exitCode !== 0) {
-    throw new Error(`git diff failed in the sandbox (exit ${r.exitCode}): ${r.stderr.slice(-500)}`);
+    throw new Error(describeExecFailure('git diff', r, await fleetReasonFor(row, r)));
   }
   return { patch: r.stdout };
 }
@@ -200,7 +231,10 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
   const q = shellQuote(safePath);
   const script = [
     `[ -f ${q} ] || exit 3`,
-    `[ "$(wc -c < ${q})" -le ${MAX_FILE_BYTES} ] || exit 4`,
+    // A size that cannot be read is a failed read, never "too large".
+    `n=$(wc -c < ${q} | tr -d ' ') || exit 5`,
+    `case "$n" in ''|*[!0-9]*) exit 5 ;; esac`,
+    `[ "$n" -le ${MAX_FILE_BYTES} ] || exit 4`,
     `cat ${q}`,
   ].join('\n');
   const r = await runCapture(row, script, { quiet: true, timeoutMs: 60_000, diskRecovery: true });
@@ -238,8 +272,18 @@ function sameStat(a: WorkbenchDiffStat | null, b: WorkbenchDiffStat): boolean {
  * The whole list also goes to storage, without waiting, so the Changes tab can
  * show it while the box sleeps (see `changesSnapshot.ts`).
  */
-export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges): Promise<WorkbenchRow> {
-  void writeChangesSnapshot(row, changes);
+/**
+ * Store a list read from the box: the list-only copy and the sidebar's stat.
+ * `observedAt` is when the box was read, for a caller whose read is slow (a
+ * capture): when a list read after it is already stored, nothing is written,
+ * so an older list never replaces a newer one.
+ */
+export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges, opts: { observedAt?: Date } = {}): Promise<WorkbenchRow> {
+  if (opts.observedAt) {
+    if (!(await writeChangesSnapshot(row, changes, { observedAt: opts.observedAt }))) return row;
+  } else {
+    void writeChangesSnapshot(row, changes);
+  }
   const uncommittedStats = changes.uncommittedStats ?? { added: 0, removed: 0, files: 0 };
   const committedStats = changes.committedStats ?? { added: 0, removed: 0, files: 0 };
   if (sameStat(row.diffStat ?? null, uncommittedStats)

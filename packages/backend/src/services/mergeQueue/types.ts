@@ -12,6 +12,7 @@ import type {
   PRMergeableSummary,
 } from '@talyn/shared';
 import type { StackBatchPlan, StackParent } from './stack.js';
+import type { PrSessionActivity } from '../workbenches/prSessions.js';
 
 /** Stop auto-firing a given remediation after this many attempts per head. */
 export const MAX_ATTEMPTS = 3;
@@ -175,11 +176,15 @@ export type BlockedCode =
    */
   | 'code_review_blocker'
   /**
-   * A live session (a non-archived workbench) is working this PR, and the
-   * queue would otherwise have started a fix run on it. Two agents pushing to
-   * one branch is the collision `activePrTaskId` exists to stop, so the queue
-   * waits. Costs no fix attempt. Self-heals when the session is archived or
-   * unlinked; a PR the session made clean merges straight from here.
+   * A live session (a non-archived workbench) is WORKING this PR now: one of
+   * its chats runs a turn, has queued messages or waits for a sandbox, or the
+   * session is provisioning or moving. The queue would otherwise have started
+   * a fix run on it, and two agents pushing to one branch is the collision
+   * `activePrTaskId` exists to stop, so the queue waits. Costs no fix attempt.
+   * Released when the turn ends (`pr:session`): an idle session gets the fix
+   * as a message (fixKind `session`), and a PR the session made clean merges
+   * straight from here. A local session is parked here too, because the
+   * backend cannot see its turns or send it a message.
    */
   | 'session_active'
   /** Re-sign budget spent on a signed-commits-required base. Self-heals on a new head. */
@@ -249,7 +254,12 @@ export type BlockedCode =
    */
   | 'stack_retarget_loop';
 
-export type FixKind = 'blockers' | 'resign' | 'queue_failure';
+/**
+ * `session`: the fix went INTO the live, idle session on the PR as a message,
+ * not to a cloud task. `fixTaskId` stays null; the session's own turn is the
+ * run, and it is accounted like one (same budget, same progress rule).
+ */
+export type FixKind = 'blockers' | 'resign' | 'queue_failure' | 'session';
 
 /**
  * How a PR was handed to an external merge queue: the provider's own submit
@@ -469,10 +479,14 @@ export interface DecisionContext {
    */
   codeReviewBlocker?: { reason: string } | null;
   /**
-   * The live session working this PR, or null. Absent on a context built
+   * The live session linked to this PR, or null. Absent on a context built
    * before this existed, and absent means "no session", like the field above.
+   *
+   * `activity` says whether the session works the PR NOW (see
+   * `sessionActivity` in workbenches/prSessions.ts). Absent reads as
+   * `working`, the behaviour before the field existed.
    */
-  liveSession?: { id: string; name: string } | null;
+  liveSession?: { id: string; name: string; activity?: PrSessionActivity } | null;
   /**
    * Another run is linked to the PR (`pull_requests.taskId` differs from our
    * fixTaskId and is active) — a manual task or the keep-mergeable watcher.
@@ -702,6 +716,16 @@ export type Action =
        * from, so it is started from the provider's failure output instead —
        * including the required checks the provider named, when it named any.
        */
+      queueFailure?: { provider: string; evidence: string; failedChecks?: string[] };
+    }
+  /**
+   * The fix `fire_fix_run` would start, sent instead as a message INTO the
+   * live, idle session on the PR, so the session's own agent does it with its
+   * own context. Same claim-first shape as the fix run, same budget.
+   */
+  | {
+      kind: 'send_fix_to_session';
+      resign: boolean;
       queueFailure?: { provider: string; evidence: string; failedChecks?: string[] };
     }
   /** Enable GitHub auto-merge on the head (expectedHeadOid-guarded; Push E). */

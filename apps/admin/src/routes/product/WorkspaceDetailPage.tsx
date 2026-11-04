@@ -64,6 +64,31 @@ export function WorkspaceDetailPage() {
         <StatCard label="Providers" value={`${data.providers.length}`} />
       </div>
 
+      {data.features && (
+        <section className="mt-6">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            In use
+          </h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+            <StatCard label="Sessions" value={`${data.features.sessions}`} hint="not archived" />
+            <StatCard label="Threads" value={`${data.features.threads}`} hint="not archived" />
+            <StatCard
+              label="Loops"
+              value={`${data.features.loops.enabled}`}
+              hint={`on, of ${data.features.loops.total}`}
+            />
+            <StatCard
+              label="Workflows"
+              value={`${data.features.workflows.enabled}`}
+              hint={`on, of ${data.features.workflows.total}`}
+            />
+            <StatCard label="MCP servers" value={`${data.features.mcpServers}`} />
+            <StatCard label="Webhooks" value={`${data.features.webhookEndpoints}`} hint="enabled endpoints" />
+            <StatCard label="API tokens" value={`${data.features.apiTokens}`} hint="the owner's, not revoked" />
+          </div>
+        </section>
+      )}
+
       {data.description && (
         <p className="mt-4 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
           {data.description}
@@ -93,6 +118,13 @@ export function WorkspaceDetailPage() {
           className="text-sm underline-offset-2 hover:underline"
         >
           View this workspace&apos;s tasks →
+        </Link>
+        <span className="mx-2 text-muted-foreground">·</span>
+        <Link
+          to={`${ROUTES.sessions}?workspaceId=${encodeURIComponent(data.id)}`}
+          className="text-sm underline-offset-2 hover:underline"
+        >
+          View this workspace&apos;s sessions →
         </Link>
       </section>
     </Page>

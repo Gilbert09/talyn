@@ -1,5 +1,4 @@
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
-import { getPreviewPatch } from '../services/preview/workbenchPatch.js';
 import express, { Router, type Request, type Response } from 'express';
 import { forwardRequestHeaders, isSafePreviewPath, proxyBody, proxyPortRequest } from '../services/preview/portsHttp.js';
 import { PREVIEW_TICKET_RATE } from '../services/preview/previewLinks.js';
@@ -36,10 +35,13 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
+import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
 import { fleetErrorAsRefusal, refuseThread, WorkbenchError } from '../services/workbenches/errors.js';
 import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenches/move.js';
+import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
+import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
 import {
@@ -67,18 +69,21 @@ import {
   readSessionConfig,
   readSessionDiff,
   readSessionFile,
+  readSessionPreviewPatch,
   requireReadySandbox,
   resizeSession,
   startSessionScript,
   stopSessionScript,
 } from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
+import { getSandboxStatus } from '../services/workbenches/sandboxStatus.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
 import {
   fleetClientFor,
   loadWorkbenchConfig,
+  resumeCredentialsFor,
   resumeOnce,
   saveDetectedConfig,
 } from '../services/workbenches/sandboxRuntime.js';
@@ -152,6 +157,9 @@ function parseKinds(raw: unknown): WorkbenchKind[] | null {
 }
 
 const ok = <T>(res: Response, data: T) => res.json({ success: true, data } as ApiResponse<T>);
+/** A request header that asks a box read not to wake a sleeping box. Never forwarded to the box. */
+const NO_WAKE_HEADER = 'x-talyn-no-wake';
+
 const bad = (res: Response, status: number, error: string, code?: string) =>
   res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
 
@@ -163,11 +171,19 @@ function fail(res: Response, err: unknown): void {
   const refusal = fleetErrorAsRefusal(err);
   if (refusal) {
     if (!(err instanceof WorkbenchError)) console.warn('[workbench] fleet request failed:', err);
+    // `wake`: the box sleeps and nothing is stored; a read with `live=1` wakes it.
+    if (refusal.code === 'snapshot_unavailable') {
+      res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, wake: true });
+      return;
+    }
     bad(res, refusal.status, refusal.message, refusal.code);
     return;
   }
   throw err;
 }
+
+/** `?live=1` or `?live=true`: read the box now, and wake it if it sleeps. Only a person's refresh sends it. */
+const wantsLive = (req: Request) => req.query.live === '1' || req.query.live === 'true';
 
 export function workbenchRoutes(): Router {
   const router = Router();
@@ -451,6 +467,7 @@ export function workbenchRoutes(): Router {
       repositoryId: query('repositoryId'),
       threadId: query('threadId'),
       q: query('q'),
+      name: query('name'),
       includeForgotten: query('includeForgotten') === 'true',
       includeBody: query('includeBody') === 'true',
     }));
@@ -641,6 +658,13 @@ export function workbenchRoutes(): Router {
         ...((row.settings as Record<string, unknown> | null)?.archiveCredentialsRearmed ? { archiveCredentialsRearmed: true } : {}),
         // Server-only: old boxes the reaper must keep.
         ...(row.settings?.keptSandboxIds ? { keptSandboxIds: row.settings.keptSandboxIds } : {}),
+        // Server-only: the box's start times and last wake, for the Sandbox panel.
+        ...Object.fromEntries(
+          BOX_START_SETTINGS_KEYS.flatMap((key) => {
+            const value = (row.settings as Record<string, unknown> | null)?.[key];
+            return value === undefined ? [] : [[key, value]];
+          }),
+        ),
         // A move's target, lease and backoff: server-only, and a later box must not reuse the target's generation.
         ...Object.fromEntries(
           MOVE_SETTINGS_KEYS.flatMap((key) => {
@@ -687,12 +711,12 @@ export function workbenchRoutes(): Router {
     }
   });
 
-  /** Provision again after a failed start. Refused, unchanged, while the fleet still cannot run it. */
+  /** Provision again after a failed or stuck start. Refused, unchanged, while the fleet still cannot run it. */
   router.post('/:id/retry', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      if (row.runtime === 'sandbox' && row.status === 'error' && !row.archivedAt) {
+      if (row.runtime === 'sandbox' && (row.status === 'error' || row.status === 'provisioning') && !row.archivedAt) {
         const user = assertUser(req);
         const refusal = sandboxRefusal(
           await workbenchReadiness(row.workspaceId, { id: user.id, email: user.email }),
@@ -718,6 +742,21 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       ok(res, await getWorkbenchTiming(row.id));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * The Sandbox panel: the box's state, what runs on it, and whether its work
+   * is saved. Read-only; a fleet that does not answer degrades the fleet part
+   * to unknown and never fails the request.
+   */
+  router.get('/:id/sandbox-status', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await getSandboxStatus(row));
     } catch (err) {
       fail(res, err);
     }
@@ -757,7 +796,8 @@ export function workbenchRoutes(): Router {
           }
           status = 'resuming';
           // The fleet may answer that the box is lost, e.g. its hibernated copy cannot be restored.
-          resumeOnce(client, row.sandboxId)
+          const inStorage = Boolean(sandbox.suspendUploaded) && !sandbox.suspendDir;
+          resumeOnce(client, row.sandboxId, inStorage ? 'storage' : 'host', () => resumeCredentialsFor(row))
             .catch((err: unknown) => recoverLostSandbox(row, err))
             .catch(() => undefined);
         }
@@ -841,9 +881,18 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      // Only `?live=1` (a person's refresh) wakes a box that has a stored list.
-      const live = req.query.live === '1' || req.query.live === 'true';
-      ok(res, await readSessionChanges(row, { live, wakeWithoutSnapshot: true }));
+      // Only `?live=1` (a person's refresh) wakes a sleeping box, with or without a stored list.
+      const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: false });
+      const etag = changesResponseEtag(changes);
+      if (etag) {
+        res.setHeader('ETag', etag);
+        const match = req.headers['if-none-match'];
+        if (typeof match === 'string' && match.split(',').some((tag) => tag.trim().replace(/^W\//, '') === etag)) {
+          res.status(304).end();
+          return;
+        }
+      }
+      ok(res, changes);
     } catch (err) {
       fail(res, err);
     }
@@ -859,7 +908,7 @@ export function workbenchRoutes(): Router {
         await requireReadySandbox(row);
         return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
       }
-      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope));
+      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -873,7 +922,7 @@ export function workbenchRoutes(): Router {
         await requireReadySandbox(row);
         return bad(res, 400, 'path is required');
       }
-      ok(res, await readSessionFile(row, req.query.path));
+      ok(res, await readSessionFile(row, req.query.path, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -883,7 +932,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      ok(res, await listSessionFiles(row));
+      ok(res, await listSessionFiles(row, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -896,7 +945,7 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     if (isThread(row)) return ok(res, await loadWorkbenchConfig(row));
     try {
-      ok(res, await readSessionConfig(row));
+      ok(res, await readSessionConfig(row, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
@@ -995,9 +1044,7 @@ export function workbenchRoutes(): Router {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
     try {
-      refuseThread(row);
-      await requireReadySandbox(row);
-      ok(res, await getPreviewPatch(row));
+      ok(res, await readSessionPreviewPatch(row, { live: wantsLive(req) }));
     } catch (err) { fail(res, err); }
   });
 
@@ -1030,6 +1077,10 @@ export function workbenchRoutes(): Router {
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
     try {
+      // The app's check of a preview port, sent with no user action: a sleeping box stays asleep.
+      if (req.headers[NO_WAKE_HEADER] === '1' && !(await chooseReadSource(row)).live) {
+        return bad(res, 409, 'The sandbox is asleep. Talyn does not wake it to check a preview port.', 'sandbox_asleep');
+      }
       await requireReadySandbox(row);
       const body = await proxyBody(req);
       if (body === 'too_large') return bad(res, 413, 'That request body is too large to forward.');
@@ -1111,7 +1162,7 @@ function validateSettings(input: unknown): WorkbenchSettings | string {
     const p = raw.prompts;
     if (!p || typeof p !== 'object' || Array.isArray(p)) return 'settings.prompts must be an object';
     const prompts: NonNullable<WorkbenchSettings['prompts']> = {};
-    for (const key of ['create_pr', 'fix_checks', 'resolve_conflicts', 'rename_branch'] as const) {
+    for (const key of ['create_pr', 'fix_checks', 'resolve_conflicts', 'address_review', 'rename_branch'] as const) {
       const v = p[key];
       if (v === undefined) continue;
       if (typeof v !== 'string') return `settings.prompts.${key} must be a string`;

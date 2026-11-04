@@ -1,20 +1,34 @@
-import type { PutRepositoryInstructionsInput, RepositoryInstructionAgents } from '@talyn/shared';
+import type {
+  PutRepositoryInstructionsInput,
+  PutRepositorySetupInput,
+  PutWorkspaceSandboxSetupInput,
+  RepositoryInstructionAgents,
+  SetupListStep,
+  SetupListStepInput,
+} from '@talyn/shared';
 import {
   PutRepositoryInstructionsBody,
+  PutRepositorySetupBody,
+  PutWorkspaceSandboxSetupBody,
   RepositoryInstructions,
   RepositorySettings,
+  RepositorySetup,
   SetupRecipe,
   SetupStepParams,
   UpdateRepositorySettingsBody,
+  WorkspaceSandboxSetup,
 } from '../../schemas/public/repositorySettings.js';
 import { IdParams, Repository } from '../../schemas/public/resources.js';
 import { mergePreview, previewResponse, validatePreviewChoice } from '../../services/preview/repoPreview.js';
-import { invalid, notFound } from '../../services/public/errors.js';
+import { authorizeWorkspace } from '../../services/public/authorize.js';
+import { invalid, notFound, PublicApiError } from '../../services/public/errors.js';
 import { toPublicRepository } from '../../services/public/projections.js';
 import {
   toPublicRepositoryInstructions,
   toPublicRepositorySettings,
+  toPublicRepositorySetup,
   toPublicSetupRecipe,
+  toPublicWorkspaceSandboxSetup,
 } from '../../services/public/workProjections.js';
 import { authorizedRepository } from '../../services/public/workQueries.js';
 import {
@@ -28,7 +42,20 @@ import {
   sandboxSizeResponse,
   validateSandboxSizeChoice,
 } from '../../services/workbenches/sandboxSize.js';
-import { getSetupRecipe, learningDisabled, revertSetupStep, setSetupLearning } from '../../services/workbenches/setupRecipe.js';
+import {
+  acceptSetupStep,
+  dismissSetupStep,
+  getRepositorySetup,
+  getSetupRecipe,
+  getWorkspaceSandboxSetup,
+  learningDisabled,
+  putRepositorySetup,
+  putWorkspaceSandboxSetup,
+  retrySetupStep,
+  revertSetupStep,
+  setSetupLearning,
+  SetupListError,
+} from '../../services/workbenches/setupLayers.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
 
 /**
@@ -49,6 +76,73 @@ function validated<T>(param: string, check: () => T): T {
     throw invalid(err instanceof Error ? err.message : 'Not valid.', param);
   }
 }
+
+/** A refusal of the Setup list as a public error, with the same code the app gets. */
+async function setupList<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof SetupListError) throw new PublicApiError(err.status, err.code, err.message);
+    throw err;
+  }
+}
+
+type StepInputBody = { id?: string; name: string; command?: string; run_on: SetupListStepInput['runOn']; timeout_sec?: number | null };
+
+const stepInputs = (steps: StepInputBody[] | undefined): SetupListStepInput[] | undefined =>
+  steps?.map((s) => ({
+    ...(s.id !== undefined ? { id: s.id } : {}),
+    name: s.name,
+    ...(s.command !== undefined ? { command: s.command } : {}),
+    runOn: s.run_on,
+    ...(s.timeout_sec !== undefined ? { timeoutSec: s.timeout_sec } : {}),
+  }));
+
+async function repositorySetup(id: string) {
+  const setup = await getRepositorySetup(id);
+  if (!setup) throw notFound('repository');
+  return toPublicRepositorySetup(setup);
+}
+
+async function workspaceSandboxSetup(id: string) {
+  const setup = await getWorkspaceSandboxSetup(id);
+  if (!setup) throw notFound('workspace');
+  return toPublicWorkspaceSandboxSetup(setup);
+}
+
+const STEP_ACTIONS: Array<{
+  action: 'accept' | 'dismiss' | 'retry';
+  operationId: string;
+  summary: string;
+  description: string;
+  run: (repositoryId: string, stepId: string) => Promise<SetupListStep | null>;
+}> = [
+  {
+    action: 'accept',
+    operationId: 'acceptSetupListStep',
+    summary: 'Accept a setup step',
+    description:
+      'Accept a suggested or dismissed learned step. It runs on new sandboxes, and an image step goes into the image. ' +
+      'Talyn never removes a step that a person accepted.',
+    run: (repositoryId, stepId) => acceptSetupStep(repositoryId, stepId),
+  },
+  {
+    action: 'dismiss',
+    operationId: 'dismissSetupListStep',
+    summary: 'Dismiss a setup step',
+    description:
+      'Dismiss a learned step. It stops running and stays in the list as dismissed, so Talyn does not suggest it again. ' +
+      'Your own step cannot be dismissed (409 `not_learned`): remove it from the list instead.',
+    run: (repositoryId, stepId) => dismissSetupStep(repositoryId, stepId),
+  },
+  {
+    action: 'retry',
+    operationId: 'retrySetupListStep',
+    summary: 'Retry a setup step',
+    description: 'Run a disabled step again, or put a step that failed in the image build back into the image. The failure count goes back to 0.',
+    run: (repositoryId, stepId) => retrySetupStep({ repositoryId }, stepId),
+  },
+];
 
 /**
  * Per-repository settings for sessions. The same settings as the repository
@@ -177,10 +271,145 @@ export const repositorySettingsRoutes: PublicRoute[] = [
 
   definePublicRoute({
     method: 'get',
+    path: '/repositories/{id}/setup',
+    operationId: 'getRepositorySetup',
+    summary: 'Get the Setup list',
+    description:
+      "The repository's own setup, then one ordered list of setup steps. Image steps go into the repository's image. " +
+      'Box steps run on each new sandbox. Learned steps are suggested until a person or the frequency rule accepts them.',
+    tag: 'Repositories',
+    scope: 'repositories:read',
+    sessions: true,
+    params: IdParams,
+    responses: { 200: { description: 'The Setup list.', schema: RepositorySetup } },
+    async handler({ params, token }) {
+      const repo = await authorizedRepository(token, params.id);
+      return { status: 200, body: await repositorySetup(repo.id) };
+    },
+  }),
+
+  definePublicRoute({
+    method: 'put',
+    path: '/repositories/{id}/setup',
+    operationId: 'putRepositorySetup',
+    summary: 'Write the Setup list',
+    description:
+      'Send only the fields to change. `steps` is the whole list in its new order. ' +
+      'A step that reads a secret runs only on the box. A command that holds a literal token is refused (`setup_step_refused`). ' +
+      'The command of a learned step cannot change (`learned_command`). A refusal changes nothing.',
+    tag: 'Repositories',
+    scope: 'repositories:write',
+    sessions: true,
+    params: IdParams,
+    body: PutRepositorySetupBody,
+    responses: { 200: { description: 'The Setup list.', schema: RepositorySetup } },
+    async handler({ params, body, token }) {
+      const repo = await authorizedRepository(token, params.id);
+      const input: PutRepositorySetupInput = {
+        ...(body.steps !== undefined ? { steps: stepInputs(body.steps) } : {}),
+        ...(body.run_on_box !== undefined ? { runOnBox: body.run_on_box } : {}),
+        ...(body.hosts !== undefined ? { hosts: body.hosts } : {}),
+        ...(body.learning !== undefined ? { learningDisabled: !body.learning } : {}),
+      };
+      const setup = await setupList(() => putRepositorySetup(repo.id, input));
+      if (!setup) throw notFound('repository');
+      return { status: 200, body: toPublicRepositorySetup(setup) };
+    },
+  }),
+
+  ...STEP_ACTIONS.map(({ action, operationId, summary, description, run }) =>
+    definePublicRoute({
+      method: 'post',
+      path: `/repositories/{id}/setup/steps/{step_id}/${action}`,
+      operationId,
+      summary,
+      description,
+      tag: 'Repositories',
+      scope: 'repositories:write',
+      sessions: true,
+      params: SetupStepParams,
+      responses: { 200: { description: 'The Setup list.', schema: RepositorySetup } },
+      async handler({ params, token }) {
+        const repo = await authorizedRepository(token, params.id);
+        if (!(await setupList(() => run(repo.id, params.step_id)))) throw notFound('setup_step');
+        return { status: 200, body: await repositorySetup(repo.id) };
+      },
+    }),
+  ),
+
+  definePublicRoute({
+    method: 'get',
+    path: '/workspaces/{id}/sandbox_setup',
+    operationId: 'getWorkspaceSandboxSetup',
+    summary: 'Get the sandbox setup',
+    description:
+      "The workspace's dotfiles and setup steps. They go into the image of every repository of the workspace, before the repository's own steps.",
+    tag: 'Workspaces',
+    scope: 'repositories:read',
+    sessions: true,
+    params: IdParams,
+    responses: { 200: { description: 'The sandbox setup.', schema: WorkspaceSandboxSetup } },
+    async handler({ params, token }) {
+      await authorizeWorkspace(token, params.id);
+      return { status: 200, body: await workspaceSandboxSetup(params.id) };
+    },
+  }),
+
+  definePublicRoute({
+    method: 'put',
+    path: '/workspaces/{id}/sandbox_setup',
+    operationId: 'putWorkspaceSandboxSetup',
+    summary: 'Write the sandbox setup',
+    description:
+      'Each field you send replaces it. It changes the sandboxes of every repository of the workspace, so it needs `repositories:write`. ' +
+      'The dotfiles install command cannot read a secret: the image build has no secrets.',
+    tag: 'Workspaces',
+    scope: 'repositories:write',
+    sessions: true,
+    params: IdParams,
+    body: PutWorkspaceSandboxSetupBody,
+    responses: { 200: { description: 'The sandbox setup.', schema: WorkspaceSandboxSetup } },
+    async handler({ params, body, token }) {
+      await authorizeWorkspace(token, params.id);
+      const input: PutWorkspaceSandboxSetupInput = {
+        ...(body.dotfiles !== undefined
+          ? { dotfiles: body.dotfiles === null ? null : { slug: body.dotfiles.slug, ref: body.dotfiles.ref ?? '', install: body.dotfiles.install ?? null } }
+          : {}),
+        ...(body.hosts !== undefined ? { hosts: body.hosts } : {}),
+        ...(body.steps !== undefined ? { steps: stepInputs(body.steps) } : {}),
+      };
+      const setup = await setupList(() => putWorkspaceSandboxSetup(params.id, input));
+      if (!setup) throw notFound('workspace');
+      return { status: 200, body: toPublicWorkspaceSandboxSetup(setup) };
+    },
+  }),
+
+  definePublicRoute({
+    method: 'post',
+    path: '/workspaces/{id}/sandbox_setup/steps/{step_id}/retry',
+    operationId: 'retryWorkspaceSetupStep',
+    summary: 'Retry a sandbox setup step',
+    description: 'Run a disabled workspace step again, or put a step that failed in the image build back into the image.',
+    tag: 'Workspaces',
+    scope: 'repositories:write',
+    sessions: true,
+    params: SetupStepParams,
+    responses: { 200: { description: 'The sandbox setup.', schema: WorkspaceSandboxSetup } },
+    async handler({ params, token }) {
+      await authorizeWorkspace(token, params.id);
+      if (!(await retrySetupStep({ workspaceId: params.id }, params.step_id))) throw notFound('setup_step');
+      return { status: 200, body: await workspaceSandboxSetup(params.id) };
+    },
+  }),
+
+  definePublicRoute({
+    method: 'get',
     path: '/repositories/{id}/setup_recipe',
     operationId: 'getSetupRecipe',
     summary: 'Get the setup recipe',
-    description: 'The setup steps Talyn learned from sessions on the repository. New sandboxes run them.',
+    description:
+      'Deprecated: use `GET /repositories/{id}/setup`. This route goes after one release. ' +
+      'The setup steps Talyn learned from sessions on the repository, in the old shape.',
     tag: 'Repositories',
     scope: 'repositories:read',
     sessions: true,
@@ -197,7 +426,9 @@ export const repositorySettingsRoutes: PublicRoute[] = [
     path: '/repositories/{id}/setup_recipe/steps/{step_id}/revert',
     operationId: 'revertSetupStep',
     summary: 'Revert a setup step',
-    description: 'New sandboxes stop running the step. It stays in the list as reverted, so Talyn does not learn it again.',
+    description:
+      'Deprecated: use `POST /repositories/{id}/setup/steps/{step_id}/dismiss`. This route goes after one release. ' +
+      'It dismisses the step. The step stays in the list as reverted, so Talyn does not learn it again.',
     tag: 'Repositories',
     scope: 'repositories:write',
     sessions: true,

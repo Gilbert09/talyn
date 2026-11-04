@@ -1,13 +1,21 @@
 import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
+import { archiveBoxSource, IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
 import { beginWorkbenchDrain, detachWorkbenchFollowers, isWorkbenchDraining } from './ownership.js';
-import { pickWorkbenchName, SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
+import { boxLayerContextFrom, hasPrebakedCheckout, pickWorkbenchName, SANDBOX_SIZES, withCheckoutCommit, type BoxLayerContext, type SandboxSize } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
-import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import {
+  FleetCapacityError,
+  FleetDispatchUncertainError,
+  FleetRunNotFoundError,
+  FleetThrottleError,
+  type FleetClient,
+  type FleetSandbox,
+} from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
   buildSandboxCreateBody,
@@ -17,15 +25,30 @@ import {
   withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
+import { captureChanges } from './changesCapture.js';
 import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, notReadyError, SandboxSizeRefusedError, userFacingError, WorkbenchError } from './errors.js';
+import {
+  isHibernationFetchFailed,
+  localRuntimeError,
+  notReadyError,
+  SandboxSizeRefusedError,
+  userFacingError,
+  WorkbenchError,
+} from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
-import { isHibernationLost, keptSandboxIdsFor, recordRecoveredTranscript } from './recovery.js';
+import {
+  isHibernationLost,
+  keptSandboxIdsFor,
+  recordRecoveredTranscript,
+  SANDBOX_LOST_FAILED_MESSAGE,
+  SANDBOX_LOST_MESSAGE,
+} from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
-import { effectiveRepositoryBake } from './setupRecipe.js';
+import { boxStartRecord, imageSetupForCreate, noteImageResults, noteImageStatus, recordBoxSetupResults, type BoxTiming } from './setupLayers.js';
+import { writeBoxStart, type BoxStartCause } from './boxStart.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -41,33 +64,40 @@ import {
   SANDBOX_WORK_ROOT,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
-import { checkpointWork, deleteSavedWork, restoreWork, saveWork } from './workCheckpoint.js';
+import { checkpointWork, deleteSavedWork, promoteCheckpointToArchive, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor } from './talynMcp.js';
 import { meterWorkbenchAwake, meterWorkbenchBoxGone } from './usageMeter.js';
+import { isMaintenanceClaimHeld, withMaintenanceClaim } from './maintenanceClaim.js';
 import {
   claimArchive,
   backfillCredentialArchives,
   clearWorkCheckpoint,
   requestArchiveRestore, cancelPendingArchive, releaseArchive, ensureSandboxGeneration,
   finishArchive,
-  markArchive,
+  markArchive, type IdleArchiveClaim,
   pendingArchives,
   renewArchive,
   deleteWorkbenchRow,
+  failProvisioningWorkbench,
   failQueued,
   getWorkbench,
+  isProvisionOwned,
   isThread,
   keepSandboxes,
+  lastTurnActivity,
   listChats,
   liveWorkbenchNames,
+  moveProvisionToSandboxId,
   provisioningWorkbenchIds,
+  recordProvisionedSandbox,
   requeueDroppedMessages,
   resetFailedChats,
+  updateProvisioningWorkbench,
   updateWorkbench,
   type WorkbenchRow,
 } from './store.js';
-import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollowers } from './turns.js';
+import { cancelAllTurns, isWaitingForSandbox, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollowers } from './turns.js';
 
 /**
  * A sandbox workbench's life: provision (create the box, clone, set up),
@@ -76,7 +106,9 @@ import { cancelAllTurns, startQueuedIfIdle, sweepOrphanedTurns, detachTurnFollow
  *
  * Provisioning is IDEMPOTENT end to end, which is what makes it safe to re-run
  * after a crash: the fleet's create returns the existing box for a repeated
- * id, and the clone script keeps a clone and a local branch it finds.
+ * id, and the clone script keeps a clone and a local branch it finds. One run
+ * owns a session's provision across instances (the `provision:<id>` claim),
+ * and the clone script also takes a lock in the box.
  */
 
 /** How long the clone and checkout may take. A blobless clone of a very large repository is minutes, not seconds. */
@@ -84,7 +116,273 @@ const CLONE_TIMEOUT_MS = 20 * 60_000;
 /** An archive script is cleanup, not a build; past this it is stopped and the archive goes on. */
 const ARCHIVE_SCRIPT_TIMEOUT_MS = 2 * 60_000;
 
+/** This process's provisions: a fast path in front of the cross-instance claim. */
 const provisioning = new Set<string>();
+
+/** The claim expires 2 minutes after its last renewal, so 20 s leaves five missed renewals of slack. */
+const PROVISION_CLAIM_RENEW_MS = 20_000;
+
+export const provisionClaimName = (workbenchId: string): string => `provision:${workbenchId}`;
+
+/** This run no longer owns the provision: its claim lapsed, or the row moved on. It stops and writes nothing. */
+class ProvisionSupersededError extends Error {}
+
+type ProvisionClaim = { lost: boolean };
+
+function assertOwned(claim: ProvisionClaim): void {
+  if (claim.lost) throw new ProvisionSupersededError('the provision claim expired');
+}
+
+/** A provision's write, only while the row is still this run's. */
+async function setProvisioningRow(
+  row: WorkbenchRow,
+  sandboxId: string | null,
+  patch: Parameters<typeof updateProvisioningWorkbench>[2],
+): Promise<WorkbenchRow> {
+  const updated = await updateProvisioningWorkbench(row.id, sandboxId, patch);
+  if (!updated) throw new ProvisionSupersededError(`the session moved on from sandbox ${sandboxId ?? '(none)'}`);
+  await emitWorkbenchUpdated(await publicWorkbench(updated));
+  return updated;
+}
+
+/**
+ * How a provision waits for a free sandbox. When the host is out of memory,
+ * the create asks the fleet to queue the box (`queueWhenFull`), and Talyn
+ * polls the queued box. Every other refusal is a 503, and Talyn tries again
+ * with backoff. ONE bound covers both kinds of wait. It matches the fleet's
+ * own queue limit (`MaxQueueWait`, 30 minutes). A field, not a constant, so
+ * tests can shorten it.
+ */
+export const PROVISION_CAPACITY_WAIT = {
+  maxMs: 30 * 60_000,
+  firstDelayMs: 10_000,
+  maxDelayMs: 60_000,
+  /** How often a sleep checks for a drain or a lost claim. */
+  checkMs: 1_000,
+  /** How often a provision reads a box that the fleet queued. */
+  queuePollMs: 5_000,
+};
+
+/**
+ * How a provision waits for its setup script. The script has no time limit,
+ * and a box with a failed disk can hang it forever. So the wait also watches
+ * for a drain, a lost claim, and a Retry or an archive that moves the row away
+ * from this run. Fields, not constants, so tests can shorten them.
+ */
+export const PROVISION_SETUP_WATCH = {
+  /** How often the wait checks for a drain or a lost claim. */
+  checkMs: 1_000,
+  /** How often the wait reads the row. */
+  ownershipCheckMs: 5_000,
+};
+
+/**
+ * Wait for the setup script to exit. Null at a drain: the resume sweep comes
+ * back to the script after the deploy. A lost claim or a row that moved on
+ * ends the wait with a superseded error, and the claim goes to the next run.
+ * The script itself is left alone.
+ */
+async function awaitSetupScript(
+  done: Promise<number | null>,
+  workbenchId: string,
+  sandboxId: string,
+  claim: ProvisionClaim,
+): Promise<{ code: number | null } | null> {
+  const exited = done.then((code) => ({ code }));
+  // A failure after the wait ended has nobody to report to.
+  exited.catch(() => undefined);
+  let checkedAt = Date.now();
+  for (;;) {
+    let timer: NodeJS.Timeout | undefined;
+    const tick = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), PROVISION_SETUP_WATCH.checkMs); });
+    try {
+      const result = await Promise.race([exited, tick]);
+      if (result) return result;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (isWorkbenchDraining()) return null;
+    assertOwned(claim);
+    if (Date.now() - checkedAt < PROVISION_SETUP_WATCH.ownershipCheckMs) continue;
+    checkedAt = Date.now();
+    if (!(await isProvisionOwned(workbenchId, sandboxId))) {
+      throw new ProvisionSupersededError(`the session moved on from sandbox ${sandboxId} while its setup script ran`);
+    }
+  }
+}
+
+export const WAITING_FOR_SANDBOX_MESSAGE = 'Waiting for a free sandbox';
+export const NO_FREE_SANDBOX_MESSAGE = 'No sandbox became free in 30 minutes. Retry when the fleet has room.';
+
+/**
+ * The start of the fleet's error on a queued box that a fleetd restart lost.
+ * Nothing ran. The id answers from the failed record, so a new create needs a
+ * new id. The second form is the fleet's queue pump finding the same loss.
+ */
+const QUEUE_LOST_ERRORS = ['lost while queued', 'queued run did not survive'];
+/** The start of the fleet's error on a queued box that reached the fleet's own queue limit. */
+const QUEUE_TIMEOUT_ERROR = 'waited';
+/** The states of a box that has booted. The synchronous create answers `idle`. */
+const BOOTED_STATUSES: ReadonlySet<string> = new Set(['idle', 'busy', 'suspended']);
+
+/** The fleet's record, with what it says about the box's image layers. */
+type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error' | (typeof LAYER_FIELDS)[number]>;
+const LAYER_FIELDS = [
+  'layer', 'goldenLayer', 'repoCommit', 'appliedStepIds', 'userLayerPending', 'repoLayerPending',
+  'repoSetupOk', 'prebakedCheckout', 'layerStepResults',
+] as const;
+const layerFieldsOf = (sandbox: Partial<FleetSandbox> | undefined): Partial<FleetRecord> =>
+  Object.fromEntries(LAYER_FIELDS.filter((k) => sandbox?.[k] !== undefined).map((k) => [k, sandbox![k]]));
+
+/** The fleet queued the box, or the queue already failed it. */
+function isQueueRecord(record: FleetRecord): boolean {
+  return record.status === 'queued' || (record.status === 'failed' && record.phase === 'queued');
+}
+
+/** The pause before the next try: doubling, capped, with jitter. The fleet's Retry-After wins when it is longer. */
+export function capacityWaitDelayMs(attempt: number, retryAfterMs?: number, random = Math.random): number {
+  const { firstDelayMs, maxDelayMs } = PROVISION_CAPACITY_WAIT;
+  const doubled = Math.min(maxDelayMs, firstDelayMs * 2 ** Math.min(attempt, 30));
+  const base = Math.min(maxDelayMs, Math.max(doubled, retryAfterMs ?? 0));
+  return Math.round(base * (0.8 + 0.4 * random()));
+}
+
+/** Sleep in short steps. False at a drain. A lost claim ends the sleep early, and the caller reads `claim.lost`. */
+async function pauseProvision(ms: number, claim: ProvisionClaim): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(PROVISION_CAPACITY_WAIT.checkMs, until - Date.now())));
+    if (isWorkbenchDraining()) return false;
+    if (claim.lost) return true;
+  }
+  return true;
+}
+
+/** The queued box's record. Null when the fleet cannot answer now: the next poll asks again. */
+async function readQueuedBox(client: FleetClient, sandboxId: string): Promise<FleetRecord | null> {
+  try {
+    return (await client.getSandbox(sandboxId)).sandbox;
+  } catch (err) {
+    if (err instanceof FleetCapacityError || err instanceof FleetThrottleError || err instanceof FleetDispatchUncertainError) {
+      console.warn(`[workbench] reading queued sandbox ${sandboxId} failed; polling again:`, err.message);
+      return null;
+    }
+    throw err;
+  }
+}
+
+/** `waitMs`: how long the create waited for a free sandbox. 0: no wait. */
+type CapacityWait = { created: CreatedWorkbenchSandbox; ownSandboxId: string | null; waitMs: number };
+
+/**
+ * Create the session's box, and wait while the fleet has no room. A 503 is
+ * tried again with the same sandbox id: the fleet's create is idempotent on
+ * the id. A queued box is polled until it boots. A queued box that a fleetd
+ * restart lost is created again on the next sandbox id, and the row moves to
+ * that id. So the caller takes `ownSandboxId` from the answer.
+ *
+ * The wait ends quietly (null) at a drain. The fleet keeps a queued box, and
+ * the resume sweep's create with the same id finds it and waits again, on its
+ * own clock. The wait ends with a superseded error when the claim or the row
+ * moves on. A queued box is deleted then, unless the row still names it: a new
+ * owner of the provision waits on the same box.
+ */
+async function createWaitingForCapacity(
+  row: WorkbenchRow,
+  sandboxId: string,
+  ownSandboxId: string | null,
+  claim: ProvisionClaim,
+): Promise<CapacityWait | null> {
+  let startedAt: number | null = null;
+  let noted = false;
+  const timeLeft = () => {
+    startedAt ??= Date.now();
+    return PROVISION_CAPACITY_WAIT.maxMs - (Date.now() - startedAt);
+  };
+  /** The first wait of either kind: one message on the row and one event. */
+  const noteWait = async (why: string) => {
+    if (noted) return;
+    noted = true;
+    row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
+    recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${why}: waiting for a free sandbox`, false);
+    console.warn(`[workbench] no free sandbox for ${row.id} (${why}); waiting`);
+  };
+  const superseded = () => new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+  const waited = () => (startedAt === null ? 0 : Date.now() - startedAt);
+
+  for (let attempt = 0; ;) {
+    let created: CreatedWorkbenchSandbox;
+    try {
+      created = await createWorkbenchSandbox(row, sandboxId, { queueWhenFull: true });
+    } catch (err) {
+      // A 429 waits too: the fleet's per-tenant queue cap (queue_depth) and its
+      // rate limit both clear with time, and the same bound applies.
+      const throttled = err instanceof FleetThrottleError;
+      if (!(err instanceof FleetCapacityError || throttled) || isHibernationFetchFailed(err)) throw err;
+      const left = timeLeft();
+      if (left <= 0) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+      if (isWorkbenchDraining()) return null;
+      assertOwned(claim);
+      await noteWait(throttled ? 'throttled' : err.reason);
+      if (!(await pauseProvision(Math.min(capacityWaitDelayMs(attempt++, err.retryAfterMs), left), claim))) return null;
+      assertOwned(claim);
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) throw superseded();
+      continue;
+    }
+    if (!created.ok || !isQueueRecord(created.record)) return { created, ownSandboxId, waitMs: waited() };
+
+    const { client } = created;
+    const dropQueuedBox = async () => {
+      await client.deleteSandbox(sandboxId).catch((err) =>
+        console.warn(`[workbench] deleting queued sandbox ${sandboxId} failed:`, err),
+      );
+    };
+    /** The wait is no longer this run's. The queued box goes, unless the row still names it. */
+    const stopWaiting = async () => {
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) await dropQueuedBox();
+      return superseded();
+    };
+    let record = created.record;
+    for (;;) {
+      if (record.status === 'failed' && record.phase === 'queued') {
+        const error = record.error ?? '';
+        if (QUEUE_LOST_ERRORS.some((prefix) => error.startsWith(prefix))) break;
+        if (error.startsWith(QUEUE_TIMEOUT_ERROR)) throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+        throw new Error(`The sandbox failed while it waited for room: ${error || 'the fleet gave no reason'}`);
+      }
+      if (record.status && BOOTED_STATUSES.has(record.status)) return { created: { ...created, record }, ownSandboxId, waitMs: waited() };
+      if (record.status !== 'queued' && record.status !== 'starting') {
+        throw new Error(`The sandbox did not start: ${record.error || `the fleet reports it ${record.status}`}`);
+      }
+      const left = timeLeft();
+      if (left <= 0) {
+        await dropQueuedBox();
+        throw new WorkbenchError(NO_FREE_SANDBOX_MESSAGE, 503, 'no_free_sandbox');
+      }
+      if (isWorkbenchDraining()) return null;
+      if (claim.lost) throw await stopWaiting();
+      await noteWait('queued in the fleet').catch(async (err: unknown) => {
+        throw err instanceof ProvisionSupersededError ? await stopWaiting() : err;
+      });
+      if (!(await pauseProvision(Math.min(PROVISION_CAPACITY_WAIT.queuePollMs, left), claim))) return null;
+      if (claim.lost || !(await isProvisionOwned(row.id, ownSandboxId))) throw await stopWaiting();
+      const polled = await readQueuedBox(client, sandboxId);
+      record = polled ? { ...polled, ...layerFieldsOf(polled) } : record;
+    }
+
+    // A fleetd restart lost the queued box. Nothing ran, so create it again on the next id.
+    const nextId = nextSandboxId({ id: row.id, sandboxId, settings: row.settings });
+    assertOwned(claim);
+    const moved = await moveProvisionToSandboxId(row.id, ownSandboxId, nextId);
+    if (!moved) throw superseded();
+    recordWorkbenchEvent(moved, 'sandbox_queue_lost', `the fleet lost queued sandbox ${sandboxId}; creating ${nextId}`, false);
+    console.warn(`[workbench] the fleet lost queued sandbox ${sandboxId} of ${row.id}; creating ${nextId}`);
+    row = moved;
+    ownSandboxId = nextId;
+    sandboxId = nextId;
+    await emitWorkbenchUpdated(await publicWorkbench(row));
+  }
+}
 
 async function setRow(row: WorkbenchRow, patch: Parameters<typeof updateWorkbench>[1]): Promise<WorkbenchRow> {
   const updated = (await updateWorkbench(row.id, patch)) ?? row;
@@ -102,17 +400,20 @@ function settingsWithoutFleetSandboxId(row: WorkbenchRow): WorkbenchRow['setting
  * The ONE way a provision fails: the workbench and a box that never came up
  * go to `error`, the reason lands in `statusMessage` (which the payload's
  * `error` carries), and each chat says why. Waiting messages stay queued for a
- * retry. A workbench archived while this ran is left alone.
+ * retry. A workbench archived, retried or restored while this ran is left
+ * alone: the write names the sandbox id this run used.
  */
-async function failProvision(workbenchId: string, message: string): Promise<void> {
-  const row = await getWorkbench(workbenchId);
-  if (!row || row.archivedAt || isWorkbenchDraining()) return;
+async function failProvision(workbenchId: string, sandboxId: string | null, rawMessage: string): Promise<void> {
+  if (isWorkbenchDraining()) return;
+  // A lost box found while provisioning ends in `error`: nothing is starting a new one.
+  const message = rawMessage === SANDBOX_LOST_MESSAGE ? SANDBOX_LOST_FAILED_MESSAGE : rawMessage;
+  const row = await failProvisioningWorkbench(workbenchId, sandboxId, message);
+  if (!row) {
+    console.warn(`[workbench] not failing ${workbenchId}: it moved on from sandbox ${sandboxId ?? '(none)'} (${message})`);
+    return;
+  }
   recordWorkbenchEvent(row, 'provision_failed', message, false);
-  await setRow(row, {
-    status: 'error',
-    statusMessage: message,
-    sandboxState: 'error',
-  });
+  await emitWorkbenchUpdated(await publicWorkbench(row));
   await failQueued(row.id, message);
 }
 
@@ -144,7 +445,19 @@ export const THREAD_SANDBOX_SIZE: SandboxSize = (Object.keys(SANDBOX_SIZES) as S
 export const THREAD_WORKDIR_SCRIPT = `mkdir -p ${SANDBOX_WORK_ROOT}`;
 
 export type CreatedWorkbenchSandbox =
-  | { ok: true; sandboxId: string; fleetHost: string | null; fleetSandboxId: string | null; size: SandboxSize }
+  | {
+    ok: true;
+    sandboxId: string;
+    fleetHost: string | null;
+    fleetSandboxId: string | null;
+    size: SandboxSize;
+    /** The fleet's record as the create answered it. A queued box says `queued`. */
+    record: FleetRecord;
+    /** The person's steps in the legacy bake: on a host that does not report layers, a box never runs them. */
+    legacyUserStepIds: string[];
+    /** The client the create used. A queued box is polled and deleted through it. */
+    client: FleetClient;
+  }
   | { ok: false; error: string };
 
 /**
@@ -156,7 +469,7 @@ export type CreatedWorkbenchSandbox =
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
-  opts: { strictSize?: boolean } = {},
+  opts: { strictSize?: boolean; queueWhenFull?: boolean; diskMib?: number } = {},
 ): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
@@ -190,22 +503,57 @@ export async function createWorkbenchSandbox(
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
-  // The repository's bake plus the learned install steps that have settled.
-  // A changed bake is what makes the fleet bake the repository again.
-  const bake = repository && repositoryId ? await effectiveRepositoryBake(repositoryId) : null;
+  // The image layers of the Setup list (`layers`), and the legacy `bake`
+  // beside them for a host that predates layers. A changed spec is what makes
+  // the fleet build the user layer again. Best effort: a box without them
+  // runs every step itself.
+  const image = repository && repositoryId
+    ? await imageSetupForCreate({
+      workspaceId: row.workspaceId,
+      repositoryId,
+      slug: row.repoFullName,
+      baseBranch: repository.defaultBranch,
+    }).catch((error) => {
+      debugBus.recordEvent({
+        service: 'setup_recipe',
+        action: 'image_spec_failed',
+        summary: 'Could not build the image layers for a box. The box runs every setup step itself.',
+        ok: false,
+        error,
+        workspaceId: row.workspaceId,
+        meta: { repositoryId, workbenchId: row.id },
+      });
+      return null;
+    })
+    : null;
   const target = await fleetCreateTarget(row.workspaceId);
-  const withSize = (size: SandboxSize) => withGithubReadAllRepos({
+  const withSize = (size: SandboxSize, diskMib?: number) => withGithubReadAllRepos({
     ...built.body,
-    ...(repository && bake ? { bake } : {}),
+    ...(image?.bake ? { bake: image.bake } : {}),
+    ...(image ? { layers: image.layers } : {}),
     memMib: SANDBOX_SIZES[size].memMib,
     milliVcpu: SANDBOX_SIZES[size].milliVcpu,
+    ...(diskMib ? { diskMib } : {}),
+    ...(opts.queueWhenFull ? { queueWhenFull: true } : {}),
   });
+  // A larger disk is a request, not a need: when the fleet refuses it, ask once more for the default.
+  const createSized = async (size: SandboxSize) => {
+    if (!opts.diskMib) return createSandboxRetryingUncertain(target.client, withSize(size));
+    try {
+      return await createSandboxRetryingUncertain(target.client, withSize(size, opts.diskMib));
+    } catch (err) {
+      // An uncertain create may have made the box: the same request must be asked again, not a new one.
+      if (err instanceof FleetDispatchUncertainError) throw err;
+      console.warn(`[workbench] creating ${sandboxId} with a ${opts.diskMib} MiB disk failed; using the default size:`, err);
+      return createSandboxRetryingUncertain(target.client, withSize(size));
+    }
+  };
   const chosen = isThread(row) ? null : sessionSandboxSize(row);
   const wanted = isThread(row) ? THREAD_SANDBOX_SIZE : chosen ?? await sizeForSession(row);
   let size = wanted;
   let created;
   try {
-    created = await createSandboxRetryingUncertain(target.client, withSize(wanted));
+    created = await createSized(wanted);
   } catch (err) {
     // A resize asked for exactly this size: refuse, and the session keeps its box.
     if (opts.strictSize && isSizeRefusal(err)) throw new SandboxSizeRefusedError(wanted, sizeRefusalReason(err));
@@ -215,61 +563,170 @@ export async function createWorkbenchSandbox(
     recordWorkbenchEvent(row, 'sandbox_size_fallback', text, false);
     await noteSizeFallback(row, text).catch(() => undefined);
     size = 'standard';
-    created = await createSandboxRetryingUncertain(target.client, withSize(size));
+    created = await createSized(size);
   }
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
       : null;
-  return { ok: true, sandboxId, fleetHost: target.host ?? created.host ?? null, fleetSandboxId, size };
+  return {
+    ok: true,
+    sandboxId,
+    fleetHost: target.host ?? created.host ?? null,
+    fleetSandboxId,
+    size,
+    record: {
+      status: created.sandbox?.status,
+      phase: created.sandbox?.phase,
+      error: created.sandbox?.error,
+      ...layerFieldsOf(created.sandbox),
+    },
+    legacyUserStepIds: image?.legacyUserStepIds ?? [],
+    client: target.client,
+  };
 }
 
-export async function provisionWorkbench(workbenchId: string, opts: { restore?: boolean } = {}): Promise<void> {
-  if (provisioning.has(workbenchId)) return;
-  provisioning.add(workbenchId);
-  let row = await getWorkbench(workbenchId);
+/**
+ * What the booted box says about its image, kept on the repository for the
+ * Setup list's footer, and the image build's step failures. Best effort.
+ */
+async function noteBoxImage(row: WorkbenchRow, record: FleetRecord, ctx: BoxLayerContext): Promise<void> {
+  if (!row.repositoryId) return;
   try {
-    if (!row || row.runtime !== 'sandbox' || row.archivedAt || isWorkbenchDraining()) return;
+    if (record.layer || record.appliedStepIds || record.userLayerPending !== undefined || record.repoLayerPending !== undefined) {
+      await noteImageStatus(row.repositoryId, {
+        layer: ctx.layer,
+        repoCommit: ctx.repoCommit,
+        repoLayerPending: record.repoLayerPending ?? null,
+        userLayerPending: record.userLayerPending ?? null,
+        repoSetupOk: ctx.repoSetupOk,
+        appliedStepIds: ctx.layerAware ? ctx.appliedStepIds : [],
+        checkedAt: new Date().toISOString(),
+        workbenchId: row.id,
+      });
+    }
+    if (record.layerStepResults?.length) await noteImageResults(row.repositoryId, record.layerStepResults, row.workspaceId);
+  } catch (error) {
+    debugBus.recordEvent({
+      service: 'setup_recipe',
+      action: 'image_status_failed',
+      summary: 'Could not keep the image status of a box.',
+      ok: false,
+      error,
+      workspaceId: row.workspaceId,
+      meta: { repositoryId: row.repositoryId, workbenchId: row.id },
+    });
+  }
+}
+
+/** The box's image context from the create answer, or the old rule when the host reports no layers. */
+export function boxLayerOf(created: Extract<CreatedWorkbenchSandbox, { ok: true }>): BoxLayerContext {
+  return boxLayerContextFrom(created.record, created.legacyUserStepIds);
+}
+
+/**
+ * Provision a sandbox session. ONE run owns a session at a time, across
+ * backend instances: the run holds the `provision:<id>` maintenance claim and
+ * renews it while it works. A call that finds the claim held returns and
+ * changes nothing; the resume sweep comes back if the holder dies.
+ */
+export async function provisionWorkbench(workbenchId: string, opts: { restore?: boolean } = {}): Promise<void> {
+  if (provisioning.has(workbenchId) || isWorkbenchDraining()) return;
+  provisioning.add(workbenchId);
+  try {
+    await withMaintenanceClaim(provisionClaimName(workbenchId), async (renew) => {
+      const claim: ProvisionClaim = { lost: false };
+      const timer = setInterval(() => {
+        void renew().catch(() => { claim.lost = true; });
+      }, PROVISION_CLAIM_RENEW_MS);
+      timer.unref();
+      try {
+        await provisionClaimed(workbenchId, opts, claim);
+      } finally {
+        clearInterval(timer);
+      }
+    });
+  } finally {
+    provisioning.delete(workbenchId);
+  }
+}
+
+async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }, claim: ProvisionClaim): Promise<void> {
+  // Read under the claim: a late call finds the session ready, failed or archived.
+  let row = await getWorkbench(workbenchId);
+  if (!row || row.runtime !== 'sandbox' || row.archivedAt || row.status !== 'provisioning' || isWorkbenchDraining()) return;
+  // Every write below names this id. A Retry or a restore moves the row to a new one.
+  let ownSandboxId: string | null = row.sandboxId;
+  try {
     row = (await ensureSandboxGeneration(row.id))!;
     await resetSetupForGeneration(row);
     const replacingLostSandbox = row.sandboxState === 'lost';
-    const fail = (message: string) => failProvision(workbenchId, message);
+    const fail = async (message: string) => {
+      assertOwned(claim);
+      await failProvision(workbenchId, ownSandboxId, message);
+    };
 
     // 1. The box.
-    const created = await createWorkbenchSandbox(row, row.sandboxId ?? sandboxIdFor(row.id));
+    const createStartedAt = Date.now();
+    const cause: BoxStartCause = opts.restore || row.memoryRestorePending === 'archive' ? 'restore' : replacingLostSandbox ? 'lost' : 'new';
+    const waited = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
+    if (!waited) return;
+    ownSandboxId = waited.ownSandboxId;
+    const { created } = waited;
     if (!created.ok) return await fail(created.error);
-    const settings = settingsWithoutFleetSandboxId(row);
-    if (created.fleetSandboxId) settings.fleetSandboxId = created.fleetSandboxId;
-    settings.boxSize = created.size;
-    // A resize that waited is done: this box has the size.
-    if (settings.resizeTo === created.size) {
-      settings.sandboxSize = created.size;
-      delete settings.resizeTo;
-      delete settings.resizeReason;
-    }
+    assertOwned(claim);
+    const boxReadyMs = Date.now() - createStartedAt;
+    let boxLayer = boxLayerOf(created);
     const sandboxId = created.sandboxId;
-    row = await setRow(row, {
+    const boxed = await recordProvisionedSandbox(row.id, ownSandboxId, {
       sandboxId,
       sandboxState: replacingLostSandbox ? 'lost' : 'running',
-      fleetHost: created.fleetHost ?? row.fleetHost ?? null,
-      settings,
+      fleetHost: created.fleetHost,
+      fleetSandboxId: created.fleetSandboxId,
+      size: created.size,
       statusMessage: isThread(row) ? 'Preparing the thread' : 'Cloning the repository',
     });
+    if (!boxed) throw new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
+    ownSandboxId = sandboxId;
+    row = boxed;
+    await emitWorkbenchUpdated(await publicWorkbench(row));
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
     await meterWorkbenchAwake(row, { size: created.size });
 
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
-    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail);
-    // 2. The repository and the branch.
-    const cloned = await runCapture(row, cloneScript(row), { cwd: '/', timeoutMs: CLONE_TIMEOUT_MS });
+    if (isThread(row)) return await finishThreadProvision(row, replacingLostSandbox, fail, claim);
+    void noteBoxImage(row, created.record, boxLayer);
+    const startFacts: BoxTiming = {
+      cause,
+      requestedAtMs: createStartedAt,
+      capacityWaitMs: waited.waitMs,
+      boxReadyMs,
+      layer: boxLayer.layer,
+      repoCommit: boxLayer.repoCommit,
+      userLayerPending: created.record.userLayerPending ?? null,
+      repoLayerPending: created.record.repoLayerPending ?? null,
+      prebakedCheckout: hasPrebakedCheckout(boxLayer, created.record.prebakedCheckout),
+    };
+    // The image and the boot show in the Sandbox panel while the clone and the setup run.
+    await writeBoxStart(row.id, boxStartRecord(sandboxId, startFacts)).catch((err: unknown) =>
+      console.warn(`[workbench] keeping the start of ${sandboxId} failed:`, err));
+    // 2. The repository and the branch: a checkout when the image holds the repository.
+    const checkoutStartedAt = Date.now();
+    const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout, firstBox: cause === 'new' }), {
+      cwd: '/',
+      timeoutMs: CLONE_TIMEOUT_MS,
+    });
+    const checkoutMs = Date.now() - checkoutStartedAt;
     if (cloned.exitCode !== 0) {
       return await fail(
         `Could not clone ${row.repoFullName} and check out ${row.branch}: ` +
           (cloned.stderr.trim().split('\n').slice(-3).join(' ') || `git exited ${cloned.exitCode}`),
       );
     }
+    boxLayer = withCheckoutCommit(boxLayer, cloned.stdout);
     if (isWorkbenchDraining()) return;
+    assertOwned(claim);
     // The saved work comes back from Talyn's storage before the setup script
     // runs against the files: the archive's for a restore, the last
     // checkpoint's for a lost box.
@@ -279,7 +736,14 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       workNote = archiveRestoreNote(await restoreWork(row, 'archive'));
     } else if (replacingLostSandbox) {
       const restore = await restoreWork(row, 'checkpoint');
-      workNote = recoveryWorkNote(restore, { lostAt: new Date(), recordedAt: row.workCheckpointAt });
+      const turns = await lastTurnActivity(row.id).catch(() => null);
+      workNote = recoveryWorkNote(restore, {
+        lostAt: new Date(),
+        recordedAt: row.workCheckpointAt,
+        checkedAt: row.workCheckedAt,
+        saveFailures: row.workSaveFailures,
+        ...(turns ? { lastTurnStartedAt: turns.lastStartedAt, lastTurnEndedAt: turns.lastEndedAt, turnRunning: turns.running } : {}),
+      });
     }
 
     // 3. The setup script. A failure leaves the workbench usable — the agent
@@ -288,23 +752,33 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     const config = await loadWorkbenchConfig(row).catch(() => null);
     if (isWorkbenchDraining()) return;
     if (config?.setup) {
-      row = await setRow(row, { statusMessage: 'Running the setup script' });
+      assertOwned(claim);
+      row = await setProvisioningRow(row, sandboxId, { statusMessage: 'Running the setup script' });
+      const setupStartedAt = Date.now();
       const { done } = await startScript(row, 'setup', { config, resume: true });
-      const code = await done;
-      if (isWorkbenchDraining()) return;
+      const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
+      if (!exited || isWorkbenchDraining()) return;
+      await recordBoxSetupResults(row, { ...startFacts, checkoutMs, setupMs: Date.now() - setupStartedAt, setupExitCode: exited.code ?? null });
+      const { code } = exited;
       if (code !== 0) {
         setupNote = `The setup script exited with ${code ?? 'no exit code'}. Its output is in the Scripts panel.`;
       }
+    } else {
+      await recordBoxSetupResults(row, { ...startFacts, checkoutMs }, { ranSetup: false });
     }
 
     if (isWorkbenchDraining()) return;
+    assertOwned(claim);
     row = await linkPullRequest(row);
     if (row.memoryRestorePending || replacingLostSandbox) {
       await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive', workNote);
     }
-    row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
+    assertOwned(claim);
+    row = await setProvisioningRow(row, sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
-    void refreshDiffStat(row);
+    // A new box (a start, a move, a recovery): store its changes, which refreshes the stat too.
+    const readyRow = row;
+    void captureChanges(readyRow, 'ready').then((c) => (c.kind === 'captured' ? undefined : refreshDiffStat(readyRow)));
     // The archive's work is on this box now: make it the checkpoint, so a loss before the first turn keeps it.
     if (restoringArchive) void checkpointWork(row, 'restored');
 
@@ -314,12 +788,14 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
   } catch (err) {
     if (isWorkbenchDraining() || (err instanceof WorkbenchError && err.code === 'draining')) return;
+    if (err instanceof ProvisionSupersededError || claim.lost) {
+      console.warn(`[workbench] provisioning ${workbenchId} stopped: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     console.warn(`[workbench] provisioning ${workbenchId} failed:`, err);
-    await failProvision(workbenchId, userFacingError(err)).catch((failErr) =>
+    await failProvision(workbenchId, ownSandboxId, userFacingError(err)).catch((failErr) =>
       console.error(`[workbench] recording the failed provision of ${workbenchId} failed:`, failErr),
     );
-  } finally {
-    provisioning.delete(workbenchId);
   }
 }
 
@@ -328,16 +804,18 @@ async function finishThreadProvision(
   row: WorkbenchRow,
   replacingLostSandbox: boolean,
   fail: (message: string) => Promise<void>,
+  claim: ProvisionClaim,
 ): Promise<void> {
   const prepared = await runCapture(row, THREAD_WORKDIR_SCRIPT, { cwd: '/', timeoutMs: 60_000 });
   if (prepared.exitCode !== 0) {
     return fail(`Could not prepare the thread's sandbox: ${prepared.stderr.trim().split('\n').slice(-3).join(' ') || `exit ${prepared.exitCode}`}`);
   }
   if (isWorkbenchDraining()) return;
+  assertOwned(claim);
   if (row.memoryRestorePending || replacingLostSandbox) {
     await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
   }
-  row = await setRow(row, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
+  row = await setProvisioningRow(row, row.sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
   recordWorkbenchEvent(row, 'ready', 'provisioned');
   for (const chat of await listChats(row.id)) {
     if (chat.queuedMessages.length > 0 && !chat.closedAt) await startQueuedIfIdle(chat.id);
@@ -346,10 +824,15 @@ async function finishThreadProvision(
 
 /** Archive answers after the durable marker is written. */
 export function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow>;
-export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true }): Promise<WorkbenchRow | null>;
-export async function archiveWorkbench(workbenchId: string, opts?: { autoForMergedPr: true }): Promise<WorkbenchRow | null> {
-  const row = await markArchive(workbenchId, opts?.autoForMergedPr);
-  if (!row && opts?.autoForMergedPr) return null;
+export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true } | { idle: IdleArchiveClaim }): Promise<WorkbenchRow | null>;
+export async function archiveWorkbench(
+  workbenchId: string, opts?: { autoForMergedPr: true } | { idle: IdleArchiveClaim },
+): Promise<WorkbenchRow | null> {
+  const idle = opts && 'idle' in opts ? opts.idle : undefined;
+  // A person's or a merge's archive of a sleeping box: a fresh save is the archive, so nothing wakes the box.
+  const source = idle ? 'running' : await archiveBoxSource(workbenchId);
+  const row = await markArchive(workbenchId, Boolean(opts && 'autoForMergedPr' in opts), idle, source === 'running' ? undefined : source);
+  if (!row && opts) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
   scheduleArchive(row.id);
@@ -378,6 +861,8 @@ export async function processArchive(workbenchId: string): Promise<void> {
   if (isWorkbenchDraining()) return;
   const seen = await getWorkbench(workbenchId);
   if (!seen?.archivePendingAt || seen.status === 'moving' || provisioning.has(workbenchId)) return;
+  // Another instance may be provisioning it. Its writes stop at the archive's status change, and it lets the claim go.
+  if (await isMaintenanceClaimHeld(provisionClaimName(workbenchId))) return;
   const row = await claimArchive(seen);
   if (!row) return;
   let lost = false;
@@ -393,14 +878,25 @@ export async function processArchive(workbenchId: string): Promise<void> {
     if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && isThread(row)) {
       // A thread's box holds no work of its own: its conversation is in the transcript and the agent backups.
       const chats = await listChats(row.id);
-      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id));
       await checkLease();
+      await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
+      await meterWorkbenchBoxGone(row, row.sandboxId);
+      await stopSandboxScripts(row.id, row.sandboxId);
+    } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted' && row.settings?.archiveFromSaved) {
+      // An archive of a sleeping box with a fresh save: the saved copy is the archive, and nothing here wakes the box.
+      await promoteCheckpointToArchive(row);
+      await checkLease();
+      await deleteSavedWork(row, ['checkpoint']).catch((err) =>
+        console.warn(`[workbench] removing the checkpoint of ${row.id} after its archive failed:`, err),
+      );
+      await clearWorkCheckpoint(row.id);
       await (await fleetClientFor(row.workspaceId, row.fleetHost)).deleteSandbox(row.sandboxId);
       await meterWorkbenchBoxGone(row, row.sandboxId);
       await stopSandboxScripts(row.id, row.sandboxId);
     } else if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
       const chats = await listChats(row.id);
-      await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
+      await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id));
       await stopAllScripts(row);
       const config = await loadWorkbenchConfig(row);
       await checkLease();
@@ -414,6 +910,9 @@ export async function processArchive(workbenchId: string): Promise<void> {
       const saved = await saveWork(row, 'archive', { marker: archiveSaveMarker(row) });
       if (saved.kind === 'too_large') throw new Error(archiveTooLargeMessage(saved.size));
       if (saved.kind === 'failed') throw saved.error ?? new Error(`Could not save the session: ${saved.detail}`);
+      await checkLease();
+      // The archived session shows its changes from this copy. Best effort: it never fails the archive.
+      await captureChanges(row, 'archive');
       await checkLease();
       // The archive supersedes the checkpoint; a stale one must not come back after a restore.
       await deleteSavedWork(row, ['checkpoint']).catch((err) =>
@@ -457,29 +956,40 @@ export async function sweepPendingArchives(): Promise<void> {
  * Provision again after a failed start. A half-made box is deleted first, and
  * the new one takes the next sandbox id, because the fleet answers a deleted
  * id from its tombstone. Chats the failure left in `error` go back to `idle`.
+ *
+ * A session still at `provisioning` can be retried too: its start can hang,
+ * for example in a setup script on a box whose disk failed. The old box is
+ * deleted best effort, because the host that holds it can be the broken part.
+ * The old run sees that the row moved on and ends, and the resume sweep then
+ * starts the new provision.
  */
 export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (row.runtime !== 'sandbox') throw localRuntimeError();
   if (row.archivedAt) throw notReadyError('archived');
-  if (row.status !== 'error') {
-    throw new WorkbenchError('This session has not failed, so there is nothing to retry.', 409, 'not_failed');
+  if (row.status !== 'error' && row.status !== 'provisioning') {
+    throw new WorkbenchError('This session has not failed and is not starting, so there is nothing to retry.', 409, 'not_failed');
   }
-  if (row.sandboxId && row.sandboxState !== 'deleted') {
+  const stuck = row.status === 'provisioning';
+  // A stuck run with no recorded box can still be creating the first id.
+  const oldBox = row.sandboxId ?? (stuck ? sandboxIdFor(row.id) : null);
+  if (oldBox && row.sandboxState !== 'deleted') {
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-      await client.deleteSandbox(row.sandboxId);
+      await client.deleteSandbox(oldBox);
     } catch (err) {
-      if (!fleetHoldsNoBox(err)) throw err;
+      if (!stuck && !fleetHoldsNoBox(err)) throw err;
+      if (stuck) console.warn(`[workbench] deleting sandbox ${oldBox} of stuck ${row.id} failed; retrying anyway:`, err);
     }
     await meterWorkbenchBoxGone(row, row.sandboxId);
   }
   row = await setRow(row, {
     status: 'provisioning',
     statusMessage: 'Creating the sandbox',
-    sandboxId: row.sandboxId ? nextSandboxId(row) : sandboxIdFor(row.id),
-    sandboxState: 'creating',
+    sandboxId: oldBox ? nextSandboxId({ ...row, sandboxId: oldBox }) : sandboxIdFor(row.id),
+    // A stuck recovery of a lost box stays one, so the new box gets the checkpoint back.
+    sandboxState: stuck && row.sandboxState === 'lost' ? 'lost' : 'creating',
     sandboxGeneration: null,
     fleetHost: null,
     settings: settingsWithoutFleetSandboxId(row),
@@ -526,7 +1036,7 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
   const name = taken.includes(row.name) ? pickWorkbenchName(taken) : row.name;
 
   if (row.runtime !== 'sandbox') {
-    return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+    return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name, lastActivityAt: new Date() });
   }
   if (row.sandboxId && row.sandboxState !== 'deleted') {
     try {
@@ -536,7 +1046,7 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
         await stopScript(row, 'archive');
         await killMarker(row, archiveSaveMarker(interruptedArchive));
       }
-      return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name });
+      return setRow(row, { archivedAt: null, restoreRequestedAt: null, status: 'ready', statusMessage: null, name, lastActivityAt: new Date() });
     } catch (error) { if (!fleetHoldsNoBox(error)) throw error; }
   }
   // The old box is gone; its interval normally closed with the archive.
@@ -544,6 +1054,7 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
   row = await setRow(row, {
     archivedAt: null,
     restoreRequestedAt: null,
+    lastActivityAt: new Date(),
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
@@ -574,7 +1085,7 @@ export async function deleteWorkbench(workbenchId: string): Promise<void> {
 async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
     const chats = await listChats(row.id);
-    await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id)).catch(() => undefined);
+    await cancelAllTurns(chats.filter((c) => c.status === 'running' || isWaitingForSandbox(c)).map((c) => c.id)).catch(() => undefined);
     await stopAllScripts(row).catch(() => undefined);
     try {
       const client = await fleetClientFor(row.workspaceId, row.fleetHost);
@@ -597,8 +1108,47 @@ async function deleteHeld(row: WorkbenchRow): Promise<void> {
   if (row.pullRequestId) await emitPrSession(row.workspaceId, row.pullRequestId);
 }
 
-/** Resume provisions promptly. Turn ownership protects overlapping backend instances. */
+/** Resume provisions promptly. Turn ownership and the provision claim protect overlapping backend instances. */
 const BOOT_SWEEP_DELAY_MS = 5_000;
+
+const PROVISION_POLLER = 'workbench-provision-sweep';
+/**
+ * A stranded provision waits for its dead owner's claim to lapse (2 minutes)
+ * and then at most one more pass. No minimum row age: a pass over a live
+ * provision costs one claim INSERT that matches nothing.
+ */
+const PROVISION_SWEEP_INTERVAL_MS = 15_000;
+
+/**
+ * Start a provision for every session left in `provisioning`. A live one,
+ * here or on another instance, holds its claim, so the call returns at once.
+ * Fire and forget: a pass must not wait out a 20-minute clone.
+ */
+export async function sweepStrandedProvisions(): Promise<number> {
+  if (isWorkbenchDraining()) return 0;
+  let started = 0;
+  for (const id of await provisioningWorkbenchIds()) {
+    if (isWorkbenchDraining()) break;
+    if (provisioning.has(id)) continue;
+    scheduleProvision(id);
+    started += 1;
+  }
+  return started;
+}
+
+let provisionSweepRunning = false;
+let provisionSweepArmed = false;
+async function provisionSweepTick(): Promise<void> {
+  if (provisionSweepRunning || isWorkbenchDraining()) return;
+  provisionSweepRunning = true;
+  const started = Date.now();
+  let error: unknown;
+  try { await runWithoutScope(() => sweepStrandedProvisions()); } catch (err) { error = err; }
+  finally {
+    provisionSweepRunning = false;
+    debugBus.pollerTick(PROVISION_POLLER, { durationMs: Date.now() - started, ok: !error, error });
+  }
+}
 
 let turnSweepTimer: NodeJS.Timeout | null = null;
 let turnSweepRunning = false;
@@ -629,6 +1179,7 @@ async function turnSweepTick(): Promise<void> {
 let bootTimer: NodeJS.Timeout | null = null;
 let moveSweepTimer: NodeJS.Timeout | null = null;
 let archiveSweepTimer: NodeJS.Timeout | null = null;
+let idleSweepTimer: NodeJS.Timeout | null = null;
 let archiveSweepRunning = false;
 const ARCHIVE_POLLER = 'workbench-archive-sweep';
 
@@ -672,18 +1223,22 @@ async function moveSweepTick(): Promise<void> {
 
 /**
  * Arm the one-shot boot sweep: settle turns a dead process left running, and
- * carry on provisions it left half done. Then the move sweep, which runs on
- * an interval: an instance can die mid-move at any time, not only at a deploy,
- * and the row would stay `moving` until the next one.
+ * carry on provisions it left half done. The provision sweep then repeats on
+ * the turn sweep's timer: a provision another instance started after this
+ * pass, and then lost at its drain, must not wait for the next boot. Then the
+ * move sweep, which runs on an interval: an instance can die mid-move at any
+ * time, not only at a deploy, and the row would stay `moving` until the next one.
  */
 export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
   if (bootTimer) return;
   debugBus.registerPoller('workbench-turn-sweep', 5_000, 'Resumes stale turns and starts queued messages.');
   debugBus.registerPoller('workbench-backup-sweep', 30_000, 'Retries agent backups after a backend restart.');
+  debugBus.registerPoller(PROVISION_POLLER, PROVISION_SWEEP_INTERVAL_MS, 'Resumes session provisions whose owner stopped or died.');
   void turnSweepTick();
   void backupSweepTick();
   const bootAt = Date.now();
   let lastBackupAt = bootAt;
+  let lastProvisionAt = bootAt;
   let lastInterval = 5_000;
   const scheduleSweep = () => {
     const interval = Date.now() - bootAt < 120_000 ? 5_000 : 15_000;
@@ -694,6 +1249,10 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
     turnSweepTimer = setTimeout(() => {
       void turnSweepTick();
       if (Date.now() - lastBackupAt >= 30_000) { lastBackupAt = Date.now(); void backupSweepTick(); }
+      if (provisionSweepArmed && Date.now() - lastProvisionAt >= PROVISION_SWEEP_INTERVAL_MS) {
+        lastProvisionAt = Date.now();
+        void provisionSweepTick();
+      }
       scheduleSweep();
     }, interval);
     turnSweepTimer.unref();
@@ -705,13 +1264,14 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
         await backfillCredentialArchives();
         initWorkbenchMaintenance();
         const settled = await sweepOrphanedTurns();
-        const stuck = await provisioningWorkbenchIds();
-        for (const id of stuck) scheduleProvision(id);
-        if (settled > 0 || stuck.length > 0) {
-          console.log(`[workbench] boot sweep: settled ${settled} orphaned turn(s), resumed ${stuck.length} provision(s)`);
+        const stuck = await sweepStrandedProvisions();
+        if (settled > 0 || stuck > 0) {
+          console.log(`[workbench] boot sweep: settled ${settled} orphaned turn(s), scheduled ${stuck} provision(s)`);
         }
       } catch (err) {
         console.error('[workbench] boot sweep failed:', err);
+      } finally {
+        provisionSweepArmed = true;
       }
     });
     void moveSweepTick();
@@ -721,6 +1281,11 @@ export function initWorkbenches(delayMs = BOOT_SWEEP_DELAY_MS): void {
     debugBus.registerPoller(ARCHIVE_POLLER, 60_000, 'Saves pending session archives and deletes their sandboxes after a successful save.');
     archiveSweepTimer = setInterval(() => void archiveSweepTick(), 60_000);
     archiveSweepTimer.unref();
+  }
+  if (!idleSweepTimer) {
+    debugBus.registerPoller(IDLE_POLLER, IDLE_SWEEP_INTERVAL_MS, 'Archives sessions with no activity for the workspace window (7 days by default).');
+    idleSweepTimer = setInterval(() => void idleArchiveTick(), IDLE_SWEEP_INTERVAL_MS);
+    idleSweepTimer.unref();
   }
   if (!moveSweepTimer) {
     debugBus.registerPoller(
@@ -740,8 +1305,11 @@ export function stopWorkbenches(): void {
   turnSweepTimer = null;
   if (archiveSweepTimer) clearInterval(archiveSweepTimer);
   archiveSweepTimer = null;
+  if (idleSweepTimer) clearInterval(idleSweepTimer);
+  idleSweepTimer = null;
   if (bootTimer) clearTimeout(bootTimer);
   bootTimer = null;
+  provisionSweepArmed = false;
   if (moveSweepTimer) clearInterval(moveSweepTimer);
   moveSweepTimer = null;
 }

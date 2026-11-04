@@ -717,10 +717,59 @@
       "breakpoints": true
     },
     {
-      "idx": 102,
+      "idx": 103,
       "version": "7",
-      "when": 1790900000022,
-      "tag": "0102_usage_billing",
+      "when": 1790900000023,
+      "tag": "0103_setup_step_sessions_and_box_failures",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1790900000024,
+      "tag": "0104_setup_step_durations",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1790900000025,
+      "tag": "0105_workbench_work_save_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790900000026,
+      "tag": "0106_setup_steps",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1790900000027,
+      "tag": "0107_workbench_changes_capture",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1790900000028,
+      "tag": "0108_workbench_last_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1790900000029,
+      "tag": "0109_workbench_turn_start_timings",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1790900000030,
+      "tag": "0110_usage_billing",
       "breakpoints": true
     }
   ]

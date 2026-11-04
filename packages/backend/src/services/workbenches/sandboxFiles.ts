@@ -46,7 +46,7 @@ function dirOf(path: string): string {
 export async function writeSandboxFiles(
   wb: WorkbenchRow,
   files: SandboxFile[],
-  opts: { before?: string; after?: string; timeoutMs?: number; diskRecovery?: boolean; env?: Record<string, string> } = {},
+  opts: { before?: string; after?: string; timeoutMs?: number; diskRecovery?: boolean; env?: Record<string, string>; onLastOutput?: (stderr: string) => void } = {},
 ): Promise<void> {
   const steps: Array<{ line: (v: string) => string; data: string } | { line: () => string; data: null }> = [];
   for (const file of files) {
@@ -99,5 +99,6 @@ export async function writeSandboxFiles(
     if (r.exitCode !== 0) {
       throw new Error(`writing files in the sandbox failed (exit ${r.exitCode}): ${r.stderr.slice(-300)}`);
     }
+    if (i === execs.length - 1) opts.onLastOutput?.(r.stderr);
   }
 }

@@ -18,6 +18,8 @@ import {
   SUBMIT_CALL_FIRST_WAIT_MS,
   SUBMIT_CALL_MAX_FAILURES,
   githubFaultWaitMs,
+  localSessionBlockReason,
+  sessionActiveBlockReason,
   submitCallWaitMs,
 } from '../../services/mergeQueue/decide.js';
 import {
@@ -328,6 +330,94 @@ describe('decide — settled blockers fire the fix run', () => {
     const d = decide(entry(), conflictingPr(), ctx({ cloudEnvAvailable: false }));
     expect(fixRun(d)).toBeUndefined();
     expect(d.verdict).toBe('hold');
+  });
+});
+
+describe('decide — failing required checks after the rerun reach the live session', () => {
+  // PostHog/posthog 2026-11-04: a batch of PRs sat in awaiting_external /
+  // awaiting_ci with red required CI and fix_attempts=0. Each must be handed to
+  // its live session once the one rerun has reported, in every waiting state.
+  const redCi = (s: Partial<PRMergeableSummary> = {}) =>
+    pr(
+      { mergeStateStatus: 'BLOCKED' },
+      { blockingReason: 'checks_failed', checks: { total: 5, failed: 1, inProgress: 0 }, ...s }
+    );
+  const minutesAgo = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+  const idle = { id: 'wb1', name: 'paris', activity: 'idle' as const };
+  const sendFix = (d: Decision) => d.actions.find((a) => a.kind === 'send_fix_to_session');
+  const spent = (o: Partial<EntrySnapshot>) =>
+    entry({ rerunAttempts: 1, lastErrorAt: minutesAgo(10), ...o });
+  const ext = (state: ExternalQueueState) =>
+    ({ provider: 'trunk', state, source: 'comment', evidence: 'x' }) as const;
+
+  it.each([
+    ['awaiting_ci', spent({ status: 'awaiting_ci' }), null],
+    [
+      'awaiting_external, trunk not ready',
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      ext('not_ready'),
+    ],
+    [
+      'awaiting_external, trunk has not seen the submit',
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      null,
+    ],
+  ])('sends the fix to an idle session (%s)', (_label, e, externalQueue) => {
+    const d = decide(
+      e,
+      redCi(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, ...(externalQueue ? { externalQueue } : {}) })
+    );
+    expect(sendFix(d)).toEqual({ kind: 'send_fix_to_session', resign: false });
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it.each([
+    ['awaiting_ci', spent({ status: 'awaiting_ci' })],
+    ['awaiting_external', spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) })],
+  ])('fires a cloud fix run when no session is live (%s)', (_label, e) => {
+    const d = decide(
+      e,
+      redCi(),
+      ctx({
+        externalGate: 'confirmed',
+        ...(e.status === 'awaiting_external' ? { externalQueue: ext('not_ready') } : {}),
+      })
+    );
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+  });
+
+  it('waits while the rerun is still reporting, with no fix', () => {
+    const d = decide(
+      entry({ status: 'awaiting_ci', rerunAttempts: 1, lastErrorAt: minutesAgo(1) }),
+      redCi(),
+      ctx({ liveSession: idle })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it.each([
+    ['awaiting_ci', entry({ status: 'awaiting_ci', rerunAttempts: 1 })],
+    ['awaiting_external', entry({ status: 'awaiting_external', rerunAttempts: 1, externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) })],
+  ])('sends no fix when only an OPTIONAL check is red (%s)', (_label, e) => {
+    const d = decide(
+      e,
+      optionalFailPr(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, externalQueue: ext('not_ready') })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('leaves a PR trunk is actively testing alone, since a push would eject it', () => {
+    const d = decide(
+      spent({ status: 'awaiting_external', externalSubmitVia: 'comment', externalSubmittedAt: minutesAgo(9) }),
+      redCi(),
+      ctx({ externalGate: 'confirmed', liveSession: idle, externalQueue: ext('testing') })
+    );
+    expect(sendFix(d)).toBeUndefined();
+    expect(fixRun(d)).toBeUndefined();
   });
 });
 
@@ -4252,10 +4342,23 @@ describe('decide — a live session holds back fix runs', () => {
     expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
   });
 
-  it('stays parked, writing nothing, while the session lives and the PR is blocked', () => {
-    const d = decide(parked(), conflictingPr(), ctx({ liveSession: session }));
+  it('stays parked, writing nothing, while the session works and the PR is blocked', () => {
+    const d = decide(
+      parked({ blockedReason: sessionActiveBlockReason('paris') }),
+      conflictingPr(),
+      ctx({ liveSession: session })
+    );
     expect(d.actions).toEqual([]);
     expect(d.verdict).toBe('advance');
+  });
+
+  it('gives an entry parked with older words the true reason, once', () => {
+    const d = decide(parked(), conflictingPr(), ctx({ liveSession: session }));
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('session_active');
+    expect(t.blockedReason).toBe(sessionActiveBlockReason('paris'));
+    expect(fixRun(d)).toBeUndefined();
   });
 
   it('merges a PR the session made clean', () => {
@@ -4297,6 +4400,195 @@ describe('decide — a live session holds back fix runs', () => {
     );
     expect(fixRun(d)).toBeUndefined();
     expect(lastTransition(d)?.blockedCode).not.toBe('session_active');
+  });
+});
+
+// Tom, 2026-11-03: entries sat on `session_active` ("is working on this pull
+// request") while the session was ready and idle, and the app said "Needs you".
+// Only a session that WORKS now holds the queue back; an idle one gets the fix.
+describe('decide — only a working session holds the queue; an idle one gets the fix', () => {
+  const live = (activity: 'working' | 'idle' | 'local' | 'unavailable') => ({
+    id: 'wb1',
+    name: 'paris',
+    activity,
+  });
+  const sendFix = (d: Decision) => d.actions.find((a) => a.kind === 'send_fix_to_session');
+  const parked = (o: Partial<EntrySnapshot> = {}) =>
+    entry({
+      status: 'blocked',
+      blockedCode: 'session_active',
+      blockedReason: 'The session "paris" is working on this pull request, so the merge queue starts no fix run.',
+      ...o,
+    });
+
+  it('sends the fix into an idle session instead of firing a run', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ liveSession: live('idle') }));
+    expect(fixRun(d)).toBeUndefined();
+    expect(sendFix(d)).toEqual({ kind: 'send_fix_to_session', resign: false });
+    // No park: the claim in the executor moves it to fixing.
+    expect(transitions(d).map((t) => t.blockedCode)).not.toContain('session_active');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('sends the fix to an idle session even with no cloud provider connected', () => {
+    const d = decide(
+      entry(),
+      conflictingPr(),
+      ctx({ liveSession: live('idle'), cloudEnvAvailable: false })
+    );
+    expect(sendFix(d)).toBeTruthy();
+  });
+
+  it.each([
+    ['working', sessionActiveBlockReason('paris')],
+    ['local', localSessionBlockReason('paris')],
+  ] as const)('parks on a %s session with true words, spending nothing', (activity, reason) => {
+    const d = decide(entry(), conflictingPr(), ctx({ liveSession: live(activity) }));
+    expect(fixRun(d)).toBeUndefined();
+    expect(sendFix(d)).toBeUndefined();
+    const t = lastTransition(d)!;
+    expect(t.blockedCode).toBe('session_active');
+    expect(t.blockedReason).toBe(reason);
+    expect(t.set?.fixAttempts).toBeUndefined();
+    expect(kinds(d)).not.toContain('notify_blocked');
+    expect(kinds(d)).not.toContain('rerequest_failed_checks');
+  });
+
+  it('reads an absent activity as working, the behaviour before the field', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ liveSession: { id: 'wb1', name: 'paris' } }));
+    expect(lastTransition(d)!.blockedCode).toBe('session_active');
+    expect(sendFix(d)).toBeUndefined();
+  });
+
+  it('fires a fix run beside a session that cannot take a message', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ liveSession: live('unavailable') }));
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+    expect(sendFix(d)).toBeUndefined();
+  });
+
+  it('releases a stale park when the session is idle, and sends it the fix', () => {
+    const d = decide(parked(), conflictingPr(), ctx({ liveSession: live('idle') }));
+    const released = transitions(d).find((t) => t.event.code === 'session_released')!;
+    expect(released.to).toBe('queued');
+    expect(released.event.message).toContain('"paris" is not working');
+    expect(sendFix(d)).toEqual({ kind: 'send_fix_to_session', resign: false });
+    expect(fixRun(d)).toBeUndefined();
+  });
+
+  it('merges a stale park the idle session made clean', () => {
+    const d = decide(parked(), cleanPr(), ctx({ liveSession: live('idle') }));
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(sendFix(d)).toBeUndefined();
+  });
+
+  it('sends a re-sign into an idle session', () => {
+    const d = decide(
+      entry(),
+      cleanPr(),
+      ctx({ signingRequired: true, unsignedCount: 2, liveSession: live('idle') })
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(sendFix(d)).toEqual({ kind: 'send_fix_to_session', resign: true });
+  });
+
+  describe("accounting the session's turn like a fix run", () => {
+    const sent = (o: Partial<EntrySnapshot> = {}) =>
+      entry({ status: 'fixing', fixKind: 'session', fixTaskId: null, fixTaskAccounted: false, ...o });
+
+    it('holds as fixing while the turn runs, sending nothing more', () => {
+      const d = decide(
+        sent(),
+        conflictingPr(),
+        ctx({ fixTaskState: 'active', liveSession: live('working') })
+      );
+      expect(sendFix(d)).toBeUndefined();
+      expect(fixRun(d)).toBeUndefined();
+      expect(transitions(d)).toEqual([]);
+      expect(d.verdict).toBe('hold');
+    });
+
+    it('counts a finished turn as one attempt and records the blocker signature', () => {
+      const d = decide(
+        sent(),
+        conflictingPr(),
+        ctx({ fixTaskState: 'terminal', liveSession: live('idle') })
+      );
+      const accounted = transitions(d).find((t) => t.event.code === 'fix_run_accounted')!;
+      expect(accounted.set?.fixAttempts).toBe(1);
+      expect(accounted.set?.fixTaskAccounted).toBe(true);
+      expect(accounted.set?.seenSignatures).toEqual([blockerSignature(conflictingPr())]);
+      expect(accounted.event.message).toContain("The session's fix turn finished");
+    });
+
+    it('stops on no progress when the turn leaves the same blocker as before', () => {
+      const d = decide(
+        sent({ fixAttempts: 1, seenSignatures: [blockerSignature(conflictingPr())] }),
+        conflictingPr(),
+        ctx({ fixTaskState: 'terminal', liveSession: live('idle') })
+      );
+      const t = transitions(d).find((x) => x.event.code === 'fix_run_accounted')!;
+      expect(t.to).toBe('blocked');
+      expect(t.blockedCode).toBe('no_progress');
+      expect(sendFix(d)).toBeUndefined();
+      expect(kinds(d)).toContain('notify_blocked');
+    });
+
+    it("stands down when the session's turn ends on the needs-human sentinel", () => {
+      const d = decide(
+        sent(),
+        conflictingPr(),
+        ctx({
+          fixTaskState: 'terminal',
+          fixTaskNeedsHumanReason: 'A maintainer must approve the migration.',
+          liveSession: live('idle'),
+        })
+      );
+      const t = lastTransition(d)!;
+      expect(t.to).toBe('blocked');
+      expect(t.blockedCode).toBe('agent_needs_human');
+      expect(t.blockedReason).toBe('A maintainer must approve the migration.');
+      expect(t.set?.fixAttempts).toBeUndefined();
+      expect(sendFix(d)).toBeUndefined();
+      expect(d.verdict).toBe('advance');
+    });
+
+    it("keeps the budget when the session's own push moves the head", () => {
+      const d = decide(
+        sent({ headSha: 'old', fixAttempts: 1 }),
+        pr({ mergeStateStatus: 'DIRTY', headSha: 'new' }, { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }),
+        ctx({ fixTaskState: 'active', liveSession: live('working') })
+      );
+      expect(kinds(d)).toContain('adopt_head');
+      expect(kinds(d)).not.toContain('reset_budgets');
+    });
+
+    it('a session fix the claim never linked (accounted) is not counted', () => {
+      const d = decide(
+        sent({ fixTaskAccounted: true }),
+        conflictingPr(),
+        ctx({ fixTaskState: 'none', liveSession: live('idle') })
+      );
+      expect(transitions(d).find((t) => t.event.code === 'fix_run_accounted')).toBeUndefined();
+      expect(sendFix(d)).toBeTruthy();
+    });
+  });
+
+  it('hands an external queue failure to an idle session', () => {
+    const d = decide(
+      entry({
+        status: 'awaiting_external',
+        externalSubmitVia: 'auto_merge',
+        submitAttempts: 1,
+        automergeArmedBy: 'talyn',
+      }),
+      pr({}, { labels: ['trunk-failed', 'stamphog'] }),
+      ctx({ externalGate: 'confirmed', liveSession: live('idle') })
+    );
+    const send = sendFix(d) as Extract<Action, { kind: 'send_fix_to_session' }> | undefined;
+    expect(send?.queueFailure).toMatchObject({ provider: expect.any(String) });
+    expect(fixRun(d)).toBeUndefined();
+    expect(kinds(d)).not.toContain('submit_external');
+    expect(kinds(d)).toContain('disarm_automerge');
   });
 });
 

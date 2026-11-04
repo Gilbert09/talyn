@@ -109,7 +109,7 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `not_ready` | The session is not in a state that allows the action, for example while it provisions. | Poll the session. Retry when `status` is `ready`. |
 | 409 | `chat_closed` | The chat is closed. | Open a new chat. |
 | 409 | `archived` | The session is archived. | Call `POST /sessions/{id}/restore`. |
-| 409 | `not_failed` | A retry was sent for a session that did not fail. | Retry only when `status` is `error`. |
+| 409 | `not_failed` | A retry was sent for a session that did not fail and is not starting. | Retry only when `status` is `error` or `provisioning`. |
 | 409 | `pull_request_not_open` | The pull request is closed or merged. | Use an open pull request. |
 | 409 | `cannot_refresh` | GitHub did not return the pull request, or Talyn does not know its branch yet. | Retry after the next sync. |
 | 409 | `not_queued` | A re-submit was sent for a pull request that is not in the merge queue. | Add it to the queue. |

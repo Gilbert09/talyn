@@ -128,6 +128,9 @@ import type {
   AdminRunDetail,
   AdminRunEventPage,
   AdminRunIndex,
+  AdminFleetAlerts,
+  AdminSessionDetail,
+  AdminSessionSummary,
   AdminTaskDetail,
   AdminTaskSummary,
   AdminUserDetail,
@@ -2367,8 +2370,16 @@ const adminFleet = {
     rawRequest('GET', `/admin/fleet/hosts/${encodeURIComponent(name)}/metrics`, {
       accept: 'text/plain',
     }).then((r) => r.text()),
-  runs: (params?: { host?: string; status?: string; limit?: number; before?: string }) =>
-    request<AdminRunIndex>('GET', `/admin/fleet/runs${adminQuery({ ...params })}`),
+  runs: (params?: {
+    host?: string;
+    status?: string;
+    kind?: string;
+    owner?: string;
+    limit?: number;
+    before?: string;
+  }) => request<AdminRunIndex>('GET', `/admin/fleet/runs${adminQuery({ ...params })}`),
+  /** Host alerts for the console banner. Cached briefly server-side. */
+  alerts: () => request<AdminFleetAlerts>('GET', '/admin/fleet/alerts'),
   run: (host: string, runId: string) =>
     request<AdminRunDetail>(
       'GET',
@@ -2490,6 +2501,22 @@ export const admin = {
    */
   me: () => request<AdminAccess>('GET', '/admin/me'),
   fleet: adminFleet,
+  /** Sessions and threads across every account. Read-only. */
+  sessions: {
+    list: (params?: {
+      q?: string;
+      kind?: string;
+      status?: string;
+      state?: string;
+      host?: string;
+      owner?: string;
+      runtime?: string;
+      workspaceId?: string;
+      limit?: number;
+      before?: string;
+    }) => request<AdminPage<AdminSessionSummary>>('GET', `/admin/sessions${adminQuery({ ...params })}`),
+    get: (id: string) => request<AdminSessionDetail>('GET', `/admin/sessions/${encodeURIComponent(id)}`),
+  },
   users: {
     list: (params?: { q?: string; plan?: string; admin?: boolean; limit?: number; before?: string }) =>
       request<AdminPage<AdminUserSummary>>('GET', `/admin/users${adminQuery({ ...params })}`),

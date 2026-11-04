@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { WorkbenchStatus } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches as workbenchesTable } from '../../db/schema.js';
@@ -60,6 +60,98 @@ export async function liveWorkbenchesForPrs(
 
 export async function liveWorkbenchForPr(workspaceId: string, prId: string): Promise<PrSession | null> {
   return (await liveWorkbenchesForPrs(workspaceId, [prId])).get(prId) ?? null;
+}
+
+/**
+ * What a live session does on its pull request NOW. Only `working` holds the
+ * merge queue back.
+ *
+ * - `working`: a chat runs a turn, has queued messages (a message that waits
+ *   for a sandbox carries `capacityWait` and stays in the queue), or the
+ *   session is provisioning or moving.
+ * - `idle`: ready, and no chat has work. Asleep is idle too: a message wakes it.
+ * - `local`: runs on the person's computer. The backend cannot see its turns
+ *   or send it a message.
+ * - `unavailable`: in error, or archived. It cannot take a message.
+ */
+export type PrSessionActivity = 'working' | 'idle' | 'local' | 'unavailable';
+
+export function classifySessionActivity(input: {
+  status: string;
+  runtime: string;
+  archived: boolean;
+  chatBusy: boolean;
+}): PrSessionActivity {
+  if (input.archived) return 'unavailable';
+  if (input.runtime === 'local') return 'local';
+  if (input.status === 'provisioning' || input.status === 'moving') return 'working';
+  if (input.status === 'ready') return input.chatBusy ? 'working' : 'idle';
+  return 'unavailable';
+}
+
+/** The query behind {@link sessionActivity}, exposed for the egress test. */
+export function sessionActivityQuery(workbenchId: string) {
+  return getPoolDbClient()
+    .select({
+      status: workbenchesTable.status,
+      runtime: workbenchesTable.runtime,
+      archived: sql<boolean>`${workbenchesTable.archivedAt} IS NOT NULL`,
+      // Derived in SQL: the queue blob never ships. Raw, aliased SQL because
+      // drizzle leaves a column in a subquery unqualified.
+      chatBusy: sql<boolean>`EXISTS (
+        SELECT 1 FROM workbench_chats c
+        WHERE c.workbench_id = ${workbenchId}
+          AND (c.status = 'running' OR jsonb_array_length(c.queued_messages) > 0)
+      )`,
+      lastActivityAt: sql<string | Date | null>`(
+        SELECT max(COALESCE(c.turn_heartbeat_at, c.updated_at))
+        FROM workbench_chats c WHERE c.workbench_id = ${workbenchId}
+      )`,
+    })
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.id, workbenchId))
+    .limit(1);
+}
+
+/**
+ * Whether a session works its pull request now, and when a chat last moved.
+ * Null when the session is gone. A failed read answers `working`: holding
+ * the queue back for one more evaluation is cheap, and a second agent on the
+ * branch is not.
+ */
+export async function sessionActivity(
+  workbenchId: string
+): Promise<{ activity: PrSessionActivity; lastActivityAt: string | null } | null> {
+  try {
+    const [row] = await sessionActivityQuery(workbenchId);
+    if (!row) return null;
+    const last = row.lastActivityAt ? new Date(row.lastActivityAt) : null;
+    return {
+      activity: classifySessionActivity({
+        status: row.status,
+        runtime: row.runtime,
+        archived: Boolean(row.archived),
+        chatBusy: Boolean(row.chatBusy),
+      }),
+      lastActivityAt: last && !Number.isNaN(last.getTime()) ? last.toISOString() : null,
+    };
+  } catch (err) {
+    console.warn('[workbenches] session activity read failed:', err instanceof Error ? err.message : err);
+    return { activity: 'working', lastActivityAt: null };
+  }
+}
+
+/** The live session on a pull request with what it does now, for the merge queue. */
+export async function liveSessionActivityForPr(
+  workspaceId: string,
+  prId: string
+): Promise<(PrSession & { activity: PrSessionActivity }) | null> {
+  const session = await liveWorkbenchForPr(workspaceId, prId);
+  if (!session) return null;
+  const state = await sessionActivity(session.id);
+  // Archived between the two reads: no longer live.
+  if (!state) return null;
+  return { ...session, activity: state.activity };
 }
 
 /**

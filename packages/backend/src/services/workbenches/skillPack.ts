@@ -5,6 +5,8 @@ import { shellQuote, TALYN_BRIEFING_MARKER, TALYN_BRIEFING, TALYN_SKILL_PACK } f
 import { getPoolDbClient } from '../../db/client.js';
 import { workspaces } from '../../db/schema.js';
 import { shellPath, writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
+import { repoDirFor } from './sandboxRuntime.js';
+import { syncSessionFiles } from './sessionFileSync.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -21,9 +23,9 @@ import type { WorkbenchRow } from './store.js';
  * reads `$CODEX_HOME/skills/<name>/SKILL.md`, which is `~/.codex/skills`. A
  * stamp file in the skill's directory marks it as Talyn's: a directory without
  * one is the user's and is never written or removed. A file is rewritten only
- * when its bytes differ (`cmp`), so an unchanged pack costs one exec and no
- * writes. Switching the pack off, or a box without Talyn's MCP server, removes
- * every stamped directory on the next turn.
+ * when its bytes differ (`cmp`). Matching source and disk hashes skip the exec.
+ * Switching the pack off removes every stamped directory on the next turn.
+ * A box without Talyn's MCP server also removes those directories.
  */
 
 export const SKILL_PACK_SOURCE_DIR = path.resolve(__dirname, 'skillPack');
@@ -69,12 +71,9 @@ export function readSkillPack(dir: string = SKILL_PACK_SOURCE_DIR): PackSkill[] 
   });
 }
 
-let cached: PackSkill[] | null = null;
-
-/** The pack, read once per process. */
+/** Read current source files so a source change invalidates the sync. */
 export function loadSkillPack(): PackSkill[] {
-  cached ??= readSkillPack();
-  return cached;
+  return readSkillPack();
 }
 
 /** Where the Talyn briefing goes for Claude: a user rule. Outside the `talyn-*.md` names the instruction sync manages. */
@@ -210,6 +209,8 @@ export async function syncSkillPack(row: WorkbenchRow, opts: { talynTools: boole
   const enabled = opts.talynTools && (await sessionSkillPackEnabled(row.workspaceId));
   // The briefing describes Talyn's tools, so it goes wherever the `talyn` server does, pack or not.
   const [files, scripts] = skillPackSyncPlan(enabled ? loadSkillPack() : null, opts.talynTools ? TALYN_BRIEFING : null);
-  await writeSandboxFiles(row, files, scripts);
+  await syncSessionFiles(row, 'skills', {
+    workspaceId: row.workspaceId, enabled, talynTools: opts.talynTools, files, scripts,
+  }, [files, scripts], { repoDir: repoDirFor(row), write: writeSandboxFiles });
   return enabled;
 }

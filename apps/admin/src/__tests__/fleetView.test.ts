@@ -3,6 +3,13 @@ import type { AdminFleetHost, AdminRunRow } from '@talyn/shared';
 import {
   HOST_STALE_AFTER_MS,
   WEDGE_WARN_SECONDS,
+  boxSizeLabel,
+  countRuns,
+  isAsleep,
+  isRealOrphan,
+  runClaim,
+  runKind,
+  sleepSeconds,
   hostState,
   durationSeconds,
   idlePct,
@@ -380,5 +387,106 @@ describe('formatters', () => {
 
   it('counts down to a future deadline', () => {
     expect(countdown(new Date(NOW + 300_000).toISOString(), NOW)).toBe('5m');
+  });
+});
+
+/**
+ * Asleep is not wedged.
+ *
+ * On 2026-11-03 every suspended session box on the Runs page showed "wedged?"
+ * with a red idle time: the backend folds `suspended` into the `running` run
+ * status, and a sleeping box sends no frames, so its idle time grew without
+ * bound. A box asleep costs no memory and no slot, and is the normal state of a
+ * session between turns.
+ */
+describe('asleep, not wedged', () => {
+  const silent = new Date(NOW - 3 * 3600_000).toISOString();
+
+  it.each([
+    ['a box suspended on its host', { sandboxStatus: 'suspended', sleep: { kind: 'local' as const, since: silent, suspendKind: 'memory' as const, uploadError: null } }],
+    ['a hibernated box', { sandboxStatus: 'suspended', sleep: { kind: 'storage' as const, since: silent, suspendKind: 'rootfs' as const, uploadError: null } }],
+    ['a suspended box whose backend sent no sleep detail', { sandboxStatus: 'suspended', sleep: null }],
+  ])('never flags %s, however long it has slept', (_label, over) => {
+    const r = run({ ...over, status: 'running', lastActivity: silent });
+    expect(isAsleep(r)).toBe(true);
+    expect(looksWedged(r, NOW)).toBe(false);
+  });
+
+  it.each([
+    ['busy', true],
+    ['idle', true],
+    ['starting', true],
+    ['stopped', false],
+    ['failed', false],
+  ])('flags a silent %s box: %s', (sandboxStatus, expected) => {
+    expect(looksWedged(run({ sandboxStatus, lastActivity: silent }), NOW)).toBe(expected);
+  });
+
+  it('keeps the old rule for a row with no fleet state word', () => {
+    expect(looksWedged(run({ sandboxStatus: null, lastActivity: silent }), NOW)).toBe(true);
+    expect(looksWedged(run({ sandboxStatus: undefined, status: 'completed', lastActivity: silent }), NOW)).toBe(false);
+  });
+
+  it('says how long a box has slept', () => {
+    const r = run({ sandboxStatus: 'suspended', sleep: { kind: 'local', since: new Date(NOW - 90_000).toISOString(), suspendKind: null, uploadError: null } });
+    expect(sleepSeconds(r, NOW)).toBe(90);
+    expect(sleepSeconds(run(), NOW)).toBeNull();
+    expect(sleepSeconds(run({ sandboxStatus: 'suspended', sleep: null }), NOW)).toBeNull();
+  });
+});
+
+describe('kind and claim', () => {
+  it.each([
+    ['a row with a kind', { kind: 'session' as const }, 'session'],
+    ['an older row with a task', { kind: undefined, taskId: 't' }, 'task'],
+    ['an older row with no task', { kind: undefined, taskId: null }, 'unknown'],
+  ])('reads the kind of %s', (_label, over, expected) => {
+    expect(runKind(run(over))).toBe(expected);
+  });
+
+  it.each([
+    ['a row with a claim', { claim: 'superseded' as const, orphan: false }, 'superseded'],
+    ['an older orphan', { claim: undefined, orphan: true }, 'orphan'],
+    ['an older claimed row', { claim: undefined, orphan: false }, 'active'],
+  ])('reads the claim of %s', (_label, over, expected) => {
+    expect(runClaim(run(over))).toBe(expected);
+  });
+
+  it('does not count a deploy self-test as an orphan', () => {
+    expect(isRealOrphan(run({ claim: 'orphan', orphan: true, selfTest: true }))).toBe(false);
+    expect(isRealOrphan(run({ claim: 'orphan', orphan: true }))).toBe(true);
+    expect(isRealOrphan(run({ claim: 'superseded' }))).toBe(false);
+  });
+});
+
+describe('countRuns', () => {
+  it('counts each header category', () => {
+    const silent = new Date(NOW - 3600_000).toISOString();
+    const counts = countRuns(
+      [
+        run({ sandboxStatus: 'busy' }),
+        run({ sandboxStatus: 'busy', lastActivity: silent }),
+        run({ sandboxStatus: 'suspended', lastActivity: silent, sleep: { kind: 'storage', since: silent, suspendKind: null, uploadError: null } }),
+        run({ sandboxStatus: 'suspended', claim: 'superseded', lastActivity: silent }),
+        run({ sandboxStatus: 'idle', claim: 'orphan', orphan: true }),
+        run({ claim: 'orphan', orphan: true, selfTest: true }),
+        run({ status: 'completed', sandboxStatus: null }),
+      ],
+      NOW,
+    );
+    expect(counts).toEqual({ running: 4, asleep: 2, superseded: 1, orphaned: 1, wedged: 1 });
+  });
+});
+
+describe('boxSizeLabel', () => {
+  it.each([
+    ['the chosen size', { sandboxSize: 'large', memMib: 12288, vcpuCount: 6 }, 'Large · 12 GB'],
+    ['a size read from the memory', { sandboxSize: null, memMib: 4096, vcpuCount: 4 }, 'Standard · 4 GB'],
+    ['a chosen size the box does not match', { sandboxSize: 'large', memMib: 8192, vcpuCount: 4 }, 'Medium · 8 GB'],
+    ['a memory no size has', { sandboxSize: null, memMib: 3000, vcpuCount: 2 }, `${mib(3000)} · 2 vCPU`],
+    ['a chosen size with no live read', { sandboxSize: 'small', memMib: null, vcpuCount: null }, 'Small · 2 GB'],
+    ['nothing known', { sandboxSize: null, memMib: null, vcpuCount: null }, null],
+  ])('names %s', (_label, input, expected) => {
+    expect(boxSizeLabel(input)).toBe(expected);
   });
 });

@@ -14,7 +14,7 @@ import { workbenchChats, workbenchTurnTimings as timings } from '../../db/schema
 import { createConcurrencyLimit } from '../concurrencyLimit.js';
 import { debugBus } from '../debugBus.js';
 import { fleetClientFor, repoDirFor } from './sandboxRuntime.js';
-import { hasBakedSteps, learningDisabled, noteBakeResults, recordSetupSteps } from './setupRecipe.js';
+import { hasImageSteps, learningDisabled, noteImageResults, recordSetupSteps, recordStepUses } from './setupLayers.js';
 import { getWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -50,6 +50,8 @@ interface LoadedTurn {
   startedAt: number;
   endedAt: number;
   calls: TurnToolCall[];
+  startMs: number | null;
+  initMs: number | null;
 }
 
 function rowsOf<T>(result: unknown): T[] {
@@ -61,8 +63,13 @@ const epoch = (value: unknown): number => (value instanceof Date ? value.getTime
 
 /** The turn's bounds and its tool calls, paired by id, oldest first. */
 export async function loadTurnToolCalls(chatId: string, turn: number): Promise<LoadedTurn | null> {
-  const [bounds] = rowsOf<{ started_at: unknown; ended_at: unknown }>(await db().execute(sql`
-    SELECT min(created_at) AS started_at, max(created_at) AS ended_at
+  const [bounds] = rowsOf<{ started_at: unknown; ended_at: unknown; start_ms: number | null; init_ms: number | null }>(await db().execute(sql`
+    SELECT min(created_at) AS started_at, max(created_at) AS ended_at,
+      (array_agg((event -> 'talyn' ->> 'startMs')::bigint ORDER BY
+        CASE WHEN event -> 'talyn' ->> 'kind' = 'turn_start_timing' THEN 0 ELSE 1 END, seq)
+        FILTER (WHERE event -> 'talyn' ->> 'kind' IN ('turn_start_timing', 'turn_spawn_timing')))[1] AS start_ms,
+      (array_agg((event -> 'talyn' ->> 'initMs')::bigint ORDER BY seq)
+        FILTER (WHERE event -> 'talyn' ->> 'kind' = 'turn_start_timing'))[1] AS init_ms
     FROM workbench_events WHERE chat_id = ${chatId} AND turn = ${turn}
   `));
   if (!bounds?.started_at) return null;
@@ -120,11 +127,20 @@ export async function loadTurnToolCalls(chatId: string, turn: number): Promise<L
       }
     }
   }
-  return { startedAt: epoch(bounds.started_at), endedAt: epoch(bounds.ended_at), calls: [...calls.values()] };
+  return {
+    startedAt: epoch(bounds.started_at), endedAt: epoch(bounds.ended_at), calls: [...calls.values()],
+    startMs: bounds.start_ms === null ? null : Number(bounds.start_ms),
+    initMs: bounds.init_ms === null ? null : Number(bounds.init_ms),
+  };
 }
 
-export async function storeTurnTiming(chatId: string, turn: number, workbenchId: string, report: TurnTimeReport): Promise<void> {
+export async function storeTurnTiming(
+  chatId: string, turn: number, workbenchId: string, report: TurnTimeReport,
+  startup: Pick<LoadedTurn, 'startMs' | 'initMs'> = { startMs: null, initMs: null },
+): Promise<void> {
   const values = {
+    startMs: startup.startMs,
+    initMs: startup.initMs,
     wallMs: report.wallMs,
     toolMs: report.toolMs,
     modelMs: report.modelMs,
@@ -141,7 +157,8 @@ export async function storeTurnTiming(chatId: string, turn: number, workbenchId:
 async function readBakeStepsFromFleet(row: WorkbenchRow): Promise<BakeStepResult[] | undefined> {
   if (!row.sandboxId) return undefined;
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  return (await client.getSandbox(row.sandboxId)).sandbox.bakeSteps;
+  const { sandbox } = await client.getSandbox(row.sandboxId);
+  return sandbox.layerStepResults ?? sandbox.bakeSteps;
 }
 
 /** Take a learned step out of the bake when the bake says it failed. At most every ten minutes per repository. */
@@ -150,9 +167,9 @@ async function checkBakeResults(row: WorkbenchRow, deps: TurnInsightsDeps): Prom
   const now = deps.now?.() ?? Date.now();
   if (now - (lastBakeCheck.get(repositoryId) ?? 0) < BAKE_CHECK_INTERVAL_MS) return;
   lastBakeCheck.set(repositoryId, now);
-  if (!(await hasBakedSteps(repositoryId))) return;
+  if (!(await hasImageSteps(repositoryId))) return;
   const results = await (deps.readBakeSteps ?? readBakeStepsFromFleet)(row);
-  if (results?.length) await noteBakeResults(repositoryId, results, row.workspaceId);
+  if (results?.length) await noteImageResults(repositoryId, results, row.workspaceId);
 }
 
 /**
@@ -168,7 +185,7 @@ export async function analyseTurn(chatId: string, turn: number, deps: TurnInsigh
   const loaded = await loadTurnToolCalls(chatId, turn);
   if (!loaded) return null;
   const report = computeTurnTiming(loaded);
-  await storeTurnTiming(chatId, turn, row.id, report);
+  await storeTurnTiming(chatId, turn, row.id, report, loaded);
 
   if (!row.repositoryId || row.kind === 'thread' || (await learningDisabled(row.repositoryId))) return report;
   const extraction = extractSetupSteps(loaded.calls, { repoDir: repoDirFor(row) });
@@ -190,6 +207,7 @@ export async function analyseTurn(chatId: string, turn: number, deps: TurnInsigh
       candidates: extraction.steps,
     });
   }
+  await recordStepUses({ repositoryId: row.repositoryId, workbenchId: row.id, calls: loaded.calls });
   await checkBakeResults(row, deps).catch((error) => {
     debugBus.recordEvent({
       service: 'setup_recipe',

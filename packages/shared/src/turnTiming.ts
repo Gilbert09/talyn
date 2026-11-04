@@ -273,27 +273,66 @@ export function commandSegments(command: string): string[] {
 }
 
 const LEADING_WORDS = /^(?:if|then|else|elif|while|until|do|time|nohup|exec|command|builtin|!|\(|\{)(?:\s+|$)/;
-const WRAPPERS = /^(?:(?:uv|poetry|pipenv|hatch|pdm)\s+run|npx|bunx|pnpm\s+(?:exec|dlx)|yarn\s+(?:exec|dlx)|bundle\s+exec)\s+(?:--?[\w-]+(?:=\S+)?\s+)*/;
+const WRAPPERS = /^((?:uv|poetry|pipenv|hatch|pdm)\s+run|npx|bunx|pnpm\s+(?:exec|dlx)|yarn\s+(?:exec|dlx)|bundle\s+exec)\s+(?:--?[\w-]+(?:=\S+)?\s+)*/;
+
+/** sudo and its options. Only the options in the first group take a value. */
+const SUDO = /^sudo((?:\s+(?:-[ugCDhprtTU]\s*(?!-)[^\s-]\S*|--(?:user|group|chdir|prompt|role|type|host|other-user|close-from)=\S+|-[A-Za-z]+|--[\w-]+(?:=\S+)?))*)\s+/;
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S*))\s+/;
+
+/** A segment without its wrappers, and what the wrappers said. */
+export interface UnwrappedCommand {
+  command: string;
+  /** The segment ran under sudo. */
+  sudo: boolean;
+  /** The user of `sudo -u`, or null for root. */
+  sudoUser: string | null;
+  /** Leading `NAME=value` words, as written. */
+  assignments: string[];
+  /** A runner such as `uv run` or `npx`, without its options. */
+  runner: string | null;
+}
 
 /**
  * One segment with what only wraps a command removed: `sudo`, `env`, leading
  * variable assignments, `timeout`, loop and `if` keywords, and runners such as
- * `uv run` or `npx`.
+ * `uv run` or `npx`. The result also says which wrappers were there, because
+ * a setup step must run as the same user as the command it came from.
  */
-export function stripCommandPrefix(segment: string): string {
+export function unwrapCommand(segment: string): UnwrappedCommand {
   let s = segment.trim();
+  const out: UnwrappedCommand = { command: '', sudo: false, sudoUser: null, assignments: [], runner: null };
   for (let guard = 0; guard < 12; guard++) {
     const before = s;
     s = s.replace(/^[({]\s*/, '').replace(/\s*[)}]\s*$/, '');
     s = s.replace(LEADING_WORDS, '');
-    s = s.replace(/^sudo(?:\s+-[A-Za-z]+(?:\s+(?!-)\S+)?)*\s+/, '');
+    const sudo = SUDO.exec(s);
+    if (sudo) {
+      out.sudo = true;
+      const user = /(?:^|\s)(?:-u\s*|--user=)(\S+)/.exec(sudo[1])?.[1] ?? null;
+      out.sudoUser = user === 'root' || user === '0' || user === '#0' ? null : user;
+      s = s.slice(sudo[0].length);
+    }
     s = s.replace(/^env(?:\s+-\S+)*\s+/, '');
-    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S*)\s+/, '');
+    const assignment = ASSIGNMENT.exec(s);
+    if (assignment) {
+      out.assignments.push(assignment[1]);
+      s = s.slice(assignment[0].length);
+    }
     s = s.replace(/^timeout(?:\s+-\S+)*\s+\d+[smhd]?\s+/, '');
-    s = s.replace(WRAPPERS, '');
+    const runner = WRAPPERS.exec(s);
+    if (runner) {
+      out.runner = runner[1].replace(/\s+/g, ' ');
+      s = s.slice(runner[0].length);
+    }
     if (s === before) break;
   }
-  return s.trim();
+  out.command = s.trim();
+  return out;
+}
+
+/** {@link unwrapCommand}, the command only. */
+export function stripCommandPrefix(segment: string): string {
+  return unwrapCommand(segment).command;
 }
 
 function unwrapShell(segment: string): string | null {

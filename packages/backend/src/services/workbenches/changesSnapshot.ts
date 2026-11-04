@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { WorkbenchChanges } from '@talyn/shared';
 import type { WorkbenchRow } from './store.js';
+import { deleteAllChanges, noteListRead } from './changesStore.js';
 import { WorkStorageUnavailableError, workObjectStore } from './workStorage.js';
 
 /**
@@ -30,33 +31,46 @@ export function changesSnapshotKey(row: SnapshotRow): string {
 /** The hash of the last list this process wrote, per workbench, so an unchanged poll does not upload again. */
 const lastWritten = new Map<string, string>();
 /** Writes per workbench run one at a time, in call order. */
-const writing = new Map<string, Promise<void>>();
+const writing = new Map<string, Promise<boolean>>();
 
 function hashOf(changes: WorkbenchChanges): string {
   return createHash('sha256').update(JSON.stringify(changes)).digest('hex');
 }
 
-async function put(row: SnapshotRow, changes: WorkbenchChanges, hash: string): Promise<void> {
-  if (lastWritten.get(row.id) === hash) return;
-  const body: StoredSnapshot = { version: 1, takenAt: new Date().toISOString(), changes };
+/** False when a newer list is already stored and nothing was written. */
+async function put(row: SnapshotRow, changes: WorkbenchChanges, hash: string, observedAt: Date | undefined): Promise<boolean> {
+  if (lastWritten.get(row.id) === hash) return true;
   try {
+    if (observedAt) {
+      const stored = await readChangesSnapshot(row);
+      if (stored?.snapshotAt && Date.parse(stored.snapshotAt) > observedAt.getTime()) return false;
+    }
+    const body: StoredSnapshot = { version: 1, takenAt: (observedAt ?? new Date()).toISOString(), changes };
     await workObjectStore().put(changesSnapshotKey(row), Buffer.from(JSON.stringify(body)));
     lastWritten.set(row.id, hash);
+    // The full copy's patches do not match a list that moved past them.
+    await noteListRead(row, changes);
   } catch (err) {
     lastWritten.delete(row.id);
-    if (err instanceof WorkStorageUnavailableError) return;
+    if (err instanceof WorkStorageUnavailableError) return true;
     console.warn(`[workbench] storing the changes snapshot of ${row.id} failed:`, err);
   }
+  return true;
 }
 
-/** Store the list a read of the box just produced. Best effort: never throws. */
+/**
+ * Store the list a read of the box produced. Best effort: never throws.
+ * With `observedAt` (when the box was read), a stored list taken after it
+ * is kept, and the answer is false.
+ */
 export function writeChangesSnapshot(
   row: Pick<WorkbenchRow, 'workspaceId' | 'id' | 'runtime' | 'kind'>,
   changes: WorkbenchChanges,
-): Promise<void> {
-  if (row.runtime !== 'sandbox' || row.kind === 'thread') return Promise.resolve();
+  opts: { observedAt?: Date } = {},
+): Promise<boolean> {
+  if (row.runtime !== 'sandbox' || row.kind === 'thread') return Promise.resolve(true);
   const hash = hashOf(changes);
-  const next = (writing.get(row.id) ?? Promise.resolve()).then(() => put(row, changes, hash));
+  const next = (writing.get(row.id) ?? Promise.resolve(true)).then(() => put(row, changes, hash, opts.observedAt));
   writing.set(row.id, next);
   void next.finally(() => {
     if (writing.get(row.id) === next) writing.delete(row.id);
@@ -80,7 +94,7 @@ export async function readChangesSnapshot(row: SnapshotRow): Promise<WorkbenchCh
   }
 }
 
-/** Remove the stored list. Called when the session is deleted. */
+/** Remove the stored list and the full stored copy (`changesStore.ts`). Called when the session is deleted. */
 export async function deleteChangesSnapshot(row: SnapshotRow): Promise<void> {
   lastWritten.delete(row.id);
   try {
@@ -88,6 +102,7 @@ export async function deleteChangesSnapshot(row: SnapshotRow): Promise<void> {
   } catch (err) {
     if (!(err instanceof WorkStorageUnavailableError)) throw err;
   }
+  await deleteAllChanges(row);
 }
 
 /** Tests start each case with no memory of earlier writes. */

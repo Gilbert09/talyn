@@ -71,9 +71,10 @@ const SHA256 = 'sha256_of() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"
  *
  * Prints one line:
  *   CLEAN                                     no uncommitted work and no commit GitHub lacks
- *   UNCHANGED <sha>                           HEAD and the tree are those of `previousSha`
+ *   UNCHANGED <sha> <unpushed>                HEAD and the tree are those of `previousSha`
  *   TOO_LARGE <bytes>                         the bundle is over the limit; nothing is staged
- *   BUNDLE <sha> <epoch> <base|-> <bytes> <sha256>
+ *   BUNDLE <sha> <epoch> <base|-> <bytes> <sha256> <unpushed>
+ * where <unpushed> counts the commits GitHub lacks.
  * and exits non-zero when it could not save. The bundle excludes the base
  * branch's history when the box knows it, and is a full bundle when not.
  */
@@ -102,16 +103,20 @@ export function workSaveScript(
     `prev=${previous || "''"}`,
     'if [ -n "$prev" ] && git cat-file -e "$prev^{commit}" 2>/dev/null &&',
     '  [ "$(git rev-parse "$prev^{tree}")" = "$tree" ] && [ "$(git rev-parse "$prev^")" = "$head" ]; then',
-    '  rm -rf -- "$d"; echo "UNCHANGED $prev"; exit 0',
+    '  rm -rf -- "$d"; echo "UNCHANGED $prev $unpushed"; exit 0',
     'fi',
     `sha=$(${IDENTITY} git commit-tree --no-gpg-sign "$tree" -p "$head" -m ${shellQuote(`talyn work ${opts.kind} ${row.id}`)}) || fail "could not write the commit"`,
     'git update-ref "$ref" "$sha" || fail "could not name the commit"',
     `base=$(git rev-parse -q --verify ${shellQuote(`refs/remotes/origin/${row.baseBranch}^{commit}`)} 2>/dev/null || true)`,
-    'if [ -n "$base" ]; then git bundle create "$d/work.bundle" "$ref" --not "$base" >/dev/null 2>&1',
-    'else git bundle create "$d/work.bundle" "$ref" >/dev/null 2>&1; fi || fail "could not write the bundle"',
+    // git's own error stays on stderr, so the failure says why.
+    'if [ -n "$base" ]; then git bundle create "$d/work.bundle" "$ref" --not "$base" >/dev/null',
+    'else git bundle create "$d/work.bundle" "$ref" >/dev/null; fi || fail "could not write the bundle"',
+    '[ -f "$d/work.bundle" ] || fail "git made no bundle file"',
     'size=$(wc -c < "$d/work.bundle" | tr -d " ")',
+    // An empty or broken size must fail the save, never read as small or as too large.
+    'case "$size" in ""|*[!0-9]*) fail "could not read the size of the bundle" ;; esac',
     `if [ "$size" -gt ${max} ]; then rm -rf -- "$d"; echo "TOO_LARGE $size"; exit 0; fi`,
-    'echo "BUNDLE $sha $(git log -1 --format=%ct "$sha") ${base:--} $size $(sha256_of "$d/work.bundle")"',
+    'echo "BUNDLE $sha $(git log -1 --format=%ct "$sha") ${base:--} $size $(sha256_of "$d/work.bundle") $unpushed"',
   ].join('\n');
 }
 
@@ -121,9 +126,9 @@ export function workCleanupScript(workbenchId: string): string {
 }
 
 export type WorkSaveResult =
-  | { kind: 'bundle'; sha: string; at: Date; base: string | null; size: number; sha256: string }
+  | { kind: 'bundle'; sha: string; at: Date; base: string | null; size: number; sha256: string; unpushed: number | null }
   | { kind: 'clean' }
-  | { kind: 'unchanged'; sha: string }
+  | { kind: 'unchanged'; sha: string; unpushed: number | null }
   | { kind: 'too_large'; size: number }
   | { kind: 'failed'; detail: string };
 
@@ -131,17 +136,25 @@ function tailOf(stderr: string): string {
   return stderr.trim().split('\n').slice(-3).join(' ').slice(-300);
 }
 
+/** An older box script prints no count. */
+function countOrNull(raw: string | undefined): number | null {
+  return raw === undefined ? null : Number(raw);
+}
+
 export function parseWorkSave(r: { exitCode: number; stdout: string; stderr: string }): WorkSaveResult {
   const line = r.stdout.trim().split('\n').pop()?.trim() ?? '';
   if (r.exitCode === 0) {
     if (line === 'CLEAN') return { kind: 'clean' };
-    const unchanged = /^UNCHANGED ([0-9a-f]{40,64})$/.exec(line);
-    if (unchanged) return { kind: 'unchanged', sha: unchanged[1] };
+    const unchanged = /^UNCHANGED ([0-9a-f]{40,64})(?: (\d+))?$/.exec(line);
+    if (unchanged) return { kind: 'unchanged', sha: unchanged[1], unpushed: countOrNull(unchanged[2]) };
     const large = /^TOO_LARGE (\d+)$/.exec(line);
     if (large) return { kind: 'too_large', size: Number(large[1]) };
-    const b = /^BUNDLE ([0-9a-f]{40,64}) (\d+) ([0-9a-f]{40,64}|-) (\d+) ([0-9a-f]{64})$/.exec(line);
+    const b = /^BUNDLE ([0-9a-f]{40,64}) (\d+) ([0-9a-f]{40,64}|-) (\d+) ([0-9a-f]{64})(?: (\d+))?$/.exec(line);
     if (b) {
-      return { kind: 'bundle', sha: b[1], at: new Date(Number(b[2]) * 1000), base: b[3] === '-' ? null : b[3], size: Number(b[4]), sha256: b[5] };
+      return {
+        kind: 'bundle', sha: b[1], at: new Date(Number(b[2]) * 1000), base: b[3] === '-' ? null : b[3],
+        size: Number(b[4]), sha256: b[5], unpushed: countOrNull(b[6]),
+      };
     }
   }
   return { kind: 'failed', detail: tailOf(r.stderr) || `saving the work exited ${r.exitCode}` };
@@ -249,17 +262,51 @@ function commitsCarried(n: number): string {
   return n > 0 ? `, with ${n} commit${n === 1 ? '' : 's'} that had not been pushed` : '';
 }
 
-/** What the replacement box holds of the lost one's work, for the chat. */
-export function recoveryWorkNote(restore: WorkRestore, opts: { lostAt: Date; recordedAt?: Date | null }): string {
+/**
+ * What the replacement box holds of the lost one's work, for the chat.
+ *
+ * `checkedAt` is when a save last confirmed that the checkpoint held all of
+ * the work; changes can only be missing from after it. The last turn's start
+ * and end and `turnRunning` say whether the agent ran after that. When the
+ * last turn ended before it, and no save failed since,
+ * the note says so: on 2026-11-03 a session idle for two hours was told that
+ * "up to 141 minutes of work" were missing, and it read as lost work.
+ */
+export function recoveryWorkNote(
+  restore: WorkRestore,
+  opts: {
+    lostAt: Date;
+    recordedAt?: Date | null;
+    checkedAt?: Date | null;
+    lastTurnStartedAt?: Date | null;
+    lastTurnEndedAt?: Date | null;
+    turnRunning?: boolean;
+    saveFailures?: number;
+  },
+): string {
   switch (restore.kind) {
     case 'none':
       return NO_CHECKPOINT_NOTE;
     case 'restored': {
-      const gap = Math.max(0, Math.ceil((opts.lostAt.getTime() - restore.at.getTime()) / 60_000));
-      const missing = gap <= 1
-        ? 'Changes made in the last minute before the loss may be missing.'
-        : `Changes made after it, up to ${minutes(gap)} of work, are missing.`;
-      return `${LOST_PREFIX}. Talyn restored the work from a checkpoint taken at ${checkpointTime(restore.at)}${commitsCarried(restore.commits)}. ${missing}`;
+      const confirmed = opts.checkedAt && opts.checkedAt.getTime() > restore.at.getTime() && !opts.saveFailures
+        ? opts.checkedAt
+        : restore.at;
+      const agentIdle = opts.turnRunning === false && !opts.saveFailures && (
+        !opts.lastTurnStartedAt
+        || (!!opts.lastTurnEndedAt
+          && opts.lastTurnEndedAt.getTime() >= opts.lastTurnStartedAt.getTime()
+          && opts.lastTurnEndedAt.getTime() <= confirmed.getTime()));
+      const gap = Math.max(0, Math.ceil((opts.lostAt.getTime() - confirmed.getTime()) / 60_000));
+      const checked = confirmed === restore.at ? '' : ` A later check at ${checkpointTime(confirmed)} found no new changes.`;
+      let missing: string;
+      if (agentIdle && gap > 1) {
+        missing = 'The agent did not run after that, so only changes made in a terminal or by a script after it can be missing.';
+      } else if (gap <= 1) {
+        missing = 'Changes made in the last minute before the loss may be missing.';
+      } else {
+        missing = `Changes made after it, up to ${minutes(gap)} of work, are missing.`;
+      }
+      return `${LOST_PREFIX}. Talyn restored the work from a checkpoint taken at ${checkpointTime(restore.at)}${commitsCarried(restore.commits)}.${checked} ${missing}`;
     }
     case 'stale':
       return (
@@ -291,6 +338,35 @@ export function archiveRestoreNote(restore: WorkRestore): string {
       return `${base} Talyn could not put back the work saved when it was archived: ${restore.detail}. Talyn keeps the saved work.`;
   }
 }
+
+/** Saves that fail in a row before the chat says that the work is at risk. */
+export const CHECKPOINT_KEEPS_FAILING_AFTER = 3;
+
+function lastCheckpointText(savedAt: Date | null): string {
+  return savedAt ? `The last checkpoint is from ${checkpointTime(savedAt)}.` : 'There is no checkpoint of this work yet.';
+}
+
+/** The first save that failed in a run. */
+export function checkpointFailedNote(detail: string, savedAt: Date | null): string {
+  return (
+    `Talyn could not save a checkpoint of this session's work: ${detail.replace(/\.?\s*$/, '')}. ` +
+    `${lastCheckpointText(savedAt)} Talyn tries again after the next change.`
+  );
+}
+
+/** {@link CHECKPOINT_KEEPS_FAILING_AFTER} saves failed in a row. */
+export function checkpointKeepsFailingNote(failures: number, savedAt: Date | null): string {
+  const lost = savedAt
+    ? `changes made after ${checkpointTime(savedAt)} are lost too`
+    : 'changes that are not pushed are lost too';
+  return (
+    `Talyn could not save this session's work ${failures} times in a row. ` +
+    `If the sandbox is lost, ${lost}. To keep them, push the branch.`
+  );
+}
+
+/** A save worked after a run of failures. */
+export const CHECKPOINT_RECOVERED_NOTE = "Talyn saved this session's work again.";
 
 /** A checkpoint refused for its size. Shown once until a checkpoint succeeds again. */
 export function tooLargeNote(size: number, maxBytes = WORK_BUNDLE_MAX_BYTES): string {

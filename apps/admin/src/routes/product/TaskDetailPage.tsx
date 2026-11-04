@@ -159,9 +159,9 @@ export function TaskDetailPage() {
         <Field
           label="Run"
           value={
-            data.remoteRunId && data.fleetHost ? (
+            data.remoteRunId && data.provider === 'selfhosted' ? (
               <Link
-                to={`${routeTo(ROUTES.fleetRun, { runId: data.remoteRunId })}?host=${encodeURIComponent(data.fleetHost)}`}
+                to={`${routeTo(ROUTES.fleetRun, { runId: data.remoteRunId })}${data.fleetHost ? `?host=${encodeURIComponent(data.fleetHost)}` : ''}`}
                 className="underline-offset-2 hover:underline"
               >
                 {data.remoteRunId}

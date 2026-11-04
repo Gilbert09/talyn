@@ -250,10 +250,11 @@ describe('the meter on a session box', () => {
       expect(opens()).toEqual([]);
     });
 
-    it('a box that was asleep, not lost, is resumed and metered', async () => {
+    it('a box that was asleep, not lost, stays asleep and meters nothing', async () => {
+      // Recovery never wakes a box: the next exec does, and its resume opens the interval.
       fleet.status = 'suspended';
       await recovery.recoverLostSandbox(await row(), new FleetRunNotFoundError('not on this host'));
-      expect(opens()).toEqual([workbenchInterval(OLD_BOX, 'standard')]);
+      expect(opens()).toEqual([]);
       expect(closes()).toEqual([]);
     });
   });

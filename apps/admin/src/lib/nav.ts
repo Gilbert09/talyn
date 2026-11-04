@@ -4,6 +4,7 @@ import {
   Disc3,
   Layers,
   ListChecks,
+  MessagesSquare,
   Server,
   ScrollText,
   Siren,
@@ -51,6 +52,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'users', label: 'Users', to: ROUTES.users, icon: Users },
       { id: 'workspaces', label: 'Workspaces', to: ROUTES.workspaces, icon: Layers },
+      { id: 'sessions', label: 'Sessions', to: ROUTES.sessions, icon: MessagesSquare },
       { id: 'tasks', label: 'Tasks', to: ROUTES.tasks, icon: ListChecks },
     ],
   },

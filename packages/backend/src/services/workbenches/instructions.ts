@@ -19,6 +19,7 @@ import { memoryIndexForTurn } from './memory.js';
 import { repositoryInstructionsForTurn } from './repositoryInstructions.js';
 import { repoDirFor } from './sandboxRuntime.js';
 import { shellPath, writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
+import { syncSessionFiles } from './sessionFileSync.js';
 import type { WorkbenchRow } from './store.js';
 
 /**
@@ -289,50 +290,40 @@ function shellQuoteRaw(value: string): string {
 
 /**
  * Copy the workspace's switched-on files for `agent` into the sandbox, and
- * take away the ones switched off since. Skipped entirely when the workspace
- * has never stored a file for this agent or a memory entry, so a session that
- * never used the features pays no exec for them.
+ * remove files that were disabled or deleted. Unchanged files need no sync exec.
  */
 export async function syncInstructionFiles(row: WorkbenchRow, agent: WorkbenchAgent = row.agent as WorkbenchAgent): Promise<void> {
   // A thread has no repository: only the user-wide files and the memory index apply.
   const thread = row.kind === 'thread';
-  const repo = thread || !row.repositoryId
-    ? { hasRow: false, body: null }
-    : await repositoryInstructionsForTurn(row.repositoryId, agent);
-  const [any] = await db()
-    .select({ key: filesTable.key })
-    .from(filesTable)
-    .where(and(eq(filesTable.workspaceId, row.workspaceId), eq(filesTable.agent, agent)))
-    .limit(1);
-  const memory = await memoryIndexForTurn({
-    workspaceId: row.workspaceId,
-    repositoryId: row.repositoryId,
-    // A thread sees its own entries; a session in a thread sees its thread's.
-    threadId: thread ? row.id : row.threadId,
-  });
-  if (!any && !repo.hasRow && !memory.used) return;
+  const [repo, rows, memory] = await Promise.all([
+    thread || !row.repositoryId
+      ? Promise.resolve({ hasRow: false, body: null })
+      : repositoryInstructionsForTurn(row.repositoryId, agent),
+    db()
+      .select({ key: filesTable.key, target: filesTable.target, sourcePath: filesTable.sourcePath, content: filesTable.content })
+      .from(filesTable)
+      .where(and(
+        eq(filesTable.workspaceId, row.workspaceId),
+        eq(filesTable.agent, agent),
+        eq(filesTable.enabled, true),
+        thread ? eq(filesTable.target, 'user') : or(
+          eq(filesTable.target, 'user'),
+          and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
+        ),
+      ))
+      .orderBy(asc(filesTable.key)),
+    memoryIndexForTurn({
+      workspaceId: row.workspaceId,
+      repositoryId: row.repositoryId,
+      threadId: thread ? row.id : row.threadId,
+    }),
+  ]);
 
-  const rows: SyncRow[] = any
-    ? await db()
-        .select({ key: filesTable.key, target: filesTable.target, sourcePath: filesTable.sourcePath, content: filesTable.content })
-        .from(filesTable)
-        .where(
-          and(
-            eq(filesTable.workspaceId, row.workspaceId),
-            eq(filesTable.agent, agent),
-            eq(filesTable.enabled, true),
-            thread
-              ? eq(filesTable.target, 'user')
-              : or(
-                eq(filesTable.target, 'user'),
-                and(eq(filesTable.target, 'repo'), sql`lower(${filesTable.repoFullName}) = lower(${row.repoFullName})`),
-              ),
-          ),
-        )
-        .orderBy(asc(filesTable.key))
-    : [];
-
-  await writeSandboxFiles(row, ...instructionSyncPlan(row, agent, rows, repo.body, memory.index));
+  const plan = instructionSyncPlan(row, agent, rows, repo.body, memory.index);
+  await syncSessionFiles(row, `instructions-${agent}`, {
+    workspaceId: row.workspaceId, repositoryId: row.repositoryId, threadId: row.threadId,
+    agent, repo, memory, rows, plan,
+  }, plan, { repoDir: repoDirFor(row), write: writeSandboxFiles });
 }
 
 /** The files to write and the scripts around them. Split out so a test can read it. */

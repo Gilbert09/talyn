@@ -113,6 +113,8 @@ export interface ListMemoryOptions {
   repositoryId?: string;
   threadId?: string;
   q?: string;
+  /** Exactly this name, not case-sensitive, as the unique key compares it. */
+  name?: string;
   includeForgotten?: boolean;
   includeBody?: boolean;
 }
@@ -142,6 +144,8 @@ export function memoryListWhere(workspaceId: string, opts: Omit<ListMemoryOption
   } else if (opts.repositoryId || opts.threadId) {
     where.push(visibleFrom(opts.repositoryId, opts.threadId));
   }
+  const name = opts.name?.trim();
+  if (name) where.push(sql`lower(${table.name}) = lower(${name})`);
   const q = opts.q?.trim();
   if (q) {
     const pattern = `%${escapeLike(q)}%`;

@@ -119,12 +119,13 @@ describe('session tools', () => {
 
   it('marks every session tool with the workbenches feature', () => {
     const sessions = TOOLS.filter((t) => /^talyn_\w*session/.test(t.name));
-    expect(sessions).toHaveLength(17);
+    expect(sessions).toHaveLength(19);
     for (const t of sessions) expect(t.feature).toBe('workbenches');
   });
 
   it.each([
     ['archive_session', { destructiveHint: true, idempotentHint: true }],
+    ['retry_session', { destructiveHint: true, openWorldHint: true }],
     ['cancel_session_turn', { destructiveHint: true, idempotentHint: true }],
     ['list_sessions', { readOnlyHint: true }],
     ['get_session_diff', { readOnlyHint: true }],
@@ -375,18 +376,48 @@ describe('session tools', () => {
     expect(text).toContain('a.ts  modified  +3/-1');
     expect(text).toContain('b.png  added  binary');
     expect(text).toContain('head: def');
+    expect(text).not.toContain('As of');
+  });
+
+  it('get_session_changes says when the list is a stored copy of a sleeping sandbox', async () => {
+    mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'GET /api/v1/workbenches/s1/changes': () => ({
+        files: [{ path: 'a.ts', status: 'modified', added: 3, removed: 1, binary: false }],
+        base: 'abc',
+        headSha: 'def',
+        snapshotAt: '2026-11-01T10:00:00.000Z',
+      }),
+    });
+    const text = await tool('get_session_changes').handler(OWNER, { session_id: 's1' });
+    expect(text.split('\n')[0]).toBe("As of 2026-11-01T10:00:00.000Z (sandbox asleep; Talyn's stored copy).");
+    expect(text).toContain('a.ts  modified  +3/-1');
   });
 
   it.each([
-    [{ session_id: 's1' }, null],
-    [{ session_id: 's1', path: 'src/a b.ts' }, 'src/a b.ts'],
-  ])('get_session_diff %j', async (args, path) => {
+    [{ session_id: 's1' }, null, null],
+    [{ session_id: 's1', path: 'src/a b.ts' }, 'src/a b.ts', null],
+    [{ session_id: 's1', live: true }, null, '1'],
+    [{ session_id: 's1', live: false }, null, null],
+  ])('get_session_diff %j', async (args, path, live) => {
     const { calls } = mockApi({
       'GET /api/v1/workbenches/s1': () => session(),
       'GET /api/v1/workbenches/s1/diff': () => ({ patch: 'diff --git a b' }),
     });
     expect(await tool('get_session_diff').handler(OWNER, args)).toBe('diff --git a b');
     expect(calls[1].url.searchParams.get('path')).toBe(path);
+    expect(calls[1].url.searchParams.get('live')).toBe(live);
+  });
+
+  it.each([
+    [{ source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' }, "As of 2026-11-01T10:00:00.000Z (sandbox asleep; Talyn's stored copy)."],
+    [{ source: 'github', mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40) }, 'From GitHub, aaaaaaaa..bbbbbbbb (sandbox asleep).'],
+  ])('get_session_diff says where a diff of a sleeping sandbox came from: %j', async (extra, line) => {
+    mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'GET /api/v1/workbenches/s1/diff': () => ({ patch: 'diff --git a b', ...extra }),
+    });
+    expect(await tool('get_session_diff').handler(OWNER, { session_id: 's1' })).toBe(`${line}\ndiff --git a b`);
   });
 
   it('get_session_diff caps a large diff and says how to read less', async () => {
@@ -444,6 +475,7 @@ describe('session tools', () => {
   it.each([
     ['archive_session', 'archive'],
     ['restore_session', 'restore'],
+    ['retry_session', 'retry'],
   ])('%s calls POST /%s', async (name, action) => {
     const { calls } = mockApi({
       [`POST /api/v1/workbenches/s1/${action}`]: () => session({ archivedAt: action === 'archive' ? 'now' : null }),
@@ -457,11 +489,53 @@ describe('session tools', () => {
     'get_session',
     'archive_session',
     'restore_session',
+    'retry_session',
     'get_session_changes',
     'get_session_diff',
     'run_session_script',
   ])('%s requires a session id', async (name) => {
     mockApi({});
     await expect(tool(name).handler(OWNER, { name: 'dev' })).rejects.toThrow('session_id is required');
+  });
+
+  describe('retry_session', () => {
+    it('calls the retry route once and answers the new state', async () => {
+      const { calls } = mockApi({
+        'POST /api/v1/workbenches/s1/retry': () => session({ status: 'provisioning', sandboxState: 'creating' }),
+      });
+      const text = await tool('retry_session').handler(OWNER, { session_id: 's1' });
+      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual(['POST /api/v1/workbenches/s1/retry']);
+      expect(text).toContain('[provisioning]');
+    });
+
+    it.each([
+      ['a ready session', 'This session has not failed and is not starting, so there is nothing to retry.', 'not_failed'],
+      ['an archived session', 'This session is archived. Restore it first.', 'not_ready'],
+      ["another owner's session", 'Session not found', undefined],
+    ])('passes on the refusal for %s', async (_name, error, code) => {
+      mockApi({
+        'POST /api/v1/workbenches/s1/retry': () => ({
+          status: code ? 409 : 404,
+          body: { success: false, error, ...(code ? { code } : {}) },
+        }),
+      });
+      await expect(tool('retry_session').handler(OWNER, { session_id: 's1' })).rejects.toThrow(error);
+    });
+
+    it('turns a local session refusal into the local message', async () => {
+      mockApi({
+        'POST /api/v1/workbenches/sl/retry': () => ({
+          status: 409,
+          body: { success: false, error: 'local', code: 'local_runtime' },
+        }),
+      });
+      await expect(tool('retry_session').handler(OWNER, { session_id: 'sl' })).rejects.toThrow(LOCAL_MESSAGE);
+    });
+
+    it('url-encodes the session id', async () => {
+      const { calls } = mockApi({ 'POST /api/v1/workbenches/a%2Fb/retry': () => session({ id: 'a/b' }) });
+      await tool('retry_session').handler(OWNER, { session_id: 'a/b' });
+      expect(calls[0].url.pathname).toBe('/api/v1/workbenches/a%2Fb/retry');
+    });
   });
 });

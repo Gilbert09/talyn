@@ -32,7 +32,7 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
   reconcileDefaultBranch: async (input: { stored: string }) => input.stored || 'main',
 }));
 
-const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
+const { settleArchivesForTests, sweepStrandedProvisions } = await import('../services/workbenches/lifecycle.js');
 const { setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
@@ -385,6 +385,26 @@ describe('/v1 sessions and chats', () => {
       expect(retried.status).toBe(200);
       expect(retried.body.status).toBe('provisioning');
       await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
+    });
+
+    it('retries a session stuck while it starts', async () => {
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      scriptedFleet(async (script) => {
+        if (script.includes('git clone')) await held;
+        return null;
+      });
+      const res = await call('POST', '/sessions', { workspace_id: 'ws-a', repository_id: 'repo-a', agent: 'claude' });
+      await vi.waitFor(() => expect(fleet.created).toHaveLength(1));
+      const retried = await call('POST', `/sessions/${res.body.id}/retry`);
+      expect(retried.status).toBe(200);
+      expect(retried.body.status).toBe('provisioning');
+      expect(fleet.deleted).toEqual([fleet.created[0].id]);
+      release();
+      await vi.waitFor(async () => {
+        await sweepStrandedProvisions();
+        expect((await getWorkbench(res.body.id))?.status).toBe('ready');
+      }, { timeout: 5000 });
     });
 
     it('refuses to retry a session that has not failed', async () => {

@@ -11,7 +11,7 @@ import { createHash, randomBytes } from 'crypto';
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
 import type { Duplex } from 'stream';
-import { createSseJsonParser, type BakeStepResult, type RepositoryBake } from '@talyn/shared';
+import { createSseJsonParser, type BakeStepResult, type CreateSandboxLayers, type LayerStepResult, type RepositoryBake } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 
 /**
@@ -83,19 +83,11 @@ export interface FleetSandbox {
    */
   memMib?: number;
   /**
-   * The CPU-time allowance the box was created with, in thousandths of a
-   * vCPU. With `memMib` it names the size: `small` and `standard` share 4 GiB
-   * and differ only here. Absent on a host that predates the field.
-   */
-  milliVcpu?: number;
-  /**
    * When the box was suspended. Cleared on resume. The meter closes the box's
    * interval at this instant, not at the moment Talyn noticed. Go writes a zero
    * time for "never", so read it through {@link fleetInstant}.
    */
   suspendedAt?: string;
-  /** The idle timeout this box runs with, in seconds. */
-  idleTtlSec?: number;
   /**
    * What the run is spending right now — the VMM's resident size, so guest
    * pages actually touched plus the VMM's own overhead.
@@ -114,12 +106,50 @@ export interface FleetSandbox {
   bakeError?: string;
   /** 'base' | 'repo' — which layer selection landed on. */
   goldenLayer?: string;
+  /**
+   * Layered images (plan §10.5). Every field is optional: a host that predates
+   * layers sends none, and Talyn keeps the old rules then.
+   * `layer`: the image the box booted, 'base' | 'legacy' | 'repo' | 'user'.
+   */
+  layer?: string;
+  /** The commit the booted repo layer holds. */
+  repoCommit?: string;
+  /** The user layer step ids the booted image holds. Absent: the host does not report it. */
+  appliedStepIds?: string[];
+  /** The fleet is building the user layer, or the repo layer, for this box's stack. */
+  userLayerPending?: boolean;
+  repoLayerPending?: boolean;
+  /** The repository's own setup failed in the repo layer build; the box runs it. */
+  repoSetupOk?: boolean;
+  /** The booted image holds the repository checked out at `/work/repo`. */
+  prebakedCheckout?: boolean;
+  /** The user layer build's results per step (was `bakeSteps`). */
+  layerStepResults?: LayerStepResult[];
   /** The rootfs this box was given. Absent or 0 means the golden's own size. */
   diskMib?: number;
+  /**
+   * Non-zero while a disk grow to `diskMib` is charged but the guest has not
+   * confirmed it. Asking for `diskMib` again retries only the guest step.
+   */
+  diskGrowFromMib?: number;
   /** True when a newer golden exists for this box's repository. Absent reads as "not stale". */
   goldenStale?: boolean;
   /** `memory` or `rootfs`, while suspended. */
   suspendKind?: string;
+  /** Where the suspended images are on the host. Empty or absent: none on the host. */
+  suspendDir?: string;
+  /** True when a complete copy of the suspension is in object storage (hibernation). */
+  suspendUploaded?: boolean;
+  /** The idle timeout the box runs with, in seconds. Absent on an older fleetd. */
+  idleTtlSec?: number;
+  /** When the host last asked the box to do something: the idle clock. */
+  lastRequestAt?: string;
+  /**
+   * The box's CPU share in thousandths of a vCPU, when the fleet sends it.
+   * With `memMib` it names the size: `small` and `standard` share 4 GiB and
+   * differ only here.
+   */
+  milliVcpu?: number;
   /** Last vsock heartbeat. */
   lastHeartbeat?: string;
   /**
@@ -326,6 +356,17 @@ export interface CreateSandboxInput {
    * the base image, which the workbench clone script handles as before.
    */
   baseBranch?: string;
+  /**
+   * The legacy tenant bake: the repository's image steps. Kept beside `layers`
+   * until every host takes `layers`; a host that takes both prefers `layers`.
+   */
+  bake?: RepositoryBake;
+  /**
+   * Layered images (plan §10.5): use the stack, and the user layer to build
+   * for this workspace and repository. `user: null`: boot the repo layer.
+   * Lenient decode: a host that predates the field ignores it.
+   */
+  layers?: CreateSandboxLayers;
   /** Who the box's commits are by. Written into the guest's ~/.gitconfig; not a secret. */
   gitAuthorName?: string;
   gitAuthorEmail?: string;
@@ -395,6 +436,17 @@ export interface CreateSandboxInput {
   memMib?: number;
   /** The guest's CPU-time allowance in thousandths of a vCPU. Absent takes the tenant's default. */
   milliVcpu?: number;
+  /** The rootfs size in MiB. Absent takes the golden's own size. A session move for a full disk sets it. */
+  diskMib?: number;
+  /**
+   * A BARE create only: when the host is out of memory, join the fleet's queue
+   * instead of a 503. The answer is then at once, with `status: 'queued'`, and
+   * the caller polls `getSandbox` until the box is `idle` or `failed`. Every
+   * other refusal is still a 503. A session provision sends it. A move does
+   * not, because a move keeps the old box when the fleet is full. A fleet that
+   * predates the field ignores it.
+   */
+  queueWhenFull?: boolean;
   /**
    * How long the box may go with no request before the fleet suspends it.
    * Every Talyn box sends {@link TALYN_SANDBOX_IDLE_TTL_SEC}: awake time is
@@ -433,6 +485,27 @@ export function fleetInstant(value: string | null | undefined): Date | null {
 }
 
 /** One MCP server, as the fleet takes it on a create. */
+/**
+ * The credentials of one box: the body of POST /v1/sandboxes/{id}/credentials,
+ * and the optional `credentials` of a resume.
+ */
+export interface FleetSandboxCredentials {
+  githubToken: string;
+  anthropicKey?: string;
+  openaiKey?: string;
+  repo?: string;
+  /**
+   * One credential per integration, keyed by NAME — which for us means one
+   * per MCP server. The fleet spells this `integrations` here and
+   * `integrationSecrets` on a create; it is the same map.
+   *
+   * REPLACES the whole set rather than merging into it, because installing
+   * credentials replaces the running proxy's entire struct. A name omitted
+   * here is a credential the box loses.
+   */
+  integrations?: Record<string, string>;
+}
+
 export interface FleetMcpServerInline {
   /** Becomes a hostname label inside the sandbox: lowercase, digits, hyphens. */
   name: string;
@@ -813,6 +886,18 @@ export class FleetClient {
         await errorMessage(resp, 'the fleet lost the answer to this request'),
       );
     }
+    if (resp.status === 502) {
+      // A 502 is the edge in front of the control plane ("Application failed
+      // to respond" while it redeploys or restarts), or a host the gateway
+      // could not reach. Both clear by waiting, so it is an unreachable fleet,
+      // not a refusal. A retry with the same sandbox id is safe: the create is
+      // idempotent on the id. On 2026-11-03 three session starts failed for
+      // good this way during one control-plane deploy.
+      const { message, code } = await errorBody(resp, 'the fleet did not respond');
+      const lost = lostSandboxError(resp.status, message, code);
+      if (lost) throw lost;
+      throw new FleetCapacityError(`Fleet unreachable (502): ${message}`, parseRetryAfterMs(resp), 'unreachable', code);
+    }
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
@@ -1007,6 +1092,16 @@ export class FleetClient {
     return this.request(`/v1/sandboxes/${encodeURIComponent(id)}`);
   }
 
+  /**
+   * The host the gateway says holds a sandbox now, from the `X-Fleet-Host` it
+   * puts on every sandbox answer. A sleeping box can move to another host when
+   * its own host is full, so this can differ from the host it was created on.
+   * Undefined when the answer names no host (a host answering directly).
+   */
+  async sandboxHost(id: string): Promise<string | undefined> {
+    return (await this.requestWithMeta<unknown>(`/v1/sandboxes/${encodeURIComponent(id)}`)).host;
+  }
+
   async getEvents(
     id: string,
     after: number,
@@ -1090,25 +1185,7 @@ export class FleetClient {
    * fleet deploy survivable for a task that is already running, which is what
    * lets deploys happen at all rather than waiting for an idle host.
    */
-  async setSandboxCredentials(
-    id: string,
-    creds: {
-      githubToken: string;
-      anthropicKey?: string;
-      openaiKey?: string;
-      repo?: string;
-      /**
-       * One credential per integration, keyed by NAME — which for us means one
-       * per MCP server. The fleet spells this `integrations` here and
-       * `integrationSecrets` on a create; it is the same map.
-       *
-       * REPLACES the whole set rather than merging into it, because installing
-       * credentials replaces the running proxy's entire struct. A name omitted
-       * here is a credential the box loses.
-       */
-      integrations?: Record<string, string>;
-    },
-  ): Promise<void> {
+  async setSandboxCredentials(id: string, creds: FleetSandboxCredentials): Promise<void> {
     await this.request(`/v1/sandboxes/${encodeURIComponent(id)}/credentials`, {
       method: 'POST',
       body: JSON.stringify(creds),
@@ -1419,13 +1496,22 @@ export class FleetClient {
     await this.request(sandboxPath(id, '/suspend'), { method: 'POST', body: '{}' });
   }
 
-  async resumeSandbox(id: string): Promise<void> {
+  /**
+   * Resume a suspended box. With `credentials`, the box boots with them and the
+   * fleet skips its own fetch from the control plane, which was most of a
+   * local wake. A fleet without the field ignores it and fetches, as before.
+   */
+  async resumeSandbox(id: string, opts: { credentials?: FleetSandboxCredentials } = {}): Promise<void> {
     // A hibernated box pulls its image back from object storage first, which
     // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
     // The idle timeout goes on the resume too, so a box created before Talyn
     // asked for 10 minutes moves to it the next time it wakes.
-    const resume = (body: Record<string, unknown>) =>
-      this.request(sandboxPath(id, '/resume'), { method: 'POST', body: JSON.stringify(body) }, { timeoutMs: RESUME_TIMEOUT_MS });
+    const resume = (fields: Record<string, unknown>) =>
+      this.request(
+        sandboxPath(id, '/resume'),
+        { method: 'POST', body: JSON.stringify({ ...fields, ...(opts.credentials ? { credentials: opts.credentials } : {}) }) },
+        { timeoutMs: RESUME_TIMEOUT_MS },
+      );
     try {
       await resume({ idleTtlSec: TALYN_SANDBOX_IDLE_TTL_SEC });
     } catch (err) {

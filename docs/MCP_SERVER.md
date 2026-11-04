@@ -77,6 +77,8 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_list_github_repos` | Find accessible GitHub repositories. Use `search` to narrow the first 100 matches. |
 | `talyn_add_repository` | Watch a repository. Accept `owner/name` or separate owner and repository fields. |
 | `talyn_remove_repository` | Stop watching a repository. |
+| `talyn_list_setup_steps` | List the Setup list of a repository, in order. Each step shows its id, its status (`active`, `suggested`, `dismissed` or `disabled`), where it runs (`image`, `box` or `both`), who added it (`user`, `learned` or `agent`), its name, its command, and why it has its status. The first lines show if learning is on, the repository's own setup command and the time of the last setup. Allowed for session tokens. |
+| `talyn_revert_setup_step` | Dismiss one learned setup step. It stops running on new boxes, leaves the image and stays in the list as dismissed, so Talyn does not suggest it again. Talyn refuses to dismiss a person's own step. Not allowed for session tokens. |
 
 ### Pull requests
 
@@ -93,6 +95,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_set_review_hidden` | Hide or restore a PR in the review list. |
 | `talyn_set_auto_keep_mergeable` | Enable or disable automatic cloud fixes. |
 | `talyn_merge_pull_request` | Merge a PR or submit it to the external merge queue. |
+| `talyn_close_pull_request` | Close a PR as you, with an optional comment first. Pass `pull_request_id`, or `repository` and `number`. Talyn closes only your own PRs (the GitHub author is the connected user) or PRs a Talyn session opened. A merged PR is refused. An already closed PR is a no-op, and Talyn does not post the comment. Talyn posts the comment only when the close is allowed. If the close then fails, the error says that the comment is on the PR. From a session token, the PR must be in the session's repository, and the session's own PR is refused. |
 | `talyn_fix_pull_request` | Start the standard cloud task to make a PR ready to merge. |
 
 ### Merge queue
@@ -171,6 +174,8 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | --- | --- |
 | `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
 | `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
+| `talyn_session_sandbox_status` | Read the state of a session's sandbox in plain words: starting, running, idle (with the time it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. It also shows the fleet host and size, what runs now, when the work was last saved, what is not pushed, failed saves and the last problem. Read-only. The fleet's record is cached for 10 seconds; when the fleet does not answer, that part is unknown. From a session token: the session itself, or a session in its thread. |
+| `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
@@ -182,7 +187,8 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_run_session_script` | Start a named script in the sandbox. |
 | `talyn_stop_session_script` | Stop a running script. |
 | `talyn_archive_session` | Archive a session. |
-| `talyn_restore_session` | Restore an archived session, or retry a failed start. |
+| `talyn_restore_session` | Restore an archived session. |
+| `talyn_retry_session` | Restart a session that failed, or one that is stuck while it starts, on a new sandbox. The old sandbox is deleted. A ready or archived session is refused. |
 
 ### Workspace memory
 
@@ -276,8 +282,11 @@ refused until somebody adds it.
 - `talyn_archive_session` on itself is done after the current reply ends.
   Archiving at once would cancel the turn that asked. No new turn starts while
   the request waits (`settings.archiveAfterTurn`).
-- `talyn_cancel_session_turn`, `talyn_send_session_message` and
-  `talyn_restore_session` on itself are refused.
+- `talyn_cancel_session_turn`, `talyn_send_session_message`,
+  `talyn_restore_session` and `talyn_retry_session` on itself are refused.
+- `talyn_close_pull_request` refuses the session's own pull request, and any
+  pull request outside the session's repository. A thread has no repository,
+  so it cannot close pull requests.
 - Calls on other sessions work as they do for a personal token.
 
 **Sessions that start sessions.** A session started through a session token

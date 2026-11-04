@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, isNotNull, or, lt, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, isNotNull, or, lt, lte, ne, sql, type SQL } from 'drizzle-orm';
 import type {
   AgentEvent,
   AgentStreamSnapshot,
@@ -23,11 +23,13 @@ import {
   workbenchCheckpoints as checkpointsTable,
   workbenchEvents as eventsTable,
   workbenches as workbenchesTable,
+  workbenchTurnTimings,
 } from '../../db/schema.js';
 import { TURN_OWNER, isWorkbenchDraining } from './ownership.js';
 import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
 import { cleanJsonbString, stringifyJsonbSafe, toJsonbSafe } from './jsonSafe.js';
+import { BOX_START_SETTINGS_KEYS } from './boxStart.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -89,6 +91,13 @@ export const WORKBENCH_COLUMNS = {
   workCheckpointSha: workbenchesTable.workCheckpointSha,
   workCheckpointAt: workbenchesTable.workCheckpointAt,
   workCheckpointBytes: workbenchesTable.workCheckpointBytes,
+  workCheckedAt: workbenchesTable.workCheckedAt,
+  workUnpushedCommits: workbenchesTable.workUnpushedCommits,
+  workSaveFailures: workbenchesTable.workSaveFailures,
+  workSaveFailedAt: workbenchesTable.workSaveFailedAt,
+  workSaveError: workbenchesTable.workSaveError,
+  changesAt: workbenchesTable.changesAt,
+  changesEtag: workbenchesTable.changesEtag,
   archivedAt: workbenchesTable.archivedAt,
   createdAt: workbenchesTable.createdAt,
   updatedAt: workbenchesTable.updatedAt,
@@ -119,6 +128,15 @@ export const CHAT_COLUMNS = {
 
 export type ChatRow = Pick<typeof chatsTable.$inferSelect, keyof typeof CHAT_COLUMNS>;
 
+/** The start timeline and the last wake are for the Sandbox panel only: they stay out of every list and broadcast. */
+function publicSettings(settings: WorkbenchRow['settings'] | null): Workbench['settings'] {
+  if (!settings) return {};
+  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings)) return settings;
+  const out = { ...settings } as Record<string, unknown>;
+  for (const key of BOX_START_SETTINGS_KEYS) delete out[key];
+  return out as Workbench['settings'];
+}
+
 export function rowToWorkbench(row: WorkbenchRow): Workbench {
   return {
     id: row.id,
@@ -140,11 +158,13 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     status: row.status === 'archiveError' ? 'archiveError' : row.archivedAt ? 'archived' : row.status as WorkbenchStatus,
     statusMessage: row.statusMessage,
     pullRequestId: row.pullRequestId,
-    settings: row.settings ?? {},
+    settings: publicSettings(row.settings),
     source: row.source ?? null,
     diffStat: row.diffStat ? { added: row.diffStat.added, removed: row.diffStat.removed, files: row.diffStat.files } : null,
     uncommittedStats: row.diffStat?.uncommittedStats ?? null,
     committedStats: row.diffStat?.committedStats ?? null,
+    changesAt: row.changesAt ? row.changesAt.toISOString() : null,
+    changesEtag: row.changesEtag ?? null,
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -233,6 +253,16 @@ export async function getWorkbench(id: string): Promise<WorkbenchRow | null> {
   return (await getWorkbenchQuery(id))[0] ?? null;
 }
 
+/** The session whose box this is. `idx_workbenches_sandbox` answers it. */
+export async function getWorkbenchBySandboxId(sandboxId: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .select(WORKBENCH_COLUMNS)
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.sandboxId, sandboxId))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function updateWorkbench(
   id: string,
   patch: Partial<Omit<NewWorkbench, 'id' | 'workspaceId' | 'createdAt'>>,
@@ -265,6 +295,70 @@ export async function clearWorkCheckpoint(id: string, sandboxId?: string): Promi
     .update(workbenchesTable)
     .set({ workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null })
     .where(sandboxId ? and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)) : eq(workbenchesTable.id, id));
+}
+
+/** The longest save error kept on the row. The panel shows it on one line. */
+const WORK_SAVE_ERROR_MAX_CHARS = 500;
+
+/**
+ * A save worked: a new checkpoint, a check that found nothing new, or nothing
+ * to save. Only while the row still names the box. True when it ends a run of
+ * failures, so the caller can say that the work is saved again.
+ */
+export async function recordWorkSaveSuccess(
+  id: string,
+  sandboxId: string,
+  at: Date,
+  unpushed: number | null,
+): Promise<boolean> {
+  const onBox = and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId));
+  const set = { workCheckedAt: at, ...(unpushed === null ? {} : { workUnpushedCommits: unpushed }) };
+  const ended = await db()
+    .update(workbenchesTable)
+    .set({ ...set, workSaveFailures: 0, workSaveFailedAt: null, workSaveError: null })
+    .where(and(onBox, gt(workbenchesTable.workSaveFailures, 0)))
+    .returning({ id: workbenchesTable.id });
+  if (ended.length > 0) return true;
+  await db().update(workbenchesTable).set(set).where(onBox);
+  return false;
+}
+
+/** A save failed. Returns the failures in a row, or null when the row names another box now. */
+export async function recordWorkSaveFailure(id: string, sandboxId: string, at: Date, error: string): Promise<number | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      workSaveFailures: sql`${workbenchesTable.workSaveFailures} + 1`,
+      workSaveFailedAt: at,
+      workSaveError: error.slice(0, WORK_SAVE_ERROR_MAX_CHARS),
+    })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)))
+    .returning({ failures: workbenchesTable.workSaveFailures });
+  return row?.failures ?? null;
+}
+
+/**
+ * The newest turn start and turn end of a session, and whether a turn runs
+ * now. A lost box's note reads them to say whether the agent ran after the
+ * last save. A turn ends when its time report is written, so a turn cut by
+ * the loss has a start and no end.
+ */
+export async function lastTurnActivity(
+  workbenchId: string,
+): Promise<{ lastStartedAt: Date | null; lastEndedAt: Date | null; running: boolean }> {
+  const [chats] = await db()
+    .select({
+      lastStartedAt: sql<Date | string | null>`max(${chatsTable.turnStartedAt})`,
+      running: sql<boolean>`coalesce(bool_or(${chatsTable.status} = 'running'), false)`,
+    })
+    .from(chatsTable)
+    .where(eq(chatsTable.workbenchId, workbenchId));
+  const [ends] = await db()
+    .select({ lastEndedAt: sql<Date | string | null>`max(${workbenchTurnTimings.createdAt})` })
+    .from(workbenchTurnTimings)
+    .where(eq(workbenchTurnTimings.workbenchId, workbenchId));
+  const date = (raw: Date | string | null | undefined) => (raw === null || raw === undefined ? null : new Date(raw));
+  return { lastStartedAt: date(chats?.lastStartedAt), lastEndedAt: date(ends?.lastEndedAt), running: Boolean(chats?.running) };
 }
 
 /** `settings` with `ids` added to `keptSandboxIds`. */
@@ -545,6 +639,108 @@ export async function failLostWorkbench(id: string, sandboxId: string, message: 
 }
 
 /**
+ * The rows a provision may still write: provisioning, live, and on the sandbox
+ * id the run used. A Retry or a restore moves the row to a new id, and an
+ * archive changes its status, so a stale run's write matches nothing.
+ */
+function ownedByProvision(id: string, sandboxId: string | null) {
+  return and(
+    eq(workbenchesTable.id, id),
+    eq(workbenchesTable.status, 'provisioning'),
+    isNull(workbenchesTable.archivedAt),
+    sandboxId === null ? isNull(workbenchesTable.sandboxId) : eq(workbenchesTable.sandboxId, sandboxId),
+  );
+}
+
+/** Whether the row is still this provision's: the same test its writes make, and no write. */
+export async function isProvisionOwned(id: string, sandboxId: string | null): Promise<boolean> {
+  const rows = await db()
+    .select({ id: workbenchesTable.id })
+    .from(workbenchesTable)
+    .where(ownedByProvision(id, sandboxId))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** A provision's write. Null when the row is no longer this provision's. */
+export async function updateProvisioningWorkbench(
+  id: string,
+  sandboxId: string | null,
+  patch: Pick<Partial<NewWorkbench>, 'status' | 'statusMessage' | 'sandboxState' | 'memoryRestorePending'>,
+): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(ownedByProvision(id, sandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Record the box a provision created. Only the keys this step owns change in
+ * `settings`, read in the statement: a stale copy of the row must not undo a
+ * resize request or a kept sandbox id written since.
+ */
+export async function recordProvisionedSandbox(
+  id: string,
+  expectedSandboxId: string | null,
+  box: {
+    sandboxId: string;
+    sandboxState: WorkbenchSandboxState;
+    fleetHost: string | null;
+    fleetSandboxId: string | null;
+    size: string;
+    statusMessage: string;
+  },
+): Promise<WorkbenchRow | null> {
+  const s = workbenchesTable.settings;
+  const base = sql`(COALESCE(${s}, '{}'::jsonb) - 'fleetSandboxId')`;
+  // `boxSize` is the size this box was created at: the usage meter's weight.
+  const resized = sql`(CASE WHEN ${s} ->> 'resizeTo' = ${box.size}::text
+    THEN (${base} - 'resizeTo' - 'resizeReason') || jsonb_build_object('sandboxSize', ${box.size}::text)
+    ELSE ${base} END) || jsonb_build_object('boxSize', ${box.size}::text)`;
+  const settings = box.fleetSandboxId
+    ? sql`${resized} || jsonb_build_object('fleetSandboxId', ${box.fleetSandboxId}::text)`
+    : resized;
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      sandboxId: box.sandboxId,
+      sandboxState: box.sandboxState,
+      ...(box.fleetHost ? { fleetHost: box.fleetHost } : {}),
+      settings,
+      statusMessage: box.statusMessage,
+      updatedAt: new Date(),
+    })
+    .where(ownedByProvision(id, expectedSandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/**
+ * Move a provision to a new sandbox id before its box exists: the fleet lost a
+ * queued box, and its id answers from a failed record. Null when the row is no
+ * longer this provision's.
+ */
+export async function moveProvisionToSandboxId(
+  id: string,
+  expectedSandboxId: string | null,
+  sandboxId: string,
+): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ sandboxId, updatedAt: new Date() })
+    .where(ownedByProvision(id, expectedSandboxId))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** A provision failed. Null when the row is no longer this provision's. */
+export async function failProvisioningWorkbench(id: string, sandboxId: string | null, message: string): Promise<WorkbenchRow | null> {
+  return updateProvisioningWorkbench(id, sandboxId, { status: 'error', statusMessage: message, sandboxState: 'error' });
+}
+
+/**
  * Set a generated title, but only while the workbench has none. One
  * statement, so a title a person sets at the same moment always wins.
  * Null when nothing changed.
@@ -592,6 +788,19 @@ export async function sessionTurnCount(workbenchId: string): Promise<number> {
     .from(chatsTable)
     .where(eq(chatsTable.workbenchId, workbenchId));
   return Number(row?.turns ?? 0);
+}
+
+/** Check session history before skipping the first checkpoint. */
+export async function isFreshSessionTurn(workbenchId: string): Promise<boolean> {
+  const [row] = await db()
+    .select({ fresh: sql<boolean>`${workbenchesTable.lastActivityAt} IS NULL AND (
+      SELECT COALESCE(SUM(${chatsTable.turnCount}), 0) FROM ${chatsTable}
+      WHERE ${chatsTable.workbenchId} = ${workbenchId}
+    ) = 1` })
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.id, workbenchId))
+    .limit(1);
+  return row?.fresh === true;
 }
 
 /**
@@ -699,6 +908,14 @@ export async function workbenchBySandboxId(sandboxId: string): Promise<Workbench
     .where(eq(workbenchesTable.sandboxId, sandboxId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Record the host that holds the session's box now: the fleet moved it. */
+export async function recordWorkbenchFleetHost(id: string, sandboxId: string, fleetHost: string): Promise<void> {
+  await db()
+    .update(workbenchesTable)
+    .set({ fleetHost, updatedAt: new Date() })
+    .where(and(eq(workbenchesTable.id, id), eq(workbenchesTable.sandboxId, sandboxId)));
 }
 
 /** Match only recorded IDs. A move target belongs to the session only during that move. */
@@ -916,6 +1133,14 @@ function workbenchState(chatId: string) {
     )`;
 }
 
+/**
+ * The head of the queue waits for a free sandbox and its next try is not due
+ * yet. No turn starts then: the retry timer or the turn sweep comes back at
+ * `retryAt`, so the backoff holds across sends, instances and deploys.
+ */
+const headWaitsForSandbox = (queue: SQL) =>
+  sql`COALESCE((${queue} -> 0 -> 'capacityWait' ->> 'retryAt')::timestamptz > now(), false)`;
+
 const WORKBENCH_UNAVAILABLE = sql.raw(`EXISTS (SELECT 1 FROM wb_state WHERE status <> 'ready' OR archived_at IS NOT NULL OR archive_on_idle IS NOT NULL OR archive_after_turn IS NOT NULL)`);
 
 export interface ClaimResult {
@@ -951,7 +1176,8 @@ export async function claimOrEnqueue(
     ), merged AS (
       SELECT status AS prev_status, queued_messages || ${add}::jsonb AS mq,
         (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_UNAVAILABLE}
-          AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0) AS go
+          AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0
+          AND NOT ${headWaitsForSandbox(sql`(queued_messages || ${add}::jsonb)`)}) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
@@ -999,7 +1225,8 @@ export async function finishTurn(
       SELECT queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
     ), merged AS (
       SELECT queued_messages AS mq,
-        (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0) AS go
+        (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0
+          AND NOT ${headWaitsForSandbox(sql`queued_messages`)}) AS go
       FROM old
     )
     UPDATE workbench_chats c SET
@@ -1038,7 +1265,9 @@ export async function finishTurn(
 /**
  * Give a turn back to the queue before it ran anything: its message goes to
  * the head of the queue, the turn number is returned, and the chat is idle.
- * For a turn that found its workbench moving. Null when the chat was not running.
+ * For a turn that found its workbench moving, and for a turn that waits for a
+ * free sandbox (the message then carries `capacityWait`). Null when the chat
+ * was not running.
  */
 export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
   const result = await db().execute(sql`
@@ -1052,6 +1281,29 @@ export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessag
       updated_at = now()
     WHERE c.id = ${chatId} AND c.status = 'running' AND c.turn_owner = ${TURN_OWNER}
       AND (${turn ?? null}::int IS NULL OR c.turn_count = ${turn ?? null})
+    RETURNING ${RETURNING_CHAT}
+  `);
+  const row = rowsOf<RawChatRow>(result)[0];
+  return row ? rawToChatRow(row) : null;
+}
+
+/**
+ * End the wait of the message at the head of the queue that waits for a free
+ * sandbox: take it out of the queue and give it back its turn. The transcript
+ * already shows its user message in that turn, so the next message must not
+ * take the same number. Nothing drains after it, as after a cancel.
+ * `messageId` limits this to that message. Null when no message waits.
+ */
+export async function abandonCapacityWait(chatId: string, messageId?: string): Promise<ChatRow | null> {
+  const result = await db().execute(sql`
+    UPDATE workbench_chats c SET
+      queued_messages = c.queued_messages - 0,
+      turn_count = (c.queued_messages -> 0 -> 'capacityWait' ->> 'turn')::int,
+      drain_pending = false,
+      updated_at = now()
+    WHERE c.id = ${chatId} AND c.status <> 'running'
+      AND c.queued_messages -> 0 -> 'capacityWait' IS NOT NULL
+      AND (${messageId ?? null}::text IS NULL OR c.queued_messages -> 0 ->> 'id' = ${messageId ?? null})
     RETURNING ${RETURNING_CHAT}
   `);
   const row = rowsOf<RawChatRow>(result)[0];
@@ -1458,7 +1710,29 @@ export async function chatIdsOf(workbenchIds: string[]): Promise<string[]> {
 }
 
 /** Mark the archive before any sandbox work starts. Preserve an active move's lease. */
-export async function markArchive(id: string, autoForMergedPr = false): Promise<WorkbenchRow | null> {
+/** An archive by the idle sweep: the guard is re-checked inside the claiming UPDATE. */
+export interface IdleArchiveClaim {
+  guard: SQL;
+  days: number;
+  /** The box sleeps: the archive is the stored checkpoint, and the box is not woken. */
+  fromSaved?: boolean;
+}
+
+/** The box of an archive a person or a merge asked for sleeps: what the archive does about it. */
+export type SleepingArchive = 'from_saved' | 'wake';
+
+const SLEEPING_ARCHIVE_NOTE: Record<SleepingArchive, string> = {
+  from_saved: 'The sandbox was asleep, so Talyn archived the last saved copy and did not run the archive script.',
+  wake: 'The sandbox was asleep and Talyn had no save newer than its last activity, so Talyn woke it to save the work.',
+};
+
+export async function markArchive(
+  id: string, autoForMergedPr = false, idle?: IdleArchiveClaim, sleeping?: SleepingArchive,
+): Promise<WorkbenchRow | null> {
+  const noRunningChat = sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
+    WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`;
+  const auto = autoForMergedPr || Boolean(idle);
+  const fromSaved = idle ? Boolean(idle.fromSaved) : sleeping === 'from_saved';
   const row = await db().transaction(async (tx) => {
     const [archived] = await tx.update(workbenchesTable).set({
       archivedAt: new Date(),
@@ -1467,22 +1741,29 @@ export async function markArchive(id: string, autoForMergedPr = false): Promise<
       status: sql`CASE WHEN ${workbenchesTable.status} = 'moving' THEN 'moving' ELSE 'archived' END`,
       statusMessage: null,
       // An archive also ends a request to archive after the turn, so a restore does not archive again.
-      settings: sql`(CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
+      // The reason of an earlier idle archive goes too, so a later manual one does not wear it.
+      settings: sql`((CASE WHEN ${workbenchesTable.settings} ->> 'archiveOnIdle' IS NULL
         THEN ${workbenchesTable.settings}
         ELSE (${workbenchesTable.settings} - 'archiveOnIdle') || jsonb_build_object('autoArchivedForPr',
           COALESCE(${workbenchesTable.settings} -> 'autoArchivedForPr', '[]'::jsonb)
-          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'`,
+          || jsonb_build_array(${workbenchesTable.settings} ->> 'archiveOnIdle')) END) - 'archiveAfterTurn'
+          - 'autoArchivedReason' - 'archiveFromSaved')${fromSaved ? sql` || jsonb_build_object('archiveFromSaved', true)` : sql``}${idle ? sql` || jsonb_build_object('autoArchivedReason', 'idle')` : sql``}`,
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
-      autoForMergedPr ? and(
-        isNull(workbenchesTable.archivedAt),
-        sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
-        sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
-          WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`,
-      ) : or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')),
+      idle ? and(isNull(workbenchesTable.archivedAt), noRunningChat, idle.guard)
+        : autoForMergedPr ? and(
+          isNull(workbenchesTable.archivedAt),
+          sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
+          noRunningChat,
+        ) : or(isNull(workbenchesTable.archivedAt), eq(workbenchesTable.status, 'archiveError')),
     )).returning(WORKBENCH_COLUMNS);
-    if (archived && autoForMergedPr) {
+    if (archived && (auto || sleeping)) {
+      const sleepNote = !idle && sleeping ? ` ${SLEEPING_ARCHIVE_NOTE[sleeping]}` : '';
+      const text = idle
+        ? `Archived after ${idle.days} ${idle.days === 1 ? 'day' : 'days'} with no activity.${idle.fromSaved
+          ? ' The sandbox was asleep, so Talyn used the last saved copy and did not run the archive script.' : ''}`
+        : autoForMergedPr ? `The pull request was merged, so Talyn archived this session.${sleepNote}` : sleepNote.trim();
       await tx.execute(sql`
         WITH first_chat AS (
           SELECT id FROM workbench_chats WHERE workbench_id = ${id} ORDER BY created_at, id LIMIT 1
@@ -1492,14 +1773,31 @@ export async function markArchive(id: string, autoForMergedPr = false): Promise<
         )
         INSERT INTO workbench_events (chat_id, seq, turn, event)
         SELECT id, next_seq, turn_count, ${JSON.stringify({
-          type: 'system', subtype: 'pr_merged_archive',
-          text: 'The pull request was merged, so Talyn archived this session.',
+          type: 'system', subtype: idle ? 'idle_archive' : autoForMergedPr ? 'pr_merged_archive' : 'sleeping_archive', text,
         })}::jsonb FROM alloc
       `);
     }
     return archived;
   });
-  return row ?? (autoForMergedPr ? null : getWorkbench(id));
+  return row ?? (auto ? null : getWorkbench(id));
+}
+
+const ACTIVITY_WRITE_EVERY_MS = 5 * 60_000;
+const lastActivityWrite = new Map<string, number>();
+
+/**
+ * Record activity the chat tables do not show (terminal input, a script start).
+ * A burst of typing is one write per five minutes per session and process;
+ * never throws, never waits.
+ */
+export function touchWorkbenchActivity(id: string, force = false): void {
+  const now = Date.now();
+  if (!force && now - (lastActivityWrite.get(id) ?? 0) < ACTIVITY_WRITE_EVERY_MS) return;
+  lastActivityWrite.set(id, now);
+  if (lastActivityWrite.size > 5000) lastActivityWrite.clear();
+  void db().update(workbenchesTable).set({ lastActivityAt: new Date(now) })
+    .where(eq(workbenchesTable.id, id))
+    .catch((err) => console.warn(`[workbench] noting activity on ${id} failed:`, err));
 }
 
 const archiveAvailable = () => or(isNull(workbenchesTable.archiveLeaseUntil), lt(workbenchesTable.archiveLeaseUntil, new Date()));
@@ -1617,6 +1915,7 @@ export async function queuedIdleChats(): Promise<Array<{ id: string }>> {
   return db().select({ id: chatsTable.id }).from(chatsTable).where(and(
     eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
     sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
+    sql`NOT ${headWaitsForSandbox(sql`${chatsTable.queuedMessages}`)}`,
   ));
 }
 

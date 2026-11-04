@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetClient, FleetHttpError, resetFleetOptionalSupport } from '../services/selfHosted/client.js';
 import {
@@ -11,7 +15,9 @@ import {
 import {
   MOVE_IGNORED_FILE_MAX_BYTES,
   MOVE_IGNORED_TOTAL_MAX_BYTES,
+  MOVE_EXPORT_EXIT,
   MOVE_SKIP_DIRS,
+  MOVE_STAGE_FUNCTIONS,
   MOVE_TRANSFER_MAX_BYTES,
   moveExportEnv,
   moveExportScript,
@@ -118,7 +124,7 @@ describe('the export script', () => {
     expect(script).toContain(`[ "$size" -gt ${MOVE_IGNORED_FILE_MAX_BYTES} ]`);
     expect(script).toContain(`-gt ${MOVE_IGNORED_TOTAL_MAX_BYTES} ]`);
     expect(script).toContain(`cap=${MOVE_TRANSFER_MAX_BYTES}`);
-    expect(script).toContain('head -c $((cap + 1))');
+    expect(script).toContain('head -c $((cap - used + 1))');
     expect(MOVE_IGNORED_FILE_MAX_BYTES).toBe(MIB);
     expect(MOVE_IGNORED_TOTAL_MAX_BYTES).toBe(16 * MIB);
   });
@@ -131,6 +137,77 @@ describe('the export script', () => {
 
   it('ends the manifest with END, after everything else', () => {
     expect(script.trimEnd().endsWith('echo END')).toBe(true);
+  });
+});
+
+describe('the export script, on a failure', () => {
+  const script = moveExportScript({ workbenchId: WB, sessions: [] });
+
+  it('checks every staged file with staged(), and never compares a size it did not read', () => {
+    expect(script).not.toContain('fits ');
+    expect(script).not.toContain('stat -c %s -- "$d/$1"');
+    expect(script).not.toMatch(/\[ "\$\(/);
+    for (const [name, code] of [
+      ['repo.bundle', 36],
+      ['filtered.tgz', 33],
+      ['staged.patch.gz', 33],
+      ['unstaged.patch.gz', 33],
+      ['ignored.tgz', 34],
+      ['agent.tgz', 35],
+    ] as const) {
+      expect(script).toContain(`| capped ${name}\n${name.startsWith('staged') || name.startsWith('unstaged') ? '' : '  '}staged ${name} ${code} "\${PIPESTATUS[@]}"`);
+    }
+  });
+
+  it('stops when the commit count fails, rather than leave the commits behind', () => {
+    expect(script).toContain('ahead=$(git rev-list --count "${refs[@]}" --not --remotes) || exit 31');
+    expect(script).toContain('case "$ahead" in ""|*[!0-9]*)');
+    expect(script.indexOf('case "$ahead"')).toBeLessThan(script.indexOf('if [ "$ahead" -gt 0 ]; then'));
+  });
+
+  it('names every exit the staging can take', () => {
+    expect(MOVE_EXPORT_EXIT[30]).toBe('could not stage the work in memory');
+    expect(MOVE_EXPORT_EXIT[37]).toBe('there is not enough free memory in /dev/shm to stage the work');
+    expect(MOVE_EXPORT_EXIT[40]).toBe('the work is too large to move');
+  });
+});
+
+// The staging functions, run for real against fake producers. Not on Windows: no bash.
+describe.skipIf(process.platform === 'win32')('the staging functions in bash', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'talyn-stage-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function run(body: string, cap = 100) {
+    const script = ['set -u', `d=${JSON.stringify(join(dir, 'stage'))}`, 'mkdir -p -- "$d"', `cap=${cap}`, 'used=0', ...MOVE_STAGE_FUNCTIONS, body, 'echo "OK $used"'].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    return { exitCode: r.status, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
+  }
+
+  it.each<[string, string, number, RegExp]>([
+    ['a bundle that fits', 'printf 1234567890 | capped repo.bundle\nstaged repo.bundle 36 "${PIPESTATUS[@]}"', 0, /^$/],
+    ['a bundle over the cap', 'head -c 500 /dev/zero | capped repo.bundle\nstaged repo.bundle 36 "${PIPESTATUS[@]}"', 40, /repo\.bundle takes the work over/],
+    ['two files over the cap together', 'head -c 60 /dev/zero | capped staged.patch.gz\nstaged staged.patch.gz 33 "${PIPESTATUS[@]}"\nhead -c 60 /dev/zero | capped unstaged.patch.gz\nstaged unstaged.patch.gz 33 "${PIPESTATUS[@]}"', 40, /unstaged\.patch\.gz takes the work over/],
+    ['git failing to make the bundle', '{ echo "fatal: bad object" >&2; exit 128; } | capped repo.bundle\nstaged repo.bundle 36 "${PIPESTATUS[@]}"', 36, /fatal: bad object/],
+    ['the staging folder removed', 'rm -rf -- "$d"; printf x | capped repo.bundle\nstaged repo.bundle 36 "${PIPESTATUS[@]}"', 30, /staging folder .* was removed while the export ran/],
+    ['a staged file that is gone', 'printf x | capped repo.bundle\nrm -f -- "$d/repo.bundle"\nstaged repo.bundle 36 0 0', 30, /could not write repo\.bundle in /],
+    ['a failed write', 'printf x | false\nstaged repo.bundle 36 "${PIPESTATUS[@]}"', 30, /could not write repo\.bundle in /],
+  ])('%s', (_label, body, exitCode, stderr) => {
+    const r = run(body);
+    expect(r.exitCode).toBe(exitCode);
+    expect(r.stderr).toMatch(stderr);
+    if (exitCode === 0) expect(r.stdout).toBe('OK 10');
+    if (exitCode !== 40) expect(r.stderr).not.toMatch(/over the/);
+  });
+
+  it('cuts a file one byte over what is left of the cap, so the staging never holds much more than the cap', () => {
+    const r = run('head -c 60 /dev/zero | capped a\nstaged a 33 "${PIPESTATUS[@]}"\nhead -c 1000 /dev/zero | capped b\nwc -c < "$d/b" | tr -d " " >&2', 100);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('41');
   });
 });
 

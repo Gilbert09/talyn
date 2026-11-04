@@ -9,7 +9,15 @@
  * wrote, not text an agent wrote.
  */
 import { validateRepositoryBake, type BakeStep, type RepositoryBake } from './bake.js';
-import { commandSegments, containsSecret, stripCommandPrefix, type TurnToolCall } from './turnTiming.js';
+import {
+  commandSegments,
+  containsSecret,
+  formatDurationMs,
+  stripCommandPrefix,
+  unwrapCommand,
+  type TurnToolCall,
+  type UnwrappedCommand,
+} from './turnTiming.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import { shellQuote } from './workbenchGit.js';
 
@@ -56,12 +64,12 @@ export type SetupStepState = 'waiting' | 'live' | 'failing' | 'reverted';
 
 export interface SetupRecipeStep {
   id: string;
-  state: SetupStepState;
   command: string;
   kind: SetupStepKind;
   phase: SetupStepPhase;
   why: string | null;
   source: SetupStepSource;
+  state: SetupStepState;
   /** The session that first needed the step. */
   sourceWorkbenchId: string | null;
   firstSeenAt: string;
@@ -114,11 +122,11 @@ export interface SetupRecipe {
   repositoryId: string;
   learningDisabled: boolean;
   maxSteps: number;
-  steps: SetupRecipeStep[];
   /** The window that the share of each step counts sessions in. */
   windowDays?: number;
   /** The times of the last box setup that ran learned steps. Null: none measured yet. */
   lastSetupTiming?: SetupTiming | null;
+  steps: SetupRecipeStep[];
 }
 
 /** One box setup's times: "Setup took 9m 40s: repository setup 2m 05s, learned steps 7m 35s". */
@@ -142,6 +150,8 @@ export interface SetupTiming {
   setupBoxStepsMs?: number | null;
   /** The image layer the box booted (`SandboxImageLayer`). */
   layer?: string | null;
+  /** From the request for the box to the end of its setup, waits included. Absent: not measured. */
+  startTotalMs?: number | null;
 }
 
 /** `POST /repositories/:id/setup-recipe/steps`. */
@@ -172,6 +182,93 @@ export const SETUP_STEP_MAX_BYTES = 1000;
 export const SETUP_RECIPE_SETTLE_MS = 15 * 60_000;
 /** Learned bake steps are named `talyn-learned <step id>`, so a bake result names its step. */
 export const LEARNED_BAKE_STEP_PREFIX = 'talyn-learned ';
+/**
+ * A step runs on every new box, so it must be a need of most work on the
+ * repository, not of one task (a browser for one test, a database for one
+ * script). Talyn measures the need as a share: the repository's sandbox
+ * sessions of the last {@link SETUP_STEP_WINDOW_DAYS} days that needed the step.
+ *
+ * Two weeks holds a normal work cycle (a sprint, a release), so a step that
+ * one week of work needed does not fall out in the next quiet week.
+ */
+export const SETUP_STEP_WINDOW_DAYS = 14;
+/**
+ * A step goes live only when at least this many different sessions needed it.
+ * On a quiet repository, a share of 2 sessions can be 100%, and 2 sessions can
+ * be the same task done twice.
+ */
+export const SETUP_STEP_MIN_SESSIONS = 3;
+/** A step goes live at this share of recent sessions: about one session in three. */
+export const SETUP_STEP_LIVE_SHARE = 0.3;
+/**
+ * A live step goes back to waiting below this share. Half of
+ * {@link SETUP_STEP_LIVE_SHARE}, so a step near the bar does not go in and out
+ * with each session.
+ */
+export const SETUP_STEP_DROP_SHARE = 0.15;
+/**
+ * The bars for a heavy step ({@link isHeavySetupStep}). A browser download
+ * costs every box minutes and hundreds of megabytes, so it must be a need of
+ * half the work.
+ */
+export const SETUP_STEP_HEAVY_LIVE_SHARE = 0.5;
+export const SETUP_STEP_HEAVY_DROP_SHARE = 0.25;
+/**
+ * A live step leaves only when the window has at least this many sessions.
+ * With 7 sessions, one session moves the share by less than 15 points, the gap
+ * between {@link SETUP_STEP_LIVE_SHARE} and {@link SETUP_STEP_DROP_SHARE}. So
+ * one session cannot take a step out, and the next put it back.
+ */
+export const SETUP_STEP_MIN_SESSIONS_TO_DROP = 7;
+/**
+ * A step that failed in the box setup this many times in a row stops running.
+ * One failure can be a bad box (a full disk, a lost network); two in a row is
+ * the step.
+ */
+export const SETUP_STEP_MAX_BOX_FAILURES = 2;
+/** The time limit of one learned step in the box setup, in seconds. */
+export const SETUP_STEP_TIMEOUT_SEC: Record<SetupStepKind, number> = {
+  installer: 600,
+  rustup: 600,
+  apt: 600,
+  brew: 600,
+  // A cargo install that compiles from source takes about ten minutes.
+  cargo: 900,
+  go: 600,
+  gem: 600,
+  pip: 600,
+  uv: 600,
+  node: 600,
+  download: 300,
+  env: 30,
+  docker: 120,
+  service: 120,
+  // A compose start pulls its images first, which is an install in time.
+  compose: 600,
+  database: 120,
+  other: 600,
+};
+/** After the time limit, `timeout` sends TERM, then KILL after this many seconds. */
+export const SETUP_STEP_KILL_AFTER_SEC = 10;
+/**
+ * The weight of the newest box in a step's typical time:
+ * `typical = typical * (1 - w) + last * w`. With 0.2, the last 10 boxes carry
+ * about 90% of the value, so one slow box (a cold cache) moves it a little and
+ * a step that became fast (it went into the bake) shows that within days.
+ */
+export const SETUP_STEP_TYPICAL_WEIGHT = 0.2;
+/** The next typical time of a step, from its typical time and a new measurement. */
+export function nextTypicalDurationMs(typical: number | null | undefined, lastMs: number): number {
+  if (typical === null || typical === undefined) return Math.round(lastMs);
+  return Math.round(typical * (1 - SETUP_STEP_TYPICAL_WEIGHT) + lastMs * SETUP_STEP_TYPICAL_WEIGHT);
+}
+/**
+ * A step that typically takes this long on a box is slow: it gets the heavy
+ * bars of the frequency rule ({@link setupStepVerdict}). Two minutes added to
+ * every box start is what a person notices, and a step that few sessions need
+ * is not worth that.
+ */
+export const SETUP_STEP_SLOW_MS = 2 * 60_000;
 
 // ============================================================================
 // Refusals
@@ -316,7 +413,6 @@ function withoutOutputPlumbing(segment: string): string {
 }
 
 const quoteAll = (words: string[]) => words.map(shellQuote).join(' ');
-const operands = (words: string[]) => words.filter((w) => !w.startsWith('-'));
 
 /** Flags whose next word is a value, so the value is not a package name. */
 const VALUE_FLAGS = new Set([
@@ -352,8 +448,63 @@ interface Parsed {
 
 type ParseResult = Parsed | { refused: string } | null;
 
-const DOCKER_START =
+/**
+ * The Docker start that Talyn used to learn. Docker now starts on demand in the
+ * sandbox: the first client on /var/run/docker.sock starts dockerd. This start
+ * also failed as uid 1000 (it writes /var/log/dockerd.log), and its
+ * `docker info` loop could hang. Stored steps with this exact command are
+ * skipped when a box is set up, so no migration is needed.
+ */
+export const LEGACY_DOCKER_START_COMMAND =
   "pgrep -x dockerd >/dev/null 2>&1 || (nohup dockerd >/var/log/dockerd.log 2>&1 &); for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done";
+
+const DOCKER_ON_DEMAND = 'Docker starts on demand in the sandbox, so Talyn does not learn a Docker start.';
+
+/** How the original command ran: under sudo, as which user, and with which variables. */
+interface RunAs {
+  sudo: boolean;
+  user: string | null;
+  /** Leading `NAME=value` words that are kept, see {@link KEPT_ENV}. */
+  env: string[];
+}
+
+/**
+ * Leading variables a step keeps. Each one configures the tool that the step
+ * runs, for example `PIP_BREAK_SYSTEM_PACKAGES=1 pip install x`, which fails
+ * on Debian without it. Other variables are dropped: a variable such as
+ * LD_PRELOAD or BASH_ENV changes what runs, so it must not reach every box.
+ */
+const KEPT_ENV = /^(?:(?:PIP|UV|NPM_CONFIG|npm_config|PNPM|YARN|CARGO|RUSTUP|PLAYWRIGHT|BUNDLE|GEM)_\w+|RUSTFLAGS|GOFLAGS|GOPROXY|GOPRIVATE|GONOSUMDB|GOBIN|GOTOOLCHAIN|CGO_ENABLED)$/;
+const SECRET_NAME = /TOKEN|AUTH|PASS|SECRET|KEY|CRED/i;
+const SAFE_USER = /^[a-z_][a-z0-9_-]*$/;
+
+function runAsOf(u: UnwrappedCommand): RunAs | null {
+  if (u.sudoUser !== null && !SAFE_USER.test(u.sudoUser)) return null;
+  const env: string[] = [];
+  for (const word of u.assignments) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|(\S*))$/.exec(word);
+    if (!m || !KEPT_ENV.test(m[1]) || SECRET_NAME.test(m[1])) continue;
+    const value = m[2] ?? m[3] ?? m[4] ?? '';
+    if (/^[\w@%+=:,./-]*$/.test(value)) env.push(`${m[1]}=${value}`);
+  }
+  return { sudo: u.sudo, user: u.sudoUser, env };
+}
+
+/**
+ * The words in front of a step's command. A step runs as the user its
+ * command ran as: `sudo` in the command gives `sudo -n` in the step, so it can
+ * run as uid 1000 and never waits for a password. `root` forces sudo for the
+ * commands that only root can run.
+ */
+function runPrefix(run: RunAs, opts: { root?: boolean; env?: boolean; user?: boolean } = {}): string {
+  const words: string[] = [];
+  if (run.sudo || opts.root) {
+    words.push('sudo', '-n');
+    if (opts.user !== false && run.user) words.push('-u', run.user);
+  }
+  if (opts.env !== false && run.env.length > 0) words.push('env', ...run.env);
+  return words.length > 0 ? `${quoteAll(words)} ` : '';
+}
 
 function parseInstaller(segment: string): ParseResult {
   if (!PIPE_TO_SHELL.test(segment) || !/\b(?:curl|wget)\b/.test(segment)) return null;
@@ -366,21 +517,43 @@ function parseInstaller(segment: string): ParseResult {
   return { refused: `The command runs a script from ${url}, which is not one of the installers Talyn applies automatically (rustup, uv, pnpm).` };
 }
 
+/**
+ * apt runs as root, so the step always has `sudo -n`. Kept options:
+ * `--no-install-recommends` (without it the step installs more than the
+ * session did) and the target release. `-o` and `-c` can run any command as
+ * root, so a command with them is not learned.
+ */
 function parseApt(w: string[]): ParseResult {
   const at = w.indexOf('install');
   if (at < 0) return null;
-  const pkgs = [...new Set(operands(w.slice(at + 1)))].sort();
-  if (pkgs.length === 0 || !pkgs.every((p) => /^[A-Za-z0-9][A-Za-z0-9+.:~=_-]*$/.test(p))) return null;
-  const list = quoteAll(pkgs);
+  const args = w.slice(at + 1);
+  const pkgs: string[] = [];
+  const kept: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (['-o', '-c', '--option', '--config-file'].includes(a) || /^--(?:option|config-file)=/.test(a) || /^-[oc]./.test(a)) return null;
+    if (a === '-t' || a === '--target-release') {
+      const release = args[++i];
+      if (!release || !SAFE_NAME.test(release)) return null;
+      kept.push('-t', release);
+    } else if (a === '--no-install-recommends') {
+      if (!kept.includes(a)) kept.push(a);
+    } else if (!a.startsWith('-')) {
+      pkgs.push(a);
+    }
+  }
+  const list = [...new Set(pkgs)].sort();
+  if (list.length === 0 || !list.every((p) => /^[A-Za-z0-9][A-Za-z0-9+.:~=_-]*$/.test(p))) return null;
+  const install = `sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ${quoteAll([...kept, ...list])}`;
   return {
-    command: `DEBIAN_FRONTEND=noninteractive apt-get install -y ${list} || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ${list})`,
+    command: `${install} || (sudo -n apt-get update && ${install})`,
     kind: 'apt',
     phase: 'install',
-    provides: pkgs.map(packageName),
+    provides: list.map(packageName),
   };
 }
 
-function parsePip(w: string[], head: string[]): ParseResult {
+function parsePip(w: string[], head: string[], run: RunAs): ParseResult {
   const at = w.indexOf('install');
   if (at < 0) return null;
   const args = w.slice(at + 1);
@@ -388,34 +561,36 @@ function parsePip(w: string[], head: string[]): ParseResult {
   const project = args.some((a) => ['-r', '--requirement', '-e', '--editable', '.'].includes(a));
   const pkgs = names(args);
   if (!project && (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p)))) return null;
-  return { command: quoteAll([...head, 'install', ...args]), kind: 'pip', phase: 'install', inCheckout: project, provides: project ? [] : pkgs.map(packageName) };
+  return { command: runPrefix(run) + quoteAll([...head, 'install', ...args]), kind: 'pip', phase: 'install', inCheckout: project, provides: project ? [] : pkgs.map(packageName) };
 }
 
-function parseUv(w: string[]): ParseResult {
+function parseUv(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
-  if (sub === 'sync') return { command: quoteAll(w), kind: 'uv', phase: 'install', inCheckout: true };
-  if (sub === 'pip' && w[2] === 'install' && w.length > 3) return { command: quoteAll(w), kind: 'uv', phase: 'install', inCheckout: true };
+  const command = runPrefix(run) + quoteAll(w);
+  if (sub === 'sync') return { command, kind: 'uv', phase: 'install', inCheckout: true };
+  if (sub === 'pip' && w[2] === 'install' && w.length > 3) return { command, kind: 'uv', phase: 'install', inCheckout: true };
   if ((sub === 'tool' || sub === 'python') && w[2] === 'install') {
     const pkgs = names(w.slice(3));
     if (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p))) return null;
-    return { command: quoteAll(w), kind: 'uv', phase: 'install', provides: sub === 'tool' ? pkgs.map(packageName) : [] };
+    return { command, kind: 'uv', phase: 'install', provides: sub === 'tool' ? pkgs.map(packageName) : [] };
   }
   return null;
 }
 
-function parseNode(w: string[]): ParseResult {
+function parseNode(w: string[], run: RunAs): ParseResult {
   const [tool, sub] = w;
   const rest = w.slice(2);
   const global = rest.includes('-g') || rest.includes('--global');
   const pkgs = names(rest);
+  const pre = runPrefix(run);
   if (tool === 'corepack' && ['enable', 'prepare', 'install'].includes(sub ?? '')) {
-    return { command: quoteAll(w), kind: 'node', phase: 'install' };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install' };
   }
   if (tool === 'playwright' && sub === 'install') {
-    return { command: `npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true };
+    return { command: `${pre}npx ${quoteAll(w)}`, kind: 'node', phase: 'install', inCheckout: true, provides: ['playwright'] };
   }
   if (tool === 'yarn' && sub === 'global' && w[2] === 'add' && w.length > 3) {
-    return { command: quoteAll(w), kind: 'node', phase: 'install', provides: names(w.slice(3)).map(packageName) };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install', provides: names(w.slice(3)).map(packageName) };
   }
   const installs = (tool === 'npm' && ['install', 'i', 'ci', 'add'].includes(sub ?? ''))
     || ((tool === 'pnpm' || tool === 'bun') && ['install', 'i', 'add'].includes(sub ?? ''))
@@ -423,14 +598,43 @@ function parseNode(w: string[]): ParseResult {
   if (!installs) return null;
   if (global) {
     if (pkgs.length === 0 || !pkgs.every((p) => PACKAGE.test(p))) return null;
-    return { command: quoteAll(w), kind: 'node', phase: 'install', provides: pkgs.map(packageName) };
+    return { command: pre + quoteAll(w), kind: 'node', phase: 'install', provides: pkgs.map(packageName) };
   }
   // A package named without -g is a dependency change, which belongs in the code, not the setup.
   if (pkgs.length > 0 || sub === 'add') return null;
-  return { command: quoteAll(w), kind: 'node', phase: 'install', inCheckout: true };
+  return { command: pre + quoteAll(w), kind: 'node', phase: 'install', inCheckout: true };
 }
 
-function parseCargo(w: string[]): ParseResult {
+const BINSTALL_YES = new Set(['-y', '--no-confirm']);
+
+/**
+ * One form for one cargo install: `crate --version v` becomes `crate@v`, and
+ * `cargo binstall` gets one `-y` after `binstall`. cargo-binstall refuses `-y`
+ * and `--no-confirm` together ("cannot be used multiple times"), because `-y`
+ * is `--no-confirm`.
+ */
+export function canonicalCargoWords(w: string[]): string[] {
+  const sub = w[1];
+  let rest = w.slice(2);
+  if (sub === 'binstall') rest = rest.filter((a) => !BINSTALL_YES.has(a));
+  const v = rest.indexOf('--version');
+  const version = v >= 0 ? rest[v + 1] : undefined;
+  if (version && /^[\w.+-]+$/.test(version) && !rest.includes('--git')) {
+    const without = rest.filter((_, i) => i !== v && i !== v + 1);
+    const crates = names(without);
+    if (crates.length === 1 && !crates[0].includes('@')) {
+      let done = false;
+      rest = without.map((a, i) => {
+        if (done || a !== crates[0] || (i > 0 && VALUE_FLAGS.has(without[i - 1]))) return a;
+        done = true;
+        return `${a}@${version}`;
+      });
+    }
+  }
+  return [w[0], sub, ...(sub === 'binstall' ? ['-y'] : []), ...rest];
+}
+
+function parseCargo(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
   if (sub !== 'install' && sub !== 'binstall') return null;
   const rest = w.slice(2);
@@ -438,35 +642,37 @@ function parseCargo(w: string[]): ParseResult {
   const crates = names(rest);
   if (crates.length === 0 && !rest.includes('--git')) return null;
   if (!crates.every((c) => /^[A-Za-z0-9_][\w-]*(?:@[\w.+-]+)?$/.test(c))) return null;
-  const words = sub === 'binstall' && !rest.some((a) => a === '-y' || a === '--no-confirm') ? [...w, '-y'] : w;
-  return { command: quoteAll(words), kind: 'cargo', phase: 'install', provides: crates.map(packageName) };
+  return { command: runPrefix(run) + quoteAll(canonicalCargoWords(w)), kind: 'cargo', phase: 'install', provides: crates.map(packageName) };
 }
 
-function parseRustup(w: string[]): ParseResult {
+function parseRustup(w: string[], run: RunAs): ParseResult {
   const sub = w[1];
   const ok = (sub === 'toolchain' && w[2] === 'install') || sub === 'default' || sub === 'install'
     || ((sub === 'target' || sub === 'component') && w[2] === 'add');
   if (!ok || w.length < 3 || !names(w.slice(2)).every((n) => SAFE_NAME.test(n))) return null;
-  return { command: quoteAll(w), kind: 'rustup', phase: 'install', provides: sub === 'target' || sub === 'component' ? [] : ['rustc', 'cargo'] };
+  return { command: runPrefix(run) + quoteAll(w), kind: 'rustup', phase: 'install', provides: sub === 'target' || sub === 'component' ? [] : ['rustc', 'cargo'] };
 }
 
-function parseGo(w: string[]): ParseResult {
-  if (w[1] === 'mod' && w[2] === 'download') return { command: quoteAll(w), kind: 'go', phase: 'install', inCheckout: true };
+function parseGo(w: string[], run: RunAs): ParseResult {
+  if (w[1] === 'mod' && w[2] === 'download') return { command: runPrefix(run) + quoteAll(w), kind: 'go', phase: 'install', inCheckout: true };
   if (w[1] !== 'install') return null;
   const pkgs = names(w.slice(2));
   if (pkgs.length === 0 || !pkgs.every((p) => /^[\w.~/-]+@[\w.+-]+$/.test(p))) return null;
-  return { command: quoteAll(w), kind: 'go', phase: 'install', provides: pkgs.map((p) => p.split('@')[0].split('/').pop() ?? p) };
+  return { command: runPrefix(run) + quoteAll(w), kind: 'go', phase: 'install', provides: pkgs.map((p) => p.split('@')[0].split('/').pop() ?? p) };
 }
 
-function parseBrewOrGem(w: string[]): ParseResult {
+/** brew refuses to run as root, so a brew step never gets sudo. */
+function parseBrewOrGem(w: string[], run: RunAs): ParseResult {
   const [tool, sub] = w;
-  if (tool === 'bundle' && (sub === undefined || sub === 'install')) return { command: quoteAll(w), kind: 'gem', phase: 'install', inCheckout: true };
+  const pre = tool === 'brew' ? runPrefix({ ...run, sudo: false }) : runPrefix(run);
+  if (tool === 'bundle' && (sub === undefined || sub === 'install')) return { command: pre + quoteAll(w), kind: 'gem', phase: 'install', inCheckout: true };
   if (sub !== 'install') return null;
   const pkgs = names(w.slice(2));
   if (pkgs.length === 0 || !pkgs.every((p) => SAFE_NAME.test(p))) return null;
-  return { command: quoteAll(w), kind: tool === 'brew' ? 'brew' : 'gem', phase: 'install', provides: pkgs };
+  return { command: pre + quoteAll(w), kind: tool === 'brew' ? 'brew' : 'gem', phase: 'install', provides: pkgs };
 }
 
+/** /usr/local/bin belongs to root, so the download and the chmod have `sudo -n`. */
 function parseDownload(w: string[]): ParseResult {
   const tool = w[0];
   const url = w.find((x) => /^https?:\/\//.test(x));
@@ -478,14 +684,14 @@ function parseDownload(w: string[]): ParseResult {
     return { refused: `The download comes from ${url}. Talyn applies downloads automatically only from public artifact hosts such as GitHub releases.` };
   }
   return {
-    command: `[ -x ${dest} ] || { curl -fsSL ${shellQuote(url)} -o ${dest} && chmod +x ${dest}; }`,
+    command: `[ -x ${dest} ] || { sudo -n curl -fsSL ${shellQuote(url)} -o ${dest} && sudo -n chmod +x ${dest}; }`,
     kind: 'download',
     phase: 'install',
     provides: [dest.split('/').pop()!],
   };
 }
 
-function parseCompose(w: string[]): ParseResult {
+function parseCompose(w: string[], run: RunAs): ParseResult {
   const base = w[0] === 'docker-compose' ? 1 : w[0] === 'docker' && w[1] === 'compose' ? 2 : -1;
   if (base < 0) return null;
   const up = w.indexOf('up', base);
@@ -495,37 +701,45 @@ function parseCompose(w: string[]): ParseResult {
   if (![...global, ...args].every((x) => /^[\w@%+=:,./-]+$/.test(x))) return null;
   const detached = args.some((a) => a === '-d' || a === '--detach' || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(a));
   return {
-    command: quoteAll(['docker', 'compose', ...global, 'up', ...(detached ? [] : ['-d']), ...args]),
+    command: runPrefix(run) + quoteAll(['docker', 'compose', ...global, 'up', ...(detached ? [] : ['-d']), ...args]),
     kind: 'compose',
     phase: 'start',
     inCheckout: true,
   };
 }
 
-function parseService(w: string[]): ParseResult {
+/**
+ * Service starts. `service`, `systemctl`, init scripts and `pg_ctlcluster`
+ * need root, so they always get `sudo -n`. A Docker start is recognised and
+ * refused: Docker starts on demand in the sandbox.
+ */
+function parseService(w: string[], run: RunAs): ParseResult {
   const [tool] = w;
-  if (tool === 'dockerd') return { command: DOCKER_START, kind: 'docker', phase: 'start' };
+  if (tool === 'dockerd') return { refused: DOCKER_ON_DEMAND };
   let name: string | undefined;
   if (tool === 'service' && ['start', 'restart'].includes(w[2] ?? '')) name = w[1];
   else if (tool === 'systemctl' && ['start', 'restart'].includes(w[1] ?? '')) name = w[2];
   else if (/^\/etc\/init\.d\/[\w@.-]+$/.test(tool) && ['start', 'restart'].includes(w[1] ?? '')) name = tool.split('/').pop();
-  if (name === 'docker') return { command: DOCKER_START, kind: 'docker', phase: 'start' };
-  if (name && SAFE_NAME.test(name) && w.length <= 3) return { command: quoteAll(w), kind: 'service', phase: 'start' };
+  if (name === 'docker' || name === 'docker.service') return { refused: DOCKER_ON_DEMAND };
+  if (name && SAFE_NAME.test(name) && w.length <= 3) return { command: runPrefix(run, { root: true, env: false }) + quoteAll(w), kind: 'service', phase: 'start' };
   if ((tool === 'pg_ctlcluster' && w.length === 4 && w[3] === 'start') || (tool === 'redis-server' && w.includes('--daemonize'))) {
-    if (w.every((x) => /^[\w@%+=:,./-]+$/.test(x))) return { command: quoteAll(w), kind: 'service', phase: 'start' };
+    const pre = runPrefix(run, { root: tool === 'pg_ctlcluster', env: false });
+    if (w.every((x) => /^[\w@%+=:,./-]+$/.test(x))) return { command: pre + quoteAll(w), kind: 'service', phase: 'start' };
   }
   return null;
 }
 
-function parseDatabase(w: string[]): ParseResult {
+/** `sudo -u postgres createdb x` keeps its user: as uid 1000 it fails, and `|| true` would hide that. */
+function parseDatabase(w: string[], run: RunAs): ParseResult {
+  const pre = runPrefix(run, { env: false });
   if (w[0] === 'createdb' && names(w.slice(1)).length >= 1) {
-    return { command: `${quoteAll(w)} 2>/dev/null || true`, kind: 'database', phase: 'start' };
+    return { command: `${pre}${quoteAll(w)} 2>/dev/null || true`, kind: 'database', phase: 'start' };
   }
   if (w[0] === 'psql') {
     const at = w.findIndex((x) => x === '-c' || x === '--command');
     const sql = at >= 0 ? w[at + 1] : undefined;
     if (sql && /^\s*create\s+(?:database|role|user|extension|schema)\b/i.test(sql) && !/;\s*\S/.test(sql)) {
-      return { command: `${quoteAll(w)} || true`, kind: 'database', phase: 'start' };
+      return { command: `${pre}${quoteAll(w)} || true`, kind: 'database', phase: 'start' };
     }
   }
   return null;
@@ -545,27 +759,39 @@ function parseExport(segment: string): ParseResult {
   };
 }
 
-function parseSegment(raw: string): ParseResult {
+/** Runners that pick the environment a command runs in. `npx` and friends only find a JS tool. */
+const ENV_RUNNERS = /^(?:uv|poetry|pipenv|hatch|pdm) run$|^bundle exec$/;
+
+function parseSegment(raw: string, opts: { inVenv?: boolean } = {}): ParseResult {
   const installer = parseInstaller(stripCommandPrefix(raw));
   if (installer) return installer;
-  const segment = withoutOutputPlumbing(stripCommandPrefix(raw));
+  const unwrapped = unwrapCommand(raw);
+  const run = runAsOf(unwrapped);
+  if (!run) return null;
+  const segment = withoutOutputPlumbing(unwrapped.command);
   if (/^export\s/.test(segment)) return null;
   const w = shellWords(segment);
   if (!w || w.length === 0) return null;
   const [tool] = w;
+  // `uv run pip install x` installs into the project's environment. Without
+  // the runner the step would install into the system Python, so it is not learned.
+  if (unwrapped.runner && ENV_RUNNERS.test(unwrapped.runner)) return null;
   if (tool === 'apt' || tool === 'apt-get') return parseApt(w);
-  if (tool === 'pip' || tool === 'pip3') return parsePip(w.slice(1), [tool]);
-  if (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2] === 'pip') return parsePip(w.slice(3), w.slice(0, 3));
-  if (tool === 'uv') return parseUv(w);
-  if (['npm', 'pnpm', 'yarn', 'bun', 'corepack', 'playwright'].includes(tool)) return parseNode(w);
-  if (tool === 'cargo') return parseCargo(w);
-  if (tool === 'rustup') return parseRustup(w);
-  if (tool === 'go') return parseGo(w);
-  if (tool === 'brew' || tool === 'gem' || tool === 'bundle') return parseBrewOrGem(w);
+  const isPip = tool === 'pip' || tool === 'pip3' || (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2] === 'pip');
+  // The same for a pip after `source .venv/bin/activate`: the box has no such environment yet.
+  if (isPip && opts.inVenv) return null;
+  if (tool === 'pip' || tool === 'pip3') return parsePip(w.slice(1), [tool], run);
+  if (isPip) return parsePip(w.slice(3), w.slice(0, 3), run);
+  if (tool === 'uv') return parseUv(w, run);
+  if (['npm', 'pnpm', 'yarn', 'bun', 'corepack', 'playwright'].includes(tool)) return parseNode(w, run);
+  if (tool === 'cargo') return parseCargo(w, run);
+  if (tool === 'rustup') return parseRustup(w, run);
+  if (tool === 'go') return parseGo(w, run);
+  if (tool === 'brew' || tool === 'gem' || tool === 'bundle') return parseBrewOrGem(w, run);
   if (tool === 'curl' || tool === 'wget') return parseDownload(w);
-  if (tool === 'docker' || tool === 'docker-compose') return parseCompose(w);
-  if (tool === 'createdb' || tool === 'psql') return parseDatabase(w);
-  return parseService(w);
+  if (tool === 'docker' || tool === 'docker-compose') return parseCompose(w, run);
+  if (tool === 'createdb' || tool === 'psql') return parseDatabase(w, run);
+  return parseService(w, run);
 }
 
 /** The directory after `cd <dir>`, relative to the checkout. Null: not known. */
@@ -624,6 +850,7 @@ export function stepsFromCommand(command: string, opts: { repoDir?: string } = {
   // Only a command made of exports is an environment setup; `export X=1 && pytest` is a one-off.
   const onlyExports = segments.length > 0 && segments.every((s) => /^export\s/.test(s.trim()));
   let dir: string | null = '';
+  let inVenv = false;
   for (const raw of segments) {
     const stripped = stripCommandPrefix(raw);
     const cd = /^(?:cd|pushd)(?:\s+(.*))?$/.exec(stripped);
@@ -632,7 +859,11 @@ export function stepsFromCommand(command: string, opts: { repoDir?: string } = {
       dir = words && words.length === 1 ? nextDir(dir, words[0], opts.repoDir) : null;
       continue;
     }
-    const parsed = onlyExports ? parseExport(stripped) : parseSegment(raw);
+    if (/^(?:source|\.)\s+\S*bin\/activate\b/.test(stripped)) {
+      inVenv = true;
+      continue;
+    }
+    const parsed = onlyExports ? parseExport(stripped) : parseSegment(raw, { inVenv });
     if (!parsed) continue;
     if ('refused' in parsed) {
       out.refused.push({ command: raw.trim(), reason: parsed.refused });
@@ -690,6 +921,10 @@ function provides(step: SetupStepCandidate, bin: string): boolean {
  * provides that command (or, failing a match, the next install at all): the
  * step says what it fixed, and its replay first checks whether the command is
  * already there.
+ *
+ * Only installs are learned. A start (a service, a compose stack, an exported
+ * variable, a database) is what one task needed, so Talyn never learns one
+ * from tool calls. An agent can still record one with `talyn_record_setup_step`.
  */
 export function extractSetupSteps(calls: TurnToolCall[], opts: { repoDir?: string } = {}): SetupExtraction {
   const out: SetupExtraction = { steps: [], refused: [] };
@@ -707,7 +942,7 @@ export function extractSetupSteps(calls: TurnToolCall[], opts: { repoDir?: strin
     const steps = stepsFromCommand(call.command, opts);
     out.refused.push(...steps.refused);
     for (const step of steps.steps) {
-      if (seen.has(step.command)) continue;
+      if (step.phase !== 'install' || seen.has(step.command)) continue;
       seen.add(step.command);
       found.push({ step, at });
     }
@@ -748,6 +983,22 @@ export function prepareRecordedStep(command: string, why: string): SetupExtracti
   return { steps: [{ command: trimmed, kind: 'other', phase: 'start', why: why.trim() || DEFAULT_WHY.other }], refused: [] };
 }
 
+/**
+ * What makes two steps the same step, for the dedupe key. The command itself,
+ * except a cargo install, whose `crate@v` and `crate --version v` forms, and
+ * `-y` and `--no-confirm`, are one step. For every other command the identity
+ * is the command, so the stored keys of those steps do not change.
+ */
+export function setupStepIdentity(kind: SetupStepKind, command: string): string {
+  if (kind !== 'cargo') return command;
+  const m = /^(command -v [\w.+-]+ >\/dev\/null 2>&1 \|\| )?(.*)$/s.exec(command)!;
+  const w = shellWords(m[2]);
+  if (!w) return command;
+  const at = w.indexOf('cargo');
+  if (at < 0 || !['install', 'binstall'].includes(w[at + 1] ?? '')) return command;
+  return `${m[1] ?? ''}${quoteAll([...w.slice(0, at), ...canonicalCargoWords(w.slice(at))])}`;
+}
+
 // ============================================================================
 // Applying
 // ============================================================================
@@ -761,6 +1012,23 @@ export interface AppliedSetupStep {
   /** The box time limit. Absent: the limit of the kind ({@link SETUP_STEP_TIMEOUT_SEC}). */
   timeoutSec?: number | null;
 }
+
+/** The line the box setup prints for each learned step, after all of them ran. */
+export const LEARNED_STEP_RESULT_PREFIX = '[talyn] learned step result ';
+
+export interface LearnedStepResult {
+  id: string;
+  exitCode: number;
+  /** The step ran into its time limit. */
+  timedOut: boolean;
+  /** The last line the step printed, at most 300 characters. */
+  lastLine: string;
+  /** How long the step ran. Absent in the output of a script from before the step was timed. */
+  durationMs?: number;
+}
+
+/** The line the box setup prints last, with the times of the whole setup. */
+export const SETUP_TIMING_PREFIX = '[talyn] setup timing ';
 
 /** Installs first, then services, then what needs the services. */
 const KIND_ORDER: SetupStepKind[] = [
@@ -780,22 +1048,114 @@ export function orderSetupSteps<T extends Pick<AppliedSetupStep, 'kind'>>(steps:
 export const LEARNED_PATH_LINE =
   'export PATH="$HOME/.cargo/bin:$HOME/go/bin:$HOME/.local/bin:$HOME/.local/share/pnpm:$PATH"';
 
-/** The box-setup script for the learned steps, or null when there are none. */
+/**
+ * The box-setup script for the learned steps, or null when there are none.
+ *
+ * Each step runs on its own, with no stdin and with a time limit
+ * ({@link SETUP_STEP_TIMEOUT_SEC}): one hung step must not hold the setup. A
+ * failed step does not stop the others. Its output goes to the setup output
+ * and to a file, for its last line. After all steps, one result line per step
+ * ({@link LEARNED_STEP_RESULT_PREFIX}) says how it ended. The lines come last
+ * because the backend keeps only the end of a script's output, and a long
+ * install must not push out the result of an earlier step.
+ */
+/**
+ * Milliseconds since the epoch, in bash. `EPOCHREALTIME` (bash 5) has
+ * microseconds; its decimal mark depends on the locale. Then GNU `date`
+ * (`%3N`). Last, whole seconds, which still time a slow step.
+ */
+const NOW_MS_FUNCTION = [
+  'talyn_now_ms() {',
+  '  local t="${EPOCHREALTIME:-}"',
+  '  if [ -n "$t" ]; then t="${t/[.,]/}"; echo "${t%???}"; return; fi',
+  '  t="$(date +%s%3N 2>/dev/null)"',
+  '  case "$t" in \'\'|*[!0-9]*) echo "$(( $(date +%s) * 1000 ))" ;; *) echo "$t" ;; esac',
+  '}',
+];
+
 export function learnedSetupScript(steps: AppliedSetupStep[], opts: { keepOrder?: boolean } = {}): string | null {
   if (steps.length === 0) return null;
   const lines = [
     '# Setup that Talyn learned from earlier sessions on this repository.',
     '# Each step runs on its own. A failed step does not stop the others.',
     LEARNED_PATH_LINE,
+    ...NOW_MS_FUNCTION,
+    'talyn_learned_start="$(talyn_now_ms)"',
+    'talyn_learned_run() {',
+    '  bash -c "$1" </dev/null 2>&1 | tee "$2"',
+    '  return "${PIPESTATUS[0]}"',
+    '}',
+    'export -f talyn_learned_run',
+    "talyn_learned_results=''",
     'talyn_learned_step() {',
-    '  echo "[talyn] learned step $1 (from session $2): $3"',
-    '  bash -c "$3" || echo "[talyn] learned step $1 failed with exit $?. A person can revert it in the repository settings." >&2',
+    '  local log code last start ms',
+    '  echo "[talyn] learned step $1 (from session $2): $4"',
+    '  log="$(mktemp)"',
+    '  start="$(talyn_now_ms)"',
+    `  timeout -k ${SETUP_STEP_KILL_AFTER_SEC} "$3" bash -c 'talyn_learned_run "$1" "$2"' talyn-learned-step "$4" "$log"`,
+    '  code=$?',
+    '  ms="$(( $(talyn_now_ms) - start ))"',
+    "  last=\"$(grep -v '^[[:space:]]*$' \"$log\" | tail -n 1 | tr -d '\\r' | cut -c1-300)\"",
+    '  rm -f "$log"',
+    '  if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then',
+    '    echo "[talyn] learned step $1 timed out after $3 seconds. A person can revert it in the repository settings." >&2',
+    '  elif [ "$code" -ne 0 ]; then',
+    '    echo "[talyn] learned step $1 failed with exit $code. A person can revert it in the repository settings." >&2',
+    '  fi',
+    `  talyn_learned_results="$talyn_learned_results${LEARNED_STEP_RESULT_PREFIX}$1 exit $code ms $ms: $last"$'\\n'`,
     '}',
   ];
   for (const step of opts.keepOrder ? steps : orderSetupSteps(steps)) {
-    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${shellQuote(step.command)}`);
+    lines.push(`talyn_learned_step ${shellQuote(step.id)} ${shellQuote(step.sourceWorkbenchId ?? 'unknown')} ${step.timeoutSec ?? SETUP_STEP_TIMEOUT_SEC[step.kind] ?? SETUP_STEP_TIMEOUT_SEC.other} ${shellQuote(step.command)}`);
   }
+  lines.push(`printf '%s' "$talyn_learned_results"`);
+  lines.push('talyn_learned_ms="$(( $(talyn_now_ms) - talyn_learned_start ))"');
   return lines.join('\n');
+}
+
+/** The timing line, after the learned steps. `talyn_setup_start` and `talyn_own_ms` are set when the repository has its own setup. */
+const TIMING_LINE = [
+  'if [ -n "${talyn_setup_start:-}" ]; then',
+  `  echo "${SETUP_TIMING_PREFIX}total $(( $(talyn_now_ms) - talyn_setup_start )) repository $talyn_own_ms learned $talyn_learned_ms"`,
+  'else',
+  `  echo "${SETUP_TIMING_PREFIX}total $talyn_learned_ms learned $talyn_learned_ms"`,
+  'fi',
+].join('\n');
+
+const RESULT_LINE = /^\[talyn\] learned step result (\S+) exit (\d+)(?: ms (\d+))?: ?(.*)$/;
+
+/**
+ * The learned-step results in a box setup's output. The last line for a step
+ * wins. Output that has no result line (a setup that was stopped) gives none.
+ */
+export function parseLearnedStepResults(output: string): LearnedStepResult[] {
+  const found = new Map<string, LearnedStepResult>();
+  for (const line of output.split(/\r?\n/)) {
+    const m = RESULT_LINE.exec(line);
+    if (!m) continue;
+    const exitCode = Number(m[2]);
+    found.delete(m[1]);
+    found.set(m[1], {
+      id: m[1],
+      exitCode,
+      timedOut: exitCode === 124 || exitCode === 137,
+      lastLine: m[4].trim(),
+      ...(m[3] !== undefined ? { durationMs: Number(m[3]) } : {}),
+    });
+  }
+  return [...found.values()];
+}
+
+const TIMING = /^\[talyn\] setup timing total (\d+)(?: repository (\d+))? learned (\d+)\s*$/;
+
+/** The times of a box setup, from its last timing line. Null: the output has none. */
+export function parseSetupTiming(output: string): Pick<SetupTiming, 'totalMs' | 'repositoryMs' | 'learnedMs'> | null {
+  let found: Pick<SetupTiming, 'totalMs' | 'repositoryMs' | 'learnedMs'> | null = null;
+  for (const line of output.split(/\r?\n/)) {
+    const m = TIMING.exec(line);
+    if (m) found = { totalMs: Number(m[1]), repositoryMs: m[2] !== undefined ? Number(m[2]) : null, learnedMs: Number(m[3]) };
+  }
+  return found;
 }
 
 /**
@@ -808,8 +1168,17 @@ export function mergeLearnedSetup(config: WorkbenchConfig, steps: AppliedSetupSt
   if (!learned) return config;
   const own = config.setup?.command?.trim();
   const command = own
-    ? `(\n${own}\n)\ntalyn_setup_status=$?\n${learned}\nexit $talyn_setup_status`
-    : learned;
+    ? [
+        ...NOW_MS_FUNCTION,
+        'talyn_setup_start="$(talyn_now_ms)"',
+        `(\n${own}\n)`,
+        'talyn_setup_status=$?',
+        'talyn_own_ms="$(( $(talyn_now_ms) - talyn_setup_start ))"',
+        learned,
+        TIMING_LINE,
+        'exit $talyn_setup_status',
+      ].join('\n')
+    : `${learned}\n${TIMING_LINE}`;
   return { ...config, setup: { command } };
 }
 
@@ -894,4 +1263,177 @@ export function bakeWithLearnedSteps(
 /** The step id in a learned bake step's name, or null for a step the repository wrote. */
 export function learnedBakeStepId(name: string): string | null {
   return name.startsWith(LEARNED_BAKE_STEP_PREFIX) ? name.slice(LEARNED_BAKE_STEP_PREFIX.length) : null;
+}
+
+// ============================================================================
+// Frequency: does every session need the step?
+// ============================================================================
+
+/** Browsers. Each is hundreds of megabytes, often with dozens of system packages. */
+const HEAVY_INSTALL = /\bplaywright\b[^|;&]*\binstall\b|(?:@puppeteer\/browsers|\bpuppeteer\b)[^|;&]*\b(?:install|browsers)\b/;
+/** The same, and TeX, as apt packages. `texlive-full` alone is gigabytes. */
+const HEAVY_APT_PACKAGE = /^(?:chromium(?:-[\w.-]+)?|google-chrome[\w.-]*|firefox(?:-esr)?|texlive(?:-[\w.-]+)?)$/;
+
+/**
+ * A step that installs a browser (playwright, puppeteer, chrome, chromium,
+ * firefox) or TeX. It costs every box minutes and gigabytes, so it needs
+ * {@link SETUP_STEP_HEAVY_LIVE_SHARE}, not {@link SETUP_STEP_LIVE_SHARE}.
+ */
+export function isHeavySetupStep(command: string): boolean {
+  if (HEAVY_INSTALL.test(command)) return true;
+  for (const segment of commandSegments(command)) {
+    const w = shellWords(unwrapCommand(segment).command);
+    if (!w || !['apt', 'apt-get'].includes(w[0]) || !w.includes('install')) continue;
+    if (names(w.slice(w.indexOf('install') + 1)).some((p) => HEAVY_APT_PACKAGE.test(packageName(p)))) return true;
+  }
+  return false;
+}
+
+/** The commands of a language's tools. A dependency install in the checkout is used by any of them. */
+const ECOSYSTEM_COMMANDS: Partial<Record<SetupStepKind, string[]>> = {
+  uv: ['uv', 'uvx', 'python', 'python3', 'pytest'],
+  pip: ['python', 'python3', 'pytest', 'pip', 'pip3'],
+  node: ['node', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx'],
+  go: ['go'],
+  gem: ['ruby', 'bundle', 'rake', 'rails'],
+};
+/** System libraries for a build. No command names them: the dependency install and the compilers use them. */
+const BUILD_LIBRARY = /^(?:lib[\w.+-]*-dev|build-essential|pkg-config|[\w.+-]+-dev)$/;
+const BUILD_COMMANDS = [...new Set([...Object.values(ECOSYSTEM_COMMANDS).flat(), 'cargo', 'rustc', 'make', 'cmake', 'cc', 'gcc'])];
+
+/**
+ * The commands that show that a session used a live step. A box that ran the
+ * step already has what it installs, so the agent does not install it again.
+ * Without this, a step that every session needs looks unneeded once it runs.
+ *
+ * - The command a step guards: `command -v uv || ...` gives `uv`.
+ * - The tools it installs: `cargo install sqlx-cli` gives `sqlx-cli`, which
+ *   `sqlx` matches ({@link setupStepUsed}).
+ * - For a dependency install in the checkout (`uv sync`, `pnpm install`), the
+ *   language's own commands.
+ * - For build libraries (`libpq-dev`), every build command.
+ *
+ * A start step has none: it is a one-off by nature, and a session that needs
+ * it every time records it again.
+ */
+export function setupStepUses(step: Pick<AppliedSetupStep, 'kind' | 'command' | 'phase'>): string[] {
+  if (step.phase !== 'install') return [];
+  const out = new Set<string>();
+  for (const m of step.command.matchAll(/command -v ([\w.+-]+)/g)) out.add(m[1]);
+  for (const parsed of stepsFromCommand(step.command).steps) {
+    const provided = (parsed.provides ?? []).map((p) => p.split('/').pop() ?? p);
+    if (parsed.kind === 'apt' && provided.length > 0 && provided.every((p) => BUILD_LIBRARY.test(p))) {
+      BUILD_COMMANDS.forEach((c) => out.add(c));
+    } else if (provided.length > 0) {
+      provided.forEach((p) => out.add(p));
+    } else {
+      (ECOSYSTEM_COMMANDS[parsed.kind] ?? []).forEach((c) => out.add(c));
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The commands that a turn's shell calls ran: the tool of each part, its
+ * runner (`uv` of `uv run pytest`), `tool-sub` for a subcommand
+ * (`cargo-nextest` of `cargo nextest run`), and the module of `python -m`.
+ */
+export function turnCommandWords(calls: TurnToolCall[]): Set<string> {
+  const out = new Set<string>();
+  for (const call of calls) {
+    if (!SHELL_TOOLS.has(call.name) || !call.command) continue;
+    for (const segment of commandSegments(call.command).flatMap(pipeParts)) {
+      const u = unwrapCommand(segment);
+      if (u.runner) out.add(u.runner.split(' ')[0]);
+      const w = u.command.split(/\s+/).map((x) => x.replace(/^['"]|['"]$/g, ''));
+      const tool = w[0]?.split('/').pop();
+      if (!tool || !/^[\w.+-]+$/.test(tool)) continue;
+      out.add(tool);
+      if (w[1] && /^[a-z][\w-]*$/.test(w[1])) out.add(`${tool}-${w[1]}`);
+      if (/^python3?(?:\.\d+)?$/.test(tool) && w[1] === '-m' && w[2]) out.add(w[2]);
+    }
+  }
+  return out;
+}
+
+/** The commands of a pipeline: `cat x | jq .` is `cat x` and `jq .`. Quotes keep their `|`. */
+function pipeParts(segment: string): string[] {
+  const out: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  for (const c of segment) {
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '|') {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    current += c;
+  }
+  out.push(current);
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+
+/** Whether a session that ran {@link turnCommandWords} used the step. `sqlx` uses `sqlx-cli`. */
+export function setupStepUsed(step: Pick<AppliedSetupStep, 'kind' | 'command' | 'phase'>, words: Set<string>): boolean {
+  return setupStepUses(step).some((use) => words.has(use) || (use.endsWith('-cli') && words.has(use.slice(0, -4))));
+}
+
+export interface SetupStepVerdictInput {
+  /** The step runs on new boxes now. */
+  live: boolean;
+  heavy: boolean;
+  /** Recent sessions that needed the step. */
+  neededBy: number;
+  /** All recent sandbox sessions on the repository. */
+  sessions: number;
+  /** The step's typical time in the box setup. At {@link SETUP_STEP_SLOW_MS} or more, the heavy bars apply. */
+  typicalDurationMs?: number | null;
+  /**
+   * The window has the full {@link SETUP_STEP_WINDOW_DAYS} days of data. Until
+   * then a live step stays live: its sessions before Talyn counted uses look
+   * like sessions that did not need it.
+   */
+  canDrop: boolean;
+}
+
+const pct = (share: number) => `${Math.round(share * 100)}%`;
+
+/**
+ * Whether a step runs on new boxes, and why, from its share of the
+ * repository's recent sessions. A waiting step goes live at
+ * {@link SETUP_STEP_MIN_SESSIONS} sessions and {@link SETUP_STEP_LIVE_SHARE}.
+ * A live step goes back to waiting below {@link SETUP_STEP_DROP_SHARE}, but only
+ * with full data and at least {@link SETUP_STEP_MIN_SESSIONS_TO_DROP} sessions.
+ * Heavy and slow steps use the heavy bars.
+ */
+export function setupStepVerdict(input: SetupStepVerdictInput): { live: boolean; reason: string } {
+  const { neededBy, sessions } = input;
+  const share = sessions > 0 ? neededBy / sessions : 0;
+  const slow = (input.typicalDurationMs ?? 0) >= SETUP_STEP_SLOW_MS;
+  const strict = input.heavy || slow;
+  const liveBar = strict ? SETUP_STEP_HEAVY_LIVE_SHARE : SETUP_STEP_LIVE_SHARE;
+  const dropBar = strict ? SETUP_STEP_HEAVY_DROP_SHARE : SETUP_STEP_DROP_SHARE;
+  const counted = `needed by ${neededBy} of ${sessions} sessions in the last ${SETUP_STEP_WINDOW_DAYS} days`;
+  const heavy = input.heavy
+    ? ', because it installs a browser or a large package set'
+    : slow ? `, because it takes about ${formatDurationMs(input.typicalDurationMs!)} on each box` : '';
+  if (!input.live) {
+    if (neededBy >= SETUP_STEP_MIN_SESSIONS && share >= liveBar) return { live: true, reason: `Live: ${counted} (${pct(share)}).` };
+    return {
+      live: false,
+      reason: `Waiting: ${counted}. It runs on new boxes when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${pct(liveBar)} need it${heavy}.`,
+    };
+  }
+  if (sessions === 0 || share >= dropBar) return { live: true, reason: `Live: ${counted}${sessions ? ` (${pct(share)})` : ''}.` };
+  if (!input.canDrop) {
+    return { live: true, reason: `Live: ${counted} (${pct(share)}). It stays until Talyn has ${SETUP_STEP_WINDOW_DAYS} days of data.` };
+  }
+  if (sessions < SETUP_STEP_MIN_SESSIONS_TO_DROP) {
+    return { live: true, reason: `Live: ${counted} (${pct(share)}). Talyn needs ${SETUP_STEP_MIN_SESSIONS_TO_DROP} recent sessions to take a step out.` };
+  }
+  return { live: false, reason: `Waiting: ${counted} (${pct(share)}), under ${pct(dropBar)}. It no longer runs on new boxes.` };
 }

@@ -285,6 +285,68 @@ export interface AdminFleetHost {
   live: AdminFleetCapacity | null;
   liveError: string | null;
   liveErrorCode: AdminFleetLiveErrorCode | null;
+  /** From a live `GET /v1/stats`. Null without a live read. */
+  health?: AdminHostHealth | null;
+  conditions?: AdminHostCondition[] | null;
+  boxes?: AdminHostBoxCounts | null;
+}
+
+/**
+ * A host's health, from fleetd's `GET /v1/stats` (`health`).
+ *
+ * The same numbers the YAS control plane raises its host alerts from. Null on a
+ * host we could not reach, and on a fleetd older than the field.
+ */
+export interface AdminHostHealth {
+  /** The fleet store's free space, unrounded. */
+  diskFreeBytes: number;
+  /** `ok`, `low` or `critical`. Null from a host that predates it. */
+  diskPressure: 'ok' | 'low' | 'critical' | null;
+  /** Growth that admitted boxes have not written yet. */
+  diskCommittedMib: number | null;
+  diskReserveMib: number | null;
+  diskHardFloorMib: number | null;
+  /** The boxes that write most. Set only under disk pressure. */
+  diskTopWriters: Array<{ id: string; writtenMib: number; rateMibPerMin: number }>;
+  /** Local suspensions whose last hibernation upload failed. */
+  hibernateUploadFailing: number;
+  bakeFailingRepos: number;
+  bakeMaxConsecutiveFailures: number;
+}
+
+/**
+ * One thing on a host that a person should look at. The kinds are the fleet's
+ * stable strings (yas `internal/fleet/hosthealth.go`).
+ */
+export type AdminHostConditionKind = 'disk_low' | 'hibernate_upload_failing' | 'bake_failing' | (string & {});
+
+export interface AdminHostCondition {
+  kind: AdminHostConditionKind;
+  severity: 'warning' | 'critical';
+  detail: string;
+}
+
+/** A host's sandboxes by state, from `runsByStatus` on `GET /v1/stats`. */
+export interface AdminHostBoxCounts {
+  /** starting, idle and busy. */
+  running: number;
+  /** suspended. */
+  asleep: number;
+  queued: number;
+}
+
+/** A host alert as the console banner shows it. */
+export interface AdminHostAlert {
+  host: string;
+  kind: AdminHostConditionKind | 'host_offline';
+  severity: 'warning' | 'critical';
+  detail: string;
+}
+
+export interface AdminFleetAlerts {
+  alerts: AdminHostAlert[];
+  /** When the backend last read the hosts. The answer is cached for a short time. */
+  checkedAt: string;
 }
 
 export interface AdminFleetHostDetail extends AdminFleetHost {
@@ -296,6 +358,43 @@ export interface AdminFleetHostDetail extends AdminFleetHost {
 }
 
 export type AdminRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * What a fleet sandbox is for, read from its id.
+ *
+ * `talyn-<task>` is a task run, `talyn-wb-<workbench>` is a session or a
+ * thread (the Talyn row says which), `talyn-rev-<unit>` is one code-review
+ * unit. `unknown` is an id Talyn does not make (a deploy self-test, a box made
+ * by hand).
+ */
+export type AdminRunKind = 'task' | 'session' | 'thread' | 'review' | 'unknown';
+export const ADMIN_RUN_KINDS: readonly AdminRunKind[] = ['task', 'session', 'thread', 'review', 'unknown'];
+
+/**
+ * Whether a Talyn row claims the sandbox.
+ *
+ *  - `active`: a row claims it as its current sandbox.
+ *  - `superseded`: a row names it, but the row is archived or has moved to a
+ *    newer sandbox. A cleanup candidate, not a leak.
+ *  - `orphan`: no Talyn row of any status names it.
+ */
+export type AdminRunClaim = 'active' | 'superseded' | 'orphan';
+
+/**
+ * Where a suspended sandbox sleeps. `local`: its images are on the host's
+ * disk. `storage`: a complete copy is in object storage (hibernated).
+ */
+export type AdminRunSleepKind = 'local' | 'storage';
+
+export interface AdminRunSleep {
+  kind: AdminRunSleepKind;
+  /** When the box went to sleep. Null when the host did not say. */
+  since: string | null;
+  /** `memory` keeps running processes. `rootfs` keeps only the disk. */
+  suspendKind: 'memory' | 'rootfs' | null;
+  /** Why the last hibernation upload failed. The box is still asleep locally. */
+  uploadError: string | null;
+}
 
 /**
  * A run, joined from two sources that each know something the other doesn't.
@@ -316,6 +415,25 @@ export interface AdminRunRow {
   workspaceId: string | null;
   ownerEmail: string | null;
   repo: string | null;
+  /** Absent on an older backend: read absent as `task` when `taskId` is set. */
+  kind?: AdminRunKind;
+  /** Absent on an older backend: read it from `orphan`. */
+  claim?: AdminRunClaim;
+  /** Why a `superseded` sandbox is a cleanup candidate, in words. */
+  supersededReason?: string | null;
+  /** The session's or task's title. */
+  title?: string | null;
+  /** The session or thread that claims the sandbox. */
+  workbenchId?: string | null;
+  workspaceName?: string | null;
+  /** The fleet's own state word (`busy`, `idle`, `suspended`, ...). Null without a live read. */
+  sandboxStatus?: string | null;
+  /** Set while the sandbox is suspended. */
+  sleep?: AdminRunSleep | null;
+  vcpuCount?: number | null;
+  diskMib?: number | null;
+  /** The size the session chose (`standard`, `large`, ...). Null for a task, or a session on the default. */
+  sandboxSize?: string | null;
   status: AdminRunStatus | null;
   phase: string | null;
   adopted: boolean;
@@ -584,6 +702,22 @@ export interface AdminWorkspaceDetail extends AdminWorkspaceSummary {
   activeTaskCount: number;
   /** Provider types with credentials configured. Never the credentials. */
   providers: string[];
+  /** What the workspace uses beyond tasks. Absent on an older backend. */
+  features?: AdminWorkspaceFeatures;
+}
+
+/** Counts only. The rules, prompts and secrets behind them stay on the backend. */
+export interface AdminWorkspaceFeatures {
+  /** Sessions and threads that are not archived. */
+  sessions: number;
+  threads: number;
+  loops: { enabled: number; total: number };
+  workflows: { enabled: number; total: number };
+  mcpServers: number;
+  /** Webhook endpoints that send to this workspace's events, enabled. */
+  webhookEndpoints: number;
+  /** The owner's API tokens that are not revoked and can reach this workspace. */
+  apiTokens: number;
 }
 
 export interface AdminTaskSummary {
@@ -628,4 +762,151 @@ export interface AdminPlanOverrideRequest extends AdminConfirmRequest {
 
 export interface AdminGrantRequest extends AdminConfirmRequest {
   isAdmin: boolean;
+}
+
+// ============================================================================
+// Sessions (workbenches on fleet sandboxes)
+// ============================================================================
+
+export type AdminSessionKind = 'session' | 'thread';
+
+/**
+ * Provisioning longer than this is stuck. A box boots, clones and runs setup in
+ * a few minutes; a cold repository with no golden can take ten. Twenty is past
+ * every healthy start the fleet has recorded.
+ */
+export const ADMIN_SESSION_STUCK_PROVISIONING_MS = 20 * 60_000;
+
+export interface AdminSessionSummary {
+  id: string;
+  kind: AdminSessionKind;
+  workspaceId: string;
+  workspaceName: string | null;
+  ownerEmail: string | null;
+  /** `owner/name`. '' for a thread. */
+  repoFullName: string;
+  /** The title a person sees: the session title, or its name when it has none. */
+  title: string;
+  name: string;
+  branch: string;
+  runtime: string;
+  agent: string;
+  model: string | null;
+  /** `WorkbenchStatus`. */
+  status: string;
+  statusMessage: string | null;
+  /** `WorkbenchSandboxState`. */
+  sandboxState: string;
+  sandboxId: string | null;
+  fleetHost: string | null;
+  /** The size the session chose. Null: the repository's size. */
+  sandboxSize: string | null;
+  /** `slack` when Slack started the session. Null: the app. */
+  source: string | null;
+  pullRequestId: string | null;
+  chatCount: number;
+  runningChats: number;
+  /** The newest chat update, or the session's own update when it has no chats. */
+  lastActivityAt: string;
+  /** Provisioning for longer than ADMIN_SESSION_STUCK_PROVISIONING_MS. */
+  stuckProvisioning: boolean;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminSessionChat {
+  id: string;
+  title: string;
+  agent: string;
+  model: string | null;
+  /** `WorkbenchChatStatus`. */
+  status: string;
+  statusMessage: string | null;
+  turnCount: number;
+  queuedCount: number;
+  turnStartedAt: string | null;
+  turnHeartbeatAt: string | null;
+  closedAt: string | null;
+  updatedAt: string;
+}
+
+export interface AdminSessionTurn {
+  chatId: string;
+  turn: number;
+  wallMs: number;
+  toolMs: number;
+  modelMs: number;
+  calls: number;
+  at: string;
+}
+
+/**
+ * One transcript event, WITHOUT its content: the type words only. The content is
+ * another tenant's conversation, and this page does not need it to say what
+ * the agent was doing.
+ */
+export interface AdminSessionEventMeta {
+  chatId: string;
+  seq: number;
+  turn: number;
+  type: string | null;
+  subtype: string | null;
+  at: string;
+}
+
+export interface AdminSessionSetupStep {
+  id: string;
+  kind: string;
+  phase: string;
+  /** The first 200 characters of the command. */
+  command: string;
+  sessionCount: number;
+  live: boolean;
+  disabled: boolean;
+  boxFailureCount: number;
+  boxDisabled: boolean;
+  boxLastFailure: string | null;
+  typicalDurationMs: number | null;
+}
+
+export interface AdminSessionSetup {
+  /** The repository's newest box setup that ran learned steps. */
+  timing: {
+    totalMs: number;
+    repositoryMs: number | null;
+    learnedMs: number;
+    measuredAt: string;
+    /** True when the timing is from this session's box. */
+    thisSession: boolean;
+  } | null;
+  steps: AdminSessionSetupStep[];
+}
+
+export interface AdminSessionDetail extends AdminSessionSummary {
+  baseBranch: string;
+  threadId: string | null;
+  sandboxGeneration: string | null;
+  /** The fleet sandbox the session's next turn tries first, when it is not `sandboxId`. */
+  fleetSandboxId: string | null;
+  /** The sandbox a move is creating, while the session moves. */
+  moveSandboxId: string | null;
+  /** Old sandboxes kept because their hibernated copy could not be restored. */
+  keptSandboxIds: string[];
+  internetAccess: boolean;
+  archivePendingAt: string | null;
+  archiveFailures: number;
+  restoreRequestedAt: string | null;
+  memoryRestorePending: string | null;
+  workCheckpoint: { sha: string; at: string | null; bytes: number | null } | null;
+  pullRequest: { number: number; owner: string; repo: string; state: string; url: string } | null;
+  slackPermalink: string | null;
+  chats: AdminSessionChat[];
+  turns: AdminSessionTurn[];
+  events: AdminSessionEventMeta[];
+  setup: AdminSessionSetup | null;
+  /** The live sandbox, when the fleet answered. */
+  sandbox: AdminRunRow | null;
+  /** Why the live read failed. Null when it worked or was not tried. */
+  sandboxError: string | null;
 }

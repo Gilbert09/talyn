@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Toaster } from '../ui/toaster';
 import { useWsConnection } from '../../hooks/useWsConnection';
+import { HostAlertsBanner } from './HostAlertsBanner';
 
 /**
  * The console shell. Only ever mounted behind AdminGate, which is why the
@@ -15,6 +16,7 @@ export function AdminLayout() {
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar />
       <main className="flex-1 overflow-y-auto">
+        <HostAlertsBanner />
         <Outlet />
       </main>
       <Toaster />

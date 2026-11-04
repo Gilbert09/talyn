@@ -558,7 +558,7 @@ describe('workbench Create PR', () => {
             ok: true, adopted: true, existing: true, number: 120958, url: 'https://github.com/acme/app/pull/120958',
           }),
         ]);
-        expect(watch).toHaveBeenCalledWith(expect.objectContaining({ number: 120958 }));
+        expect(watch).toHaveBeenCalledWith(expect.objectContaining({ number: 120958, markWatching: false }));
         const row = await getWorkbench(wb.id);
         expect(row?.pullRequestId).toBe('pr-120958');
         expect(row?.branch).toBe('agent-branch');

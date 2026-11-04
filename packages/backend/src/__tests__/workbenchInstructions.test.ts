@@ -25,25 +25,24 @@ const sandbox = vi.hoisted(() => ({
   fail: null as null | ((script: string) => boolean),
 }));
 
-vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../services/workbenches/sandboxRuntime.js')>()),
-  repoDirFor: () => sandbox.repo,
-  runCapture: async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
-    sandbox.calls.push({ script, env: opts.env ?? {} });
-    if (sandbox.fail?.(script)) return { exitCode: 1, stdout: '', stderr: 'boom', stdoutBytes: Buffer.alloc(0) };
-    const r = spawnSync('bash', [bashScriptFile(script)], {
-      cwd: '/',
-      env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
-      encoding: 'utf8',
-    });
-    return { exitCode: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, stdoutBytes: Buffer.from(r.stdout) };
-  },
-}));
+const runInSandbox = async (_row: unknown, script: string, opts: { env?: Record<string, string> } = {}) => {
+  sandbox.calls.push({ script, env: opts.env ?? {} });
+  if (sandbox.fail?.(script)) return { exitCode: 1, stdout: '', stderr: 'boom', stdoutBytes: Buffer.alloc(0) };
+  const r = spawnSync('bash', [bashScriptFile(script)], {
+    cwd: '/',
+    env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
+    encoding: 'utf8',
+  });
+  return { exitCode: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, stdoutBytes: Buffer.from(r.stdout) };
+};
 
+const runtime = await import('../services/workbenches/sandboxRuntime.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
+const { observeSessionFiles, sessionFileProbe, syncSessionFiles } = await import('../services/workbenches/sessionFileSync.js');
+const repositoryInstructions = await import('../services/workbenches/repositoryInstructions.js');
 const { putInstructionFile, ruleFileName, syncInstructionFiles, CODEX_BLOCK_END, CODEX_BLOCK_START, MEMORY_RULE_FILE } =
   await import('../services/workbenches/instructions.js');
 const { writeSandboxFiles } = await import('../services/workbenches/sandboxFiles.js');
@@ -87,23 +86,13 @@ describe('workbench instruction files', () => {
       { id: 'ws-a', ownerId: 'owner-a', name: 'A' },
       { id: 'ws-b', ownerId: 'owner-b', name: 'B' },
     ]);
-    const app = express();
-    app.use(express.json({ limit: '2mb' }));
-    app.use((req, _res, next) => {
-      const id = req.headers['x-user'] as string;
-      req.user = { id, email: `${id}@example.test`, isAdmin: false };
-      next();
-    });
-    app.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
-    app.use(apiErrorHandler);
-    server = createServer(app);
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'talyn-instr-'));
     sandbox.home = path.join(tmp, 'home');
     sandbox.repo = path.join(tmp, 'work', 'app');
     sandbox.calls = [];
+    vi.spyOn(runtime, 'runCapture').mockImplementation(runInSandbox);
+    vi.spyOn(runtime, 'repoDirFor').mockImplementation(() => sandbox.repo);
     sandbox.fail = null;
     await fs.mkdir(path.join(sandbox.home, '.claude'), { recursive: true });
     await fs.mkdir(sandbox.repo, { recursive: true });
@@ -111,7 +100,7 @@ describe('workbench instruction files', () => {
   });
 
   afterEach(async () => {
-    await new Promise((resolve) => server.close(resolve));
+    vi.restoreAllMocks();
     await testDb.cleanup();
     await fs.rm(tmp, { recursive: true, force: true });
     vi.unstubAllEnvs();
@@ -119,6 +108,25 @@ describe('workbench instruction files', () => {
   });
 
   describe('routes', () => {
+    beforeEach(async () => {
+      const app = express();
+      app.use(express.json({ limit: '2mb' }));
+      app.use((req, _res, next) => {
+        const id = req.headers['x-user'] as string;
+        req.user = { id, email: `${id}@example.test`, isAdmin: false };
+        next();
+      });
+      app.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
+      app.use(apiErrorHandler);
+      server = createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise((resolve) => server.close(resolve));
+    });
+
     it('upserts a file and lists it without its content', async () => {
       const put = await call('PUT', '/workbenches/instructions', { workspaceId: 'ws-a', file: claudeUser('be terse') });
       expect(put.status).toBe(200);
@@ -221,10 +229,107 @@ describe('workbench instruction files', () => {
     const read = (p: string) => fs.readFile(p, 'utf8');
     const exists = (p: string) => fs.access(p).then(() => true, () => false);
 
-    it('runs no exec when the workspace has no file for the agent', async () => {
+    it('cleans stale files when the workspace has no file for the agent', async () => {
       await put({ ...claudeUser('x'), enabled: true });
       await syncInstructionFiles(row(), 'codex');
-      expect(sandbox.calls).toEqual([]);
+      expect(sandbox.calls).toHaveLength(1);
+    });
+
+    function probe(target = row()) {
+      const r = spawnSync('bash', [bashScriptFile(sessionFileProbe(sandbox.repo))], {
+        env: { ...process.env, HOME: sandbox.home }, encoding: 'utf8',
+      });
+      expect(r.status, r.stderr).toBe(0);
+      observeSessionFiles(target, r.stderr);
+    }
+
+    it.each(['claude', 'codex'] as const)('skips unchanged %s files and syncs after source or disk changes', async (agent) => {
+      const file = agent === 'claude' ? claudeUser('first') : {
+        key: 'codex-user', agent, target: 'user' as const, sourcePath: '~/.codex/AGENTS.md', content: 'first', enabled: true,
+      };
+      const target = row();
+      await put(file);
+      await syncInstructionFiles(target, agent);
+      probe(target);
+      sandbox.calls = [];
+      await syncInstructionFiles(target, agent);
+      expect(sandbox.calls).toHaveLength(0);
+      await put({ ...file, content: 'changed' });
+      await syncInstructionFiles(target, agent);
+      expect(sandbox.calls).toHaveLength(1);
+      const dest = agent === 'claude' ? home('.claude/rules/talyn-user.md') : home('.codex/AGENTS.md');
+      await fs.writeFile(dest, 'terminal edit');
+      probe(target);
+      await syncInstructionFiles(target, agent);
+      expect(sandbox.calls).toHaveLength(2);
+      expect(await read(dest)).toContain('changed');
+      observeSessionFiles(target, '');
+      await syncInstructionFiles(target, agent);
+      expect(sandbox.calls).toHaveLength(3);
+    });
+
+    it('invalidates a cached sync when the last source file is deleted', async () => {
+      await put(claudeUser('first'));
+      await syncInstructionFiles(row(), 'claude');
+      probe();
+      const { removeInstructionFile } = await import('../services/workbenches/instructions.js');
+      await removeInstructionFile('ws-a', 'claude-user');
+      await syncInstructionFiles(row(), 'claude');
+      expect(await exists(home('.claude/rules/talyn-user.md'))).toBe(false);
+    });
+
+    it('does not cache a failed write', async () => {
+      await put(claudeUser('first'));
+      sandbox.fail = () => true;
+      await expect(syncInstructionFiles(row(), 'claude')).rejects.toThrow('boom');
+      sandbox.fail = null;
+      probe();
+      await syncInstructionFiles(row(), 'claude');
+      expect(await read(home('.claude/rules/talyn-user.md'))).toBe('first');
+    });
+
+    it('serializes writes to the shared Codex file', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const write = vi.fn().mockImplementationOnce(() => gate).mockResolvedValue(undefined);
+      const io = { repoDir: sandbox.repo, write };
+      const first = syncSessionFiles(row(), 'instructions-codex', 'instructions', [[], { after: 'true' }], io);
+      const second = syncSessionFiles(row(), 'skills', 'skills', [[], { after: 'true' }], io);
+      try {
+        await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+      } finally { release(); }
+      await Promise.all([first, second]);
+      expect(write).toHaveBeenCalledTimes(2);
+    });
+
+    it('invalidates repository instruction changes and missing git exclusions', async () => {
+      const source = vi.spyOn(repositoryInstructions, 'repositoryInstructionsForTurn').mockResolvedValue({ hasRow: true, body: 'first' });
+      try {
+        await syncInstructionFiles(row(), 'claude');
+        probe();
+        sandbox.calls = [];
+        await fs.writeFile(path.join(sandbox.repo, '.git/info/exclude'), '');
+        probe();
+        await syncInstructionFiles(row(), 'claude');
+        expect(sandbox.calls).toHaveLength(1);
+        expect(await read(path.join(sandbox.repo, '.git/info/exclude'))).toContain('CLAUDE.local.md');
+        probe();
+        sandbox.calls = [];
+        source.mockResolvedValue({ hasRow: true, body: 'second' });
+        await syncInstructionFiles(row(), 'claude');
+        expect(sandbox.calls).toHaveLength(1);
+        expect(await read(path.join(sandbox.repo, 'CLAUDE.local.md'))).toContain('second');
+      } finally { source.mockRestore(); }
+    });
+
+    it('invalidates a cached sync when its source path changes', async () => {
+      await put(claudeUser('same content'));
+      await syncInstructionFiles(row(), 'claude');
+      probe();
+      sandbox.calls = [];
+      await put({ ...claudeUser('same content'), sourcePath: '/new/source/CLAUDE.md' });
+      await syncInstructionFiles(row(), 'claude');
+      expect(sandbox.calls).toHaveLength(1);
     });
 
     it('writes Claude files as rules, removes stale ones, and leaves the fleet briefing alone', async () => {
@@ -376,10 +481,10 @@ describe('workbench instruction files', () => {
         ]);
       });
 
-      it('runs no exec when the workspace never stored an entry or a file', async () => {
+      it('cleans stale files when the workspace has no entry or file', async () => {
         await syncInstructionFiles(memRow(), 'claude');
         await syncInstructionFiles(memRow('codex'), 'codex');
-        expect(sandbox.calls).toEqual([]);
+        expect(sandbox.calls).toHaveLength(2);
       });
 
       it('writes the index as a Claude rule: workspace and own-repository entries, no bodies', async () => {
@@ -419,6 +524,7 @@ describe('workbench instruction files', () => {
         await syncInstructionFiles(memRow(), 'claude');
         expect(await exists(rule())).toBe(true);
 
+        probe(memRow());
         await change();
         await syncInstructionFiles(memRow(), 'claude');
 
@@ -430,6 +536,7 @@ describe('workbench instruction files', () => {
         await remember();
         await syncInstructionFiles(memRow(), 'claude');
         expect(await exists(rule())).toBe(true);
+        probe(memRow());
         await forgetAll();
         await syncInstructionFiles(memRow(), 'claude');
         expect(await exists(rule())).toBe(false);

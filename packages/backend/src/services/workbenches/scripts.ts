@@ -15,6 +15,7 @@ import {
   sandboxScriptEnv,
 } from './sandboxRuntime.js';
 import type { WorkbenchRow } from './store.js';
+import { noteWorkActivity } from './workCheckpoint.js';
 
 /**
  * Setup, run and archive scripts in a sandbox workbench.
@@ -151,6 +152,8 @@ function followScript(row: WorkbenchRow, lease: ScriptLease): { done: Promise<nu
       emitWorkbenchScript(row.workspaceId, { workbenchId: row.id, name: lease.name, stream: 'exit',
         exitCode: outcome.exitCode, generation: lease.generation, offset: lease.offset });
     }
+    // A script can change files outside a turn.
+    noteWorkActivity(row.id);
     return outcome.exitCode;
   }).catch((err: unknown) => {
     recordWorkbenchEvent(row, 'script_follow_failed', 'The script output will reconnect.', false, err);

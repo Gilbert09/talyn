@@ -2,6 +2,90 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Opening a session no longer wakes its sandbox (2026-11-04)
+
+**What was wrong.** The owner opened an existing session and its Sandbox tab said "Up for less than a minute". The app called `POST /workbenches/:id/wake` on every open (`WorkbenchView`), and the fleet journal on scaleway-1 shows five sleeping posthog sessions resumed at 12:48:13-12:48:27 UTC. No line said "resumed a suspended sandbox for a request that needs its guest", so no exec, pty or port request woke them: each was an explicit `POST /v1/sandboxes/{id}/resume`. Talyn sends that from three places only: the wake route, `withWake` (a hibernated box) and the lost-box recovery. Railway logs were not readable, so the one that fired is not proved; the wake route on open fits best. A manual archive of a hibernated box also pulled 6.7 GB back to run the archive script and save, and that resume then failed.
+
+**What changed.**
+- Back end: the app's `/changes` refuses with `snapshot_unavailable` when a sleeping box has no stored list (it used to wake the box). The ports route answers `sandbox_asleep` for a sleeping box when the request carries `X-Talyn-No-Wake: 1`. The lost-box recovery keeps a suspended box and no longer resumes it. The throttled checkpoint and diff stat skip a box the fleet does not report running. A manual archive and a merge archive use the storage-only branch (`archiveBoxSource`, `settings.archiveFromSaved`) when the box sleeps and a save is newer than the last activity; with no such save the archive wakes the box, and a chat note says so.
+- Front end (`tom/workbenches`, both apps): opening a session reads it and does not wake it. The terminal connects on a click in it or the first key, never on mount. The Changes tab offers "Wake the sandbox" when nothing is stored. The desktop's on-open port check sends the no-wake header.
+- Guard: `workbenchOpenNoWake.test.ts` sends every open-time read to a suspended fake box and allows only `getSandbox`.
+
+**Open.** Typing in the composer still wakes the box (throttled to 30 s), as a prewarm for the prompt. The backup sweep runs its backup when the fleet does not answer `getSandbox`.
+
+## A sleeping session shows its changes without waking its sandbox (2026-11-04)
+
+**What was wrong.** The stored changes list (`changesSnapshot.ts`) was never used in production. The read used it only when `sandbox_state` was not `running`, but nothing writes `suspended` there: an asleep ready session keeps `running`. So every Changes poll ran an exec, the exec woke the box, and the 10 s poll then kept it awake for ever (the fleet measures idle time on requests). The diff, the file list, a file, the script config and the preview patch always read the box.
+
+**What changed.**
+- The fleet's record decides (`sandboxReadSource.ts`, `chooseReadSource`). Its sandbox read never wakes a box and is cached 10 s; a FAILED read is reused for 1 s only, so one dropped connection cannot send ten seconds of reads to a stale copy. Idle and busy read live. Suspended, queued, starting, a lost box, an archived session and a fleet that does not answer read Talyn's stored copy. With nothing stored, only a sleeping or waking box is refused: a fleet that does not answer reads the box, a starting session answers `not_ready`, and a lost box goes to the box path. A box the fleet reports lost starts its replacement (`recoverLostSandbox`) also when the stored copy answers, because a stored answer no longer runs the exec that used to find out. The preview patch (`/patch`) never answers from storage when the fleet did not answer, and marks a stored answer `source: 'stored'`. A read never writes `suspended` into the row. The admin "asleep" filter reads the fleet record too.
+- A full copy of the changes (`changesCapture.ts`, `changesCaptureScript.ts`, `changesStore.ts`): the list, three patches (combined, uncommitted, committed, all tree to tree through a temporary index, `--binary --find-renames`), the work tree's file list, and the changed files' contents. One exec stages it in tmpfs and prints `UNCHANGED` when the merge base, HEAD and tree are those of the last copy. The backend reads each object out in 2 MiB parts into storage, then replaces `meta.json`, then deletes the old generation. Two identical patches are stored once. Caps: 20 MiB per patch, 8 MiB file list, 16 MiB contents and 1 MiB per file (over a cap: `TOO_LARGE`, never cut). Measured on a 266-file, 57,000-line diff of this repository: 1.7 s on macOS, about 2.2 MB stored.
+- A copy is taken after every work checkpoint (after the save, under its own per-session queue, so a save never waits behind a capture), when a box is ready (start, move, recovery), before an archive deletes the box, and soon after a live list read that found other changes. A list-only write that moves past the copy marks it `listNewer`, and its patches are not served until the next copy.
+- Two columns, `changes_at` and `changes_etag` (migration `0107`), tell clients that a new copy exists. Nothing big goes in Postgres.
+- Reads of a box that does not run: `/changes` (with an `ETag` and 304), `/diff` (stored patch, sliced per file, binary bodies replaced by git's one line), `/files`, `/file`, `/config` (the last answer read from the box) and `/patch` (with binary bodies). With no stored diff, GitHub answers when the work is all pushed (`compareCommits`, cached 10 min). A file the session did not change comes from GitHub at the merge base. A rate limit is a "no", never a wait. Otherwise a 409 `snapshot_unavailable` with `wake: true`; only `live=1` wakes the box. The public API and the MCP tools take `live` and say where an answer came from.
+
+**Review fixes, same day.** An ask for a checkpoint while one ran used to be dropped, and a turn end often is that ask (the 20 s throttle had just started a save): now exactly one more save runs after the current one, and further asks join it. The capture's time counts in the checkpoint gap. A capture never writes the list-only copy or the sidebar stat over a list stored after it read the box (`storeDiffStat(..., { observedAt })`). It announces the new copy before it deletes the old generation, removes the parts of a generation it did not finish, puts nothing back for a session deleted during it, and cleans its tmpfs staging after an exec that threw, but only when the fleet says the box runs. A file the session deleted (or renamed away) answers 404 from the changes list and never comes from GitHub at the merge base; when the list cannot say, the read is refused with a wake. A GitHub compare that lists 300 files, fewer files than the stored list, or a file with line changes and no patch is refused with a wake rather than shown as the whole diff (an omitted patch used to read "Binary files differ"). The `/changes` ETag covers `storedReason`, `stale`, `source` and the copy's time, so a 304 cannot keep a wrong banner.
+
+**Open.** No pre-sleep capture (the capture runs on activity, so an idle box already has its last state) and no retention sweep for archived sessions. The Run panel's config is stored only after a live read of it.
+
+## Operator console: session boxes on the Runs page, a Sessions page, host health (2026-11-03)
+
+**What was wrong.** The Runs page joined fleet sandboxes only to `talyn-<task>` ids. Every session and thread box (`talyn-wb-<24 hex>[-rN]--<hash>`) showed "orphan" with no owner. The gateway's sandbox index names no host, so HOST was blank for every box. The backend folds `suspended` into the `running` run status, so every sleeping box showed "wedged?". Run detail, events and Cancel dialled the host directly with `FLEET_API_TOKEN`, which resolves to the fleet's empty tenant and cannot see a gateway-placed box: Cancel read "no such sandbox" as "already gone" and reported success.
+
+**What changed.**
+- `services/admin/sandboxClaims.ts` reads the three id schemes (task, workbench, review unit) and finds the claiming row in three queries. "orphan" now means no Talyn row of any status names the box. A row that is archived, has moved to a newer generation, or kept the box after a failed restore makes it "superseded", with the reason.
+- The host comes from the gateway's `X-Fleet-Host` (`sandboxHost`), then from the host Talyn recorded. Hydration runs 8 at a time.
+- Each row carries the sleep state (`local`, or `storage` once `suspendUploaded`), the fleet's own status word, vCPUs, disk and the session's size. "wedged?" fires only for an awake box (starting, idle, busy).
+- Run detail, events, the stream and Cancel go through the gateway when one is configured (`adminSandboxClient`). Cancel is not offered on a live session's current box.
+- New read-only `GET /admin/sessions` and `/admin/sessions/:id`, and Sessions pages in the console. Transcript events are read as their type words only.
+- Hosts read `GET /v1/stats` beside `/v1/capacity` for health, conditions and box counts. `GET /admin/fleet/alerts` (cached 15 s) drives a banner on every page.
+- Workspace detail counts sessions, threads, loops, workflows, MCP servers, webhook endpoints and API tokens.
+
+**Not as planned, and open items.**
+- Host health is live-only. The relayed host report carries `placementPriority`, `region` and the health fields, but `recordFleetHostReport` drops them and storing them needs a migration. Placement priority is not shown anywhere yet.
+- The control plane's raised alerts (with their sustain time) have no API. The banner shows the conditions the hosts report now.
+- The `golden_stale` incident reads `goldensStale` from the metrics snapshot, which fleetd only exports to Prometheus. It never fires.
+
+## Sandbox status panel, and save results that a person can see (2026-11-03)
+
+**The incident, read from production.** Session 95491f73 (Debugbear triage) did not work for two hours after its last checkpoint. Turn 1 ran from 15:03:33 to 15:10:15 UTC. The turn-end checkpoint saved at 15:10:51 (1554 bytes, 1 commit not pushed). At 15:11:04 the PR push failed ("the remote end hung up unexpectedly"). No turn and no event came after that until the box was lost (recovered at 15:42) and lost again after the fleetd restart (recovered at 17:32). Both restores put the commit back, and PR #128452 opened from it at 17:34. No checkpoint ran after 15:10 because the triggers were the turn end and file-changing tools during a turn, and none happened. Nothing was lost. The note "up to 141 minutes of work are missing" measured the time from the checkpoint to the loss, not to the last change, and that read as lost work. The disk I/O errors (15:07 in the box's dmesg) did not stop that save, because the bundle is staged in `/dev/shm`.
+
+**What changed.**
+- Each save result goes on the row (migration `0105`): `work_checked_at` (a save confirmed that storage holds all the work), `work_unpushed_commits` (the save script now prints the count), `work_save_failures`, `work_save_failed_at`, `work_save_error`. Before, a failed save went only to the log and the debug bus.
+- The chat gets a note at the first failure in a run, a stronger note at the third, and a note when a save works again. A bundle that is too large counts as a failure but keeps its own note. A lost box is recorded with no note, because the loss has its own.
+- Typing in the session terminal and the end of a script now trigger a save, through the same throttle as a turn (one interval later, once for a burst). No timer runs for idle sessions.
+- The lost-box note uses the later check time, and says "The agent did not run after that" when the last turn ended before the checkpoint and no save failed. A turn cut by the loss has a start and no time report, so it keeps the old wording.
+- `GET /workbenches/:id/sandbox-status` (`services/workbenches/sandboxStatus.ts`) answers the Sandbox panel: state, host, size, activity, work safety, last problem, actions. The fleet read is cached 10 s per box and has a 5 s timeout; a failure makes the fleet part unknown. MCP tool `talyn_session_sandbox_status`, allowed for a session token on itself and its thread.
+
+**Open.** There is no "save work now" route. There is no plain "move to a new box" route, only a resize to another size. `workbench_script_runs.started_at` is null for runs from before this change.
+
+## Workbench provisioning: one owner across instances (2026-11-03)
+
+**What was wrong.** A provision had only an in-memory guard. The boot sweep ran 5 s after boot and started a provision for every `provisioning` row. During a Railway deploy the old instance stays live for up to 3 minutes after that. So both instances provisioned the same session. Two clone scripts then ran in one box. The second found a half-made `.git`, its fetch or `checkout -b` failed, and `failProvision` marked the session `error` and failed the first prompt.
+
+Other defects in the same path:
+- The step-1 write copied `settings` and `sandboxId` from a stale read. The `ready` write and the failure write had no condition.
+- After Retry (generation `-r1`), a stale run could mark the new generation `error` or write back the deleted sandbox id.
+- A provision that started on the old instance after the new instance's boot sweep, and then died at drain, stayed at "Cloning the repository".
+- A late call on a `ready` session ran the whole pipeline again.
+
+**What changed.**
+- `cloneScript` opens `/work/.talyn-clone.lock` on fd 9 and runs `flock 9` when `flock` is on the PATH. The lock is outside every work tree. A second run waits, then takes the existing-clone path. The guest image is Debian bookworm, where `flock` is in util-linux. Without `flock` the script runs as before.
+- `provisionWorkbench` takes the maintenance claim `provision:<id>` (`withMaintenanceClaim`, migration `0089`, no new migration) and renews it every 20 s. The claim expires 2 minutes after the last renewal. A call that finds the claim held returns and writes nothing. The in-memory set stays as a fast path. A run whose renewal fails stops and writes nothing.
+- Under the claim the run reads the row again and returns unless the status is `provisioning`.
+- Every provision write is conditional: `status = 'provisioning'`, not archived, and the sandbox id the run used (`ownedByProvision` in `store.ts`). A write that matches no row stops the run with no failed prompt and no broadcast. Step 1 (`recordProvisionedSandbox`) changes only the `settings` keys it owns, in SQL.
+- The one-shot boot resume is now the first pass of a periodic sweep (`sweepStrandedProvisions`, poller `workbench-provision-sweep`, every 15 s on the turn-sweep timer). It stops at drain. It has no minimum row age, because a pass over a live provision costs one claim INSERT that matches nothing.
+- `processArchive` also steps aside while another instance holds the provision claim (`isMaintenanceClaimHeld`).
+
+**Not as planned, and open items.**
+- The first deploy of this change still overlaps an old instance that takes no claim. That one deploy can still provision a session twice.
+- A run that loses its write does not delete the box it created. The id can be the live box's id, so the reaper keeps that job.
+- A clone process killed mid-`git clone` (SIGKILL) can still leave a half-made `.git`. The lock does not repair that case.
+- The sweep reads `status = 'provisioning'` with no index on `status`. The result is ids only. A partial index needs a migration, and this change adds none.
+- An archive marked during a provision waits until the provision writes again and stops. Before, the provision wrote `ready` over the archived row.
+
+Tests: `workbenchProvisionClaim.test.ts` (new) and the clone-script tests in `workbenchFraming.test.ts`. The concurrent real-git clone test fails without the lock and passes with it.
+
 ## Public API, phase 2: pull requests, merge queue and code reviews (2026-11-02)
 
 Four new scopes: `pull_requests:read|write` and `code_reviews:read|write`. The merge-queue routes use the pull-request scopes. `POST /pull-requests/{id}/sessions` uses `sessions:write` and the `workbenches` gate, because it starts a session.
@@ -310,7 +394,7 @@ Scripts store their offsets and recent output. Clients reload that output after 
 Setup and archive scripts reuse their stored run on the same sandbox. Pending agent backups retry after restart.
 
 Audit: moves and pending archives already have durable leases and recovery sweeps.
-Provisioning retries its idempotent steps at boot. It still lacks a lease across instances for clone operations.
+Provisioning retries its idempotent steps at boot. (2026-11-03: a provision now holds a claim across instances, and the clone script takes a lock. See "Workbench provisioning: one owner across instances".)
 PR creation can find an existing PR for its branch. Adopted turns repeat completion when necessary.
 Imports still lack a durable completion record for partially copied transcripts.
 Preview servers survive, but an active forwarded HTTP request can end during deployment.

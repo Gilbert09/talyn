@@ -83,7 +83,7 @@ describe('preview workbench routes', () => {
     resetFeatureFlagsForTests();
   });
   const call = (path: string, user = 'owner', port = '3000') => invokeRoute<{ data: { base: string; patch: string } }>(router, 'GET', path, {
-    params: { id: 'wb', port }, user: { id: user, email: `${user}@test.invalid`, isAdmin: false },
+    params: { id: 'wb', port }, query: {}, user: { id: user, email: `${user}@test.invalid`, isAdmin: false },
   });
 
   it.each(['/:id/patch', '/:id/ports/:port/*'])('requires access and the workbenches flag for %s', async (path) => {

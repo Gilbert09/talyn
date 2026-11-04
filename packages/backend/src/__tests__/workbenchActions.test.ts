@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { prCheckStates, pullRequests, repositories, workspaces } from '../db/schema.js';
 
-const { formatFixChecksContext, readFixChecksContext } = await import('../services/workbenches/actions.js');
+const { formatFixChecksContext, readFixChecksContext, readUnresolvedThreadCount, formatUnresolvedThreadsNote } = await import('../services/workbenches/actions.js');
 const { githubService } = await import('../services/github.js');
 
 type Check = Parameters<typeof formatFixChecksContext>[0]['checks'][number];
@@ -90,6 +90,29 @@ describe('formatFixChecksContext', () => {
       checks: [check('e2e', { conclusion: null, required: null, url: null })],
     });
     expect(out).toBe('## Failing checks on #7\n\n- `e2e`');
+  });
+});
+
+describe('formatUnresolvedThreadsNote', () => {
+  it.each([
+    [1, '1 unresolved review thread.'],
+    [3, '3 unresolved review threads.'],
+  ])('counts %i', (n, phrase) => {
+    const note = formatUnresolvedThreadsNote(n);
+    expect(note).toContain(phrase);
+    expect(note).toContain('Fix the checks first');
+  });
+});
+
+describe('address_review prompt', () => {
+  it('is a default, can be overridden, and does not resolve threads', async () => {
+    const shared = await import('@talyn/shared');
+    const text = shared.resolveWorkbenchActionPrompt('address_review', null, {});
+    expect(text).toContain('reviewThreads');
+    expect(text).toContain('Do not resolve any thread');
+    expect(text).toContain('Signed commits are handled for you');
+    const custom = shared.resolveWorkbenchActionPrompt('address_review', { prompts: { address_review: 'On {{branch}}' } }, { branch: 'b' });
+    expect(custom).toBe('On b');
   });
 });
 
@@ -196,5 +219,41 @@ describe('readFixChecksContext', () => {
     vi.spyOn(githubService, 'listFailingCheckNames').mockRejectedValue(new Error('boom'));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await readFixChecksContext({ workspaceId: 'ws-a', pullRequestId: 'pr-1' })).toBe('');
+  });
+});
+
+describe('readUnresolvedThreadCount', () => {
+  let testDb: Awaited<ReturnType<typeof createTestDb>>;
+
+  beforeEach(async () => {
+    testDb = await createTestDb();
+    await seedUser(testDb.db, { id: 'owner-a' });
+    await testDb.db.insert(workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
+    await testDb.db.insert(repositories).values({
+      id: 'repo-a', workspaceId: 'ws-a', name: 'Acme/App', url: 'https://github.com/Acme/App', defaultBranch: 'main',
+    });
+  });
+
+  afterEach(async () => {
+    await testDb.cleanup();
+  });
+
+  it.each([
+    ['three threads', { unresolvedReviewThreads: 3 }, 3],
+    ['no field', {}, 0],
+    ['zero', { unresolvedReviewThreads: 0 }, 0],
+  ])('reads %s', async (_name, summary, expected) => {
+    await testDb.db.insert(pullRequests).values({
+      id: 'pr-1', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'Acme', repo: 'App', number: 1, state: 'open',
+      lastSummary: summary,
+    });
+    expect(await readUnresolvedThreadCount({ workspaceId: 'ws-a', pullRequestId: 'pr-1' })).toBe(expected);
+  });
+
+  it.each([
+    ['no PR', null],
+    ['missing PR', 'nope'],
+  ])('is 0 with %s', async (_name, pullRequestId) => {
+    expect(await readUnresolvedThreadCount({ workspaceId: 'ws-a', pullRequestId })).toBe(0);
   });
 });

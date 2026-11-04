@@ -236,6 +236,16 @@ export class FakeFleet {
     return { sandbox: { id, status: this.sandboxStatus, goldenStale: this.goldenStale }, terminal: false };
   }
 
+  /** The host the gateway names for a box; an Error is thrown as the call's failure. */
+  placedOn: string | Error | undefined;
+  hostLookups: string[] = [];
+
+  async sandboxHost(id: string): Promise<string | undefined> {
+    this.hostLookups.push(id);
+    if (this.placedOn instanceof Error) throw this.placedOn;
+    return this.placedOn;
+  }
+
   async getDiff() {
     return { supported: false };
   }

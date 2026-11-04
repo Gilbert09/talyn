@@ -59,6 +59,20 @@ export const GetChangesQuery = z
 
 export const DIFF_SCOPES = ['combined', 'uncommitted', 'committed'] as const;
 
+const LiveFlag = QueryBoolean.optional().openapi({
+  description:
+    'Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, ' +
+    'or answers 409 `snapshot_unavailable` when there is none.',
+});
+
+const ReadSource = z.enum(['live', 'stored', 'github']).openapi({
+  description: '`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub.',
+});
+
+const ReadSnapshotAt = Timestamp.nullable().openapi({
+  description: 'When the stored copy was taken. Null on a live read.',
+});
+
 export const SessionDiff = z
   .object({
     object: z.literal('diff'),
@@ -66,6 +80,8 @@ export const SessionDiff = z
     path: z.string().nullable().openapi({ description: 'The file the diff is limited to. Null: the whole diff.' }),
     scope: z.enum(DIFF_SCOPES),
     patch: z.string().openapi({ description: 'A unified diff, as `git diff` writes it. Untracked files are diffs against /dev/null.' }),
+    source: ReadSource,
+    snapshot_at: ReadSnapshotAt,
   })
   .openapi('SessionDiff');
 
@@ -75,6 +91,7 @@ export const GetDiffQuery = z
     scope: z.enum(DIFF_SCOPES).optional().openapi({
       description: '`combined` (default): everything against the merge base. `uncommitted`: against HEAD. `committed`: merge base to HEAD.',
     }),
+    live: LiveFlag,
   })
   .strict();
 
@@ -83,8 +100,12 @@ export const FileList = z
     object: z.literal('file_list'),
     session_id: Id,
     paths: z.array(z.string()).openapi({ description: 'Tracked and untracked files. Files that git ignores are not listed.' }),
+    source: ReadSource,
+    snapshot_at: ReadSnapshotAt,
   })
   .openapi('FileList');
+
+export const ListFilesQuery = z.object({ live: LiveFlag }).strict();
 
 export const FileContent = z
   .object({
@@ -93,11 +114,13 @@ export const FileContent = z
     path: z.string(),
     encoding: z.enum(['utf8', 'base64']).openapi({ description: '`base64` for a binary file.' }),
     content: z.string(),
+    source: ReadSource,
+    snapshot_at: ReadSnapshotAt,
   })
   .openapi('FileContent');
 
 export const GetFileQuery = z
-  .object({ path: RepoPath.openapi({ description: 'Relative to the repository root.' }) })
+  .object({ path: RepoPath.openapi({ description: 'Relative to the repository root.' }), live: LiveFlag })
   .strict();
 
 // ---------------------------------------------------------------------------
@@ -208,7 +231,7 @@ export const PullRequestReceipt = z
   })
   .openapi('PullRequestReceipt');
 
-export const SESSION_ACTIONS = ['fix_checks', 'resolve_conflicts', 'merge'] as const;
+export const SESSION_ACTIONS = ['fix_checks', 'resolve_conflicts', 'address_review', 'merge'] as const;
 
 export const PromptActionBody = z
   .object({

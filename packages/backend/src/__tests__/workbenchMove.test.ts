@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { repositories, workspaces } from '../db/schema.js';
-import type { FleetExecFrame, FleetExecRequest, FleetSandbox } from '../services/selfHosted/client.js';
+import { FleetHttpError, FleetThrottleError, type FleetExecFrame, type FleetExecRequest, type FleetSandbox } from '../services/selfHosted/client.js';
 
 /**
  * Moving a session to a fresh sandbox: the claim and its lease, the order of a
@@ -113,8 +113,14 @@ class MoveFleet extends FakeFleet {
     return { sandbox: { id, ...this.sandbox } as FleetSandbox, terminal: false };
   }
 
-  async growSandboxDisk(id: string) {
+  growSizes: number[] = [];
+  growErrors: Array<Error | undefined> = [];
+
+  async growSandboxDisk(id: string, diskMib: number) {
     this.log.push({ kind: 'grow', box: id });
+    this.growSizes.push(diskMib);
+    const err = this.growErrors.shift();
+    if (err) throw err;
     return this.grow;
   }
 
@@ -164,6 +170,7 @@ describe('moving a session to a fresh sandbox', () => {
     vi.stubEnv('FLEET_GATEWAY_TOKEN', '');
     vi.stubEnv('FLEET_ALLOWED', 'true');
     move.resetMovesForTests();
+    move.setGuestGrowRetryDelayForTests(0);
     testDb = await createTestDb();
     await seedUser(testDb.db, { id: 'owner-a' });
     await testDb.db.insert(workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
@@ -341,6 +348,54 @@ describe('moving a session to a fresh sandbox', () => {
     });
   });
 
+  describe('the disk of the new box', () => {
+    const MIB = 1024 * 1024;
+    const FULL = { stderr: `TALYN_DISK ${22 * MIB} ${16 * GIB}` };
+
+    it.each([
+      // reason, old record diskMib, probe, expected diskMib on the create
+      ['disk_full', 24231, FULL, 24231 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['low_disk', 16384, FULL, 16384 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['disk_full', 24231, { stderr: `TALYN_DISK ${10 * GIB} ${16 * GIB}` }, 24231],
+      ['disk_full', undefined, FULL, 16384 + Math.ceil((8 * GIB - 22 * MIB) / MIB)],
+      ['disk_full', 24231, { stderr: '' }, 24231],
+    ] as const)('a %s move of a %s MiB box asks for a larger disk', async (reason, recorded, probe, expected) => {
+      fleet.sandbox = { status: 'idle', ...(recorded ? { diskMib: recorded } : {}) };
+      replies.probe = probe;
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), reason);
+      expect(result.moved).toBe(true);
+      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX, diskMib: expected });
+    });
+
+    it.each(['stale_golden', 'resize'] as const)('a %s move leaves the disk size to the fleet', async (reason) => {
+      fleet.sandbox = { status: 'idle', diskMib: 24231 };
+      replies.probe = FULL;
+      await move.moveWorkbenchToFreshSandbox(await row(), reason);
+      expect(fleet.created[0]).toMatchObject({ id: NEW_BOX });
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
+    });
+
+    it('sends no disk size when the old box size and the probe are both unknown', async () => {
+      replies.probe = { stderr: '' };
+      await move.moveWorkbenchToFreshSandbox(await row(), 'disk_full');
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
+    });
+
+    it('asks again for the default disk when the fleet refuses the larger one', async () => {
+      fleet.sandbox = { status: 'idle', diskMib: 24231 };
+      replies.probe = FULL;
+      const spy = vi.spyOn(fleet, 'createSandbox').mockImplementationOnce(async (input) => {
+        fleet.log.push({ kind: 'create', box: input.id });
+        throw new FleetThrottleError('diskMib exceeds the 20000 MiB permitted');
+      });
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), 'disk_full');
+      expect(result.moved).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(fleet.created).toHaveLength(1);
+      expect(fleet.created[0]).not.toHaveProperty('diskMib');
+    });
+  });
+
   describe('a move that works', () => {
     it('stops the old box, exports, creates, imports, then deletes the old box, in that order', async () => {
       const result = await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
@@ -502,6 +557,38 @@ describe('moving a session to a fresh sandbox', () => {
       expect(await row()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
     });
 
+    it.each<[string, { exitCode: number; stderr: string }, string]>([
+      [
+        'a staging file that is missing',
+        {
+          exitCode: 30,
+          stderr: `environment: line 40: /dev/shm/talyn-move-${WB}/repo.bundle: No such file or directory\nthe staging folder /dev/shm/talyn-move-${WB} was removed while the export ran`,
+        },
+        `could not stage the work in memory: environment: line 40: /dev/shm/talyn-move-${WB}/repo.bundle: No such file or directory the staging folder /dev/shm/talyn-move-${WB} was removed while the export ran`,
+      ],
+      [
+        'a full /dev/shm',
+        { exitCode: 37, stderr: "head: error writing 'repo.bundle': No space left on device\n/dev/shm has 12 KiB free, so repo.bundle could not be written" },
+        'there is not enough free memory in /dev/shm to stage the work: /dev/shm has 12 KiB free, so repo.bundle could not be written',
+      ],
+      [
+        'a bundle git could not make',
+        { exitCode: 36, stderr: 'fatal: unable to read 1234abcd: Input/output error' },
+        'could not bundle the commits: fatal: unable to read 1234abcd: Input/output error',
+      ],
+      [
+        'work over the cap',
+        { exitCode: 40, stderr: 'error: pipe broken\nfatal: write error\nrepo.bundle takes the work over the 96 MB a move can carry' },
+        'the work is too large to move: repo.bundle takes the work over the 96 MB a move can carry',
+      ],
+    ])('says what failed for %s, and calls only real excess too large', async (_label, reply, message) => {
+      replies.export = reply;
+      const result = await move.moveWorkbenchToFreshSandbox(await row(), 'stale_golden');
+      expect(result).toMatchObject({ moved: false, reason: 'failed', message: expect.stringContaining(message) });
+      if (reply.exitCode !== 40) expect((result as { message?: string }).message).not.toMatch(/too large/);
+      expect(fleet.has('create')).toBe(false);
+    });
+
     it('when the session is deleted during the move, deletes the new box and not the old one', async () => {
       replies.import = async () => {
         await testDb.db.execute(sql`DELETE FROM workbenches`);
@@ -607,6 +694,56 @@ describe('moving a session to a fresh sandbox', () => {
       await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
       expect(fleet.has('grow')).toBe(true);
       expect(fleet.has('export')).toBe(false);
+    });
+
+    describe('a grow whose guest step fails', () => {
+      const guestFailure = () => new FleetHttpError('guest growth failed: context canceled', 500, 'disk_grow_failed');
+
+      beforeEach(() => {
+        replies.checkpoint = lowCheckpoint(GIB);
+        fleet.grow = 'grown';
+      });
+
+      it('retries the guest step at the size the box now has, and does not move', async () => {
+        fleet.growErrors = [guestFailure()];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        const original = fleet.getSandbox.bind(fleet);
+        let reads = 0;
+        fleet.getSandbox = async (id: string) => {
+          // The first read is before the grow; later reads see the charge.
+          const r = await original(id);
+          return ++reads === 1 ? r : { ...r, sandbox: { ...r.sandbox, diskMib: 24234, diskGrowFromMib: 16384 } };
+        };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(2);
+        expect(fleet.growSizes[1]).toBe(24234);
+        expect(fleet.has('export')).toBe(false);
+      });
+
+      it('starts with the guest step when a grow is already pending', async () => {
+        fleet.sandbox = { status: 'idle', diskMib: 24234, diskGrowFromMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('agent')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toEqual([24234]);
+        expect(fleet.has('export')).toBe(false);
+      });
+
+      it('moves the box when every retry fails', async () => {
+        fleet.growErrors = [guestFailure(), guestFailure(), guestFailure()];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('export')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(3);
+      });
+
+      it('does not retry a refusal that is not a server fault', async () => {
+        fleet.growErrors = [new FleetHttpError('too large', 400, 'disk_too_large')];
+        fleet.sandbox = { status: 'idle', diskMib: 16384 };
+        await turns.sendMessage('chat-a', { text: 'go' });
+        await vi.waitFor(() => expect(fleet.has('export')).toBe(true), { timeout: 5000 });
+        expect(fleet.growSizes).toHaveLength(1);
+      });
     });
 
     it('does not move a box a disk move made and that is on the newest golden; says so once', async () => {

@@ -14,16 +14,36 @@ import { setGeneratedTitle, type WorkbenchRow } from './store.js';
  * write only lands while the session has no title, so a person's rename wins.
  */
 
-/** Workbenches this process has already asked about. One attempt each. */
-const attempted = new Set<string>();
+/** Failed tries allowed per workbench, per process. */
+export const MAX_TITLE_FAILURES = 3;
 
-/** Start the title call once per workbench, in the background. */
-export function startTitleGeneration(row: WorkbenchRow, firstMessage: string): void {
-  if (row.title || row.runtime !== 'sandbox' || attempted.has(row.id)) return;
-  attempted.add(row.id);
-  void generateSandboxTitle(row, firstMessage).catch((err) => {
-    console.warn(`[workbench] title for ${row.id} failed:`, err);
-  });
+const failures = new Map<string, number>();
+const inFlight = new Set<string>();
+
+/**
+ * Start a title call in the background, on any turn, while the session has no
+ * title. A failed try counts. After MAX_TITLE_FAILURES the session keeps its name
+ * until the process restarts. Only one call per workbench runs at a time.
+ */
+export function startTitleGeneration(row: WorkbenchRow, message: string, opts: CheapAgentOptions = {}): Promise<void> {
+  if (row.title || row.runtime !== 'sandbox' || inFlight.has(row.id)) return Promise.resolve();
+  if ((failures.get(row.id) ?? 0) >= MAX_TITLE_FAILURES) return Promise.resolve();
+  inFlight.add(row.id);
+  return generateSandboxTitle(row, message, opts)
+    .then((updated) => {
+      if (!updated) failures.set(row.id, (failures.get(row.id) ?? 0) + 1);
+    })
+    .catch((err) => {
+      failures.set(row.id, (failures.get(row.id) ?? 0) + 1);
+      console.warn(`[workbench] title for ${row.id} failed:`, err);
+    })
+    .finally(() => inFlight.delete(row.id));
+}
+
+/** Test hook: forget the failure counts. */
+export function resetTitleAttempts(): void {
+  failures.clear();
+  inFlight.clear();
 }
 
 /** The new row when a title was written; null when the name stays. */

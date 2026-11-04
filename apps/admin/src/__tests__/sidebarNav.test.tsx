@@ -34,7 +34,9 @@ vi.mock('../lib/api', () => ({
         events: pending,
         goldens: pending,
         incidents: pending,
+        alerts: pending,
       },
+      sessions: { list: pending, get: pending },
       users: { list: pending, get: pending },
       workspaces: { list: pending, get: pending },
       tasks: { list: pending, get: pending },
@@ -136,6 +138,7 @@ describe('routes are mounted', () => {
     ['a user detail', routeTo(ROUTES.user, { userId: 'user-1' }), 'User'],
     ['a workspace detail', routeTo(ROUTES.workspace, { workspaceId: 'ws-1' }), 'Workspace'],
     ['a task detail', routeTo(ROUTES.task, { taskId: 'task-1' }), 'Task'],
+    ['a session detail', routeTo(ROUTES.session, { sessionId: 'wb-1' }), 'Session'],
   ])('%s route is mounted', (_label, path, heading) => {
     // Drill-ins are ROUTES, not modals — an operator's commonest act is
     // pasting a run id into Slack, and a modal has no URL. So each one has to

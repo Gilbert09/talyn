@@ -14,6 +14,8 @@ import { WorkspacesPage } from './routes/product/WorkspacesPage';
 import { WorkspaceDetailPage } from './routes/product/WorkspaceDetailPage';
 import { TasksPage } from './routes/product/TasksPage';
 import { TaskDetailPage } from './routes/product/TaskDetailPage';
+import { SessionsPage } from './routes/product/SessionsPage';
+import { SessionDetailPage } from './routes/product/SessionDetailPage';
 import { AuditPage } from './routes/AuditPage';
 import { DebugPanel } from './components/panels/DebugPanel';
 import { HostsPage } from './routes/fleet/HostsPage';
@@ -86,6 +88,8 @@ export default function App() {
             <Route path={ROUTES.workspace} element={<WorkspaceDetailPage />} />
             <Route path={ROUTES.tasks} element={<TasksPage />} />
             <Route path={ROUTES.task} element={<TaskDetailPage />} />
+            <Route path={ROUTES.sessions} element={<SessionsPage />} />
+            <Route path={ROUTES.session} element={<SessionDetailPage />} />
 
             <Route path={ROUTES.audit} element={<AuditPage />} />
             <Route path={ROUTES.debug} element={<DebugPanel />} />

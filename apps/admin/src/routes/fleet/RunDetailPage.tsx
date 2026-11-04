@@ -1,13 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { AdminRunEvent } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
 import { Page, Pill } from '../../components/layout/Page';
 import { CopyableId } from '../../components/ui/CopyableId';
 import { absolute, duration, relativeAge } from '../../lib/format';
-import { durationSeconds, idlePct, idleSeconds, isTerminal, looksWedged } from '../../lib/fleetView';
-import { ROUTES } from '../../lib/routes';
+import {
+  boxSizeLabel,
+  durationSeconds,
+  idlePct,
+  idleSeconds,
+  isAsleep,
+  isTerminal,
+  looksWedged,
+  runClaim,
+  runKind,
+  sleepSeconds,
+} from '../../lib/fleetView';
+import { ROUTES, routeTo } from '../../lib/routes';
 import { Transcript, type TranscriptMode } from '../../components/fleet/Transcript';
 
 /**
@@ -30,28 +41,17 @@ const MAX_RENDERED = 1_000;
 export function RunDetailPage() {
   const { runId = '' } = useParams();
   const [params] = useSearchParams();
-  const host = params.get('host') ?? '';
+  // Through the fleet gateway the host is only a label, so a link with no host
+  // still works. `-` is the placeholder the backend reads as "no host named".
+  const host = params.get('host') || '-';
 
   const { data, error, loading, initialLoading, refresh } = useAdminQuery(
     () => api.admin.fleet.run(host, runId),
-    { intervalMs: POLL_MS, deps: [host, runId], enabled: Boolean(host && runId) }
+    { intervalMs: POLL_MS, deps: [host, runId], enabled: Boolean(runId) }
   );
 
-  const events = useEventCursor(host, runId, Boolean(host && runId));
+  const events = useEventCursor(host, runId, Boolean(runId));
   const [mode, setMode] = useState<TranscriptMode>('readable');
-
-  if (!host) {
-    // The run list always links with ?host=. Landing here without it means a
-    // hand-typed URL, so say what is missing rather than showing an empty page.
-    return (
-      <Page title={runId} backTo={ROUTES.fleetRuns} backLabel="Runs">
-        <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-          This URL needs a <code className="font-mono">?host=</code> — a run only exists on the
-          fleet host that is running it. Open it from the Runs list instead.
-        </div>
-      </Page>
-    );
-  }
 
   const run = data?.run;
 
@@ -60,7 +60,36 @@ export function RunDetailPage() {
       title={<CopyableId value={runId} />}
       subtitle={
         <span className="flex flex-wrap items-center gap-3 text-xs">
-          <span>on {host}</span>
+          <span>on {run?.host ?? (host === '-' ? 'an unknown host' : host)}</span>
+          {run && <Pill tone="muted">{runKind(run)}</Pill>}
+          {run && runClaim(run) !== 'active' && (
+            <Pill
+              tone={runClaim(run) === 'orphan' && !run.selfTest ? 'critical' : 'warn'}
+              title={run.supersededReason ?? undefined}
+            >
+              {run.selfTest ? 'self-test' : runClaim(run)}
+            </Pill>
+          )}
+          {run?.title && <span className="font-medium text-foreground">{run.title}</span>}
+          {run?.ownerEmail && <span>{run.ownerEmail}</span>}
+          {run?.taskId && (
+            <Link className="underline" to={routeTo(ROUTES.task, { taskId: run.taskId })}>
+              task
+            </Link>
+          )}
+          {run?.workbenchId && (
+            <Link className="underline" to={routeTo(ROUTES.session, { sessionId: run.workbenchId })}>
+              {run.kind === 'thread' ? 'thread' : 'session'}
+            </Link>
+          )}
+          {run && boxSizeLabel(run) && <span>{boxSizeLabel(run)}</span>}
+          {run && isAsleep(run) && (
+            <Pill tone="muted">
+              asleep · {run.sleep?.kind === 'storage' ? 'in storage' : 'local'}
+              {sleepSeconds(run) != null && ` · ${duration(sleepSeconds(run))}`}
+            </Pill>
+          )}
+          {run?.supersededReason && <span>{run.supersededReason}</span>}
           {run?.status && <Pill tone={run.status === 'failed' ? 'critical' : 'muted'}>{run.status}</Pill>}
           {run?.phase && <Pill tone="muted">{run.phase}</Pill>}
           {run?.startedAt && <span title={absolute(run.startedAt)}>started {relativeAge(run.startedAt)} ago</span>}

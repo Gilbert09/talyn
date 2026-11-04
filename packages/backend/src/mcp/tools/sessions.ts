@@ -11,11 +11,19 @@ import {
   type FleetAccountView,
   type FleetAccountsResponse,
   SANDBOX_SIZES,
+  SETUP_STEP_LIVE_SHARE,
+  SETUP_STEP_MIN_SESSIONS,
+  SETUP_STEP_WINDOW_DAYS,
   type SandboxSize,
   type RecordSetupStepResult,
+  type SandboxStartInfo,
+  type SandboxStartLayer,
+  type SandboxStartTimeline,
+  type WorkbenchSandboxStatus,
   type WorkbenchTiming,
   type Workbench,
   type WorkbenchChanges,
+  type WorkbenchDiff,
   type WorkbenchChat,
   type WorkbenchEvent,
 } from '@talyn/shared';
@@ -40,6 +48,14 @@ import {
   workspaceSchema,
 } from './helpers.js';
 import type { McpCallContext } from './index.js';
+
+/** The old step states that `POST /repositories/:id/setup-recipe/steps` answers, as Setup list statuses. */
+const RECORDED_STATUS: Record<RecordSetupStepResult['steps'][number]['state'], string> = {
+  waiting: 'suggested',
+  live: 'active',
+  reverted: 'dismissed',
+  failing: 'disabled',
+};
 
 const FEATURE = 'workbenches' as const;
 const LOCAL_MESSAGE =
@@ -156,6 +172,7 @@ const SELF_MESSAGE =
   'This is your own session. A message to it would start another turn of yourself after this one. Answer in this reply instead.';
 const SELF_CANCEL = 'That would stop the reply you are writing now. To stop, end your reply.';
 const SELF_RESTORE = 'This is your own session, and it is running. There is nothing to restore.';
+const SELF_RETRY = 'This is your own session, and it is running. There is nothing to retry.';
 const SELF_ARCHIVE_DEFERRED =
   'This session will be archived when this reply ends. Finish the reply now, and do not start more work.';
 
@@ -248,6 +265,75 @@ function timingText(t: WorkbenchTiming): string {
   }
   return lines.join('\n');
 }
+
+/** The Sandbox panel's facts, as lines an agent can read. */
+export function sandboxStatusText(s: WorkbenchSandboxStatus): string {
+  const lines = [`Session ${s.workbenchId}: ${s.headline}`];
+  if (s.detail) lines.push(`Note: ${s.detail}`);
+  const where = [s.host ? `host ${s.host}` : '', s.size ? `size ${s.size.label}` : ''].filter(Boolean).join(', ');
+  if (where) lines.push(`Sandbox: ${where}.`);
+  if (s.since) lines.push(`${s.state === 'asleep' || s.state === 'hibernated' ? 'Asleep since' : 'Started at'}: ${s.since}`);
+  if (s.sleepsAt) lines.push(`Goes to sleep at: ${s.sleepsAt}`);
+  if (!s.fleet.known && s.fleet.error) lines.push(`The fleet did not answer: ${s.fleet.error}`);
+  lines.push('Doing:');
+  lines.push(...(s.activity.length ? s.activity.map((a) => `  ${a.text}`) : ['  Nothing.']));
+  if (s.work) {
+    const w = s.work;
+    lines.push('Work:');
+    lines.push(`  Last checkpoint: ${w.savedAt ?? 'none'}${w.checkedAt && w.checkedAt !== w.savedAt ? `; last check with no new changes: ${w.checkedAt}` : ''}`);
+    if (w.uncommitted) lines.push(`  Not committed: ${w.uncommitted.files} file(s), +${w.uncommitted.added}/-${w.uncommitted.removed}`);
+    if (w.unpushedCommits !== null) lines.push(`  Commits not on GitHub: ${w.unpushedCommits}`);
+    if (w.failures > 0) lines.push(`  Saves failed in a row: ${w.failures}, last at ${w.lastFailureAt ?? 'unknown'}: ${w.lastFailure ?? ''}`.trimEnd());
+    if (w.warning) lines.push(`  Warning: ${w.warning}`);
+  }
+  if (s.problem) lines.push(`Last problem${s.problem.at ? ` (${s.problem.at})` : ''}: ${s.problem.text}`);
+  if (s.start) lines.push(...boxStartLines(s.start));
+  if (s.actions.length) lines.push(`Actions in the app: ${s.actions.map((a) => a.label).join(', ')}.`);
+  return lines.join('\n');
+}
+
+const START_LAYER_SHORT: Record<SandboxStartLayer, string> = {
+  user: 'your image',
+  repo: 'repository image',
+  legacy: 'older image',
+  base: 'base image',
+};
+
+/** "How this box started", as lines. */
+function boxStartLines(start: SandboxStartInfo): string[] {
+  const lines = ['How this box started:'];
+  const { image, timeline } = start;
+  if (image) {
+    lines.push(`  Image: ${image.label}${image.repoCommit ? `, commit ${image.repoCommit.slice(0, 12)}` : ''}${image.builtAt ? `, built ${image.builtAt}` : ''}.`);
+    lines.push(`  ${image.detail}`);
+    if (image.pending) lines.push(`  ${image.pending}`);
+    if (image.stale) lines.push('  A newer image exists. A new box boots it.');
+  }
+  if (timeline) {
+    if (timeline.requestedAt) lines.push(`  Box requested at ${timeline.requestedAt}${timeline.cause && timeline.cause !== 'new' ? ` (${START_CAUSE[timeline.cause]})` : ''}.`);
+    for (const step of timeline.steps) {
+      const indent = step.kind === 'setup_step' ? '    ' : '  ';
+      const time = step.durationMs === null ? 'not measured' : formatDurationMs(step.durationMs);
+      const failed = step.ok === false ? ` (failed${step.detail ? `: ${step.detail}` : ''})` : '';
+      lines.push(`${indent}${step.label}: ${time}${failed}`);
+    }
+  }
+  if (start.lastWake) lines.push(`  Last wake (${start.lastWake.at}): ${start.lastWake.text}`);
+  if (start.comparison) lines.push(`  ${start.comparison}${start.slow ? ' This start was slow.' : ''}`);
+  if (start.recent.length) {
+    const recent = start.recent.map((r) => `${formatDurationMs(r.totalMs)}${r.layer ? ` (${START_LAYER_SHORT[r.layer]})` : ''}${r.thisSession ? ' this session' : ''}`);
+    lines.push(`  Recent starts of this repository, newest first: ${recent.join(', ')}.`);
+  }
+  if (start.note) lines.push(`  ${start.note}`);
+  return lines;
+}
+
+const START_CAUSE: Record<NonNullable<SandboxStartTimeline['cause']>, string> = {
+  new: 'a new session',
+  move: 'a move to a new box',
+  lost: 'a new box for a lost one',
+  restore: 'a restore of an archived session',
+};
 
 const eventSeq = (key: string): number | null => {
   const match = /^(\d+)(?:\.|$)/.exec(key);
@@ -592,8 +678,23 @@ export const SESSIONS = [
     FEATURE
   ),
   defineTool(
+    'session_sandbox_status',
+    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host and size, how the box started (the image it booted, the wait for a free sandbox, the clone or checkout, the setup and each Setup list step, the last wake, and how the start compares with the repository's median), what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session. A session can read itself and the sessions of its thread.' },
+    },
+    [],
+    { readOnlyHint: true },
+    async (ownerId, args, ctx) => {
+      const sessionId = await threadScopedSession(ownerId, args, ctx, 'read the sandbox status of');
+      const status = await callApi<WorkbenchSandboxStatus>(ownerId, 'GET', `/workbenches/${encodeURIComponent(sessionId)}/sandbox-status`);
+      return sandboxStatusText(status);
+    },
+    FEATURE
+  ),
+  defineTool(
     'record_setup_step',
-    "Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Use it after you install a tool or start a service that the work needed, for example `cargo install sqlx-cli`. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A person can revert any step.",
+    `Add a setup step to this session's repository, so later sessions and the repository's sandbox image have it ready. Record only a step that every session on this repository needs: the dependency install, or a toolchain or CLI that the normal build, test or lint uses, for example \`cargo install sqlx-cli\` in a repository with sqlx migrations. Never record a step for one task, such as a browser for one test, a database or service for one script, or a one-off tool. One shell command per step. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell (except the official rustup, uv and pnpm installers), sends data out, or pushes code. A new step is suggested in the repository's Setup list. It runs on new boxes only when a person accepts it, or when at least ${SETUP_STEP_MIN_SESSIONS} sessions and ${Math.round(SETUP_STEP_LIVE_SHARE * 100)}% of the repository's sessions of the last ${SETUP_STEP_WINDOW_DAYS} days need it. An install step goes into the image. A step that fails on two boxes in a row stops. Docker starts on demand, so never record a Docker start. A person can dismiss any learned step.`,
     {
       command: { type: 'string', description: 'One shell command, as you ran it. No secrets.' },
       why: { type: 'string', description: 'Why later sessions need this step.' },
@@ -617,9 +718,9 @@ export const SESSIONS = [
           { command, why, sessionId: wb.id }
         );
         const lines = result.steps.map(
-          (s) => `  ${s.id}  [${s.kind}, ${s.phase === 'install' ? 'box setup and bake' : 'box setup'}]  ${s.command}`
+          (s) => `  ${s.id}  ${RECORDED_STATUS[s.state]}  [${s.kind}, ${s.phase === 'install' ? 'image' : 'box'}]  ${s.command}${s.stateReason ? `\n    ${s.stateReason}` : ''}`
         );
-        return [`Added to the setup of ${wb.repoFullName}. New sessions run it after the repository's own setup:`, ...lines].join('\n');
+        return [`Added to the Setup list of ${wb.repoFullName}. An active step runs on new boxes after the repository's own setup:`, ...lines].join('\n');
       }),
     FEATURE
   ),
@@ -698,16 +799,22 @@ export const SESSIONS = [
           (f) =>
             `${f.path}  ${f.status}${f.oldPath ? ` (from ${f.oldPath})` : ''}  ${f.binary ? 'binary' : `+${f.added}/-${f.removed}`}`
         );
+        const asOf = changes.snapshotAt ? `As of ${changes.snapshotAt} (sandbox asleep; Talyn's stored copy).\n` : '';
         return lines.length
-          ? `${lines.join('\n')}\nhead: ${changes.headSha}  base: ${changes.base}`
-          : 'No changes.';
+          ? `${asOf}${lines.join('\n')}\nhead: ${changes.headSha}  base: ${changes.base}`
+          : `${asOf}No changes.`;
       }),
     FEATURE
   ),
   defineTool(
     'get_session_diff',
-    'Get the unified diff of a session against its base branch. Pass path to read one file. Large diffs are cut.',
-    { ...sessionIdSchema, path: { type: 'string', description: 'Limit the diff to this file.' } },
+    'Get the unified diff of a session against its base branch. Pass path to read one file. Large diffs are cut. ' +
+      'A sleeping sandbox answers from the copy Talyn stored, or from GitHub when the work is all pushed. Pass live=true to wake it and read it now.',
+    {
+      ...sessionIdSchema,
+      path: { type: 'string', description: 'Limit the diff to this file.' },
+      live: { type: 'boolean', description: 'Read the sandbox now, and wake it if it sleeps. Default false.' },
+    },
     ['session_id'],
     { readOnlyHint: true },
     async (ownerId, args) =>
@@ -716,14 +823,20 @@ export const SESSIONS = [
         await loadSandboxSession(ownerId, id);
         const params = new URLSearchParams();
         if (str(args.path)) params.set('path', str(args.path)!);
+        if (args.live !== undefined && bool(args, 'live')) params.set('live', '1');
         const query = params.toString();
-        const { patch } = await callApi<{ patch: string }>(
+        const diff = await callApi<WorkbenchDiff>(
           ownerId,
           'GET',
           `/workbenches/${encodeURIComponent(id)}/diff${query ? `?${query}` : ''}`
         );
-        if (!patch) return 'No diff.';
-        return capped(patch, 'Pass path to read one file at a time. Use talyn_get_session_changes to list the files.');
+        const asOf = diff.source === 'stored'
+          ? `As of ${diff.snapshotAt} (sandbox asleep; Talyn's stored copy).\n`
+          : diff.source === 'github'
+            ? `From GitHub, ${diff.mergeBase?.slice(0, 8)}..${diff.headSha?.slice(0, 8)} (sandbox asleep).\n`
+            : '';
+        if (!diff.patch) return `${asOf}No diff.`;
+        return asOf + capped(diff.patch, 'Pass path to read one file at a time. Use talyn_get_session_changes to list the files.');
       }),
     FEATURE
   ),
@@ -815,7 +928,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'restore_session',
-    'Restore an archived session, or retry one that failed to start.',
+    'Restore an archived session. To start a failed session again, use talyn_retry_session.',
     sessionIdSchema,
     ['session_id'],
     { idempotentHint: true, openWorldHint: true },
@@ -827,6 +940,25 @@ export const SESSIONS = [
             ownerId,
             'POST',
             `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/restore`
+          )
+        );
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'retry_session',
+    'Restart a session that failed, or one that is stuck while it starts, on a new sandbox. The old sandbox is deleted. A session that is ready or archived is refused.',
+    sessionIdSchema,
+    ['session_id'],
+    { destructiveHint: true, openWorldHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        if (await targetsSelf(ctx, args)) throw new Error(SELF_RETRY);
+        return sessionLine(
+          await callApi<Workbench>(
+            ownerId,
+            'POST',
+            `/workbenches/${encodeURIComponent(requireId(args, 'session_id'))}/retry`
           )
         );
       }),

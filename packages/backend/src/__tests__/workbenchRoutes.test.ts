@@ -6,8 +6,10 @@ import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
+import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
+import { userFacingError } from '../services/workbenches/errors.js';
 
 /**
  * The workbench routes, end to end against a fake fleet: the gate, tenancy,
@@ -52,7 +54,7 @@ vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
   reconcileDefaultBranch: async (input: { stored: string }) => input.stored || 'main',
 }));
 
-const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
+const { settleArchivesForTests, sweepStrandedProvisions } = await import('../services/workbenches/lifecycle.js');
 const { memoryWorkObjectStore, setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
@@ -62,8 +64,14 @@ const { refreshDiffStat } = await import('../services/workbenches/changes.js');
 const { changesSnapshotKey, resetChangesSnapshotsForTests } = await import('../services/workbenches/changesSnapshot.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
+const { resetSandboxStatusCacheForTests } = await import('../services/workbenches/sandboxStatus.js');
+const { resetChangesStoreForTests } = await import('../services/workbenches/changesStore.js');
+const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
+const { resetChangesGithubForTests } = await import('../services/workbenches/changesGithub.js');
+const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
+const recovery = await import('../services/workbenches/recovery.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -264,6 +272,12 @@ describe('workbench routes', () => {
   });
 
   describe('creating', () => {
+    /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
+    const withoutBoxStart = (settings: object | undefined) => {
+      const { boxStart: _boxStart, ...rest } = (settings ?? {}) as Record<string, unknown>;
+      return rest;
+    };
+
     it('records the fleet sandbox id and keeps other settings', async () => {
       const createSandbox = fleet.createSandbox.bind(fleet);
       fleet.createSandbox = async (input) => {
@@ -271,7 +285,7 @@ describe('workbench routes', () => {
         return { ...created, sandbox: { ...created.sandbox, id: `${input.id}--3542ee` } };
       };
       const wb = await createSandboxWorkbench({ internetAccess: false });
-      expect((await getWorkbench(wb.id))?.settings).toEqual({
+      expect(withoutBoxStart((await getWorkbench(wb.id))?.settings)).toEqual({
         internetAccess: false,
         fleetSandboxId: `${sandboxIdFor(wb.id)}--3542ee`,
         boxSize: 'standard',
@@ -360,7 +374,7 @@ describe('workbench routes', () => {
       [false, false],
     ] as const)('stores internetAccess %s and creates the box with access %s', async (flag, open) => {
       const wb = await createSandboxWorkbench(flag === undefined ? {} : { internetAccess: flag });
-      expect((await getWorkbench(wb.id))?.settings).toEqual(
+      expect(withoutBoxStart((await getWorkbench(wb.id))?.settings)).toEqual(
         flag === undefined ? { boxSize: 'standard' } : { internetAccess: flag, boxSize: 'standard' },
       );
       expect(fleet.created[0].policy?.egress).toEqual(open ? { mode: 'open' } : undefined);
@@ -510,12 +524,12 @@ describe('workbench routes', () => {
       await putInstructionFile('ws-a', {
         key: 'claude-user', agent: 'claude', target: 'user', sourcePath: '~/.claude/CLAUDE.md', content: 'be terse', enabled: true,
       });
-      scriptedFleet((script) => (script.includes('.claude/rules') ? { exitCode: 1, stderr: 'disk full' } : null));
+      scriptedFleet((script) => (script.includes('.claude/rules') && script.includes('TALYN_F0') ? { exitCode: 1, stderr: 'disk full' } : null));
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
-      const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules'));
+      const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules') && e.script.includes('TALYN_F0'));
       const turn = fleet.execs.findIndex((e) => isAgentTurn(e.script));
       expect(sync).toBeGreaterThan(-1);
       expect(sync).toBeLessThan(turn);
@@ -529,10 +543,10 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
       await idle(chatId);
       // The Talyn briefing (rules/talyn.md, the talyn:briefing block) rides the skill pack. The instruction sync writes neither of these.
-      expect(fleet.execs.some((e) => e.script.includes('rules/talyn-') || e.script.includes('talyn:instructions'))).toBe(false);
+      expect(fleet.execs.some((e) => e.req.env?.TALYN_F0 !== undefined && e.script.includes('talyn:instructions'))).toBe(false);
     });
 
-    it('runs claude as a sandbox turn: checkpoint, fresh credentials, then the CLI', async () => {
+    it('runs claude as a sandbox turn: fresh credentials, then the CLI (no checkpoint on a fresh box)', async () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: "- fix 'it'", planMode: true, model: 'claude-opus-5', effort: 'high' });
@@ -549,10 +563,11 @@ describe('workbench routes', () => {
       expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
       // The checkpoint ran before the agent, and the credentials are the box's vendor only.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
-      expect(order.indexOf('checkpoint')).toBeLessThan(order.indexOf('agent'));
+      // A fresh box skips the turn-start checkpoint, so none runs before the agent.
+      expect(order.slice(0, order.indexOf('agent'))).not.toContain('checkpoint');
       expect(fleet.credentialPushes[0].creds).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', repo: 'acme/app' });
       const cps = await call('GET', `/workbenches/chats/${chatId}/checkpoints`);
-      expect(cps.body.data).toMatchObject([{ turn: 1, sha: 'c'.repeat(40), ref: `refs/talyn/checkpoints/${chatId}/1` }]);
+      expect(cps.body.data).toEqual([]);
 
       // The second turn resumes the session the first one reported.
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'again' });
@@ -1021,8 +1036,16 @@ describe('workbench routes', () => {
       expect(JSON.stringify(events)).toContain('add a readme');
     });
 
+    // An unreachable fleet no longer fails a start: the provision waits for a
+    // free sandbox (workbenchProvisionCapacityWait.test.ts). Its words still
+    // reach a person on every other path, and must never name the endpoint.
+    it('words an unreachable fleet for a person, never the private endpoint', () => {
+      const text = userFacingError(new FleetCapacityError('http://10.0.0.7:8080 refused', undefined, 'unreachable'));
+      expect(text).toBe('The sandbox runners are not reachable right now. Try again shortly.');
+      expect(text).not.toContain('10.0.0.7');
+    });
+
     it.each([
-      ['an unreachable fleet', new FleetCapacityError('http://10.0.0.7:8080 refused', undefined, 'unreachable'), 'The sandbox runners are not reachable right now. Try again shortly.'],
       ['a fleet refusal', new FleetHttpError('provider must be anthropic or openai', 400), 'Talyn Fleet refused the request: provider must be anthropic or openai'],
       ['a plain fault', new Error('boom'), 'boom'],
     ])('words %s for a person, never the private endpoint', async (_name, err, message) => {
@@ -1075,6 +1098,29 @@ describe('workbench routes', () => {
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
       expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id, 1)}`]);
       expect((await getChat(await chatIdOf(wb.id)))?.status).toBe('idle');
+    });
+
+    it('retries a workbench stuck while it starts onto a new sandbox id', async () => {
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      scriptedFleet(async (script) => {
+        if (script.includes('git clone')) await held;
+        return null;
+      });
+      const created = await call('POST', '/workbenches', { workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude' });
+      const id = created.body.data.id;
+      await vi.waitFor(async () => expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(id)}`]));
+      const res = await call('POST', `/workbenches/${id}/retry`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ status: 'provisioning', sandboxState: 'creating', sandboxId: `${sandboxIdFor(id, 1)}` });
+      expect(fleet.deleted).toEqual([`${sandboxIdFor(id)}`]);
+      release();
+      await vi.waitFor(async () => {
+        await sweepStrandedProvisions();
+        expect((await getWorkbench(id))?.status).toBe('ready');
+      }, { timeout: 5000 });
+      expect(await getWorkbench(id)).toMatchObject({ sandboxId: `${sandboxIdFor(id, 1)}` });
+      expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(id)}`, `${sandboxIdFor(id, 1)}`]);
     });
 
     it('retries past a half-made box the fleet cannot be holding', async () => {
@@ -1441,8 +1487,12 @@ describe('workbench routes', () => {
       return raw ? JSON.parse(raw.toString('utf8')) : null;
     };
 
-    /** A running box read once (so a snapshot of `src/a.ts` is stored), then put to sleep in `state`. */
-    async function sleepingWorkbench(state = 'suspended'): Promise<Loose> {
+    /**
+     * A running box read once (so a snapshot of `src/a.ts` is stored), then put
+     * to sleep the way production does it: only the fleet's record changes. The
+     * row keeps `sandboxState: 'running'`.
+     */
+    async function sleepingWorkbench(fleetStatus = 'suspended'): Promise<Loose> {
       let added = 1;
       scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/a.ts', added) : null));
       const wb = await createSandboxWorkbench();
@@ -1452,14 +1502,33 @@ describe('workbench routes', () => {
       const live = await call('GET', `/workbenches/${wb.id}/changes`);
       expect(live.body.data.snapshotAt).toBeUndefined();
       await vi.waitFor(() => expect(storedSnapshot(wb)?.changes.files[0].added).toBe(3));
-      await updateWorkbench(wb.id, { sandboxState: state });
-      fleet.sandboxStatus = 'suspended';
+      fleet.sandboxStatus = fleetStatus;
+      resetSandboxStatusCacheForTests();
       vi.mocked(startStaleGoldenMove).mockClear();
       return wb;
     }
 
+    /** The box wakes up: the fleet reports it idle again. */
+    const wakeUp = () => {
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+    };
+
+    const expectStoredWithoutTouchingTheBox = async (wb: Loose) => {
+      const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        files: [{ path: 'src/a.ts', added: 3 }],
+        snapshotAt: storedSnapshot(wb).takenAt,
+      });
+      expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
+      expect(startStaleGoldenMove).not.toHaveBeenCalled();
+    };
+
     beforeEach(() => {
       resetChangesSnapshotsForTests();
+      resetSandboxStatusCacheForTests();
       store = memoryWorkObjectStore();
       setWorkObjectStoreForTests(store);
     });
@@ -1479,28 +1548,70 @@ describe('workbench routes', () => {
       expect(Number.isNaN(Date.parse(stored.takenAt))).toBe(false);
     });
 
-    it.each(['suspended', 'lost', 'none', 'creating', 'error'])(
-      'answers a %s box from the stored list and never touches the box',
+    it.each(['suspended', 'queued', 'starting'])(
+      'answers from the stored list when the fleet reports the box %s, and never touches the box',
+      async (fleetStatus) => {
+        const wb = await sleepingWorkbench(fleetStatus);
+        await expectStoredWithoutTouchingTheBox(wb);
+        // A read never writes the sleep into the row.
+        expect((await getWorkbench(wb.id))?.sandboxState).toBe('running');
+      },
+    );
+
+    it.each(['lost', 'none', 'creating', 'error', 'suspended'])(
+      'answers from the stored list when the row says the box is %s, whatever the fleet says',
       async (state) => {
-        const wb = await sleepingWorkbench(state);
-        const before = { scripts: fleet.scripts.length, resumes: fleet.resumes };
-        const res = await call('GET', `/workbenches/${wb.id}/changes`);
-        expect(res.status).toBe(200);
-        expect(res.body.data).toMatchObject({
-          files: [{ path: 'src/a.ts', added: 3 }],
-          snapshotAt: storedSnapshot(wb).takenAt,
-        });
-        expect({ scripts: fleet.scripts.length, resumes: fleet.resumes }).toEqual(before);
-        expect(startStaleGoldenMove).not.toHaveBeenCalled();
+        const wb = await sleepingWorkbench('idle');
+        await updateWorkbench(wb.id, { sandboxState: state });
+        await expectStoredWithoutTouchingTheBox(wb);
       },
     );
 
     it.each([
+      ['the fleet does not answer', () => { fleet.getSandbox = async () => { throw new Error('fleet down'); }; }, false],
+      ['the fleet no longer runs the box', () => { fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }); }, true],
+      ['the fleet reports the box stopped', () => { fleet.sandboxStatus = 'stopped'; }, true],
+    ])('answers from the stored list when %s', async (_name, arrange, recovers) => {
+      const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
+      const wb = await sleepingWorkbench('idle');
+      arrange();
+      resetSandboxStatusCacheForTests();
+      await expectStoredWithoutTouchingTheBox(wb);
+      // A lost box gets its replacement started, as a read of the box would have.
+      expect(recover).toHaveBeenCalledTimes(recovers ? 1 : 0);
+    });
+
+    it('reads the box when the fleet does not answer and no list is stored', async () => {
+      const wb = await sleepingWorkbench('idle');
+      fleet.getSandbox = async () => { throw new Error('fleet down'); };
+      resetSandboxStatusCacheForTests();
+      store.objects.delete(changesSnapshotKey(wb));
+      const before = changesReads();
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.snapshotAt).toBeUndefined();
+      expect(changesReads()).toBe(before + 1);
+    });
+
+    it.each([
+      ['no list is stored', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
+      ['storage is not configured', () => setWorkObjectStoreForTests(null)],
+      ['the stored list is not readable', (wb: Loose) => store.objects.set(changesSnapshotKey(wb), Buffer.from('{oops'))],
+    ])('refuses without waking the sleeping box when %s', async (_name, arrange) => {
+      const wb = await sleepingWorkbench();
+      arrange(wb);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const before = { reads: changesReads(), resumes: fleet.resumes };
+      const res = await call('GET', `/workbenches/${wb.id}/changes`);
+      expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+      expect({ reads: changesReads(), resumes: fleet.resumes }).toEqual(before);
+      expect(startStaleGoldenMove).not.toHaveBeenCalled();
+    });
+
+    it.each([
       ['the client asks for live (live=1)', '?live=1', () => undefined],
       ['the client asks for live (live=true)', '?live=true', () => undefined],
-      ['no list is stored', '', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
-      ['storage is not configured', '', () => setWorkObjectStoreForTests(null)],
-      ['the stored list is not readable', '', (wb: Loose) => store.objects.set(changesSnapshotKey(wb), Buffer.from('{oops'))],
+      ['live and no list is stored', '?live=1', (wb: Loose) => store.objects.delete(changesSnapshotKey(wb))],
     ])('reads the box as before when %s', async (_name, query, arrange) => {
       const wb = await sleepingWorkbench();
       arrange(wb);
@@ -1514,25 +1625,31 @@ describe('workbench routes', () => {
       expect(startStaleGoldenMove).toHaveBeenCalled();
     });
 
-    it('reads a running box live even when a list is stored', async () => {
-      const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+    it.each(['idle', 'busy'])('reads a %s box live even when a list is stored', async (fleetStatus) => {
+      const wb = await sleepingWorkbench(fleetStatus);
       const before = changesReads();
       const res = await call('GET', `/workbenches/${wb.id}/changes`);
       expect(res.body.data.snapshotAt).toBeUndefined();
       expect(changesReads()).toBe(before + 1);
     });
 
-    it('keeps refusing an archived session rather than answering from the stored list', async () => {
-      const wb = await sleepingWorkbench('deleted');
-      await updateWorkbench(wb.id, { archivedAt: new Date() });
+    it('answers an archived session from the stored list', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      await expectStoredWithoutTouchingTheBox(wb);
+    });
+
+    it('refuses an archived session with no stored list', async () => {
+      const wb = await sleepingWorkbench();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      store.objects.delete(changesSnapshotKey(wb));
       const res = await call('GET', `/workbenches/${wb.id}/changes`);
       expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
     });
 
     it('does not upload an unchanged list again, and uploads a changed one', async () => {
       const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      wakeUp();
       const put = vi.spyOn(store, 'put');
       const snapshotPuts = () => put.mock.calls.filter(([key]) => key === changesSnapshotKey(wb)).length;
       await call('GET', `/workbenches/${wb.id}/changes`);
@@ -1547,7 +1664,7 @@ describe('workbench routes', () => {
 
     it('answers a live read even when storing the list fails', async () => {
       const wb = await sleepingWorkbench();
-      await updateWorkbench(wb.id, { sandboxState: 'running' });
+      wakeUp();
       vi.spyOn(store, 'put').mockRejectedValue(new Error('storage down'));
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       scriptedFleet((script) => (isChangesRead(script) ? changesReply('src/c.ts', 2) : null));
@@ -1561,6 +1678,446 @@ describe('workbench routes', () => {
       const wb = await sleepingWorkbench();
       expect((await call('DELETE', `/workbenches/${wb.id}`)).status).toBe(200);
       expect(storedSnapshot(wb)).toBeNull();
+    });
+  });
+
+  describe('the diff, files and file of a sleeping box', () => {
+    const MB = 'a'.repeat(40);
+    const HEAD = 'b'.repeat(40);
+    const PATCH_A = 'diff --git a/src/a.ts b/src/a.ts\nindex 1..2 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n';
+    const PATCH_IMG = 'diff --git a/img.png b/img.png\nnew file mode 100644\nindex 0..3\nGIT binary patch\nliteral 3\nKcmZ\n\nliteral 0\n';
+    const fileOf = (path: string) => ({ path, status: 'modified' as const, added: 1, removed: 1, binary: false });
+    const listOf = (uncommitted: string[], committed: string[]) => ({
+      files: [...uncommitted, ...committed].map(fileOf),
+      uncommitted: uncommitted.map(fileOf),
+      committed: committed.map(fileOf),
+      uncommittedStats: { added: uncommitted.length, removed: uncommitted.length, files: uncommitted.length },
+      committedStats: { added: committed.length, removed: committed.length, files: committed.length },
+      base: MB,
+      headSha: HEAD,
+    });
+    let store: ReturnType<typeof memoryWorkObjectStore>;
+    const touches = () => ({ scripts: fleet.scripts.length, resumes: fleet.resumes });
+
+    /** A ready session whose box sleeps, with `copy` stored for it. */
+    async function asleepWith(copy: Partial<StoredCopy> | null = {}, extra: Record<string, unknown> = {}): Promise<Loose> {
+      const wb = await createSandboxWorkbench();
+      if (Object.keys(extra).length) await updateWorkbench(wb.id, extra);
+      const row = (await getWorkbench(wb.id))!;
+      if (copy) {
+        await storeChangesCopy(store, { workspaceId: row.workspaceId, id: row.id, sandboxId: row.sandboxId! }, {
+          changes: listOf(['src/a.ts', 'img.png'], []),
+          patch: PATCH_A + PATCH_IMG,
+          patchUncommitted: PATCH_A + PATCH_IMG,
+          patchCommitted: '',
+          files: ['README.md', 'src/a.ts', 'img.png'],
+          contents: {
+            'src/a.ts': 'new\n',
+            'img.png': Buffer.from([0x89, 0, 1]),
+            'big.bin': { size: 5 * 1024 * 1024 },
+            'mid.bin': { size: 2 * 1024 * 1024 },
+          },
+          ...copy,
+        });
+      }
+      fleet.sandboxStatus = 'suspended';
+      resetSandboxStatusCacheForTests();
+      resetChangesStoreForTests();
+      resetChangesStoredForTests();
+      return wb;
+    }
+
+    beforeEach(() => {
+      resetChangesSnapshotsForTests();
+      resetSandboxStatusCacheForTests();
+      resetChangesStoreForTests();
+      resetChangesStoredForTests();
+      resetChangesGithubForTests();
+      store = memoryWorkObjectStore();
+      setWorkObjectStoreForTests(store);
+    });
+
+    it('answers the diff from the stored copy and never touches the box', async () => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' });
+      expect(res.body.data.patch).toContain('+new');
+      expect(res.body.data.patch).toContain('Binary files /dev/null and b/img.png differ');
+      expect(res.body.data.patch).not.toContain('GIT binary patch');
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['one file', '?path=src/a.ts', (p: string) => expect(p).toBe(PATCH_A)],
+      ['the uncommitted scope', '?scope=uncommitted', (p: string) => expect(p).toContain('src/a.ts')],
+      ['the committed scope', '?scope=committed', (p: string) => expect(p).toBe('')],
+    ])('answers %s from the stored copy', async (_name, query, check) => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+      expect(res.status).toBe(200);
+      check(res.body.data.patch);
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['nothing is stored', null, /no stored copy of this diff\./],
+      ['the patch was too large to store', { tooLarge: ['patch'] as const }, /too large/],
+    ])('refuses the diff with a way to wake the box when %s', async (_name, copy, words) => {
+      const wb = await asleepWith(copy as Partial<StoredCopy> | null);
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+      expect(res.body.error).toMatch(words);
+      expect(res.body.error).toContain('Refresh from the sandbox');
+      expect(touches()).toEqual(before);
+    });
+
+    it('wakes the box for live=1', async () => {
+      const wb = await asleepWith(null);
+      const before = fleet.scripts.length;
+      const res = await call('GET', `/workbenches/${wb.id}/diff?live=1`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.source).toBeUndefined();
+      expect(fleet.scripts.length).toBe(before + 1);
+    });
+
+    it('reads a running box live even with a copy stored', async () => {
+      const wb = await asleepWith();
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+      const before = fleet.scripts.length;
+      const res = await call('GET', `/workbenches/${wb.id}/diff`);
+      expect(res.body.data.source).toBeUndefined();
+      expect(fleet.scripts.length).toBe(before + 1);
+    });
+
+    describe('from GitHub', () => {
+      const compare = () => vi.spyOn(githubService, 'compareCommits');
+      /** A session whose work is all pushed, with only the list stored. */
+      async function pushedAsleep(extra: Record<string, unknown> = { pushedHeadShas: [HEAD] }): Promise<Loose> {
+        const wb = await asleepWith(null, extra);
+        store.objects.set(changesSnapshotKey(wb), Buffer.from(JSON.stringify({
+          version: 1, takenAt: '2026-11-01T09:00:00.000Z', changes: listOf([], ['src/a.ts', 'src/gone.ts', 'src/new.ts']),
+        })));
+        return wb;
+      }
+
+      it('builds the diff from GitHub when the work is all pushed', async () => {
+        const spy = compare().mockResolvedValue({ files: [
+          { filename: 'src/a.ts', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' },
+          { filename: 'src/gone.ts', status: 'removed', patch: '@@ -1 +0,0 @@\n-x' },
+          { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed', changes: 0 },
+          { filename: 'logo.png', status: 'added', changes: 0 },
+        ] });
+        const wb = await pushedAsleep();
+        const before = touches();
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ source: 'github', mergeBase: MB, headSha: HEAD, snapshotAt: '2026-11-01T09:00:00.000Z' });
+        expect(res.body.data.patch).toContain('diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n');
+        expect(res.body.data.patch).toContain('diff --git a/src/gone.ts b/src/gone.ts\ndeleted file mode 100644\n--- a/src/gone.ts\n+++ /dev/null\n');
+        expect(res.body.data.patch).toContain('rename from src/old.ts\nrename to src/new.ts\n');
+        expect(res.body.data.patch).toContain('Binary files /dev/null and b/logo.png differ');
+        expect(spy).toHaveBeenCalledWith('ws-a', 'acme', 'app', MB, HEAD);
+        // One file, from the cached answer.
+        const one = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts`);
+        expect(one.body.data.patch.match(/^diff --git /gm)).toHaveLength(1);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(touches()).toEqual(before);
+      });
+
+      it('answers the empty uncommitted scope without asking GitHub', async () => {
+        const spy = compare();
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff?scope=uncommitted`);
+        expect(res.body.data).toMatchObject({ patch: '', source: 'github' });
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['the head commit is not pushed', { pushedHeadShas: ['c'.repeat(40)] }, () => compare().mockResolvedValue({ files: [] })],
+        ['GitHub rate-limits the read', { pushedHeadShas: [HEAD] }, () => compare().mockRejectedValue(new GitHubRateLimitError('rate limited', 60_000))],
+        ['GitHub does not know the commits', { pushedHeadShas: [HEAD] }, () => compare().mockResolvedValue(null)],
+      ])('refuses with a way to wake the box when %s', async (_name, extra, arrange) => {
+        arrange();
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const wb = await pushedAsleep(extra);
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+      });
+
+      const fullCompare = () => [
+        { filename: 'src/a.ts', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new', changes: 2 },
+        { filename: 'src/gone.ts', status: 'removed', patch: '@@ -1 +0,0 @@\n-x', changes: 1 },
+        { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed', changes: 0 },
+      ];
+      const many = (n: number) => Array.from({ length: n }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b', changes: 2 }));
+
+      it.each([
+        ['GitHub listed its maximum of 300 files', () => many(300), ''],
+        ['GitHub listed fewer files than the stored list', () => fullCompare().slice(0, 2), ''],
+        ['GitHub left out a large patch', () => fullCompare().map((f) => (f.filename === 'src/a.ts' ? { ...f, patch: undefined } : f)), ''],
+        ['GitHub left out the patch of the file asked for', () => fullCompare().map((f) => (f.filename === 'src/a.ts' ? { ...f, patch: undefined } : f)), '?path=src/a.ts'],
+        ['GitHub cut its list before the file asked for', () => many(300), '?path=src/a.ts'],
+      ])('refuses with a way to wake the box, never part of the diff, when %s', async (_name, files, query) => {
+        compare().mockResolvedValue({ files: files() as never });
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+        expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+      });
+
+      it.each([
+        ['a file GitHub listed in full from a cut list', [...many(299), fullCompare()[0]], '?path=src/a.ts', /\+new/],
+        ['a binary file, which has no patch and no line changes', [...fullCompare(), { filename: 'logo.png', status: 'modified', changes: 0 }], '', /Binary files a\/logo\.png and b\/logo\.png differ/],
+      ])('answers %s', async (_name, files, query, pattern) => {
+        compare().mockResolvedValue({ files: files as never });
+        const wb = await pushedAsleep();
+        const res = await call('GET', `/workbenches/${wb.id}/diff${query}`);
+        expect(res.status).toBe(200);
+        expect(res.body.data.patch).toMatch(pattern);
+      });
+
+      it('does not use GitHub when work is uncommitted', async () => {
+        const spy = compare();
+        const wb = await asleepWith(null, { pushedHeadShas: [HEAD] });
+        store.objects.set(changesSnapshotKey(wb), Buffer.from(JSON.stringify({
+          version: 1, takenAt: '2026-11-01T09:00:00.000Z', changes: listOf(['src/a.ts'], []),
+        })));
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(409);
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
+    it('answers the file list from the stored copy, and refuses with none', async () => {
+      const wb = await asleepWith();
+      const none = await asleepWith(null);
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/files`);
+      expect(res.body.data).toEqual({ paths: ['README.md', 'src/a.ts', 'img.png'], snapshotAt: '2026-11-01T10:00:00.000Z', source: 'stored' });
+      const refused = await call('GET', `/workbenches/${none.id}/files`);
+      expect([refused.status, refused.body.code]).toEqual([409, 'snapshot_unavailable']);
+      expect(touches()).toEqual(before);
+    });
+
+    it.each([
+      ['a changed file', 'src/a.ts', 200, { content: 'new\n', binary: false, source: 'stored' }],
+      ['a changed binary file', 'img.png', 200, { content: Buffer.from([0x89, 0, 1]).toString('base64'), binary: true, source: 'stored' }],
+      ['a deleted or unknown file', 'nope.ts', 404, undefined],
+      ['a changed file too large to open', 'big.bin', 413, undefined],
+      ['a changed file whose content was not stored', 'mid.bin', 409, undefined],
+    ])('answers %s from the stored copy', async (_name, path, status, data) => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=${encodeURIComponent(path)}`);
+      expect(res.status).toBe(status);
+      if (data) expect(res.body.data).toMatchObject(data);
+      expect(touches()).toEqual(before);
+    });
+
+    it('reads a file the session did not change from GitHub at the merge base', async () => {
+      const spy = vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: '# hi\n', size: 5, bytes: Buffer.from('# hi\n') });
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect(res.body.data).toMatchObject({ content: '# hi\n', binary: false, source: 'github', ref: MB });
+      expect(spy).toHaveBeenCalledWith('ws-a', 'acme', 'app', 'README.md', MB, 1024 * 1024);
+      await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(touches()).toEqual(before);
+    });
+
+    it('refuses an unchanged file when GitHub rate-limits the read', async () => {
+      vi.spyOn(githubService, 'getFileContent').mockRejectedValue(new GitHubRateLimitError('rate limited', 60_000));
+      const wb = await asleepWith();
+      const res = await call('GET', `/workbenches/${wb.id}/file?path=README.md`);
+      expect([res.status, res.body.code]).toEqual([409, 'snapshot_unavailable']);
+    });
+
+    it('answers the script config with the one last read from the box', async () => {
+      const wb = await asleepWith();
+      fleet.sandboxStatus = 'idle';
+      resetSandboxStatusCacheForTests();
+      const live = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(live.status).toBe(200);
+      await vi.waitFor(() => expect(store.objects.has(`ws-a/${wb.id}/changes/config.json`)).toBe(true));
+      fleet.sandboxStatus = 'suspended';
+      resetSandboxStatusCacheForTests();
+      const before = touches();
+      const stored = await call('GET', `/workbenches/${wb.id}/config`);
+      expect(stored.body.data).toEqual(live.body.data);
+      expect(touches()).toEqual(before);
+      // Nothing stored: no scripts yet, and the box is neither woken nor refused.
+      const none = await asleepWith(null);
+      const beforeNone = touches();
+      const empty = await call('GET', `/workbenches/${none.id}/config`);
+      expect([empty.status, empty.body.data?.run]).toEqual([200, []]);
+      expect(touches()).toEqual(beforeNone);
+    });
+
+    it('gives the preview sync the stored patch with its binary bodies, marked as stored', async () => {
+      const wb = await asleepWith();
+      const before = touches();
+      const res = await call('GET', `/workbenches/${wb.id}/patch`);
+      expect(res.body.data).toEqual({ base: MB, patch: PATCH_A + PATCH_IMG, source: 'stored', snapshotAt: '2026-11-01T10:00:00.000Z' });
+      expect(touches()).toEqual(before);
+    });
+
+    it('answers the changes with an etag, and 304 when it did not move', async () => {
+      const wb = await asleepWith();
+      const res = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a' } });
+      const body = (await res.json()) as Json['body'];
+      expect(body.data).toMatchObject({ source: 'stored', storedReason: 'asleep', patch: { available: true }, fileList: { available: true } });
+      const etag = res.headers.get('etag');
+      expect(etag).toMatch(/^"[0-9a-f]{24}"$/);
+      const again = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': etag! } });
+      expect(again.status).toBe(304);
+      const other = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': '"nope"' } });
+      expect(other.status).toBe(200);
+    });
+
+    it.each([
+      ['the session is archived', (id: string) => updateWorkbench(id, { archivedAt: new Date(), sandboxState: 'deleted' }), { storedReason: 'archived' }],
+      ['the box was replaced after the copy', (id: string) => updateWorkbench(id, { sandboxId: 'box-new' }), { stale: 'sandbox_replaced' }],
+    ])('does not answer 304 for the same copy when %s', async (_name, change, expected) => {
+      const wb = await asleepWith();
+      const first = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a' } });
+      const etag = first.headers.get('etag')!;
+      const copyEtag = ((await first.json()) as Json['body']).data.etag;
+      await change(wb.id);
+      resetSandboxStatusCacheForTests();
+      const again = await fetch(`${base}/workbenches/${wb.id}/changes`, { headers: { 'x-user': 'owner-a', 'if-none-match': etag } });
+      expect(again.status).toBe(200);
+      const body = (await again.json()) as Json['body'];
+      expect(body.data).toMatchObject({ etag: copyEtag, ...expected });
+      expect(again.headers.get('etag')).not.toBe(etag);
+    });
+
+    describe('when the fleet does not answer', () => {
+      const fleetDown = () => {
+        fleet.getSandbox = async () => { throw new Error('fleet down'); };
+        resetSandboxStatusCacheForTests();
+      };
+
+      it.each([
+        ['the diff', (id: string) => `/workbenches/${id}/diff`],
+        ['the file list', (id: string) => `/workbenches/${id}/files`],
+        ['a file', (id: string) => `/workbenches/${id}/file?path=src/a.ts`],
+        ['the script config', (id: string) => `/workbenches/${id}/config`],
+        ['the preview patch', (id: string) => `/workbenches/${id}/patch`],
+      ])('reads %s from the box when nothing is stored, as before', async (_name, path) => {
+        const wb = await asleepWith(null);
+        fleetDown();
+        const before = fleet.scripts.length;
+        const res = await call('GET', path(wb.id));
+        expect(res.body.code).not.toBe('snapshot_unavailable');
+        // The fake box answers some reads with output they cannot parse; what matters is that the box was read.
+        expect(fleet.scripts.length).toBeGreaterThan(before);
+      });
+
+      it('reads the preview patch from the box even with a copy stored, because the box may run', async () => {
+        const wb = await asleepWith();
+        fleetDown();
+        const before = fleet.scripts.length;
+        const res = await call('GET', `/workbenches/${wb.id}/patch`);
+        expect(res.body.data?.source).toBeUndefined();
+        expect(fleet.scripts.length).toBe(before + 1);
+      });
+
+      it('asks the fleet again a second later rather than reuse its failure for ten seconds', async () => {
+        const wb = await asleepWith();
+        let reads = 0;
+        fleet.getSandbox = async () => { reads++; throw new Error('fleet down'); };
+        resetSandboxStatusCacheForTests();
+        await call('GET', `/workbenches/${wb.id}/diff`);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(reads).toBe(2);
+      });
+    });
+
+    it.each([
+      ['the diff', (id: string) => `/workbenches/${id}/diff`],
+      ['the file list', (id: string) => `/workbenches/${id}/files`],
+      ['a file', (id: string) => `/workbenches/${id}/file?path=src/a.ts`],
+      ['the script config', (id: string) => `/workbenches/${id}/config`],
+    ])('answers %s of a starting session with not_ready, as before', async (_name, path) => {
+      const wb = await asleepWith(null, { status: 'provisioning', sandboxState: 'creating' });
+      const res = await call('GET', path(wb.id));
+      expect([res.status, res.body.code]).toEqual([409, 'not_ready']);
+    });
+
+    describe('a box the fleet no longer runs', () => {
+      const gone = () => {
+        fleet.getSandbox = async (id: string) => ({ sandbox: { id, status: 'idle', goldenStale: false }, terminal: true }) as never;
+        resetSandboxStatusCacheForTests();
+      };
+
+      it.each([
+        ['with a copy stored', {}, 200],
+        ['with nothing stored', null, undefined],
+      ] as const)('starts its replacement on a read %s', async (_name, copy, status) => {
+        const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
+        const wb = await asleepWith(copy);
+        gone();
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        if (status) expect(res.status).toBe(status);
+        expect(res.body.code).not.toBe('snapshot_unavailable');
+        await vi.waitFor(() => expect(recover).toHaveBeenCalled());
+        expect(recover.mock.calls[0][0]).toMatchObject({ id: wb.id });
+      });
+
+      it('does not start a second replacement when the row already says lost', async () => {
+        const recover = vi.spyOn(recovery, 'recoverLostSandbox').mockResolvedValue(undefined);
+        const wb = await asleepWith({}, { sandboxState: 'lost' });
+        const res = await call('GET', `/workbenches/${wb.id}/diff`);
+        expect(res.status).toBe(200);
+        expect(recover).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('a file the session deleted, with no stored file list', () => {
+      const changes = {
+        ...listOf([], ['src/a.ts']),
+        files: [
+          fileOf('src/a.ts'),
+          { path: 'src/gone.ts', status: 'deleted' as const, added: 0, removed: 1, binary: false },
+          { path: 'src/new.ts', oldPath: 'src/old.ts', status: 'renamed' as const, added: 0, removed: 0, binary: false },
+        ],
+      };
+
+      it.each([
+        ['a deleted file', 'src/gone.ts', 404],
+        ['the old path of a renamed file', 'src/old.ts', 404],
+        ['an unchanged file', 'README.md', 200],
+      ])('answers %s without serving the merge base as now', async (_name, path, status) => {
+        const spy = vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: 'base\n', size: 5, bytes: Buffer.from('base\n') });
+        const wb = await asleepWith({ changes, files: undefined, contents: { 'src/a.ts': 'new\n', 'src/new.ts': 'moved\n' } });
+        const res = await call('GET', `/workbenches/${wb.id}/file?path=${encodeURIComponent(path)}`);
+        expect(res.status).toBe(status);
+        expect(spy).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+        if (status === 200) expect(res.body.data).toMatchObject({ source: 'github', ref: MB });
+      });
+
+      it('refuses with a way to wake the box when the changes list cannot be read', async () => {
+        const spy = vi.spyOn(githubService, 'getFileContent');
+        const wb = await asleepWith({ changes, files: undefined, contents: { 'src/a.ts': 'new\n' } });
+        for (const key of [...store.objects.keys()]) if (key.endsWith('/lists.json')) store.objects.delete(key);
+        resetChangesStoreForTests();
+        const res = await call('GET', `/workbenches/${wb.id}/file?path=src/gone.ts`);
+        expect([res.status, res.body.code, (res.body as Loose).wake]).toEqual([409, 'snapshot_unavailable', true]);
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
+    it('answers an archived session from its stored copy', async () => {
+      const wb = await asleepWith();
+      await updateWorkbench(wb.id, { archivedAt: new Date(), sandboxState: 'deleted' });
+      const res = await call('GET', `/workbenches/${wb.id}/diff?path=src/a.ts`);
+      expect(res.body.data).toMatchObject({ patch: PATCH_A, source: 'stored' });
     });
   });
 

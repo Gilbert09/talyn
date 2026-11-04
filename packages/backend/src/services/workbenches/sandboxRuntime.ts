@@ -1,7 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import {
   applyWorkbenchScriptOverrides,
+  BOX_LAYER_FILE,
   detectWorkbenchScripts,
+  hasPrebakedCheckout,
+  parseBoxLayerContext,
+  type BoxLayerContext,
   detectedScriptsToToml,
   resolveWorkbenchConfig,
   shellQuote,
@@ -27,6 +31,7 @@ import {
   FleetRunNotFoundError,
   type FleetExecFrame,
   type FleetExecRequest,
+  type FleetSandboxCredentials,
 } from '../selfHosted/client.js';
 import {
   fleetApiToken,
@@ -63,8 +68,9 @@ import {
 import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
-import { withLearnedSetup } from './setupRecipe.js';
-import type { WorkbenchRow } from './store.js';
+import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
+import { recordSandboxWake } from './boxStart.js';
+import { getWorkbenchBySandboxId, type WorkbenchRow } from './store.js';
 
 /**
  * The sandbox runtime's plumbing: which fleet client, which sandbox, which
@@ -213,24 +219,84 @@ export function isRemoteResumeRequired(err: unknown): boolean {
 /** Resumes in flight, per sandbox, so a burst of calls waits on one resume. */
 const resuming = new Map<string, Promise<void>>();
 
-export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
+/** Whether Talyn is resuming this box now. */
+export function isResuming(sandboxId: string): boolean {
+  return resuming.has(sandboxId);
+}
+
+/** Where a resume's credentials come from. Null means "send none; the fleet fetches". */
+export type ResumeCredentialSource = () => Promise<FleetSandboxCredentials | null>;
+
+/**
+ * A resume waits this long for its credentials, then goes without them. The
+ * fleet's own fetch took 3.6-4.3 s, so a slower answer here would only make
+ * the wake slower than it was.
+ */
+const RESUME_CREDENTIALS_TIMEOUT_MS = 3_000;
+let resumeCredentialsTimeoutMs = RESUME_CREDENTIALS_TIMEOUT_MS;
+
+/** Tests shorten the wait. */
+export function setResumeCredentialsTimeoutForTests(ms: number | null): void {
+  resumeCredentialsTimeoutMs = ms ?? RESUME_CREDENTIALS_TIMEOUT_MS;
+}
+
+/** The default source: the session that owns the box, looked up by its sandbox id. */
+async function credentialsForSandbox(sandboxId: string): Promise<FleetSandboxCredentials | null> {
+  const row = await getWorkbenchBySandboxId(sandboxId);
+  return row ? resumeCredentialsFor(row) : null;
+}
+
+/** The source's answer, or null when it fails or is too slow. Never throws. */
+async function resumeCredentials(source: ResumeCredentialSource): Promise<FleetSandboxCredentials | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), resumeCredentialsTimeoutMs);
+  });
+  try {
+    return await Promise.race([source().catch(() => null), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Resume a suspended box once, however many callers wait. `from` says where
+ * the box sleeps: `storage` for a hibernated box (the fleet refused an exec
+ * with `remote_resume_required`), `host` for a box on its host's disk. The
+ * wake and its time go on the session for the Sandbox panel.
+ *
+ * The resume carries the box's credentials, so the fleet boots with them
+ * instead of fetching them first. `credentials` names where they come from;
+ * by default the session that owns the box. A fleet that predates the field
+ * ignores it and fetches, as before.
+ */
+export function resumeOnce(
+  client: FleetClient,
+  sandboxId: string,
+  from: 'host' | 'storage' = 'storage',
+  credentials: ResumeCredentialSource = () => credentialsForSandbox(sandboxId),
+): Promise<void> {
   let pending = resuming.get(sandboxId);
   if (!pending) {
-    console.log(`[workbench] resuming hibernated sandbox ${sandboxId}`);
+    console.log(`[workbench] resuming ${from === 'storage' ? 'hibernated' : 'suspended'} sandbox ${sandboxId}`);
     const startedAt = Date.now();
-    pending = client
-      .resumeSandbox(sandboxId)
+    const note = (ok: boolean, ms: number) =>
+      recordSandboxWake({ sandboxId, at: new Date(startedAt).toISOString(), ms, from, ok });
+    pending = resumeCredentials(credentials)
+      .then((creds) => client.resumeSandbox(sandboxId, creds ? { credentials: creds } : {}))
       .then(
         async () => {
           const ms = Date.now() - startedAt;
           console.log(`[workbench] resumed sandbox ${sandboxId} in ${ms} ms`);
-          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms } });
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resumed', summary: `Resumed sandbox ${sandboxId} in ${ms} ms.`, meta: { sandboxId, durationMs: ms, from } });
+          void note(true, ms);
           await meterWorkbenchAwakeBySandboxId(sandboxId);
         },
         (error: unknown) => {
           const ms = Date.now() - startedAt;
           console.warn(`[workbench] resuming sandbox ${sandboxId} failed after ${ms} ms:`, error);
-          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms } });
+          debugBus.recordEvent({ service: 'workbench', action: 'sandbox_resume_failed', summary: `Resuming sandbox ${sandboxId} failed after ${ms} ms.`, ok: false, error, meta: { sandboxId, durationMs: ms, from } });
+          void note(false, ms);
           throw error;
         },
       )
@@ -238,6 +304,28 @@ export function resumeOnce(client: FleetClient, sandboxId: string): Promise<void
     resuming.set(sandboxId, pending);
   }
   return pending;
+}
+
+/**
+ * Before a turn's first exec: a box asleep on its host's disk is resumed WITH
+ * its credentials. Without this the exec wakes it, and the fleet fetches the
+ * credentials before the boot, which was 3.6-4.3 s of a 5.4 s wake. A box in
+ * object storage is left to `withWake`, whose resume carries them too.
+ *
+ * Never throws: on any failure the exec that follows wakes the box the old
+ * way, and reports a lost box as it always did.
+ */
+export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
+  if (!row.sandboxId) return;
+  try {
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const { sandbox } = await client.getSandbox(row.sandboxId);
+    if (sandbox?.status !== 'suspended') return;
+    if (sandbox.suspendUploaded && !sandbox.suspendDir) return;
+    await resumeOnce(client, row.sandboxId, 'host', () => resumeCredentialsFor(row));
+  } catch (err) {
+    console.warn(`[workbench] waking ${row.sandboxId} with its credentials failed; the next exec wakes it:`, err);
+  }
 }
 
 /** Calls that manage the box itself, and must never resume it as a side effect. */
@@ -672,6 +760,9 @@ export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<
 /** Where a golden-booted box already has the repository checked out. */
 export const GOLDEN_REPO_DIR = `${SANDBOX_WORK_ROOT}/repo`;
 
+/** The clone script's lock. In the work root, never in a repository's tree. */
+export const CLONE_LOCK_FILE = `${SANDBOX_WORK_ROOT}/.talyn-clone.lock`;
+
 /** `git fetch --deepen` steps tried for a merge base in a shallow clone before `--unshallow`. */
 export const MERGE_BASE_DEEPEN_TRIES = 4;
 export const MERGE_BASE_DEEPEN_BY = 500;
@@ -692,15 +783,23 @@ export const MERGE_BASE_DEEPEN_BY = 500;
  * hold its absolute path. Only when its origin is this repository: anything
  * else clones as before.
  *
- * The fetch names its two branches explicitly, so a shallow golden never pulls
- * the whole repository's pack. A shallow clone then deepens in steps until
- * `origin/<base>` and HEAD share a merge base, which the diff needs.
+ * A new allocated branch fetches only the base, from the image commit's date.
+ * Other branches use explicit refspecs and deepen until the diff has a merge base.
  *
  * `git` reaches GitHub through the guest's proxy rewrite, which attaches the
  * credential host-side; the token never enters the box. The fallback clone is
  * blobless, so a large repository is usable in seconds and blobs arrive as read.
  */
-export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>): string {
+export function cloneScript(
+  row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>
+    & Partial<Pick<WorkbenchRow, 'allocatedBranch' | 'pushedHeadShas'>>,
+  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean } = {},
+): string {
+  const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
+  const depth = prebaked ? 50 : 200;
+  const repoCommit = opts.boxLayer?.repoCommit;
+  const newBranch = prebaked && opts.firstBox === true && row.allocatedBranch === true && row.pushedHeadShas?.length === 0
+    && row.branch !== row.baseBranch && repoCommit && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(repoCommit);
   const dir = shellQuote(repoDirFor(row));
   const golden = shellQuote(GOLDEN_REPO_DIR);
   const url = shellQuote(`https://github.com/${row.repoFullName}.git`);
@@ -714,6 +813,10 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
   return [
     'set -e',
     `mkdir -p ${SANDBOX_WORK_ROOT}`,
+    // Two provisions of one session can run this at once. The second waits,
+    // then finds the clone and takes the existing-clone path. Outside the work tree.
+    `exec 9>${shellQuote(CLONE_LOCK_FILE)}`,
+    'if command -v flock >/dev/null 2>&1; then flock 9; fi',
     `if [ ! -d ${dir}/.git ]; then`,
     `  origin_url=$(git -C ${golden} remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)`,
     '  golden_match=',
@@ -736,15 +839,42 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
     '}',
     `ensure_refspec ${baseSpec}`,
     `set -- ${baseSpec}`,
+    'shallow_since=',
+    ...(newBranch ? [
+      // Keep local work on retries. Missing image objects use the existing path.
+      `if ! git show-ref --verify --quiet ${localRef}; then`,
+      `  image_date=$(git show -s --format=%ct ${shellQuote(repoCommit)} -- 2>/dev/null || true)`,
+      '  case "$image_date" in',
+      "    ''|*[!0-9]*) ;;",
+      // Include the image commit, even if Git excludes the date boundary.
+      '    *) shallow_since="@$((image_date - 1))" ;;',
+      '  esac',
+      'fi',
+    ] : []),
     'remote_branch=',
-    `if git ls-remote --exit-code --heads origin ${branch} >/dev/null 2>&1; then`,
-    '  remote_branch=1',
-    `  ensure_refspec ${branchSpec}`,
-    `  set -- "$@" ${branchSpec}`,
+    'if [ -z "$shallow_since" ]; then',
+    `  if git ls-remote --exit-code --heads origin ${branch} >/dev/null; then`,
+    '    remote_branch=1',
+    `    ensure_refspec ${branchSpec}`,
+    `    set -- "$@" ${branchSpec}`,
+    '  else',
+    // Only status 2 means the branch is absent. A failed probe must stop checkout.
+    '    remote_status=$?',
+    '    if [ "$remote_status" -ne 2 ]; then exit "$remote_status"; fi',
+    '  fi',
     'fi',
     'shallow=',
     'if [ "$(git rev-parse --is-shallow-repository)" = true ]; then shallow=1; fi',
-    `if [ -n "$shallow" ]; then git fetch --depth=200 origin "$@"; else git fetch origin "$@"; fi`,
+    'if [ -n "$shallow" ]; then',
+    // A rewritten base can predate the image. Retry without the date limit.
+    '  if [ -n "$shallow_since" ]; then',
+    `    git fetch --no-tags --shallow-since="$shallow_since" origin "$@" || git fetch --no-tags --depth=${depth} origin "$@"`,
+    '  else',
+    `    git fetch --no-tags --depth=${depth} origin "$@"`,
+    '  fi',
+    'else',
+    '  git fetch --no-tags origin "$@"',
+    'fi',
     `if git show-ref --verify --quiet ${localRef}; then`,
     `  git checkout ${branch}`,
     'elif [ -n "$remote_branch" ]; then',
@@ -758,12 +888,25 @@ export function cloneScript(row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 
     // unrelated histories, and `--unshallow` on a complete repo is an error.
     'tries=0',
     `while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD ${remoteBase} >/dev/null 2>&1; do`,
-    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --unshallow origin "$@"; break; fi`,
-    `  git fetch --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
+    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --no-tags --unshallow origin "$@"; break; fi`,
+    `  git fetch --no-tags --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
     '  tries=$((tries + 1))',
     'done',
+    // What the box knows about its image, for the box setup (`BOX_LAYER_FILE`).
+    // Outside the work tree; the checkout commit is HEAD now.
+    ...(opts.boxLayer ? boxLayerFileLines(opts.boxLayer) : []),
     'git rev-parse HEAD',
   ].join('\n');
+}
+
+function boxLayerFileLines(ctx: BoxLayerContext): string[] {
+  const { checkoutCommit: _ignored, ...rest } = ctx;
+  void _ignored;
+  const head = JSON.stringify(rest).replace(/\}$/, '');
+  return [
+    `printf '%s' ${shellQuote(head)} > ${shellQuote(BOX_LAYER_FILE)} || true`,
+    `printf ',"checkoutCommit":"%s"}' "$(git rev-parse HEAD)" >> ${shellQuote(BOX_LAYER_FILE)} || true`,
+  ];
 }
 
 /**
@@ -782,6 +925,7 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
       { label: 'TALYN', command: 'cat .talyn/settings.toml' },
       { label: 'CJSON', command: 'cat conductor.json' },
       { label: 'CTOML', command: 'cat .conductor/settings.toml' },
+      { label: 'LAYER', command: `cat ${shellQuote(BOX_LAYER_FILE)}` },
     ]),
     // Reads only, so it may run again after a grow.
     { quiet: true, timeoutMs: 30_000, diskRecovery: true },
@@ -792,8 +936,20 @@ export async function loadWorkbenchConfig(row: WorkbenchRow): Promise<WorkbenchC
     conductorJson: files.CJSON || null,
     conductorToml: files.CTOML || null,
   });
-  // The learned setup runs after the repository's own setup, never instead of it.
-  return withLearnedSetup(row, applyWorkbenchScriptOverrides(config, row.settings));
+  // Row 0 of the Setup list: what this box read of the repository's own setup.
+  if (row.repositoryId) {
+    void noteRepoSetupRead(row.repositoryId, config).catch((error) => debugBus.recordEvent({
+      service: 'setup_recipe',
+      action: 'repo_setup_note_failed',
+      summary: "Could not keep the repository's own setup command for the Setup list.",
+      ok: false,
+      error,
+      workspaceId: row.workspaceId,
+      meta: { repositoryId: row.repositoryId, workbenchId: row.id },
+    }));
+  }
+  // The Setup list runs after the repository's own setup, never instead of it.
+  return withBoxSetup(row, applyWorkbenchScriptOverrides(config, row.settings), parseBoxLayerContext(files.LAYER));
 }
 
 const configAbsentScript = [
@@ -956,6 +1112,42 @@ export async function refreshSandboxCredentials(
   opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
 ): Promise<{ accountId: string | null; note: string | null }> {
   const sandboxId = requireSandbox(row);
+  const { creds, credential, recorded, model } = await sandboxCredentialSet(row, opts);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+  await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
+
+  let note: string | null = null;
+  if (credential.accountId && credential.accountId !== recorded) {
+    await setWorkbenchFleetAccount(row, credential.accountId).catch((err) =>
+      console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
+    );
+    if (recorded) {
+      note = await describeAccountSwitch(row.workspaceId, recorded, credential.accountId, model).catch(
+        () => null,
+      );
+      if (note) {
+        recordWorkbenchEvent(row, 'account_switch', note);
+      }
+    }
+  }
+  return { accountId: credential.accountId ?? null, note };
+}
+
+/**
+ * The credential set a session's box gets: the key for this box's vendor from
+ * the session's account (or the next one over the threshold), the GitHub
+ * token, and the MCP secrets. Throws when there is no key: a blank is never
+ * sent, because the gateway would fill it from somebody else's custody.
+ */
+async function sandboxCredentialSet(
+  row: WorkbenchRow,
+  opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
+): Promise<{
+  creds: FleetSandboxCredentials;
+  credential: NonNullable<Awaited<ReturnType<typeof resolveRunCredential>>>;
+  recorded: string | null;
+  model: string | undefined;
+}> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) throw new WorkbenchError(resolved.error, 409, 'credentials_unavailable');
   const provider = providerForAgent(row.agent);
@@ -978,30 +1170,30 @@ export async function refreshSandboxCredentials(
     );
   }
   const integrations = await workbenchIntegrationSecrets(row);
-  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, {
+  const creds: FleetSandboxCredentials = {
     githubToken: resolved.githubToken,
     ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),
     // A thread names no repository.
     ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
-  }));
+  };
+  return { creds, credential, recorded: recorded ?? null, model };
+}
 
-  let note: string | null = null;
-  if (credential.accountId && credential.accountId !== recorded) {
-    await setWorkbenchFleetAccount(row, credential.accountId).catch((err) =>
-      console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
-    );
-    if (recorded) {
-      note = await describeAccountSwitch(row.workspaceId, recorded, credential.accountId, model).catch(
-        () => null,
-      );
-      if (note) {
-        recordWorkbenchEvent(row, 'account_switch', note);
-      }
-    }
+/**
+ * The credentials to send WITH a resume, so the fleet does not fetch them
+ * before the boot (3.6-4.3 s of a 5.4 s local wake, 2026-11-04). Null when
+ * they cannot be resolved: the resume then goes without, and the fleet
+ * fetches as it always did. The turn's own push after the wake still runs,
+ * and is what records an account switch.
+ */
+export async function resumeCredentialsFor(row: WorkbenchRow): Promise<FleetSandboxCredentials | null> {
+  try {
+    return (await sandboxCredentialSet(row)).creds;
+  } catch (err) {
+    console.warn(`[workbench] resuming ${row.sandboxId} without credentials; the fleet fetches them:`, err);
+    return null;
   }
-  return { accountId: credential.accountId ?? null, note };
 }
 
 /**

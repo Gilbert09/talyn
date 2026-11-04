@@ -1,13 +1,28 @@
 import type { AgentEventDraft } from '@talyn/shared';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { refreshDiffStat } from './changes.js';
+import { captureChanges } from './changesCapture.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { userFacingError } from './errors.js';
 import { moveReadChunkScript } from './move.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
 import { recordWorkbenchEvent, runCapture } from './sandboxRuntime.js';
-import { appendEvents, clearWorkCheckpoint, getWorkbench, listChats, recordWorkCheckpoint, type WorkbenchRow } from './store.js';
+import { chooseReadSource } from './sandboxReadSource.js';
 import {
+  appendEvents,
+  clearWorkCheckpoint,
+  getWorkbench,
+  listChats,
+  recordWorkCheckpoint,
+  recordWorkSaveFailure,
+  recordWorkSaveSuccess,
+  type WorkbenchRow,
+} from './store.js';
+import {
+  CHECKPOINT_KEEPS_FAILING_AFTER,
+  CHECKPOINT_RECOVERED_NOTE,
+  checkpointFailedNote,
+  checkpointKeepsFailingNote,
   parseWorkRestore,
   parseWorkSave,
   tooLargeNote,
@@ -31,9 +46,17 @@ import { WorkStorageUnavailableError, workObjectStore } from './workStorage.js';
  *
  * Checkpoint triggers: the end of every turn, and during a turn at most every
  * {@link CHECKPOINT_DURING_TURN_MS} once the agent used a tool that can change
- * files. The same tool signal refreshes the sidebar's diff stat, at most every
- * {@link DIFF_STAT_DURING_TURN_MS}. A checkpoint never fails or delays a turn;
- * a failed one is tried again at the next trigger.
+ * files. Outside a turn, typing in the session's terminal and the end of a
+ * script are triggers too, with the same throttle, so work done by a person
+ * is saved as well. The same signals refresh the sidebar's diff stat, at most
+ * every {@link DIFF_STAT_DURING_TURN_MS}. A checkpoint never fails or delays
+ * a turn; a failed one is tried again at the next trigger.
+ *
+ * Each result goes on the row (`recordWorkSaveSuccess`/`recordWorkSaveFailure`),
+ * which the Sandbox panel reads. The first failure in a run, and the
+ * {@link CHECKPOINT_KEEPS_FAILING_AFTER}th, put a note in the chat, and so
+ * does the save that ends the run. Before 2026-11-03 a failure went only to
+ * the log, so a session could not tell that its work was not saved.
  *
  * # Storage layout
  *
@@ -118,6 +141,35 @@ export async function readWorkMeta(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>
   return meta;
 }
 
+/**
+ * Make the stored checkpoint the archive, in storage only: the parts are copied
+ * under the archive prefix and `meta.json` is written last, as a save does. No
+ * checkpoint means the box held no unsaved work, so any older archive goes.
+ * Returns whether a copy was promoted. Never touches the box.
+ */
+export async function promoteCheckpointToArchive(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>): Promise<boolean> {
+  const meta = await readWorkMeta(row, 'checkpoint');
+  if (!meta) {
+    await deleteSavedWork(row, ['archive']);
+    return false;
+  }
+  const store = workObjectStore();
+  const from = workPrefix(row, 'checkpoint');
+  const to = workPrefix(row, 'archive');
+  const previous = await readWorkMeta(row, 'archive').catch(() => null);
+  for (let i = 0; i < meta.parts; i++) {
+    const body = await store.get(partKey(from, meta.generation, i));
+    if (!body) throw new Error(`part ${i + 1} of ${meta.parts} of the saved work is missing`);
+    await store.put(partKey(to, meta.generation, i), body);
+  }
+  await store.put(metaKey(to), Buffer.from(JSON.stringify({ ...meta, kind: 'archive' satisfies WorkKind })));
+  if (previous && previous.generation !== meta.generation) {
+    const old = Array.from({ length: previous.parts }, (_, i) => partKey(to, previous.generation, i));
+    await store.remove(old).catch(() => undefined);
+  }
+  return true;
+}
+
 /** Delete every object of these kinds. Folders are found by listing, so a half-written generation goes too. */
 export async function deleteSavedWork(row: Pick<WorkbenchRow, 'workspaceId' | 'id'>, kinds: WorkKind[] = ['checkpoint', 'archive']): Promise<void> {
   const store = workObjectStore();
@@ -138,7 +190,7 @@ export async function deleteSavedWork(row: Pick<WorkbenchRow, 'workspaceId' | 'i
 // ============================================================================
 
 export type SaveOutcome =
-  | { kind: 'saved'; sha: string; at: Date; size: number }
+  | { kind: 'saved'; sha: string; at: Date; size: number; unpushed?: number | null }
   | Exclude<WorkSaveResult, { kind: 'bundle' | 'failed' }>
   /** `error` is the exception, when one was thrown, so a caller can word it as it words fleet faults. */
   | { kind: 'failed'; detail: string; error?: unknown };
@@ -205,7 +257,7 @@ export async function saveWork(
     if (result.kind !== 'bundle') return result;
     staged = true;
     await uploadBundle(row, kind, result);
-    return { kind: 'saved', sha: result.sha, at: result.at, size: result.size };
+    return { kind: 'saved', sha: result.sha, at: result.at, size: result.size, unpushed: result.unpushed };
   } catch (err) {
     if (err instanceof FleetRunNotFoundError) throw err;
     return { kind: 'failed', detail: userFacingError(err), error: err };
@@ -329,14 +381,23 @@ function liveSandbox(row: WorkbenchRow | null): row is WorkbenchRow & { sandboxI
   return Boolean(row && row.runtime === 'sandbox' && row.sandboxId && row.status === 'ready' && !row.archivedAt && !row.archivePendingAt);
 }
 
+/**
+ * The throttles fire up to minutes after the activity that armed them, and the
+ * box may sleep by then. Their exec would wake it, and only a person's action
+ * or a prompt may do that: a box the fleet does not report running is skipped.
+ */
+async function boxRunsNow(row: WorkbenchRow): Promise<boolean> {
+  return (await chooseReadSource(row)).live;
+}
+
 async function refreshDiffStatOf(id: string): Promise<void> {
   const row = await getWorkbench(id);
-  if (liveSandbox(row)) await refreshDiffStat(row);
+  if (liveSandbox(row) && await boxRunsNow(row)) await refreshDiffStat(row);
 }
 
 async function checkpointOf(id: string): Promise<void> {
   const row = await getWorkbench(id);
-  if (row) await checkpointWork(row, 'during_turn');
+  if (liveSandbox(row) && await boxRunsNow(row)) await checkpointWork(row, 'during_turn');
 }
 
 let checkpointClock = realClock;
@@ -362,6 +423,33 @@ export function noteTurnActivity(row: Pick<WorkbenchRow, 'id' | 'workCheckpointA
   }
 }
 
+/**
+ * A person typed in the session's terminal, or a script ended: files may have
+ * changed outside a turn. The checkpoint waits one interval from now, so a
+ * burst of typing is one save. Never throws, never waits.
+ */
+export function noteWorkActivity(workbenchId: string): void {
+  try {
+    const now = checkpointClock.now();
+    diffThrottle.poke(workbenchId, now);
+    checkpointThrottle.poke(workbenchId, now);
+  } catch (err) {
+    console.warn(`[workbench] noting work activity on ${workbenchId} failed:`, err);
+  }
+}
+
+/**
+ * A live read found other changes than the stored copy: take a checkpoint,
+ * and with it a new copy, within one interval. Never throws, never waits.
+ */
+export function noteChangesStale(workbenchId: string): void {
+  try {
+    checkpointThrottle.poke(workbenchId);
+  } catch (err) {
+    console.warn(`[workbench] noting stale changes on ${workbenchId} failed:`, err);
+  }
+}
+
 /** The Changes route just read the box: the stat it stored is fresh. */
 export function noteDiffStatFresh(workbenchId: string): void {
   diffThrottle.mark(workbenchId);
@@ -378,31 +466,58 @@ export function settleTurnActivity(workbenchId: string): void {
 // Checkpoint and restore
 // ============================================================================
 
+type CheckpointReason = 'turn_end' | 'during_turn' | 'restored';
+
 const inFlight = new Map<string, Promise<SaveOutcome | null>>();
+/** One run asked for while another ran, per session. Further asks join it. */
+const followUps = new Map<string, { reason: CheckpointReason; job: Promise<SaveOutcome | null> }>();
 /** Sessions already told that their work is too large to save, until a save works again. */
 const tooLargeNoted = new Set<string>();
 
 async function noteTooLarge(row: WorkbenchRow, size: number): Promise<void> {
   if (tooLargeNoted.has(row.id)) return;
   tooLargeNoted.add(row.id);
-  for (const chat of await listChats(row.id)) {
-    if (chat.closedAt) continue;
-    const stored = await appendEvents(chat.id, [
-      { turn: chat.turnCount, event: { type: 'system', subtype: 'work_checkpoint_too_large', text: tooLargeNote(size) } },
-    ]);
-    emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
-  }
+  await noteChats(row, 'work_checkpoint_too_large', tooLargeNote(size));
+}
+
+/** The reason a joined follow-up keeps: a turn end says more than a save during the turn. */
+function strongerReason(a: CheckpointReason, b: CheckpointReason): CheckpointReason {
+  const rank: Record<CheckpointReason, number> = { during_turn: 0, restored: 1, turn_end: 2 };
+  return rank[b] > rank[a] ? b : a;
 }
 
 /**
  * Checkpoint the session's unsaved work into Talyn's storage. Null when the
  * session has no live box. Never throws; one at a time per session.
+ *
+ * An ask while a save runs is never dropped: that save may have read the box
+ * before the work the ask is about (a turn end is the usual case). Exactly one
+ * more save runs after the current one, on the row as it is then; any further
+ * asks join that one.
  */
-export function checkpointWork(row: WorkbenchRow, reason: 'turn_end' | 'during_turn' | 'restored'): Promise<SaveOutcome | null> {
+export function checkpointWork(row: WorkbenchRow, reason: CheckpointReason): Promise<SaveOutcome | null> {
   // A thread has no repository, so no work to save.
   if (!liveSandbox(row) || row.kind === 'thread') return Promise.resolve(null);
   const running = inFlight.get(row.id);
-  if (running) return running;
+  if (!running) return startCheckpoint(row, reason);
+  const queued = followUps.get(row.id);
+  if (queued) {
+    queued.reason = strongerReason(queued.reason, reason);
+    return queued.job;
+  }
+  const entry: { reason: CheckpointReason; job: Promise<SaveOutcome | null> } = { reason, job: Promise.resolve(null) };
+  entry.job = running.catch(() => null).then(async () => {
+    followUps.delete(row.id);
+    const latest = await getWorkbench(row.id).catch(() => null);
+    if (!liveSandbox(latest) || latest.kind === 'thread') return null;
+    // A save that started after this ask covers it.
+    return inFlight.get(row.id) ?? startCheckpoint(latest, entry.reason);
+  });
+  followUps.set(row.id, entry);
+  return entry.job;
+}
+
+function startCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason: CheckpointReason): Promise<SaveOutcome | null> {
   const job = takeCheckpoint(row, reason).finally(() => inFlight.delete(row.id));
   inFlight.set(row.id, job);
   return job;
@@ -410,13 +525,17 @@ export function checkpointWork(row: WorkbenchRow, reason: 'turn_end' | 'during_t
 
 async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason: string): Promise<SaveOutcome> {
   let result: SaveOutcome;
+  let lost = false;
   const startedAt = checkpointClock.now();
+  let saveMs = 0;
   try {
     result = await saveWork(row, 'checkpoint', { previousSha: row.workCheckpointSha });
   } catch (err) {
+    lost = err instanceof FleetRunNotFoundError;
     result = { kind: 'failed', detail: err instanceof Error ? err.message : String(err) };
   } finally {
-    checkpointThrottle.recordDuration(row.id, Math.max(0, checkpointClock.now() - startedAt));
+    saveMs = Math.max(0, checkpointClock.now() - startedAt);
+    checkpointThrottle.recordDuration(row.id, saveMs);
   }
   try {
     if (result.kind === 'saved') {
@@ -432,10 +551,102 @@ async function takeCheckpoint(row: WorkbenchRow & { sandboxId: string }, reason:
       recordWorkbenchEvent(row, 'work_checkpoint', `${reason}: ${result.detail}`, false);
     }
     if (result.kind !== 'too_large' && result.kind !== 'failed') tooLargeNoted.delete(row.id);
+    await recordSaveResult(row, result, lost);
   } catch (err) {
     console.warn(`[workbench] recording the work checkpoint for ${row.id} failed:`, err);
   }
+  // A copy of the changes for the Changes tab while the box sleeps. Outside
+  // this save's lock, so the next save never waits behind a capture.
+  if (!lost) requestCapture(row, reason, saveMs);
   return result;
+}
+
+// ============================================================================
+// The changes capture after a save
+// ============================================================================
+
+/** The capture running per session, and at most one asked for while it runs. */
+const captures = new Map<string, { running: Promise<void>; next: { reason: string; saveMs: number } | null }>();
+
+/**
+ * Capture the changes after a save, one at a time per session. An ask while
+ * one runs queues exactly one more, on the row as it is then. The capture's
+ * time counts with its save's in the checkpoint gap: both run on the box.
+ */
+function requestCapture(row: WorkbenchRow, reason: string, saveMs: number): void {
+  const current = captures.get(row.id);
+  if (current) {
+    current.next = { reason: current.next?.reason === 'turn_end' ? 'turn_end' : reason, saveMs };
+    return;
+  }
+  const entry: { running: Promise<void>; next: { reason: string; saveMs: number } | null } = { running: Promise.resolve(), next: null };
+  const run = async (target: WorkbenchRow, why: string, ms: number): Promise<void> => {
+    // A save that started meanwhile goes first: two git reads at once on a box near its memory ceiling is worse than a wait.
+    await inFlight.get(target.id)?.catch(() => null);
+    const startedAt = checkpointClock.now();
+    try {
+      await captureChanges(target, why);
+    } finally {
+      checkpointThrottle.recordDuration(target.id, ms + Math.max(0, checkpointClock.now() - startedAt));
+    }
+  };
+  entry.running = (async () => {
+    try {
+      await run(row, reason, saveMs);
+      while (entry.next) {
+        const { reason: why, saveMs: ms } = entry.next;
+        entry.next = null;
+        const latest = await getWorkbench(row.id).catch(() => null);
+        if (!liveSandbox(latest) || latest.kind === 'thread') break;
+        await run(latest, why, ms);
+      }
+    } catch (err) {
+      console.warn(`[workbench] the changes capture of ${row.id} failed:`, err);
+    } finally {
+      captures.delete(row.id);
+    }
+  })();
+  captures.set(row.id, entry);
+}
+
+/** Tests wait for the capture a checkpoint started. */
+export async function settledCapturesForTests(): Promise<void> {
+  while (captures.size > 0) await Promise.all([...captures.values()].map((c) => c.running));
+}
+
+/** Put one system note in each open chat of the session. */
+async function noteChats(row: WorkbenchRow, subtype: string, text: string): Promise<void> {
+  for (const chat of await listChats(row.id)) {
+    if (chat.closedAt) continue;
+    const stored = await appendEvents(chat.id, [{ turn: chat.turnCount, event: { type: 'system', subtype, text } }]);
+    emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+  }
+}
+
+/**
+ * Keep the save's result on the row, and tell the chat when a run of
+ * failures starts, keeps going, or ends. A lost box is recorded but not
+ * noted: the loss has its own note, and its replacement starts a new run.
+ */
+async function recordSaveResult(row: WorkbenchRow & { sandboxId: string }, result: SaveOutcome, lost: boolean): Promise<void> {
+  const now = new Date(checkpointClock.now());
+  if (result.kind === 'saved' || result.kind === 'unchanged' || result.kind === 'clean') {
+    const unpushed = result.kind === 'clean' ? 0 : result.unpushed ?? null;
+    const ended = await recordWorkSaveSuccess(row.id, row.sandboxId, result.kind === 'saved' ? result.at : now, unpushed);
+    if (ended) await noteChats(row, 'work_checkpoint_recovered', CHECKPOINT_RECOVERED_NOTE);
+    return;
+  }
+  const detail = result.kind === 'too_large'
+    ? tooLargeNote(result.size)
+    : result.detail;
+  const failures = await recordWorkSaveFailure(row.id, row.sandboxId, now, detail);
+  // The size has its own note, shown once.
+  if (failures === null || lost || result.kind === 'too_large') return;
+  if (failures === 1) {
+    await noteChats(row, 'work_checkpoint_failed', checkpointFailedNote(result.detail, row.workCheckpointAt));
+  } else if (failures === CHECKPOINT_KEEPS_FAILING_AFTER) {
+    await noteChats(row, 'work_checkpoint_failed', checkpointKeepsFailingNote(failures, row.workCheckpointAt));
+  }
 }
 
 /**

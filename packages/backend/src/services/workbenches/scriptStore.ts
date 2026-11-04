@@ -5,7 +5,7 @@ import { getPoolDbClient } from '../../db/client.js';
 import { workbenchScriptRuns as runs } from '../../db/schema.js';
 import { cleanJsonbString } from './jsonSafe.js';
 import { TURN_OWNER } from './ownership.js';
-import type { WorkbenchRow } from './store.js';
+import { touchWorkbenchActivity, type WorkbenchRow } from './store.js';
 
 const columns = {
   id: runs.id, sandboxId: runs.sandboxId, workbenchId: runs.workbenchId, workspaceId: runs.workspaceId, name: runs.name,
@@ -14,9 +14,10 @@ const columns = {
 export type ScriptLease = { [K in keyof typeof columns]: typeof runs.$inferSelect[K] };
 export async function claimScript(row: WorkbenchRow, name: string): Promise<ScriptLease | null> {
   const values = { id: `${row.id}:${name}`, workbenchId: row.id, sandboxId: row.sandboxId!, workspaceId: row.workspaceId, name,
-    sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null };
+    sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null, startedAt: new Date() };
   const [claimed] = await getPoolDbClient().insert(runs).values(values)
     .onConflictDoUpdate({ target: runs.id, set: values, setWhere: or(eq(runs.running, false), ne(runs.sandboxId, row.sandboxId!), sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`) }).returning(columns);
+  if (claimed) touchWorkbenchActivity(row.id, true);
   return claimed ?? null;
 }
 function owned(lease: ScriptLease) {
@@ -79,4 +80,10 @@ export async function stopSandboxScripts(workbenchId: string, sandboxId: string)
 export async function resetSetupForGeneration(row: WorkbenchRow): Promise<void> {
   await getPoolDbClient().delete(runs).where(and(eq(runs.workbenchId, row.id), eq(runs.name, 'setup'),
     sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`));
+}
+/** The stored end of a script's output on one box (at most 64 KiB), or null. */
+export async function scriptOutput(workbenchId: string, name: string, sandboxId: string): Promise<string | null> {
+  const [row] = await getPoolDbClient().select({ output: runs.output }).from(runs)
+    .where(and(eq(runs.workbenchId, workbenchId), eq(runs.name, name), eq(runs.sandboxId, sandboxId)));
+  return row?.output ?? null;
 }

@@ -2903,6 +2903,24 @@
           "patch": {
             "type": "string",
             "description": "A unified diff, as `git diff` writes it. Untracked files are diffs against /dev/null."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
@@ -2910,7 +2928,9 @@
           "session_id",
           "path",
           "scope",
-          "patch"
+          "patch",
+          "source",
+          "snapshot_at"
         ]
       },
       "FileList": {
@@ -2933,12 +2953,32 @@
               "type": "string"
             },
             "description": "Tracked and untracked files. Files that git ignores are not listed."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
           "object",
           "session_id",
-          "paths"
+          "paths",
+          "source",
+          "snapshot_at"
         ]
       },
       "FileContent": {
@@ -2968,6 +3008,24 @@
           },
           "content": {
             "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stored",
+              "github"
+            ],
+            "description": "`live`: read from the sandbox now. `stored`: the copy Talyn stored while the sandbox ran. `github`: read from GitHub."
+          },
+          "snapshot_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stored copy was taken. Null on a live read.",
+            "example": "2026-11-02T09:30:00.000Z"
           }
         },
         "required": [
@@ -2975,7 +3033,9 @@
           "session_id",
           "path",
           "encoding",
-          "content"
+          "content",
+          "source",
+          "snapshot_at"
         ]
       },
       "Script": {
@@ -3340,6 +3400,7 @@
             "enum": [
               "fix_checks",
               "resolve_conflicts",
+              "address_review",
               "merge"
             ]
           },
@@ -4696,6 +4757,828 @@
         ],
         "additionalProperties": false
       },
+      "SetupListStep": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "repository_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Null: a workspace step."
+          },
+          "position": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "For example `apt`, `node`, `service` or `other`. New values can appear."
+          },
+          "run_on": {
+            "type": "string",
+            "enum": [
+              "image",
+              "box",
+              "both"
+            ],
+            "description": "`image`: the step goes into the image. `box`: the step runs on each new box. `both`: the step goes into the image and runs again on each box."
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "user",
+              "learned",
+              "agent"
+            ],
+            "description": "`user`: a person wrote the step. `learned`: Talyn learned it from a session. `agent`: an agent recorded it."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suggested",
+              "dismissed",
+              "disabled"
+            ],
+            "description": "`active`: the step runs. `suggested`: Talyn learned the step and it does not run until it is accepted. `dismissed`: a person dismissed it, and Talyn does not suggest it again. `disabled`: it failed on too many boxes in a row and does not run until a person retries it."
+          },
+          "status_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the step has its status."
+          },
+          "status_changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "accepted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "person",
+              "talyn"
+            ],
+            "description": "`person`: Talyn never removes the step. `talyn`: the frequency rule accepted it, and Talyn removes it when few sessions need it."
+          },
+          "timeout_sec": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "box_only_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step reads a secret, so it runs only on the box."
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "seen_count": {
+            "type": "integer"
+          },
+          "session_count": {
+            "type": "integer",
+            "description": "The different sessions that needed the step."
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the step was accepted.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "image_applied_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the step went into the image. Null: not yet.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "image_failed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The step failed in an image build. It runs on the box instead.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "image_failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "box_failure_count": {
+            "type": "integer",
+            "description": "Box setups in a row where the step failed."
+          },
+          "box_last_failure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "typical_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "measured_boxes": {
+            "type": "integer"
+          },
+          "recent_needed_sessions": {
+            "type": "integer",
+            "description": "Learned steps only: the recent sessions that needed the step."
+          },
+          "recent_sessions": {
+            "type": "integer",
+            "description": "Learned steps only: the repository's sandbox sessions of the last `window_days` days."
+          },
+          "share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "`recent_needed_sessions / recent_sessions`, 0 to 1."
+          },
+          "heavy": {
+            "type": "boolean"
+          },
+          "verdict_reason": {
+            "type": "string",
+            "description": "The frequency rule's reason, for a learned step."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "repository_id",
+          "position",
+          "name",
+          "command",
+          "kind",
+          "run_on",
+          "origin",
+          "status",
+          "status_reason",
+          "status_changed_at",
+          "accepted_by",
+          "timeout_sec",
+          "box_only_reason",
+          "why",
+          "source_session_id",
+          "seen_count",
+          "session_count",
+          "first_seen_at",
+          "last_seen_at",
+          "confirmed_at",
+          "image_applied_at",
+          "image_failed_at",
+          "image_failure_reason",
+          "box_failure_count",
+          "box_last_failure",
+          "last_duration_ms",
+          "typical_duration_ms",
+          "measured_boxes",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "BoxSetupTiming": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "total_ms": {
+            "type": "integer",
+            "description": "The whole setup script."
+          },
+          "repository_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The repository's own setup command. Null: the repository has none."
+          },
+          "learned_ms": {
+            "type": "integer",
+            "description": "All setup steps together."
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "box_ready_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "From the create request until the sandbox was ready."
+          },
+          "checkout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The checkout of the repository."
+          },
+          "setup_repository_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The repository's own setup on the box."
+          },
+          "setup_box_steps_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The setup steps that ran on the box."
+          },
+          "layer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image the box started from: `base`, `legacy`, `repo` or `user`."
+          }
+        },
+        "required": [
+          "total_ms",
+          "repository_ms",
+          "learned_ms",
+          "measured_at",
+          "session_id"
+        ]
+      },
+      "RepositorySetup": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "repository_setup"
+            ]
+          },
+          "repository_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "learning": {
+            "type": "boolean",
+            "description": "Talyn learns setup steps from sessions and suggests them."
+          },
+          "window_days": {
+            "type": "integer"
+          },
+          "max_learned_steps": {
+            "type": "integer"
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "image_max_steps": {
+                "type": "integer"
+              },
+              "image_total_sec": {
+                "type": "integer"
+              },
+              "max_hosts": {
+                "type": "integer"
+              },
+              "max_user_steps": {
+                "type": "integer"
+              },
+              "step_max_sec": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "image_max_steps",
+              "image_total_sec",
+              "max_hosts",
+              "max_user_steps",
+              "step_max_sec"
+            ]
+          },
+          "repo_setup": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The repository's own setup command, as the newest box read it."
+              },
+              "source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "read_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "example": "2026-11-02T09:30:00.000Z"
+              },
+              "run_on_box": {
+                "type": "string",
+                "enum": [
+                  "always",
+                  "moved",
+                  "never"
+                ],
+                "description": "`moved`: only when the checkout is not the commit of the image."
+              }
+            },
+            "required": [
+              "command",
+              "source",
+              "read_at",
+              "run_on_box"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SetupListStep"
+            },
+            "description": "The steps in order. Dismissed steps come last."
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra hosts that the image build can reach."
+          },
+          "image": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "layer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo_commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo_layer_pending": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "user_layer_pending": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "repo_setup_ok": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "applied_step_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "checked_at": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2026-11-02T09:30:00.000Z"
+              },
+              "session_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "layer",
+              "repo_commit",
+              "repo_layer_pending",
+              "user_layer_pending",
+              "repo_setup_ok",
+              "applied_step_ids",
+              "checked_at",
+              "session_id"
+            ],
+            "description": "What the newest box of the repository was told about its images."
+          },
+          "last_setup_timing": {
+            "$ref": "#/components/schemas/BoxSetupTiming"
+          },
+          "timing_history": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/BoxSetupTiming"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "The newest box setups, newest first."
+          }
+        },
+        "required": [
+          "object",
+          "repository_id",
+          "learning",
+          "window_days",
+          "max_learned_steps",
+          "limits",
+          "repo_setup",
+          "steps",
+          "hosts",
+          "image",
+          "last_setup_timing",
+          "timing_history"
+        ]
+      },
+      "PutRepositorySetupRequest": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "An existing step. No id: a new step of your own."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "command": {
+                  "type": "string",
+                  "description": "Required for a new step. The command of a learned step cannot change."
+                },
+                "run_on": {
+                  "type": "string",
+                  "enum": [
+                    "image",
+                    "box",
+                    "both"
+                  ]
+                },
+                "timeout_sec": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "run_on"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The whole list in its new order. Your own step that is not in the list is deleted. A learned step that is not in the list keeps its status and goes last: to remove it, dismiss it."
+          },
+          "run_on_box": {
+            "type": "string",
+            "enum": [
+              "always",
+              "moved",
+              "never"
+            ]
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "learning": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkspaceSandboxSetup": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "workspace_sandbox_setup"
+            ]
+          },
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "dotfiles": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "slug": {
+                "type": "string",
+                "description": "`owner/name`."
+              },
+              "ref": {
+                "type": "string",
+                "description": "A branch, tag or commit. Empty: the default branch."
+              },
+              "install": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The install command. Null: Talyn looks for a known install script."
+              }
+            },
+            "required": [
+              "slug",
+              "ref",
+              "install"
+            ]
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SetupListStep"
+            },
+            "description": "The workspace's steps. They go before each repository's steps."
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "image_max_steps": {
+                "type": "integer"
+              },
+              "image_total_sec": {
+                "type": "integer"
+              },
+              "max_hosts": {
+                "type": "integer"
+              },
+              "max_user_steps": {
+                "type": "integer"
+              },
+              "step_max_sec": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "image_max_steps",
+              "image_total_sec",
+              "max_hosts",
+              "max_user_steps",
+              "step_max_sec"
+            ]
+          }
+        },
+        "required": [
+          "object",
+          "workspace_id",
+          "dotfiles",
+          "hosts",
+          "steps",
+          "limits"
+        ]
+      },
+      "PutWorkspaceSandboxSetupRequest": {
+        "type": "object",
+        "properties": {
+          "dotfiles": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "install": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "slug"
+            ],
+            "additionalProperties": false,
+            "description": "Null: no dotfiles."
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "An existing step. No id: a new step of your own."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "command": {
+                  "type": "string",
+                  "description": "Required for a new step. The command of a learned step cannot change."
+                },
+                "run_on": {
+                  "type": "string",
+                  "enum": [
+                    "image",
+                    "box",
+                    "both"
+                  ]
+                },
+                "timeout_sec": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "run_on"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The whole list in its new order. A step that is not in the list is deleted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetupTiming": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "total_ms": {
+            "type": "integer",
+            "description": "The whole setup script."
+          },
+          "repository_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The repository's own setup command. Null: the repository has none."
+          },
+          "learned_ms": {
+            "type": "integer",
+            "description": "All learned steps together."
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "total_ms",
+          "repository_ms",
+          "learned_ms",
+          "measured_at",
+          "session_id"
+        ],
+        "description": "The times of the newest box setup that ran learned steps."
+      },
       "SetupStep": {
         "type": "object",
         "properties": {
@@ -4732,6 +5615,16 @@
               "agent"
             ]
           },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "live",
+              "failing",
+              "reverted"
+            ],
+            "description": "`waiting`: too few of the repository's recent sessions need it, so it does not run (see `state_reason`). `live`: runs on every new box. `failing`: failed on 2 boxes in a row and does not run. `reverted`: a person reverted it."
+          },
           "source_session_id": {
             "type": [
               "string",
@@ -4742,6 +5635,10 @@
           },
           "seen_count": {
             "type": "integer"
+          },
+          "session_count": {
+            "type": "integer",
+            "description": "The different sessions that needed the step."
           },
           "first_seen_at": {
             "type": "string",
@@ -4776,6 +5673,73 @@
               "string",
               "null"
             ]
+          },
+          "box_failure_count": {
+            "type": "integer",
+            "description": "Box setups in a row where the step failed."
+          },
+          "box_last_failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The exit code or time limit, and the last line the step printed."
+          },
+          "box_disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The step failed on too many boxes and no longer runs.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
+          "box_disabled_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent_needed_sessions": {
+            "type": "integer",
+            "description": "The repository's sandbox sessions of the last `window_days` days that needed the step: they ran it, or used what a live step installs."
+          },
+          "recent_sessions": {
+            "type": "integer",
+            "description": "The repository's sandbox sessions of the last `window_days` days."
+          },
+          "share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "`recent_needed_sessions / recent_sessions`, 0 to 1. Null: no recent sessions."
+          },
+          "heavy": {
+            "type": "boolean",
+            "description": "The step installs a browser or a large package set, so it needs a higher share to run."
+          },
+          "state_reason": {
+            "type": "string",
+            "description": "Why the step is in its state, for example \"Waiting: needed by 2 of 31 sessions in the last 14 days. ...\""
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How long the step took in the newest box setup that measured it."
+          },
+          "typical_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "A rolling mean of the step's time in the box setup."
+          },
+          "measured_boxes": {
+            "type": "integer",
+            "description": "The box setups that measured the step."
           }
         },
         "required": [
@@ -4785,13 +5749,19 @@
           "phase",
           "why",
           "source",
+          "state",
           "source_session_id",
           "seen_count",
+          "session_count",
           "first_seen_at",
           "last_seen_at",
           "applied_at",
           "reverted_at",
-          "reverted_reason"
+          "reverted_reason",
+          "box_failure_count",
+          "box_last_failure",
+          "box_disabled_at",
+          "box_disabled_reason"
         ]
       },
       "SetupRecipe": {
@@ -4813,6 +5783,13 @@
           },
           "max_steps": {
             "type": "integer"
+          },
+          "window_days": {
+            "type": "integer",
+            "description": "The window that `recent_sessions` counts sessions in."
+          },
+          "last_setup_timing": {
+            "$ref": "#/components/schemas/SetupTiming"
           },
           "steps": {
             "type": "array",
@@ -6120,8 +7097,8 @@
     "/sessions/{id}/retry": {
       "post": {
         "operationId": "retrySession",
-        "summary": "Retry a session that failed to start",
-        "description": "Provisions again after `status: \"error\"`. Refused while the account still cannot run a sandbox.\n\nScope: `sessions:write`.",
+        "summary": "Retry a session that failed or is stuck while it starts",
+        "description": "Provisions again on a new sandbox after `status: \"error\"`, or while `status` is `provisioning` and the start is stuck. Refused while the account still cannot run a sandbox.\n\nScope: `sessions:write`.",
         "tags": [
           "Sessions"
         ],
@@ -12265,7 +13242,7 @@
       "get": {
         "operationId": "getSessionDiff",
         "summary": "Read the diff",
-        "description": "A unified diff of the whole session, or of one file with `path`. Reads the sandbox, and wakes it if it sleeps.\n\nScope: `sessions:read`.",
+        "description": "A unified diff of the whole session, or of one file with `path`. A sleeping sandbox answers from the copy Talyn stored, or from GitHub when all the work is pushed; `source` says which. With neither, it answers 409 `snapshot_unavailable`. Send `live=true` to read the sandbox now; that wakes it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -12309,6 +13286,15 @@
             },
             "required": false,
             "name": "scope",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
             "in": "query"
           }
         ],
@@ -12416,7 +13402,7 @@
       "get": {
         "operationId": "listSessionFiles",
         "summary": "List files",
-        "description": "Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. Wakes the sandbox.\n\nScope: `sessions:read`.",
+        "description": "Every file in the repository checkout, tracked and untracked. Files that git ignores are left out. A sleeping sandbox answers from the copy Talyn stored, or 409 `snapshot_unavailable`. Send `live=true` to wake it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -12436,6 +13422,15 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
+            "in": "query"
           }
         ],
         "responses": {
@@ -12542,7 +13537,7 @@
       "get": {
         "operationId": "getSessionFile",
         "summary": "Read a file",
-        "description": "One file as it is in the sandbox now. Text comes back as UTF-8, a binary file as base64. A file over 4 MiB answers 413 `file_too_large`. Wakes the sandbox.\n\nScope: `sessions:read`.",
+        "description": "One file as it is in the sandbox now. Text comes back as UTF-8, a binary file as base64. A file over 4 MiB answers 413 `file_too_large`. A sleeping sandbox answers a changed file from the copy Talyn stored, and a file the session did not change from GitHub at the merge base; `source` says which. With neither, it answers 409 `snapshot_unavailable`. Send `live=true` to read the sandbox now; that wakes it.\n\nScope: `sessions:read`.",
         "tags": [
           "Session work"
         ],
@@ -12572,6 +13567,15 @@
             },
             "required": true,
             "name": "path",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "description": "Read the sandbox now, and wake it if it sleeps. Default false: a sleeping sandbox answers from the copy Talyn stored, or answers 409 `snapshot_unavailable` when there is none."
+            },
+            "required": false,
+            "name": "live",
             "in": "query"
           }
         ],
@@ -13984,6 +14988,182 @@
         "operationId": "resolveSessionConflicts",
         "summary": "Ask the agent to resolve conflicts",
         "description": "Sends the agent the app's prompt to merge the base branch and resolve the conflicts. The message queues behind a running turn. A cloud task that works on the same pull request answers 409 `task_active`.\n\nScope: `sessions:write`.",
+        "tags": [
+          "Session work"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "sessions:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "description": "Send the same key when you retry, and the request runs once. Kept for 24 hours."
+            },
+            "required": false,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The prompt is sent.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The plan limit is reached. `error.code` says which limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}/address_review": {
+      "post": {
+        "operationId": "addressSessionReviews",
+        "summary": "Ask the agent to address review comments",
+        "description": "Sends the agent the app's prompt to read and address the unresolved review comments of the linked pull request. The message queues behind a running turn. A cloud task that works on the same pull request answers 409 `task_active`.\n\nScope: `sessions:write`.",
         "tags": [
           "Session work"
         ],
@@ -17762,11 +18942,1195 @@
         }
       }
     },
+    "/repositories/{id}/setup": {
+      "get": {
+        "operationId": "getRepositorySetup",
+        "summary": "Get the Setup list",
+        "description": "The repository's own setup, then one ordered list of setup steps. Image steps go into the repository's image. Box steps run on each new sandbox. Learned steps are suggested until a person or the frequency rule accepts them.\n\nScope: `repositories:read`.",
+        "tags": [
+          "Repositories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Setup list.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putRepositorySetup",
+        "summary": "Write the Setup list",
+        "description": "Send only the fields to change. `steps` is the whole list in its new order. A step that reads a secret runs only on the box. A command that holds a literal token is refused (`setup_step_refused`). The command of a learned step cannot change (`learned_command`). A refusal changes nothing.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Repositories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutRepositorySetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Setup list.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repositories/{id}/setup/steps/{step_id}/accept": {
+      "post": {
+        "operationId": "acceptSetupListStep",
+        "summary": "Accept a setup step",
+        "description": "Accept a suggested or dismissed learned step. It runs on new sandboxes, and an image step goes into the image. Talyn never removes a step that a person accepted.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Repositories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "step_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Setup list.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repositories/{id}/setup/steps/{step_id}/dismiss": {
+      "post": {
+        "operationId": "dismissSetupListStep",
+        "summary": "Dismiss a setup step",
+        "description": "Dismiss a learned step. It stops running and stays in the list as dismissed, so Talyn does not suggest it again. Your own step cannot be dismissed (409 `not_learned`): remove it from the list instead.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Repositories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "step_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Setup list.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repositories/{id}/setup/steps/{step_id}/retry": {
+      "post": {
+        "operationId": "retrySetupListStep",
+        "summary": "Retry a setup step",
+        "description": "Run a disabled step again, or put a step that failed in the image build back into the image. The failure count goes back to 0.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Repositories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "step_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Setup list.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{id}/sandbox_setup": {
+      "get": {
+        "operationId": "getWorkspaceSandboxSetup",
+        "summary": "Get the sandbox setup",
+        "description": "The workspace's dotfiles and setup steps. They go into the image of every repository of the workspace, before the repository's own steps.\n\nScope: `repositories:read`.",
+        "tags": [
+          "Workspaces"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:read",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sandbox setup.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSandboxSetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putWorkspaceSandboxSetup",
+        "summary": "Write the sandbox setup",
+        "description": "Each field you send replaces it. It changes the sandboxes of every repository of the workspace, so it needs `repositories:write`. The dotfiles install command cannot read a secret: the image build has no secrets.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Workspaces"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutWorkspaceSandboxSetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sandbox setup.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSandboxSetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{id}/sandbox_setup/steps/{step_id}/retry": {
+      "post": {
+        "operationId": "retryWorkspaceSetupStep",
+        "summary": "Retry a sandbox setup step",
+        "description": "Run a disabled workspace step again, or put a step that failed in the image build back into the image.\n\nScope: `repositories:write`.",
+        "tags": [
+          "Workspaces"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-talyn-scope": "repositories:write",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": true,
+            "name": "step_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sandbox setup.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The id of this request. Also in every error body.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Limit": {
+                "description": "Requests allowed in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Remaining": {
+                "description": "Requests left in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "RateLimit-Reset": {
+                "description": "Seconds until the window ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSandboxSetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid. `error.param` names the field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing, not valid, expired or revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the scope, or the API or sessions are not available for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or the token cannot reach it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The resource is not in a state that allows this, e.g. `not_ready`, `local_runtime`, an idempotency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Wait `Retry-After` seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A fault on our side. Quote `error.request_id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Talyn Fleet or GitHub cannot take the request now. Retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/repositories/{id}/setup_recipe": {
       "get": {
         "operationId": "getSetupRecipe",
         "summary": "Get the setup recipe",
-        "description": "The setup steps Talyn learned from sessions on the repository. New sandboxes run them.\n\nScope: `repositories:read`.",
+        "description": "Deprecated: use `GET /repositories/{id}/setup`. This route goes after one release. The setup steps Talyn learned from sessions on the repository, in the old shape.\n\nScope: `repositories:read`.",
         "tags": [
           "Repositories"
         ],
@@ -17892,7 +20256,7 @@
       "post": {
         "operationId": "revertSetupStep",
         "summary": "Revert a setup step",
-        "description": "New sandboxes stop running the step. It stays in the list as reverted, so Talyn does not learn it again.\n\nScope: `repositories:write`.",
+        "description": "Deprecated: use `POST /repositories/{id}/setup/steps/{step_id}/dismiss`. This route goes after one release. It dismisses the step. The step stays in the list as reverted, so Talyn does not learn it again.\n\nScope: `repositories:write`.",
         "tags": [
           "Repositories"
         ],

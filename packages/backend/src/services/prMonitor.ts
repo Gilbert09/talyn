@@ -2056,11 +2056,18 @@ class PRMonitorService extends EventEmitter {
     repo: WatchedRepo;
     number: number;
     allowClosed?: boolean;
+    /**
+     * Set false to fetch and hold the row without the user-visible "tracked"
+     * mark. A session that opens a PR passes false: the row is what keeps the
+     * PR monitored, and a person did not ask to track it. Default true.
+     */
+    markWatching?: boolean;
   }): Promise<
     | { ok: true; rowId: string; alreadyTracked: boolean; summary: PRSummary }
     | { ok: false; reason: 'not_found' | 'not_open'; summary: PRSummary | null }
   > {
     const { workspaceId, repo, number } = opts;
+    const markWatching = opts.markWatching !== false;
     const alreadyTracked = await this.prRowExists(workspaceId, repo.id, number);
 
     // No `dedupeWindowMs`: a user-initiated add must be authoritative, not
@@ -2107,7 +2114,7 @@ class PRMonitorService extends EventEmitter {
       // for the full 2min `statement_timeout` and died with 57014. On the
       // insert path it failed silently instead, the uncommitted row being
       // invisible to the pool, so `watching` was simply never set.
-      explicitWatch: true,
+      explicitWatch: markWatching,
     });
 
     emitPullRequestUpdated(workspaceId, {
@@ -2121,7 +2128,8 @@ class PRMonitorService extends EventEmitter {
       lastSummary: summary as unknown as Record<string, unknown>,
       authored: flags.authored,
       reviewRequested: flags.reviewRequested,
-      watching: true,
+      // Omitted when not marking: clients keep the value they hold.
+      ...(markWatching ? { watching: true } : {}),
     });
 
     return { ok: true, rowId, alreadyTracked, summary };

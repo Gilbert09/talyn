@@ -116,6 +116,52 @@ describe('session credentials during lifecycle operations', () => {
     expect(mcpIntegrationSecrets).not.toHaveBeenCalled();
   });
 
+  describe('a box the fleet moved to another host', () => {
+    beforeEach(() => vi.stubEnv('FLEET_PINNED_ENDPOINT', 'https://gateway.test'));
+
+    it('serves the host the gateway names, and records it', async () => {
+      fleet.placedOn = TARGET_HOST;
+      expect((await credentials(BOX, TARGET_HOST)).status).toBe(200);
+      expect(fleet.hostLookups).toEqual([BOX]);
+      expect((await row()).fleetHost).toBe(TARGET_HOST);
+      // The recorded host now matches, so the next pull asks the gateway nothing.
+      expect((await credentials(BOX, TARGET_HOST)).status).toBe(200);
+      expect(fleet.hostLookups).toEqual([BOX]);
+    });
+
+    it('serves an exact fleet ID the gateway places on the asking host', async () => {
+      await updateWorkbench(ID, { settings: { fleetSandboxId: `${BOX}--abcdef` } } as Patch);
+      fleet.placedOn = TARGET_HOST;
+      expect((await credentials(`${BOX}--abcdef`, TARGET_HOST)).status).toBe(200);
+      expect(fleet.hostLookups).toEqual([`${BOX}--abcdef`]);
+      expect((await row()).fleetHost).toBe(TARGET_HOST);
+    });
+
+    it.each<[string, string | Error | undefined]>([
+      ['the gateway names another host', 'third-host'],
+      ['the gateway names no host', undefined],
+      ['the gateway cannot be reached', new Error('unreachable')],
+    ])('refuses when %s', async (_name, placedOn) => {
+      fleet.placedOn = placedOn;
+      expect(await credentials(BOX, TARGET_HOST)).toEqual({ status: 403, body: { success: false, error: 'forbidden' } });
+      expect((await row()).fleetHost).toBe(HOST);
+      expect(githubService.getVerifiedAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('never widens the bound on a workbench move target', async () => {
+      await updateWorkbench(ID, { status: 'moving', settings: { moveSandboxId: TARGET, moveTargetHost: TARGET_HOST } } as Patch);
+      fleet.placedOn = HOST;
+      expect((await credentials(TARGET, HOST)).status).toBe(403);
+      expect(fleet.hostLookups).toEqual([]);
+    });
+  });
+
+  it('asks no gateway when the backend talks to hosts directly', async () => {
+    fleet.placedOn = TARGET_HOST;
+    expect((await credentials(BOX, TARGET_HOST)).status).toBe(403);
+    expect(fleet.hostLookups).toEqual([]);
+  });
+
   it('records the target host and exact fleet ID after the move claim', async () => {
     await claimMove(ID, BOX, TARGET, 'Saving work');
     expect((await credentials()).status).toBe(200);

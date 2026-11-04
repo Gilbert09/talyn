@@ -80,6 +80,24 @@ describe('split changes', () => {
     await expect(getChanges(row)).rejects.toThrow('git diff failed');
   });
 
+  it.each([
+    ['no exit code and no output, the fleet gave a reason', '', 'sandbox is stopping', 'Talyn could not run git diff in the sandbox. The fleet said: sandbox is stopping'],
+    ['no exit code and no output, no reason', '', undefined, 'Talyn could not run git diff in the sandbox. The fleet gave no reason.'],
+    ['a full disk in stderr', 'fatal: No space left on device', undefined, "The sandbox's disk is full or failing. Move the session to a new sandbox."],
+    ['a fleet error that says the disk is full', '', 'ENOSPC on /', "The sandbox's disk is full or failing. Move the session to a new sandbox."],
+  ])('says plainly why a diff failed: %s', async (_name, stderr, fleetError, message) => {
+    vi.mocked(runCapture).mockResolvedValue({ stdout: '', stdoutBytes: Buffer.alloc(0), stderr, exitCode: -1 });
+    vi.mocked(fleetClientFor).mockResolvedValue({ getSandbox: async () => ({ sandbox: { error: fleetError } }) } as never);
+    await expect(getChanges(row)).rejects.toThrow(message);
+    await expect(getPatch(row, undefined, 'uncommitted')).rejects.toThrow(message);
+  });
+
+  it('gives no reason when the fleet look-up fails', async () => {
+    vi.mocked(runCapture).mockResolvedValue({ stdout: '', stdoutBytes: Buffer.alloc(0), stderr: '', exitCode: -1 });
+    vi.mocked(fleetClientFor).mockRejectedValue(new Error('down'));
+    await expect(getChanges(row)).rejects.toThrow('The fleet gave no reason.');
+  });
+
   it('stores and broadcasts uncommitted totals under the legacy name', async () => {
     const result = await refreshDiffStat(row);
     expect(result.diffStat).toEqual({

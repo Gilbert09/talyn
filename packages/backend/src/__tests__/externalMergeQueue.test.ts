@@ -24,6 +24,9 @@ import {
   TRUNK_SUBMIT_LABELS,
   coarseQueueStatus,
   queueBlockNeedsHuman,
+  queueSessionBadge,
+  queueSessionBadgeTooltip,
+  QUEUE_SESSION_BADGE_LABEL,
 } from '@talyn/shared';
 import { githubService } from '../services/github.js';
 import {
@@ -1085,8 +1088,9 @@ describe('queueBlockNeedsHuman', () => {
     awaiting_human_check: true,
     agent_needs_human: true,
     code_review_blocker: true,
-    // The person's own session is working the PR; clears when it lets go.
-    session_active: true,
+    // The session's own agent works the PR: nothing for the person to do.
+    // It has its own neutral badge (queueSessionBadge).
+    session_active: false,
     // Budgets genuinely spent on this head.
     attempts_exhausted: false,
     no_progress: false,
@@ -1122,5 +1126,39 @@ describe('queueBlockNeedsHuman', () => {
     // Forward compatibility, and the safe direction: an unknown cause reads as
     // an ordinary block rather than promising the reader it self-heals.
     expect(queueBlockNeedsHuman('some_future_code')).toBe(false);
+  });
+});
+
+describe('queueSessionBadge', () => {
+  it.each([
+    ['a park on a working session', { status: 'blocked', blockedCode: 'session_active' }, 'working'],
+    ['a fix sent into the session', { status: 'fixing', fixKind: 'session' }, 'fixing'],
+    ['an ordinary fix run', { status: 'fixing', fixKind: 'blockers' }, null],
+    ['a re-sign run', { status: 'fixing', fixKind: 'resign' }, null],
+    ['a fix run with no kind', { status: 'fixing' }, null],
+    ['a needs-human stop', { status: 'blocked', blockedCode: 'agent_needs_human' }, null],
+    ['a stale code on a waiting entry', { status: 'queued', blockedCode: 'session_active' }, null],
+    ['a waiting entry', { status: 'queued' }, null],
+    ['an unknown status', { status: 'some_future_status', fixKind: 'session' }, null],
+  ])('answers for %s', (_label, mq, expected) => {
+    expect(queueSessionBadge(mq)).toBe(expected);
+  });
+
+  it.each([null, undefined])('answers null for %s', (mq) => {
+    expect(queueSessionBadge(mq)).toBeNull();
+  });
+
+  it('labels the two badges, and neither says Needs you', () => {
+    expect(QUEUE_SESSION_BADGE_LABEL).toEqual({ working: 'Session working', fixing: 'Session fixing' });
+  });
+
+  it.each([
+    ['working', 'The backend reason.', 'paris', 'The backend reason.'],
+    ['working', null, 'paris', 'The session "paris" is working on this pull request now. The merge queue waits for its turn to end.'],
+    ['working', undefined, null, 'The session is working on this pull request now. The merge queue waits for its turn to end.'],
+    ['fixing', null, 'paris', 'The merge queue asked the session "paris" to fix this pull request. It waits for the session\'s turn to end.'],
+    ['fixing', 'ignored', null, 'The merge queue asked the session to fix this pull request. It waits for the session\'s turn to end.'],
+  ] as const)('writes the %s tooltip (reason %s, name %s)', (badge, reason, name, expected) => {
+    expect(queueSessionBadgeTooltip(badge, reason, name)).toBe(expected);
   });
 });

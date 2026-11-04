@@ -105,6 +105,20 @@ describe('the gateway names the host that took a dispatch', () => {
   });
 });
 
+describe('the gateway names the host that holds a box now', () => {
+  // A sleeping box moves to another host when its own host is full, and the
+  // new host's credential pull is bounded by the host the gateway names.
+  it.each<[string, Record<string, string>, string | undefined]>([
+    ['a gateway answer', { [FLEET_HOST_HEADER]: 'scaleway-1' }, 'scaleway-1'],
+    ['a host answering directly', {}, undefined],
+  ])('is read off %s', async (_name, headers, want) => {
+    fetchMock.mockResolvedValue(reply({ sandbox: { id: 'talyn-wb-1' }, terminal: false }, { headers }));
+    const host = await new FleetClient(GATEWAY, 'yas_sk_key').sandboxHost('talyn-wb-1');
+    expect(host).toBe(want);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(`${GATEWAY}/v1/sandboxes/talyn-wb-1`);
+  });
+});
+
 describe('the two fleet credentials are not interchangeable', () => {
   // They authenticate to different trust domains: FLEET_API_TOKEN is a
   // deployment secret every HOST shares, a gateway key is a per-tenant key the
