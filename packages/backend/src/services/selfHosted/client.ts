@@ -442,6 +442,27 @@ export interface CreateSandboxInput {
 }
 
 /** One MCP server, as the fleet takes it on a create. */
+/**
+ * The credentials of one box: the body of POST /v1/sandboxes/{id}/credentials,
+ * and the optional `credentials` of a resume.
+ */
+export interface FleetSandboxCredentials {
+  githubToken: string;
+  anthropicKey?: string;
+  openaiKey?: string;
+  repo?: string;
+  /**
+   * One credential per integration, keyed by NAME — which for us means one
+   * per MCP server. The fleet spells this `integrations` here and
+   * `integrationSecrets` on a create; it is the same map.
+   *
+   * REPLACES the whole set rather than merging into it, because installing
+   * credentials replaces the running proxy's entire struct. A name omitted
+   * here is a credential the box loses.
+   */
+  integrations?: Record<string, string>;
+}
+
 export interface FleetMcpServerInline {
   /** Becomes a hostname label inside the sandbox: lowercase, digits, hyphens. */
   name: string;
@@ -1121,25 +1142,7 @@ export class FleetClient {
    * fleet deploy survivable for a task that is already running, which is what
    * lets deploys happen at all rather than waiting for an idle host.
    */
-  async setSandboxCredentials(
-    id: string,
-    creds: {
-      githubToken: string;
-      anthropicKey?: string;
-      openaiKey?: string;
-      repo?: string;
-      /**
-       * One credential per integration, keyed by NAME — which for us means one
-       * per MCP server. The fleet spells this `integrations` here and
-       * `integrationSecrets` on a create; it is the same map.
-       *
-       * REPLACES the whole set rather than merging into it, because installing
-       * credentials replaces the running proxy's entire struct. A name omitted
-       * here is a credential the box loses.
-       */
-      integrations?: Record<string, string>;
-    },
-  ): Promise<void> {
+  async setSandboxCredentials(id: string, creds: FleetSandboxCredentials): Promise<void> {
     await this.request(`/v1/sandboxes/${encodeURIComponent(id)}/credentials`, {
       method: 'POST',
       body: JSON.stringify(creds),
@@ -1450,10 +1453,16 @@ export class FleetClient {
     await this.request(sandboxPath(id, '/suspend'), { method: 'POST', body: '{}' });
   }
 
-  async resumeSandbox(id: string): Promise<void> {
+  /**
+   * Resume a suspended box. With `credentials`, the box boots with them and the
+   * fleet skips its own fetch from the control plane, which was most of a
+   * local wake. A fleet without the field ignores it and fetches, as before.
+   */
+  async resumeSandbox(id: string, opts: { credentials?: FleetSandboxCredentials } = {}): Promise<void> {
+    const body = opts.credentials ? JSON.stringify({ credentials: opts.credentials }) : '{}';
     // A hibernated box pulls its image back from object storage first, which
     // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
-    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body: '{}' }, { timeoutMs: RESUME_TIMEOUT_MS });
+    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body }, { timeoutMs: RESUME_TIMEOUT_MS });
   }
 
   /** Delete a sandbox. Already gone counts as done: the caller wanted it gone. */

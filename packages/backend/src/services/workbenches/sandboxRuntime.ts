@@ -31,6 +31,7 @@ import {
   FleetRunNotFoundError,
   type FleetExecFrame,
   type FleetExecRequest,
+  type FleetSandboxCredentials,
 } from '../selfHosted/client.js';
 import {
   fleetApiToken,
@@ -68,7 +69,7 @@ import { WorkbenchError } from './errors.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import { recordSandboxWake } from './boxStart.js';
-import type { WorkbenchRow } from './store.js';
+import { getWorkbenchBySandboxId, type WorkbenchRow } from './store.js';
 
 /**
  * The sandbox runtime's plumbing: which fleet client, which sandbox, which
@@ -222,21 +223,66 @@ export function isResuming(sandboxId: string): boolean {
   return resuming.has(sandboxId);
 }
 
+/** Where a resume's credentials come from. Null means "send none; the fleet fetches". */
+export type ResumeCredentialSource = () => Promise<FleetSandboxCredentials | null>;
+
+/**
+ * A resume waits this long for its credentials, then goes without them. The
+ * fleet's own fetch took 3.6-4.3 s, so a slower answer here would only make
+ * the wake slower than it was.
+ */
+const RESUME_CREDENTIALS_TIMEOUT_MS = 3_000;
+let resumeCredentialsTimeoutMs = RESUME_CREDENTIALS_TIMEOUT_MS;
+
+/** Tests shorten the wait. */
+export function setResumeCredentialsTimeoutForTests(ms: number | null): void {
+  resumeCredentialsTimeoutMs = ms ?? RESUME_CREDENTIALS_TIMEOUT_MS;
+}
+
+/** The default source: the session that owns the box, looked up by its sandbox id. */
+async function credentialsForSandbox(sandboxId: string): Promise<FleetSandboxCredentials | null> {
+  const row = await getWorkbenchBySandboxId(sandboxId);
+  return row ? resumeCredentialsFor(row) : null;
+}
+
+/** The source's answer, or null when it fails or is too slow. Never throws. */
+async function resumeCredentials(source: ResumeCredentialSource): Promise<FleetSandboxCredentials | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), resumeCredentialsTimeoutMs);
+  });
+  try {
+    return await Promise.race([source().catch(() => null), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Resume a suspended box once, however many callers wait. `from` says where
  * the box sleeps: `storage` for a hibernated box (the fleet refused an exec
  * with `remote_resume_required`), `host` for a box on its host's disk. The
  * wake and its time go on the session for the Sandbox panel.
+ *
+ * The resume carries the box's credentials, so the fleet boots with them
+ * instead of fetching them first. `credentials` names where they come from;
+ * by default the session that owns the box. A fleet that predates the field
+ * ignores it and fetches, as before.
  */
-export function resumeOnce(client: FleetClient, sandboxId: string, from: 'host' | 'storage' = 'storage'): Promise<void> {
+export function resumeOnce(
+  client: FleetClient,
+  sandboxId: string,
+  from: 'host' | 'storage' = 'storage',
+  credentials: ResumeCredentialSource = () => credentialsForSandbox(sandboxId),
+): Promise<void> {
   let pending = resuming.get(sandboxId);
   if (!pending) {
     console.log(`[workbench] resuming ${from === 'storage' ? 'hibernated' : 'suspended'} sandbox ${sandboxId}`);
     const startedAt = Date.now();
     const note = (ok: boolean, ms: number) =>
       recordSandboxWake({ sandboxId, at: new Date(startedAt).toISOString(), ms, from, ok });
-    pending = client
-      .resumeSandbox(sandboxId)
+    pending = resumeCredentials(credentials)
+      .then((creds) => client.resumeSandbox(sandboxId, creds ? { credentials: creds } : {}))
       .then(
         () => {
           const ms = Date.now() - startedAt;
@@ -256,6 +302,28 @@ export function resumeOnce(client: FleetClient, sandboxId: string, from: 'host' 
     resuming.set(sandboxId, pending);
   }
   return pending;
+}
+
+/**
+ * Before a turn's first exec: a box asleep on its host's disk is resumed WITH
+ * its credentials. Without this the exec wakes it, and the fleet fetches the
+ * credentials before the boot, which was 3.6-4.3 s of a 5.4 s wake. A box in
+ * object storage is left to `withWake`, whose resume carries them too.
+ *
+ * Never throws: on any failure the exec that follows wakes the box the old
+ * way, and reports a lost box as it always did.
+ */
+export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
+  if (!row.sandboxId) return;
+  try {
+    const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+    const { sandbox } = await client.getSandbox(row.sandboxId);
+    if (sandbox?.status !== 'suspended') return;
+    if (sandbox.suspendUploaded && !sandbox.suspendDir) return;
+    await resumeOnce(client, row.sandboxId, 'host', () => resumeCredentialsFor(row));
+  } catch (err) {
+    console.warn(`[workbench] waking ${row.sandboxId} with its credentials failed; the next exec wakes it:`, err);
+  }
 }
 
 /** Calls that manage the box itself, and must never resume it as a side effect. */
@@ -1015,6 +1083,42 @@ export async function refreshSandboxCredentials(
   opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
 ): Promise<{ accountId: string | null; note: string | null }> {
   const sandboxId = requireSandbox(row);
+  const { creds, credential, recorded, model } = await sandboxCredentialSet(row, opts);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+  await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
+
+  let note: string | null = null;
+  if (credential.accountId && credential.accountId !== recorded) {
+    await setWorkbenchFleetAccount(row, credential.accountId).catch((err) =>
+      console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
+    );
+    if (recorded) {
+      note = await describeAccountSwitch(row.workspaceId, recorded, credential.accountId, model).catch(
+        () => null,
+      );
+      if (note) {
+        recordWorkbenchEvent(row, 'account_switch', note);
+      }
+    }
+  }
+  return { accountId: credential.accountId ?? null, note };
+}
+
+/**
+ * The credential set a session's box gets: the key for this box's vendor from
+ * the session's account (or the next one over the threshold), the GitHub
+ * token, and the MCP secrets. Throws when there is no key: a blank is never
+ * sent, because the gateway would fill it from somebody else's custody.
+ */
+async function sandboxCredentialSet(
+  row: WorkbenchRow,
+  opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
+): Promise<{
+  creds: FleetSandboxCredentials;
+  credential: NonNullable<Awaited<ReturnType<typeof resolveRunCredential>>>;
+  recorded: string | null;
+  model: string | undefined;
+}> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) throw new WorkbenchError(resolved.error, 409, 'credentials_unavailable');
   const provider = providerForAgent(row.agent);
@@ -1037,30 +1141,30 @@ export async function refreshSandboxCredentials(
     );
   }
   const integrations = await workbenchIntegrationSecrets(row);
-  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, {
+  const creds: FleetSandboxCredentials = {
     githubToken: resolved.githubToken,
     ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),
     // A thread names no repository.
     ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
-  }));
+  };
+  return { creds, credential, recorded: recorded ?? null, model };
+}
 
-  let note: string | null = null;
-  if (credential.accountId && credential.accountId !== recorded) {
-    await setWorkbenchFleetAccount(row, credential.accountId).catch((err) =>
-      console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
-    );
-    if (recorded) {
-      note = await describeAccountSwitch(row.workspaceId, recorded, credential.accountId, model).catch(
-        () => null,
-      );
-      if (note) {
-        recordWorkbenchEvent(row, 'account_switch', note);
-      }
-    }
+/**
+ * The credentials to send WITH a resume, so the fleet does not fetch them
+ * before the boot (3.6-4.3 s of a 5.4 s local wake, 2026-11-04). Null when
+ * they cannot be resolved: the resume then goes without, and the fleet
+ * fetches as it always did. The turn's own push after the wake still runs,
+ * and is what records an account switch.
+ */
+export async function resumeCredentialsFor(row: WorkbenchRow): Promise<FleetSandboxCredentials | null> {
+  try {
+    return (await sandboxCredentialSet(row)).creds;
+  } catch (err) {
+    console.warn(`[workbench] resuming ${row.sandboxId} without credentials; the fleet fetches them:`, err);
+    return null;
   }
-  return { accountId: credential.accountId ?? null, note };
 }
 
 /**

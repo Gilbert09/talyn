@@ -67,6 +67,7 @@ import {
   isMarkerAlive,
   recordWorkbenchEvent,
   refreshSandboxCredentials,
+  wakeWithCredentials,
   repoDirFor,
   runCapture,
   runGitSteps,
@@ -626,6 +627,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (pendingResize(wb)) wb = await applyPendingResize(wb, { ownerChatId: chatId });
     if (live.cancelRequested) return cancelledOutcome(events);
 
+    // A box asleep on its host wakes with its credentials, so the fleet does
+    // not fetch them before the boot. A no-op for a box that is awake.
+    await wakeWithCredentials(wb);
     // The checkpoint first: it is also the exec that wakes a suspended box,
     // which the credential push below needs. It reports the free disk too (T2).
     // A relaunch keeps the turn's first checkpoint: an earlier attempt may have run.

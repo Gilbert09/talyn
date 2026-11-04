@@ -201,6 +201,20 @@ describe('fleet client: workbench methods', () => {
     expect(calls[0]).toMatchObject({ method: 'POST', path });
   });
 
+  it.each([
+    ['no credentials (the old body)', undefined, {}],
+    [
+      'credentials',
+      { githubToken: 'ghp_x', anthropicKey: 'sk-ant-x', repo: 'acme/app', integrations: { linear: 'lin_x' } },
+      { credentials: { githubToken: 'ghp_x', anthropicKey: 'sk-ant-x', repo: 'acme/app', integrations: { linear: 'lin_x' } } },
+    ],
+    ['an OpenAI box', { githubToken: 'ghp_x', openaiKey: 'sk-x' }, { credentials: { githubToken: 'ghp_x', openaiKey: 'sk-x' } }],
+  ] as const)('a resume with %s sends the matching body', async (_name, credentials, body) => {
+    respond = () => json({ id: 'sb', status: 'idle' });
+    await client.resumeSandbox('sb', credentials ? { credentials } : {});
+    expect(calls[0]).toEqual({ method: 'POST', path: '/v1/sandboxes/sb/resume', body });
+  });
+
   it('proxies a preview port with the fleet token, never the caller\'s headers', async () => {
     respond = () => new Response('<html>', { status: 404 });
     const resp = await client.proxyPort('sb', 3000, '/a/b?x=1', { method: 'GET', headers: { accept: 'text/html' } });

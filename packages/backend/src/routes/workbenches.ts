@@ -82,6 +82,7 @@ import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/read
 import {
   fleetClientFor,
   loadWorkbenchConfig,
+  resumeCredentialsFor,
   resumeOnce,
   saveDetectedConfig,
 } from '../services/workbenches/sandboxRuntime.js';
@@ -780,7 +781,7 @@ export function workbenchRoutes(): Router {
           status = 'resuming';
           // The fleet may answer that the box is lost, e.g. its hibernated copy cannot be restored.
           const inStorage = Boolean(sandbox.suspendUploaded) && !sandbox.suspendDir;
-          resumeOnce(client, row.sandboxId, inStorage ? 'storage' : 'host')
+          resumeOnce(client, row.sandboxId, inStorage ? 'storage' : 'host', () => resumeCredentialsFor(row))
             .catch((err: unknown) => recoverLostSandbox(row, err))
             .catch(() => undefined);
         }

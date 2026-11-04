@@ -253,6 +253,16 @@ export async function getWorkbench(id: string): Promise<WorkbenchRow | null> {
   return (await getWorkbenchQuery(id))[0] ?? null;
 }
 
+/** The session whose box this is. `idx_workbenches_sandbox` answers it. */
+export async function getWorkbenchBySandboxId(sandboxId: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .select(WORKBENCH_COLUMNS)
+    .from(workbenchesTable)
+    .where(eq(workbenchesTable.sandboxId, sandboxId))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function updateWorkbench(
   id: string,
   patch: Partial<Omit<NewWorkbench, 'id' | 'workspaceId' | 'createdAt'>>,
