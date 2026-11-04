@@ -16,6 +16,8 @@ import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 import { maybeHandleBillingLimit } from '../../stores/billing';
@@ -133,7 +135,9 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       setRetrying(true);
       try {
         useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+        trackEvent('session_retry', { workbench_id: workbench.id });
       } catch (err) {
+        captureWorkbenchFailure('retry_session', err, workbench.id);
         if (maybeHandleBillingLimit(err, 'session_retry')) return;
         toast.error('Could not retry', err instanceof Error ? err.message : undefined);
       } finally {

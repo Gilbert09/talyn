@@ -8,6 +8,7 @@ import { WorkbenchHeader } from '../renderer/components/workbench/WorkbenchHeade
 import { requestWorkbenchAction, type WorkbenchAction } from '../renderer/lib/workbenchActions';
 import { toast } from '../renderer/stores/toast';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
+import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 
 const merge = jest.fn();
 const archive = jest.fn();
@@ -30,6 +31,7 @@ jest.mock('../renderer/lib/api', () => ({
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 
 const WB: Workbench = {
   id: 'wb1',
@@ -148,6 +150,7 @@ describe('WorkbenchHeader action cycle', () => {
     fireEvent.click(button);
     if (kind === 'prompt') {
       await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
+      await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('session_fix_sent', { workbench_id: 'wb1', action }));
     } else if (kind === 'send') {
       // Create PR is a short message with its own intent, sent straight away.
       await waitFor(() => expect(o.send).toHaveBeenCalledWith(chat, CREATE_PR));
@@ -157,6 +160,15 @@ describe('WorkbenchHeader action cycle', () => {
       expect(o.runAction).not.toHaveBeenCalled();
       expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     }
+  });
+
+  it('captures a failed fix without sending its error text', async () => {
+    const o = ops();
+    o.runAction.mockRejectedValue(new Error('private path'));
+    render(<WorkbenchHeader workbench={WB} pr={prRow({ ciStatus: 'failing_required' })} chat={chat} ops={o} />);
+    fireEvent.click(screen.getByTestId('workbench-primary-action'));
+    await waitFor(() => expect(captureAnalyticsException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ operation: 'send_fix' })));
+    expect((jest.mocked(captureAnalyticsException).mock.calls[0][0] as Error).message).not.toContain('private path');
   });
 
   describe('Create PR', () => {

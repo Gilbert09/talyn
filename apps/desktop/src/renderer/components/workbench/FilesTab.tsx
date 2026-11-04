@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, X } from 'lucide-react';
 import type { Workbench, WorkbenchFileContent, WorkbenchFileList } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import { needsWake, type WorkbenchOps } from '../../lib/workbenchOps';
 import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
@@ -41,11 +43,13 @@ export function FilesTab({ workbench, ops, visible }: { workbench: Workbench; op
       isCancelled: () => !alive.current,
     })
       .then((next) => {
+        if (live && workbench.sandboxState === 'suspended') trackEvent('session_sandbox_woken', { workbench_id: workbench.id, source: 'user_refresh' });
         setList(next);
         setError(null);
         setWake(false);
       })
       .catch((err: Error) => {
+        if (live) captureWorkbenchFailure('refresh_files', err, workbench.id);
         if (needsWake(err)) setWake(true);
         else setError(err.message);
       })

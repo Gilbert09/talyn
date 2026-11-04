@@ -18,6 +18,8 @@ import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 import { useRepoPaths } from './new/useRepoPaths';
@@ -54,8 +56,12 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
     setChoosing(true);
     try {
       const chosen = await repoPaths.pickFolder(workbench.repoFullName);
-      if (chosen) await takeOverLocalWorkbench(workbench, chosen.path);
+      if (chosen) {
+        await takeOverLocalWorkbench(workbench, chosen.path);
+        trackEvent('session_moved', { workbench_id: workbench.id, reason: 'disk' });
+      }
     } catch (error) {
+      captureWorkbenchFailure('move_session', error, workbench.id);
       toast.error('Could not move the session', error instanceof Error ? error.message : undefined);
     } finally {
       setChoosing(false);
@@ -160,7 +166,9 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       setRetrying(true);
       try {
         useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+        trackEvent('session_retry', { workbench_id: workbench.id });
       } catch (err) {
+        captureWorkbenchFailure('retry_session', err, workbench.id);
         if (!maybeHandleBillingLimit(err, 'workbench_retry')) {
           toast.error('Could not retry', err instanceof Error ? err.message : undefined);
         }

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { Workbench } from '@talyn/shared';
 import { api } from '../../../lib/api';
+import { trackEvent } from '../../../lib/analytics';
 import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
 import { useXterm } from './useXterm';
 
@@ -32,12 +33,22 @@ export function ShellTerminal({ workbench, active }: { workbench: Workbench; act
   });
 
   const startRef = useRef<(() => void) | null>(null);
+  const suspended = useRef(false);
+  suspended.current = workbench.sandboxState === 'suspended';
 
   useEffect(() => {
     if (!term) return undefined;
     if (workbench.runtime === 'local') return connectLocal(term, workbench, sizeRef, resizeSink);
     // Mounting (a session opened with the dock already open) connects nothing: a click or a key does.
-    const terminal = connectSandbox(term, workbench.id, sizeRef, resizeSink, { onDemand: true });
+    let wakeAttempt = false;
+    const terminal = connectSandbox(term, workbench.id, sizeRef, resizeSink, {
+      onDemand: true,
+      onStart: () => { wakeAttempt = suspended.current; },
+      onOpen: () => {
+        if (wakeAttempt) trackEvent('session_sandbox_woken', { workbench_id: workbench.id, source: 'terminal' });
+        wakeAttempt = false;
+      },
+    });
     startRef.current = terminal.start;
     return () => {
       startRef.current = null;
@@ -71,7 +82,7 @@ export function connectSandbox(
   workbenchId: string,
   sizeRef: SizeRef,
   sinkRef: SinkRef,
-  opts: { onDemand?: boolean } = {},
+  opts: { onDemand?: boolean; onStart?: () => void; onOpen?: () => void } = {},
 ): SandboxTerminal {
   let ws: WebSocket | null = null;
   let attempt = 0;
@@ -107,6 +118,7 @@ export function connectSandbox(
     socket.binaryType = 'arraybuffer';
     ws = socket;
     socket.onopen = () => {
+      opts.onOpen?.();
       socket.send(auth);
       if (sizeRef.current) sendResize(sizeRef.current.cols, sizeRef.current.rows);
       opened = true;
@@ -135,6 +147,7 @@ export function connectSandbox(
   const start = () => {
     if (started || disposed) return;
     started = true;
+    opts.onStart?.();
     void connect();
   };
   if (opts.onDemand) term.writeln(TERMINAL_CONNECT_HINT);

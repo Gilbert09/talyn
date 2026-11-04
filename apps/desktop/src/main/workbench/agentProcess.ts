@@ -18,6 +18,7 @@ import { exec, safeFilePath } from './git';
 import { applyRepositoryInstructions } from './repositoryInstructions';
 import { WorkbenchPaths } from './paths';
 import { stopGroup, type Emit } from './processes';
+import { reportMainFailure } from '../mainErrorBridge';
 
 type TurnInput = Parameters<WorkbenchLocalBridge['startTurn']>[0] & {
   permissionMode?: ClaudePermissionMode;
@@ -81,9 +82,10 @@ export class AgentProcesses {
       });
       const prepared = await this.prepareAttachments(input);
       if (input.repositoryInstructions !== undefined) {
-        await applyRepositoryInstructions(input.path, input.agent, input.repositoryInstructions).catch((err) =>
-          console.warn('[workbench] repository instructions failed:', err),
-        );
+        await applyRepositoryInstructions(input.path, input.agent, input.repositoryInstructions).catch((err) => {
+          console.warn('[workbench] repository instructions failed:', err);
+          reportMainFailure('workbench_repository_instructions', err);
+        });
       }
       const env = await processEnv();
       if (turn.cancelled) {
@@ -141,6 +143,7 @@ export class AgentProcesses {
         stderr = (stderr + chunk).slice(-16 * 1024);
       });
       child.once('error', (error) => {
+        reportMainFailure('workbench_agent_spawn', error);
         spawnError = error.message;
       });
       child.once('close', (exitCode, signal) => {

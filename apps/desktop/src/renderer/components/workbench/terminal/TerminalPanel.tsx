@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react';
 import type { Workbench, WorkbenchConfig } from '@talyn/shared';
 import { cn } from '../../../lib/utils';
+import { trackEvent } from '../../../lib/analytics';
+import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
 import { formatKeys } from '../../../lib/shortcuts';
 import { clampDockHeight } from '../../../lib/workbenchLayout';
 import { needsWake, type WorkbenchOps } from '../../../lib/workbenchOps';
@@ -36,6 +38,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const setTab = useWorkbenchStore((s) => s.setTerminalTab);
   const setOpen = useWorkbenchStore((s) => s.setTerminalOpen);
   const rootRef = useRef<HTMLDivElement>(null);
+  const viewed = useRef(new Set<string>());
   const [available, setAvailable] = useState<number | undefined>(undefined);
   const [loaded, setLoaded] = useState<{ id: string; config: WorkbenchConfig } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -48,6 +51,14 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   const tab = hideScripts ? 'terminal' : storedTab;
 
   useEffect(() => {
+    if (!open) return;
+    const key = `${workbench.id}:${tab}`;
+    if (viewed.current.has(key)) return;
+    viewed.current.add(key);
+    trackEvent('session_tab_viewed', { workbench_id: workbench.id, tab });
+  }, [open, tab, workbench.id]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoaded(null);
     if (!ops.unavailable) {
@@ -55,7 +66,10 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
         if (!cancelled) setLoaded({ id: workbench.id, config: value });
       }).catch((err) => {
         // A sleeping sandbox with no stored config: the scripts show once it wakes. Not an error.
-        if (!cancelled && !needsWake(err)) toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
+        if (!cancelled && !needsWake(err)) {
+          captureWorkbenchFailure('read_config', err, workbench.id);
+          toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
+        }
       });
     }
     return () => { cancelled = true; };
@@ -74,6 +88,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
       setLoaded({ id: workbench.id, config: await ops.config() });
       toast.success('Config saved', "The file is now in this session's changes. You can commit it.");
     } catch (err) {
+      captureWorkbenchFailure('save_config', err, workbench.id);
       toast.error('Could not save the repository config', err instanceof Error ? err.message : undefined);
     } finally {
       setSaving(false);
@@ -246,6 +261,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
       if (running) await ops.stopScript(name);
       else await ops.runScript(name);
     } catch (err) {
+      captureWorkbenchFailure(running ? 'stop_script' : 'run_script', err, workbench.id);
       toast.error(`Could not ${running ? 'stop' : 'run'} the ${name} script`, err instanceof Error ? err.message : undefined);
     } finally {
       if (name === 'run') usePreviewStatusStore.getState().setRunStarting(workbench.id, false);

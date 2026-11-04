@@ -1,6 +1,7 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { trackEvent } from '../../lib/analytics';
 import type { PRRow } from '../../lib/api';
 import type { DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -63,12 +64,19 @@ export function GitPanel({
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const [comments, setComments] = useState<DiffComment[]>([]);
   const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false, sandbox: false });
+  const viewed = useRef(new Set<string>());
   const turnsEnded = useTurnsEnded(chats);
   const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox);
   const sandboxAttention = hasSandbox ? sandboxStatusNeedsAttention(sandbox.status) : null;
 
   useEffect(() => setComments([]), [workbench.id]);
   useEffect(() => setMounted((m) => (m[tab] ? m : { ...m, [tab]: true })), [tab]);
+  useEffect(() => {
+    const key = `${workbench.id}:${tab}`;
+    if (viewed.current.has(key)) return;
+    viewed.current.add(key);
+    trackEvent('session_tab_viewed', { workbench_id: workbench.id, tab });
+  }, [workbench.id, tab]);
 
   const onDragStart = (e: React.PointerEvent) => {
     e.preventDefault();

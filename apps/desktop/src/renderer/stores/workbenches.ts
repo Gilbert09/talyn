@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { trackEvent } from '../lib/analytics';
 import type {
   Workbench,
   WorkbenchChat,
@@ -567,3 +568,14 @@ export function visibleChats(state: Pick<WorkbenchState, 'chats' | 'hiddenChatId
 }
 
 export const emptyChatEvents = EMPTY_EVENTS;
+
+useWorkbenchStore.subscribe((state, previous) => {
+  const workbenchId = state.selectedWorkbenchId;
+  if (!workbenchId) return;
+  if (state.terminalOpen && !previous.terminalOpen) {
+    trackEvent('session_terminal_opened', { workbench_id: workbenchId });
+  }
+  if (state.prDetailId && state.prDetailId !== previous.prDetailId) {
+    trackEvent('session_pr_overlay_opened', { workbench_id: workbenchId });
+  }
+});

@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Archive, ArrowRight, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { api } from '../lib/api';
+import { trackEvent } from '../lib/analytics';
+import { captureWorkbenchFailure } from '../lib/workbenchAnalytics';
 import { workbenchPlaceLabel } from '../lib/threads';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -132,9 +134,11 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
     setBusy(true);
     try {
       const wb = await api.workbenches.restore(workbench.id);
+      trackEvent('session_restored', { workbench_id: workbench.id, kind: wb.kind ?? 'session', runtime: wb.runtime });
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
     } catch (err) {
+      captureWorkbenchFailure('restore_session', err, workbench.id);
       if (maybeHandleBillingLimit(err, 'session_restore')) return;
       toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
     } finally {
@@ -145,8 +149,10 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
     setBusy(true);
     try {
       const wb = await api.workbenches.archive(workbench.id);
+      trackEvent('session_archived', { workbench_id: workbench.id, kind: wb.kind ?? 'session', runtime: wb.runtime });
       useWorkbenchStore.getState().upsertWorkbench(wb);
     } catch (err) {
+      captureWorkbenchFailure('archive_session', err, workbench.id);
       toast.error('Could not save the session', err instanceof Error ? err.message : undefined);
     } finally { setBusy(false); }
   };

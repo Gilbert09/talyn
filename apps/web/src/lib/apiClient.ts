@@ -1,6 +1,7 @@
 import { configureApiClient } from '@talyn/client';
 import { API_URL, CLIENT_VERSION } from './env';
 import { getSupabase, isSupabaseConfigured } from './supabase';
+import { reportApiError } from './apiErrorAnalytics';
 
 /**
  * The browser app's binding of the shared backend client.
@@ -12,6 +13,7 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
  * Imported for side effect from main.tsx, before anything renders.
  */
 configureApiClient({
+  onRequestError: reportApiError,
   baseUrl: API_URL,
   clientVersion: CLIENT_VERSION,
 

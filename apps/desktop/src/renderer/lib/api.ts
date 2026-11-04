@@ -2,6 +2,7 @@ import { configureApiClient } from '@talyn/client';
 import { getSupabase, isSupabaseConfigured } from './supabase';
 import { setLogoutReason } from './logoutReason';
 import { appVersion } from './appVersion';
+import { reportApiError } from './apiErrorAnalytics';
 
 export const API_BASE_URL = process.env.TALYN_API_URL || 'http://localhost:4747';
 
@@ -25,6 +26,7 @@ export async function getAccessToken(): Promise<string | null> {
  * from '../lib/api'` are unaffected by the move.
  */
 configureApiClient({
+  onRequestError: reportApiError,
   // Falls back to local dev so a fresh checkout Just Works.
   baseUrl: API_BASE_URL,
   // Baked at build time; `dev+<sha>` on a local build. Never a bare semver

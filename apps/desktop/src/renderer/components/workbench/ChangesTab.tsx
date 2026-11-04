@@ -22,6 +22,8 @@ import type {
   WorkbenchDiffScope,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
 import { needsWake, type WorkbenchOps } from '../../lib/workbenchOps';
 import { newClientId } from '../../lib/workbenchBridge';
@@ -107,10 +109,12 @@ export function ChangesTab({
         onReconnecting: (r) => aliveRef.current && setReconnecting(r),
         isCancelled: () => !aliveRef.current,
       });
+      if (live && workbench.sandboxState === 'suspended') trackEvent('session_sandbox_woken', { workbench_id: workbench.id, source: 'user_refresh' });
       setChanges(next);
       setError(null);
       setAsleep(false);
     } catch (err) {
+      if (live) captureWorkbenchFailure('refresh_changes', err, workbench.id);
       if (needsWake(err) && !live) {
         setAsleep(true);
         setError(null);

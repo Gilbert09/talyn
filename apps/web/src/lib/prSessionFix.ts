@@ -1,5 +1,7 @@
 import type { WorkbenchChat } from '@talyn/shared';
 import { ApiError, type PRRow } from './api';
+import { trackEvent } from './analytics';
+import { captureWorkbenchFailure } from './workbenchAnalytics';
 import { opsFor } from './workbenchOps';
 import { loadWorkbench } from './workbenchData';
 import { useWorkbenchStore, visibleChats } from '../stores/workbenches';
@@ -48,6 +50,15 @@ export function sessionFixAction(row: PRRow): 'resolve_conflicts' | 'fix_checks'
 }
 
 export async function sendPrFixToSession(row: PRRow, session: PrSessionRef): Promise<void> {
+  try {
+    await sendPrFixToSessionInternal(row, session);
+  } catch (error) {
+    captureWorkbenchFailure('send_fix', error, session.id);
+    throw error;
+  }
+}
+
+async function sendPrFixToSessionInternal(row: PRRow, session: PrSessionRef): Promise<void> {
   const workbench =
     useWorkbenchStore.getState().workbenches[session.id] ?? (await loadWorkbench(session.id));
   if (!workbench) throw new Error(`Could not open the session "${session.name}".`);
@@ -59,7 +70,9 @@ export async function sendPrFixToSession(row: PRRow, session: PrSessionRef): Pro
   // With no chat, the server picks the session's latest one.
   const chat: WorkbenchChat | null =
     chats.find((c) => c.id === store.selectedChatByWorkbench[workbench.id]) ?? chats[chats.length - 1] ?? null;
-  await ops.runAction(sessionFixAction(row), chat);
+  const action = sessionFixAction(row);
+  await ops.runAction(action, chat);
+  trackEvent('session_fix_sent', { workbench_id: session.id, action });
 
   toast.success('Sent to the session', `${row.owner}/${row.repo}#${row.number}`, {
     label: 'Open',

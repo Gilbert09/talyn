@@ -1,5 +1,6 @@
 import type { Workbench } from '@talyn/shared';
 import { api } from './api';
+import { trackEvent } from './analytics';
 import { useNavigationStore } from '../stores/navigation';
 import { useWorkbenchStore } from '../stores/workbenches';
 
@@ -15,6 +16,7 @@ function absorb(wb: Workbench): void {
  */
 export async function continueAsThread(session: Workbench): Promise<Workbench> {
   const thread = await api.workbenches.continueAsThread(session.id);
+  trackEvent('session_created', { kind: 'thread', runtime: thread.runtime, repository_id: thread.repositoryId, size: thread.settings.sandboxSize ?? thread.settings.boxSize ?? 'default' });
   absorb(thread);
   // The broadcast brings the linked session too; this shows the link at once.
   const current = useWorkbenchStore.getState().workbenches[session.id] ?? session;

@@ -30,6 +30,8 @@ import {
 } from '../ui/dropdown-menu';
 import { cn } from '../../lib/utils';
 import { api, type PRChecks, type PRRow } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { openExternal } from '../../lib/openExternal';
 import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
@@ -90,11 +92,16 @@ export async function runPromptAction(
   ops: WorkbenchOps,
   action: WorkbenchPromptActionKind,
   chat: WorkbenchChat | null,
+  workbenchId?: string,
 ): Promise<void> {
   try {
     await ops.runAction(action, chat);
+    if (action === 'fix_checks' || action === 'resolve_conflicts' || action === 'address_review') {
+      trackEvent('session_fix_sent', { workbench_id: workbenchId, action });
+    }
     toast.info(`${NEXT_ACTION_LABEL[action]}: sent to the agent`);
   } catch (err) {
+    captureWorkbenchFailure('send_fix', err, workbenchId);
     toast.error(`Could not ${NEXT_ACTION_LABEL[action].toLowerCase()}`, err instanceof Error ? err.message : undefined);
   }
 }
@@ -117,6 +124,7 @@ export async function sendCreatePullRequest(
       intent: 'create_pr',
       planMode: false,
     });
+    trackEvent('session_message_sent', { queued: res.queued, plan_mode: false, model_id: target.model, attachments_count: 0 });
     if (res.queued && workbench.status !== 'moving') {
       toast.info(
         'Queued',
@@ -126,6 +134,7 @@ export async function sendCreatePullRequest(
       );
     }
   } catch (err) {
+    captureWorkbenchFailure('create_pull_request', err, workbench.id);
     if (maybeHandleBillingLimit(err, 'session_create_pr')) return;
     toast.error('Could not create the pull request', err instanceof Error ? err.message : undefined);
   }
@@ -166,6 +175,7 @@ export function WorkbenchHeader({
     try {
       await continueAsThread(workbench);
     } catch (err) {
+      captureWorkbenchFailure('continue_as_thread', err, workbench.id);
       toast.error('Could not continue as a thread', err instanceof Error ? err.message : undefined);
     } finally {
       setContinuing(false);
@@ -176,6 +186,7 @@ export function WorkbenchHeader({
     try {
       useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.unlinkPullRequest(workbench.id));
     } catch (err) {
+      captureWorkbenchFailure('unlink_pull_request', err, workbench.id);
       toast.error('Could not unlink the pull request', err instanceof Error ? err.message : undefined);
     } finally {
       setLinkBusy(false);
@@ -189,8 +200,11 @@ export function WorkbenchHeader({
   const restore = async () => {
     setRestoring(true);
     try {
-      useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.restore(workbench.id));
+      const restored = await api.workbenches.restore(workbench.id);
+      useWorkbenchStore.getState().upsertWorkbench(restored);
+      trackEvent('session_restored', { workbench_id: workbench.id, kind: restored.kind ?? 'session', runtime: restored.runtime });
     } catch (err) {
+      captureWorkbenchFailure('restore_session', err, workbench.id);
       if (maybeHandleBillingLimit(err, 'session_restore')) return;
       toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
     } finally {
@@ -221,7 +235,7 @@ export function WorkbenchHeader({
       }
       setBusy(action);
       if (action === 'create_pr') await sendCreatePullRequest(workbench, ops, chat);
-      else await runPromptAction(ops, action, chat);
+      else await runPromptAction(ops, action, chat, workbench.id);
       setBusy(null);
     },
     [workbench, ops, chat],
@@ -261,6 +275,7 @@ export function WorkbenchHeader({
       else toast.info(`#${pr.number} was not merged`, res.message);
       setConfirm(null);
     } catch (err) {
+      captureWorkbenchFailure('merge_pull_request', err, workbench.id);
       toast.error(`Could not merge #${pr.number}`, err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(null);

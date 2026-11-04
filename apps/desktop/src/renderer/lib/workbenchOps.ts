@@ -32,6 +32,8 @@ import {
   type WorkbenchPromptAction,
 } from '@talyn/shared';
 import { api } from './api';
+import { trackEvent } from './analytics';
+import { captureWorkbenchFailure } from './workbenchAnalytics';
 import { getDeviceId, getWorkbenchBridge } from './workbenchBridge';
 import { getLocalController, type LocalTurnController } from './localWorkbench';
 import { toast } from '../stores/toast';
@@ -128,7 +130,10 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
       api.workbenches
         .removeQueuedMessage(chatId, messageId)
         .then((chat) => useWorkbenchStore.getState().upsertChat(chat))
-        .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
+        .catch((err) => {
+          captureWorkbenchFailure('remove_queued_message', err, id);
+          toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined);
+        });
     },
     changes: (opts) => api.workbenches.changes(id, opts),
     diff: (path, scope, opts) => api.workbenches.diff(id, path, scope, opts),
@@ -141,6 +146,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     runScript: async (name) => {
       useWorkbenchStore.getState().markScriptStarted(id, name);
       await api.workbenches.runScript(id, name);
+      if (name === 'setup' || name === 'run' || name === 'archive') trackEvent('session_script_run', { workbench_id: id, script_kind: name });
     },
     stopScript: (name) => api.workbenches.stopScript(id, name),
     runAction: async (action, chat) => {
@@ -312,6 +318,7 @@ export function localOps(
         // Main sets the TALYN_* variables: the root path and a port block it checked is free.
         env: {},
       });
+      if (name === 'setup' || name === 'run' || name === 'archive') trackEvent('session_script_run', { workbench_id: workbench.id, script_kind: name });
     },
     stopScript: (name) => need().scripts.stop({ workbenchId: workbench.id, name }),
     runAction: async (action, chat) => {

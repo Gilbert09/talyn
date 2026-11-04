@@ -26,6 +26,7 @@ import { Scripts } from './scripts';
 import { Terminals } from './terminals';
 import { generateWorkbenchTitle, suggestWorkbenchBranchName } from './title';
 import { renameWorktreeBranch } from './branchRename';
+import { reportMainFailure } from '../mainErrorBridge';
 
 /**
  * The native folder picker. With `expectRepo`, a folder that is not a Git
@@ -67,7 +68,7 @@ export function registerWorkbenchIpc(
     channel: string,
     callback: (...args: Args) => Result,
   ) => {
-    ipcMain.handle(`workbench:${channel}`, (event, ...args) => {
+    ipcMain.handle(`workbench:${channel}`, async (event, ...args) => {
       if (shuttingDown) throw new Error('The runtime is shutting down');
       const window = getWindow();
       if (
@@ -76,7 +77,12 @@ export function registerWorkbenchIpc(
         event.senderFrame !== event.sender.mainFrame
       )
         throw new Error('Invalid workbench sender');
-      return callback(...(args as Args));
+      try {
+        return await callback(...(args as Args));
+      } catch (error) {
+        reportMainFailure(`workbench_${channel.replace(/[^a-z0-9]+/g, '_')}`, error);
+        throw error;
+      }
     });
   };
   handle(

@@ -316,7 +316,31 @@ async function fetchOrThrow(
   }
 }
 
+function reportRequestError(error: unknown, method: string, path: string): void {
+  const apiError = error instanceof ApiError ? error : null;
+  try {
+    getConfig().onRequestError?.({ error, method, path, status: apiError?.status, code: apiError?.code });
+  } catch {
+    // Reporting must not replace the request failure.
+  }
+}
+
 async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  isRetry = false,
+  raw?: { file: Blob; name?: string }
+): Promise<T> {
+  try {
+    return await requestInternal<T>(method, path, body, isRetry, raw);
+  } catch (error) {
+    reportRequestError(error, method, path);
+    throw error;
+  }
+}
+
+async function requestInternal<T>(
   method: string,
   path: string,
   body?: unknown,
@@ -345,7 +369,7 @@ async function request<T>(
     // recoverSession) and replay the request once with the fresh token;
     // a second 401 falls through to the normal error path.
     if (await recoverSession()) {
-      return request<T>(method, path, body, true, raw);
+      return requestInternal<T>(method, path, body, true, raw);
     }
   }
 
@@ -353,19 +377,24 @@ async function request<T>(
   // ("upstream error", "upstream request timeout") when the backend can't
   // respond — parse defensively so an outage reads as "backend unreachable"
   // instead of a JSON SyntaxError.
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (response.status >= 500) throw new ApiError(`Backend unreachable (HTTP ${response.status})`, response.status);
+    throw new ApiNetworkError(method, path, error);
+  }
   let data: ApiResponse<T> | null = null;
   try {
     data = JSON.parse(text) as ApiResponse<T>;
   } catch {
-    throw new Error(
-      `Backend unreachable (HTTP ${response.status}${
-        text ? `: ${text.slice(0, 80)}` : ''
-      })`
+    throw new ApiError(
+      `Backend unreachable (HTTP ${response.status}${text ? `: ${text.slice(0, 80)}` : ''})`,
+      response.status
     );
   }
 
-  if (!data.success) {
+  if (!response.ok || !data.success) {
     throw new ApiError(
       data.error || 'Request failed',
       response.status,
@@ -394,6 +423,19 @@ async function request<T>(
 async function rawRequest(
   method: string,
   path: string,
+  init: { accept?: string; signal?: AbortSignal } = {}
+): Promise<Response> {
+  try {
+    return await rawRequestInternal(method, path, init);
+  } catch (error) {
+    reportRequestError(error, method, path);
+    throw error;
+  }
+}
+
+async function rawRequestInternal(
+  method: string,
+  path: string,
   init: { accept?: string; signal?: AbortSignal } = {},
   isRetry = false
 ): Promise<Response> {
@@ -411,7 +453,7 @@ async function rawRequest(
 
   if (response.status === 401 && token && !isRetry) {
     if (await recoverSession()) {
-      return rawRequest(method, path, init, true);
+      return rawRequestInternal(method, path, init, true);
     }
   }
 

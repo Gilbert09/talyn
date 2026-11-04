@@ -9,6 +9,7 @@ import { WorkbenchHeader } from '../components/workbench/WorkbenchHeader';
 import { requestWorkbenchAction, type WorkbenchAction } from '../lib/workbenchActions';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
+import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 
 const merge = vi.fn();
 const archive = vi.fn();
@@ -31,6 +32,7 @@ vi.mock('../lib/api', () => ({
 vi.mock('../stores/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 
 const WB: Workbench = {
   id: 'wb1',
@@ -185,6 +187,7 @@ describe('WorkbenchHeader action cycle', () => {
     fireEvent.click(button);
     if (kind === 'prompt') {
       await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
+      await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('session_fix_sent', { workbench_id: 'wb1', action }));
     } else if (kind === 'send') {
       // Create PR is a short message with its own intent, sent straight away.
       await waitFor(() => expect(o.send).toHaveBeenCalledWith(chat, CREATE_PR));
@@ -194,6 +197,15 @@ describe('WorkbenchHeader action cycle', () => {
       expect(o.runAction).not.toHaveBeenCalled();
       expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     }
+  });
+
+  it('captures a failed fix without sending its error text', async () => {
+    const o = ops();
+    o.runAction.mockRejectedValue(new Error('private path'));
+    render(<WorkbenchHeader workbench={WB} pr={prRow({ ciStatus: 'failing_required' })} chat={chat} ops={o} />);
+    fireEvent.click(screen.getByTestId('workbench-primary-action'));
+    await waitFor(() => expect(captureAnalyticsException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ operation: 'send_fix' })));
+    expect((vi.mocked(captureAnalyticsException).mock.calls[0][0] as Error).message).not.toContain('private path');
   });
 
   describe('Create PR', () => {

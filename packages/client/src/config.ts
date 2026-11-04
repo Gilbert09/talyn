@@ -37,6 +37,8 @@ export interface ApiClientConfig {
    * need their own guard against a refresh-token stampede.
    */
   recoverSession: () => Promise<boolean>;
+  /** Called once when a request fails after transport retries and session recovery. */
+  onRequestError?: (failure: { error: unknown; method: string; path: string; status?: number; code?: string }) => void;
 }
 
 let config: ApiClientConfig | null = null;

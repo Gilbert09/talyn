@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import type { CoderStatus, CoderWorkspace } from '../../workbenchBridgeTypes';
 import { locate, loginPath } from './environment';
+import { reportMainFailure } from '../mainErrorBridge';
 
 export interface CoderResult { code: number; stdout: string; stderr: string }
 export interface CoderApp { slug: string; url: string; port?: number }
@@ -196,7 +197,8 @@ export class CoderCli {
           const row = record(Array.isArray(data) ? data[0] : data);
           url = string(row.url) || undefined;
           user = string(row.username ?? record(row.user).username ?? row.user) || undefined;
-        } catch {
+        } catch (error) {
+          reportMainFailure('workbench_coder_parse_status', error);
           return { installed: true, loggedIn: false, binary, problem: 'error', detail: `Could not read the output of coder whoami:\n${result.stdout.slice(0, 2000)}` };
         }
       }
@@ -211,6 +213,7 @@ export class CoderCli {
       return { installed: true, loggedIn: true, binary, url, user };
     } catch (error) {
       if (error instanceof CoderCommandError && error.code === 'ENOENT') return { installed: false, loggedIn: false, problem: 'not_installed', detail: error.message };
+      reportMainFailure('workbench_coder_status', error);
       const detail = error instanceof Error ? error.message : String(error);
       const unreachable = (error instanceof CoderCommandError && error.code === 'ETIMEDOUT') || classifyCoderFailure(detail) === 'unreachable';
       return { installed: true, loggedIn: false, binary, problem: unreachable ? 'unreachable' : 'error', detail };
@@ -221,7 +224,9 @@ export class CoderCli {
     const result = await this.call(['list', '--output', 'json'], undefined, timeout);
     if (result.code) throw new Error(`coder list failed. Run: coder list --output json\n${(result.stderr || result.stdout).trim()}`);
     try { return parseWorkspaces(result.stdout); }
-    catch { throw new Error('Could not read Coder workspaces. Run: coder list --output json'); }
+    catch {
+      throw new Error('Could not read Coder workspaces. Run: coder list --output json');
+    }
   }
 
   /** Starts a workspace and waits until it runs. `onStatus` gets each status it reports. */

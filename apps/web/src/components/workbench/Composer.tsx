@@ -15,6 +15,8 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { wakeWorkbench } from '../../lib/wakeWorkbench';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -162,6 +164,7 @@ export function Composer({
     try {
       useWorkbenchStore.getState().upsertChat(await api.workbenches.updateChat(chat.id, patch));
     } catch (err) {
+      captureWorkbenchFailure('update_chat_settings', err, workbench.id);
       toast.error('Could not save the chat setting', err instanceof Error ? err.message : undefined);
     }
   };
@@ -191,6 +194,7 @@ export function Composer({
         model,
         effort,
       });
+      trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
           'Queued',
@@ -200,6 +204,7 @@ export function Composer({
         );
       }
     } catch (err) {
+      captureWorkbenchFailure('send_message', err, workbench.id);
       setDraft(draftKey, text);
       // A box refusal (out of hours, every box busy) opens the plan modal with
       // its own sentence and action; the text stays in the composer.
@@ -217,6 +222,7 @@ export function Composer({
     try {
       await ops.cancel(chat.id);
     } catch (err) {
+      captureWorkbenchFailure('stop_agent', err, workbench.id);
       toast.error('Could not stop the agent', err instanceof Error ? err.message : undefined);
     } finally {
       setStopping(false);

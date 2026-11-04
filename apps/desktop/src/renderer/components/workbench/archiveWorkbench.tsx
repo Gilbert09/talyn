@@ -6,6 +6,8 @@ import { stopLocalWorkbench } from '../../lib/localWorkbench';
 import { markDialogArchive } from '../../lib/localArchive';
 import { detectedCheckout, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -32,21 +34,25 @@ export async function archiveWorkbench(id: string, leave: boolean, opts: Archive
   markDialogArchive(id, true);
   try {
     const wb = await api.workbenches.archive(id);
+    trackEvent('session_archived', { workbench_id: id, kind: wb.kind ?? 'session', runtime: wb.runtime });
     useWorkbenchStore.getState().upsertWorkbench(wb);
     // An archived sandbox loses its box. A local session's agent and dev server run here, so stop them.
     if (ownsLocalWorktree(wb)) {
       await stopLocalWorkbench(id).catch((err) => {
+        captureWorkbenchFailure('stop_local_session', err, id);
         toast.error('Could not stop the session on this computer', bridgeErrorMessage(err, ''));
       });
       await removeLocalWorktree(wb, opts.discardChanges === true);
     }
     stopCoderPreview(id);
-    await getWorkbenchBridge()?.preview?.stop(id).catch(() => {
+    await getWorkbenchBridge()?.preview?.stop(id).catch((err) => {
+      captureWorkbenchFailure('stop_preview', err, id);
       toast.error('Could not stop the preview');
     });
     if (leave) useWorkbenchStore.getState().selectWorkbench(null);
     return true;
   } catch (err) {
+    captureWorkbenchFailure('archive_session', err, id);
     toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
     return false;
   } finally {
@@ -69,6 +75,7 @@ export async function removeLocalWorktree(
     await bridge.removeWorktree({ path: workbench.localPath, workbenchId: workbench.id, force: discardChanges });
     return true;
   } catch (err) {
+    captureWorkbenchFailure('remove_worktree', err, workbench.id);
     toast.error(
       'Could not delete the worktree',
       `${bridgeErrorMessage(err, 'Git refused.')} The session is archived. Its folder stays at ${workbench.localPath}.`
@@ -99,9 +106,11 @@ export async function restoreWorkbench(
       }
     }
     const wb = await api.workbenches.restore(workbench.id);
+    trackEvent('session_restored', { workbench_id: workbench.id, kind: wb.kind ?? 'session', runtime: wb.runtime });
     useWorkbenchStore.getState().upsertWorkbench(wb);
     return wb;
   } catch (err) {
+    captureWorkbenchFailure('restore_session', err, workbench.id);
     if (!maybeHandleBillingLimit(err, 'workbench_restore')) {
       toast.error('Could not restore the session', bridgeErrorMessage(err, 'Try again.'));
     }

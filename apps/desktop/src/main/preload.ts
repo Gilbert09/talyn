@@ -117,6 +117,12 @@ const workbench: DesktopWorkbenchBridge = {
 };
 
 const electronHandler = {
+  mainErrors: {
+    onEvent: (callback: (frame: { source: 'main' | 'renderer'; operation: string; reason?: string; exitCode?: number; errorCode?: string }) => void) =>
+      subscribe('analytics:main-error', callback),
+    drain: (): Promise<Array<{ source: 'main' | 'renderer'; operation: string; reason?: string; exitCode?: number; errorCode?: string }>> =>
+      ipcRenderer.invoke('analytics:drain-main-errors'),
+  },
   workbench,
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,

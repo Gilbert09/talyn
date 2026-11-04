@@ -1,5 +1,7 @@
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { ConfirmDialog } from '../ui/confirm-dialog';
@@ -8,10 +10,12 @@ import { ConfirmDialog } from '../ui/confirm-dialog';
 export async function archiveWorkbench(id: string, leave: boolean): Promise<boolean> {
   try {
     const wb = await api.workbenches.archive(id);
+    trackEvent('session_archived', { workbench_id: id, kind: wb.kind ?? 'session', runtime: wb.runtime });
     useWorkbenchStore.getState().upsertWorkbench(wb);
     if (leave) useWorkbenchStore.getState().selectWorkbench(null);
     return true;
   } catch (err) {
+    captureWorkbenchFailure('archive_session', err, id);
     toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
     return false;
   }

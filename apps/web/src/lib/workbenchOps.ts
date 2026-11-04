@@ -12,6 +12,8 @@ import type {
   WorkbenchPromptAction,
 } from '@talyn/shared';
 import { api } from './api';
+import { trackEvent } from './analytics';
+import { captureWorkbenchFailure } from './workbenchAnalytics';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
 
@@ -106,7 +108,10 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
       api.workbenches
         .removeQueuedMessage(chatId, messageId)
         .then((chat) => useWorkbenchStore.getState().upsertChat(chat))
-        .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
+        .catch((err) => {
+          captureWorkbenchFailure('remove_queued_message', err, id);
+          toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined);
+        });
     },
     changes: (opts) => api.workbenches.changes(id, opts),
     diff: (path, scope, opts) => api.workbenches.diff(id, path, scope, opts),
@@ -119,6 +124,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     runScript: async (name) => {
       useWorkbenchStore.getState().markScriptStarted(id, name);
       await api.workbenches.runScript(id, name);
+      if (name === 'setup' || name === 'run' || name === 'archive') trackEvent('session_script_run', { workbench_id: id, script_kind: name });
     },
     stopScript: (name) => api.workbenches.stopScript(id, name),
     runAction: async (action, chat) => {

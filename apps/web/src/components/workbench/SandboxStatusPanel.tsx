@@ -33,6 +33,8 @@ import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { useWorkbenchStore } from '../../stores/workbenches';
 
 /** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
@@ -538,15 +540,24 @@ export function SandboxStatusPanel({
     setActionError(null);
     setNote(null);
     try {
-      if (action.kind === 'wake') await api.workbenches.wake(workbench.id);
-      else if (action.kind === 'retry') useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+      if (action.kind === 'wake') {
+        const answer = await api.workbenches.wake(workbench.id);
+        if (answer.status === 'moving' || answer.status === 'resuming' || answer.status === 'awake') {
+          trackEvent('session_sandbox_woken', { workbench_id: workbench.id, source: 'wake_button' });
+        }
+      } else if (action.kind === 'retry') {
+        useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+        trackEvent('session_retry', { workbench_id: workbench.id });
+      }
       else if (action.kind === 'resize' && size) {
         const res = await api.workbenches.resize(workbench.id, { size });
+        if (res.outcome !== 'unchanged') trackEvent('session_moved', { workbench_id: workbench.id, reason: 'size' });
         setNote(RESIZE_OUTCOME[res.outcome]);
         setPicking(false);
       }
       await onRefresh();
     } catch (err) {
+      captureWorkbenchFailure(`sandbox_${action.kind}`, err, workbench.id);
       setActionError(err instanceof Error ? err.message : `Could not ${action.label.toLowerCase()}.`);
     } finally {
       setBusy(null);

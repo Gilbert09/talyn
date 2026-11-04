@@ -2,6 +2,7 @@ import http, { type IncomingHttpHeaders, type IncomingMessage } from 'http';
 import https from 'https';
 import type { Duplex } from 'stream';
 import type { PreviewForward } from '../../workbenchBridgeTypes';
+import { reportMainFailure } from '../mainErrorBridge';
 
 interface StartInput {
   workbenchId: string;
@@ -112,12 +113,18 @@ export class PreviewForwarder {
         else res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }).end(failure(status));
       };
       void connect(req, false).then((upstream) => {
-        upstream.on('error', () => fail());
+        upstream.on('error', (error) => {
+          reportMainFailure('workbench_preview_forward_upstream', error);
+          fail();
+        });
         res.once('close', () => upstream.destroy());
         req.once('aborted', () => upstream.destroy());
         if (res.destroyed) { upstream.destroy(); return; }
         upstream.on('response', (response) => {
-          response.on('error', () => res.destroy());
+          response.on('error', (error) => {
+            reportMainFailure('workbench_preview_forward_response', error);
+            res.destroy();
+          });
           if (response.statusCode === 401) {
             fail(401);
             response.destroy();
@@ -127,7 +134,10 @@ export class PreviewForwarder {
           response.pipe(res);
         });
         req.pipe(upstream);
-      }).catch(() => fail());
+      }).catch((error) => {
+        reportMainFailure('workbench_preview_forward_request', error);
+        fail();
+      });
     });
     server.on('upgrade', (req, socket, head) => {
       const localPort = (server.address() as { port: number }).port;
@@ -139,7 +149,10 @@ export class PreviewForwarder {
         `HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${failure(status)}`,
       );
       void connect(req, true).then((upstream) => {
-        upstream.on('error', () => { if (!socket.destroyed) fail(); });
+        upstream.on('error', (error) => {
+          reportMainFailure('workbench_preview_forward_upstream', error);
+          if (!socket.destroyed) fail();
+        });
         socket.once('close', () => upstream.destroy());
         if (socket.destroyed) { upstream.destroy(); return; }
         upstream.on('response', (response) => { fail(response.statusCode); response.destroy(); });
@@ -163,7 +176,10 @@ export class PreviewForwarder {
           socket.pipe(remote).pipe(socket);
         });
         upstream.end();
-      }).catch(() => fail());
+      }).catch((error) => {
+        reportMainFailure('workbench_preview_forward_upgrade', error);
+        fail();
+      });
     });
     forward.ready = this.listen(forward).catch((error: unknown) => {
       if (this.forwards.get(key) === forward) this.forwards.delete(key);

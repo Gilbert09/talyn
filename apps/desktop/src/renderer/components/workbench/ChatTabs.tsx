@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { opsFor } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
@@ -19,6 +21,7 @@ export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat
     store.selectChat(workbench.id, chat.id);
     return chat;
   } catch (err) {
+    captureWorkbenchFailure('create_chat', err, workbench.id);
     toast.error('Could not open a new chat', err instanceof Error ? err.message : undefined);
     return null;
   }
@@ -32,6 +35,7 @@ export async function closeChatTab(workbench: Workbench, chat: WorkbenchChat): P
     if (workbench.runtime === 'local' && chat.status === 'running') await opsFor(workbench).cancel(chat.id);
     await api.workbenches.closeChat(chat.id);
   } catch (err) {
+    captureWorkbenchFailure('close_chat', err, workbench.id);
     useWorkbenchStore.setState((s) => {
       const hiddenChatIds = { ...s.hiddenChatIds };
       delete hiddenChatIds[chat.id];
@@ -53,6 +57,15 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [title, setTitle] = useState('');
+  const viewed = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!selected) return;
+    const key = `${workbench.id}:${selected.id}`;
+    if (viewed.current.has(key)) return;
+    viewed.current.add(key);
+    trackEvent('session_tab_viewed', { workbench_id: workbench.id, tab: 'chat', chat_id: selected.id });
+  }, [workbench.id, selected?.id]);
 
   const newChat = async () => {
     setCreating(true);
@@ -67,6 +80,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
     try {
       useWorkbenchStore.getState().upsertChat(await api.workbenches.updateChat(chat.id, { title: next }));
     } catch (err) {
+      captureWorkbenchFailure('rename_chat', err, workbench.id);
       toast.error('Could not rename the chat', err instanceof Error ? err.message : undefined);
     }
   };

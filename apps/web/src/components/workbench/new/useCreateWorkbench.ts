@@ -5,6 +5,8 @@ import { toast } from '../../../stores/toast';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
+import { trackEvent } from '../../../lib/analytics';
+import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
 
 export interface NewWorkbenchSpec {
   workspaceId: string;
@@ -44,22 +46,29 @@ export function useCreateWorkbench(): CreateWorkbenchState {
     setError(null);
     try {
       const wb = await createWorkbench(spec);
+      trackEvent('session_created', { kind: wb.kind ?? 'session', runtime: wb.runtime, repository_id: wb.repositoryId, size: wb.settings.sandboxSize ?? wb.settings.boxSize ?? 'default' });
+      if (spec.prompt.trim() && !spec.attachments?.length) {
+        trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0 });
+      }
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
       if (spec.attachments?.length) {
         try {
           const chat = wb.chats?.[0] ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
-          await api.workbenches.sendMessage(chat.id, {
+          const sent = await api.workbenches.sendMessage(chat.id, {
             text: spec.prompt.trim(), attachments: spec.attachments,
             model: spec.model, effort: spec.effort, planMode: spec.planMode,
           });
+          trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length });
         } catch (err) {
+          captureWorkbenchFailure('send_first_message', err, wb.id);
           if (maybeHandleBillingLimit(err, 'session_first_message')) return wb;
           toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
         }
       }
       return wb;
     } catch (err) {
+      captureWorkbenchFailure('create_session', err);
       // A box refusal keeps its sentence on the page and opens the modal with the action.
       maybeHandleBillingLimit(err, spec.kind === 'thread' ? 'thread_create' : 'session_create');
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
@@ -110,7 +119,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     await api.workbenches
       .updateChat(chat.id, { planMode: spec.planMode, effort: spec.effort })
       .then((updated) => useWorkbenchStore.getState().upsertChat(updated))
-      .catch(() => {});
+      .catch((error) => captureWorkbenchFailure('update_first_chat', error, wb.id));
   }
   return wb;
 }

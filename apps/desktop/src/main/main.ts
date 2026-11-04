@@ -26,8 +26,37 @@ import { signInToCodex } from './codexAuth';
 import { scanLocalMcpServers } from './localMcp';
 import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
 import { registerReviewRankingExport } from './reviewRankingExport';
+import { drainMainErrors, markRendererUnavailable, reportMainFailure, setMainErrorSender } from './mainErrorBridge';
 
 let mainWindow: BrowserWindow | null = null;
+const noRejection = Symbol('no rejection');
+let forwardedRejection: unknown = noRejection;
+
+setMainErrorSender((frame) => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+  mainWindow.webContents.send('analytics:main-error', frame);
+  return true;
+});
+
+process.on('uncaughtExceptionMonitor', (error) => {
+  if (forwardedRejection !== noRejection && error === forwardedRejection) {
+    forwardedRejection = noRejection;
+    return;
+  }
+  console.error('[main] uncaught exception', error);
+  reportMainFailure('uncaught_exception', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandled rejection', reason);
+  reportMainFailure('unhandled_rejection', reason);
+  forwardedRejection = reason;
+  process.nextTick(() => { throw reason; });
+});
+
+ipcMain.handle('analytics:drain-main-errors', (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame) return [];
+  return drainMainErrors();
+});
 
 registerReviewRankingExport(() => mainWindow);
 
@@ -363,6 +392,7 @@ const createWindow = async () => {
   });
 
   mainWindow.on('closed', () => {
+    markRendererUnavailable();
     mainWindow = null;
   });
 
@@ -376,6 +406,8 @@ const createWindow = async () => {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     // A deliberate teardown (window close, app quit) isn't a crash.
     if (details.reason === 'clean-exit') return;
+    markRendererUnavailable();
+    reportMainFailure('render_process_gone', undefined, { source: 'renderer', reason: details.reason, exitCode: details.exitCode });
     const now = Date.now();
     crashTimestamps.push(now);
     while (
