@@ -9,9 +9,11 @@ import {
   loops as loopsTable,
   repositories as repositoriesTable,
   tasks as tasksTable,
+  workbenchChats as chatsTable,
+  workbenches as workbenchesTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
-import { createLoop } from '../services/loops/store.js';
+import { createLoop, getLoopRun } from '../services/loops/store.js';
 import { loopScheduler } from '../services/loops/scheduler.js';
 import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import * as taskCreate from '../services/taskCreate.js';
@@ -20,6 +22,7 @@ import * as registry from '../services/cloudProviders/registry.js';
 import * as loopsAccess from '../services/loopsAccess.js';
 import * as fleetCredentials from '../services/selfHosted/credentials.js';
 import * as analytics from '../services/analytics.js';
+import * as workbenchCreate from '../services/workbenches/create.js';
 
 /**
  * The scheduler end to end, against a real Postgres.
@@ -194,6 +197,85 @@ describe('loop scheduler', () => {
       const [run] = await runsFor(db, loop.id);
       expect(run.id).toBe('orphan-1');
       expect(run.taskId).toBeTruthy();
+    });
+  });
+
+  describe('sessions', () => {
+    beforeEach(async () => {
+      vi.mocked(registry.getCloudProvider).mockReturnValue({ type: 'selfhosted' } as never);
+      vi.spyOn(fleetAccess, 'workspaceMayUseFleet').mockResolvedValue(true);
+      vi.spyOn(fleetCredentials, 'fleetAgentStatus').mockResolvedValue({
+        connectedAgents: ['codex'],
+        reauthAgents: [],
+      });
+      vi.spyOn(workbenchCreate, 'createWorkbench').mockImplementation(async (input) => {
+        const id = 'session-from-loop';
+        const chatId = 'chat-from-loop';
+        await db.insert(workbenchesTable).values({
+          id,
+          workspaceId: input.workspaceId,
+          repositoryId: input.repositoryId!,
+          repoFullName: 'acme/widget',
+          name: 'morning-triage',
+          branch: 'morning-triage',
+          baseBranch: 'main',
+          runtime: 'sandbox',
+          agent: input.agent,
+          model: input.model,
+          sandboxState: 'creating',
+          status: 'provisioning',
+          settings: { autoCreatePr: true },
+          source: input.source,
+        });
+        await db.insert(chatsTable).values({
+          id: chatId,
+          workbenchId: id,
+          workspaceId: input.workspaceId,
+          title: 'Morning triage',
+          agent: input.agent,
+          model: input.model,
+          queuedMessages: [],
+        });
+        return { id, workspaceId: input.workspaceId, chats: [{ id: chatId }] } as never;
+      });
+    });
+
+    it('starts a session and settles after its first turn', async () => {
+      const loop = await dueLoop(db, {
+        target: 'session',
+        provider: 'selfhosted',
+        model: 'gpt-6.1-sol',
+      });
+
+      await loopScheduler.tick();
+
+      let [run] = await runsFor(db, loop.id);
+      expect(run.taskId).toBeNull();
+      expect(run.workbenchId).toBe('session-from-loop');
+      expect(await getLoopRun(run.id)).toMatchObject({
+        target: 'session',
+        sessionId: 'session-from-loop',
+        session: { id: 'session-from-loop', status: 'provisioning' },
+      });
+      expect(workbenchCreate.createWorkbench).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: 'sandbox',
+          agent: 'codex',
+          autoCreatePr: true,
+          source: { kind: 'loop', loopId: loop.id, runId: run.id },
+        }),
+        expect.objectContaining({ id: TEST_USER_ID })
+      );
+
+      await db.update(chatsTable).set({ status: 'running', turnCount: 1 }).where(eq(chatsTable.id, 'chat-from-loop'));
+      await loopScheduler.tick();
+      [run] = await runsFor(db, loop.id);
+      expect(run.status).toBe('running');
+
+      await db.update(chatsTable).set({ status: 'idle' }).where(eq(chatsTable.id, 'chat-from-loop'));
+      await loopScheduler.tick();
+      [run] = await runsFor(db, loop.id);
+      expect(run.status).toBe('succeeded');
     });
   });
 

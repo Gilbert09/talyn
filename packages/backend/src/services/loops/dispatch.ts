@@ -4,6 +4,9 @@ import {
   resolveFleetModel,
   type LoopRunFailureCode,
 } from '@talyn/shared';
+import { eq } from 'drizzle-orm';
+import { getDbClient } from '../../db/client.js';
+import { users as usersTable, workspaces as workspacesTable } from '../../db/schema.js';
 import { isBoxGateError } from '../billing/entitlements.js';
 import { deferralRetryAt } from '../billing/boxDeferral.js';
 import { getCloudProvider } from '../cloudProviders/registry.js';
@@ -13,15 +16,19 @@ import { envIdForType } from '../prCloudFix.js';
 import { createCloudTask } from '../taskCreate.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { workspaceMayUseLoops } from '../loopsAccess.js';
+import { createWorkbench } from '../workbenches/create.js';
+import { WorkbenchError } from '../workbenches/errors.js';
 import {
   markDispatched,
+  markSessionDispatched,
   providerOf,
   settleRun,
+  targetOf,
   type DueLoop,
 } from './runs.js';
 
 /**
- * One claimed firing → one cloud task.
+ * One claimed firing → one cloud task or sandbox session.
  *
  * Shared by the scheduler and the "Run now" route, so a manual run and a
  * scheduled one are the same code path: a manual run that behaved differently
@@ -45,7 +52,7 @@ import {
  */
 
 export type DispatchOutcome =
-  | { ok: true; taskId: string }
+  | { ok: true; taskId?: string; sessionId?: string }
   | { ok: false; status: 'failed' | 'waiting_slot' | 'skipped'; code: LoopRunFailureCode };
 
 /** A refusal that settles the run and hands the caller the shape back. */
@@ -71,7 +78,7 @@ async function refuse(
 async function resolveTarget(
   loop: DueLoop,
   runId: string
-): Promise<{ envId: string; model: string } | DispatchOutcome> {
+): Promise<{ envId?: string; model: string } | DispatchOutcome> {
   if (!(await workspaceMayUseLoops(loop.workspaceId))) {
     return refuse(
       runId,
@@ -119,6 +126,12 @@ async function resolveTarget(
     }
   }
 
+  // A stored fleet id can be retired out from under a loop (OpenAI withdraws
+  // models from the ChatGPT sign-in path on its own schedule), and dispatching
+  // at a dead id is a 400 every firing until somebody edits the loop.
+  const model = provider === 'selfhosted' ? resolveFleetModel(loop.model) : loop.model;
+  if (targetOf(loop) === 'session') return { model };
+
   const envId = await envIdForType(loop.workspaceId, provider);
   if (!envId) {
     return refuse(
@@ -128,11 +141,6 @@ async function resolveTarget(
       `No ${provider} credentials are connected to this workspace.`
     );
   }
-
-  // A stored fleet id can be retired out from under a loop (OpenAI withdraws
-  // models from the ChatGPT sign-in path on its own schedule), and dispatching
-  // at a dead id is a 400 every firing until somebody edits the loop.
-  const model = provider === 'selfhosted' ? resolveFleetModel(loop.model) : loop.model;
   return { envId, model };
 }
 
@@ -142,8 +150,29 @@ function titleFor(loop: DueLoop, scheduledFor: Date): string {
   return `${loop.name} — ${when}`;
 }
 
+async function workspaceOwner(workspaceId: string): Promise<{ id: string; email: string } | null> {
+  const rows = await getDbClient()
+    .select({ id: usersTable.id, email: usersTable.email })
+    .from(workspacesTable)
+    .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+function failureForSessionError(err: WorkbenchError): LoopRunFailureCode {
+  if (err.code === 'flag_off') return 'sessions_not_allowed';
+  if (err.code === 'fleet_not_allowed' || err.code === 'fleet_disabled' || err.code === 'fleet_not_deployed') {
+    return 'fleet_not_allowed';
+  }
+  if (err.code === 'agent_not_connected' || err.code === 'agent_reauth_required') {
+    return 'agent_not_connected';
+  }
+  return 'dispatch_failed';
+}
+
 /**
- * Create the task for a claimed run.
+ * Create the task or session for a claimed run.
  *
  * The run stays `queued` on success: the task row is inserted as `queued` too,
  * and `task:status` is what moves the run to `running`. Writing `running` here
@@ -158,6 +187,30 @@ export async function dispatchRun(
   if ('ok' in target) return target;
 
   try {
+    if (targetOf(loop) === 'session') {
+      const owner = await workspaceOwner(loop.workspaceId);
+      if (!owner) return refuse(runId, 'failed', 'dispatch_failed', 'The workspace owner no longer exists.');
+      const session = await createWorkbench(
+        {
+          workspaceId: loop.workspaceId,
+          repositoryId: loop.repositoryId as string,
+          runtime: 'sandbox',
+          agent: fleetAgentForModel(target.model),
+          model: target.model,
+          prompt: loop.prompt,
+          namingText: loop.name,
+          internetAccess: loop.internetAccess,
+          autoCreatePr: true,
+          source: { kind: 'loop', loopId: loop.id, runId },
+        },
+        owner
+      );
+      const chatId = session.chats?.[0]?.id;
+      if (!chatId) throw new Error('The session was created without a chat.');
+      await markSessionDispatched(runId, session.id, chatId);
+      return { ok: true, sessionId: session.id };
+    }
+
     const task = await createCloudTask({
       workspaceId: loop.workspaceId,
       type: 'code_writing',
@@ -166,7 +219,7 @@ export async function dispatchRun(
       description: `Loop: ${loop.name}`,
       prompt: loop.prompt,
       repositoryId: loop.repositoryId as string,
-      assignedEnvironmentId: target.envId,
+      assignedEnvironmentId: target.envId as string,
       model: target.model,
       // The loop's own switch. The fleet turns it into an egress policy; every
       // other provider ignores it, which is why the editor only offers it on a
@@ -198,6 +251,9 @@ export async function dispatchRun(
       // runs are downsized before this can happen, so it is not expected.
       if (!retryAt) return refuse(runId, 'failed', code, err.message);
       return refuse(runId, 'waiting_slot', code, err.message, retryAt);
+    }
+    if (err instanceof WorkbenchError) {
+      return refuse(runId, 'failed', failureForSessionError(err), err.message);
     }
     const message = err instanceof Error ? err.message : String(err);
     return refuse(runId, 'failed', 'dispatch_failed', message);

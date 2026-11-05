@@ -14,10 +14,11 @@ Use a loop for routine work, such as updating dependencies, tidying stale featur
 3. Select **New loop**.
 4. Give it a name.
 5. Write the **Prompt**. This is the whole instruction the agent gets. It has the repository checked out and can open a pull request.
-6. Set the **Schedule**.
-7. Pick the **Repository**. A loop works on one repository.
-8. Pick the **Agent** and **Model**.
-9. Select **Create loop**.
+6. Choose whether each run starts a **Session** or **Cloud task**. A session stays in Talyn for review and follow-up.
+7. Set the **Schedule**.
+8. Pick the **Repository**. A loop works on one repository.
+9. Pick the **Agent** and **Model**.
+10. Select **Create loop**.
 
 ## Schedule
 
@@ -55,7 +56,7 @@ A loop's agent gets the tools of your workspace's [MCP servers](/docs/mcp-server
 
 ## Run now, history and turning off
 
-Select **Run now** to start a run straight away. Expand a loop to see its history. Each run is **Waiting to start**, **Queued**, **Running**, **Succeeded**, **Failed** or **Skipped**, with the reason when it did not run.
+Select **Run now** to start a run straight away. Expand a loop to see its history. Each run is **Waiting to start**, **Queued**, **Running**, **Succeeded**, **Failed** or **Skipped**, with the reason when it did not run. A session run includes an **Open session** link.
 
 Turn a loop off with its switch. Talyn also turns a loop off by itself, and says why, when:
 

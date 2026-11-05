@@ -10,13 +10,14 @@ import {
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
-import { repositories as reposTable } from '../db/schema.js';
+import { repositories as reposTable, users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
 import { getCloudProvider } from '../services/cloudProviders/registry.js';
 import { fleetAgentStatus } from '../services/selfHosted/credentials.js';
 import { loopsRefusalReason, workspaceMayUseLoops } from '../services/loopsAccess.js';
 import { dispatchRun } from '../services/loops/dispatch.js';
 import { claimFiring } from '../services/loops/runs.js';
+import { workbenchReadiness } from '../services/workbenches/readiness.js';
 import {
   countLoops,
   createLoop,
@@ -65,6 +66,7 @@ function loopShape(id: string, loop: NormalizedLoop): Record<string, unknown> {
     timezone: loop.timezone,
     provider: loop.provider,
     model: loop.model,
+    target: loop.target,
     concurrency: loop.concurrency,
     internet_access: loop.internetAccess,
     // Shape, never content: how many, not which. A server id is the user's.
@@ -139,6 +141,9 @@ export function loopRoutes(): Router {
     if (loop.mcpServerIds !== null && loop.provider !== 'selfhosted') {
       return 'MCP servers are only available on Talyn Fleet.';
     }
+    if (loop.target === 'session' && loop.mcpServerIds !== null) {
+      return 'A session uses the workspace MCP servers. Per-loop MCP selection is only available for cloud tasks.';
+    }
     if (loop.internetAccess && loop.provider !== 'selfhosted') {
       return 'Internet access is a Talyn Fleet capability — PostHog Code runs cannot be given it.';
     }
@@ -155,6 +160,18 @@ export function loopRoutes(): Router {
       if (!connectedAgents.includes(agent)) {
         const label = agent === 'codex' ? 'Codex' : 'Claude';
         return `Talyn Fleet has no ${label} subscription connected to this workspace.`;
+      }
+      if (loop.target === 'session') {
+        const owner = await getDbClient()
+          .select({ id: usersTable.id, email: usersTable.email })
+          .from(workspacesTable)
+          .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
+          .where(eq(workspacesTable.id, workspaceId))
+          .limit(1);
+        if (!owner[0]) return 'The workspace owner no longer exists.';
+        const readiness = await workbenchReadiness(workspaceId, owner[0]);
+        const reason = readiness.sandbox.reasons[0];
+        if (reason) return reason.message;
       }
     }
     return null;
@@ -301,6 +318,7 @@ export function loopRoutes(): Router {
       timezone: existing.timezone,
       provider: existing.provider,
       model: existing.model,
+      target: existing.target,
       concurrency: existing.concurrency,
       internetAccess: existing.internetAccess,
       mcpServerIds: existing.mcpServerIds,

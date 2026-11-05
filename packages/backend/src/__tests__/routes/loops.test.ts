@@ -20,6 +20,7 @@ import * as registry from '../../services/cloudProviders/registry.js';
 import * as fleetAccess from '../../services/cloudProviders/fleetAccess.js';
 import * as fleetCredentials from '../../services/selfHosted/credentials.js';
 import * as taskCreate from '../../services/taskCreate.js';
+import * as workbenchReadiness from '../../services/workbenches/readiness.js';
 
 /**
  * The loops API.
@@ -268,6 +269,30 @@ describe('loop routes', () => {
       });
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toMatch(/no Codex subscription/);
+    });
+
+    it('creates a session loop when sessions and its fleet agent are available', async () => {
+      vi.spyOn(fleetAccess, 'workspaceMayUseFleet').mockResolvedValue(true);
+      vi.mocked(registry.getCloudProvider).mockReturnValue({ type: 'selfhosted' } as never);
+      vi.spyOn(fleetCredentials, 'fleetAgentStatus').mockResolvedValue({
+        connectedAgents: ['codex'],
+        reauthAgents: [],
+      });
+      vi.spyOn(workbenchReadiness, 'workbenchReadiness').mockResolvedValue({
+        sandbox: {
+          ok: true,
+          reasons: [],
+          agents: { claude: { ok: false, reason: { code: 'agent_not_connected', message: '' } }, codex: { ok: true } },
+        },
+      });
+
+      const made = await create({
+        target: 'session',
+        provider: 'selfhosted',
+        model: 'gpt-6.1-sol',
+      });
+
+      expect(made).toMatchObject({ target: 'session', provider: 'selfhosted' });
     });
   });
 

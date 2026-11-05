@@ -774,7 +774,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "A loop is four choices",
         paragraphs: [
-          "The repository, the prompt, the agent and model, and the schedule. That is the whole editor. When it fires, it creates an ordinary cloud task (the same kind the fix button creates) so the transcript, the pull request link and the plan limits all work exactly as they do everywhere else. What loops add is the clock.",
+          "The repository, the prompt, the agent and model, the run type, and the schedule. Choose a reviewable Talyn session or a cloud task. Both use the same agent, pull request, and plan rules as work you start yourself. What loops add is the clock.",
         ],
         bullets: [
           "Hourly, daily, weekdays, weekly, or a raw cron expression",
@@ -820,7 +820,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Is there a limit on how many loops I can have?",
-        a: "No. You can have as many loops as you want on any plan. Each firing creates an ordinary cloud task that runs on a box, so what a loop costs is the box-hours its runs use.",
+        a: "No. You can have as many loops as you want on any plan. Each firing creates a session or cloud task that runs on a box, so what a loop costs is the box-hours its runs use.",
       },
     ],
     planNote:

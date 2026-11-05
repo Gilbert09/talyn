@@ -6,6 +6,7 @@ import {
   presetForCron,
   LOOP_DISABLED_REASON_LABELS,
   LOOP_RUN_STATUS_LABELS,
+  LOOP_TARGET_LABELS,
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -112,7 +113,7 @@ function LoopRow({
           </div>
           <p className="mt-1 truncate text-sm text-muted-foreground">
             {describeSchedule(loop.cron, loop.timezone)} &middot; {loop.repoFullName} &middot;{' '}
-            <span className="font-mono text-xs">{loop.model}</span>
+            {LOOP_TARGET_LABELS[loop.target]} &middot; <span className="font-mono text-xs">{loop.model}</span>
           </p>
           {/* The engine switched this off. Says which reason, because every one
               of them has a different fix. */}
@@ -306,8 +307,8 @@ export function LoopsPanel() {
         <div className="flex-1">
           <h1 className="text-lg font-semibold">Loops</h1>
           <p className="text-sm text-muted-foreground">
-            Run a prompt on a schedule. Every run starts a cloud task on the agent you pick, and
-            opens a pull request if the work warrants one.
+            Run a prompt on a schedule. Start a reviewable session or a cloud task on the agent
+            you pick.
           </p>
         </div>
         <FeedbackButton surface="loops" />

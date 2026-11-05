@@ -11,6 +11,7 @@ import {
   type LoopRunStatus,
   type LoopRunTrigger,
   type LoopStats,
+  type LoopTarget,
   type LoopWithStats,
   type NormalizedLoop,
 } from '@talyn/shared';
@@ -20,6 +21,7 @@ import {
   loops as loopsTable,
   pullRequests as prTable,
   tasks as tasksTable,
+  workbenches as workbenchesTable,
 } from '../../db/schema.js';
 
 /**
@@ -55,6 +57,8 @@ const RUN_TASK_COLUMNS = {
   taskPrOwner: prTable.owner,
   taskPrRepo: prTable.repo,
   taskPrNumber: prTable.number,
+  sessionStatus: workbenchesTable.status,
+  sessionArchivedAt: workbenchesTable.archivedAt,
 } as const;
 
 export function rowToLoop(row: LoopRow): LoopDefinition {
@@ -68,6 +72,7 @@ export function rowToLoop(row: LoopRow): LoopDefinition {
     timezone: row.timezone,
     provider: row.provider as LoopProvider,
     model: row.model,
+    target: row.target as LoopTarget,
     concurrency: row.concurrency as LoopConcurrency,
     internetAccess: row.internetAccess,
     mcpServerIds: row.mcpServerIds ?? null,
@@ -88,6 +93,8 @@ export function rowToLoopRun(
     taskPrOwner: string | null;
     taskPrRepo: string | null;
     taskPrNumber: number | null;
+    sessionStatus: string | null;
+    sessionArchivedAt: Date | null;
   } | null
 ): LoopRun {
   return {
@@ -100,7 +107,9 @@ export function rowToLoopRun(
     repoFullName: row.repoFullName,
     provider: row.provider as LoopProvider,
     model: row.model,
+    target: row.target as LoopTarget,
     taskId: task?.taskStatus ? row.taskId : null,
+    sessionId: task?.sessionStatus ? row.workbenchId : null,
     status: row.status as LoopRunStatus,
     failureCode: (row.failureCode as LoopRunFailureCode | null) ?? null,
     error: row.error,
@@ -118,6 +127,14 @@ export function rowToLoopRun(
                 ? `https://github.com/${task.taskPrOwner}/${task.taskPrRepo}/pull/${task.taskPrNumber}`
                 : null,
             prNumber: task.taskPrNumber ?? null,
+          }
+        : null,
+    session:
+      row.workbenchId && task?.sessionStatus
+        ? {
+            id: row.workbenchId,
+            status: task.sessionStatus,
+            archivedAt: task.sessionArchivedAt ? task.sessionArchivedAt.toISOString() : null,
           }
         : null,
   };
@@ -196,8 +213,10 @@ export async function createLoop(
     timezone: input.timezone,
     provider: input.provider,
     model: input.model,
+    target: input.target,
     concurrency: input.concurrency,
     internetAccess: input.internetAccess,
+    mcpServerIds: input.mcpServerIds,
     repositoryId: input.repositoryId,
     repoFullName: input.repoFullName,
     nextRunAt: scheduleFrom(input, now),
@@ -238,6 +257,7 @@ export async function updateLoop(
       timezone: input.timezone,
       provider: input.provider,
       model: input.model,
+      target: input.target,
       concurrency: input.concurrency,
       internetAccess: input.internetAccess,
       mcpServerIds: input.mcpServerIds,
@@ -324,6 +344,10 @@ function loopRunQuery() {
     .leftJoin(tasksTable, and(
       eq(tasksTable.id, runsTable.taskId),
       eq(tasksTable.workspaceId, loopsTable.workspaceId),
+    ))
+    .leftJoin(workbenchesTable, and(
+      eq(workbenchesTable.id, runsTable.workbenchId),
+      eq(workbenchesTable.workspaceId, loopsTable.workspaceId),
     ))
     .leftJoin(prTable, and(
       eq(prTable.id, tasksTable.pullRequestId),
