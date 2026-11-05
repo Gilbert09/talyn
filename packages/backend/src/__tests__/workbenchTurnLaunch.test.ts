@@ -224,9 +224,19 @@ describe('workbench turn launch', () => {
         ...r, record: { ...r.record, timing: { queuedAt: 1000, spawnedAt: 2200, at: 2700 } },
       }))), opts));
     if (agent === 'codex') {
+      await addFleetAccount('ws', {
+        kind: 'openai_key', label: 'Codex', credential: { keyEnc: encryptString('codex-token') },
+      });
+      await testDb.db.update(workbenches).set({
+        settings: { autoCreatePr: false, sandboxAgents: { 'talyn-wb-test': ['claude', 'codex'] } },
+      }).where(eq(workbenches.id, 'wb'));
       await testDb.db.update(workbenchChats).set({ agent }).where(eq(workbenchChats.id, 'chat'));
       fleet.handler = (script) => isAgentTurn(script, 'codex')
-        ? { stdout: [JSON.stringify({ type: 'thread.started', thread_id: 'sess' }), JSON.stringify({ type: 'turn.completed', usage: {} })], exitCode: 0 }
+        ? { stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'sess' }),
+          JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'done' } }),
+          JSON.stringify({ type: 'turn.completed', usage: {} }),
+        ], exitCode: 0 }
         : { stdout: '', exitCode: 0 };
     }
     await sendMessage('chat', { text: 'go' });

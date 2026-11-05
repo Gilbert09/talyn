@@ -12,6 +12,7 @@ import * as title from '../services/workbenches/title.js';
 import { LAUNCH_FAILED_MESSAGE, sendMessage, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import * as turns from '../services/workbenches/turns.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import { FleetRunNotFoundError, lostSandboxError } from '../services/selfHosted/client.js';
 import { NO_CHECKPOINT_NOTE } from '../services/workbenches/workCheckpointScripts.js';
 import { memoryWorkObjectStore, setWorkObjectStoreForTests } from '../services/workbenches/workStorage.js';
@@ -100,6 +101,8 @@ describe('agent memory backups', () => {
   const rows = () => testDb.db.select({ ...BACKUP_METADATA_COLUMNS, data: backups.data }).from(backups).orderBy(backups.seq);
   const state = async () => (await testDb.db.select({ backup: chats.agentBackup, pending: chats.recapPending })
     .from(chats).where(eq(chats.id, 'chat')))[0];
+  const mockRunCredentials = () => vi.spyOn(accountSelection, 'resolveRunCredential')
+    .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'test' } : null);
 
   it('appends only new bytes and computes the stored size in SQL', async () => {
     const first = source.length;
@@ -303,6 +306,7 @@ describe('agent memory backups', () => {
     await updateChat('chat', { queuedMessages: [{ id: 'queued', text: 'continue', queuedAt: new Date().toISOString() }] });
     const fleet = new FakeFleet();
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    mockRunCredentials();
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
@@ -337,6 +341,7 @@ describe('agent memory backups', () => {
     await updateChat('chat', { queuedMessages: [{ id: 'queued', text: 'continue', queuedAt: new Date().toISOString() }] });
     const fleet = new FakeFleet();
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    mockRunCredentials();
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
@@ -540,6 +545,7 @@ describe('agent memory backups', () => {
     await updateWorkbench('wb', { status: 'provisioning' });
     const fleet = new FakeFleet();
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    mockRunCredentials();
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
