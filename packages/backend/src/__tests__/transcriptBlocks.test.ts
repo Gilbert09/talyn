@@ -403,6 +403,7 @@ describe('system lines', () => {
     ['sandbox_processes_stopped', 'Start them again.', { kind: 'system', text: 'Start them again.' }],
     ['fleet_account_switched', 'Moved to "Teams".', { kind: 'system', text: 'Moved to "Teams".' }],
     ['local_turn_interrupted', 'The app quit during this turn.', { kind: 'system', text: 'The app quit during this turn.' }],
+    ['agent_session_reset', 'Started a new session.', { kind: 'system', text: 'Started a new session.' }],
     ['stderr', 'boom', { kind: 'system', text: 'boom', subtype: 'stderr' }],
     ['init', 'hidden', null],
   ])('%s', (subtype, text, expected) => {

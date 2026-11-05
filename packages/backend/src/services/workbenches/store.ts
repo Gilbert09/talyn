@@ -1506,7 +1506,11 @@ export async function recordSandboxBootMetric(sandboxId: string, metric: string,
  */
 export async function appendEvents(
   chatId: string, items: EventDraftInput[],
-  progress?: { owner: string; turn: number; offset?: number; previousOffset?: number; parser?: AgentStreamSnapshot },
+  progress?: {
+    owner: string; turn: number; offset?: number; previousOffset?: number; parser?: AgentStreamSnapshot;
+    /** The agent session to resume next turn. Not the parser's: a session that never answered may not resume. */
+    sessionId?: string | null;
+  },
 ): Promise<WorkbenchEvent[]> {
   if (items.length === 0 && !progress) return [];
   const payload = stringifyJsonbSafe(items.map((i) => ({ turn: i.turn, event: i.event })));
@@ -1515,7 +1519,7 @@ export async function appendEvents(
       UPDATE workbench_chats SET next_seq = next_seq + ${items.length}, updated_at = now(),
         turn_offset = COALESCE(${progress?.offset ?? null}::bigint, turn_offset),
         turn_parser = COALESCE(${progress?.parser ? stringifyJsonbSafe(progress.parser) : null}::jsonb, turn_parser),
-        agent_session_id = COALESCE(${progress?.parser?.sessionId ? cleanJsonbString(progress.parser.sessionId) : null}::text, agent_session_id)
+        agent_session_id = COALESCE(${progress?.sessionId ? cleanJsonbString(progress.sessionId) : null}::text, agent_session_id)
       WHERE id = ${chatId}
         AND (${progress?.owner ?? null}::text IS NULL OR
           (turn_owner = ${progress?.owner ?? null} AND turn_count = ${progress?.turn ?? null}

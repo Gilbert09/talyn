@@ -39,7 +39,8 @@ import { runWithoutScope } from '../../db/client.js';
 import { scheduleAgentBackup } from './agentBackups.js';
 import { scheduleTurnInsights } from './turnInsights.js';
 import { scheduleTurnUsage } from '../insights/turnUsage.js';
-import { clearRecoveryRecap, recoveryRecap } from './agentRecap.js';
+import { clearRecoveryRecap, recoveryRecap, RESUME_FAILED_RECAP_HEADER } from './agentRecap.js';
+import { isResumeFailure } from './resumeFailure.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import {
   DISK_PROBE_SCRIPT,
@@ -101,6 +102,7 @@ import {
   isThread,
   requeueTurn,
   rowToChat,
+  updateChat,
   getTurnLease,
   hasTurnEvent,
   turnLeases,
@@ -730,29 +732,29 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const planMode = message.planMode ?? chat.planMode;
     const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
-    const resumeSessionId = chat.agentSessionId ?? undefined;
+    let resumeSessionId = chat.agentSessionId ?? undefined;
     const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
-    const recap = await recoveryRecap(chatId, turn);
-    const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
-      recap,
-      agent,
-      text,
-      planMode,
-      intent: message.intent,
-      createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
-      internetAccess: wb.settings?.internetAccess,
-      // A thread has no branch to open a pull request from.
-      autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
-      hasPullRequest: Boolean(wb.pullRequestId),
-      imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
-      talynTools,
-      talynSkills,
-      memory,
-      thread: isThread(wb),
-    });
-    const argv =
-      agent === 'codex'
+    let recap = await recoveryRecap(chatId, turn);
+    const buildArgv = () => {
+      const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
+        recap,
+        agent,
+        text,
+        planMode,
+        intent: message.intent,
+        createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
+        internetAccess: wb.settings?.internetAccess,
+        // A thread has no branch to open a pull request from.
+        autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
+        hasPullRequest: Boolean(wb.pullRequestId),
+        imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
+        talynTools,
+        talynSkills,
+        memory,
+        thread: isThread(wb),
+      });
+      return agent === 'codex'
         ? buildCodexArgv({
             prompt,
             model,
@@ -765,10 +767,12 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
             sandboxMode: planMode ? 'read-only' : 'danger-full-access',
           })
         : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
+    };
+    let argv = buildArgv();
     const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), TALYN_TURN_QUEUED_AT: message.queuedAt };
 
     let accountId = refreshed.accountId;
-    let outcome!: Awaited<ReturnType<typeof followDurableExec>>;
+    let outcome!: Awaited<ReturnType<typeof followTurnOutput>>;
     let attemptSawResult = false;
     let recapStarted = false;
     const noteRecapStarted = () => {
@@ -819,13 +823,29 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       if (outcome.exitCode === 0) noteRecapStarted();
       parserResult = parser.result;
 
-      if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || failedOver) break;
+      if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError)) break;
       if (attempt + 1 >= MAX_TURN_ATTEMPTS) break;
+      const why = parserResult?.text?.trim() || outcome.stderrTail.trim();
+      const detail = [parserResult?.text, outcome.stderrTail].filter(Boolean).join('\n');
+      // The stored session cannot be resumed, and every turn would fail the same way: run once more in a new session.
+      if (resumeSessionId && !outcome.productive && isResumeFailure(`${detail}\n${outcome.errorTail}`, resumeSessionId)) {
+        noteTurn('turn_resume_failed', chatId, turn, `session ${resumeSessionId} could not be resumed; starting a new session`);
+        if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why || outcome.errorTail));
+        await recapWrite;
+        const cleared = await updateChat(chatId, { agentSessionId: null, recapPending: true });
+        if (cleared) emitWorkbenchChat(cleared.workspaceId, rowToChat(cleared));
+        resumeSessionId = undefined;
+        recap = await recoveryRecap(chatId, turn, RESUME_FAILED_RECAP_HEADER);
+        recapStarted = false;
+        argv = buildArgv();
+        events.add({ type: 'system', subtype: 'agent_session_reset', text: SESSION_RESET_NOTE });
+        attempt++;
+        continue;
+      }
+      if (failedOver) break;
       // The account this attempt ran on. The row can still name the one from before the turn-start switch.
       const failedAccountId = accountId ?? workbenchFleetAccountId(wb, agent);
       if (!failedAccountId) break;
-      const why = parserResult?.text?.trim() || outcome.stderrTail.trim();
-      const detail = [parserResult?.text, outcome.stderrTail].filter(Boolean).join('\n');
       const hop = await failOverAccount(wb, agent, model, failedAccountId, detail);
       if (!hop) break;
       if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
@@ -912,6 +932,8 @@ async function failOverAccount(
     note: `${agent === 'claude' ? 'Claude' : 'Codex'} account “${oldLabel}” ${limit}. Retrying on “${nextLabel}”.`,
   };
 }
+
+export const SESSION_RESET_NOTE = 'The agent could not resume its earlier session, so Talyn started a new one.';
 
 export const TURN_HELD_NOTE = 'Talyn did not start this message. It stays in the queue: send a message to try again.';
 
@@ -1469,7 +1491,12 @@ async function followTurnOutput(
 ) {
   let offset = startOffset;
   let sessionId = chat.agentSessionId;
-  return followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
+  // A session is kept for the next turn only once the agent answered in it. A
+  // run that failed first may leave a session that cannot be resumed.
+  let productive = startOffset > 0 && (await hasTurnEvent(chat.id, turn, 'assistant'));
+  // The agent's own error lines on stdout (Codex reports some only there), for the caller's failure checks.
+  let errorTail = '';
+  const outcome = await followDurableBatches(wb, turnLogKey(chat.id, turn, attempt), turnMarker(chat.id, turn, attempt), offset,
     async (records) => {
       const drafts = records.flatMap<AgentEventDraft | Record<string, unknown>>(({ record }) => {
         if (record.spawned && record.timing) {
@@ -1489,19 +1516,33 @@ async function followTurnOutput(
       });
       const nextOffset = records[records.length - 1].offset;
       const snapshot = parser.snapshot();
+      productive ||= drafts.some(isAgentAnswer) || (parser.result !== null && !parser.result.isError);
+      for (const draft of drafts) {
+        if (draft.type === 'system' && draft.subtype === 'stderr' && typeof draft.text === 'string') {
+          errorTail = `${errorTail}\n${draft.text}`.slice(-4000);
+        }
+      }
       const stored = await retryBatchWrite(() => appendEvents(chat.id, drafts.map((event) => ({ turn, event })), {
         owner: TURN_OWNER, turn, offset: nextOffset, previousOffset: offset, parser: snapshot,
+        sessionId: productive ? parser.sessionId : null,
       }));
       offset = nextOffset;
       onStored?.();
       emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
       noteTurnActivity(wb, drafts);
-      if (parser.sessionId && parser.sessionId !== sessionId) {
+      if (productive && parser.sessionId && parser.sessionId !== sessionId) {
         const updated = await getChat(chat.id);
         if (updated) emitWorkbenchChat(chat.workspaceId, rowToChat(updated));
         sessionId = parser.sessionId;
       }
     }, { records: FLUSH_EVENTS, ms: FLUSH_MS, signal, legacyMarker: turnMarker(chat.id) });
+  return { ...outcome, productive, errorTail: errorTail.trim() };
+}
+
+/** The agent said or did something. Claude's synthetic message for an API error does not count. */
+function isAgentAnswer(draft: AgentEventDraft | Record<string, unknown>): boolean {
+  if (draft.type !== 'assistant' || draft.error || draft.isApiErrorMessage) return false;
+  return (draft.message as { model?: unknown } | undefined)?.model !== '<synthetic>';
 }
 
 export async function detachTurnFollowers(): Promise<void> {

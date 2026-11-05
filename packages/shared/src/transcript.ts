@@ -121,6 +121,7 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'fleet_account_switched',
   'local_turn_interrupted',
   'sandbox_capacity_wait',
+  'agent_session_reset',
 ]);
 
 export function buildBlocks(events: AgentEvent[]): Block[] {

@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A chat stuck on a session that cannot be resumed (2026-11-05)
+
+**What happened.** A Codex session chat had several turns fail early on a fleet proxy 401. Each of those turns still stored the Codex thread id, because `appendEvents` wrote the parser's session id on every batch. The thread had no usable turns, so every later turn and every Retry failed at once with `thread/resume failed: list_turns is not supported yet (code -32601)`. Nothing cleared `agentSessionId` after a resume failure, so the chat was stuck.
+
+**What changed.**
+- A turn stores the session id only after the agent answered in it (`followTurnOutput`, `productive`). An `assistant` event counts; Claude's synthetic API-error message does not. `appendEvents` now takes the id as `progress.sessionId`, separate from the parser snapshot, so an adopted turn keeps its parser state.
+- When a resumed attempt fails before any answer and the error says the resume itself failed (`resumeFailure.ts`), the attempt loop clears `agentSessionId`, sets `recapPending`, and runs once more without resume. The new session gets the recovery recap with its own header, or only the header when the chat has no text yet. The transcript gets an `agent_session_reset` note.
+- The markers are narrow: `thread/resume:` or `thread/resume failed`, `no rollout found`, `No conversation found with session ID`, and a `not found` on a line that names the session id. A rate limit, a spent quota, or a line with a 401/403 or auth error is never a resume failure.
+
 ## Adopted boxes starved by the balloon after a YAS deploy (2026-11-05)
 
 **What happened.** A YAS deploy restarted fleetd on scaleway-1 at 12:21 UTC and it adopted twelve live session boxes. Adoption never restarted the balloon reclaim loop, so each box kept the hold the old fleetd had set: 9.9 GiB of a 12 GiB guest, 27 MiB available, 28 million major faults. Every exec ran into its own timeout and came back as exit -1 with no output. The work checkpoint failed three times in a row, the liveness checks read -1 as "dead", followers leaked one per retry, and turns showed "working" while the agent crawled. The fix is in YAS (`internal/run/sandbox.go` reattach starts the loop, `internal/fleet/sandbox_adopt.go` passes `Balloon` and `MemBaselineMiB`).
