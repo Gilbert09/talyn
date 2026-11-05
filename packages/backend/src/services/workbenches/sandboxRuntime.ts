@@ -751,10 +751,17 @@ export async function killMarker(row: WorkbenchRow, marker: string): Promise<voi
   await runCapture(row, script, { cwd: '/', env, timeoutMs: 20_000, quiet: true });
 }
 
+/**
+ * True when the marker's process group is alive, false when it is gone. Throws
+ * when the box did not say: a check that timed out comes back as -1, and that
+ * is not evidence of a dead process. Reading it as one ended live turns' output.
+ */
 export async function isMarkerAlive(row: WorkbenchRow, marker: string): Promise<boolean> {
   const { script, env } = aliveMarkerScript(marker);
   const r = await runCapture(row, script, { cwd: '/', env, timeoutMs: 10_000, quiet: true });
-  return r.exitCode === 0;
+  if (r.exitCode === 0) return true;
+  if (r.exitCode === 1) return false;
+  throw new Error(`The liveness check of ${marker} did not finish (exit ${r.exitCode}).`);
 }
 
 // ============================================================================

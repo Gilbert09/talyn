@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Adopted boxes starved by the balloon after a YAS deploy (2026-11-05)
+
+**What happened.** A YAS deploy restarted fleetd on scaleway-1 at 12:21 UTC and it adopted twelve live session boxes. Adoption never restarted the balloon reclaim loop, so each box kept the hold the old fleetd had set: 9.9 GiB of a 12 GiB guest, 27 MiB available, 28 million major faults. Every exec ran into its own timeout and came back as exit -1 with no output. The work checkpoint failed three times in a row, the liveness checks read -1 as "dead", followers leaked one per retry, and turns showed "working" while the agent crawled. The fix is in YAS (`internal/run/sandbox.go` reattach starts the loop, `internal/fleet/sandbox_adopt.go` passes `Balloon` and `MemBaselineMiB`).
+
+**Talyn side.**
+- `isMarkerAlive` answers true for exit 0, false for exit 1, and throws for anything else. A check killed by its own timeout is not evidence of a dead process. The recovery poller already treats a throw as alive.
+- `followDurableExec` has a lost-contact guard (`FOLLOW_LOST_CONTACT_MS`, 30 min). When no output arrived for that long and an attempt ends without the agent's exit, it asks the box whether the agent is alive. A live or dead answer keeps following. Only a box that cannot answer ends the turn, with a message that says the agent may still be running.
+
+**Open.** The fleet's event ring restarts its seq at 1 after a fleetd restart, so `recoverStream` polls a stale cursor until its liveness check ends the attempt. It recovers, but a persisted seq would make it immediate.
+
 ## Insights: usage analytics per workspace (2026-11-04)
 
 **What it is.** A new Insights page in both apps, behind the `usage-insights` flag (`usageInsights`, fallback off, `availability: 'gated'`, `USAGE_INSIGHTS_ENABLED` override). It shows one workspace's box-hours, agent tokens and models, output, speed and top lists for 7 days, 30 days, this billing period or a custom range (UTC days, both ends included in the picker).

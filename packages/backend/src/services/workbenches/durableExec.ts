@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { shellQuote } from '@talyn/shared';
 import { safeMarker, pidFileFor } from './execFraming.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
-import { runCapture, runStream, killMarker, recordWorkbenchEvent, type StreamOutcome } from './sandboxRuntime.js';
+import { runCapture, runStream, killMarker, isMarkerAlive, recordWorkbenchEvent, type StreamOutcome } from './sandboxRuntime.js';
 import type { WorkbenchRow } from './store.js';
 
 export interface LogRecord {
@@ -168,6 +168,22 @@ export async function fenceDurableExec(row: WorkbenchRow, key: string): Promise<
   throw new Error(`The start marker could not be checked (exit ${result.exitCode}).`, { cause: new Error(result.stderr) });
 }
 
+/**
+ * How long the follower may go without hearing from the box before it asks the
+ * box directly, and gives up when the box cannot answer either.
+ *
+ * Far past every interruption the box recovers from by itself: a fleetd
+ * restart re-attaches in seconds (two minutes at worst), and a suspended box
+ * resumes on the next exec. On 2026-11-05 a fleetd restart left boxes whose
+ * every exec timed out, and their sessions said "working" with nothing
+ * behind the word. Past this, Talyn ends the turn and says why, rather than
+ * show a state it cannot see.
+ */
+export const FOLLOW_LOST_CONTACT_MS = 30 * 60_000;
+
+export const LOST_CONTACT_MESSAGE =
+  'Talyn lost contact with the sandbox for 30 minutes and stopped waiting for this turn. The agent may still be running there.';
+
 /** Each callback commits before the next record. A reconnect starts at the last accepted byte. */
 export async function followDurableExec(
   row: WorkbenchRow, key: string, marker: string, offset: number,
@@ -175,6 +191,7 @@ export async function followDurableExec(
 ): Promise<StreamOutcome> {
   let current = offset;
   let stderrTail = '';
+  let lastContact = Date.now();
   while (!signal?.aborted) {
     const followerMarker = `follow-${randomUUID()}`;
     const controller = new AbortController();
@@ -197,6 +214,7 @@ export async function followDurableExec(
             const record = JSON.parse(Buffer.from(line.slice(split + 1), 'base64').toString('utf8')) as LogRecord;
             await onRecord(record, next);
             current = next;
+            lastContact = Date.now();
             if (record.stream === 'stderr') stderrTail = `${stderrTail}\n${record.line}`.slice(-4000);
           }).catch((err: unknown) => { failure = err; controller.abort(); });
         },
@@ -217,6 +235,20 @@ export async function followDurableExec(
     if (missing) throw missing;
     if (failure) throw failure;
     if (outcome?.exitCode !== null && outcome?.exitCode !== undefined) return { ...outcome, stderrTail };
+    if (!signal?.aborted && Date.now() - lastContact >= FOLLOW_LOST_CONTACT_MS) {
+      // Quiet for a long time and the follower cannot finish: ask the box itself.
+      // A live agent is contact. A dead one is answered by the next follower,
+      // which reads the exit file. Only a box that cannot answer ends the turn.
+      const alive = await isMarkerAlive(row, marker).then((a) => a, (err: unknown) => {
+        if (err instanceof FleetRunNotFoundError) throw err;
+        return null;
+      });
+      if (alive === null) {
+        recordWorkbenchEvent(row, 'output_lost_contact', LOST_CONTACT_MESSAGE, false);
+        return { exitCode: null, stderrTail: `${stderrTail}\n${LOST_CONTACT_MESSAGE}`.trim() };
+      }
+      lastContact = Date.now();
+    }
     if (!signal?.aborted) await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return { exitCode: null, stderrTail };
