@@ -8,7 +8,8 @@ import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../renderer/lib/api';
 import { CommandPalette } from '../renderer/components/CommandPalette';
 import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
-import { clearShortcuts, formatKeys, registerShortcuts } from '../renderer/lib/shortcuts';
+import { ShortcutsSettings, shortcutRows } from '../renderer/components/settings/sections/ShortcutsSettings';
+import { FOCUS_COMPOSER_EVENT, clearShortcuts, dispatchKeydown, formatKeys, registerShortcuts } from '../renderer/lib/shortcuts';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
@@ -243,5 +244,177 @@ describe('CommandPalette', () => {
     fireEvent.click(screen.getByText('Toggle Sidebar'));
     expect(useNavigationStore.getState().paletteOpen).toBe(false);
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(true);
+  });
+});
+
+describe('go-to shortcuts', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let clock = 0;
+  const route = () => useNavigationStore.getState().route;
+
+  function press(key: string, init: KeyboardEventInit = {}): boolean {
+    clock += 100;
+    const e = new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, bubbles: true, cancelable: true, ...init });
+    let ran = false;
+    act(() => {
+      ran = dispatchKeydown(e, { ...opts, now: clock });
+    });
+    return ran;
+  }
+  const go = (letter: string) => {
+    press('g');
+    return press(letter);
+  };
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+  });
+
+  it.each([
+    ['p', { view: 'prs', tab: 'my_prs' }],
+    ['r', { view: 'prs', tab: 'reviews' }],
+    ['c', { view: 'prs', tab: 'code_reviews' }],
+    ['m', { view: 'prs', tab: 'merge_queue' }],
+    ['t', { view: 'prs', tab: 'queue' }],
+    ['a', { view: 'automations', tab: 'workflows' }],
+    ['i', { view: 'insights' }],
+    ['y', { view: 'history' }],
+  ])('G then %s opens %p', (letter, expected) => {
+    expect(go(letter)).toBe(true);
+    expect(route()).toEqual(expected);
+  });
+
+  it('G then H opens Home', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'insights' }));
+    expect(go('h')).toBe(true);
+    expect(route()).toEqual({ view: 'home' });
+  });
+
+  it('G then S opens Settings', () => {
+    expect(go('s')).toBe(true);
+    expect(route().view).toBe('settings');
+  });
+
+  it('? opens Settings → Shortcuts', () => {
+    expect(press('?', { code: 'Slash', shiftKey: true })).toBe(true);
+    expect(route()).toEqual({ view: 'settings', section: 'shortcuts' });
+  });
+
+  it.each([
+    ['l', 'Loops is off', { workbenches: true, workflows: true }],
+    ['a', 'no automation is offered', { workbenches: true }],
+    ['y', 'sessions are off', {}],
+  ])('G then %s does nothing when %s', (letter, _label, features) => {
+    useWorkspaceStore.setState({ features: features as Features });
+    expect(go(letter)).toBe(false);
+    expect(route()).toEqual({ view: 'home' });
+  });
+
+  it('G then L opens Loops when Loops is on', () => {
+    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
+    expect(go('l')).toBe(true);
+    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
+  });
+
+  it('G then A opens the first automation offered', () => {
+    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
+    expect(go('a')).toBe(true);
+    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
+  });
+
+  it('the palette shows the keys on its Navigate rows', () => {
+    useNavigationStore.setState({ paletteOpen: true });
+    render(<CommandPalette />);
+    const prs = screen.getByText('Pull requests: PRs').closest('[cmdk-item]') as HTMLElement;
+    expect(within(prs).getByText('G then P')).toBeInTheDocument();
+    const reviews = screen.getByText('Review requests').closest('[cmdk-item]') as HTMLElement;
+    expect(within(reviews).getByText('G then R')).toBeInTheDocument();
+    // The go-to entries are not repeated as Actions.
+    expect(screen.queryByText('Go to Pull requests')).not.toBeInTheDocument();
+  });
+});
+
+describe('Tab focuses the chat input', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let composer: HTMLTextAreaElement;
+  const onFocus = jest.fn();
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    onFocus.mockReset();
+    window.addEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+  });
+
+  afterEach(() => {
+    window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+    composer.remove();
+  });
+
+  function tab(init: KeyboardEventInit = {}): KeyboardEvent {
+    return new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true, cancelable: true, ...init });
+  }
+
+  it('in a session, asks the composer for focus', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const e = tab();
+    expect(dispatchKeydown(e, opts)).toBe(true);
+    expect(e.defaultPrevented).toBe(true);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a session, Tab is left alone', () => {
+    const e = tab();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it('Shift+Tab is left alone', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const e = tab({ shiftKey: true });
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+});
+
+describe('Settings → Shortcuts', () => {
+  it('lists the go-to sequences in their own group and Tab under Session', () => {
+    const groups = shortcutRows(buildAppShortcuts());
+    const goTo = groups.find((g) => g.group === 'Go to');
+    expect(goTo?.rows.map((r) => [r.label, r.keys])).toEqual([
+      ['Go to Home', 'G then H'],
+      ['Go to History', 'G then Y'],
+      ['Go to Pull requests', 'G then P'],
+      ['Go to Review requests', 'G then R'],
+      ['Go to Code review', 'G then C'],
+      ['Go to Merge queue', 'G then M'],
+      ['Go to Tasks', 'G then T'],
+      ['Go to Automations', 'G then A'],
+      ['Go to Loops', 'G then L'],
+      ['Go to Insights', 'G then I'],
+      ['Go to Settings', 'G then S'],
+    ]);
+    const session = groups.find((g) => g.group === 'Session');
+    expect(session?.rows).toContainEqual({ id: 'composer.focus.tab', label: 'Focus chat input', keys: 'Tab' });
+    const general = groups.find((g) => g.group === 'General');
+    expect(general?.rows.map((r) => r.label)).toContain('Show keyboard shortcuts');
+  });
+
+  it('every go-to sequence has its own keys', () => {
+    const keys = buildAppShortcuts().map((s) => s.keys);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('renders the go-to group with both keys', () => {
+    render(<ShortcutsSettings />);
+    expect(screen.getByText('Go to')).toBeInTheDocument();
+    const row = screen.getByText('Go to Review requests').parentElement?.parentElement as HTMLElement;
+    expect(within(row).getByText('G')).toBeInTheDocument();
+    expect(within(row).getByText('then')).toBeInTheDocument();
+    expect(within(row).getByText('R')).toBeInTheDocument();
+    expect(screen.getByText('Focus chat input')).toBeInTheDocument();
   });
 });

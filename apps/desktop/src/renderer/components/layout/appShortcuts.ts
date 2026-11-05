@@ -3,6 +3,7 @@ import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/s
 import { MENU_COMMANDS } from '../../../main/menuCommands';
 import {
   FOCUS_COMPOSER_EVENT,
+  composerForTab,
   dispatchKeydown,
   isEmptyComposer,
   registerShortcuts,
@@ -16,6 +17,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
+import { buildGoToShortcuts } from './goToShortcuts';
 
 /** Live workbenches in sidebar order, the order ⌘1–9 counts in. */
 export function orderedLiveWorkbenches(): Workbench[] {
@@ -241,6 +243,17 @@ export function buildAppShortcuts(): Shortcut[] {
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
     }),
+    {
+      id: 'composer.focus.tab',
+      keys: 'tab',
+      label: 'Focus chat input',
+      group: 'Session',
+      hidden: true,
+      // `composerForTab` leaves Tab alone in fields, the terminal, code views and overlays.
+      when: () => inWorkbench() && composerForTab() !== null,
+      run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
+    ...buildGoToShortcuts(),
   ];
 }
 

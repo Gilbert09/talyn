@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
 import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
-import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
+import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
+import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
 import { api } from '../lib/api';
 import { archivedAtOf, relativeTime } from '../pages/HistoryView';
@@ -67,6 +68,13 @@ function subscribeVersion(listener: () => void): () => void {
   });
 }
 const readVersion = () => shortcutsVersion;
+
+/** The go-to shortcut for a Navigate row, when it applies now. */
+function navShortcut(key: string): Shortcut | undefined {
+  const id = goToShortcutIdForNavItem(key);
+  const shortcut = id ? getShortcut(id) : undefined;
+  return shortcut && shortcutEnabled(shortcut) ? shortcut : undefined;
+}
 
 /**
  * ⌘K. Jump to any workbench, go anywhere in the app, or run any shortcut
@@ -227,12 +235,16 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
               New thread
             </CommandItem>
           )}
-          {navItems.map((item) => (
-            <CommandItem key={item.key} value={`go ${item.label}`} onSelect={() => pick(() => navigate(item.route))}>
-              <item.icon className="h-3.5 w-3.5 text-muted-foreground" />
-              {item.label}
-            </CommandItem>
-          ))}
+          {navItems.map((item) => {
+            const shortcut = navShortcut(item.key);
+            return (
+              <CommandItem key={item.key} value={`go ${item.label}`} onSelect={() => pick(() => navigate(item.route))}>
+                <item.icon className="h-3.5 w-3.5 text-muted-foreground" />
+                {item.label}
+                {shortcut && <CommandShortcut>{formatKeys(shortcut.keys)}</CommandShortcut>}
+              </CommandItem>
+            );
+          })}
         </CommandGroup>
         {actions.length > 0 && (
           <CommandGroup heading="Actions">
