@@ -64,7 +64,7 @@ export const hero = {
   badge: "Public beta",
   titleLead: "Give every task",
   titleAccent: "its own agent.",
-  sub: "A Talyn session is a branch with its own coding agent, diff and terminal, in a cloud sandbox. Run several at once, on the Claude or ChatGPT plan you already pay for.",
+  sub: "Each session is a branch with its own agent, diff and terminal in the cloud. Run as many as you like on the Claude or ChatGPT plan you already have.",
   primaryCta: "Download for {platform}",
   webCta: "Open in browser",
   // "For GitHub" stays: a GitLab user should find out in eight seconds, not
@@ -76,7 +76,7 @@ export const hero = {
 export const sessions = {
   kicker: "Sessions",
   title: "From prompt to pull request.",
-  sub: "Describe the task and press Enter. Talyn makes the branch, starts the sandbox and hands the work to your agent.",
+  sub: "Describe the task. Talyn makes the branch, starts the sandbox and hands it to your agent.",
   steps: [
     {
       title: "Describe it",
@@ -102,7 +102,7 @@ export const sessions = {
 export const sandboxes = {
   kicker: "Sandboxes",
   title: "Run sessions side by side.",
-  sub: "Each session has its own cloud sandbox, so agents never edit the same files. Start the next task while the last one runs.",
+  sub: "Every session gets its own sandbox. Start the next task while the last one runs.",
   items: [
     {
       title: "Ready in seconds",
@@ -135,7 +135,7 @@ export const sandboxes = {
 export const threads = {
   kicker: "Threads",
   title: "One conversation, many repositories.",
-  sub: "A thread has no repository of its own. Tell it the goal, and it starts a session on each repository that needs a change.",
+  sub: "Give a thread a goal. It starts a session on every repository that needs a change.",
   bullets: [
     "It hears when a session finishes, opens a pull request or needs an answer.",
     "Open any of its sessions to read the diff or step in.",
@@ -148,7 +148,7 @@ export const threads = {
 export const pullRequests = {
   kicker: "Pull requests",
   title: "Your pull requests, kept green.",
-  sub: "Talyn lists every pull request you have open and every review waiting on you, with the blocked ones first. One click sends the fix to an agent.",
+  sub: "Every PR you own and every review you owe, blocked ones first. One click sends the fix.",
   items: [
     {
       title: "Fix it in one click",
@@ -172,7 +172,7 @@ export const pullRequests = {
 export const automation = {
   kicker: "Automation",
   title: "Work that starts without you.",
-  sub: "Set it up once. It runs on Talyn's servers, with the app closed.",
+  sub: "Set it up once. It runs in the cloud, even with the app closed.",
   items: [
     {
       title: "Loops",
@@ -215,7 +215,7 @@ export const automation = {
 export const providers = {
   kicker: "Agents",
   title: "Bring your Claude or ChatGPT plan.",
-  sub: "Sessions run Claude Code or Codex on the subscription you already pay for. You pay Talyn for the sandboxes, not for tokens.",
+  sub: "Claude Code or Codex, on the plan you already pay for. Talyn charges for sandboxes, not tokens.",
   items: [
     {
       name: "Claude Code",
@@ -269,7 +269,7 @@ export const why = {
 export const pricing = {
   kicker: "Pricing",
   title: "Pay for the machines. Bring your own model.",
-  sub: "Talyn runs your agents on its own boxes. You get a monthly allowance of box-hours, and you add credits only if you need more. The model runs on your own Claude or ChatGPT subscription.",
+  sub: "A monthly allowance of box-hours, and credits only if you need more. The model runs on your own subscription.",
   footnote:
     "Prices are in US dollars. The model is not included: runs use the Claude or ChatGPT subscription you connect, so you pay us for the machines, not the model. Manage or cancel any time from Settings → Billing in the app.",
   annualBadge: "2 months free",
