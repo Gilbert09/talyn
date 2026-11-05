@@ -16,7 +16,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 
 vi.mock('@pierre/diffs/react', () => ({ PatchDiff: () => <div data-testid="patch-diff" /> }));
 vi.mock('../stores/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
-vi.mock('../lib/fileIconUrl', () => ({ loadFileIconUrl: async () => null }));
+vi.mock('../lib/fileIconUrl', () => ({ fileIconUrl: (name: string) => `/file-icons/${name}.svg` }));
 vi.mock('../components/workbench/CodeViewer', () => ({ __esModule: true, default: () => null }));
 
 const UNREACHABLE = 'The sandbox runners are not reachable right now. Try again shortly.';

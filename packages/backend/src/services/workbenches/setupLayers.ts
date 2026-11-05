@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, count, eq, gt, gte, inArray, isNotNull, isNull, lte, max, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
   boxSetupScript,
   buildUserLayerSpec,
@@ -1148,9 +1148,16 @@ export async function noteRepoSetupRead(repositoryId: string, config: Pick<Workb
  */
 export async function promoteSettledSteps(repositoryId: string, now = new Date()): Promise<string[]> {
   const pending = and(runnableRepo(repositoryId), ne(steps.runOn, 'box'), isNull(steps.imageAppliedAt));
-  const [{ newest }] = await db().select({ newest: max(steps.confirmedAt) }).from(steps).where(pending);
-  if (!newest) return [];
-  const newestAt = newest instanceof Date ? newest : new Date(newest as unknown as string);
+  // Epoch milliseconds from SQL: a driver that answers max() as text would otherwise
+  // hand new Date() a "+00" offset it may not parse, and NaN passes the settle check.
+  const [{ newestMs }] = await db()
+    .select({ newestMs: sql<string | number | null>`(extract(epoch from max(${steps.confirmedAt})) * 1000)` })
+    .from(steps)
+    .where(pending);
+  if (newestMs === null || newestMs === undefined) return [];
+  // Rounded up: Postgres keeps microseconds, and the bound below must include the newest step.
+  const newestAt = new Date(Math.ceil(Number(newestMs)));
+  if (Number.isNaN(newestAt.getTime())) return [];
   if (now.getTime() - newestAt.getTime() < SETUP_RECIPE_SETTLE_MS) return [];
   const rows = await db()
     .update(steps)
