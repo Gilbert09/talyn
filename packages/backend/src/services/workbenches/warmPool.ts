@@ -10,6 +10,7 @@ import { githubService } from '../github.js';
 import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { resolveRepository } from '../selfHosted/sandboxRun.js';
+import { recordSandboxAgents } from './credentialPolicy.js';
 import { assertNewWorkbenchBox } from './boxGate.js';
 import type { CreatedWorkbenchSandbox } from './lifecycle.js';
 import { withMaintenanceClaim } from './maintenanceClaim.js';
@@ -52,7 +53,7 @@ import { talynMcpServerFor } from './talynMcp.js';
  * overhead (`created_at` to `claimed_at` or `ended_at`) can be counted.
  *
  * Credentials: a warm box holds what a session box of the same workspace holds
- * at create (the workspace's GitHub token, its agent key and MCP secrets), with
+ * at create (the workspace's GitHub token, both usable agent keys and MCP secrets), with
  * one difference: the `talyn` MCP route carries a random secret that opens
  * nothing, because no session owns the box yet. The claim pushes the session's
  * whole set, which replaces it. Before a claim the fleet's credential pull for
@@ -331,7 +332,7 @@ export async function claimWarmBox(row: WorkbenchRow): Promise<WarmClaim | null>
     const ready = await db().select(BOX_COLUMNS).from(boxes)
       .where(and(eq(boxes.repositoryId, repositoryId), eq(boxes.workspaceId, row.workspaceId), eq(boxes.status, 'ready')))
       .orderBy(asc(boxes.readyAt));
-    const fits = ready.filter((box) => box.agent === row.agent && box.size === size
+    const fits = ready.filter((box) => (box.agent === row.agent || hasBothAgents(box)) && box.size === size
       && box.internetAccess === internetAccess && box.baseBranch === row.baseBranch);
     for (const candidate of fits) {
       const now = new Date();
@@ -354,6 +355,11 @@ export async function claimWarmBox(row: WorkbenchRow): Promise<WarmClaim | null>
   return null;
 }
 
+function hasBothAgents(box: WarmBox): boolean {
+  const agents = (box.record as { credentialAgents?: string[] } | null)?.credentialAgents;
+  return !!agents?.includes('claude') && agents.includes('codex');
+}
+
 /**
  * Give the claimed box to the session: its Talyn MCP token and its own
  * credentials, before anything runs in the box. A failure ends the box (it
@@ -365,6 +371,9 @@ async function handOver(row: WorkbenchRow, box: WarmBox): Promise<WarmClaim | nu
     await talynMcpServerFor(row);
     const client = await fleetClientFor(row.workspaceId, box.fleetHost);
     await pushSessionCredentials(row, box.sandboxId, client);
+    const agents = (box.record as { credentialAgents?: ('claude' | 'codex')[] } | null)?.credentialAgents
+      ?? [box.agent === 'codex' ? 'codex' : 'claude'];
+    await recordSandboxAgents(row, box.sandboxId, agents);
     const { legacyUserStepIds, ...layer } = (box.record ?? {}) as { legacyUserStepIds?: string[] } & Record<string, unknown>;
     const fillMs = box.fillMs ?? null;
     const ageMs = box.readyAt ? Date.now() - box.readyAt.getTime() : null;

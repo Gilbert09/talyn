@@ -25,6 +25,7 @@ import {
   withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
+import { recordSandboxAgents } from './credentialPolicy.js';
 import { captureChanges } from './changesCapture.js';
 import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
@@ -59,6 +60,7 @@ import {
   nextSandboxId,
   providerForAgent,
   recordWorkbenchEvent,
+  workbenchAgentCredentials,
   runCapture,
   sandboxIdFor,
   SANDBOX_WORK_ROOT,
@@ -228,7 +230,7 @@ const QUEUE_TIMEOUT_ERROR = 'waited';
 const BOOTED_STATUSES: ReadonlySet<string> = new Set(['idle', 'busy', 'suspended']);
 
 /** The fleet's record, with what it says about the box's image layers. */
-type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error' | (typeof LAYER_FIELDS)[number]>;
+type FleetRecord = Pick<FleetSandbox, 'status' | 'phase' | 'error' | (typeof LAYER_FIELDS)[number]> & { credentialAgents?: ('claude' | 'codex')[] };
 const LAYER_FIELDS = [
   'layer', 'goldenLayer', 'repoCommit', 'appliedStepIds', 'userLayerPending', 'repoLayerPending',
   'repoSetupOk', 'prebakedCheckout', 'layerStepResults',
@@ -471,12 +473,7 @@ export type CreatedWorkbenchSandbox =
   }
   | { ok: false; error: string };
 
-/**
- * Create a box for a workbench, writing nothing to its row. The create body
- * comes from the ONE builder task dispatch uses, so the credential rules
- * cannot differ between the two. The repository and its DEFAULT branch go on
- * the body, which is what picks the newest golden: goldens are keyed on them.
- */
+/** Create a session box with every usable vendor key and record its allowed agents. */
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
@@ -484,7 +481,9 @@ export async function createWorkbenchSandbox(
 ): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  const provider = providerForAgent(row.agent);
+  const credentials = await workbenchAgentCredentials(row);
+  const agents = (['claude', 'codex'] as const).filter((agent) => credentials[agent]?.token);
+  const provider = providerForAgent(credentials[row.agent === 'codex' ? 'codex' : 'claude']?.token ? row.agent : agents[0]);
   // Best effort: without it the box boots the base image and the clone script
   // clones as it always did. A thread has no repository.
   const repositoryId = row.repositoryId;
@@ -501,7 +500,7 @@ export async function createWorkbenchSandbox(
     workspaceId: row.workspaceId,
     provider,
     model: row.model ?? (provider === 'openai' ? 'Codex' : 'Claude'),
-    creds: resolved.creds,
+    creds: { claudeToken: credentials.claude?.token, openaiKey: credentials.codex?.token },
     githubToken: resolved.githubToken,
     mcpServerIds: null,
     extraMcpServers: talynServer ? [talynServer] : [],
@@ -515,6 +514,15 @@ export async function createWorkbenchSandbox(
     ...(repository ? { baseBranch: repository.defaultBranch } : {}),
   });
   if (!built.ok) return { ok: false, error: built.error };
+  built.body.anthropicKey = credentials.claude?.token;
+  built.body.openaiKey = credentials.codex?.token;
+  built.body.policy = {
+    ...built.body.policy,
+    credentials: {
+      ...(!credentials.claude?.token ? { anthropic: 'none' as const } : {}),
+      ...(!credentials.codex?.token ? { openai: 'none' as const } : {}),
+    },
+  };
   // The image layers of the Setup list (`layers`), and the legacy `bake`
   // beside them for a host that predates layers. A changed spec is what makes
   // the fleet build the user layer again. Best effort: a box without them
@@ -577,6 +585,7 @@ export async function createWorkbenchSandbox(
     size = 'standard';
     created = await createSized(size);
   }
+  if (!opts.warm) await recordSandboxAgents(row, sandboxId, agents);
   const fleetSandboxId =
     typeof created.sandbox?.id === 'string' && created.sandbox.id && created.sandbox.id !== sandboxId
       ? created.sandbox.id
@@ -588,6 +597,7 @@ export async function createWorkbenchSandbox(
     fleetSandboxId,
     size,
     record: {
+      credentialAgents: agents,
       status: created.sandbox?.status,
       phase: created.sandbox?.phase,
       error: created.sandbox?.error,

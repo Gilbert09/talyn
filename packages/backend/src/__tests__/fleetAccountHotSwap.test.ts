@@ -488,6 +488,33 @@ describe('fleet accounts on a running run', () => {
     });
     afterEach(() => runtime.setWorkbenchFleetClientForTests(null));
 
+    it.each(['reauth', 'quota'] as const)('skips a vendor that needs %s recovery', async (reason) => {
+      const claude = await add('claude_oauth', 'A', 10);
+      await add('codex_oauth', 'C', 10);
+      if (reason === 'reauth') await accounts.setFleetAccountReauth(claude.id, new Date());
+      else await accounts.setFleetAccountExhausted({ accountId: claude.id }, { at: new Date().toISOString(), detail: 'out of usage' });
+      const row = await seedWorkbench('claude', { fleetAccountId: claude.id });
+      const result = await runtime.resumeCredentialsFor(row);
+      expect(result).toMatchObject({ openaiKey: 'tok-C' });
+      expect(result).not.toHaveProperty('anthropicKey');
+    });
+
+    it('keeps Claude credentials when a Codex chat switches accounts', async () => {
+      const a = await add('claude_oauth', 'A', 10);
+      const c = await add('codex_oauth', 'C', 96);
+      const d = await add('codex_oauth', 'D', 10);
+      const row = await seedWorkbench('claude', {
+        fleetAccountId: a.id, codexFleetAccountId: c.id,
+        sandboxAgents: { 'talyn-wb-wb1': ['claude', 'codex'] },
+      });
+      expect(await runtime.checkSandboxHotSwap(row, undefined, 'codex')).toContain('Switched to D');
+      expect(fleet.setSandboxCredentials).toHaveBeenCalledWith('talyn-wb-wb1', expect.objectContaining({
+        anthropicKey: 'tok-A', openaiKey: 'tok-D',
+      }));
+      expect(runtime.workbenchFleetAccountId(row, 'claude')).toBe(a.id);
+      expect(runtime.workbenchFleetAccountId(row, 'codex')).toBe(d.id);
+    });
+
     it('records the account at the first turn, with no note', async () => {
       const a = await add('claude_oauth', 'A', 10);
       const row = await seedWorkbench('claude', {});

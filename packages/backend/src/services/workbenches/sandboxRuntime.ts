@@ -1,3 +1,4 @@
+import { isHeldBack } from '../selfHosted/exhaustedQuota.js';
 import { eq, sql } from 'drizzle-orm';
 import {
   applyWorkbenchScriptOverrides,
@@ -41,8 +42,7 @@ import {
   getSelfHostedCredentials,
   resolveFleetTarget,
 } from '../selfHosted/credentials.js';
-import { resolveSandboxCredentials } from '../selfHosted/sandboxRun.js';
-import { getFleetAccount } from '../selfHosted/accounts.js';
+import { getFleetAccount, listFleetAccounts } from '../selfHosted/accounts.js';
 import { resolveRunCredential } from '../selfHosted/accountSelection.js';
 import {
   describeAccountSwitch,
@@ -66,6 +66,7 @@ import {
   isGuestUnreachableBeforeStart,
 } from './execFailures.js';
 import { WorkbenchError } from './errors.js';
+import { assertSandboxAgent } from './credentialPolicy.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
@@ -1055,30 +1056,28 @@ export async function gitAuthorFor(workspaceId: string): Promise<{ name: string;
 // Which fleet account a session is on
 // ============================================================================
 
-/**
- * The fleet account a session's box is on now, kept as `settings.fleetAccountId`
- * on the workbench row: no migration, and the row is what every credential path
- * already reads. A settings PATCH that drops the key costs nothing but a fresh
- * choice at the next turn.
- */
-export function workbenchFleetAccountId(row: Pick<WorkbenchRow, 'settings'>): string | undefined {
-  const value = (row.settings as Record<string, unknown> | null | undefined)?.fleetAccountId;
+/** Keep the original account field for the session agent. Store the other agent's account separately. */
+export function workbenchFleetAccountId(row: Pick<WorkbenchRow, 'settings'> & { agent?: string }, agent?: FleetAgent): string | undefined {
+  const settings = row.settings as Record<string, unknown> | null | undefined;
+  const value = agent && agent !== row.agent ? settings?.[`${agent}FleetAccountId`] : settings?.fleetAccountId;
   return typeof value === 'string' && value ? value : undefined;
 }
 
 /** Write only that key, so a settings edit made at the same moment is kept. */
 export async function setWorkbenchFleetAccount(
-  row: Pick<WorkbenchRow, 'id' | 'settings'>,
+  row: Pick<WorkbenchRow, 'id' | 'settings'> & { agent?: string },
   accountId: string,
+  agent?: FleetAgent,
 ): Promise<void> {
+  const key = agent && agent !== row.agent ? `${agent}FleetAccountId` : 'fleetAccountId';
   await getPoolDbClient()
     .update(workbenchesTable)
     .set({
-      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object('fleetAccountId', ${accountId}::text)`,
+      settings: sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb) || jsonb_build_object(${key}::text, ${accountId}::text)`,
     })
     .where(eq(workbenchesTable.id, row.id));
   // The caller's copy too: a turn keeps using its row while it runs.
-  row.settings = { ...(row.settings ?? {}), fleetAccountId: accountId } as WorkbenchRow['settings'];
+  row.settings = { ...(row.settings ?? {}), [key]: accountId } as WorkbenchRow['settings'];
 }
 
 /**
@@ -1109,33 +1108,24 @@ function agentOf(row: Pick<WorkbenchRow, 'agent'>): FleetAgent {
   return providerForAgent(row.agent) === 'openai' ? 'codex' : 'claude';
 }
 
-/**
- * Hand the sandbox fresh credentials before a turn.
- *
- * A workbench's box lives for days, and the credentials it was created with do
- * not: a Claude OAuth token lasts hours and a GitHub App token one. Pushing
- * fresh ones per turn is what keeps an idle-then-resumed box working. Same
- * rules as every dispatch: the key for THIS box's vendor and only that one,
- * and no credential is a refusal, never a blank — the gateway would fill a
- * blank from somebody else's custody. MCP secrets ride along because the push
- * REPLACES the set.
- *
- * The key is from the session's current ACCOUNT while it is under the
- * workspace's threshold, else from the next account of the same agent. Returns
- * the account used, and the note to show when that is a switch.
- */
+/** Refresh both vendor keys. Refuse if the turn's agent has no usable key. */
 export async function refreshSandboxCredentials(
   row: WorkbenchRow,
-  opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
+  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
 ): Promise<{ accountId: string | null; note: string | null }> {
   const sandboxId = requireSandbox(row);
-  const { creds, credential, recorded, model } = await sandboxCredentialSet(row, opts);
+  const agent = opts.agent ?? agentOf(row);
+  assertSandboxAgent(row, agent);
+  const { creds, credentials, model } = await sandboxCredentialSet(row, opts);
+  const credential = credentials[agent];
+  if (!credential?.token) throw missingSessionCredential(agent);
+  const recorded = workbenchFleetAccountId(row, agent);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
 
   let note: string | null = null;
   if (credential.accountId && credential.accountId !== recorded) {
-    await setWorkbenchFleetAccount(row, credential.accountId).catch((err) =>
+    await setWorkbenchFleetAccount(row, credential.accountId, agent).catch((err) =>
       console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
     );
     if (recorded) {
@@ -1150,62 +1140,67 @@ export async function refreshSandboxCredentials(
   return { accountId: credential.accountId ?? null, note };
 }
 
-/**
- * The credential set a session's box gets: the key for this box's vendor from
- * the session's account (or the next one over the threshold), the GitHub
- * token, and the MCP secrets. Throws when there is no key: a blank is never
- * sent, because the gateway would fill it from somebody else's custody.
- */
-async function sandboxCredentialSet(
+/** Resolve both vendors with the same account rules used for a turn. */
+export async function workbenchAgentCredentials(
   row: WorkbenchRow,
-  opts: { model?: string; avoidAccountIds?: readonly string[] } = {},
+  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
+) {
+  const selectedAgent = opts.agent ?? agentOf(row);
+  const accounts = await listFleetAccounts(row.workspaceId);
+  const unavailable = accounts.filter((account) => account.reauthRequiredAt
+    || (account.quotaExhausted && isHeldBack(account.quotaExhausted))).map((account) => account.id);
+  const resolve = (agent: FleetAgent) => resolveRunCredential(row.workspaceId, agent, {
+    recordedAccountId: workbenchFleetAccountId(row, agent),
+    model: agent === selectedAgent ? opts.model ?? (agent === row.agent ? row.model ?? undefined : undefined) : undefined,
+    switchWhenOver: true,
+    avoidAccountIds: [...unavailable, ...(agent === selectedAgent ? opts.avoidAccountIds ?? [] : [])],
+  });
+  const [claude, codex] = await Promise.all([resolve('claude'), resolve('codex')]);
+  if (!claude?.token && !codex?.token) throw missingSessionCredential();
+  return { claude, codex };
+}
+
+function missingSessionCredential(agent?: FleetAgent): WorkbenchError {
+  const label = agent === 'codex' ? 'Codex (ChatGPT)' : agent === 'claude' ? 'Claude' : 'Claude or Codex';
+  return new WorkbenchError(
+    `This workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet.`,
+    409,
+    'credentials_unavailable',
+  );
+}
+
+/** A push replaces the full set, including the other vendor and MCP secrets. */
+export async function sandboxCredentialSet(
+  row: WorkbenchRow,
+  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
 ): Promise<{
   creds: FleetSandboxCredentials;
-  credential: NonNullable<Awaited<ReturnType<typeof resolveRunCredential>>>;
-  recorded: string | null;
+  credentials: Awaited<ReturnType<typeof workbenchAgentCredentials>>;
   model: string | undefined;
 }> {
-  const resolved = await resolveSandboxCredentials(row.workspaceId);
-  if (!resolved.ok) throw new WorkbenchError(resolved.error, 409, 'credentials_unavailable');
-  const provider = providerForAgent(row.agent);
-  const agent = agentOf(row);
-  const model = opts.model ?? row.model ?? undefined;
-  const recorded = workbenchFleetAccountId(row);
-  const credential = await resolveRunCredential(row.workspaceId, agent, {
-    recordedAccountId: recorded,
-    model,
-    switchWhenOver: true,
-    avoidAccountIds: opts.avoidAccountIds,
-  });
-  const key = credential?.token;
-  if (!key) {
-    const label = provider === 'openai' ? 'Codex (ChatGPT)' : 'Claude';
-    throw new WorkbenchError(
-      `This session runs ${label}, and the workspace has no ${label} subscription connected. Connect it in Settings → Talyn Fleet.`,
-      409,
-      'credentials_unavailable',
-    );
-  }
+  const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
+  if (!githubToken) throw new WorkbenchError('Connect GitHub for this workspace.', 409, 'credentials_unavailable');
+  const credentials = await workbenchAgentCredentials(row, opts);
   const integrations = await workbenchIntegrationSecrets(row);
   const creds: FleetSandboxCredentials = {
-    githubToken: resolved.githubToken,
-    ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),
-    // A thread names no repository.
+    githubToken,
+    ...(credentials.claude?.token ? { anthropicKey: credentials.claude.token } : {}),
+    ...(credentials.codex?.token ? { openaiKey: credentials.codex.token } : {}),
     ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   };
-  return { creds, credential, recorded: recorded ?? null, model };
+  return { creds, credentials, model: opts.model ?? row.model ?? undefined };
 }
 
-/**
- * Hand a box the session's credentials before the row names the box: a warm
- * box at its claim (`warmPool.ts`). The same set and rules as the per-turn
- * push. Records the account it used.
- */
 export async function pushSessionCredentials(row: WorkbenchRow, sandboxId: string, client: FleetClient): Promise<void> {
-  const { creds, credential, recorded } = await sandboxCredentialSet(row);
+  const { creds, credentials } = await sandboxCredentialSet(row);
   await client.setSandboxCredentials(sandboxId, creds);
-  if (credential.accountId && credential.accountId !== recorded) await setWorkbenchFleetAccount(row, credential.accountId);
+  for (const agent of ['claude', 'codex'] as const) {
+    const credential = credentials[agent];
+    if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent)) {
+      await setWorkbenchFleetAccount(row, credential.accountId, agent);
+    }
+  }
 }
 
 /**
@@ -1229,29 +1224,24 @@ export async function resumeCredentialsFor(row: WorkbenchRow): Promise<FleetSand
  * has crossed the threshold mid-turn. The push carries the whole set, as the
  * per-turn refresh does. Returns the note to show, or null when nothing moved.
  */
-export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string): Promise<string | null> {
+export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string, agent: FleetAgent = agentOf(row)): Promise<string | null> {
   if (row.runtime !== 'sandbox' || !row.sandboxId) return null;
-  const agent = agentOf(row);
   const decision = await findHotSwap({
-    key: `wb:${row.id}`,
+    key: `wb:${row.id}:${agent}`,
     workspaceId: row.workspaceId,
     agent,
     model: model ?? row.model ?? undefined,
-    currentAccountId: workbenchFleetAccountId(row),
+    currentAccountId: workbenchFleetAccountId(row, agent),
   });
   if (!decision) return null;
-  const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
-  if (!githubToken) return null;
-  const integrations = await workbenchIntegrationSecrets(row);
+  assertSandboxAgent(row, agent);
+  const { creds } = await sandboxCredentialSet(row, { agent, model });
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(row.sandboxId!, {
-    githubToken,
+    ...creds,
     ...(agent === 'codex' ? { openaiKey: decision.token } : { anthropicKey: decision.token }),
-    // A thread names no repository.
-    ...(row.repoFullName ? { repo: row.repoFullName } : {}),
-    ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   }));
-  await setWorkbenchFleetAccount(row, decision.to.id);
+  await setWorkbenchFleetAccount(row, decision.to.id, agent);
   recordHotSwap(row.workspaceId, `workbench ${row.id.slice(0, 8)}`, decision);
   return decision.note;
 }
@@ -1264,13 +1254,14 @@ export function startAccountWatch(
   row: WorkbenchRow,
   model: string | undefined,
   onSwitch: (note: string) => void,
+  agent: FleetAgent = agentOf(row),
 ): () => void {
   let stopped = false;
   let running = false;
   const timer = setInterval(() => {
     if (stopped || running) return;
     running = true;
-    void checkSandboxHotSwap(row, model)
+    void checkSandboxHotSwap(row, model, agent)
       .then((note) => {
         if (note && !stopped) onSwitch(note);
       })

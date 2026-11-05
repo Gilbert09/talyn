@@ -1,3 +1,4 @@
+import { assertSandboxAgent, validateAgentModel } from './credentialPolicy.js';
 import { archiveIdleSession } from './autoArchive.js';
 import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
 import type { BoxGateError } from '../billing/entitlements.js';
@@ -287,6 +288,8 @@ export async function sendMessage(
   if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
   if (wb.status !== 'ready' && !workbenchQueuesMessages(wb.status as WorkbenchStatus)) throw notReadyError(wb.status);
   const message = { ...normaliseMessage(input), queuedAt: receivedAt };
+  validateAgentModel(chat.agent, message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model : undefined));
+  if (wb.status === 'ready') assertSandboxAgent(wb, chat.agent === 'codex' ? 'codex' : 'claude');
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
   // A person's message that would start a turn now asks the plan first, so
@@ -692,10 +695,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // The box is awake now (an exec wakes a box the fleet suspended), so it is billed.
     await meterWorkbenchAwake(wb);
     if (live.cancelRequested) return cancelledOutcome(events);
-    const turnModel = message.model ?? chat.model ?? wb.model ?? undefined;
+    const turnModel = message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
+    validateAgentModel(agent, turnModel);
     const jobs = [
-      refreshSandboxCredentials(wb, { model: turnModel }),
+      refreshSandboxCredentials(wb, { agent, model: turnModel }),
       syncInstructionFiles(wb, agent).catch((err) => {
         if (err instanceof FleetRunNotFoundError) throw err;
         console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
@@ -804,7 +808,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         if (live.cancelRequested) return cancelledOutcome(events);
         continue;
       }
-      const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)));
+      const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)), agent);
       const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
         noteRecapStarted();
         if (parser.result) { sawResult = true; attemptSawResult = true; }
@@ -818,7 +822,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       if (live.cancelRequested || (outcome.exitCode === 0 && !parserResult?.isError) || failedOver) break;
       if (attempt + 1 >= MAX_TURN_ATTEMPTS) break;
       // The account this attempt ran on. The row can still name the one from before the turn-start switch.
-      const failedAccountId = accountId ?? workbenchFleetAccountId(wb);
+      const failedAccountId = accountId ?? workbenchFleetAccountId(wb, agent);
       if (!failedAccountId) break;
       const why = parserResult?.text?.trim() || outcome.stderrTail.trim();
       const detail = [parserResult?.text, outcome.stderrTail].filter(Boolean).join('\n');
@@ -899,7 +903,7 @@ async function failOverAccount(
   const selection = await selectFleetAccount(wb.workspaceId, agent, { model, avoidAccountIds: [failedAccountId] });
   if (!selection.account || selection.account.id === failedAccountId) return null;
   const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;
-  const next = await refreshSandboxCredentials(wb, { model, avoidAccountIds: [failedAccountId] });
+  const next = await refreshSandboxCredentials(wb, { agent, model, avoidAccountIds: [failedAccountId] });
   if (!next.accountId || next.accountId === failedAccountId) return null;
   const nextLabel = selection.accounts.find((a) => a.id === next.accountId)?.label ?? next.accountId;
   const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
@@ -1369,11 +1373,11 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     }
     // A rate limit on an adopted turn moves to another account, as a live one does.
     // Only the first attempt: a later one may already be the hop.
-    const hopFrom = workbenchFleetAccountId(wb);
+    const hopFrom = workbenchFleetAccountId(wb, chat.agent === 'codex' ? 'codex' : 'claude');
     if (lease.message && lease.attempt === 0 && hopFrom && outcome.exitCode !== 125) {
       const agent = chat.agent === 'codex' ? 'codex' : 'claude';
       const detail = [parser.result?.text, outcome.stderrTail].filter(Boolean).join('\n');
-      const model = lease.message.model ?? chat.model ?? wb.model ?? undefined;
+      const model = lease.message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
       const hop = await failOverAccount(wb, agent, model, hopFrom, detail);
       if (hop) {
         if (!parser.result?.isError && !(await hasTurnEvent(chatId, lease.turn, 'result', true))) {

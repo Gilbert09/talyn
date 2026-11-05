@@ -1,6 +1,8 @@
 import type { Request, RequestHandler, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { repositories, workspaces } from '../db/schema.js';
+import { workbenchRoutes } from '../routes/workbenches.js';
+import * as workbenchAccess from '../services/workbenches/access.js';
 import { fleetPublicRoutes } from '../routes/fleet.js';
 import { githubService } from '../services/github.js';
 import { mcpIntegrationSecrets } from '../services/mcpServers/dispatch.js';
@@ -9,9 +11,9 @@ import { resolveRunCredentials } from '../services/selfHosted/runCredentials.js'
 import { processArchive, restoreWorkbench, sweepPendingArchives } from '../services/workbenches/lifecycle.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { ensureSessionMcpToken, validateSessionMcpToken } from '../services/sessionMcpToken.js';
-import { refreshSandboxCredentials, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
+import { refreshSandboxCredentials, resumeCredentialsFor, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import {
-  backfillCredentialArchives, claimMove, getWorkbench, insertWorkbench, markArchive,
+  backfillCredentialArchives, claimMove, getWorkbench, insertChat, insertWorkbench, markArchive,
   setMoveTargetHost, updateWorkbench,
 } from '../services/workbenches/store.js';
 import { FakeFleet, isWorkSaveScript } from './helpers/fakeFleet.js';
@@ -50,12 +52,27 @@ async function credentials(runId = BOX, host = HOST) {
   return { status, body };
 }
 
+async function workbenchRequest(path: string, method: string, body: Record<string, unknown>) {
+  const workbenchRoute = workbenchRoutes().stack.find((layer) => layer.route?.path === path && layer.route.methods[method])!.route;
+  let status = 200;
+  let response: unknown;
+  const res = {
+    status(code: number) { status = code; return this; },
+    json(value: unknown) { response = value; return this; },
+  };
+  await (workbenchRoute.stack[0].handle as RequestHandler)({
+    body, params: { chatId: 'chat-test' }, user: { id: 'user-test', email: 'test@example.test' },
+  } as unknown as Request, res as Response, vi.fn());
+  return { status, body: response };
+}
+
 describe('session credentials during lifecycle operations', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
   let fleet: FakeFleet;
   const row = async () => (await getWorkbench(ID))!;
 
   beforeEach(async () => {
+    vi.mocked(resolveRunCredential).mockImplementation(async (_workspace, agent) => agent === 'claude' ? { token: 'agent-token' } : null);
     vi.stubEnv('FLEET_REPORT_TOKEN', 'fleet-test');
     testDb = await createTestDb();
     await seedUser(testDb.db);
@@ -74,6 +91,82 @@ describe('session credentials during lifecycle operations', () => {
     vi.unstubAllEnvs();
     vi.clearAllMocks();
     await testDb.cleanup();
+  });
+
+  it.each([
+    ['claude', 'gpt-6.1-terra'],
+    ['codex', 'claude-opus-5'],
+  ] as const)('rejects mismatched models for %s at all three entry points', async (agent, model) => {
+    vi.spyOn(workbenchAccess, 'userMayUseWorkbenches').mockResolvedValue(true);
+    await insertChat({ id: 'chat-test', workbenchId: ID, workspaceId: 'ws', title: 'Chat', agent });
+    for (const [path, method, body] of [
+      ['/', 'post', { workspaceId: 'ws', repositoryId: 'repo', runtime: 'sandbox', agent, model }],
+      ['/chats/:chatId', 'patch', { model }],
+      ['/chats/:chatId/messages', 'post', { text: 'hello', model }],
+    ] as const) {
+      expect(await workbenchRequest(path, method, body)).toMatchObject({
+        status: 400, body: { code: 'model_wrong_agent' },
+      });
+    }
+    expect(fleet.created).toEqual([]);
+    expect(fleet.credentialPushes).toEqual([]);
+  });
+
+  it('rejects an old box through the message route before launch', async () => {
+    vi.spyOn(workbenchAccess, 'userMayUseWorkbenches').mockResolvedValue(true);
+    await insertChat({ id: 'chat-test', workbenchId: ID, workspaceId: 'ws', title: 'Codex', agent: 'codex' });
+    expect(await workbenchRequest('/chats/:chatId/messages', 'post', { text: 'hello' })).toMatchObject({
+      status: 409,
+      body: { error: "This session's sandbox was started for Claude. Start a new session to use Codex, or switch this chat back to Claude." },
+    });
+    expect(fleet.scripts).toEqual([]);
+  });
+
+  it.each([
+    ['both', 'claude-key', 'codex-key'],
+    ['Claude only', 'claude-key', undefined],
+    ['Codex only', undefined, 'codex-key'],
+  ] as const)('sends %s on a host pull and resume', async (_name, anthropicKey, openaiKey) => {
+    vi.mocked(resolveRunCredential).mockImplementation(async (_workspace, agent) => {
+      const token = agent === 'claude' ? anthropicKey : openaiKey;
+      return token ? { token } : null;
+    });
+    const expected = {
+      githubToken: 'github-token', repo: 'a/b', integrations: { linear: 'tool-token' },
+      ...(anthropicKey ? { anthropicKey } : {}), ...(openaiKey ? { openaiKey } : {}),
+    };
+    expect(await credentials()).toEqual({ status: 200, body: expected });
+    expect(await resumeCredentialsFor(await row())).toEqual(expected);
+  });
+
+  it('refuses a Codex turn in an old Claude box before pushing credentials', async () => {
+    await expect(refreshSandboxCredentials(await row(), { agent: 'codex' })).rejects.toMatchObject({
+      status: 409,
+      message: "This session's sandbox was started for Claude. Start a new session to use Codex, or switch this chat back to Claude.",
+    });
+    expect(fleet.credentialPushes).toEqual([]);
+  });
+
+  it('uses the chat agent and sends both keys on a retry', async () => {
+    await updateWorkbench(ID, { settings: { sandboxAgents: { [BOX]: ['claude', 'codex'] } } } as Patch);
+    vi.mocked(resolveRunCredential).mockImplementation(async (_workspace, agent) => ({ token: `${agent}-key` }));
+    await refreshSandboxCredentials(await row(), { agent: 'codex', model: 'gpt-6.1-terra', avoidAccountIds: ['failed'] });
+    expect(fleet.credentialPushes.at(-1)?.creds).toMatchObject({ anthropicKey: 'claude-key', openaiKey: 'codex-key' });
+    expect(resolveRunCredential).toHaveBeenCalledWith('ws', 'codex', expect.objectContaining({ model: 'gpt-6.1-terra', avoidAccountIds: ['failed'] }));
+    expect(resolveRunCredential).toHaveBeenCalledWith('ws', 'claude', expect.objectContaining({ model: undefined, avoidAccountIds: [] }));
+  });
+
+  it('refuses a turn when its key is missing, even if the other key is available', async () => {
+    await updateWorkbench(ID, { settings: { sandboxAgents: { [BOX]: ['claude', 'codex'] } } } as Patch);
+    await expect(refreshSandboxCredentials(await row(), { agent: 'codex' })).rejects.toMatchObject({
+      status: 409, code: 'credentials_unavailable',
+    });
+    expect(fleet.credentialPushes).toEqual([]);
+  });
+
+  it('refuses a host pull when neither key is available', async () => {
+    vi.mocked(resolveRunCredential).mockResolvedValue(null);
+    expect((await credentials()).status).toBe(403);
   });
 
   it.each<[string, Patch, string, string]>([

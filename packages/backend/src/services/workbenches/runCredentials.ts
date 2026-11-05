@@ -1,24 +1,13 @@
-import { githubService } from '../github.js';
-import { resolveRunCredential } from '../selfHosted/accountSelection.js';
+import { WorkbenchError } from './errors.js';
 import { fleetPinnedEndpoint } from '../selfHosted/credentials.js';
 import type { RunCredentialsResult } from '../selfHosted/runCredentials.js';
-import { fleetClientFor, providerForAgent, setWorkbenchFleetAccount, workbenchFleetAccountId } from './sandboxRuntime.js';
+import { fleetClientFor, sandboxCredentialSet, setWorkbenchFleetAccount, workbenchFleetAccountId } from './sandboxRuntime.js';
 import { recordWorkbenchFleetHost, workbenchForCredentials, type WorkbenchRow } from './store.js';
-import { workbenchIntegrationSecrets } from './talynMcp.js';
 
 /** Every workbench sandbox id starts with this (`sandboxIdFor`). */
 export const WORKBENCH_SANDBOX_PREFIX = 'talyn-wb-';
 
-/**
- * A restarted fleet host asking for a WORKBENCH box's credentials back.
- *
- * The task path's rules, unchanged: only for a box this backend created, only
- * to the host it was created on, only while it is still in use, and only the
- * key for the vendor the box is wired to. No credential is a refusal, never an
- * answer with the key left out — the gateway would fill the gap from its own
- * custody. The key is the session's CURRENT account's (`settings.fleetAccountId`),
- * chosen again only when that account was deleted or needs a reconnect.
- */
+/** Return both usable vendor keys only to the host that owns this live session box. */
 export async function resolveWorkbenchRunCredentials(host: string, sandboxId: string): Promise<RunCredentialsResult> {
   const row = await workbenchForCredentials(sandboxId);
   if (!row) return { ok: false, reason: 'unknown_run' };
@@ -36,30 +25,21 @@ export async function resolveWorkbenchRunCredentials(host: string, sandboxId: st
     return { ok: false, reason: 'run_not_live' };
   }
 
-  const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
-  if (!githubToken) return { ok: false, reason: 'credentials_unavailable' };
-  const openai = providerForAgent(row.agent) === 'openai';
-  const recorded = workbenchFleetAccountId(row);
-  const credential = await resolveRunCredential(row.workspaceId, openai ? 'codex' : 'claude', {
-    recordedAccountId: recorded,
-    model: row.model ?? undefined,
-  });
-  const agentKey = credential?.token;
-  if (!agentKey) return { ok: false, reason: 'credentials_unavailable' };
-  if (credential.accountId && credential.accountId !== recorded) {
-    await setWorkbenchFleetAccount(row, credential.accountId).catch(() => undefined);
+  try {
+    const { creds, credentials } = await sandboxCredentialSet(row);
+    for (const agent of ['claude', 'codex'] as const) {
+      const credential = credentials[agent];
+      if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent)) {
+        await setWorkbenchFleetAccount(row, credential.accountId, agent).catch(() => undefined);
+      }
+    }
+    return { ok: true, credentials: creds };
+  } catch (error) {
+    if (error instanceof WorkbenchError && error.code === 'credentials_unavailable') {
+      return { ok: false, reason: 'credentials_unavailable' };
+    }
+    throw error;
   }
-  const integrations = await workbenchIntegrationSecrets(row);
-  return {
-    ok: true,
-    credentials: {
-      githubToken,
-      ...(openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
-      // A thread names no repository.
-      ...(row.repoFullName ? { repo: row.repoFullName } : {}),
-      ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
-    },
-  };
 }
 
 /**

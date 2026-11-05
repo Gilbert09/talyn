@@ -1,3 +1,4 @@
+import { validateAgentModel } from '../services/workbenches/credentialPolicy.js';
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import express, { Router, type Request, type Response } from 'express';
 import { forwardRequestHeaders, isSafePreviewPath, proxyBody, proxyPortRequest } from '../services/preview/portsHttp.js';
@@ -80,7 +81,7 @@ import { scheduleTurnUsage } from '../services/insights/turnUsage.js';
 import { getSandboxStatus } from '../services/workbenches/sandboxStatus.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
-import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
+import { sessionSandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
 import {
   fleetClientFor,
   loadWorkbenchConfig,
@@ -248,6 +249,11 @@ export function workbenchRoutes(): Router {
     }
     if (body.model !== undefined) {
       if (body.model !== null && typeof body.model !== 'string') return bad(res, 400, 'model must be a string or null');
+      try {
+        validateAgentModel(found.chat.agent, body.model);
+      } catch (error) {
+        return fail(res, error);
+      }
       patch.model = body.model?.trim() || null;
     }
     if (body.effort !== undefined) {
@@ -725,7 +731,7 @@ export function workbenchRoutes(): Router {
     try {
       if (row.runtime === 'sandbox' && (row.status === 'error' || row.status === 'provisioning') && !row.archivedAt) {
         const user = assertUser(req);
-        const refusal = sandboxRefusal(
+        const refusal = sessionSandboxRefusal(
           await workbenchReadiness(row.workspaceId, { id: user.id, email: user.email }),
           row.agent as WorkbenchAgent,
         );
@@ -846,7 +852,7 @@ export function workbenchRoutes(): Router {
       workbenchId: row.id,
       workspaceId: row.workspaceId,
       title: typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 200) : 'Chat',
-      // A sandbox's vendor is fixed at boot, so its chats are the workbench's agent.
+      // New chats use the session agent by default.
       agent: row.agent,
       model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : row.model,
       effort: (body.effort as WorkbenchEffort | undefined) ?? null,

@@ -274,7 +274,7 @@ describe('workbench routes', () => {
   describe('creating', () => {
     /** The provision keeps the box's start times on the row too; these tests are about the other keys. */
     const withoutBoxStart = (settings: object | undefined) => {
-      const { boxStart: _boxStart, boxStarts: _boxStarts, ...rest } = (settings ?? {}) as Record<string, unknown>;
+      const { boxStart: _boxStart, boxStarts: _boxStarts, sandboxAgents: _sandboxAgents, ...rest } = (settings ?? {}) as Record<string, unknown>;
       return rest;
     };
 
@@ -320,17 +320,16 @@ describe('workbench routes', () => {
     });
 
     it.each([
-      ['claude', 'anthropic', { anthropicKey: 'sk-ant-oat-claude' }, 'openaiKey', { openai: 'none' }],
-      ['codex', 'openai', { openaiKey: 'oa-codex' }, 'anthropicKey', { anthropic: 'none' }],
+      ['claude', 'anthropic'],
+      ['codex', 'openai'],
     ] as const)(
-      'creates a bare %s box with its own key and the other vendor suppressed',
-      async (agent, provider, key, otherKey, suppressed) => {
+      'creates a bare %s box with both vendor keys',
+      async (agent, provider) => {
         const wb = await createSandboxWorkbench({ agent });
         const body = fleet.created[0];
-        expect(body).toMatchObject({ id: `${sandboxIdFor(wb.id)}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', ...key });
-        expect(body).not.toHaveProperty(otherKey);
+        expect(body).toMatchObject({ id: `${sandboxIdFor(wb.id)}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', openaiKey: 'oa-codex' });
         expect(body.policy).toEqual({
-          credentials: suppressed,
+          credentials: {},
           egress: { mode: 'open' },
           github: { readAllRepos: true },
         });
@@ -563,11 +562,11 @@ describe('workbench routes', () => {
       expect(turn.req.cwd).toBe('/work/app');
       expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
       expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
-      // The checkpoint ran before the agent, and the credentials are the box's vendor only.
+      // The credential push includes both vendors before the agent runs.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
       // A fresh box skips the turn-start checkpoint, so none runs before the agent.
       expect(order.slice(0, order.indexOf('agent'))).not.toContain('checkpoint');
-      expect(fleet.credentialPushes[0].creds).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', repo: 'acme/app' });
+      expect(fleet.credentialPushes[0].creds).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', openaiKey: 'oa-codex', repo: 'acme/app' });
       const cps = await call('GET', `/workbenches/chats/${chatId}/checkpoints`);
       expect(cps.body.data).toEqual([]);
 
@@ -2269,13 +2268,13 @@ describe('workbench routes', () => {
       const result = await resolveRunCredentials(host, runId(wb.id));
       expect(result).toMatchObject(expected);
       if (result.ok) {
-        expect(result.credentials).toEqual({ githubToken: 'gh-token', openaiKey: 'oa-codex', repo: 'acme/app' });
+        expect(result.credentials).toEqual({ githubToken: 'gh-token', anthropicKey: 'sk-ant-oat-claude', openaiKey: 'oa-codex', repo: 'acme/app' });
       }
     });
 
     it('refuses after the archive completes, and when the subscription has gone', async () => {
       const wb = await createSandboxWorkbench();
-      creds = { openaiKey: 'oa-codex' };
+      creds = {};
       expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'credentials_unavailable' });
       creds = { claudeToken: 'sk-ant-oat-claude' };
       await call('POST', `/workbenches/${wb.id}/archive`);

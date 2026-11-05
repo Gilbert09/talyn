@@ -105,3 +105,9 @@ export function sandboxRefusal(readiness: WorkbenchReadiness, agent: WorkbenchAg
   if (!reason) return null;
   return new WorkbenchError(reason.message, REASON_STATUS[reason.code] ?? 409, reason.code);
 }
+
+/** A session can start with either vendor. A turn still needs its own agent's key. */
+export function sessionSandboxRefusal(readiness: WorkbenchReadiness, agent: WorkbenchAgent): WorkbenchError | null {
+  const refusal = sandboxRefusal(readiness, agent);
+  return refusal && sandboxRefusal(readiness, agent === 'claude' ? 'codex' : 'claude') ? refusal : null;
+}

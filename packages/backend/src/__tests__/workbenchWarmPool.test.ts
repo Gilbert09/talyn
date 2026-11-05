@@ -12,7 +12,7 @@ import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import * as boxGate from '../services/workbenches/boxGate.js';
 import * as changes from '../services/workbenches/changes.js';
 import * as changesCapture from '../services/workbenches/changesCapture.js';
-import { PROVISION_CAPACITY_WAIT, provisionWorkbench } from '../services/workbenches/lifecycle.js';
+import { createWorkbenchSandbox, PROVISION_CAPACITY_WAIT, provisionWorkbench } from '../services/workbenches/lifecycle.js';
 import { resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
@@ -85,6 +85,7 @@ describe('the warm pool', () => {
     vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => row);
     vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row) => row);
     vi.spyOn(changesCapture, 'captureChanges').mockResolvedValue({ kind: 'skipped' } as never);
+    vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
     vi.spyOn(githubService, 'compareCommits').mockResolvedValue({ files: [] });
   });
 
@@ -159,6 +160,27 @@ describe('the warm pool', () => {
   });
 
   describe('filling', () => {
+    it.each([
+      ['both', 'claude-key', 'codex-key', {}, ['claude', 'codex']],
+      ['Claude', 'claude-key', undefined, { openai: 'none' }, ['claude']],
+      ['Codex', undefined, 'codex-key', { anthropic: 'none' }, ['codex']],
+    ] as const)('creates and replaces a session box with %s credentials', async (_name, anthropicKey, openaiKey, policy, agents) => {
+      vi.mocked(accountSelection.resolveRunCredential).mockImplementation(async (_workspace, agent) => {
+        const token = agent === 'claude' ? anthropicKey : openaiKey;
+        return token ? { token } : null;
+      });
+      const row = await insertSession('wb-keys');
+      for (const sandboxId of [row.sandboxId!, `${row.sandboxId}-r1`]) {
+        const made = await createWorkbenchSandbox(row, sandboxId);
+        expect(made).toMatchObject({ ok: true, record: { credentialAgents: agents } });
+        const body = fleet.created.at(-1)!;
+        expect(body.anthropicKey).toBe(anthropicKey);
+        expect(body.openaiKey).toBe(openaiKey);
+        expect(body.policy?.credentials).toEqual(policy);
+        expect((await getWorkbench(row.id))?.settings).toMatchObject({ sandboxAgents: { [sandboxId]: agents } });
+      }
+    });
+
     it('creates, checks out and readies one box, and bills nobody for it', async () => {
       await sweepWarmPool();
       const [box] = await boxRows();
@@ -295,6 +317,15 @@ describe('the warm pool', () => {
       expect((await bootMetrics('wb-miss')).find((m) => m.metric === 'warm_pool')).toMatchObject({ hit: false, reason: 'none_ready' });
     });
 
+    it('claims a warm box for the other agent only when both keys were present at create', async () => {
+      const sandboxId = await insertReady({ record: { credentialAgents: ['claude', 'codex'] } });
+      const row = await insertSession('wb-codex', { agent: 'codex' });
+      const claim = await claimWarmBox(row);
+      expect(claim?.created.sandboxId).toBe(sandboxId);
+      expect((await getWorkbench(row.id))?.settings).toMatchObject({ sandboxAgents: { [sandboxId]: ['claude', 'codex'] } });
+      expect(fleet.credentialPushes.at(-1)?.creds).toMatchObject({ anthropicKey: 'claude-key', openaiKey: 'claude-key' });
+    });
+
     it.each([
       ['another agent', { agent: 'codex' }],
       ['no internet', { settings: { internetAccess: false } }],
@@ -351,7 +382,8 @@ describe('the warm pool', () => {
       ['too many files to tell', Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified' })), 'base_moved'],
     ])('replaces a box when the base changes %s', async (_name, files, reason) => {
       const box = await fillAndAge({ checkedAt: old });
-      vi.spyOn(githubService, 'compareCommits').mockResolvedValue({ files });
+      vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
+    vi.spyOn(githubService, 'compareCommits').mockResolvedValue({ files });
       await sweepWarmPool();
       expect((await boxRows()).find((b) => b.id === box.id)).toMatchObject({ status: 'ended', endReason: reason });
       expect(fleet.deleted).toEqual([box.sandboxId]);
@@ -360,14 +392,16 @@ describe('the warm pool', () => {
 
     it('replaces a box whose base was rewritten', async () => {
       const box = await fillAndAge({ checkedAt: old });
-      vi.spyOn(githubService, 'compareCommits').mockResolvedValue(null);
+      vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
+    vi.spyOn(githubService, 'compareCommits').mockResolvedValue(null);
       await sweepWarmPool();
       expect((await boxRows()).find((b) => b.id === box.id)?.endReason).toBe('base_rewritten');
     });
 
     it('keeps a box when only code changed, and stamps the check', async () => {
       const box = await fillAndAge({ checkedAt: old });
-      vi.spyOn(githubService, 'compareCommits').mockResolvedValue({ files: [{ filename: 'src/app.ts', status: 'modified' }] });
+      vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
+    vi.spyOn(githubService, 'compareCommits').mockResolvedValue({ files: [{ filename: 'src/app.ts', status: 'modified' }] });
       await sweepWarmPool();
       const [kept] = await readyBoxes();
       expect(kept.id).toBe(box.id);
@@ -376,7 +410,8 @@ describe('the warm pool', () => {
 
     it('keeps a box when GitHub cannot answer', async () => {
       const box = await fillAndAge({ checkedAt: old });
-      vi.spyOn(githubService, 'compareCommits').mockRejectedValue(new Error('502'));
+      vi.spyOn(githubService, 'getVerifiedAccessToken').mockResolvedValue('gh-token');
+    vi.spyOn(githubService, 'compareCommits').mockRejectedValue(new Error('502'));
       await sweepWarmPool();
       expect((await readyBoxes()).map((b) => b.id)).toEqual([box.id]);
     });
