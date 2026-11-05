@@ -634,10 +634,23 @@ describe('/v1 session work', () => {
       expect(cleared.body).toMatchObject({ model: null, effort: null, title: 'Review' });
     });
 
+    it('switches the chat agent when the sandbox supports both providers', async () => {
+      await testDb.db.update(workbenches).set({
+        sandboxId: 'box-both',
+        settings: { sandboxAgents: { 'box-both': ['claude', 'codex'] } },
+      }).where(eq(workbenches.id, 's1'));
+      await testDb.db.update(workbenchChats).set({ queuedMessages: [] }).where(eq(workbenchChats.id, 'c1'));
+      const res = await call('PATCH', '/chats/c1', { agent: 'codex', model: null });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ object: 'chat', agent: 'codex', model: null, status: 'idle' });
+      expect(await getChat('c1')).toMatchObject({ agent: 'codex', agentSessionId: null });
+    });
+
     it.each([
       ['an empty title', { title: '   ' }, 'title'],
       ['an unknown effort', { effort: 'max-plus' }, 'effort'],
       ['a camelCase field', { planMode: true }, 'planMode'],
+      ['an unknown agent', { agent: 'gemini' }, 'agent'],
     ])('refuses %s', async (_label, body, param) => {
       const res = await call('PATCH', '/chats/c1', body);
       expect([res.status, res.body.error.param]).toEqual([400, param]);

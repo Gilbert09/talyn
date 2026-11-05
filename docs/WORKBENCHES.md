@@ -43,10 +43,9 @@ One stream parser (`packages/shared/src/agentStream.ts`) serves both runtimes.
 
 Consequences to respect:
 
-- **A sandbox's LLM vendor is fixed at create** (`provider` decides the box's egress route
-  table). A workbench therefore has ONE agent vendor for its sandbox; a chat tab on the other
-  vendor needs a second sandbox or is refused. v1: the workbench's `agent` is fixed at
-  creation for sandbox workbenches; local workbenches may mix.
+- **A sandbox records its allowed agents at create.** New boxes receive every connected
+  provider credential. A chat can switch between those providers. Older boxes that received
+  one credential still refuse the other provider.
 - **exec has no stdin**: no mid-turn steering in the sandbox. Messages sent while a turn runs
   are QUEUED and drained when it ends. (`--permission-mode` is chosen per turn; interactive
   permission prompts are local-only.)

@@ -3938,6 +3938,14 @@
             "minLength": 1,
             "maxLength": 200
           },
+          "agent": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ],
+            "description": "Stops a running turn, then continues the chat with this agent."
+          },
           "model": {
             "type": [
               "string",
@@ -7670,7 +7678,7 @@
       "patch": {
         "operationId": "updateChat",
         "summary": "Update a chat",
-        "description": "Rename the chat, or change the model, effort or plan mode its next turns use. Send only the fields to change.\n\nScope: `sessions:write`.",
+        "description": "Rename the chat, switch its agent, or change the model, effort or plan mode its next turns use. Send only the fields to change.\n\nScope: `sessions:write`.",
         "tags": [
           "Chats"
         ],

@@ -39,6 +39,29 @@ function PickerSelect({ children, ...props }: React.SelectHTMLAttributes<HTMLSel
   );
 }
 
+export function AgentPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: WorkbenchAgent;
+  onChange: (agent: WorkbenchAgent) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <PickerSelect
+      value={value}
+      onChange={(e) => onChange(e.target.value as WorkbenchAgent)}
+      disabled={disabled}
+      title="Agent"
+      aria-label="Agent"
+    >
+      <option value="claude">Claude</option>
+      <option value="codex">Codex</option>
+    </PickerSelect>
+  );
+}
+
 export function ModelPicker({
   agent,
   value,

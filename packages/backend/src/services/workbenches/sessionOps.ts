@@ -1,5 +1,6 @@
 import type {
   WorkbenchChanges,
+  WorkbenchAgent,
   WorkbenchConfig,
   WorkbenchDiff,
   WorkbenchDiffScope,
@@ -19,8 +20,9 @@ import { githubDiff, githubFileAt } from './changesGithub.js';
 import { listsKey, readChangesMeta, storeConfig } from './changesStore.js';
 import { storedChanges, storedConfig, storedFile, storedFileList, storedPatch, storedPreviewPatch } from './changesStored.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
-import { emitWorkbenchChat, emitWorkbenchUpdated } from './emit.js';
+import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, refuseThread, WorkbenchError } from './errors.js';
+import { assertSandboxAgent, validateAgentModel } from './credentialPolicy.js';
 import { startStaleGoldenMove } from './move.js';
 import { chooseReadSource, type StoredReadReason } from './sandboxReadSource.js';
 import { publicWorkbench } from './prLink.js';
@@ -29,16 +31,19 @@ import { requestSessionResize, type ResizeInput, type SessionResizeResult } from
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
 import { startScript, stopScript } from './scripts.js';
 import {
+  getChat,
   getWorkbench,
   isThread,
   listChats,
+  appendEvents,
   removeQueuedMessage,
   rowToChat,
+  switchChatAgentIfIdle,
   updateChat,
   type ChatRow,
   type WorkbenchRow,
 } from './store.js';
-import { cancelTurn, endCapacityWait, sendMessage } from './turns.js';
+import { cancelTurn, endCapacityWait, sendMessage, startQueuedIfIdle } from './turns.js';
 import { noteChangesStale, noteDiffStatFresh } from './workCheckpoint.js';
 
 /**
@@ -274,6 +279,61 @@ export async function patchChat(
   const row = (await updateChat(chat.id, patch)) ?? chat;
   emitWorkbenchChat(row.workspaceId, rowToChat(row));
   return row;
+}
+
+const AGENT_SWITCH_WAIT_MS = 10_000;
+
+/**
+ * Stop the old provider and change the chat before a queued turn can start.
+ * The next provider receives a text recap because vendor session ids differ.
+ */
+export async function switchChatAgent(
+  chat: ChatRow,
+  workbench: WorkbenchRow,
+  agent: WorkbenchAgent,
+  model: string | null,
+): Promise<ChatRow> {
+  validateAgentModel(agent, model);
+  if (chat.agent === agent) return patchChat(chat, { model });
+  if (workbench.runtime === 'local') {
+    throw new WorkbenchError('Agent switching is available for sandbox sessions.', 409, 'local_runtime');
+  }
+  if (workbench.runtime === 'sandbox') assertSandboxAgent(workbench, agent);
+
+  const deadline = Date.now() + AGENT_SWITCH_WAIT_MS;
+  for (;;) {
+    const current = await getChat(chat.id);
+    if (!current) throw new WorkbenchError('Chat not found', 404, 'not_found');
+    if (current.agent === agent && current.status !== 'running') return current;
+    if (current.status === 'running') await cancelTurn(current.id);
+
+    const switched = await switchChatAgentIfIdle(current.id, agent, model);
+    if (switched) {
+      if (switched.turnCount > 0) {
+        const from = current.agent === 'codex' ? 'Codex' : 'Claude';
+        const to = agent === 'codex' ? 'Codex' : 'Claude';
+        const events = await appendEvents(switched.id, [{
+          turn: switched.turnCount,
+          event: {
+            type: 'system',
+            subtype: 'agent_switched',
+            text: `Switched from ${from} to ${to}. The next turn continues with a conversation recap.`,
+            talyn: { from: current.agent, to: agent },
+          },
+        }]);
+        emitWorkbenchEvents(switched.workspaceId, switched.id, events);
+      }
+      emitWorkbenchChat(switched.workspaceId, rowToChat(switched));
+      void startQueuedIfIdle(switched.id).catch((err) => {
+        console.warn(`[workbench] starting the queue after switching chat ${switched.id} failed:`, err);
+      });
+      return switched;
+    }
+    if (Date.now() >= deadline) {
+      throw new WorkbenchError('The running turn did not stop. Try the agent switch again.', 409, 'agent_switch_timeout');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 /** Take one message out of a chat's queue. Null when the chat is gone. */

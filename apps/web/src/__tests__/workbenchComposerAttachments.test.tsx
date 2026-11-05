@@ -182,3 +182,28 @@ it('shows an ordinary queued message as a Queued chip', () => {
   expect(screen.getByText('later')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
 });
+
+it('switches the chat provider from the composer', async () => {
+  const activeChat = { ...chat, agent: 'claude' as const, model: 'claude-opus-5' };
+  const update = vi.spyOn(api.workbenches, 'updateChat').mockResolvedValue({
+    ...activeChat,
+    agent: 'codex',
+    model: 'gpt-6.1-sol',
+  });
+  render(
+    <Composer
+      workbench={workbench}
+      chat={activeChat}
+      ops={sandboxOps(workbench)}
+      todos={null}
+      contextUsage={null}
+      slashCommands={null}
+    />,
+  );
+
+  fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'codex' } });
+  await waitFor(() => expect(update).toHaveBeenCalledWith('chat-1', expect.objectContaining({
+    agent: 'codex',
+    model: expect.any(String),
+  })));
+});

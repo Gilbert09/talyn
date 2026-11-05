@@ -75,6 +75,7 @@ import {
   resizeSession,
   startSessionScript,
   stopSessionScript,
+  switchChatAgent,
 } from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
 import { scheduleTurnUsage } from '../services/insights/turnUsage.js';
@@ -242,6 +243,9 @@ export function workbenchRoutes(): Router {
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
     const body = (req.body ?? {}) as UpdateWorkbenchChatInput;
+    if (body.agent !== undefined && body.agent !== 'claude' && body.agent !== 'codex') {
+      return bad(res, 400, 'agent must be "claude" or "codex"');
+    }
     const patch: Parameters<typeof updateChat>[1] = {};
     if (body.title !== undefined) {
       if (typeof body.title !== 'string' || !body.title.trim()) return bad(res, 400, 'title must be a non-empty string');
@@ -250,7 +254,7 @@ export function workbenchRoutes(): Router {
     if (body.model !== undefined) {
       if (body.model !== null && typeof body.model !== 'string') return bad(res, 400, 'model must be a string or null');
       try {
-        validateAgentModel(found.chat.agent, body.model);
+        validateAgentModel(body.agent ?? found.chat.agent, body.model);
       } catch (error) {
         return fail(res, error);
       }
@@ -264,7 +268,17 @@ export function workbenchRoutes(): Router {
       if (typeof body.planMode !== 'boolean') return bad(res, 400, 'planMode must be a boolean');
       patch.planMode = body.planMode;
     }
-    ok(res, rowToChat(await patchChat(found.chat, patch)));
+    try {
+      let chat = found.chat;
+      if (body.agent !== undefined && body.agent !== chat.agent) {
+        chat = await switchChatAgent(chat, found.workbench, body.agent, body.model?.trim() || null);
+        delete patch.model;
+      }
+      if (Object.keys(patch).length > 0) chat = await patchChat(chat, patch);
+      ok(res, rowToChat(chat));
+    } catch (error) {
+      fail(res, error);
+    }
   });
 
   /** Close a chat tab. A running turn is stopped first; the transcript stays. */

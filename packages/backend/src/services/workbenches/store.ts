@@ -1051,6 +1051,45 @@ export async function updateChat(
   return row ?? null;
 }
 
+/**
+ * Change the provider only while no turn runs. The status condition closes
+ * the gap where a queued message could start on the old provider.
+ */
+export async function switchChatAgentIfIdle(
+  id: string,
+  agent: WorkbenchAgent,
+  model: string | null,
+): Promise<ChatRow | null> {
+  const queuedModel = model
+    ? sql`jsonb_build_object('model', ${model}::text)`
+    : sql`'{}'::jsonb`;
+  const queuedMessages = sql<WorkbenchQueuedMessage[]>`COALESCE((
+    SELECT jsonb_agg((item.value - 'model') || ${queuedModel} ORDER BY item.ordinal)
+    FROM jsonb_array_elements(${chatsTable.queuedMessages}) WITH ORDINALITY AS item(value, ordinal)
+  ), '[]'::jsonb)`;
+  const [row] = await db()
+    .update(chatsTable)
+    .set({
+      agent,
+      model,
+      agentSessionId: null,
+      recapPending: sql`${chatsTable.recapPending} OR ${chatsTable.turnCount} > 0`,
+      agentBackup: null,
+      agentBackupPending: false,
+      backupLeaseUntil: null,
+      backupRetryAt: null,
+      backupFailures: 0,
+      backupToken: null,
+      status: 'idle',
+      statusMessage: null,
+      queuedMessages,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(chatsTable.id, id), ne(chatsTable.status, 'running')))
+    .returning(CHAT_COLUMNS);
+  return row ?? null;
+}
+
 /** Every chat a dead process left `running`. Reads the partial index only. */
 export async function runningChats(): Promise<Array<{ id: string; workbenchId: string; workspaceId: string }>> {
   return db()

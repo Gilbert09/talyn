@@ -350,6 +350,9 @@ export const SessionReadiness = z
 export const UpdateChatBody = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
+    agent: z.enum(['claude', 'codex']).optional().openapi({
+      description: 'Stops a running turn, then continues the chat with this agent.',
+    }),
     model: z.string().max(200).nullable().optional().openapi({ description: "Null: the session's model." }),
     effort: z.enum(WORKBENCH_EFFORTS as [string, ...string[]]).nullable().optional(),
     plan_mode: z.boolean().optional(),
