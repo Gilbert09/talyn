@@ -24,7 +24,7 @@ export interface UsageModalCopy {
 }
 
 const PRO_PITCH =
-  `Pro includes ${PRO_INCLUDED_TEXT} a month (100 hours of a large box), every box size, ` +
+  `Pro includes ${PRO_INCLUDED_TEXT} a month, every box size, ` +
   `up to ${PLAN_LIMITS.pro.concurrentBoxes} boxes at once, and credits when you need more.`;
 
 /**

@@ -425,7 +425,7 @@ function ProFeatures() {
   return (
     <ul className="space-y-1 text-[13px] text-muted-foreground">
       <li className="flex items-center gap-2">
-        <Check className="h-3.5 w-3.5" /> {hours('pro')} a month (100 hours of a large box)
+        <Check className="h-3.5 w-3.5" /> {hours('pro')} a month
       </li>
       <li className="flex items-center gap-2">
         <Check className="h-3.5 w-3.5" /> Every box size, up to {PLAN_LIMITS.pro.concurrentBoxes} at once

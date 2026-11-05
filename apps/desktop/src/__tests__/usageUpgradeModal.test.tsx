@@ -64,7 +64,7 @@ describe('UpgradeModal with usage billing', () => {
     expect(screen.getByText('Upgrade to Pro')).toBeInTheDocument();
     expect(screen.getByText('$400/yr')).toBeInTheDocument();
     expect(screen.getByText('$40/mo')).toBeInTheDocument();
-    expect(screen.getByText(/200 box-hours a month \(100 hours of a large box\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^\s*200 box-hours a month\s*$/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $40/mo' }));
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'pro' }));
     expect(openExternal).toHaveBeenCalledWith('https://polar.test/checkout');
