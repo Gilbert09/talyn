@@ -16,6 +16,7 @@ const restore = jest.fn();
 const createChat = jest.fn();
 const unlinkPullRequest = jest.fn();
 const openPullRequests = jest.fn().mockResolvedValue([]);
+const update = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   api: {
     pullRequests: { merge: (...a: unknown[]) => merge(...a) },
@@ -25,6 +26,7 @@ jest.mock('../renderer/lib/api', () => ({
       unlinkPullRequest: (...a: unknown[]) => unlinkPullRequest(...a),
       openPullRequests: (...a: unknown[]) => openPullRequests(...a),
       createChat: (...a: unknown[]) => createChat(...a),
+      update: (...a: unknown[]) => update(...a),
     },
   },
 }));
@@ -102,6 +104,29 @@ afterEach(() => {
 });
 
 describe('WorkbenchHeader layout', () => {
+  it('renames from the menu and saves on blur', async () => {
+    update.mockResolvedValue({ ...WB, title: 'New title' });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename session' }));
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
+    fireEvent.change(input, { target: { value: '  New title  ' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(update).toHaveBeenCalledWith('wb1', { title: 'New title' }));
+    expect(useWorkbenchStore.getState().workbenches.wb1.title).toBe('New title');
+    expect(trackEvent).toHaveBeenCalledWith('session_renamed', { workbench_id: 'wb1' });
+  });
+
+  it('opens the title input on double-click and cancels with Escape', () => {
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.doubleClick(screen.getByRole('heading', { name: 'lisbon' }));
+    const input = screen.getByRole('textbox', { name: 'Session title' });
+    fireEvent.change(input, { target: { value: 'Other title' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'lisbon' })).toBeInTheDocument();
+  });
+
   it('puts actions and panel toggles above branch details and chips', () => {
     const { container } = render(<WorkbenchHeader workbench={WB} pr={prRow({ blockingReason: 'checks_failed', ciStatus: 'failing_required' })} chat={chat} ops={ops()} />);
     const titleRow = container.querySelector('[data-attr="workbench-header-title-row"]');
@@ -218,7 +243,7 @@ describe('WorkbenchHeader action cycle', () => {
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+    expect(items).toEqual(['Rename session', 'MergeCtrl+Shift+M', 'ArchiveCtrl+Shift+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
   });
 
   it('has a Sandbox entry in the Actions menu that opens the Sandbox tab', () => {
@@ -241,6 +266,7 @@ describe('WorkbenchHeader action cycle', () => {
     );
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
     expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      'Rename session',
       'Resolve conflicts',
       'Fix checksCtrl+Shift+X',
       'ArchiveCtrl+Shift+A',

@@ -63,6 +63,7 @@ import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
 import { timeAgo } from './new/RecentWorkbenches';
+import { useRenameSession } from './useRenameSession';
 
 const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
@@ -163,6 +164,7 @@ export function WorkbenchHeader({
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
   const continueInThread = async () => {
     setContinuing(true);
@@ -282,9 +284,11 @@ export function WorkbenchHeader({
         className="flex min-w-0 items-center gap-2"
         data-attr="workbench-header-title-row"
       >
-        <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {workbenchDisplayName(workbench)}
-        </h1>
+        {rename.editing ? rename.input : (
+          <h1 className="app-region-no-drag min-w-0 flex-1 truncate text-sm font-semibold" onDoubleClick={rename.start} title="Double-click to rename">
+            {workbenchDisplayName(workbench)}
+          </h1>
+        )}
         <div className="app-region-no-drag flex min-w-0 max-w-[70%] shrink items-center gap-2">
           {pr?.state === 'open' && pr.summary.url && (
             <div className="flex min-w-0 items-center gap-0.5">
@@ -374,6 +378,7 @@ export function WorkbenchHeader({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[13rem]">
+                  <DropdownMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename session</DropdownMenuItem>
                   {available.map((action) => {
                     const Icon = ACTION_ICON[action];
                     const keys = keysLabel(action);

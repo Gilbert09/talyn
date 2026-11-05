@@ -9,10 +9,12 @@ import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkb
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { installNavigation, useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { toast } from '../renderer/stores/toast';
 
 const archive = jest.fn();
+const update = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
-  api: { workbenches: { archive: (...a: unknown[]) => archive(...a) } },
+  api: { workbenches: { archive: (...a: unknown[]) => archive(...a), update: (...a: unknown[]) => update(...a) } },
 }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -68,6 +70,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   archive.mockReset();
+  update.mockReset();
+  jest.mocked(toast.error).mockClear();
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore.getState().setWorkbenches('ws1', [lisbon, oslo]);
   useWorkbenchStore.setState({ listLoaded: true });
@@ -80,6 +84,42 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('sidebar session context menu', () => {
+  async function editTitle(value: string, key = 'Enter') {
+    rightClick(/lisbon/);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const input = await screen.findByRole('textbox', { name: 'Session title' });
+    expect(input).toHaveAttribute('maxLength', '100');
+    fireEvent.change(input, { target: { value } });
+    fireEvent.keyDown(input, { key });
+  }
+
+  it('saves a trimmed title from Rename', async () => {
+    update.mockResolvedValue({ ...lisbon, title: 'New title' });
+    render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
+    await editTitle('  New title  ');
+    await waitFor(() => expect(update).toHaveBeenCalledWith('lisbon', { title: 'New title' }));
+    expect(useWorkbenchStore.getState().workbenches.lisbon.title).toBe('New title');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+  });
+
+  it('cancels on Escape and ignores an empty title', async () => {
+    render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
+    await editTitle('Other title', 'Escape');
+    expect(update).not.toHaveBeenCalled();
+    await editTitle('   ');
+    await editTitle('lisbon');
+    expect(update).not.toHaveBeenCalled();
+    expect(useWorkbenchStore.getState().workbenches.lisbon.title).toBeUndefined();
+  });
+
+  it('restores the old title and shows an error after a failed save', async () => {
+    update.mockRejectedValue(new Error('offline'));
+    render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
+    await editTitle('Other title');
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not rename the session', 'offline'));
+    expect(useWorkbenchStore.getState().workbenches.lisbon.title).toBeUndefined();
+  });
+
   it('archives a session after confirming, and stays on the current route', async () => {
     archive.mockResolvedValue({ ...lisbon, status: 'archived', archivedAt: '2026-10-14T00:00:00Z' });
     render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);

@@ -24,6 +24,7 @@ import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
+import { useRenameSession } from '../workbench/useRenameSession';
 
 export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
@@ -93,6 +94,7 @@ function WorkbenchRow({
   const prUrl = pr?.summary.url ?? workbench.pr?.url;
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const rename = useRenameSession(workbench);
 
   const copyBranch = () => {
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
@@ -112,9 +114,18 @@ function WorkbenchRow({
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            onClick={onSelect}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (!rename.editing) onSelect();
+            }}
+            onKeyDown={(event) => {
+              if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                event.preventDefault();
+                onSelect();
+              }
+            }}
             data-attr="sidebar-workbench-row"
             aria-current={selected ? 'page' : undefined}
             className={cn(
@@ -126,15 +137,17 @@ function WorkbenchRow({
             <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
             </span>
-            <span
-              className={cn(
-                'min-w-[5rem] flex-1 truncate',
-                isUnread ? 'font-semibold' : 'font-normal',
-                done && !selected && 'opacity-60'
-              )}
-            >
-              {workbenchDisplayName(workbench)}
-            </span>
+            {rename.editing ? rename.input : (
+              <span
+                className={cn(
+                  'min-w-[5rem] flex-1 truncate',
+                  isUnread ? 'font-semibold' : 'font-normal',
+                  done && !selected && 'opacity-60'
+                )}
+              >
+                {workbenchDisplayName(workbench)}
+              </span>
+            )}
             {diff && !done && (
               // All or nothing: when the counts do not fit, they wrap to a hidden second line.
               <span
@@ -150,10 +163,11 @@ function WorkbenchRow({
             )}
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
-          </button>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
+          <ContextMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename</ContextMenuItem>
           {workbench.branch && (
             <ContextMenuItem onSelect={copyBranch}>
               <Copy className="h-3.5 w-3.5" />
