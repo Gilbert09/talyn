@@ -5,6 +5,7 @@ import { listPosts } from "@/lib/posts";
 import { listGuides } from "@/lib/guides";
 import { listFeaturePages } from "@/lib/features";
 import { listComparePages } from "@/lib/compare";
+import { listDocs } from "@/lib/docs";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // Guides are ungated — unlike the blog, each ships complete or not at all,
@@ -31,6 +32,15 @@ export default function sitemap(): MetadataRoute.Sitemap {
     changeFrequency: "monthly" as const,
     priority: 0.8,
   }));
+
+  const docs: MetadataRoute.Sitemap = [
+    { url: `${site.url}/docs`, changeFrequency: "weekly" as const, priority: 0.8 },
+    ...listDocs().map((doc) => ({
+      url: `${site.url}/docs/${doc.slug}`,
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    })),
+  ];
 
   const staticPages: MetadataRoute.Sitemap = [
     {
@@ -75,7 +85,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   ];
 
-  const always = [...staticPages, ...features, ...comparisons, ...guides];
+  const always = [...staticPages, ...features, ...comparisons, ...guides, ...docs];
 
   // Nothing about the blog is listed while it is gated. A sitemap is an
   // invitation to crawl, so this is the surface that would do the most damage

@@ -21,8 +21,8 @@ export const site = {
   appUrl: "https://app.talyn.dev",
   /** Support/contact channel. Every Talyn user has a GitHub account. */
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
-  /** The public API reference. It lives in the repository, which is public. */
-  apiDocsUrl: "https://github.com/Gilbert09/talyn/blob/main/docs/PUBLIC_API.md",
+  /** The public API docs, in the docs section. */
+  apiDocsUrl: "/docs/api",
 };
 
 /**
@@ -44,15 +44,16 @@ export interface NavItem {
 }
 
 /**
- * Four entries. The desktop bar has a logo and three buttons to fit beside
- * them, and "Download for Windows" is wide. Sessions and threads lead because
- * the relaunch leads with them.
+ * Five entries. The desktop bar has a logo and three buttons to fit beside
+ * them, and "Download for Windows" is wide, so keep the labels to one word.
+ * Sessions and threads lead because the relaunch leads with them.
  */
 export const nav: NavItem[] = [
   { label: "Sessions", href: "features/sessions" },
   { label: "Threads", href: "features/threads" },
   { label: "Features", href: "features", group: "features" },
   { label: "Pricing", href: "pricing" },
+  { label: "Docs", href: "docs" },
 ];
 
 /**
@@ -487,6 +488,7 @@ export const footer = {
         { label: "Threads", href: "/features/threads" },
         { label: "All features", href: "/features" },
         { label: "Pricing", href: "/pricing" },
+        { label: "Docs", href: "/docs" },
         { label: "Download", href: "/download" },
         { label: "Open the web app", href: site.appUrl },
       ],
