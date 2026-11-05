@@ -13,6 +13,21 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 - The backfill is a maintenance poller (`usage-insights-backfill`, 40 chats a minute under the shared claim). Owner's call: only chats active in the last 30 days (`workbench_chats.updated_at`), and only from 01:00 to 06:00 UTC; outside the window a tick does nothing and the next night resumes from the cursor. Older history stays empty. It writes with `ON CONFLICT DO NOTHING` and stamps `completed_at` when done.
 
 **Open.** The Codex context meter (`createCodexStreamParser.contextUsage`) still reads the cumulative `input_tokens`, so it overstates after the first turn. A cancelled turn reports no result event and is not counted.
+## A warm pool of session boxes for PostHog/posthog (2026-11-05)
+
+**Why.** Boot plan R7. A new session on a user-layer image takes ~12 s before the agent starts: boot ~2.5 s, checkout ~7 s, setup ~2 s. 92% of sessions are on one repository. Tom chose one slot, for PostHog/posthog.
+
+**What changed.** `services/workbenches/warmPool.ts`, table `workbench_warm_boxes` (migration `0111`).
+- Configured per repository: `repositories.settings.warmPool` (a slot count, or `{ slots, agent }`). No flag. Absent means no pool.
+- A 60 s sweep (one replica, through the `workbench-warm-pool` maintenance claim) creates each box with `createWorkbenchSandbox` (the session create body), checks out the default branch detached (`cloneScript(..., { warm: true })`), runs the setup script, and marks it `ready`. It keeps the box awake with an exec every 4 min (the fleet suspends after 10 idle minutes), and replaces it when the create inputs change (spec hash, every 10 min), a dependency or setup file changes on the default branch (GitHub compare), or it is 4 h old.
+- A new session's first box claims a ready box with a compare-and-set (`ready -> claimed`), pushes the session's own credentials and Talyn MCP token, then provisions as usual: checkout of the session branch from the fetched base, the setup (a no-op install at the same lockfile). Any failure is a miss and the normal create runs. A claim kicks a refill.
+- Billing: a warm box opens no usage interval; it is fleet overhead until the claim, and the session's interval opens at the claim. Rows stay after the box ends, so overhead = `created_at` to `claimed_at`/`ended_at`.
+- Yielding: no fill while no host has 25% of its memory and run slots free; a ready box on such a host is dropped; a session that waits for room empties the pool and keeps it empty for 15 min.
+- Metrics: boot metrics `warm_pool` (hit, or miss with a reason), `warm_pool_ready` (`readyMs`, `fillMs`, `savedMs`), `boxStart.warm`. Warm starts stay out of `setupTimingHistory`, which describes fresh boxes.
+
+**Turn it on.** `UPDATE repositories SET settings = coalesce(settings, '{}'::jsonb) || '{"warmPool": 1}' WHERE id = '<PostHog/posthog repository id in the owner's workspace>';`
+
+**Open.** The claim always runs the session's setup. Skipping it when the checked-out commit equals the warm setup's commit would save ~2 s more. No YAS change was needed: exec resets the fleet's idle clock and create/delete/credentials push cover the rest.
 
 ## Opening a session no longer wakes its sandbox (2026-11-04)
 

@@ -797,7 +797,7 @@ export const MERGE_BASE_DEEPEN_BY = 500;
 export function cloneScript(
   row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>
     & Partial<Pick<WorkbenchRow, 'allocatedBranch' | 'pushedHeadShas'>>,
-  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean } = {},
+  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean; warm?: boolean } = {},
 ): string {
   const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
   const depth = prebaked ? 50 : 200;
@@ -856,17 +856,21 @@ export function cloneScript(
       'fi',
     ] : []),
     'remote_branch=',
-    'if [ -z "$shallow_since" ]; then',
-    `  if git ls-remote --exit-code --heads origin ${branch} >/dev/null; then`,
-    '    remote_branch=1',
-    `    ensure_refspec ${branchSpec}`,
-    `    set -- "$@" ${branchSpec}`,
-    '  else',
-    // Only status 2 means the branch is absent. A failed probe must stop checkout.
-    '    remote_status=$?',
-    '    if [ "$remote_status" -ne 2 ]; then exit "$remote_status"; fi',
-    '  fi',
-    'fi',
+    // A warm box (`warmPool.ts`) has no branch of its own: it waits on the base,
+    // detached, so a session's branch never finds a stale local copy of it.
+    ...(opts.warm ? [] : [
+      'if [ -z "$shallow_since" ]; then',
+      `  if git ls-remote --exit-code --heads origin ${branch} >/dev/null; then`,
+      '    remote_branch=1',
+      `    ensure_refspec ${branchSpec}`,
+      `    set -- "$@" ${branchSpec}`,
+      '  else',
+      // Only status 2 means the branch is absent. A failed probe must stop checkout.
+      '    remote_status=$?',
+      '    if [ "$remote_status" -ne 2 ]; then exit "$remote_status"; fi',
+      '  fi',
+      'fi',
+    ]),
     'shallow=',
     'if [ "$(git rev-parse --is-shallow-repository)" = true ]; then shallow=1; fi',
     'if [ -n "$shallow" ]; then',
@@ -879,13 +883,15 @@ export function cloneScript(
     'else',
     '  git fetch --no-tags origin "$@"',
     'fi',
-    `if git show-ref --verify --quiet ${localRef}; then`,
-    `  git checkout ${branch}`,
-    'elif [ -n "$remote_branch" ]; then',
-    `  git checkout -b ${branch} --track ${remoteBranch}`,
-    'else',
-    `  git checkout --no-track -b ${branch} ${remoteBase}`,
-    'fi',
+    ...(opts.warm ? [`git checkout --detach ${remoteBase}`] : [
+      `if git show-ref --verify --quiet ${localRef}; then`,
+      `  git checkout ${branch}`,
+      'elif [ -n "$remote_branch" ]; then',
+      `  git checkout -b ${branch} --track ${remoteBranch}`,
+      'else',
+      `  git checkout --no-track -b ${branch} ${remoteBase}`,
+      'fi',
+    ]),
     // The diff is against the merge base, and a shallow history may not reach
     // it. Deepen in bounded steps, then unshallow as the last resort.
     // A history that became complete stops the loop: no merge base there means
@@ -1182,6 +1188,17 @@ async function sandboxCredentialSet(
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   };
   return { creds, credential, recorded: recorded ?? null, model };
+}
+
+/**
+ * Hand a box the session's credentials before the row names the box: a warm
+ * box at its claim (`warmPool.ts`). The same set and rules as the per-turn
+ * push. Records the account it used.
+ */
+export async function pushSessionCredentials(row: WorkbenchRow, sandboxId: string, client: FleetClient): Promise<void> {
+  const { creds, credential, recorded } = await sandboxCredentialSet(row);
+  await client.setSandboxCredentials(sandboxId, creds);
+  if (credential.accountId && credential.accountId !== recorded) await setWorkbenchFleetAccount(row, credential.accountId);
 }
 
 /**

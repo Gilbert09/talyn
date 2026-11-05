@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { validateMcpServer } from '@talyn/shared';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import type { FleetMcpServerInline } from '../selfHosted/client.js';
@@ -18,6 +19,9 @@ import { ensureSessionMcpToken, readSessionMcpToken } from '../sessionMcpToken.j
 export const TALYN_MCP_SERVER_NAME = 'talyn';
 
 const MCP_PATH = '/api/v1/mcp';
+
+const TALYN_MCP_DESCRIPTION =
+  "Talyn, the app this session runs in: sessions (start, message, archive), the merge queue, pull requests and tasks, as the session's owner.";
 
 /**
  * The backend's public MCP endpoint, or null when this deployment cannot say.
@@ -96,9 +100,27 @@ export async function talynMcpServerFor(session: {
     name: TALYN_MCP_SERVER_NAME,
     url: talyn.url,
     transport: 'http',
-    description:
-      "Talyn, the app this session runs in: sessions (start, message, archive), the merge queue, pull requests and tasks, as the session's owner.",
+    description: TALYN_MCP_DESCRIPTION,
     secret: talyn.token,
+    inject: { kind: 'bearer' },
+  };
+}
+
+/**
+ * The `talyn` server for a WARM box's create body (`warmPool.ts`). No session
+ * owns the box yet, so it gets the route with a random secret that opens
+ * nothing. The claim's credential push replaces it with the session's token.
+ * Null when this deployment has no public MCP URL, as for a session.
+ */
+export function unclaimedTalynMcpServer(): FleetMcpServerInline | null {
+  const url = talynMcpPublicUrl();
+  if (!url) return null;
+  return {
+    name: TALYN_MCP_SERVER_NAME,
+    url,
+    transport: 'http',
+    description: TALYN_MCP_DESCRIPTION,
+    secret: `unclaimed-${randomBytes(24).toString('hex')}`,
     inject: { kind: 'bearer' },
   };
 }

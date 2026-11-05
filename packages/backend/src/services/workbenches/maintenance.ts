@@ -3,6 +3,7 @@ import { debugBus } from '../debugBus.js';
 import { backfillMergeArchives, MERGE_BACKFILL_POLLER } from './mergeBackfill.js';
 import { reapWorkbenchSandboxes, REAPER_POLLER } from './reaper.js';
 import { backfillUsageInsights, USAGE_INSIGHTS_BACKFILL } from '../insights/backfill.js';
+import { WARM_POOL, WARM_POOL_POLLER, warmPoolTick } from './warmPool.js';
 
 const timers: NodeJS.Timeout[] = [];
 export function initWorkbenchMaintenance(): void {
@@ -11,6 +12,7 @@ export function initWorkbenchMaintenance(): void {
     [MERGE_BACKFILL_POLLER, 10 * 60_000, 'Removes stale PR links and archives sessions after a merge.', backfillMergeArchives],
     [REAPER_POLLER, 5 * 60_000, 'Deletes unused session sandboxes after the grace period.', reapWorkbenchSandboxes],
     [USAGE_INSIGHTS_BACKFILL, 60_000, 'Fills the Insights usage tables from chats active in the last 30 days, 40 chats a minute, 01:00 to 06:00 UTC only, once.', () => backfillUsageInsights()],
+    [WARM_POOL_POLLER, WARM_POOL.sweepMs, 'Keeps each repository\'s warm pool of session boxes filled, awake and current.', warmPoolTick],
   ] as const) {
     let running = false;
     const tick = async () => {

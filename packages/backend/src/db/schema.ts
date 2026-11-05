@@ -2288,6 +2288,58 @@ export const workbenches = pgTable(
   })
 );
 
+/**
+ * One box of a repository's warm pool (migration 0112, `workbenches/warmPool.ts`):
+ * booted, checked out at the default branch and set up before any session
+ * asks. Until a session claims it, the box is fleet overhead and no usage
+ * interval is open for it; the claim starts the session's own interval. Rows
+ * stay after the box ends, so the overhead can be counted. No foreign keys,
+ * like `usage_intervals`: the record must outlive a deleted repository.
+ */
+export const workbenchWarmBoxes = pgTable(
+  'workbench_warm_boxes',
+  {
+    id: text('id').primaryKey(),
+    sandboxId: text('sandbox_id').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    repositoryId: text('repository_id').notNull(),
+    /** `WorkbenchAgent`: the box's vendor route table is fixed at create. */
+    agent: text('agent').notNull(),
+    /** `SandboxSize` the box was created at. */
+    size: text('size').notNull(),
+    internetAccess: boolean('internet_access').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    /** The create inputs with the secrets left out. A change makes the box stale. */
+    specHash: text('spec_hash').notNull(),
+    /** filling | ready | claimed | discarding | ended. `ended_at` is set for claimed and ended. */
+    status: text('status').notNull(),
+    fleetHost: text('fleet_host'),
+    fleetSandboxId: text('fleet_sandbox_id'),
+    /** The fleet's layer fields from the create answer, and the legacy user step ids. */
+    record: jsonb('record').$type<Record<string, unknown>>(),
+    /** HEAD after the warm checkout: the default branch when the setup ran. */
+    checkoutCommit: text('checkout_commit'),
+    setupExit: integer('setup_exit'),
+    /** From the create request to ready: the start a claim saves the person. */
+    fillMs: integer('fill_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readyAt: timestamp('ready_at', { withTimezone: true }),
+    /** The last keep-alive exec. */
+    touchedAt: timestamp('touched_at', { withTimezone: true }),
+    /** The last staleness check (spec and default branch). */
+    checkedAt: timestamp('checked_at', { withTimezone: true }),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    /** The session that took the box. No FK: the session may be deleted. */
+    claimedBy: text('claimed_by'),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    endReason: text('end_reason'),
+  },
+  (t) => ({
+    sandboxUq: uniqueIndex('uq_workbench_warm_boxes_sandbox').on(t.sandboxId),
+    liveIdx: index('idx_workbench_warm_boxes_live').on(t.repositoryId, t.status).where(sql`${t.endedAt} IS NULL`),
+  })
+);
+
 export const workbenchChats = pgTable(
   'workbench_chats',
   {

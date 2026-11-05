@@ -295,6 +295,12 @@ export interface RepositorySettings {
   repoSetup?: { command?: string | null; source?: import('./setupLayers.js').RepoSetupSource | null; readAt?: string | null; runOnBox?: import('./setupLayers.js').RepoSetupRunOnBox };
   /** What the newest box was told about its images. */
   setupImage?: import('./setupLayers.js').SetupImageStatus;
+  /**
+   * Keep this many session boxes booted, checked out and set up, so a new
+   * session here takes one instead of waiting for a boot (`workbenches/warmPool.ts`).
+   * A number is the slot count for Claude sessions. Absent or 0 means no pool.
+   */
+  warmPool?: number | { slots: number; agent?: 'claude' | 'codex' };
   /** Absent means auto. */
   sandboxSize?: SandboxSizeSetting;
   detectedSandboxSize?: CachedSandboxSize;

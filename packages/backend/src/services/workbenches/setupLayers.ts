@@ -1455,6 +1455,8 @@ export interface BoxTiming {
   /** The whole setup script, by the provision's clock, and its exit code. */
   setupMs?: number | null;
   setupExitCode?: number | null;
+  /** The box came from the warm pool. */
+  warm?: boolean;
 }
 
 /** A box start as `settings.boxStart` keeps it, before the setup adds its part. */
@@ -1478,6 +1480,7 @@ export function boxStartRecord(sandboxId: string, timing: BoxTiming, measuredAt 
     repoCommit: timing.repoCommit ?? null,
     userLayerPending: timing.userLayerPending ?? null,
     repoLayerPending: timing.repoLayerPending ?? null,
+    ...(timing.warm ? { warm: true as const } : {}),
   };
 }
 
@@ -1511,6 +1514,8 @@ export async function recordBoxSetupResults(
       steps: storedSteps(results, await stepNames(results.map((r) => r.id))),
     });
     if (!script && timing.boxReadyMs == null && timing.checkoutMs == null) return;
+    // The history is what a FRESH box of the repository costs; a warm claim skipped the boot.
+    if (timing.warm) return;
     const record: SetupTiming = {
       totalMs: script?.totalMs ?? 0,
       repositoryMs: script?.repositoryMs ?? null,

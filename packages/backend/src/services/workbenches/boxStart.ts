@@ -71,6 +71,8 @@ export interface StoredBoxStart {
   repoCommit: string | null;
   userLayerPending: boolean | null;
   repoLayerPending: boolean | null;
+  /** The box came from the repository's warm pool (`warmPool.ts`). Absent: a fresh box. */
+  warm?: true;
 }
 
 export interface StoredWake {
@@ -106,6 +108,7 @@ export async function writeBoxStart(workbenchId: string, record: StoredBoxStart)
   if (record.totalMs !== null) {
     await recordBootMetric(workbenchId, 'box_created', {
       sandboxId: record.sandboxId, cause: record.cause, layer: record.layer, totalMs: record.totalMs,
+      ...(record.warm ? { warm: true } : {}),
     }).catch((err) => console.warn(`[workbench] recording the start of ${record.sandboxId} failed:`, err));
   }
 }
@@ -197,6 +200,7 @@ export function boxStartOf(row: Pick<WorkbenchRow, 'settings' | 'sandboxId'>): S
     repoCommit: text(raw.repoCommit),
     userLayerPending: flag(raw.userLayerPending),
     repoLayerPending: flag(raw.repoLayerPending),
+    ...(raw.warm === true ? { warm: true as const } : {}),
   };
 }
 

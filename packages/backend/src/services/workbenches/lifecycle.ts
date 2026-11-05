@@ -66,7 +66,8 @@ import {
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
 import { checkpointWork, deleteSavedWork, promoteCheckpointToArchive, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
-import { talynMcpServerFor } from './talynMcp.js';
+import { talynMcpServerFor, unclaimedTalynMcpServer } from './talynMcp.js';
+import { claimWarmBox, noteWarmStartReady, yieldWarmPool, type WarmClaim } from './warmPool.js';
 import { meterWorkbenchAwake, meterWorkbenchBoxGone } from './usageMeter.js';
 import { isMaintenanceClaimHeld, withMaintenanceClaim } from './maintenanceClaim.js';
 import {
@@ -306,6 +307,8 @@ async function createWaitingForCapacity(
     noted = true;
     row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
     recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${why}: waiting for a free sandbox`, false);
+    // A real session outranks the warm pool: its boxes go back to the fleet.
+    await yieldWarmPool(`session ${row.id.slice(0, 8)} is waiting for room (${why})`);
     await recordBootMetric(row.id, 'capacity_wait_start', { why, sandboxId }).catch((err) =>
       console.warn(`[workbench] recording the capacity wait of ${row.id} failed:`, err));
     console.warn(`[workbench] no free sandbox for ${row.id} (${why}); waiting`);
@@ -477,7 +480,7 @@ export type CreatedWorkbenchSandbox =
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
-  opts: { strictSize?: boolean; queueWhenFull?: boolean; diskMib?: number } = {},
+  opts: { strictSize?: boolean; queueWhenFull?: boolean; diskMib?: number; warm?: boolean } = {},
 ): Promise<CreatedWorkbenchSandbox> {
   const resolved = await resolveSandboxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
@@ -491,7 +494,8 @@ export async function createWorkbenchSandbox(
       return null;
     })
     : null;
-  const talynServer = await talynMcpServerFor(row);
+  // A warm box has no session yet: the route goes in with a secret that opens nothing (`warmPool.ts`).
+  const talynServer = opts.warm ? unclaimedTalynMcpServer() : await talynMcpServerFor(row);
   const built = await buildSandboxCreateBody({
     id: sandboxId,
     workspaceId: row.workspaceId,
@@ -677,7 +681,11 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     // 1. The box.
     const createStartedAt = Date.now();
     const cause: BoxStartCause = opts.restore || row.memoryRestorePending === 'archive' ? 'restore' : replacingLostSandbox ? 'lost' : 'new';
-    const waited = await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
+    // A new session's first box can come ready-made from the repository's warm pool.
+    const warm: WarmClaim | null = cause === 'new' && !isThread(row) ? await claimWarmBox(row) : null;
+    const waited = warm
+      ? { created: warm.created, ownSandboxId, waitMs: 0 }
+      : await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
     if (!waited) return;
     ownSandboxId = waited.ownSandboxId;
     const { created } = waited;
@@ -722,6 +730,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       userLayerPending: created.record.userLayerPending ?? null,
       repoLayerPending: created.record.repoLayerPending ?? null,
       prebakedCheckout: hasPrebakedCheckout(boxLayer, created.record.prebakedCheckout),
+      ...(warm ? { warm: true } : {}),
     };
     // The image and the boot show in the Sandbox panel while the clone and the setup run.
     await writeBoxStart(row.id, boxStartRecord(sandboxId, startFacts)).catch((err: unknown) =>
@@ -791,6 +800,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     assertOwned(claim);
     row = await setProvisioningRow(row, sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
+    if (warm) await noteWarmStartReady(row, warm, Date.now() - createStartedAt);
     // A new box (a start, a move, a recovery): store its changes, which refreshes the stat too.
     const readyRow = row;
     void captureChanges(readyRow, 'ready').then((c) => (c.kind === 'captured' ? undefined : refreshDiffStat(readyRow)));

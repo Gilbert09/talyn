@@ -778,6 +778,13 @@
       "when": 1790900000031,
       "tag": "0111_usage_insights",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1790900000032,
+      "tag": "0112_workbench_warm_boxes",
+      "breakpoints": true
     }
   ]
 }
