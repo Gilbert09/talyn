@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { MENU_COMMANDS } from '../../lib/menuCommands';
-import { FOCUS_COMPOSER_EVENT, dispatchKeydown, isEmptyComposer, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
+import { FOCUS_COMPOSER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
+import { buildGoToShortcuts } from './goToShortcuts';
 
 export function orderedLiveWorkbenches(): Workbench[] {
   const all = Object.values(useWorkbenchStore.getState().workbenches).filter((w) => !isArchived(w));
@@ -222,6 +223,17 @@ export function buildAppShortcuts(): Shortcut[] {
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
     }),
+    {
+      id: 'composer.focus.tab',
+      keys: 'tab',
+      label: 'Focus chat input',
+      group: 'Session',
+      hidden: true,
+      // `composerForTab` leaves Tab alone in fields, the terminal, code views and overlays.
+      when: () => inWorkbench() && composerForTab() !== null,
+      run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
+    ...buildGoToShortcuts(),
   ];
 }
 

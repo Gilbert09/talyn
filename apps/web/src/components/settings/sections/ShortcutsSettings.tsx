@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { formatKeys, getShortcuts, subscribeShortcuts, type Shortcut } from '../../../lib/shortcuts';
-import { MENU_COMMANDS } from '../../../lib/menuCommands';
+import { buildAppShortcuts } from '../../layout/appShortcuts';
 import { Kbd } from '../../ui/kbd';
 import { SettingRow, SettingsPage, SettingsSection } from '../../ui/settings';
 
@@ -49,16 +49,7 @@ export function shortcutRows(shortcuts: Shortcut[]): Array<{ group: string; rows
 export function ShortcutsSettings() {
   // Re-render when the registry changes.
   useSyncExternalStore(subscribe, readVersion);
-  const groups = shortcutRows([
-    ...getShortcuts(),
-    ...MENU_COMMANDS.map((command) => ({
-      id: command.id,
-      label: command.label,
-      keys: command.keys,
-      group: command.section,
-      run: () => {},
-    })),
-  ]);
+  const groups = shortcutRows([...buildAppShortcuts(), ...getShortcuts()]);
 
   return (
     <SettingsPage title="Shortcuts" description="Keyboard shortcuts. Some apply only inside a session.">
