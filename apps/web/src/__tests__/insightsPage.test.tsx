@@ -25,6 +25,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 import { trackEvent } from '../lib/analytics';
 import { InsightsView } from '../pages/InsightsView';
+import { DayBars } from '../components/insights/InsightsCharts';
 import { AppSidebar } from '../components/layout/AppSidebar';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -478,5 +479,26 @@ describe('helpers', () => {
     [{ kind: 'custom', from: '2026-03-01', to: '2026-03-02' } as const, 'custom'],
   ])('analyticsRange(%j) is %s', (choice, range) => {
     expect(analyticsRange(choice)).toBe(range);
+  });
+});
+
+describe('day chart', () => {
+  it('shows round value ticks, date labels, and no bar for a zero day', () => {
+    const days = [0, 0.001, 0.5, 1, 1.5, 0].map((value, index) => ({ date: `2026-11-0${index + 1}`, value }));
+    render(<DayBars label="Box-hours per day" days={days} formatValue={(value) => `${value.toFixed(1)} box-hours`} />);
+    expect(screen.getByLabelText('Value axis').textContent).toBe('0.0 box-hours0.5 box-hours1.0 box-hours1.5 box-hours');
+    expect(screen.getAllByTestId('day-bar')).toHaveLength(4);
+    expect(screen.getAllByTestId('day-bar')[0]).toHaveStyle({ height: '2px' });
+    expect(screen.getByText('Nov 1')).toBeInTheDocument();
+    expect(screen.getByText('Nov 6')).toBeInTheDocument();
+    expect(screen.getByLabelText('Date axis').children).toHaveLength(4);
+    const columns = screen.getAllByRole('listitem');
+    fireEvent.mouseEnter(columns[0]);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Sun 1 Nov');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('0.0 box-hours');
+    expect(within(columns[0]).queryByTestId('day-bar')).toBeNull();
+    fireEvent.focus(columns[4]);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Thu 5 Nov');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('1.5 box-hours');
   });
 });

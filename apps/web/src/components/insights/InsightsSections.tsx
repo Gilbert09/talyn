@@ -95,8 +95,8 @@ export const computeSection: SectionSpec<'compute'> = {
       </StatGrid>
       <DayBars
         label="Box-hours per day (UTC)"
-        days={d.days.map((day) => ({ date: day.date, value: day.wsec }))}
-        format={formatBoxHoursLabel}
+        days={d.days.map((day) => ({ date: day.date, value: day.wsec / 3600 }))}
+        formatValue={(hours) => `${hours.toFixed(1)} box-hours`}
         dataAttr="insights-compute-days"
       />
       <div className="grid gap-4 md:grid-cols-2">
@@ -185,7 +185,7 @@ export const agentsSection: SectionSpec<'agents'> = {
       <DayBars
         label="Tokens per day (UTC)"
         days={d.days.map((day) => ({ date: day.date, value: totalTokens(day) }))}
-        format={(v) => `${formatTokenCount(v)} tokens`}
+        formatValue={(v) => `${formatTokenCount(v)} tokens`}
         dataAttr="insights-agents-days"
       />
       <div className="grid gap-4 md:grid-cols-2">
@@ -199,6 +199,7 @@ export const agentsSection: SectionSpec<'agents'> = {
               labelText: kind.label,
               value: d.totals[kind.key],
               valueText: formatTokenCount(d.totals[kind.key]),
+              tooltipValueText: `${count(d.totals[kind.key])} tokens`,
             }))}
           />
         </div>
@@ -212,6 +213,7 @@ export const agentsSection: SectionSpec<'agents'> = {
               labelText: agentLabel(row.agent),
               value: totalTokens(row),
               valueText: formatTokenCount(totalTokens(row)),
+              tooltipValueText: `${count(totalTokens(row))} tokens`,
               detail: `${count(row.turns)} turn${row.turns === 1 ? '' : 's'} · Estimated cost: ${costText(row.costMicros)}`,
             }))}
           />
@@ -234,6 +236,7 @@ export const agentsSection: SectionSpec<'agents'> = {
               labelText: `${modelLabel(row.model)} (${agentLabel(row.agent)})`,
               value: totalTokens(row),
               valueText: formatTokenCount(totalTokens(row)),
+              tooltipValueText: `${count(totalTokens(row))} tokens`,
               detail: `${count(row.turns)} turn${row.turns === 1 ? '' : 's'} · Estimated cost: ${costText(row.costMicros)}`,
             }))}
           />

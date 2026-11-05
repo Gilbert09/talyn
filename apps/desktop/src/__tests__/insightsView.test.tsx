@@ -16,6 +16,7 @@ import type {
   Workspace,
 } from '@talyn/shared';
 import { InsightsView } from '../renderer/pages/InsightsView';
+import { DayBars } from '../renderer/components/insights/InsightsCharts';
 import { AppSidebar } from '../renderer/components/layout/AppSidebar';
 import {
   groupFixRuns,
@@ -264,8 +265,11 @@ describe('sections', () => {
     await renderPage();
     const bars = within(screen.getByTestId('compute-days')).getAllByRole('listitem');
     expect(bars).toHaveLength(2);
-    expect(bars[1]).toHaveAttribute('title', expect.stringContaining('1.5 box-hours'));
     expect(bars[1]).toHaveAttribute('aria-label', expect.stringContaining('1.5 box-hours'));
+    expect(bars[1]).toHaveAttribute('tabindex', '0');
+    fireEvent.mouseEnter(bars[1]);
+    expect(within(screen.getByTestId('compute-days')).getByRole('tooltip')).toHaveTextContent('Tue 3 Nov');
+    expect(within(screen.getByTestId('compute-days')).getByRole('tooltip')).toHaveTextContent('1.5 box-hours');
   });
 
   it('shows the sample count for speed', async () => {
@@ -310,6 +314,28 @@ describe('sections', () => {
     expect(mockGet.mock.calls.filter(([s]) => s === section)).toHaveLength(2);
   });
 
+});
+
+describe('day chart', () => {
+  it('shows round value ticks, four date labels, and no bar for a zero day', () => {
+    const points = [0, 0.001, 0.5, 1, 1.5, 0].map((value, index) => ({
+      date: `2026-11-0${index + 1}`,
+      value,
+      valueText: `${value} box-hours`,
+    }));
+    render(<DayBars label="Box-hours per day" points={points} formatValue={(value) => `${value.toFixed(1)} box-hours`} />);
+    expect(screen.getByLabelText('Value axis').textContent).toBe('0.0 box-hours0.5 box-hours1.0 box-hours1.5 box-hours');
+    expect(screen.getAllByTestId('day-bar')).toHaveLength(4);
+    expect(screen.getAllByTestId('day-bar')[0]).toHaveStyle({ height: '2px' });
+    expect(screen.getByLabelText('Date axis').textContent).toMatch(/Nov 1|1 Nov/);
+    expect(screen.getByLabelText('Date axis').textContent).toMatch(/Nov 6|6 Nov/);
+    expect(screen.getByLabelText('Date axis').children).toHaveLength(4);
+    const zeroDay = screen.getAllByRole('listitem')[0];
+    fireEvent.mouseEnter(zeroDay);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Sun 1 Nov');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('0 box-hours');
+    expect(within(zeroDay).queryByTestId('day-bar')).toBeNull();
+  });
 });
 
 describe('agent cost copy', () => {

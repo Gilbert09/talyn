@@ -59,7 +59,8 @@ export function ComputeSection({ data }: { data: InsightsComputeResponse }) {
             <DayBars
               label="Box-hours per day"
               testId="compute-days"
-              points={data.days.map((d) => ({ date: d.date, value: d.wsec, valueText: formatBoxHoursLabel(d.wsec) }))}
+              formatValue={(hours) => `${hours.toFixed(1)} box-hours`}
+              points={data.days.map((d) => ({ date: d.date, value: d.wsec / 3600, valueText: formatBoxHoursLabel(d.wsec) }))}
             />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -162,10 +163,10 @@ export function AgentsSection({ data }: { data: InsightsAgentsResponse }) {
           <BreakdownBars
             label="Tokens by kind"
             rows={[
-              { key: 'input', label: 'Input (not from cache)', value: totals.inputTokens, valueText: formatTokenCount(totals.inputTokens) },
-              { key: 'output', label: 'Output', value: totals.outputTokens, valueText: formatTokenCount(totals.outputTokens) },
-              { key: 'cacheRead', label: 'Cache read', value: totals.cacheReadTokens, valueText: formatTokenCount(totals.cacheReadTokens) },
-              { key: 'cacheWrite', label: 'Cache write', value: totals.cacheWriteTokens, valueText: formatTokenCount(totals.cacheWriteTokens) },
+              { key: 'input', label: 'Input (not from cache)', value: totals.inputTokens, valueText: formatTokenCount(totals.inputTokens), tooltipValueText: `${count(totals.inputTokens)} tokens` },
+              { key: 'output', label: 'Output', value: totals.outputTokens, valueText: formatTokenCount(totals.outputTokens), tooltipValueText: `${count(totals.outputTokens)} tokens` },
+              { key: 'cacheRead', label: 'Cache read', value: totals.cacheReadTokens, valueText: formatTokenCount(totals.cacheReadTokens), tooltipValueText: `${count(totals.cacheReadTokens)} tokens` },
+              { key: 'cacheWrite', label: 'Cache write', value: totals.cacheWriteTokens, valueText: formatTokenCount(totals.cacheWriteTokens), tooltipValueText: `${count(totals.cacheWriteTokens)} tokens` },
             ]}
           />
         </div>
@@ -178,6 +179,7 @@ export function AgentsSection({ data }: { data: InsightsAgentsResponse }) {
               label: agentLabel(a.agent),
               value: totalTokens(a),
               valueText: `${formatTokenCount(totalTokens(a))} tokens`,
+              tooltipValueText: `${count(totalTokens(a))} tokens`,
               detail: `${plural(a.turns, 'turn', 'turns')}, est. ${costText(a.costMicros)}`,
             }))}
           />
@@ -188,6 +190,7 @@ export function AgentsSection({ data }: { data: InsightsAgentsResponse }) {
         <DayBars
           label="Tokens per day"
           testId="agents-days"
+          formatValue={(tokens) => `${formatTokenCount(tokens)} tokens`}
           points={data.days.map((d) => ({
             date: d.date,
             value: totalTokens(d),
@@ -383,25 +386,25 @@ export function TopSection({ data, onOpenSession }: { data: InsightsTopResponse;
       <TopList title="Repositories by box-hours">
         <BreakdownBars
           label="Repositories by box-hours"
-          rows={data.repositoriesByHours.map((r) => ({ key: r.repository, label: <span className="font-mono">{r.repository}</span>, value: r.wsec, valueText: hours(r.wsec) }))}
+          rows={data.repositoriesByHours.map((r) => ({ key: r.repository, label: <span className="font-mono">{r.repository}</span>, labelText: r.repository, value: r.wsec, valueText: hours(r.wsec) }))}
         />
       </TopList>
       <TopList title="Repositories by tokens">
         <BreakdownBars
           label="Repositories by tokens"
-          rows={data.repositoriesByTokens.map((r) => ({ key: r.repository, label: <span className="font-mono">{r.repository}</span>, value: r.tokens, valueText: tokens(r.tokens) }))}
+          rows={data.repositoriesByTokens.map((r) => ({ key: r.repository, label: <span className="font-mono">{r.repository}</span>, labelText: r.repository, value: r.tokens, valueText: tokens(r.tokens), tooltipValueText: `${count(r.tokens)} tokens` }))}
         />
       </TopList>
       <TopList title="Sessions by box-hours">
         <BreakdownBars
           label="Sessions by box-hours"
-          rows={data.sessionsByHours.map((s) => ({ key: s.workbenchId, label: <SessionLabel session={s} onOpen={onOpenSession} />, value: s.wsec, valueText: hours(s.wsec) }))}
+          rows={data.sessionsByHours.map((s) => ({ key: s.workbenchId, label: <SessionLabel session={s} onOpen={onOpenSession} />, labelText: s.title ?? 'Deleted session', value: s.wsec, valueText: hours(s.wsec) }))}
         />
       </TopList>
       <TopList title="Sessions by tokens">
         <BreakdownBars
           label="Sessions by tokens"
-          rows={data.sessionsByTokens.map((s) => ({ key: s.workbenchId, label: <SessionLabel session={s} onOpen={onOpenSession} />, value: s.tokens, valueText: tokens(s.tokens) }))}
+          rows={data.sessionsByTokens.map((s) => ({ key: s.workbenchId, label: <SessionLabel session={s} onOpen={onOpenSession} />, labelText: s.title ?? 'Deleted session', value: s.tokens, valueText: tokens(s.tokens), tooltipValueText: `${count(s.tokens)} tokens` }))}
         />
       </TopList>
     </div>
