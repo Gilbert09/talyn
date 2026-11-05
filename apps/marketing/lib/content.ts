@@ -306,7 +306,7 @@ export const pricing = {
       blurb: "For the weeks when everything ships at once.",
       features: [
         "Everything in Free",
-        "200 box-hours a month (100 hours of a large box)",
+        "200 box-hours a month",
         "Every box size",
         "Up to 100 boxes running at once",
         "Auto-keep on every new PR, and auto-review on every new PR",

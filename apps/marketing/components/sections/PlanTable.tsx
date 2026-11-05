@@ -18,7 +18,7 @@ import { pricing } from "@/lib/content";
 const LIMITS: Array<{ label: string; free: string; paid: string }> = [
   { label: "Price, billed monthly", free: "$0", paid: "$40 per month" },
   { label: "Price, billed annually", free: "$0", paid: "$400 per year ($33.33 per month)" },
-  { label: "Box-hours included each month", free: "10", paid: "200 (100 hours of a large box)" },
+  { label: "Box-hours included each month", free: "10", paid: "200" },
   { label: "Box sizes", free: "Small and standard", paid: "Small, standard, medium, large and xlarge" },
   { label: "Boxes running at once", free: "2", paid: "Up to 100" },
   { label: "Credits and auto top-up", free: "Not included", paid: "Included" },
