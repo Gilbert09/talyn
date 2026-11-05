@@ -19,7 +19,6 @@ import { InsightsView } from '../renderer/pages/InsightsView';
 import { AppSidebar } from '../renderer/components/layout/AppSidebar';
 import {
   groupFixRuns,
-  insightsOffered,
   insightsRangeQuery,
   modelLabel,
   validateCustomRange,
@@ -202,7 +201,7 @@ beforeAll(() => {
 beforeEach(() => {
   mockGet.mockReset();
   mockTrack.mockReset();
-  setFeatures({ usageInsights: true, workbenches: true });
+  setFeatures({ workbenches: true });
   useNavigationStore.setState({ route: { view: 'insights' }, backStack: [], forwardStack: [] });
   respondWith(FULL);
 });
@@ -210,33 +209,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('nav entry', () => {
-  it.each<[string, Partial<Features> | null, boolean]>([
-    ['flag on', { usageInsights: true }, true],
-    ['flag off', { usageInsights: false }, false],
-    ['flag absent', {}, false],
-    ['features still loading', null, false],
-  ])('%s', (_name, features, shown) => {
+  it.each<[string, Partial<Features> | null]>([
+    ['features loaded', {}],
+    ['features still loading', null],
+  ])('shows Insights with %s', (_name, features) => {
     setFeatures(features);
     const { container } = render(<AppSidebar />);
     const item = container.querySelector('[data-attr="nav-insights"]');
-    if (shown) expect(item).toBeInTheDocument();
-    else expect(item).toBeNull();
+    expect(item).toBeInTheDocument();
   });
 
   it('opens the Insights route', () => {
-    setFeatures({ usageInsights: true });
     useNavigationStore.setState({ route: { view: 'home' } });
     const { container } = render(<AppSidebar />);
     fireEvent.click(container.querySelector('[data-attr="nav-insights"]') as HTMLElement);
     expect(useNavigationStore.getState().route).toEqual({ view: 'insights' });
   });
 
-  it('leaves the page when the flag is off', async () => {
-    setFeatures({ usageInsights: false });
-    const { container } = render(<InsightsView />);
-    expect(container).toBeEmptyDOMElement();
-    await waitFor(() => expect(useNavigationStore.getState().route).toEqual({ view: 'home' }));
-    expect(mockGet).not.toHaveBeenCalled();
+  it('loads Insights while features are still loading', async () => {
+    setFeatures(null);
+    await renderPage();
+    expect(mockGet).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -317,13 +310,6 @@ describe('sections', () => {
     expect(mockGet.mock.calls.filter(([s]) => s === section)).toHaveLength(2);
   });
 
-  it('names the flag refusal', async () => {
-    mockGet.mockImplementation((s: InsightsSection) =>
-      s === 'top' ? Promise.reject(Object.assign(new Error('Forbidden'), { code: 'insights_unavailable' })) : Promise.resolve(FULL[s])
-    );
-    await renderPage();
-    expect(within(sectionEl('top')).getByRole('alert')).toHaveTextContent('Insights is not available for this account.');
-  });
 });
 
 describe('agent cost copy', () => {
@@ -469,14 +455,6 @@ describe('top sessions', () => {
 });
 
 describe('helpers', () => {
-  it.each<[Partial<Features> | null, boolean]>([
-    [{ usageInsights: true }, true],
-    [{ usageInsights: false }, false],
-    [null, false],
-  ])('insightsOffered(%j) is %s', (features, expected) => {
-    expect(insightsOffered(features as Features | null)).toBe(expected);
-  });
-
   it.each<[string, string, string | null]>([
     ['2026-01-01', '2027-01-01', null],
     ['2026-01-01', '2027-01-02', 'Pick a range of 366 days or less.'],

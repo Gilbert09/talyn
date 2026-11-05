@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { eq, type SQL } from 'drizzle-orm';
@@ -50,7 +50,6 @@ import {
 } from '../services/insights/queries.js';
 import { turnFactsSql } from '../services/insights/turnUsage.js';
 import { insightsRoutes } from '../routes/insights.js';
-import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 
 const FROM = new Date('2026-11-01T00:00:00.000Z');
 const TO = new Date('2026-11-04T00:00:00.000Z');
@@ -309,14 +308,6 @@ describe('Insights route', () => {
       tier: 'free', includedWsec: 36_000, usedWsec: 12_000, creditMicrosUsed: 0,
     });
   });
-  beforeEach(() => {
-    vi.stubEnv('USAGE_INSIGHTS_ENABLED', 'true');
-    resetFeatureFlagsForTests();
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    resetFeatureFlagsForTests();
-  });
   afterAll(async () => cleanup());
 
   const call = (section: string, query: Record<string, unknown>, user = 'owner') =>
@@ -344,26 +335,16 @@ describe('Insights route', () => {
     }
   });
 
-  it.each<[string, string, Record<string, unknown>, string, number, string | undefined]>([
-    ['an unknown section', 'everything', { workspaceId: 'ws' }, 'owner', 404, undefined],
-    ['no workspace', 'compute', {}, 'owner', 400, undefined],
-    ['a workspace the caller does not own', 'compute', { workspaceId: 'ws-x' }, 'owner', 404, undefined],
-    ['a caller who owns nothing here', 'top', { workspaceId: 'ws' }, 'stranger', 404, undefined],
-    ['a bad range', 'compute', { workspaceId: 'ws', range: 'forever' }, 'owner', 400, undefined],
-  ])('refuses %s', async (_label, section, query, user, status, code) => {
+  it.each<[string, string, Record<string, unknown>, string, number]>([
+    ['an unknown section', 'everything', { workspaceId: 'ws' }, 'owner', 404],
+    ['no workspace', 'compute', {}, 'owner', 400],
+    ['a workspace the caller does not own', 'compute', { workspaceId: 'ws-x' }, 'owner', 404],
+    ['a caller who owns nothing here', 'top', { workspaceId: 'ws' }, 'stranger', 404],
+    ['a bad range', 'compute', { workspaceId: 'ws', range: 'forever' }, 'owner', 400],
+  ])('refuses %s', async (_label, section, query, user, status) => {
     const res = await call(section, query, user);
     expect(res.status).toBe(status);
     expect(res.body.success).toBe(false);
-    if (code) expect(res.body.code).toBe(code);
-  });
-
-  it.each(['false', ''])('refuses with 403 when the flag is off (USAGE_INSIGHTS_ENABLED=%j, no PostHog)', async (value) => {
-    vi.stubEnv('USAGE_INSIGHTS_ENABLED', value);
-    vi.stubEnv('TALYN_POSTHOG_KEY', '');
-    resetFeatureFlagsForTests();
-    const res = await call('compute', { workspaceId: 'ws' });
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('insights_unavailable');
   });
 });
 

@@ -12,7 +12,6 @@ import { insights } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
 import {
   DEFAULT_INSIGHTS_RANGE,
-  insightsOffered,
   insightsRangeKey,
   insightsRangeQuery,
   utcDateString,
@@ -20,7 +19,7 @@ import {
   type InsightsRangeChoice,
 } from '../lib/insights';
 import { useWorkspaceStore } from '../stores/workspace';
-import { HOME, useNavigationStore } from '../stores/navigation';
+import { useNavigationStore } from '../stores/navigation';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { PageHeader } from '../components/ui/page-header';
@@ -39,8 +38,6 @@ type SectionState<S extends InsightsSection> =
   | { status: 'ready'; key: string; data: InsightsResponseBySection[S] };
 
 function errorMessage(err: unknown): string {
-  const code = (err as { code?: unknown } | null)?.code;
-  if (code === 'insights_unavailable') return 'Insights is not available for this account.';
   return err instanceof Error && err.message ? err.message : 'Could not load this section.';
 }
 
@@ -97,16 +94,8 @@ export function InsightsView() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaceName = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId)?.name);
   const navigate = useNavigationStore((s) => s.navigate);
-  const offered = insightsOffered(features);
   const [range, setRange] = useState<InsightsRangeChoice>(DEFAULT_INSIGHTS_RANGE);
   const tracked = useRef(new Set<string>()).current;
-
-  // A remembered route to this page outlives the flag: leave once features say no.
-  useEffect(() => {
-    if (features !== null && !offered) navigate(HOME, { replace: true });
-  }, [features, offered, navigate]);
-
-  if (!offered) return null;
 
   const openSession = workbenchesOffered(features) ? (id: string) => navigate({ view: 'workbench', id }) : undefined;
 

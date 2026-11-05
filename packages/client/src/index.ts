@@ -2290,8 +2290,7 @@ class WebSocketClient {
 }
 
 // Insights — one workspace's usage analytics, one section per request.
-// 403 `insights_unavailable` when the caller is outside the `usage-insights`
-// flag; `GET /features` → `usageInsights` decides whether to draw the page.
+// Access requires the caller's workspace. Results use the caller as owner.
 export const insights = {
   get: <S extends InsightsSection>(section: S, query: InsightsQuery) => {
     const params = new URLSearchParams({ workspaceId: query.workspaceId });

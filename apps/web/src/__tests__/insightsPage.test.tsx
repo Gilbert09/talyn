@@ -13,21 +13,14 @@ import type {
   InsightsTopResponse,
 } from '@talyn/shared';
 
-const { mockGet, MockApiError } = vi.hoisted(() => {
-  class HoistedApiError extends Error {
-    constructor(message: string, readonly status: number, readonly code?: string) {
-      super(message);
-    }
-  }
-  return { mockGet: vi.fn(), MockApiError: HoistedApiError };
-});
+const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 vi.mock('../components/auth/AuthProvider', () => ({ useAuth: () => ({ user: null }) }));
 vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn(), registerSuperProperties: vi.fn() }));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, ApiError: MockApiError, insights: { get: mockGet } };
+  return { ...actual, insights: { get: mockGet } };
 });
 
 import { trackEvent } from '../lib/analytics';
@@ -42,7 +35,6 @@ import {
   customRangeError,
   fixSourceLabel,
   groupFixRuns,
-  insightsOffered,
   rangeQuery,
 } from '../lib/insights';
 
@@ -196,27 +188,20 @@ beforeEach(() => {
   vi.mocked(trackEvent).mockClear();
   mockGet.mockReset();
   serveAll();
-  setFeatures({ workbenches: true, usageInsights: true });
+  setFeatures({ workbenches: true });
   useNavigationStore.setState({ route: { view: 'insights' }, backStack: [], forwardStack: [] });
 });
 
 afterEach(cleanup);
 
 describe('navigation', () => {
-  it.each([
-    [true, true],
-    [false, false],
-  ])('usageInsights=%s draws the nav entry: %s', (flag, shown) => {
-    setFeatures({ workbenches: true, usageInsights: flag });
+  it.each([null, {}])('draws the nav entry with features %j', (features) => {
+    setFeatures(features);
     useWorkbenchStore.getState().setWorkspace('ws1');
     render(<AppSidebar />);
     const entry = document.querySelector('[data-attr="nav-insights"]');
-    if (shown) {
-      expect(entry).toBeInTheDocument();
-      expect(entry).toHaveTextContent('Insights');
-    } else {
-      expect(entry).toBeNull();
-    }
+    expect(entry).toBeInTheDocument();
+    expect(entry).toHaveTextContent('Insights');
   });
 
   it('opens the insights route from the nav entry', () => {
@@ -234,38 +219,13 @@ describe('navigation', () => {
     expect(routeForPath(path)).toEqual(route);
     expect(pathForRoute({ view: 'insights' })).toBe('/insights');
   });
-
-  it.each([
-    [null, false],
-    [{}, false],
-    [{ usageInsights: false }, false],
-    [{ usageInsights: true }, true],
-  ])('insightsOffered(%j) is %s', (features, offered) => {
-    expect(insightsOffered(features as Features | null)).toBe(offered);
-  });
 });
 
-describe('gate', () => {
-  it('shows the unavailable state and fetches nothing when the flag is off', () => {
-    setFeatures({ workbenches: true, usageInsights: false });
-    render(<InsightsView />);
-    expect(screen.getByText('Insights is not available on your account.')).toBeInTheDocument();
-    expect(mockGet).not.toHaveBeenCalled();
-  });
-
-  it('draws nothing while features are still loading', () => {
+describe('availability', () => {
+  it('loads sections while features are still loading', async () => {
     setFeatures(null);
-    const { container } = render(<InsightsView />);
-    expect(container).toBeEmptyDOMElement();
-    expect(mockGet).not.toHaveBeenCalled();
-  });
-
-  it('shows the unavailable text when a section answers insights_unavailable', async () => {
-    mockGet.mockImplementation((section: InsightsSection) =>
-      section === 'top' ? Promise.reject(new MockApiError('Forbidden', 403, 'insights_unavailable')) : Promise.resolve(DATA[section])
-    );
     await renderLoaded();
-    expect(within(sectionEl('top')).getByText('Insights is not available on your account.')).toBeInTheDocument();
+    expect(mockGet).toHaveBeenCalledTimes(5);
   });
 });
 

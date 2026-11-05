@@ -19,7 +19,6 @@ import {
 import { cn, isMacDesktop } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
-import { insightsOffered } from '../../lib/insights';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSidebarWidth } from '../../lib/sidebarWidth';
 import { useNavigationStore } from '../../stores/navigation';
@@ -189,16 +188,14 @@ export function AppSidebar() {
               dataAttr="nav-automations"
             />
           )}
-          {insightsOffered(features) && (
-            <SidebarItem
-              icon={BarChart3}
-              label="Insights"
-              collapsed={collapsed}
-              active={route.view === 'insights'}
-              onClick={() => navigate({ view: 'insights' })}
-              dataAttr="nav-insights"
-            />
-          )}
+          <SidebarItem
+            icon={BarChart3}
+            label="Insights"
+            collapsed={collapsed}
+            active={route.view === 'insights'}
+            onClick={() => navigate({ view: 'insights' })}
+            dataAttr="nav-insights"
+          />
         </div>
 
         <div className="border-t p-2">

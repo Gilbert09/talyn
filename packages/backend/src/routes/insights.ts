@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import {
   includedWeightedSeconds,
   isInsightsSection,
@@ -11,7 +11,6 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { readPeriod } from '../services/billing/usage/periods.js';
 import { resolveUsageTier } from '../services/billing/usage/tier.js';
-import { insightsRefusalReason, userMayUseInsights } from '../services/insights/access.js';
 import { loadAgents, loadCompute, loadOutput, loadSpeed, loadTop, type InsightsScope } from '../services/insights/queries.js';
 import { parseInsightsRange } from '../services/insights/range.js';
 
@@ -25,20 +24,8 @@ import { parseInsightsRange } from '../services/insights/range.js';
  * like `/billing`: the usage tables are backend-pool-only (RLS on, no policy),
  * so every query runs on the pool and is scoped here. The caller must own the
  * workspace (`requireWorkspaceAccess`), and the usage ledger is also filtered
- * by the caller's id as its owner. Gated by the `usage-insights` flag on the
- * CALLER, the subject `GET /features` answers for.
+ * by the caller's id as its owner.
  */
-
-async function refuseUnlessEnabled(req: Request, res: Response): Promise<boolean> {
-  const user = assertUser(req);
-  if (await userMayUseInsights({ distinctId: user.id, email: user.email })) return false;
-  res.status(403).json({
-    success: false,
-    error: `Insights is not available: ${insightsRefusalReason()}.`,
-    code: 'insights_unavailable',
-  });
-  return true;
-}
 
 type Loader<S extends InsightsSection> = (scope: InsightsScope, period: InsightsComputeResponse['period']) => Promise<InsightsResponseBySection[S]>;
 
@@ -60,7 +47,6 @@ export function insightsRoutes(): Router {
     }
     const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
     if (!workspaceId) return res.status(400).json({ success: false, error: 'workspaceId is required' });
-    if (await refuseUnlessEnabled(req, res)) return;
     try {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {

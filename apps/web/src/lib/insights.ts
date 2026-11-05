@@ -1,17 +1,11 @@
 import {
   INSIGHTS_MAX_DAYS,
   SANDBOX_SIZES,
-  type Features,
   type InsightsQuery,
   type InsightsRangePreset,
   type SandboxSize,
   type UsageSubjectKind,
 } from '@talyn/shared';
-
-/** Draw the Insights nav entry and page only when the account has the flag. */
-export function insightsOffered(features: Pick<Features, 'usageInsights'> | null | undefined): boolean {
-  return features?.usageInsights === true;
-}
 
 /**
  * What the range picker holds. A custom range is two whole UTC days, both

@@ -484,7 +484,6 @@ describe('featuresForUser', () => {
       'reviewRankingExport',
       'teams',
       'trunkMergeEta',
-      'usageInsights',
       'workbenches',
       'workflows',
     ]);
@@ -504,7 +503,6 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
-      usageInsights: false,
     });
   });
 
@@ -527,7 +525,6 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
-      usageInsights: false,
     });
   });
 

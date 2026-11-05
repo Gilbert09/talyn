@@ -10,7 +10,6 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
-import { insightsOffered } from '../lib/insights';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
@@ -130,9 +129,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         route: { view: 'automations', tab },
       });
     }
-    if (insightsOffered(features)) {
-      items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
-    }
+    items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
     if (mcpServersOffered(features)) {
       items.push({ key: 'mcp_servers', label: 'MCP servers', icon: Settings, route: { view: 'mcp_servers' } });
     }

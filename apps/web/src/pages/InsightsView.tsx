@@ -7,13 +7,12 @@ import {
   type InsightsResponseBySection,
   type InsightsSection,
 } from '@talyn/shared';
-import { ApiError, insights } from '../lib/api';
+import { insights } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
 import {
   DEFAULT_INSIGHTS_RANGE,
   analyticsRange,
   customRangeError,
-  insightsOffered,
   rangeKey,
   rangeQuery,
   utcDateString,
@@ -34,25 +33,16 @@ import {
   type SectionSpec,
 } from '../components/insights/InsightsSections';
 
-const UNAVAILABLE_TEXT = 'Insights is not available on your account.';
-
 export function InsightsView() {
-  const features = useWorkspaceStore((s) => s.features);
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaceName = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId)?.name);
   const [range, setRange] = useState<InsightsRangeChoice>(DEFAULT_INSIGHTS_RANGE);
-
-  if (features === null) return null;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-attr="insights-page">
       <PageHeader title="Insights" icon={<BarChart3 className="h-4 w-4" />} />
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        {!insightsOffered(features) ? (
-          <p className="p-6 text-sm text-muted-foreground" data-attr="insights-unavailable">
-            {UNAVAILABLE_TEXT}
-          </p>
-        ) : !workspaceId ? (
+        {!workspaceId ? (
           <p className="p-6 text-sm text-muted-foreground">Pick a workspace to see its insights.</p>
         ) : (
           <div className="mx-auto w-full max-w-5xl space-y-4 p-3 sm:p-6">
@@ -168,7 +158,6 @@ type SectionState<S extends InsightsSection> =
   | { status: 'ready'; data: InsightsResponseBySection[S] };
 
 function errorText(err: unknown): string {
-  if (err instanceof ApiError && err.code === 'insights_unavailable') return UNAVAILABLE_TEXT;
   if (err instanceof Error && err.message) return err.message;
   return 'Could not load this section.';
 }

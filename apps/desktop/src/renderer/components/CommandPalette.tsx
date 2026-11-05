@@ -10,7 +10,6 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
 import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
-import { insightsOffered } from '../lib/insights';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
@@ -140,9 +139,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         route: { view: 'automations', tab },
       });
     }
-    if (insightsOffered(features)) {
-      items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
-    }
+    items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
       if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
       if (section === 'slack' && !workbenchesOffered(features)) continue;

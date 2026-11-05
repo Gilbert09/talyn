@@ -1,20 +1,14 @@
 import {
   INSIGHTS_MAX_DAYS,
-  type Features,
   type InsightsQuery,
   type InsightsRangePreset,
   type UsageSubjectKind,
 } from '@talyn/shared';
 
 /**
- * Pure helpers for the Insights page: the flag, the range picker and the
- * labels. Nothing here talks to the backend.
+ * Pure helpers for the Insights page: the range picker and labels.
+ * Nothing here talks to the backend.
  */
-
-/** Three-state like `loopsOffered`: null features (still loading) offers nothing. */
-export function insightsOffered(features: Pick<Features, 'usageInsights'> | null | undefined): boolean {
-  return features?.usageInsights === true;
-}
 
 /** The applied range. Custom dates are `YYYY-MM-DD` (UTC days), both included. */
 export type InsightsRangeChoice =

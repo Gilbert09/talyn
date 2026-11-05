@@ -351,25 +351,6 @@ export const FEATURE_FLAGS = {
    * every account. Evaluated against the TOKEN OWNER on every `/v1` request
    * and when a token is minted; listing and revoking tokens are never gated.
    */
-  /**
-   * Insights: a workspace's usage analytics (box-hours, agent tokens and
-   * models, output, speed).
-   *
-   * Fails CLOSED and gated while it rolls out. It reads only the caller's own
-   * data, so an outage that hides it costs nothing, and the token figures are
-   * new numbers that must be checked against real accounts before everybody
-   * reads them. `USAGE_INSIGHTS_ENABLED=true` runs it locally with no PostHog
-   * project.
-   */
-  usageInsights: {
-    posthogKey: 'usage-insights',
-    envOverride: 'USAGE_INSIGHTS_ENABLED',
-    fallback: false,
-    description: 'Insights: usage analytics for a workspace',
-    availability: 'gated',
-    releaseScopes: ['insights'],
-  },
-
   publicApi: {
     posthogKey: 'public-api',
     envOverride: 'PUBLIC_API_ENABLED',
@@ -503,7 +484,6 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'workbenches',
   'trunkMergeEta',
   'publicApi',
-  'usageInsights',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
