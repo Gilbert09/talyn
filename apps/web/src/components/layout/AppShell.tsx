@@ -26,6 +26,12 @@ import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { lazyWithReload } from '../../lib/lazyWithReload';
+import { useActiveSpace, loadExtraWorkbench } from '../../lib/spaces';
+import { useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
+import { useSpacesStore } from '../../stores/spaces';
+import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
+import { MoveToSpaceDialog } from '../spaces/MoveToSpace';
+import { SpaceHomePage } from '../spaces/SpaceHomePage';
 
 export function AppShell() {
   const paletteOpen = useNavigationStore((s) => s.paletteOpen);
@@ -42,6 +48,9 @@ export function AppShell() {
   useBillingLive();
   useWorkbenchList();
   useAppShortcuts();
+  useSpacesBoot();
+  const space = useActiveSpace();
+  useSpaceLive(space?.space.id ?? null);
   const codeReviewIntro = useCodeReviewIntro();
   const whatsNewOpen = useWorkspaceStore((s) => s.whatsNewOpen);
 
@@ -68,6 +77,8 @@ export function AppShell() {
       <UpgradeModal open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen} />
       <ConnectAgentModal />
       <WhatsNewModal />
+      <SpaceDialogsHost />
+      <MoveToSpaceDialog />
       <CodeReviewIntroModal
         open={codeReviewIntro.open && !whatsNewOpen}
         examplePrId={codeReviewIntro.examplePrId}
@@ -83,6 +94,7 @@ export function AppShell() {
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
   const features = useWorkspaceStore((s) => s.features);
+  const space = useActiveSpace();
   const offered = workbenchesOffered(features);
   if (
     (route.view === 'workbench' ||
@@ -91,6 +103,10 @@ export function RoutedView() {
     !offered
   )
     return null;
+  // A space shows its own feed where Personal shows pages that belong only to Personal.
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'mcp_servers' || route.view === 'insights')) {
+    return <SpaceHomePage active={space} />;
+  }
   switch (route.view) {
     case 'home':
       return <HomePage />;
@@ -120,14 +136,25 @@ function useWorkbenchList(): void {
   const workbenches = useWorkbenchStore((s) => s.workbenches);
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
   const route = useNavigationStore((s) => s.route);
+  const inSpace = useActiveSpace() !== null;
+  const extraLoads = useSpacesStore((s) => s.extraLoads);
 
   useEffect(() => {
     if (workspaceId && offered) void loadWorkbenches(workspaceId);
   }, [workspaceId, offered]);
 
   useEffect(() => {
+    // A teammate's session is not in my list: fetch it before deciding the route is gone.
+    if (inSpace && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
+      const state = extraLoads[route.id];
+      if (!state) {
+        void loadExtraWorkbench(route.id);
+        return;
+      }
+      if (state === 'loading') return;
+    }
     useNavigationStore.getState().reconcileWorkbenchRoute({ workbenches, listLoaded, offered });
-  }, [route, workbenches, listLoaded, offered]);
+  }, [route, workbenches, listLoaded, offered, inSpace, extraLoads]);
 }
 
 const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));

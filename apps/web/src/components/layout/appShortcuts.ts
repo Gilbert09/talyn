@@ -10,9 +10,22 @@ import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
+import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
+
+/**
+ * ⌘1–9 belongs to the browser (switch tab), and ⌘⌥1–9 opens a session, so a
+ * context jump adds ⇧: ⌘⌥⇧1–9 (Ctrl+Alt+Shift elsewhere).
+ */
+export const CONTEXT_JUMP_KEYS = (n: number) => `mod+alt+shift+${n}`;
+
+export function orderedContexts() {
+  return contextEntries(useWorkspaceStore.getState().workspaces, useSpacesStore.getState().teams);
+}
 
 export function orderedLiveWorkbenches(): Workbench[] {
-  const all = Object.values(useWorkbenchStore.getState().workbenches).filter((w) => !isArchived(w));
+  const { workbenches, extraWorkbenchIds } = useWorkbenchStore.getState();
+  const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
   return groupByRepository(all).flatMap((g) => g.items);
 }
 
@@ -43,6 +56,14 @@ function stepWorkbench(delta: 1 | -1): void {
 
 const offered = () => workbenchesOffered(useWorkspaceStore.getState().features);
 const inWorkbench = () => offered() && currentWorkbench() !== null;
+const ownsCurrent = () => {
+  const wb = currentWorkbench();
+  if (!wb) return false;
+  if (!useWorkbenchStore.getState().extraWorkbenchIds[wb.id]) return true;
+  const ws = useWorkspaceStore.getState();
+  return isWorkbenchOwner(wb, ws.workspaces, ws.currentWorkspaceId);
+};
+const inOwnWorkbench = () => inWorkbench() && ownsCurrent();
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
@@ -57,7 +78,7 @@ function headerAction(id: string, action: WorkbenchAction): Shortcut {
     id,
     group: 'Session',
     allowInInput: true,
-    when: inWorkbench,
+    when: inOwnWorkbench,
     run: () => {
       const wb = currentWorkbench();
       if (wb) requestWorkbenchAction(wb.id, action);
@@ -81,7 +102,22 @@ export function buildAppShortcuts(): Shortcut[] {
     })
   );
 
+  const contextJumps: Shortcut[] = Array.from({ length: 9 }, (_, i) => ({
+    id: `context.jump.${i + 1}`,
+    keys: CONTEXT_JUMP_KEYS(i + 1),
+    label: `Switch to workspace or space ${i + 1}`,
+    group: 'General',
+    allowInInput: true,
+    hidden: true,
+    when: () => spacesOffered(useWorkspaceStore.getState().features) && orderedContexts().length > i,
+    run: () => {
+      const context = orderedContexts()[i];
+      if (context) switchContext(context);
+    },
+  }));
+
   return [
+    ...contextJumps,
     fromMenu({
       id: 'palette.open',
       label: 'Search',
@@ -186,7 +222,7 @@ export function buildAppShortcuts(): Shortcut[] {
       id: 'terminal.toggle',
       group: 'Session',
       allowInInput: true,
-      when: inWorkbench,
+      when: inOwnWorkbench,
       run: () => wbStore().toggleTerminal(),
     }),
     fromMenu({
@@ -204,7 +240,7 @@ export function buildAppShortcuts(): Shortcut[] {
       id: 'chat.new',
       group: 'Session',
       allowInInput: true,
-      when: inWorkbench,
+      when: inOwnWorkbench,
       run: () => {
         const wb = currentWorkbench();
         if (wb) void createChatTab(wb);

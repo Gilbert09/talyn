@@ -181,6 +181,13 @@ export function setChatFinishedListener(listener: ChatFinishedListener | null): 
 interface WorkbenchState {
   workspaceId: string | null;
   workbenches: Record<string, Workbench>;
+  /**
+   * Workbenches outside `workspaceId` that are open for viewing: a teammate's
+   * session in a space, or my own in another workspace. They live in
+   * `workbenches` so the session view works unchanged, and stay out of the
+   * Personal lists (see `useWorkspaceWorkbenches`).
+   */
+  extraWorkbenchIds: Record<string, true>;
   listLoaded: boolean;
   listError: string | null;
   /** Chats per workbench, in creation order. */
@@ -218,6 +225,8 @@ interface WorkbenchState {
   setWorkbenches: (workspaceId: string, list: Workbench[]) => void;
   setListError: (error: string | null) => void;
   upsertWorkbench: (workbench: Workbench) => void;
+  /** Hold a workbench from outside the current workspace, for viewing. */
+  addExtraWorkbench: (workbench: Workbench) => void;
   removeWorkbench: (id: string) => void;
   setChats: (workbenchId: string, chats: WorkbenchChat[]) => void;
   upsertChat: (chat: WorkbenchChat) => void;
@@ -261,6 +270,7 @@ const initialLayout = readLayout();
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   workspaceId: null,
   workbenches: {},
+  extraWorkbenchIds: {},
   listLoaded: false,
   listError: null,
   chats: {},
@@ -285,13 +295,16 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     set((s) =>
       s.workspaceId === workspaceId
         ? s
-        : { workspaceId, workbenches: {}, listLoaded: false, listError: null, selectedWorkbenchId: null }
+        : { workspaceId, workbenches: {}, extraWorkbenchIds: {}, listLoaded: false, listError: null, selectedWorkbenchId: null }
     ),
 
   setWorkbenches: (workspaceId, list) =>
     set((s) => {
       if (s.workspaceId !== workspaceId) return s;
       const workbenches: Record<string, Workbench> = {};
+      for (const id of Object.keys(s.extraWorkbenchIds)) {
+        if (s.workbenches[id]) workbenches[id] = s.workbenches[id];
+      }
       for (const wb of list) workbenches[wb.id] = wb;
       const selected = s.selectedWorkbenchId && workbenches[s.selectedWorkbenchId] ? s.selectedWorkbenchId : null;
       return { workbenches, listLoaded: true, listError: null, selectedWorkbenchId: selected };
@@ -301,7 +314,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 
   upsertWorkbench: (workbench) =>
     set((s) => {
-      if (s.workspaceId && workbench.workspaceId !== s.workspaceId) return s;
+      if (s.workspaceId && workbench.workspaceId !== s.workspaceId && !s.extraWorkbenchIds[workbench.id]) return s;
       const prev = s.workbenches[workbench.id];
       const opened = !!prev && !hasLinkedPr(prev) && hasLinkedPr(workbench);
       const looking = s.selectedWorkbenchId === workbench.id && (typeof document === 'undefined' || document.hasFocus());
@@ -311,13 +324,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { workbenches, unseen: { ...s.unseen, [workbench.id]: { ...cur, prOpened: true } } };
     }),
 
+  addExtraWorkbench: (workbench) =>
+    set((s) => {
+      if (!s.workspaceId || workbench.workspaceId === s.workspaceId) {
+        return { workbenches: { ...s.workbenches, [workbench.id]: workbench } };
+      }
+      return {
+        workbenches: { ...s.workbenches, [workbench.id]: workbench },
+        extraWorkbenchIds: { ...s.extraWorkbenchIds, [workbench.id]: true },
+      };
+    }),
+
   removeWorkbench: (id) =>
     set((s) => {
       if (!s.workbenches[id]) return s;
       const workbenches = { ...s.workbenches };
       delete workbenches[id];
+      const extraWorkbenchIds = { ...s.extraWorkbenchIds };
+      delete extraWorkbenchIds[id];
       return {
         workbenches,
+        extraWorkbenchIds,
         selectedWorkbenchId: s.selectedWorkbenchId === id ? null : s.selectedWorkbenchId,
       };
     }),

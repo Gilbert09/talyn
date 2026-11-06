@@ -32,6 +32,7 @@ import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoC
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { SessionUsageNotice } from './SessionUsageNotice';
+import { promptRefusal, useIsWorkbenchOwner } from '../../lib/spaces';
 
 export function Composer({
   workbench,
@@ -72,6 +73,10 @@ export function Composer({
   const running = chat?.status === 'running';
   const queue = chat?.queuedMessages ?? [];
   const waitText = sandboxWaitText(workbench);
+  // A teammate's session: the message runs on my subscription; chat settings and wakes stay the owner's.
+  const owner = useIsWorkbenchOwner(workbench);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  useEffect(() => setRefusal(null), [workbench.id, chat?.id]);
 
   useEffect(() => {
     setPaths(null);
@@ -183,7 +188,9 @@ export function Composer({
   const send = async () => {
     const text = draft.trim();
     if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || sendBlocked) return;
+    if (!owner && !chat) return;
     setSending(true);
+    setRefusal(null);
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
@@ -213,6 +220,11 @@ export function Composer({
       // A box refusal (out of hours, every box busy) opens the plan modal with
       // its own sentence and action; the text stays in the composer.
       if (maybeHandleBillingLimit(err, 'session_message')) return;
+      const refused = owner ? null : promptRefusal(err);
+      if (refused) {
+        setRefusal(refused);
+        return;
+      }
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {
@@ -258,7 +270,7 @@ export function Composer({
     }
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
-      void patchChat({ planMode: !planMode });
+      if (owner) void patchChat({ planMode: !planMode });
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -307,6 +319,16 @@ export function Composer({
         </ul>
       )}
       <SessionUsageNotice workbenchId={workbench.id} />
+      {!owner && (
+        <p className="mb-1.5 text-[11px] text-muted-foreground" data-attr="composer-payer-note">
+          Runs on your subscription and your box-hours
+        </p>
+      )}
+      {refusal && (
+        <p role="alert" className="mb-1.5 text-xs text-destructive" data-attr="composer-refusal">
+          {refusal}
+        </p>
+      )}
       <div
         className={cn(
           'relative rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring',
@@ -333,7 +355,8 @@ export function Composer({
           disabled={sendBlocked}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
-            wakeWorkbench(workbench.id);
+            if (owner) wakeWorkbench(workbench.id);
+            if (refusal) setRefusal(null);
             updateTrigger(e.target.value, e.target.selectionStart);
           }}
           onClick={(e) => updateTrigger(draft, e.currentTarget.selectionStart)}
@@ -354,28 +377,28 @@ export function Composer({
           <AgentPicker
             value={agent}
             onChange={(next) => void patchChat({ agent: next, model: defaultModelFor(next) })}
-            disabled={!chat || Boolean(ops.unavailable) || ops.runtime === 'local'}
+            disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'}
           />
           <ModelPicker
             agent={agent}
             value={model}
             onChange={(m) => void patchChat({ model: m })}
-            disabled={!chat || Boolean(ops.unavailable)}
+            disabled={!owner || !chat || Boolean(ops.unavailable)}
           />
           <EffortPicker
             value={effort}
             onChange={(v) => void patchChat({ effort: v })}
-            disabled={!chat || Boolean(ops.unavailable)}
+            disabled={!owner || !chat || Boolean(ops.unavailable)}
           />
           <PlanToggle
             on={planMode}
             onToggle={() => void patchChat({ planMode: !planMode })}
-            disabled={!chat || Boolean(ops.unavailable)}
+            disabled={!owner || !chat || Boolean(ops.unavailable)}
           />
           <TodoChip todos={todos} />
           <div className="flex-1" />
           <ContextMeter usage={contextUsage} />
-          {running ? (
+          {running && owner ? (
             <button
               type="button"
               onClick={() => void stop()}

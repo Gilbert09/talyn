@@ -49,6 +49,7 @@ import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { TeamSettings } from './TeamBilling';
+import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
 import { highlightsForSurface } from '@talyn/shared';
@@ -161,9 +162,12 @@ export function SettingsPanel() {
     // Drawn for anyone the flag offers teams to, and for anyone already on a
     // team whatever the flag says: a seated member must always be able to
     // see who pays for them, and leave.
-    ...(features?.teams === true || billingStatus?.team
-      ? [{ id: 'teams' as const, icon: Users, label: 'Team' }]
-      : []),
+    // With Spaces the section is Teams: members, spaces and, below, the seats.
+    ...(features?.spaces === true
+      ? [{ id: 'teams' as const, icon: Users, label: 'Teams' }]
+      : features?.teams === true || billingStatus?.team
+        ? [{ id: 'teams' as const, icon: Users, label: 'Team' }]
+        : []),
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
     { id: 'mcp' as const, icon: Plug, label: 'Talyn MCP server' },
@@ -227,7 +231,7 @@ export function SettingsPanel() {
             )}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'billing' && <BillingSettings />}
-            {activeSection === 'teams' && <TeamSettings />}
+            {activeSection === 'teams' && (features?.spaces === true ? <TeamsSettings /> : <TeamSettings />)}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
             {activeSection === 'codeReview' && <CodeReviewSettingsCard />}

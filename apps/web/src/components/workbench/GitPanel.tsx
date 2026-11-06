@@ -13,6 +13,7 @@ import { PullRequestTab } from './PullRequestTab';
 import { SandboxTab, sandboxStatusNeedsAttention, useSandboxStatus } from './SandboxStatusPanel';
 import { useTurnsEnded } from './useTurnsEnded';
 import { lazyWithReload } from '../../lib/lazyWithReload';
+import { useIsWorkbenchOwner } from '../../lib/spaces';
 const TerminalPanel = lazyWithReload(() =>
   import('./terminal/TerminalPanel').then((module) => ({
     default: module.TerminalPanel,
@@ -56,7 +57,9 @@ export function GitPanel({
   pr: PRRow | null;
 }) {
   const storedTab = useWorkbenchStore((s) => s.sideTab);
-  const hasSandbox = workbench.runtime === 'sandbox';
+  // A teammate reads the changes, files and pull request; the sandbox and its terminal stay the owner's.
+  const owner = useIsWorkbenchOwner(workbench);
+  const hasSandbox = workbench.runtime === 'sandbox' && owner;
   const tab = storedTab === 'sandbox' && !hasSandbox ? 'changes' : storedTab;
   const setTab = useWorkbenchStore((s) => s.setSideTab);
   const width = useWorkbenchStore((s) => s.rightPanelWidth);
@@ -178,9 +181,11 @@ export function GitPanel({
           </div>
         )}
       </div>
-      <Suspense fallback={null}>
-        <TerminalPanel workbench={workbench} ops={ops} />
-      </Suspense>
+      {owner && (
+        <Suspense fallback={null}>
+          <TerminalPanel workbench={workbench} ops={ops} />
+        </Suspense>
+      )}
     </div>
   );
 }

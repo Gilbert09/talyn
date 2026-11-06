@@ -10,6 +10,7 @@ import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { StatusDot } from './WorkbenchBadges';
 import { maybeHandleBillingLimit } from '../../stores/billing';
+import { useIsWorkbenchOwner } from '../../lib/spaces';
 
 /** Make a new chat tab and open it. Shared with the composer's first send. */
 export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat | null> {
@@ -57,6 +58,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
   const [renaming, setRenaming] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const viewed = useRef(new Set<string>());
+  const owner = useIsWorkbenchOwner(workbench);
 
   useEffect(() => {
     if (!selected) return;
@@ -126,10 +128,11 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
                 className="truncate"
                 onClick={() => selectChat(workbench.id, chat.id)}
                 onDoubleClick={() => {
+                  if (!owner) return;
                   setTitle(chat.title);
                   setRenaming(chat.id);
                 }}
-                title="Double-click to rename"
+                title={owner ? 'Double-click to rename' : undefined}
               >
                 {chat.title || 'Chat'}
               </button>
@@ -146,7 +149,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
           </div>
         );
       })}
-      <button
+      {owner && <button
         type="button"
         onClick={() => void newChat()}
         disabled={creating}
@@ -155,7 +158,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
         aria-label="New chat"
       >
         {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-      </button>
+      </button>}
     </div>
   );
 }

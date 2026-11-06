@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Spaces in the web app (2026-11-06)
+
+Phase P4 of Teams and Spaces: the web app can switch between Personal and a team's space. Everything is behind the `spaces` flag; with it off, the app is as before.
+
+- **Context.** `stores/workspace.ts` holds `currentContext` (`personal` with a workspace, or `space` with a space id), kept in localStorage like `currentWorkspaceId`. In a space, `currentWorkspaceId` keeps its Personal value, so code that reads it does not change. Picking a workspace goes back to Personal. A stored space that is gone falls back to Personal when the teams load.
+- **Teams store.** `stores/spaces.ts` holds my teams, members, each space's sessions, tasks, repositories and presence. It applies `workbench:*` and `task:*` frames to the space lists, and re-lists a space when a frame names a session it does not have, because a row needs its creator.
+- **Teammate sessions are "extras" in the workbench store.** `extraWorkbenchIds` lets the session view hold a session from another workspace without it showing in the Personal lists. A workbench in the main list is always mine; only an extra is checked against my workspaces (`useIsWorkbenchOwner`). On a teammate's session the header, chat tabs, composer settings, terminal and sandbox tab hide their owner-only actions. The composer says who pays, and shows a refusal from send-message inline (`payer_busy`, or any 403/409).
+- **Presence.** `usePresenceHeartbeat` subscribes to the space, sends the open session on each navigation and every 20s, and sends `away` while the tab is hidden. The client also resends the last presence on its own heartbeat; the extra frame costs little.
+- **Keys.** The browser keeps ⌘1–9, and ⌘⌥1–9 opens a session, so a context jump is ⌘⌥⇧1–9 (`context.jump.N` in `appShortcuts.ts`).
+- **Not done here.** A teammate's task shows status, creator and PR link only: there is no member read route for a task transcript yet. Sending to a teammate's session depends on P3 (prompter pays). Until it lands, the send route is owner-only and the composer shows its error as a toast. The desktop port is P6.
+
 ## Space subscriptions and presence (2026-11-06)
 
 WebSocket clients can subscribe to a space when the `spaces` flag and membership checks pass.
