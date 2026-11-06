@@ -1798,7 +1798,7 @@ expect((await learnedOf()).length).toBeGreaterThan(1);
       ['dismissed', { status: 'dismissed', acceptedBy: null }],
       ['disabled', { status: 'disabled' }],
       ['failed in the image', { imageFailedAt: new Date() }],
-      ['not yet in the image and still settling', { imageAppliedAt: null, confirmedAt: new Date() }],
+      ['not yet in the image and still settling', { imageAppliedAt: null }],
     ])('leaves out a step that is %s', async (_name, over) => {
       await imageStep('kept');
       await imageStep('left-out', over as Partial<typeof setupSteps.$inferInsert>);

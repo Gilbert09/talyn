@@ -23,7 +23,7 @@ import { assertNewWorkbenchBox } from './boxGate.js';
 import { scheduleProvision, THREAD_SANDBOX_SIZE } from './lifecycle.js';
 import { sizeForSession } from './sandboxSize.js';
 import { publicWorkbench } from './prLink.js';
-import { sessionSandboxRefusal, workbenchReadiness, type ReadinessUser } from './readiness.js';
+import { sandboxRefusal, workbenchReadiness, type ReadinessUser } from './readiness.js';
 import { sandboxIdFor } from './sandboxRuntime.js';
 import { sendWebhookSignal } from '../apiWebhooks/signals.js';
 import { conversationRecap } from './agentRecap.js';
@@ -163,9 +163,9 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
       throw refuse(400, 'A local session needs deviceId and localPath.');
     }
   } else {
-    // Check fleet access and require at least one connected subscription.
-    const readiness = await workbenchReadiness(workspaceId, actor);
-    const refusal = sessionSandboxRefusal(readiness, body.agent);
+    // A new session needs the subscription for the agent it starts with. The
+    // box carries both keys, but the first chat runs this agent.
+    const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, actor), body.agent);
     if (refusal) throw refusal;
     // The plan: budget, the concurrent-box cap and the box's size. A refusal
     // is a BoxGateError, a 402 with its notice, and nothing is inserted.
@@ -297,8 +297,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
   }
   if (body.threadId !== undefined) throw refuse(400, 'A thread cannot be in another thread.');
   if (body.runtime !== 'sandbox') throw refuse(400, 'A thread runs in a sandbox.');
-  const readiness = await workbenchReadiness(workspaceId, actor);
-  const refusal = sessionSandboxRefusal(readiness, body.agent);
+  const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, actor), body.agent);
   if (refusal) throw refusal;
   await assertNewWorkbenchBox(workspaceId, THREAD_SANDBOX_SIZE);
 

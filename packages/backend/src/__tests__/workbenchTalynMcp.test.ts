@@ -4,6 +4,7 @@ import { TALYN_TOOLS_NOTE, workbenchTurnPrompt, type WorkbenchAgent } from '@tal
 import { repositories, workspaces } from '../db/schema.js';
 import { workspaceMayUseMcpServers } from '../services/mcpServersAccess.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import { readSessionMcpToken } from '../services/sessionMcpToken.js';
 import { createWorkbenchSandbox } from '../services/workbenches/lifecycle.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
@@ -63,7 +64,9 @@ describe("the session box's create body", () => {
     await insertWorkbench({ id: 'wb', workspaceId: 'ws', repositoryId: 'repo', repoFullName: 'a/b', name: 'paris',
       branch: 'paris', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'provisioning' });
     fleet = new FakeFleet();
-    vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'agent-token' }, githubToken: 'github-token' });
+    vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'agent-token', openaiKey: 'codex-token' }, githubToken: 'github-token' });
+    vi.spyOn(accountSelection, 'resolveRunCredential')
+      .mockImplementation(async (_workspaceId, agent) => ({ token: agent === 'claude' ? 'agent-token' : 'codex-token' }));
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'a/b', defaultBranch: 'main' });
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
     vi.spyOn(runtime, 'gitAuthorFor').mockResolvedValue(undefined);
@@ -83,6 +86,7 @@ describe("the session box's create body", () => {
 
   it('adds the talyn server with the session token, replacing a workspace server of that name', async () => {
     const body = await create();
+    expect(body).toMatchObject({ anthropicKey: 'agent-token', openaiKey: 'codex-token' });
     const token = await readSessionMcpToken('wb');
     expect(token).toMatch(/^talyn_mcs_/);
     expect(body.mcpServers?.map((s) => s.name)).toEqual(['linear', 'talyn']);

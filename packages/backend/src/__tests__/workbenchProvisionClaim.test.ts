@@ -10,6 +10,7 @@ import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxSize from '../services/workbenches/sandboxSize.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import * as scripts from '../services/workbenches/scripts.js';
 import * as setupRecipe from '../services/workbenches/setupLayers.js';
 import { beginWorkbenchDrain, resetWorkbenchDrainForTests } from '../services/workbenches/ownership.js';
@@ -61,6 +62,8 @@ describe('one provision per session across instances', () => {
     clones = 0;
     onClone = () => ({ exitCode: 0 });
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    vi.spyOn(accountSelection, 'resolveRunCredential')
+      .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'test' } : null);
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
@@ -206,6 +209,7 @@ describe('one provision per session across instances', () => {
     const { boxStart: _boxStart, boxStarts: _boxStarts, boxSize: _boxSize, ...rest } = (settings ?? {}) as Record<string, unknown>;
     return rest;
   };
+  const sandboxAgents = { [OLD_BOX]: ['claude'] };
 
   it('keeps settings written after the run read the row', async () => {
     await updateWorkbench(WB, { settings: { fleetSandboxId: 'stale-fleet-id' } });
@@ -217,7 +221,7 @@ describe('one provision per session across instances', () => {
     await provisionWorkbench(WB);
     const row = await getWorkbench(WB);
     expect(row?.status).toBe('ready');
-    expect(withoutBoxStart(row?.settings)).toEqual({ keptSandboxIds: ['older-box'], internetAccess: false });
+    expect(withoutBoxStart(row?.settings)).toEqual({ keptSandboxIds: ['older-box'], internetAccess: false, sandboxAgents });
     expect(row?.settings).toHaveProperty('boxStart.sandboxId', row?.sandboxId);
   });
 
@@ -228,13 +232,13 @@ describe('one provision per session across instances', () => {
     vi.spyOn(sandboxSize, 'sessionSandboxSize').mockReturnValue('standard');
     await updateWorkbench(WB, { settings });
     await provisionWorkbench(WB);
-    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual(expected);
+    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual({ ...expected, sandboxAgents });
   });
 
   it('records the fleet sandbox id when the fleet names its own', async () => {
     vi.spyOn(fleet, 'createSandbox').mockResolvedValue({ sandbox: { id: 'fleet-own-id', status: 'idle' }, host: 'host-1' } as never);
     await provisionWorkbench(WB);
-    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual({ fleetSandboxId: 'fleet-own-id' });
+    expect(withoutBoxStart((await getWorkbench(WB))?.settings)).toEqual({ fleetSandboxId: 'fleet-own-id', sandboxAgents });
   });
 
   describe('the resume sweep', () => {
