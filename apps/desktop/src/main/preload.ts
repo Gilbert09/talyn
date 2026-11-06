@@ -223,6 +223,15 @@ const electronHandler = {
     isDev(): Promise<boolean> {
       return ipcRenderer.invoke('app:is-dev');
     },
+    /** Open a session from a `fastowl://session/...` link. */
+    onSessionLink(cb: (url: string) => void): () => void {
+      const handler = (_event: IpcRendererEvent, url: string) => cb(url);
+      ipcRenderer.on('app:session-link', handler);
+      ipcRenderer.invoke('app:drain-session-link').then((url?: string | null) => {
+        if (url) cb(url);
+      });
+      return () => ipcRenderer.removeListener('app:session-link', handler);
+    },
   },
   codex: {
     /**

@@ -37,6 +37,7 @@ import {
 } from '@talyn/shared';
 import { GitHubApiError, GitHubNotConnectedError, githubService, type GitHubCommitPullRequest } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
+import { sessionLaunchUrl } from '../webApp.js';
 import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
@@ -55,6 +56,13 @@ import { appendEvents, listChats, updateWorkbench, type WorkbenchRow } from './s
 /** A push or a fetch through the fleet proxy; generous for a large first push. */
 const PUSH_TIMEOUT_MS = 180_000;
 const GIT_TIMEOUT_MS = 60_000;
+const SESSION_FOOTER_MARKER = '<!-- talyn-session-link -->';
+
+export function pullRequestBodyWithSession(body: string, sessionId: string): string {
+  const content = body.trimEnd();
+  const footer = `---\n${SESSION_FOOTER_MARKER}\n[View this session in Talyn](${sessionLaunchUrl(sessionId)})`;
+  return content ? `${content}\n\n${footer}` : footer;
+}
 
 function requireReadySandbox(row: WorkbenchRow): void {
   if (row.runtime === 'local') throw localRuntimeError();
@@ -203,7 +211,7 @@ async function openOnGitHub(
       title: input.title,
       head: row.branch,
       base: input.base,
-      body: input.body,
+      body: pullRequestBodyWithSession(input.body, row.id),
       draft: input.draft,
     });
     return { number: pr.number, url: pr.html_url, existing: false };
