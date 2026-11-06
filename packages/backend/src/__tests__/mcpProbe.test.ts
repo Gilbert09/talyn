@@ -33,3 +33,16 @@ describe('MCP tool discovery', () => {
     }
   });
 });
+
+describe('MCP probe failures', () => {
+  it('reports the cause rather than "fetch failed"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND box.tailnet.ts.net'), { code: 'ENOTFOUND' }),
+      });
+    }));
+    const result = await probeMcpServer({ url: 'https://box.tailnet.ts.net/mcp', authKind: 'none' });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe('could not reach the server: the address cannot be resolved from Talyn’s servers');
+  });
+});

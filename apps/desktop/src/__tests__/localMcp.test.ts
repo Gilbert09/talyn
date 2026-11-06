@@ -63,6 +63,16 @@ describe('scanLocalMcpServers', () => {
       /no route to 192\.168\.1\.9/,
     ],
     [
+      'a Tailscale server',
+      { tailnet: { type: 'http', url: 'https://box.tailnet.ts.net/mcp' } },
+      /no route to box\.tailnet\.ts\.net/,
+    ],
+    [
+      'a carrier-grade NAT server',
+      { cgnat: { type: 'http', url: 'http://100.101.102.103/mcp' } },
+      /no route to 100\.101\.102\.103/,
+    ],
+    [
       'an SSE server',
       { old: { type: 'sse', url: 'https://mcp.example.com/sse' } },
       /older SSE transport/,

@@ -1,4 +1,5 @@
 import type { McpInjection, McpProbeResult, McpServerDefinition } from '@talyn/shared';
+import { fetchFailureReason } from './http.js';
 
 /**
  * Talk to an MCP server directly: `initialize`, then `tools/list`.
@@ -247,7 +248,7 @@ export async function probeMcpServer(input: ProbeInput): Promise<McpProbeResult>
       at,
       detail: aborted
         ? `the server did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds`
-        : `could not reach the server: ${err instanceof Error ? err.message : String(err)}`,
+        : `could not reach the server: ${fetchFailureReason(err)}`,
     };
   } finally {
     clearTimeout(timer);
