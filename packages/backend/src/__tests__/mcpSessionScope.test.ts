@@ -92,8 +92,8 @@ const EXCLUDED = [
   'talyn_delete_mcp_server', 'talyn_connect_mcp_server', 'talyn_create_mcp_server',
   // Account
   'talyn_get_billing_status', 'talyn_list_cloud_providers', 'talyn_whats_new',
-  // A person's own choice of what to track
-  'talyn_track_pull_request', 'talyn_untrack_pull_request',
+  // Undoes a person's own choice of what to track
+  'talyn_untrack_pull_request',
   // Workspace configuration
   'talyn_add_repository', 'talyn_remove_repository', 'talyn_revert_setup_step',
   'talyn_create_skill', 'talyn_update_skill', 'talyn_delete_skill',
@@ -121,7 +121,7 @@ describe('session token tool scope', () => {
     'talyn_get_merge_queue_timeline', 'talyn_set_merge_queue_stack', 'talyn_list_pull_requests',
     'talyn_create_task', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
-    'talyn_list_setup_steps', 'talyn_close_pull_request',
+    'talyn_list_setup_steps', 'talyn_close_pull_request', 'talyn_track_pull_request',
   ])('allows %s', (name) => {
     expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
   });
@@ -223,6 +223,75 @@ describe('session self-calls', () => {
     mockApi({ 'POST /api/v1/workbenches/chats/self-chat/cancel': () => null });
     await tool('cancel_session_turn').handler(OWNER, { chat_id: 'self-chat' });
     expect(chatWorkbenchId).not.toHaveBeenCalled();
+  });
+});
+
+describe('tracking a PR from a session', () => {
+  const url = 'https://github.com/acme/api/pull/7';
+  const pr = {
+    id: 'pr-7',
+    summary: {
+      number: 7, title: 'Fix', repoFullName: 'acme/api', draft: false, reviewDecision: null,
+      checks: { total: 0, passed: 0, failed: 0, inProgress: 0 },
+    },
+  };
+
+  it.each<[string, Record<string, unknown>]>([
+    ['no workspace_id', { url }],
+    ["the session's own workspace_id", { url, workspace_id: 'ws1' }],
+    ['add_repository: false', { url, add_repository: false }],
+  ])("tracks in the session's workspace with %s", async (_name, args) => {
+    const { calls } = mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'POST /api/v1/pull-requests/watch': () => pr,
+    });
+    await tool('track_pull_request').handler(OWNER, args, SELF);
+    const post = calls.find((c) => c.method === 'POST');
+    expect(post?.body).toEqual({ workspaceId: 'ws1', url, confirmAddRepo: false });
+    expect(calls.some((c) => c.url.pathname === '/api/v1/workspaces')).toBe(false);
+  });
+
+  it('refuses add_repository before any request', async () => {
+    const { calls } = mockApi({});
+    await expect(
+      tool('track_pull_request').handler(OWNER, { url, add_repository: true }, SELF)
+    ).rejects.toThrow('add_repository is not available inside a session');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses another workspace', async () => {
+    const { calls } = mockApi({ 'GET /api/v1/workbenches/s1': () => session() });
+    await expect(
+      tool('track_pull_request').handler(OWNER, { url, workspace_id: 'ws2' }, SELF)
+    ).rejects.toThrow("only in the session's workspace");
+    expect(calls.every((c) => c.method === 'GET')).toBe(true);
+  });
+
+  it('tells the session to ask the person when the repository is not watched', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) =>
+        new URL(input).pathname === '/api/v1/workbenches/s1'
+          ? ({ ok: true, status: 200, json: async () => ({ success: true, data: session() }) } as Response)
+          : ({
+              ok: false,
+              status: 409,
+              json: async () => ({ success: false, error: 'Repository is not watched', code: 'repo_not_watched' }),
+            } as Response)
+      )
+    );
+    const text = await tool('track_pull_request').handler(OWNER, { url }, SELF);
+    expect(text).toContain('Ask the person to add it in the Talyn app');
+    expect(text).not.toContain('add_repository: true');
+  });
+
+  it('is callable through a session server', async () => {
+    mockApi({
+      'GET /api/v1/workbenches/s1': () => session(),
+      'POST /api/v1/pull-requests/watch': () => pr,
+    });
+    const result = await callTool(SELF, 'talyn_track_pull_request', { url });
+    expect(result.isError).toBeFalsy();
   });
 });
 

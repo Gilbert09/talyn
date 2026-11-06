@@ -1,4 +1,4 @@
-import type { Task } from '@talyn/shared';
+import type { Task, Workbench } from '@talyn/shared';
 import type { ClosePullRequestResult } from '../../services/prClose.js';
 import { McpApiError, callApi, type PrSummary, type PublicPr } from '../api.js';
 import {
@@ -390,18 +390,40 @@ PULLREQUESTS.push(
   ),
   defineTool(
     'track_pull_request',
-    'Track a GitHub PR by URL. Set add_repository to also watch its repository.',
+    "Track a GitHub PR by URL, so it shows in the watching bucket. Set add_repository to also watch its repository. Inside a session, Talyn uses the session's workspace and refuses add_repository.",
     { ...workspaceSchema, url: textSchema, add_repository: booleanSchema },
     ['url'],
     { openWorldHint: true },
-    async (ownerId, args) => {
-      const workspaceId = await resolveWorkspace(ownerId, args);
+    async (ownerId, args, ctx) => {
+      const url = requireId(args, 'url');
+      const addRepository = bool(args, 'add_repository', false);
+      let workspaceId: string;
+      if (ctx?.session) {
+        // Adding a repository is workspace configuration, which a session may not change.
+        if (addRepository) {
+          throw new Error(
+            'add_repository is not available inside a session. Ask the person to add the repository in the Talyn app.'
+          );
+        }
+        const wb = await callApi<Workbench>(
+          ownerId,
+          'GET',
+          `/workbenches/${encodeURIComponent(ctx.session.workbenchId)}`
+        );
+        const explicit = str(args.workspace_id);
+        if (explicit && explicit !== wb.workspaceId) {
+          throw new Error("Inside a session, Talyn tracks PRs only in the session's workspace.");
+        }
+        workspaceId = wb.workspaceId;
+      } else {
+        workspaceId = await resolveWorkspace(ownerId, args);
+      }
       try {
         return prLine(
           await callApi<PublicPr>(ownerId, 'POST', '/pull-requests/watch', {
             workspaceId,
-            url: requireId(args, 'url'),
-            confirmAddRepo: bool(args, 'add_repository', false),
+            url,
+            confirmAddRepo: addRepository,
           })
         );
       } catch (error) {
@@ -410,7 +432,9 @@ PULLREQUESTS.push(
           error.status === 409 &&
           error.code === 'repo_not_watched'
         ) {
-          return `${error.message}\nCall talyn_track_pull_request again with add_repository: true to add the repository and track this PR.`;
+          return ctx?.session
+            ? `${error.message}\nA session cannot add a repository. Ask the person to add it in the Talyn app, then track this PR again.`
+            : `${error.message}\nCall talyn_track_pull_request again with add_repository: true to add the repository and track this PR.`;
         }
         throw error;
       }

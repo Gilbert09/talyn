@@ -90,8 +90,8 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_get_pull_request_diff` | List changed files. Include patches on request. |
 | `talyn_get_pull_request_reviews` | Read reviews, comments, and review threads. |
 | `talyn_refresh_pull_request` | Refresh a PR from GitHub. |
-| `talyn_track_pull_request` | Track a PR by URL. Use `add_repository` to also watch its repository. |
-| `talyn_untrack_pull_request` | Stop tracking a PR. Keep its queue entry and auto-keep setting. |
+| `talyn_track_pull_request` | Track a PR by URL, so it shows in the `watching` bucket. Use `add_repository` to also watch its repository. From a session token, Talyn uses the session's workspace and refuses `add_repository`. |
+| `talyn_untrack_pull_request` | Stop tracking a PR. Keep its queue entry and auto-keep setting. Not allowed for session tokens. |
 | `talyn_set_review_hidden` | Hide or restore a PR in the review list. |
 | `talyn_set_auto_keep_mergeable` | Enable or disable automatic cloud fixes. |
 | `talyn_merge_pull_request` | Merge a PR or submit it to the external merge queue. |
@@ -275,7 +275,9 @@ server on every list and every call. The agent reads untrusted text, so these
 are refused: MCP server tools, account tools, repository add and remove, and
 every skill, workflow and loop change. Their reads are allowed. Sessions, the
 merge queue, pull requests, code review, tasks and workspace memory are allowed. A new tool is
-refused until somebody adds it.
+refused until somebody adds it. `talyn_track_pull_request` is allowed, but it
+refuses `add_repository` and another workspace. `talyn_untrack_pull_request`
+is refused, because it undoes what a person chose to watch.
 
 **Calls on its own session.**
 
