@@ -442,6 +442,9 @@ async function runTurnLoopBody(
     // T3: a turn that failed on a full disk is not run again (its side effects
     // could repeat); the box is made usable and the user sends it again.
     if (outcome.diskFull && !outcome.cancelled) await recoverTurnFromDiskFull(chatId);
+    else if (outcome.agentSaysDiskFull && !outcome.cancelled && (await diskFullConfirmed(chatId))) {
+      await recoverTurnFromDiskFull(chatId);
+    }
     const fin = await finishTurn(chatId, {
       finalStatus: outcome.status,
       statusMessage: outcome.statusMessage,
@@ -549,6 +552,12 @@ interface TurnOutcome {
   cancelled: boolean;
   /** The turn failed because the box's disk is full. */
   diskFull?: boolean;
+  /**
+   * The agent failed and its own output says the disk is full. That text is
+   * not proof (an agent can talk about disks), so the box's free space is
+   * measured before Talyn acts on it.
+   */
+  agentSaysDiskFull?: boolean;
   /** The workbench was moving: the message went back to the queue and nothing ran. */
   requeued?: boolean;
   /** The plan refused the turn's box: the message went back to the queue and nothing ran. */
@@ -569,6 +578,25 @@ export const DISK_FULL_MOVED_NOTE =
   'The sandbox ran out of disk space, so Talyn moved this session to a fresh sandbox. Send your message again to continue.';
 export const DISK_FULL_GROWN_NOTE =
   'The sandbox ran out of disk space, so Talyn gave it more. Send your message again to continue.';
+
+/**
+ * The box's own numbers, after an agent said its disk was full mid-turn: true
+ * when less than LOW_DISK_BYTES is free. The probe reads `df`, which works on a
+ * full disk. Any failure to measure is false, so nothing moves on a guess.
+ */
+export async function diskFullConfirmed(chatId: string): Promise<boolean> {
+  try {
+    const chat = await getChat(chatId);
+    const wb = chat ? await getWorkbench(chat.workbenchId) : null;
+    if (!wb || wb.status !== 'ready' || !wb.sandboxId) return false;
+    const probe = await runCapture(wb, DISK_PROBE_SCRIPT, { cwd: '/', quiet: true, timeoutMs: 60_000, env: { TMPDIR: '/dev/shm' }, diskRecovery: false });
+    const disk = parseDiskProbe(probe.stderr);
+    return disk !== null && disk.availBytes < LOW_DISK_BYTES;
+  } catch (err) {
+    console.warn(`[workbench] measuring the disk for chat ${chatId} failed:`, err);
+    return false;
+  }
+}
 
 /** After a turn failed on a full disk: grow the disk or move the session, and say so. */
 async function recoverTurnFromDiskFull(chatId: string): Promise<void> {
@@ -948,9 +976,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         : `The agent exited with code ${outcome.exitCode}.`);
     if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
     await events.flush();
-    // Not matched against the agent's text or stderr: only a failure Talyn's
-    // own exec or the fleet reports says the disk is full (see the catch).
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false };
+    // The agent's text alone never counts as a full disk: a failure Talyn's own
+    // exec or the fleet reports does (see the catch). A match here only asks
+    // the caller to measure the box (diskFullConfirmed).
+    const agentSaysDiskFull = isDiskFullText(outcome.stderrTail) || isDiskFullText(parserResult?.text ?? '');
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(agentSaysDiskFull ? { agentSaysDiskFull } : {}) };
   } catch (err) {
     if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped', err);
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);

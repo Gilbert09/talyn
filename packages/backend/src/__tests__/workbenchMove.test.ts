@@ -834,5 +834,17 @@ describe('moving a session to a fresh sandbox', () => {
       expect(fleet.has('grow')).toBe(false);
       expect((await row()).sandboxId).toBe(OLD_BOX);
     });
+
+    it('moves when the agent says the disk is full and the box measures full', async () => {
+      let agentRan = false;
+      replies.agent = () => { agentRan = true; return { exitCode: 1, stdout: '', stderr: 'ERROR codex_core::session: failed to record rollout items: No space left on device (os error 28)' }; };
+      // Healthy at the turn start, full once the agent has filled it.
+      replies.probe = () => ({ stderr: `TALYN_DISK ${agentRan ? 22 * 1024 * 1024 : 10 * GIB} ${16 * GIB}` });
+      await turns.sendMessage('chat-a', { text: 'go' });
+      await vi.waitFor(async () => expect((await row()).sandboxId).toBe(NEW_BOX), { timeout: 5000 });
+      await vi.waitFor(async () => expect((await store.getChat('chat-a'))?.status).toBe('error'));
+      expect(fleet.log.filter((e) => e.kind === 'agent')).toHaveLength(1);
+      expect((await events()).some((e) => e.text === turns.DISK_FULL_MOVED_NOTE)).toBe(true);
+    });
   });
 });
