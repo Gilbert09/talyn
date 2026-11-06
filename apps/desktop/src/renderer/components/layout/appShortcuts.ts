@@ -3,9 +3,11 @@ import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/s
 import { MENU_COMMANDS } from '../../../main/menuCommands';
 import {
   FOCUS_COMPOSER_EVENT,
+  OPEN_REPOSITORY_PICKER_EVENT,
   composerForTab,
   dispatchKeydown,
   isEmptyComposer,
+  isInOverlay,
   registerShortcuts,
   runShortcut,
   type Shortcut,
@@ -117,6 +119,15 @@ export function buildAppShortcuts(): Shortcut[] {
       when: offered,
       run: () => openNewWorkbench(),
     }),
+    {
+      id: 'repository.open',
+      keys: '/',
+      label: 'Choose repository',
+      group: 'New session',
+      allowInInput: (target) => target instanceof HTMLTextAreaElement && target.hasAttribute('data-new-workbench-composer') && target.value === '',
+      when: () => nav().route.view === 'home' && !nav().paletteOpen && !isInOverlay(document.activeElement) && !document.querySelector('[data-radix-popper-content-wrapper], [role="dialog"][data-state="open"]') && Boolean(document.querySelector<HTMLButtonElement>('[data-attr="new-workbench-repo"]:not(:disabled)')),
+      run: () => window.dispatchEvent(new Event(OPEN_REPOSITORY_PICKER_EVENT)),
+    },
     fromMenu({
       id: 'settings.open',
       label: 'Open settings',

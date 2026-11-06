@@ -7,6 +7,8 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Features, Workbench, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
+import { buildAppShortcuts } from '../components/layout/appShortcuts';
+import { dispatchKeydown, registerShortcuts } from '../lib/shortcuts';
 import { NewWorkbenchPage } from '../pages/NewWorkbenchPage';
 import { openNewWorkbench, prefillFromPr } from '../components/workbench/new/openNewWorkbench';
 import { defaultRepositoryId } from '../components/workbench/new/lastRepository';
@@ -187,6 +189,52 @@ const chooseRepo = async (name: string) => {
   fireEvent.click(screen.getByRole('button', { name: 'Repository' }));
   fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
 };
+
+describe('repository shortcut', () => {
+  it('opens search from the empty composer and selects a repository', async () => {
+    await renderPage();
+    const unregister = registerShortcuts(buildAppShortcuts());
+    try {
+      const composer = textarea() as HTMLTextAreaElement;
+      const slash = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+      Object.defineProperty(slash, 'target', { value: composer });
+      act(() => { expect(dispatchKeydown(slash, { menuOwnsChords: false })).toBe(true); });
+      const search = await screen.findByPlaceholderText('Find a repository…');
+      expect(search).toHaveFocus();
+      fireEvent.change(search, { target: { value: 'web' } });
+      fireEvent.keyDown(search, { key: 'ArrowDown' });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      await waitFor(() => expect(composer).toHaveFocus());
+      expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('acme/web');
+    } finally {
+      unregister();
+    }
+  });
+
+  it('returns focus to the composer on Escape', async () => {
+    await renderPage();
+    const composer = textarea();
+    fireEvent.click(screen.getByRole('button', { name: 'Repository' }));
+    const search = await screen.findByPlaceholderText('Find a repository…');
+    expect(search).toHaveFocus();
+    fireEvent.keyDown(search, { key: 'Escape' });
+    await waitFor(() => expect(composer).toHaveFocus());
+  });
+
+  it('keeps slash in a composer with text', async () => {
+    await renderPage();
+    const unregister = registerShortcuts(buildAppShortcuts());
+    try {
+      const composer = textarea() as HTMLTextAreaElement;
+      fireEvent.change(composer, { target: { value: 'text' } });
+      const slash = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+      Object.defineProperty(slash, 'target', { value: composer });
+      expect(dispatchKeydown(slash, { menuOwnsChords: false })).toBe(false);
+    } finally {
+      unregister();
+    }
+  });
+});
 
 describe('NewWorkbenchPage', () => {
   it('starts a thread when "Any repository" is chosen, and keeps the draft', async () => {

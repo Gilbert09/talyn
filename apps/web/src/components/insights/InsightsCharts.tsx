@@ -1,3 +1,4 @@
+import { axisStep, axisTick } from './InsightsAxis';
 import { useState, type ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { formatShortDate } from '../../lib/usageBilling';
@@ -20,16 +21,6 @@ const dayLabel = (date: string) =>
     month: 'short',
     timeZone: 'UTC',
   });
-
-function axisStep(max: number): number {
-  if (max <= 0) return 1;
-  const magnitude = 10 ** Math.floor(Math.log10(max / 3));
-  return (
-    [1, 2, 2.5, 5, 10]
-      .map((part) => part * magnitude)
-      .find((step) => step * 3 >= max) ?? 10 * magnitude
-  );
-}
 
 function dateTickIndexes(length: number): number[] {
   const count = Math.min(length, 4);
@@ -119,36 +110,41 @@ export function DayBars({
       <div className="flex gap-2">
         <div
           aria-label="Value axis"
-          className="relative h-28 w-20 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground"
+          className="relative h-28 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground"
         >
-          {[0, 1, 2, 3].map((tick) => (
-            <span
-              key={tick}
-              className="absolute right-0"
-              style={{ bottom: `calc(${(tick / 3) * 100}% - 0.5em)` }}
-            >
-              {formatValue(step * tick)}
-            </span>
-          ))}
+          <span className="invisible whitespace-nowrap">{axisTick(axisMax, step)}</span>
+          <div className="absolute inset-x-0 bottom-2 top-3">
+            {[0, 1, 2, 3].map((tick) => (
+              <span
+                key={tick}
+                className="absolute right-0 whitespace-nowrap"
+                style={{ bottom: `calc(${(tick / 3) * 100}% - 0.5em)` }}
+              >
+                {axisTick(step * tick, step)}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="relative min-w-0 flex-1">
           <div
             role="group"
             aria-label={label}
-            className="relative flex h-28 items-end gap-px"
+            className="relative flex h-28 items-end gap-px pb-2 pt-3"
           >
-            {[0, 1, 2, 3].map((tick) => (
-              <div
-                key={tick}
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 border-t border-border/50"
-                style={{ bottom: `${(tick / 3) * 100}%` }}
-              />
-            ))}
+            <div className="pointer-events-none absolute inset-x-0 bottom-2 top-3">
+              {[0, 1, 2, 3].map((tick) => (
+                <div
+                  key={tick}
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 border-t border-border/50"
+                  style={{ bottom: `${(tick / 3) * 100}%` }}
+                />
+              ))}
+            </div>
             {days.map((day, index) => {
               const text = `${dayLabel(day.date)}: ${formatValue(day.value)}`;
               const height =
-                day.value > 0 ? Math.max(2, (day.value / axisMax) * 112) : 0;
+                day.value > 0 ? Math.max(2, (day.value / axisMax) * 92) : 0;
               return (
                 <div
                   key={day.date}
@@ -228,7 +224,7 @@ export function DayBars({
               >
                 {formatShortDate(`${days[index].date}T00:00:00Z`)}
               </span>
-            ))}
+              ))}
           </div>
         </div>
       </div>

@@ -323,8 +323,8 @@ describe('day chart', () => {
       value,
       valueText: `${value} box-hours`,
     }));
-    render(<DayBars label="Box-hours per day" points={points} formatValue={(value) => `${value.toFixed(1)} box-hours`} />);
-    expect(screen.getByLabelText('Value axis').textContent).toBe('0.0 box-hours0.5 box-hours1.0 box-hours1.5 box-hours');
+    render(<DayBars label="Box-hours per day" points={points} />);
+    expect(screen.getByLabelText('Value axis').querySelector('div')?.textContent).toBe('0.00.51.01.5');
     expect(screen.getAllByTestId('day-bar')).toHaveLength(4);
     expect(screen.getAllByTestId('day-bar')[0]).toHaveStyle({ height: '2px' });
     expect(screen.getByLabelText('Date axis').textContent).toMatch(/Nov 1|1 Nov/);
@@ -473,10 +473,15 @@ describe('top sessions', () => {
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb-live' });
   });
 
-  it.each(['Old work', 'Deleted session'])('does not make %s a link', async (name) => {
+  it('opens an archived session', async () => {
     await renderPage();
-    expect(within(sectionEl('top')).queryByRole('button', { name })).toBeNull();
-    expect(within(sectionEl('top')).getByText(name)).toBeInTheDocument();
+    fireEvent.click(within(sectionEl('top')).getByRole('button', { name: 'Old work' }));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb-old' });
+  });
+
+  it('does not open a deleted session', async () => {
+    await renderPage();
+    expect(within(sectionEl('top')).queryByRole('button', { name: 'Deleted session' })).toBeNull();
   });
 });
 

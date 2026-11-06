@@ -185,7 +185,7 @@ export const agentsSection: SectionSpec<'agents'> = {
       <DayBars
         label="Tokens per day (UTC)"
         days={d.days.map((day) => ({ date: day.date, value: totalTokens(day) }))}
-        formatValue={(v) => `${formatTokenCount(v)} tokens`}
+        formatValue={(v) => `${count(v)} tokens`}
         dataAttr="insights-agents-days"
       />
       <div className="grid gap-4 md:grid-cols-2">
@@ -451,7 +451,6 @@ function RepoList({ title, rows, metric }: { title: string; rows: InsightsTopRep
 function SessionName({ row }: { row: InsightsTopSession }) {
   const navigate = useNavigationStore((s) => s.navigate);
   if (row.title === null) return <span className="italic text-muted-foreground">Deleted session</span>;
-  if (row.archived) return <span className="break-words">{row.title}</span>;
   return (
     <button
       type="button"

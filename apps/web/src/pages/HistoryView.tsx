@@ -178,6 +178,9 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       <span className="shrink-0 text-[11px] text-muted-foreground" title={new Date(at).toLocaleString()}>
         {relativeTime(at)}
       </span>
+      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => useNavigationStore.getState().navigate({ view: 'workbench', id: workbench.id })} aria-label={`Open ${workbenchDisplayName(workbench)}`}>
+        Open
+      </Button>
       <Button
         variant="outline"
         size="sm"

@@ -177,16 +177,19 @@ export function localOps(
   controller: LocalTurnController | null = getLocalController()
 ): WorkbenchOps {
   const path = workbench.localPath ?? '';
-  const unavailable = !bridge
+  const runtimeUnavailable = !bridge
     ? 'This local session needs the Talyn desktop app.'
     : workbench.deviceId && workbench.deviceId !== getDeviceId()
       ? 'This session lives on another computer. Open it there.'
       : !path
         ? 'This session has no local path.'
         : null;
+  const unavailable = workbench.status === 'archived' || workbench.archivedAt
+    ? 'This session is archived.'
+    : runtimeUnavailable;
 
   const need = (): WorkbenchLocalBridge => {
-    if (!bridge || unavailable) throw new Error(unavailable ?? 'Local runtime unavailable.');
+    if (!bridge || runtimeUnavailable) throw new Error(runtimeUnavailable ?? 'Local runtime unavailable.');
     return bridge;
   };
   // No new work on an archived local session. Reads work while a worktree is
@@ -238,7 +241,7 @@ export function localOps(
   const ops: WorkbenchOps = {
     runtime: 'local',
     unavailable,
-    readUnavailable: unavailable,
+    readUnavailable: runtimeUnavailable,
     canRemoveQueued: true,
     canAttach: !unavailable,
     send: async (chat, input) => {

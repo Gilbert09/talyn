@@ -81,12 +81,14 @@ describe('navigation store', () => {
     expect(wbs.useWorkbenchStore.getState().selectedWorkbenchId).toBe('keep');
   });
 
-  it('an archived workbench route goes home', async () => {
+  it('an archived workbench route stays open', async () => {
     const { nav, wbs } = await load({ view: 'workbench', id: 'old' });
     seedWorkbenches(wbs, [wb('old', { status: 'archived', archivedAt: '2026-10-13T01:00:00Z' })]);
     const { workbenches, listLoaded } = wbs.useWorkbenchStore.getState();
     nav.useNavigationStore.getState().reconcileWorkbenchRoute({ workbenches, listLoaded, offered: true });
-    expect(nav.useNavigationStore.getState().route).toEqual({ view: 'home' });
+    expect(nav.useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'old' });
+    expect(wbs.useWorkbenchStore.getState().selectedWorkbenchId).toBe('old');
+    expect(wbs.useWorkbenchStore.getState().workbenches.old.status).toBe('archived');
   });
 
   it('waits for the list before judging a workbench route', async () => {

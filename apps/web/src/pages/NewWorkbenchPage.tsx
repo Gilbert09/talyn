@@ -248,6 +248,7 @@ export function NewWorkbenchPage() {
             >
               <textarea
                 ref={textareaRef}
+                data-new-workbench-composer
                 value={prompt}
                 onChange={(e) => {
                   setPrompt(e.target.value);

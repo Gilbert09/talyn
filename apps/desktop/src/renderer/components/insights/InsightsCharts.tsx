@@ -1,3 +1,4 @@
+import { axisStep, axisTick } from './InsightsAxis';
 import { useState, type ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { formatShortDate } from '../../lib/usageBilling';
@@ -8,11 +9,6 @@ import {
   TooltipTrigger,
 } from '../ui/tooltip';
 
-const compactValue = (value: number) =>
-  new Intl.NumberFormat('en-US', {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(value);
 const dayLabel = (date: string) =>
   new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', {
     weekday: 'short',
@@ -20,16 +16,6 @@ const dayLabel = (date: string) =>
     month: 'short',
     timeZone: 'UTC',
   });
-
-function axisStep(max: number): number {
-  if (max <= 0) return 1;
-  const magnitude = 10 ** Math.floor(Math.log10(max / 3));
-  return (
-    [1, 2, 2.5, 5, 10]
-      .map((part) => part * magnitude)
-      .find((step) => step * 3 >= max) ?? 10 * magnitude
-  );
-}
 
 function dateTickIndexes(length: number): number[] {
   const count = Math.min(length, 4);
@@ -49,12 +35,10 @@ export function DayBars({
   points,
   label,
   testId,
-  formatValue = compactValue,
 }: {
   points: DayBarPoint[];
   label: string;
   testId?: string;
-  formatValue?: (value: number) => string;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const max = Math.max(0, ...points.map((p) => p.value));
@@ -66,36 +50,41 @@ export function DayBars({
       <div className="flex gap-2">
         <div
           aria-label="Value axis"
-          className="relative h-28 w-20 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground"
+          className="relative h-28 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground"
         >
-          {[0, 1, 2, 3].map((tick) => (
-            <span
-              key={tick}
-              className="absolute right-0"
-              style={{ bottom: `calc(${(tick / 3) * 100}% - 0.5em)` }}
-            >
-              {formatValue(step * tick)}
-            </span>
-          ))}
+          <span className="invisible whitespace-nowrap">{axisTick(axisMax, step)}</span>
+          <div className="absolute inset-x-0 bottom-2 top-3">
+            {[0, 1, 2, 3].map((tick) => (
+              <span
+                key={tick}
+                className="absolute right-0 whitespace-nowrap"
+                style={{ bottom: `calc(${(tick / 3) * 100}% - 0.5em)` }}
+              >
+                {axisTick(step * tick, step)}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="relative min-w-0 flex-1">
           <div
             role="list"
             aria-label={label}
-            className="relative flex h-28 items-end gap-px"
+            className="relative flex h-28 items-end gap-px pb-2 pt-3"
           >
-            {[0, 1, 2, 3].map((tick) => (
-              <div
-                key={tick}
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 border-t border-border/50"
-                style={{ bottom: `${(tick / 3) * 100}%` }}
-              />
-            ))}
+            <div className="pointer-events-none absolute inset-x-0 bottom-2 top-3">
+              {[0, 1, 2, 3].map((tick) => (
+                <div
+                  key={tick}
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 border-t border-border/50"
+                  style={{ bottom: `${(tick / 3) * 100}%` }}
+                />
+              ))}
+            </div>
             {points.map((p, index) => {
               const text = `${dayLabel(p.date)}: ${p.valueText}`;
               const height =
-                p.value > 0 ? Math.max(2, (p.value / axisMax) * 112) : 0;
+                p.value > 0 ? Math.max(2, (p.value / axisMax) * 92) : 0;
               return (
                 <div
                   key={p.date}
@@ -173,7 +162,7 @@ export function DayBars({
               >
                 {formatShortDate(`${points[index].date}T00:00:00.000Z`)}
               </span>
-            ))}
+              ))}
           </div>
         </div>
       </div>

@@ -177,8 +177,8 @@ interface NavigationState {
   togglePalette: () => void;
   setAddRepositoryOpen: (open: boolean) => void;
   /**
-   * Leave a workbench route that no longer points at a live workbench (a
-   * persisted id deleted elsewhere, an archive, a workspace switch), and
+   * Leave a workbench route that no longer points at a workbench (a
+   * persisted id deleted elsewhere, or a workspace switch), and
    * select the workbench once the list has it. The shell calls it whenever
    * the list or the route changes.
    */
@@ -277,7 +277,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       return;
     }
     if (route.view !== 'workbench' || !listLoaded) return;
-    if (!isLive(workbenches[route.id])) {
+    if (!workbenches[route.id]) {
       get().navigate(HOME, { replace: true });
       return;
     }

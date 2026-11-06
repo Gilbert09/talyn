@@ -40,6 +40,7 @@ export interface Shortcut {
 
 /** The composer listens for this to take focus (⌘L). */
 export const FOCUS_COMPOSER_EVENT = 'talyn:focus-composer';
+export const OPEN_REPOSITORY_PICKER_EVENT = 'talyn:open-repository-picker';
 
 const registry = new Map<string, Shortcut>();
 const listeners = new Set<() => void>();
