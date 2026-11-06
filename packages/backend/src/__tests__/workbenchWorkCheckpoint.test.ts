@@ -11,7 +11,6 @@ import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as readSource from '../services/workbenches/sandboxReadSource.js';
-import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { provisionWorkbench } from '../services/workbenches/lifecycle.js';
 import { AGENT_MEMORY_RECAP_NOTE } from '../services/workbenches/recovery.js';
@@ -1008,8 +1007,6 @@ describe('saved work in a session', () => {
     beforeEach(() => {
       const fleet = new FakeFleet();
       vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
-      vi.spyOn(accountSelection, 'resolveRunCredential')
-        .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'test' } : null);
       vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
       vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
       vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TALYN_TOOLS_NOTE, workbenchTurnPrompt, type WorkbenchAgent } from '@talyn/shared';
 import { repositories, workspaces } from '../db/schema.js';
 import { workspaceMayUseMcpServers } from '../services/mcpServersAccess.js';
-import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import { readSessionMcpToken } from '../services/sessionMcpToken.js';
 import { createWorkbenchSandbox } from '../services/workbenches/lifecycle.js';
@@ -65,8 +64,6 @@ describe("the session box's create body", () => {
       branch: 'paris', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'provisioning' });
     fleet = new FakeFleet();
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'agent-token' }, githubToken: 'github-token' });
-    vi.spyOn(accountSelection, 'resolveRunCredential')
-      .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'agent-token' } : null);
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'a/b', defaultBranch: 'main' });
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
     vi.spyOn(runtime, 'gitAuthorFor').mockResolvedValue(undefined);
