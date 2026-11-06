@@ -113,6 +113,13 @@ export interface ApplyResult {
   previousProductId?: string;
 }
 
+/**
+ * The prior product of a subscription stored before `polar_product_id` was
+ * recorded. Every such subscription was on a legacy product, so a move from it
+ * to a Pro product is an upgrade from Legacy Pro.
+ */
+export const UNRECORDED_LEGACY_PRODUCT = 'unrecorded-legacy';
+
 function subscriptionFromEvent(data: unknown): PolarSubscription | null {
   const sub = data as PolarSubscription | null;
   if (!sub || typeof sub.id !== 'string' || typeof sub.status !== 'string') return null;
@@ -444,6 +451,10 @@ export async function applySubscriptionEvent(
     ...(eventType === 'subscription.updated' && sameSubscription && current[0]?.productId && sub.productId && current[0].productId !== sub.productId
       ? { previousProductId: current[0].productId }
       : {}),
+    ...(eventType === 'subscription.updated' && sameSubscription && previouslyGranting && !current[0]?.productId
+      && personalProductTier(sub.productId) === 'pro'
+      ? { previousProductId: UNRECORDED_LEGACY_PRODUCT }
+      : {}),
   };
 }
 
@@ -586,9 +597,10 @@ function notifyPlanChange(result: ApplyResult, sub: PolarSubscription, eventId: 
   if (!result.previousProductId || !sub.productId) return;
   const team = Boolean(result.teamId);
   const oldProductId = result.previousProductId;
-  const oldPlan = subscriptionProductLabel(oldProductId, team) ?? oldProductId;
+  const unrecorded = oldProductId === UNRECORDED_LEGACY_PRODUCT;
+  const oldPlan = unrecorded ? 'Legacy Pro' : subscriptionProductLabel(oldProductId, team) ?? oldProductId;
   const newPlan = subscriptionProductLabel(sub.productId, team) ?? sub.product?.name ?? sub.productId;
-  const oldTier = team ? teamProductTier(oldProductId) : personalProductTier(oldProductId);
+  const oldTier = unrecorded ? 'legacy_pro' : team ? teamProductTier(oldProductId) : personalProductTier(oldProductId);
   const newTier = team ? teamProductTier(sub.productId) : personalProductTier(sub.productId);
   const level: TodiexLevel = oldTier === 'legacy_pro' && newTier === 'pro' ? 'success' : 'info';
 
@@ -609,7 +621,7 @@ function notifyPlanChange(result: ApplyResult, sub: PolarSubscription, eventId: 
           team_name: storedTeam?.name ?? null,
           old_plan: oldPlan,
           new_plan: newPlan,
-          old_product_id: oldProductId,
+          old_product_id: unrecorded ? null : oldProductId,
           new_product_id: sub.productId,
           product: sub.product?.name ?? null,
           price: formatSubscriptionPrice(sub.amount, sub.currency),
@@ -636,7 +648,7 @@ function notifyPlanChange(result: ApplyResult, sub: PolarSubscription, eventId: 
         ...personMetadata(person),
         old_plan: oldPlan,
         new_plan: newPlan,
-        old_product_id: oldProductId,
+        old_product_id: unrecorded ? null : oldProductId,
         new_product_id: sub.productId,
         product: sub.product?.name ?? null,
         price: formatSubscriptionPrice(sub.amount, sub.currency),
