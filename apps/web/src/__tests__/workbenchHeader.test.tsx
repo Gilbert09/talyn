@@ -9,9 +9,11 @@ import { WorkbenchHeader } from '../components/workbench/WorkbenchHeader';
 import { requestWorkbenchAction, type WorkbenchAction } from '../lib/workbenchActions';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
+import { usePullRequestStore } from '../stores/pullRequests';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 
 const merge = vi.fn();
+const setMergeQueue = vi.fn();
 const archive = vi.fn();
 const restore = vi.fn();
 const createChat = vi.fn();
@@ -20,7 +22,10 @@ const openPullRequests = vi.fn().mockResolvedValue([]);
 const update = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
-    pullRequests: { merge: (...a: unknown[]) => merge(...a) },
+    pullRequests: {
+      merge: (...a: unknown[]) => merge(...a),
+      setMergeQueue: (...a: unknown[]) => setMergeQueue(...a),
+    },
     workbenches: {
       archive: (...a: unknown[]) => archive(...a),
       restore: (...a: unknown[]) => restore(...a),
@@ -105,6 +110,8 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  usePullRequestStore.setState({ rows: [] });
+  useWorkbenchStore.setState({ extraWorkbenchIds: {} });
   vi.clearAllMocks();
 });
 
@@ -284,7 +291,7 @@ describe('WorkbenchHeader action cycle', () => {
       key: 'Enter',
     });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['Rename session', 'MergeCtrl+Alt+M', 'ArchiveCtrl+Alt+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+    expect(items).toEqual(['Rename session', 'Add to merge queue', 'MergeCtrl+Alt+M', 'ArchiveCtrl+Alt+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
   });
 
   it('has a Sandbox entry in the Actions menu that opens the Sandbox tab', () => {
@@ -310,6 +317,7 @@ describe('WorkbenchHeader action cycle', () => {
     });
     expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
       'Rename session',
+      'Add to merge queue',
       'Resolve conflicts',
       'Fix checksCtrl+Alt+X',
       'ArchiveCtrl+Alt+A',
@@ -493,4 +501,76 @@ describe('WorkbenchHeader action cycle', () => {
       expect(o.send).not.toHaveBeenCalled();
     });
   });
+});
+
+
+describe('WorkbenchHeader merge queue', () => {
+  it.each([
+    [false, 'button'],
+    [true, 'button'],
+    [false, 'menuitem'],
+    [true, 'menuitem'],
+  ] as const)('toggles queue membership %s from the %s', async (queued, role) => {
+    setMergeQueue.mockResolvedValue({});
+    const row = { ...prRow({ ciStatus: 'running' }), mergeQueued: queued };
+    usePullRequestStore.setState({ rows: [row] });
+    const { container } = render(<WorkbenchHeader workbench={WB} pr={row} chat={chat} ops={ops()} />);
+    const label = queued ? 'Remove from merge queue' : 'Add to merge queue';
+    expect(container.querySelector('[data-attr="workbench-header-title-row"]'))
+      .toContainElement(screen.getByRole('button', { name: label }));
+    if (role === 'menuitem') {
+      fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    }
+    fireEvent.click(screen.getByRole(role, { name: label }));
+    await waitFor(() => expect(setMergeQueue).toHaveBeenCalledWith('pr1', !queued));
+    expect(usePullRequestStore.getState().rows[0].mergeQueued).toBe(!queued);
+  });
+
+  it('blocks repeated queue requests until the request finishes', async () => {
+    let finish!: () => void;
+    setMergeQueue.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    render(<WorkbenchHeader workbench={WB} pr={prRow({})} chat={chat} ops={ops()} />);
+    const button = screen.getByRole('button', { name: 'Add to merge queue' });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeDisabled();
+    fireEvent.click(button);
+    expect(setMergeQueue).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); });
+    expect(button).toBeEnabled();
+  });
+
+  it('shows queue updates and restores membership after an API failure', async () => {
+    setMergeQueue.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('Queue unavailable'));
+    usePullRequestStore.setState({ rows: [{ ...prRow({}), owner: 'acme', repo: 'app', mergeQueued: false }] });
+    function Header() {
+      const row = usePullRequestStore((s) => s.rows[0]);
+      return <WorkbenchHeader workbench={WB} pr={row} chat={chat} ops={ops()} />;
+    }
+    render(<Header />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add to merge queue' }));
+    const remove = await screen.findByRole('button', { name: 'Remove from merge queue' });
+    await waitFor(() => expect(remove).toBeEnabled());
+    expect(remove).toHaveTextContent('Queued');
+    fireEvent.click(remove);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't dequeue acme/app#42", 'Queue unavailable'));
+    expect(screen.getByRole('button', { name: 'Remove from merge queue' })).toBeEnabled();
+    expect(usePullRequestStore.getState().rows[0].mergeQueued).toBe(true);
+  });
+
+  it.each(['none', 'merged', 'closed', 'archived', 'thread', 'viewer'] as const)(
+    'hides queue actions for %s', (kind) => {
+      const workbench = kind === 'archived' ? { ...WB, status: 'archived' as const }
+        : kind === 'thread' ? { ...WB, kind: 'thread' as const } : WB;
+      if (kind === 'viewer') useWorkbenchStore.setState({ extraWorkbenchIds: { [WB.id]: true } });
+      const row = kind === 'none' ? null : prRow({}, kind === 'merged' || kind === 'closed' ? kind : 'open');
+      render(<WorkbenchHeader workbench={workbench} pr={row} chat={chat} ops={ops()} />);
+      expect(screen.queryByRole('button', { name: /merge queue/ })).not.toBeInTheDocument();
+      const menu = screen.queryByRole('button', { name: 'More actions' });
+      if (menu) {
+        fireEvent.keyDown(menu, { key: 'Enter' });
+        expect(screen.queryByRole('menuitem', { name: /merge queue/ })).not.toBeInTheDocument();
+      }
+    }
+  );
 });
