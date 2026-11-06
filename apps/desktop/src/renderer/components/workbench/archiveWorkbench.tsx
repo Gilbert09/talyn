@@ -60,6 +60,28 @@ export async function archiveWorkbench(id: string, leave: boolean, opts: Archive
   }
 }
 
+const BULK_ARCHIVE_CONCURRENCY = 4;
+
+/**
+ * Archive many sessions, a few at a time. A local worktree with uncommitted
+ * changes stays on disk. `openId` is the open session, which clears the
+ * selection when it is archived. Returns how many sessions were archived.
+ */
+export async function archiveWorkbenches(ids: string[], openId: string | null): Promise<number> {
+  let archived = 0;
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      if (await archiveWorkbench(id, id === openId)) archived += 1;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BULK_ARCHIVE_CONCURRENCY, ids.length) }, worker));
+  trackEvent('sessions_archived_bulk', { requested: ids.length, archived });
+  if (archived > 0) toast.success(`Archived ${archived} ${archived === 1 ? 'session' : 'sessions'}`);
+  return archived;
+}
+
 /**
  * Delete an archived session's worktree. The branch stays in the repository,
  * so a restore can make the worktree again. Never throws: a failure keeps the

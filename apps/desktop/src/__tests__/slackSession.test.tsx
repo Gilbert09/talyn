@@ -222,7 +222,7 @@ describe('sidebar rows', () => {
     useWorkbenchStore.getState().setWorkspace('ws1');
     useWorkbenchStore.getState().setWorkbenches('ws1', [slackWb, plain]);
     render(<SidebarWorkbenchList workbenches={[slackWb, plain]} />);
-    const rows = screen.getAllByRole('button');
+    const rows = screen.getAllByRole('button').filter((el) => el.dataset.attr === 'sidebar-workbench-row');
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector('[data-attr="session-slack-mark"]')).not.toBeNull();
     expect(rows[1].querySelector('[data-attr="session-slack-mark"]')).toBeNull();

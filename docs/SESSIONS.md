@@ -7343,3 +7343,10 @@ The additions cover design, deployments, CI, CRM, analytics, and project managem
 Both apps now include catalog search. New logos are bundled for offline display.
 Authentication discovery prefers a documented key when OAuth requires a registered client.
 See [catalog sources](MCP_CATALOG.md) for endpoints, authentication details, and verification limits.
+
+
+### 2026-11-06 — Archive all sessions without an open PR
+
+The sidebar session list has a "Sessions" header with an archive button. It archives each live session with no open pull request: no PR, or a merged or closed one.
+`archiveAllCandidates` (`apps/desktop/src/renderer/lib/archiveAll.ts`) skips threads, sessions that start, move or work now, and sessions whose linked PR state is unknown. An unknown PR can be an open one.
+`archiveWorkbenches` archives four at a time through `archiveWorkbench`, so local worktrees and previews get the usual cleanup. It never discards uncommitted changes in a local worktree.
