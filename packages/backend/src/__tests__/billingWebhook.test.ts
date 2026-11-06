@@ -420,6 +420,35 @@ describe('what the inbox is told about a subscription', () => {
     expect(received).toHaveLength(1);
   });
 
+  describe('a subscription stored before its product was recorded', () => {
+    const startWithoutProduct = async () => {
+      await post('evt-old-start', { type: 'subscription.created', data: subscription() });
+      await nextInboxEvent();
+      received.length = 0;
+    };
+
+    it('announces a move to Pro as an upgrade from Legacy Pro', async () => {
+      await startWithoutProduct();
+      await post('evt-old-upgrade', { type: 'subscription.updated', data: subscription({ productId: 'prod-pro-monthly' }) }, { timestamp: 1_780_000_100 });
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      expect(received[0]).toMatchObject({
+        kind: 'subscription.plan_changed',
+        level: 'success',
+        title: `Talyn plan changed: Legacy Pro → Pro (monthly) — ${TEST_USER_ID}@example.test`,
+        metadata: { old_plan: 'Legacy Pro', new_plan: 'Pro (monthly)', new_product_id: 'prod-pro-monthly' },
+        dedupeKey: 'polar:evt-old-upgrade:plan_changed',
+      });
+      expect(received[0].metadata).not.toHaveProperty('old_product_id');
+    });
+
+    it('stays quiet when the update names a legacy product', async () => {
+      await startWithoutProduct();
+      await post('evt-old-renewal', { type: 'subscription.updated', data: subscription({ productId: 'prod-monthly' }) }, { timestamp: 1_780_000_100 });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(received).toHaveLength(0);
+    });
+  });
+
   it('does not announce a renewal or status update with the same product', async () => {
     await post('evt-status-start', {
       type: 'subscription.created',
