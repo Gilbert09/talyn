@@ -42,7 +42,7 @@ function claudeFailedLines(sessionId: string, text: string, synthetic = false): 
 }
 
 const resumes = (script: string, agent: Agent) =>
-  agent === 'codex' ? script.startsWith('codex exec resume ') : script.includes('--resume');
+  agent === 'codex' ? script.includes('\ncodex exec resume ') : script.includes('--resume');
 
 describe('workbench resume fallback', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;

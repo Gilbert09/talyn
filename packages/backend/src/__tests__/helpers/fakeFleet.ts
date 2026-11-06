@@ -279,5 +279,5 @@ export function isTitleScript(script: string): boolean {
 
 /** An agent turn: the agent's CLI, but not the title call. */
 export function isAgentTurn(script: string, agent: 'claude' | 'codex' = 'claude'): boolean {
-  return script.startsWith(`${agent} `) && !isTitleScript(script);
+  return (script.startsWith(`${agent} `) || script.includes(`\n${agent} exec `)) && !isTitleScript(script);
 }

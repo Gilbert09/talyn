@@ -58,6 +58,7 @@ import { isHibernationFetchFailed, isWakeRefusal, localRuntimeError, notReadyErr
 import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE } from './lifecycle.js';
 import { isSizeRefusal } from './sandboxSize.js';
 import { safeMarker } from './execFraming.js';
+import { codexProviderPrelude } from './codexProvider.js';
 import { syncInstructionFiles } from './instructions.js';
 import { observeSessionFiles, sessionFileProbe } from './sessionFileSync.js';
 import { syncSkillPack } from './skillPack.js';
@@ -801,7 +802,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       if (!(await renewTurnLease(chatId, turn))) return handoffOutcome('another owner holds the lease');
       // From here until the fence answers, an agent may be running in the box.
       agentMayBeRunning = true;
-      const launch = await launchAgent(wb, chatId, turn, attempt, argv.map(shellQuote).join(' '), env).catch((err: unknown) => {
+      const command = argv.map(shellQuote).join(' ');
+      const script = agent === 'codex' ? `${codexProviderPrelude()}\n${command}` : command;
+      const launch = await launchAgent(wb, chatId, turn, attempt, script, env).catch((err: unknown) => {
         if (isDiskFullError(err)) agentMayBeRunning = false;
         throw err;
       });

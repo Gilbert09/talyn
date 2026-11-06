@@ -253,6 +253,14 @@ describe('workbench turn launch', () => {
     }
     await sendMessage('chat', { text: 'go' });
     await settled('idle');
+    const script = fleet.execs.find((entry) => isAgentTurn(entry.script, agent))?.script;
+    expect(script).toBeDefined();
+    if (agent === 'codex') {
+      expect(script).toContain('export OPENAI_API_KEY=not-a-key-the-fleet-proxy-injects-host-side');
+      expect(script).toContain('\ncodex exec ');
+    } else {
+      expect(script?.startsWith('claude ')).toBe(true);
+    }
     expect(await events()).toContainEqual(expect.objectContaining({
       type: 'system', subtype: 'init', talyn: { kind: 'turn_start_timing', startMs: 1200, initMs: 500 },
     }));
