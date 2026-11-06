@@ -799,6 +799,13 @@
       "when": 1790900000034,
       "tag": "0114_auto_archive_on_merge",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1790900000035,
+      "tag": "0115_chat_limit_resume",
+      "breakpoints": true
     }
   ]
 }

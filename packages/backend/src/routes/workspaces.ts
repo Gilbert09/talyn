@@ -412,6 +412,9 @@ export function workspaceRoutes(): Router {
       if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
       }
+      if (body.settings.autoResumeOnLimit !== undefined && typeof body.settings.autoResumeOnLimit !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'settings.autoResumeOnLimit must be true or false' });
+      }
       if (body.settings.autoArchiveOnMerge !== undefined && typeof body.settings.autoArchiveOnMerge !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.autoArchiveOnMerge must be true or false' });
       }

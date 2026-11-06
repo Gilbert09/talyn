@@ -27,6 +27,33 @@ const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
 
 const IDLE_DAY_OPTIONS = [0, 1, 3, 7, 14, 30];
 
+function LimitResumeSection() {
+  const id = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const workspace = workspaces.find((w) => w.id === id);
+  const [saving, setSaving] = useState(false);
+  const save = async (value: boolean) => {
+    if (!id) return;
+    setSaving(true);
+    try {
+      await api.workspaces.update(id, { settings: { autoResumeOnLimit: value } });
+      setWorkspaces(workspaces.map((w) => w.id === id
+        ? { ...w, settings: { ...w.settings, autoResumeOnLimit: value } } : w));
+    } catch {
+      toast.error('Could not save the setting');
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <SettingsSection title="Usage limits">
+    <SettingToggle label="Continue when an agent hits its limit"
+      description="Move the chat to your other agent, or wait for the limit to reset and continue."
+      checked={workspace?.settings?.autoResumeOnLimit !== false} disabled={saving || !workspace}
+      onChange={(value) => void save(value)} />
+  </SettingsSection>;
+}
+
 function AutoArchiveSection() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -276,6 +303,7 @@ export function SessionsSettings() {
       <SettingsSection title="Branches">
         <BranchPrefixRow />
       </SettingsSection>
+      <LimitResumeSection />
       <AutoArchiveSection />
       <SettingsSection title="Notifications">
         <SettingToggle

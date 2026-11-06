@@ -92,6 +92,7 @@ export const Chat = z
     effort: z.enum(WORKBENCH_EFFORTS as [string, ...string[]]).nullable(),
     plan_mode: z.boolean(),
     status: z.enum(CHAT_STATUSES),
+    resume_at: Timestamp.nullable(),
     status_message: z.string().nullable(),
     turn_count: z.number().int(),
     queued_message_count: z.number().int().openapi({ description: 'Messages waiting for the running turn to end.' }),

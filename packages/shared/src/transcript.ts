@@ -119,6 +119,7 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'sandbox_low_disk',
   'sandbox_processes_stopped',
   'fleet_account_switched',
+  'agent_limit_switch',
   'local_turn_interrupted',
   'sandbox_capacity_wait',
   'agent_session_reset',

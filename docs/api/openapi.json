@@ -373,6 +373,14 @@
               "error"
             ]
           },
+          "resume_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
           "status_message": {
             "type": [
               "string",
@@ -415,6 +423,7 @@
           "effort",
           "plan_mode",
           "status",
+          "resume_at",
           "status_message",
           "turn_count",
           "queued_message_count",

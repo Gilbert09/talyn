@@ -131,7 +131,7 @@ describe('public projections', () => {
     expect(Object.keys(chat).sort()).toEqual(
       [
         'object', 'id', 'session_id', 'title', 'agent', 'model', 'effort', 'plan_mode', 'status', 'status_message',
-        'turn_count', 'queued_message_count', 'closed_at', 'created_at', 'updated_at',
+        'resume_at', 'turn_count', 'queued_message_count', 'closed_at', 'created_at', 'updated_at',
       ].sort(),
     );
   });

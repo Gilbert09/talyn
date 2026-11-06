@@ -1,3 +1,4 @@
+import { cancelLimitResume } from '../services/workbenches/limitResume.js';
 import { validateAgentModel } from '../services/workbenches/credentialPolicy.js';
 import { scriptSnapshots } from '../services/workbenches/scriptStore.js';
 import express, { Router, type Request, type Response } from 'express';
@@ -307,6 +308,13 @@ export function workbenchRoutes(): Router {
     } catch (err) {
       fail(res, err);
     }
+  });
+
+  router.post('/chats/:chatId/resume/cancel', async (req, res) => {
+    const found = await gatedChat(req, res, req.params.chatId);
+    if (!found) return;
+    await cancelLimitResume(found.chat.id);
+    ok(res, null);
   });
 
   router.post('/chats/:chatId/cancel', async (req, res) => {

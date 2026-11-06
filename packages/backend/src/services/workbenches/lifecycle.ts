@@ -1,3 +1,4 @@
+import { cancelLimitResume } from './limitResume.js';
 import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
 import { archiveBoxSource, IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
@@ -874,6 +875,7 @@ export async function archiveWorkbench(
   if (!row && opts) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
+  for (const chat of await listChats(row.id)) await cancelLimitResume(chat.id);
   scheduleArchive(row.id);
   return row;
 }

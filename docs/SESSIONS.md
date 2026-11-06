@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Sessions continue after agent limits (2026-11-06)
+
+A chat can move to the other connected fleet agent after a usage limit. The other agent must be available in the session box. The switch clears the provider session and uses the existing conversation recap.
+
+If neither agent can run, the chat waits. Vendor reset times remain separate from retry times. Rate limits without a reset use delays of 5, 15, 30, then 60 minutes. Exhaustion without a reset uses a five-hour session retry. Shared account holds still use the existing task dispatch policy.
+
+Migration `0115` adds the resume time, reason, limit count, and cancellation version. A minute sweep claims due chats with a conditional update and a PostgreSQL advisory try-lock. A user message, cancel, archive, or agent switch invalidates pending automatic work. The boot scan schedules recent limit errors from the last 48 hours.
+
+Both apps show the wait time, Resume now, and Cancel. Settings → Sessions can disable this behaviour. Automatic messages use the unattended box gate and the normal message service.
+
 ## Loops can start reviewable sessions (2026-11-05)
 
 Loops can now choose `session` or `task` as their target. Existing loops keep the task target. The editor defaults new loops to sessions when Talyn Fleet is available.

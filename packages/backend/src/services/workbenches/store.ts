@@ -118,6 +118,10 @@ export const CHAT_COLUMNS = {
   planMode: chatsTable.planMode,
   agentSessionId: chatsTable.agentSessionId,
   status: chatsTable.status,
+  resumeAt: chatsTable.resumeAt,
+  resumeReason: chatsTable.resumeReason,
+  limitCount: chatsTable.limitCount,
+  resumeVersion: chatsTable.resumeVersion,
   statusMessage: chatsTable.statusMessage,
   queuedMessages: chatsTable.queuedMessages,
   turnCount: chatsTable.turnCount,
@@ -182,6 +186,8 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     effort: (row.effort as WorkbenchEffort | null) ?? null,
     planMode: row.planMode,
     agentSessionId: row.agentSessionId,
+    resumeAt: row.resumeAt?.toISOString() ?? null,
+    resumeReason: row.resumeReason,
     status: row.status as WorkbenchChatStatus,
     queuedMessages: row.queuedMessages ?? [],
     importedFrom: row.importedFrom ?? null,
@@ -1059,6 +1065,7 @@ export async function switchChatAgentIfIdle(
   id: string,
   agent: WorkbenchAgent,
   model: string | null,
+  resumeVersion?: number,
 ): Promise<ChatRow | null> {
   const queuedModel = model
     ? sql`jsonb_build_object('model', ${model}::text)`
@@ -1070,6 +1077,9 @@ export async function switchChatAgentIfIdle(
   const [row] = await db()
     .update(chatsTable)
     .set({
+      resumeAt: resumeVersion === undefined ? null : sql`${chatsTable.resumeAt}`,
+      resumeReason: resumeVersion === undefined ? '' : sql`${chatsTable.resumeReason}`,
+      resumeVersion: resumeVersion === undefined ? sql`${chatsTable.resumeVersion} + 1` : resumeVersion,
       agent,
       model,
       agentSessionId: null,
@@ -1080,12 +1090,13 @@ export async function switchChatAgentIfIdle(
       backupRetryAt: null,
       backupFailures: 0,
       backupToken: null,
-      status: 'idle',
+      status: resumeVersion === undefined ? 'idle' : 'error',
       statusMessage: null,
       queuedMessages,
       updatedAt: new Date(),
     })
-    .where(and(eq(chatsTable.id, id), ne(chatsTable.status, 'running')))
+    .where(and(eq(chatsTable.id, id), ne(chatsTable.status, 'running'),
+      resumeVersion === undefined ? undefined : eq(chatsTable.resumeVersion, resumeVersion)))
     .returning(CHAT_COLUMNS);
   return row ?? null;
 }
@@ -1113,6 +1124,10 @@ interface RawChatRow {
   plan_mode: boolean;
   agent_session_id: string | null;
   status: string;
+  resume_at: Date | string | null;
+  resume_reason: string | null;
+  limit_count: number;
+  resume_version: number;
   status_message: string | null;
   queued_messages: WorkbenchQueuedMessage[] | string;
   turn_count: number;
@@ -1136,6 +1151,10 @@ function rawToChatRow(r: RawChatRow): ChatRow {
     planMode: r.plan_mode,
     agentSessionId: r.agent_session_id,
     status: r.status,
+    resumeAt: r.resume_at ? date(r.resume_at) : null,
+    resumeReason: r.resume_reason,
+    limitCount: r.limit_count,
+    resumeVersion: r.resume_version,
     statusMessage: r.status_message,
     queuedMessages: queue ?? [],
     turnCount: Number(r.turn_count),
@@ -1154,7 +1173,7 @@ function rowsOf<T>(result: unknown): T[] {
 
 const RETURNING_CHAT = sql.raw(
   `c.id, c.workbench_id, c.workspace_id, c.title, c.agent, c.model, c.effort, c.plan_mode,
-   c.agent_session_id, c.status, c.status_message, c.queued_messages, c.turn_count,
+   c.resume_at, c.resume_reason, c.limit_count, c.resume_version, c.agent_session_id, c.status, c.status_message, c.queued_messages, c.turn_count,
    c.imported_from, c.closed_at, c.created_at, c.updated_at`,
 );
 
@@ -1206,6 +1225,7 @@ export async function claimOrEnqueue(
   chatId: string,
   message: WorkbenchQueuedMessage | null,
   canStart: boolean,
+  resumeVersion?: number,
 ): Promise<ClaimResult | null> {
   const deferred = canStart && isWorkbenchDraining();
   canStart = canStart && !isWorkbenchDraining();
@@ -1221,6 +1241,10 @@ export async function claimOrEnqueue(
       FROM old
     )
     UPDATE workbench_chats c SET
+      resume_reason = CASE WHEN ${message !== null && resumeVersion === undefined} THEN '' ELSE c.resume_reason END,
+      resume_at = CASE WHEN ${message !== null} THEN NULL ELSE c.resume_at END,
+      resume_version = c.resume_version + CASE WHEN ${message !== null && resumeVersion === undefined} THEN 1 ELSE 0 END,
+      limit_count = CASE WHEN ${message !== null && message.origin !== 'talyn'} THEN 0 ELSE c.limit_count END,
       queued_messages = CASE WHEN merged.go THEN merged.mq - 0 ELSE merged.mq END,
       status = CASE WHEN merged.go THEN 'running' ELSE c.status END,
       status_message = CASE WHEN merged.go THEN NULL ELSE c.status_message END,
@@ -1236,7 +1260,10 @@ export async function claimOrEnqueue(
         (${deferred} AND c.status <> 'running' AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(merged.mq) > 0) END,
       updated_at = now()
     FROM merged
-    WHERE c.id = ${chatId} AND (merged.go OR ${message !== null} OR ${deferred})
+    WHERE c.id = ${chatId}
+      AND (${resumeVersion ?? null}::int IS NULL OR (c.resume_version = ${resumeVersion ?? null}
+        AND c.status <> 'running' AND jsonb_array_length(c.queued_messages) = 0))
+      AND (merged.go OR ${message !== null} OR ${deferred})
     RETURNING ${RETURNING_CHAT}, merged.go AS started, CASE WHEN merged.go THEN merged.mq -> 0 END AS started_message
   `);
   const row = rowsOf<RawChatRow & { started: boolean; started_message: unknown }>(result)[0];
@@ -1270,6 +1297,9 @@ export async function finishTurn(
       FROM old
     )
     UPDATE workbench_chats c SET
+      limit_count = CASE WHEN ${opts.finalStatus === 'idle' && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
+      resume_at = NULL,
+      resume_reason = NULL,
       agent_backup_pending = true,
       queued_messages = CASE WHEN merged.go THEN merged.mq - 0 ELSE merged.mq END,
       status = CASE WHEN merged.go THEN 'running' ELSE ${opts.finalStatus} END,

@@ -110,6 +110,18 @@ describe('workbench turn launch', () => {
     await testDb.db.update(workbenchChats).set({ turnHeartbeatAt: at }).where(eq(workbenchChats.id, 'chat'));
   }
 
+  it('parks a turn when Claude returns the reported 429', async () => {
+    const reason = "API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later.";
+    const normal = fleet.handler;
+    fleet.handler = (script) => {
+      if (isAgentTurn(script)) return { stdout: [JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: reason })], exitCode: 1 };
+      return normal!(script);
+    };
+    await sendMessage('chat', { text: 'Continue the work' });
+    await vi.waitFor(async () => expect((await store.getChat('chat'))?.resumeAt).toBeInstanceOf(Date), { timeout: 5000 });
+    expect(await store.getChat('chat')).toMatchObject({ status: 'error', resumeReason: reason, limitCount: 1 });
+  });
+
   it('wakes first, then starts all independent steps before any finishes', async () => {
     fleet.hibernated = true;
     let wake!: () => void;

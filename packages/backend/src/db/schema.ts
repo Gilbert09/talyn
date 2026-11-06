@@ -2371,6 +2371,10 @@ export const workbenchChats = pgTable(
     agentBackup: jsonb('agent_backup').$type<{ sessionId: string; path: string; byteLen: number; generation: string; capped?: boolean }>(),
     /** `WorkbenchChatStatus`. */
     status: text('status').notNull().default('idle'),
+    resumeAt: timestamp('resume_at', { withTimezone: true }),
+    resumeReason: text('resume_reason'),
+    limitCount: integer('limit_count').notNull().default(0),
+    resumeVersion: integer('resume_version').notNull().default(0),
     statusMessage: text('status_message'),
     queuedMessages: jsonb('queued_messages').$type<WorkbenchQueuedMessage[]>().notNull().default([]),
     turnCount: integer('turn_count').notNull().default(0),
@@ -2393,6 +2397,7 @@ export const workbenchChats = pgTable(
   },
   (t) => ({
     workbenchIdx: index('idx_workbench_chats_workbench').on(t.workbenchId, t.createdAt),
+    resumeIdx: index('idx_workbench_chats_resume').on(t.resumeAt).where(sql`${t.resumeAt} IS NOT NULL`),
     runningIdx: index('idx_workbench_chats_running')
       .on(t.status)
       .where(sql`${t.status} = 'running'`),

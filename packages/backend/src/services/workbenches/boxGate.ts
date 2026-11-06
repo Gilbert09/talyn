@@ -1,3 +1,4 @@
+import { noteBoxRefusal, releaseBoxHold, workspaceBoxHold } from '../billing/boxDeferral.js';
 import type { SandboxSize } from '@talyn/shared';
 import { billingEnabled, checkBoxGate, isBoxGateError, type BoxGateError, type BoxGateOptions } from '../billing/entitlements.js';
 import { openIntervalOfSubjectQuery } from '../billing/usage/intervals.js';
@@ -35,6 +36,7 @@ async function check(workspaceId: string, options: GateOptions): Promise<void> {
   if (!ownerId) return;
   const size = typeof options.size === 'function' ? await options.size() : options.size;
   await checkBoxGate(ownerId, { ...options, size, workspaceId });
+  releaseBoxHold(ownerId);
 }
 
 /** A new session or thread box. `size` may be a thunk: detecting it can read GitHub. */
@@ -68,16 +70,27 @@ async function boxIsAwake(row: Pick<WorkbenchRow, 'id'>): Promise<boolean> {
  * null. Budget always; the concurrency cap only when the box sleeps, because
  * waking it adds a box. The size is not checked again: the box exists.
  */
-export async function existingBoxRefusal(row: GateRow): Promise<BoxGateError | null> {
+export async function existingBoxRefusal(row: GateRow, unattended = false): Promise<BoxGateError | null> {
   if (row.runtime !== 'sandbox' || !billingEnabled()) return null;
+  if (unattended) {
+    const held = await workspaceBoxHold(row.workspaceId);
+    if (held) return held;
+  }
   try {
     await check(row.workspaceId, {
+      unattended,
       size: workbenchBoxSize(row),
       existingBox: (await boxIsAwake(row)) ? 'awake' : 'asleep',
     });
     return null;
   } catch (err) {
-    if (isBoxGateError(err)) return err;
+    if (isBoxGateError(err)) {
+      if (unattended) {
+        const owner = await ownerOfWorkspace(row.workspaceId);
+        if (owner) noteBoxRefusal(owner, err);
+      }
+      return err;
+    }
     throw err;
   }
 }

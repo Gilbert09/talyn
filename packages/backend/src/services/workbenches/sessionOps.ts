@@ -292,6 +292,7 @@ export async function switchChatAgent(
   workbench: WorkbenchRow,
   agent: WorkbenchAgent,
   model: string | null,
+  automatic?: { resumeVersion: number },
 ): Promise<ChatRow> {
   validateAgentModel(agent, model);
   if (chat.agent === agent) return patchChat(chat, { model });
@@ -304,12 +305,15 @@ export async function switchChatAgent(
   for (;;) {
     const current = await getChat(chat.id);
     if (!current) throw new WorkbenchError('Chat not found', 404, 'not_found');
+    if (automatic && (current.status === 'running' || current.resumeVersion !== automatic.resumeVersion)) {
+      throw new WorkbenchError('The chat changed before it could resume.', 409, 'chat_changed');
+    }
     if (current.agent === agent && current.status !== 'running') return current;
     if (current.status === 'running') await cancelTurn(current.id);
 
-    const switched = await switchChatAgentIfIdle(current.id, agent, model);
+    const switched = await switchChatAgentIfIdle(current.id, agent, model, automatic?.resumeVersion);
     if (switched) {
-      if (switched.turnCount > 0) {
+      if (switched.turnCount > 0 && !automatic) {
         const from = current.agent === 'codex' ? 'Codex' : 'Claude';
         const to = agent === 'codex' ? 'Codex' : 'Claude';
         const events = await appendEvents(switched.id, [{
@@ -324,7 +328,7 @@ export async function switchChatAgent(
         emitWorkbenchEvents(switched.workspaceId, switched.id, events);
       }
       emitWorkbenchChat(switched.workspaceId, rowToChat(switched));
-      void startQueuedIfIdle(switched.id).catch((err) => {
+      if (!automatic) void startQueuedIfIdle(switched.id).catch((err) => {
         console.warn(`[workbench] starting the queue after switching chat ${switched.id} failed:`, err);
       });
       return switched;

@@ -283,3 +283,16 @@ it.each(['API 429', 'The sandbox stopped', 'No sandbox was found'])('keeps Retry
   render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, message)]} loading={false} error={null} ops={ops} />);
   expect(retryButton()).toBeInTheDocument();
 });
+
+it('shows the wait and lets the user resume now', async () => {
+  const send = jest.fn(async () => ({ queued: false }));
+  const waiting = { ...chat, status: 'error', resumeAt: '2026-11-06T13:10:00Z', resumeReason: 'The agent reached its limit' } as WorkbenchChat;
+  render(<WorkbenchTranscript chat={waiting} events={[userEvent(1, 1), errorResult(2, 1)]}
+    loading={false} error={null} ops={{ ...ops, send }} />);
+  expect(screen.getByText(/Waiting for usage. Resumes at/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Resume now' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith(waiting, {
+    text: 'Continue from where you stopped. The last turn ended with an error: The agent reached its limit.',
+  }));
+});

@@ -624,6 +624,7 @@ export interface WorkspaceSettings {
   autoArchiveIdleDays?: number | null;
   /** Unset means sessions archive when their pull request merges. */
   autoArchiveOnMerge?: boolean;
+  autoResumeOnLimit?: boolean;
   continuousBuild?: ContinuousBuildSettings;
   /**
    * The usage level, in percent, at which a fleet account counts as spent and

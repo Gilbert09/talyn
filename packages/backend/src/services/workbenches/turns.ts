@@ -1,3 +1,4 @@
+import { cancelLimitResume, chatLimitAgent, handleChatLimit } from './limitResume.js';
 import { assertSandboxAgent, validateAgentModel } from './credentialPolicy.js';
 import { archiveIdleSession } from './autoArchive.js';
 import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
@@ -277,7 +278,7 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn'; sentAt?: string } = {},
+  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number } = {},
 ): Promise<{ queued: boolean }> {
   const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
@@ -303,7 +304,7 @@ export async function sendMessage(
     const refusal = await existingBoxRefusal(wb);
     if (refusal) throw refusal;
   }
-  const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
+  const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready', opts.resumeVersion);
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');
   emitWorkbenchChat(chat.workspaceId, rowToChat(claim.chat));
   if (claim.started) {
@@ -450,6 +451,12 @@ async function runTurnLoopBody(
     if (outcome.statusMessage === SANDBOX_LOST_MESSAGE && fin) {
       const wb = await getWorkbench(fin.chat.workbenchId);
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
+    }
+    if (fin && !fin.started && !outcome.cancelled && outcome.status === 'error' &&
+        outcome.statusMessage && chatLimitAgent(fin.chat, outcome.statusMessage)) {
+      await handleChatLimit(fin.chat, outcome.statusMessage).catch((err) => {
+        console.warn(`[workbench] resuming chat ${chatId} failed:`, err);
+      });
     }
     next = fin?.started ?? null;
   }
@@ -645,7 +652,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   // sleeping box needs a free box slot. A relaunch of a turn that already
   // started is not asked again; a turn already running is never stopped.
   if (early && firstAttempt === 0) {
-    const refusal = await existingBoxRefusal(early);
+    const refusal = await existingBoxRefusal(early, message.origin === 'talyn');
     if (refusal) return holdTurn(chatId, message, refusal);
   }
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
@@ -1237,6 +1244,7 @@ export async function restoreCheckpoint(chatId: string, turn: number): Promise<v
  * follower's own ending settles it.
  */
 export async function cancelTurn(chatId: string): Promise<void> {
+  await cancelLimitResume(chatId);
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);

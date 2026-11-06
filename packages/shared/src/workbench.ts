@@ -318,6 +318,8 @@ export interface WorkbenchCapacityWait {
 }
 
 export interface WorkbenchChat {
+  resumeAt?: string | null;
+  resumeReason?: string | null;
   id: string;
   workbenchId: string;
   title: string;

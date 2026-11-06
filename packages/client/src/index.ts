@@ -3147,6 +3147,7 @@ export const workbenches = {
   // ---- Chats ----
   createChat: (workbenchId: string, input: CreateWorkbenchChatInput = {}) =>
     request<WorkbenchChat>('POST', `/workbenches/${enc(workbenchId)}/chats`, input),
+  cancelResume: (chatId: string) => request<null>('POST', `/workbenches/chats/${enc(chatId)}/resume/cancel`),
   updateChat: (chatId: string, patch: UpdateWorkbenchChatInput) =>
     request<WorkbenchChat>('PATCH', `/workbenches/chats/${enc(chatId)}`, patch),
   /** Close a chat tab. A running turn is stopped first; the transcript is kept. */

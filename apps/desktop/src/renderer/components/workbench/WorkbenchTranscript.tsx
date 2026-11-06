@@ -7,6 +7,7 @@ import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../..
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
+import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 
 /**
@@ -291,13 +292,21 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
     if (sending) return;
     setSending(true);
     try {
-      await ops.send(chat, { text: `Continue from where you stopped. The last turn ended with an error: ${reason.trim().slice(0, 300)}.` });
+      await ops.send(chat, { text: `Continue from where you stopped. The last turn ended with an error: ${(chat.resumeReason || reason).trim().slice(0, 300)}.` });
     } catch (err) {
       toast.error('Could not retry the turn', err instanceof Error ? err.message : undefined);
     } finally {
       setSending(false);
     }
   };
+  if (chat.resumeAt) return (
+    <div className="mt-2 text-xs text-muted-foreground" data-attr="limit-resume">
+      <p>Waiting for usage. Resumes at {new Date(chat.resumeAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}.</p>
+      <button type="button" disabled={sending} onClick={() => void send()} className="mr-3 underline">Resume now</button>
+      <button type="button" onClick={() => void api.workbenches.cancelResume(chat.id).catch(() => toast.error('Could not cancel the wait'))}
+        className="underline">Cancel</button>
+    </div>
+  );
   if (SANDBOX_WAIT_BOUND_ERROR.test(reason)) return null;
   return (
     <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}

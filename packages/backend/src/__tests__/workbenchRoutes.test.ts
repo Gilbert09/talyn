@@ -190,6 +190,16 @@ describe('workbench routes', () => {
     resetFeatureFlagsForTests();
   });
 
+  it('lets only the owner cancel an automatic resume', async () => {
+    const wb = await createSandboxWorkbench();
+    const chatId = await chatIdOf(wb.id);
+    await updateChat(chatId, { status: 'error', resumeAt: new Date(Date.now() + 60_000), resumeReason: 'Usage limit reached' });
+    expect((await call('POST', `/workbenches/chats/${chatId}/resume/cancel`, {}, 'owner-b')).status).toBe(404);
+    expect((await getChat(chatId))?.resumeAt).not.toBeNull();
+    expect((await call('POST', `/workbenches/chats/${chatId}/resume/cancel`, {})).status).toBe(200);
+    expect((await getChat(chatId))?.resumeAt).toBeNull();
+  });
+
   describe('the gate', () => {
     it.each([
       ['GET', '/workbenches?workspaceId=ws-a'],
@@ -704,7 +714,7 @@ describe('workbench routes', () => {
       await idle(chatId);
 
       const chat = await getChat(chatId);
-      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: null });
+      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: 'sess-9' });
       expect(chat?.queuedMessages.map((m) => m.text)).toEqual(['later']);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
       expect(page.body.data.events.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });

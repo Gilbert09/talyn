@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { initChatLimitResume } from './services/workbenches/limitResumeSweep.js';
 import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
 import { drainWorkbenchFollowers, workbenchDrainTimeoutMs } from './services/workbenches/lifecycle.js';
 import express from 'express';
@@ -207,6 +208,7 @@ async function main() {
   // done. Not a poll loop, and a deployment with no workbenches reads two
   // partial indexes and finds nothing.
   initWorkbenches();
+  initChatLimitResume();
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
   // that matters is inside: the sweep asks the PostHog flag per workspace

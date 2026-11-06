@@ -216,6 +216,7 @@ export const PUBLIC_CHAT_COLUMNS = {
   effort: chatsTable.effort,
   planMode: chatsTable.planMode,
   status: chatsTable.status,
+  resumeAt: chatsTable.resumeAt,
   statusMessage: chatsTable.statusMessage,
   turnCount: chatsTable.turnCount,
   queuedMessageCount: sql<number>`jsonb_array_length(${chatsTable.queuedMessages})`.mapWith(Number),
@@ -225,6 +226,7 @@ export const PUBLIC_CHAT_COLUMNS = {
 } as const;
 
 export interface PublicChatRow {
+  resumeAt?: Date | null;
   id: string;
   workbenchId: string;
   workspaceId: string;
@@ -255,6 +257,7 @@ export function toPublicChat(row: PublicChatRow) {
     effort: row.effort ?? null,
     plan_mode: row.planMode,
     status: (CHAT_STATUSES.has(row.status) ? row.status : 'error') as 'idle' | 'running' | 'awaiting_input' | 'error',
+    resume_at: row.resumeAt?.toISOString() ?? null,
     status_message: row.statusMessage ?? null,
     turn_count: row.turnCount,
     queued_message_count: row.queuedMessageCount,
