@@ -5,9 +5,10 @@ import { FLEET_MODELS, fleetAgentForModel, type Workspace } from '@talyn/shared'
 import { SESSION_DEFAULTS_KEY } from '../lib/sessionDefaults';
 import { SessionsSettings } from '../components/settings/sections/SessionsSettings';
 
-const { update, setWorkspaces, state } = vi.hoisted(() => ({
+const { update, setWorkspaces, setSidebarOrder, state } = vi.hoisted(() => ({
   update: vi.fn(),
   setWorkspaces: vi.fn(),
+  setSidebarOrder: vi.fn(),
   state: { workspaces: [] as Workspace[] },
 }));
 
@@ -15,7 +16,13 @@ vi.mock('../lib/api', () => ({ api: { workspaces: { update } } }));
 vi.mock('../stores/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('../stores/workspace', () => ({
   useWorkspaceStore: (selector: (value: unknown) => unknown) =>
-    selector({ workspaces: state.workspaces, currentWorkspaceId: 'ws1', setWorkspaces }),
+    selector({
+      workspaces: state.workspaces,
+      currentWorkspaceId: 'ws1',
+      setWorkspaces,
+      sidebarOrder: 'active_first',
+      setSidebarOrder,
+    }),
 }));
 
 beforeEach(() => {
@@ -34,6 +41,14 @@ describe('SessionsSettings', () => {
     render(<SessionsSettings />);
     expect(screen.queryByLabelText('Default runtime')).toBeNull();
     expect(screen.getByLabelText('Default agent')).toBeTruthy();
+  });
+
+  it('lets the person switch to repository grouping', () => {
+    render(<SessionsSettings />);
+    const select = screen.getByLabelText('Sidebar session order') as HTMLSelectElement;
+    expect(select.value).toBe('active_first');
+    fireEvent.change(select, { target: { value: 'repository' } });
+    expect(setSidebarOrder).toHaveBeenCalledWith('repository');
   });
 
   it.each(['claude', 'codex'] as const)('lists %s models', (agent) => {

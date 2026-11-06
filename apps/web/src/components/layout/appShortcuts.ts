@@ -4,11 +4,13 @@ import { MENU_COMMANDS } from '../../lib/menuCommands';
 import { FOCUS_COMPOSER_EVENT, OPEN_REPOSITORY_PICKER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, isInOverlay, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
-import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
+import { isPrOnlyUnseen, useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { usePullRequestStore } from '../../stores/pullRequests';
+import { isActiveSessionState, sessionPr, sessionState } from '../../lib/sessionState';
 import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
-import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
+import { groupSidebarWorkbenches, isArchived } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
 import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
@@ -24,9 +26,23 @@ export function orderedContexts() {
 }
 
 export function orderedLiveWorkbenches(): Workbench[] {
-  const { workbenches, extraWorkbenchIds } = useWorkbenchStore.getState();
+  const { workbenches, extraWorkbenchIds, chats, unread, unseen } = useWorkbenchStore.getState();
   const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
-  return groupByRepository(all).flatMap((g) => g.items);
+  const rowById = new Map(usePullRequestStore.getState().rows.map((row) => [row.id, row]));
+  const activeIds = new Set(all.filter((workbench) => {
+    const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
+    const resolvedPr = sessionPr(workbench, pr);
+    const state = sessionState(
+      workbench,
+      chats[workbench.id] ?? workbench.chats ?? [],
+      unread,
+      resolvedPr,
+      isPrOnlyUnseen(unseen[workbench.id]),
+    );
+    return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
+  }).map((workbench) => workbench.id));
+  const activeFirst = useWorkspaceStore.getState().sidebarOrder === 'active_first';
+  return groupSidebarWorkbenches(all, activeIds, activeFirst).flatMap((group) => group.items);
 }
 
 export function currentWorkbench(): Workbench | null {

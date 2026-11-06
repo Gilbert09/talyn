@@ -115,6 +115,18 @@ export interface WatchedRepo {
 }
 
 export type Theme = 'light' | 'dark' | 'system';
+export type SidebarOrder = 'active_first' | 'repository';
+
+const SIDEBAR_ORDER_KEY = 'talyn-sidebar-order';
+
+function getInitialSidebarOrder(): SidebarOrder {
+  if (typeof window === 'undefined') return 'active_first';
+  try {
+    return localStorage.getItem(SIDEBAR_ORDER_KEY) === 'repository' ? 'repository' : 'active_first';
+  } catch {
+    return 'active_first';
+  }
+}
 
 // Get initial theme from localStorage or default to 'light'
 function getInitialTheme(): Theme {
@@ -264,6 +276,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
+  sidebarOrder: SidebarOrder;
   activePanel: ActivePanel;
   selectedTaskId: string | null;
   theme: Theme;
@@ -408,6 +421,7 @@ interface WorkspaceState {
   setRepositories: (repos: WatchedRepo[]) => void;
 
   toggleSidebar: () => void;
+  setSidebarOrder: (order: SidebarOrder) => void;
   setActivePanel: (panel: ActivePanel) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -425,6 +439,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   tasksLoadingMore: false,
   repositories: [],
   sidebarCollapsed: false,
+  sidebarOrder: getInitialSidebarOrder(),
   activePanel: 'my_prs',
   selectedTaskId: null,
   theme: getInitialTheme(),
@@ -641,6 +656,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   toggleSidebar: () =>
     set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+  setSidebarOrder: (sidebarOrder) => {
+    try {
+      localStorage.setItem(SIDEBAR_ORDER_KEY, sidebarOrder);
+    } catch {
+      // ignore quota / privacy-mode issues
+    }
+    set({ sidebarOrder });
+  },
 
   setActivePanel: (panel) => {
     if (panelNavigator) panelNavigator.openPanel(panel);

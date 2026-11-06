@@ -10,6 +10,7 @@ import { newestSessions } from '../../lib/sessionOrder';
 export interface RepoGroup {
   repo: string;
   items: Workbench[];
+  active?: boolean;
 }
 
 /** Live sessions grouped by repository, with the newest session first. The order does not change as sessions work. */
@@ -24,6 +25,18 @@ export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
   return [...map.entries()]
     .map(([repo, items]) => ({ repo, items: newestSessions(items) }))
     .sort((a, b) => b.items[0].createdAt.localeCompare(a.items[0].createdAt) || a.repo.localeCompare(b.repo));
+}
+
+/** Active sessions first in one group, then inactive sessions by repository. */
+export function groupSidebarWorkbenches(
+  workbenches: Workbench[],
+  activeIds: ReadonlySet<string>,
+  activeFirst: boolean,
+): RepoGroup[] {
+  if (!activeFirst) return groupByRepository(workbenches);
+  const active = newestSessions(workbenches.filter((workbench) => activeIds.has(workbench.id) && !isThread(workbench)));
+  const inactive = groupByRepository(workbenches.filter((workbench) => !activeIds.has(workbench.id)));
+  return active.length > 0 ? [{ repo: 'Active', items: active, active: true }, ...inactive] : inactive;
 }
 
 export function isArchived(wb: Workbench): boolean {
