@@ -391,15 +391,14 @@ describe('workbench routes', () => {
     it.each([
       ['claude', { openaiKey: 'oa-codex' }],
       ['codex', { claudeToken: 'sk-ant-oat-claude' }],
-    ] as const)('starts a %s workbench when only the other subscription is connected', async (agent, held) => {
+    ] as const)('refuses a %s workbench when that subscription is not connected', async (agent, held) => {
       creds = held;
       const res = await call('POST', '/workbenches', {
         workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent,
       });
-      expect(res.status).toBe(200);
-      await vi.waitFor(async () => expect((await getWorkbench(res.body.data.id))?.status).toBe('ready'));
-      expect(res.body.data.agent).toBe(agent);
-      expect(fleet.created).toHaveLength(1);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('agent_not_connected');
+      expect(fleet.created).toEqual([]);
     });
 
     it('fails visibly, with the reason, when the clone fails', async () => {
