@@ -8,6 +8,7 @@ import { GitHubRateLimitError } from '../../services/githubRateGate.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
+import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
@@ -53,6 +54,8 @@ describe('routes/repositories', () => {
   let closeServer: () => Promise<void>;
 
   beforeEach(async () => {
+    vi.stubEnv('WORKBENCHES_ENABLED', 'true');
+    resetFeatureFlagsForTests();
     const testDb = await createTestDb();
     db = testDb.db;
     cleanup = testDb.cleanup;
@@ -66,6 +69,8 @@ describe('routes/repositories', () => {
     vi.restoreAllMocks();
     await closeServer();
     await cleanup();
+    vi.unstubAllEnvs();
+    resetFeatureFlagsForTests();
   });
 
   describe('GET /repositories', () => {
@@ -193,6 +198,33 @@ describe('routes/repositories', () => {
         expect(body.error).not.toMatch(/rate/i);
       }
       expect(await db.select().from(repositoriesTable)).toHaveLength(0);
+    });
+  });
+
+  describe('GET /repositories/:id/files', () => {
+    it('lists files from the repository default branch', async () => {
+      await db.insert(repositoriesTable).values({
+        id: 'r1',
+        workspaceId: 'ws1',
+        name: 'acme/a',
+        url: 'https://github.com/acme/a',
+        defaultBranch: 'main',
+      });
+      vi.spyOn(githubService, 'getTreeRecursive').mockResolvedValue({
+        entries: [
+          { path: 'src/app.ts', type: 'blob', mode: '100644', sha: 'one' },
+          { path: 'src', type: 'tree', mode: '040000', sha: 'two' },
+          { path: 'vendor/tool', type: 'commit', mode: '160000', sha: 'three' },
+          { path: 'README.md', type: 'blob', mode: '100644', sha: 'four' },
+        ],
+        truncated: false,
+      });
+
+      const res = await fetch(`${serverUrl}/repositories/r1/files`, { headers: authHeaders });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).data).toEqual({ paths: ['src/app.ts', 'README.md'] });
+      expect(githubService.getTreeRecursive).toHaveBeenCalledWith('ws1', 'acme', 'a', 'HEAD');
     });
   });
 
