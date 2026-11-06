@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { FleetAccountView, Workspace } from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
 import { FleetAccountsList, formatResetAt, formatRetryAt } from '../renderer/components/settings/FleetAccountsList';
-import { FleetSwitchThresholdRow } from '../renderer/components/settings/sections/AgentsSettings';
+import { FleetFullQuotaRow, FleetSwitchThresholdRow } from '../renderer/components/settings/sections/AgentsSettings';
 
 const list = jest.fn();
 const add = jest.fn();
@@ -295,4 +295,20 @@ it('shows the server error when it refuses a threshold', async () => {
   fireEvent.change(input, { target: { value: '95' } });
   fireEvent.blur(input);
   expect(await screen.findByRole('alert')).toHaveTextContent('Threshold refused');
+});
+
+it('saves the option to use subscriptions to 100%', async () => {
+  render(<FleetFullQuotaRow />);
+  fireEvent.click(screen.getByRole('checkbox', { name: /Use subscriptions to 100%/ }));
+  await waitFor(() => expect(update).toHaveBeenCalledWith('ws1', {
+    settings: { fleetUseFullQuotaWhenAllOver: true },
+  }));
+  expect(setWorkspaces).toHaveBeenCalled();
+});
+
+it('shows the server error when it refuses the full quota option', async () => {
+  update.mockRejectedValue(new ApiError('Full quota setting refused', 400));
+  render(<FleetFullQuotaRow />);
+  fireEvent.click(screen.getByRole('checkbox', { name: /Use subscriptions to 100%/ }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Full quota setting refused');
 });
