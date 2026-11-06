@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
+  fleetModelForAgentSwitch,
   WORKBENCH_MOVING_MESSAGE,
   type Workbench,
   type WorkbenchAgent,
@@ -370,7 +371,7 @@ export function Composer({
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
           <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
-          <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: defaultModelFor(next) })} disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
+          <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })} disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
           <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!owner || !chat || Boolean(ops.unavailable)} />

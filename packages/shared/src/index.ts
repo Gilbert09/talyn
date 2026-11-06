@@ -333,20 +333,22 @@ export type FleetProvider = 'anthropic' | 'openai';
  *
  * Most capable first within each vendor.
  */
+type FleetModelTier = 'flagship' | 'strong' | 'fast' | 'economy';
+
 export const FLEET_MODELS = [
-  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', blurb: 'Most capable — demanding reasoning.' },
-  { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', blurb: 'Newest Opus.' },
-  { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', blurb: 'The previous Opus — 1M context.' },
-  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', blurb: 'The previous Fable.' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'The previous Sonnet.' },
-  { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', blurb: 'Cheapest of the Claude set.' },
-  { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', blurb: 'Most capable: the hardest reasoning and coding.' },
-  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', blurb: 'Near-Astra on complex work, for less.' },
-  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'openai', blurb: 'Fast and efficient: the Codex default.' },
-  { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'openai', blurb: 'Cheapest, for focused high-volume work.' },
-] as const satisfies readonly { id: string; label: string; provider: FleetProvider; blurb: string }[];
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', tier: 'flagship', blurb: 'Most capable — demanding reasoning.' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', tier: 'flagship', blurb: 'Newest Opus.' },
+  { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus — 1M context.' },
+  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Fable.' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', tier: 'fast', blurb: 'Strong and fast — the default.' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', tier: 'fast', blurb: 'The previous Sonnet.' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus flagship.' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', tier: 'economy', blurb: 'Cheapest of the Claude set.' },
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', tier: 'flagship', blurb: 'Most capable: the hardest reasoning and coding.' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', tier: 'strong', blurb: 'Near-Astra on complex work, for less.' },
+  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'openai', tier: 'fast', blurb: 'Fast and efficient: the Codex default.' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'openai', tier: 'economy', blurb: 'Cheapest, for focused high-volume work.' },
+] as const satisfies readonly { id: string; label: string; provider: FleetProvider; tier: FleetModelTier; blurb: string }[];
 
 export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
 
@@ -483,6 +485,15 @@ export function fleetAgentForModel(modelId: string | undefined): FleetAgent {
 /** That agent's SHIPPED default — the floor when a workspace has chosen nothing. */
 export function defaultFleetModelForAgent(agent: FleetAgent): FleetModelId {
   return agent === 'codex' ? DEFAULT_FLEET_CODEX_MODEL_ID : DEFAULT_FLEET_MODEL_ID;
+}
+
+/** Keep the model's capability tier when a chat moves to the other agent. */
+export function fleetModelForAgentSwitch(modelId: string, agent: FleetAgent): FleetModelId {
+  const current = FLEET_MODELS.find((model) => model.id === resolveFleetModel(modelId));
+  if (!current) return defaultFleetModelForAgent(agent);
+  const provider: FleetProvider = agent === 'codex' ? 'openai' : 'anthropic';
+  return FLEET_MODELS.find((model) => model.provider === provider && model.tier === current.tier)?.id
+    ?? defaultFleetModelForAgent(agent);
 }
 
 /**

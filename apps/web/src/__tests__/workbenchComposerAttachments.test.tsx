@@ -183,12 +183,12 @@ it('shows an ordinary queued message as a Queued chip', () => {
   expect(screen.queryByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
 });
 
-it('switches the chat provider from the composer', async () => {
-  const activeChat = { ...chat, agent: 'claude' as const, model: 'claude-opus-5' };
+it('switches the chat provider at the same model tier', async () => {
+  const activeChat = { ...chat, agent: 'claude' as const, model: 'claude-opus-5-5' };
   const update = vi.spyOn(api.workbenches, 'updateChat').mockResolvedValue({
     ...activeChat,
     agent: 'codex',
-    model: 'gpt-6.1-sol',
+    model: 'gpt-6-astra',
   });
   render(
     <Composer
@@ -204,6 +204,6 @@ it('switches the chat provider from the composer', async () => {
   fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'codex' } });
   await waitFor(() => expect(update).toHaveBeenCalledWith('chat-1', expect.objectContaining({
     agent: 'codex',
-    model: expect.any(String),
+    model: 'gpt-6-astra',
   })));
 });

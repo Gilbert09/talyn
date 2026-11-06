@@ -748,11 +748,12 @@ describe('workbench routes', () => {
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Remember pineapple.' });
       await idle(chatId);
+      await updateChat(chatId, { model: 'claude-opus-5-5' });
 
       const switched = await call('PATCH', `/workbenches/chats/${chatId}`, { agent: 'codex', model: null });
       expect(switched.status).toBe(200);
-      expect(switched.body.data).toMatchObject({ agent: 'codex', model: null, agentSessionId: null });
-      expect(await getChat(chatId)).toMatchObject({ agent: 'codex', agentSessionId: null });
+      expect(switched.body.data).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
+      expect(await getChat(chatId)).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
       expect((await testDb.db.select({ pending: workbenchChats.recapPending })
         .from(workbenchChats).where(eq(workbenchChats.id, chatId)))[0].pending).toBe(true);
 
