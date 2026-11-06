@@ -16,10 +16,11 @@ import { openExternal } from '../../lib/openExternal';
 import { prDetailIdFor } from '../../lib/prDetail';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
-import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
+import type { AgentEvent, EditDiff, GroupedBlock, ToolGroupChild } from '@talyn/shared';
 import {
   buildBlocks,
   describeTool,
+  editDiffFromInput,
   formatToolOutput,
   groupToolRuns,
   groupedBlockSignature,
@@ -88,6 +89,7 @@ export function AgentConversation({
     [transcript]
   );
   const skills = useMemo(() => skillInstructionsByToolId(transcript ?? []), [transcript]);
+  const lastContent = lastContentIndex(blocks);
 
   if (blocks.length === 0) {
     // Task may have events but none render as blocks yet (the very
@@ -110,13 +112,14 @@ export function AgentConversation({
       onScroll={handleScroll}
       className="h-full overflow-auto px-4 py-4 text-[13px] text-foreground bg-background space-y-3 min-w-0"
     >
-      {blocks.map((block) => (
+      {blocks.map((block, i) => (
         <BlockView
           key={`${scopeId ?? ''}:${block.key}`}
           block={block}
           envName={envName}
           scopeId={scopeId}
           skills={skills}
+          endsTurn={i === lastContent}
         />
       ))}
     </div>
@@ -147,11 +150,18 @@ export function AgentBlocks({
     return hideCompletedResults ? all.filter((b) => b.kind !== 'result' || b.isError) : all;
   }, [events, hideCompletedResults]);
   const skills = useMemo(() => skillInstructionsByToolId(events), [events]);
+  const lastContent = lastContentIndex(blocks);
   return (
     <>
-      {blocks.map((block) => (
+      {blocks.map((block, i) => (
         <React.Fragment key={`${scopeId ?? ''}:${block.key}`}>
-          <BlockView block={block} envName={envName} scopeId={scopeId} skills={skills} />
+          <BlockView
+            block={block}
+            envName={envName}
+            scopeId={scopeId}
+            skills={skills}
+            endsTurn={i === lastContent}
+          />
           {block.kind === 'result' && block.key === retryResult?.key && retryResult.action}
         </React.Fragment>
       ))}
@@ -174,11 +184,18 @@ function skillsSignature(block: GroupedBlock, skills: Map<string, string>): stri
   return tools.map((t) => skills.get(t.toolId)?.length ?? 0).join(',');
 }
 
+/** The last block that is not a result footer: a failure there is where the turn ended. */
+function lastContentIndex(blocks: GroupedBlock[]): number {
+  for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind !== 'result') return i;
+  return -1;
+}
+
 const BlockView = React.memo(
   BlockViewImpl,
   (prev, next) =>
     prev.envName === next.envName &&
     prev.scopeId === next.scopeId &&
+    prev.endsTurn === next.endsTurn &&
     groupedBlockSignature(prev.block) === groupedBlockSignature(next.block) &&
     skillsSignature(prev.block, prev.skills) === skillsSignature(next.block, next.skills)
 );
@@ -187,6 +204,7 @@ function BlockViewImpl({
   block,
   envName,
   skills,
+  endsTurn = false,
 }: {
   block: GroupedBlock;
   envName?: string;
@@ -194,6 +212,8 @@ function BlockViewImpl({
   scopeId?: string;
   /** The text each launched skill added, by Skill tool call id. */
   skills: Map<string, string>;
+  /** Nothing but a result footer follows this block. */
+  endsTurn?: boolean;
 }) {
   switch (block.kind) {
     case 'text':
@@ -215,10 +235,12 @@ function BlockViewImpl({
     case 'tool_group':
       return (
         <ToolGroupView
-          tools={block.tools}
+          items={block.children}
           summary={block.summary}
           running={block.running}
           isError={block.isError}
+          failedCount={block.failedCount}
+          openOnFailure={block.lastFailed && endsTurn}
           skills={skills}
         />
       );
@@ -277,9 +299,9 @@ function TextBlock({ text }: { text: string }) {
  * most of what made the transcript hard to scan. The first line of the thought
  * is almost always the useful part, so it is what shows.
  */
-function ThinkingBlock({ text }: { text: string }) {
+function ThinkingBlock({ text, compact = false }: { text: string; compact?: boolean }) {
   const [open, setOpen] = useState(false);
-  const firstLine = text.split('\n').find((l) => l.trim()) ?? 'Thinking';
+  const firstLine = compact ? 'Thought' : (text.split('\n').find((l) => l.trim()) ?? 'Thinking');
   return (
     <div className="text-xs text-muted-foreground">
       <button
@@ -289,7 +311,7 @@ function ThinkingBlock({ text }: { text: string }) {
       >
         <span className="flex-none text-muted-foreground select-none">✻</span>
         <span className={cn('italic min-w-0 flex-1', !open && 'truncate')}>
-          {open ? 'Thinking' : firstLine}
+          {open && !compact ? 'Thinking' : firstLine}
         </span>
       </button>
       {open && (
@@ -354,7 +376,13 @@ function ToolBlockView({
   const { label, isCommand } = described;
   const detail = isCommand ? described.detail : shortenPath(described.detail);
 
-  const out = useMemo(() => formatToolOutput(output), [output]);
+  const editDiff = useMemo(() => editDiffFromInput(name, input), [name, input]);
+  const fileKind = editDiff ? null : codexFileKind(label, input);
+  // An edit's input already says what changed; "updated successfully" adds nothing.
+  const out = useMemo(
+    () => formatToolOutput(editDiff && !isError ? undefined : output),
+    [output, editDiff, isError]
+  );
 
   const maxLines = isError ? PREVIEW_LINES_ERROR : PREVIEW_LINES;
   const maxChars = isError ? PREVIEW_CHARS_ERROR : PREVIEW_CHARS;
@@ -364,7 +392,8 @@ function ToolBlockView({
   // that failed should say why without being asked.
   const [open, setOpen] = useState(false);
   const showBody = out.text.length > 0 && (fitsInline || open);
-  const canToggle = out.text.length > 0 && !fitsInline;
+  const hasDiff = !!editDiff && editDiff.lines.length > 0;
+  const canToggle = hasDiff || (out.text.length > 0 && !fitsInline);
 
   const Row = canToggle ? 'button' : 'div';
 
@@ -406,11 +435,24 @@ function ToolBlockView({
             {detail}
           </span>
         )}
+        {editDiff && (
+          <span className="flex-none tabular-nums text-[11px] text-muted-foreground">
+            <span className="text-success/80">+{editDiff.added}</span> <span className="text-destructive/80">−{editDiff.removed}</span>
+          </span>
+        )}
+        {fileKind && (
+          <span
+            title={fileKind.title}
+            className="flex-none rounded border border-border px-1 text-[10px] leading-4 text-muted-foreground"
+          >
+            {fileKind.badge}
+          </span>
+        )}
         {!settled && <span className="flex-none text-[11px] text-muted-foreground">running…</span>}
         {stopped && <span className="flex-none text-[11px] text-muted-foreground">stopped</span>}
         {canToggle && (
           <span className="flex-none flex items-center gap-1 text-[11px] text-muted-foreground">
-            <span>{out.summary}</span>
+            {out.text.length > 0 && <span>{out.summary}</span>}
             {open ? (
               <ChevronDown className="w-3 h-3" />
             ) : (
@@ -440,7 +482,67 @@ function ToolBlockView({
           </pre>
         </div>
       )}
+      {hasDiff && open && editDiff && <EditDiffBody diff={editDiff} />}
       {skillInstructions && <SkillInstructions text={skillInstructions} />}
+    </div>
+  );
+}
+
+const CODEX_FILE_KINDS: Record<string, { badge: string; title: string }> = {
+  add: { badge: 'A', title: 'Added' },
+  update: { badge: 'M', title: 'Modified' },
+  delete: { badge: 'D', title: 'Deleted' },
+};
+
+/** Codex reports a file edit as a path and a kind, with no diff. */
+function codexFileKind(label: string, input: unknown): { badge: string; title: string } | null {
+  if (label !== 'edit' && label !== 'write') return null;
+  const kind = input && typeof input === 'object' ? (input as { kind?: unknown }).kind : undefined;
+  return typeof kind === 'string' ? (CODEX_FILE_KINDS[kind] ?? null) : null;
+}
+
+const DIFF_PREVIEW_LINES = 12;
+const DIFF_MARKS = { add: '+', del: '−', ctx: ' ' } as const;
+
+function EditDiffBody({ diff }: { diff: EditDiff }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? diff.lines : diff.lines.slice(0, DIFF_PREVIEW_LINES);
+  const hidden = diff.lines.length - shown.length;
+  return (
+    <div className="mt-1 ml-[2px] border-l border-border pl-3 py-0.5">
+      <div className="max-h-72 overflow-auto rounded bg-muted/40 leading-[1.55]">
+        {shown.map((line, i) =>
+          line.kind === 'hunk' ? (
+            <div key={i} className="select-none text-center text-muted-foreground/60">
+              ⋯
+            </div>
+          ) : (
+            <div
+              key={i}
+              className={cn(
+                'flex gap-2 px-2',
+                line.kind === 'add' && 'bg-success/10 text-success',
+                line.kind === 'del' && 'bg-destructive/10 text-destructive',
+                line.kind === 'ctx' && 'text-muted-foreground'
+              )}
+            >
+              <span aria-hidden className="flex-none select-none">
+                {DIFF_MARKS[line.kind]}
+              </span>
+              <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{line.text}</span>
+            </div>
+          )
+        )}
+      </div>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="mt-1 text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          Show {hidden} more {hidden === 1 ? 'line' : 'lines'}
+        </button>
+      )}
     </div>
   );
 }
@@ -480,28 +582,30 @@ function SkillInstructions({ text }: { text: string }) {
  * sentence, and rendering each as a top-level row buries the sentences.
  * Closed, this is one line. Open, every call inside keeps its own disclosure.
  *
- * A FAILED call opens the group by default. The alternative is a red dot on a
- * closed section, which tells you something went wrong and then makes you hunt
- * for it. A RUNNING group opens for the same reason: while the agent is working
- * this is the only place progress is visible.
+ * A RUNNING group opens by default: while the agent is working this is the only
+ * place progress is visible. So does a group whose last call failed when the turn
+ * ended there. Any other failure stays closed and is counted in the summary line.
  */
 function ToolGroupView({
-  tools,
+  items,
   summary,
   running,
   isError,
+  failedCount,
+  openOnFailure,
   skills,
 }: {
-  tools: ToolBlock[];
+  items: ToolGroupChild[];
   summary: string;
   running: boolean;
   isError: boolean;
+  failedCount: number;
+  /** The run's last call failed and the turn ended there. */
+  openOnFailure: boolean;
   skills: Map<string, string>;
 }) {
-  // Open when there is something to see: a failure to read, or work still
-  // happening. `useState` takes this once, at mount, so a group that finishes
-  // while open STAYS open — content is never yanked away mid-read.
-  const [open, setOpen] = useState(isError || running);
+  // Taken once, at mount, so a group that finishes while open stays open.
+  const [open, setOpen] = useState(running || openOnFailure);
 
   return (
     <div className="font-mono text-xs min-w-0">
@@ -520,7 +624,10 @@ function ToolGroupView({
             !running && !isError && 'bg-muted-foreground/50'
           )}
         />
-        <span className={cn('min-w-0 truncate', isError && 'text-destructive')}>{summary}</span>
+        <span className="min-w-0 truncate">
+          {summary}
+          {failedCount > 0 && <span className="text-destructive"> · {failedCount} failed</span>}
+        </span>
         {running && <span className="flex-none text-[11px] text-muted-foreground">running…</span>}
         {open ? (
           <ChevronDown className="w-3 h-3 flex-none" />
@@ -531,18 +638,22 @@ function ToolGroupView({
 
       {open && (
         <div className="mt-1.5 ml-[2px] border-l border-border pl-3 space-y-2">
-          {tools.map((t) => (
-            <ToolBlockView
-              key={t.key}
-              name={t.name}
-              input={t.input}
-              output={t.output}
-              isError={t.isError}
-              stopped={t.stopped}
-              settled={t.settled}
-              skillInstructions={skills.get(t.toolId)}
-            />
-          ))}
+          {items.map((item) =>
+            item.kind === 'thinking' ? (
+              <ThinkingBlock key={item.key} text={item.text} compact />
+            ) : (
+              <ToolBlockView
+                key={item.key}
+                name={item.name}
+                input={item.input}
+                output={item.output}
+                isError={item.isError}
+                stopped={item.stopped}
+                settled={item.settled}
+                skillInstructions={skills.get(item.toolId)}
+              />
+            )
+          )}
         </div>
       )}
     </div>

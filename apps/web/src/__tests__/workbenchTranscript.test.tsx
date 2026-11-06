@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -297,4 +297,140 @@ it('shows the wait and lets the user resume now', async () => {
   await waitFor(() => expect(send).toHaveBeenCalledWith(waiting, {
     text: 'Continue from where you stopped. The last turn ended with an error: The agent reached its limit.',
   }));
+});
+
+// ---------------------------------------------------------------------------
+// Tool rows: diffs, groups, failures
+// ---------------------------------------------------------------------------
+
+type Piece =
+  | { use: string; name: string; input: Record<string, unknown> }
+  | { result: string; content: string; error?: boolean }
+  | { thinking: string };
+
+/** One user message, then the pieces as consecutive events of turn 1. */
+function toolTurn(pieces: Piece[]): WorkbenchEvent[] {
+  const out: WorkbenchEvent[] = [userEvent(1, 1)];
+  pieces.forEach((p, i) => {
+    const seq = i + 2;
+    const event =
+      'use' in p
+        ? { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: p.use, name: p.name, input: p.input }] } }
+        : 'result' in p
+          ? { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: p.result, content: p.content, is_error: p.error ?? false }] } }
+          : { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: p.thinking }] } };
+    out.push({ chatId: 'c1', seq, turn: 1, event: { seq, ...event } as unknown as AgentEvent });
+  });
+  return out;
+}
+
+const renderEvents = (events: WorkbenchEvent[]) =>
+  render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+const renderTurn = (pieces: Piece[]) => renderEvents(toolTurn(pieces));
+
+const call = (id: string, name: string, input: Record<string, unknown>, content = 'ok', error = false): Piece[] => [
+  { use: id, name, input },
+  { result: id, content, error },
+];
+
+describe('edit rows', () => {
+  it('shows +N −M and expands to the diff lines', () => {
+    renderTurn(
+      call('t1', 'Edit', { file_path: 'src/a.ts', old_string: 'keep\nold line', new_string: 'keep\nnew line\nextra line' }, 'The file src/a.ts has been updated successfully.'),
+    );
+    expect(screen.getByText('+2')).toBeInTheDocument();
+    expect(screen.getByText('−1')).toBeInTheDocument();
+    expect(screen.queryByText(/updated successfully/)).not.toBeInTheDocument();
+    expect(screen.queryByText('new line')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('new line').parentElement).toHaveClass('bg-success/10');
+    expect(screen.getByText('old line').parentElement).toHaveClass('bg-destructive/10');
+    expect(screen.getByText('keep').parentElement).toHaveClass('text-muted-foreground');
+  });
+
+  it('collapses a large diff behind a Show more toggle', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `row ${i}`).join('\n');
+    renderTurn(call('t1', 'Write', { file_path: 'big.ts', content: lines }));
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('row 11')).toBeInTheDocument();
+    expect(screen.queryByText('row 12')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 8 more lines' }));
+    expect(screen.getByText('row 19')).toBeInTheDocument();
+  });
+
+  it('still shows the error of a failed edit', () => {
+    renderTurn(call('t1', 'Edit', { file_path: 'a.ts', old_string: 'x', new_string: 'y' }, 'String to replace not found', true));
+    expect(screen.getByText('String to replace not found')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['add', 'A'],
+    ['update', 'M'],
+    ['delete', 'D'],
+  ])('shows a %s badge for a Codex per-file edit', (kind, badge) => {
+    renderTurn(call('t1', 'Edit', { file_path: 'src/a.ts', kind }, ''));
+    expect(screen.getByText(badge)).toBeInTheDocument();
+    expect(screen.queryByText(/^\+\d/)).not.toBeInTheDocument();
+  });
+});
+
+describe('tool groups', () => {
+  const groupButton = () => screen.getAllByRole('button').find((b) => b.hasAttribute('aria-expanded')) as HTMLElement;
+
+  it('stays closed and counts a failure that is not the last call', () => {
+    renderTurn([
+      ...call('t1', 'Bash', { command: 'npm test' }, 'boom', true),
+      ...call('t2', 'Read', { file_path: 'a.ts' }, 'contents'),
+    ]);
+    expect(groupButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('· 1 failed')).toHaveClass('text-destructive');
+    expect(screen.queryByText('boom')).not.toBeInTheDocument();
+  });
+
+  it('opens when the last call failed and the transcript ends there', () => {
+    renderTurn([
+      ...call('t1', 'Read', { file_path: 'a.ts' }, 'contents'),
+      ...call('t2', 'Bash', { command: 'npm test' }, 'boom', true),
+    ]);
+    expect(groupButton()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('boom')).toBeInTheDocument();
+  });
+
+  it('stays closed when prose follows the failed call', () => {
+    const events = toolTurn([
+      ...call('t1', 'Read', { file_path: 'a.ts' }, 'contents'),
+      ...call('t2', 'Bash', { command: 'npm test' }, 'boom', true),
+    ]);
+    events.push({
+      chatId: 'c1', seq: 20, turn: 1,
+      event: { seq: 20, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'I will try again.' }] } } as unknown as AgentEvent,
+    });
+    renderEvents(events);
+    expect(groupButton()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('shows thinking between calls as a Thought line inside the group', () => {
+    renderTurn([
+      ...call('t1', 'Read', { file_path: 'a.ts' }),
+      { thinking: 'The file looks fine so I will search next.' },
+      ...call('t2', 'Grep', { pattern: 'foo' }),
+    ]);
+    expect(screen.queryByText('Thought')).not.toBeInTheDocument();
+    fireEvent.click(groupButton());
+    fireEvent.click(screen.getByText('Thought'));
+    expect(screen.getByText('The file looks fine so I will search next.')).toBeInTheDocument();
+  });
+});
+
+it('renders a Bash search command as a search row', () => {
+  renderTurn(call('t1', 'Bash', { command: "bash -lc 'rg foo'" }, 'src/a.ts:1:foo'));
+  expect(screen.getByText('grep')).toBeInTheDocument();
+  expect(screen.getByText('foo')).toBeInTheDocument();
+  expect(screen.queryByText('bash')).not.toBeInTheDocument();
+});
+
+it('does not render a lone todo tool', () => {
+  renderTurn(call('t1', 'TodoWrite', { todos: [{ content: 'x', status: 'pending' }] }));
+  expect(screen.queryByText('todo')).not.toBeInTheDocument();
 });

@@ -547,6 +547,7 @@ const TOOL_ALIASES: Record<string, string> = {
   websearch: 'websearch', searchweb: 'websearch',
   task: 'agent', agent: 'agent', subagent: 'agent', dispatchagent: 'agent',
   todowrite: 'todo', todoread: 'todo', updatetodos: 'todo',
+  notebookedit: 'edit',
   fleetpublish: 'publish', publish: 'publish',
 };
 
@@ -555,7 +556,7 @@ const DETAIL_KEYS: Record<string, string[]> = {
   bash: ['command', 'cmd', 'script', 'shell', 'input'],
   read: ['file_path', 'filePath', 'path', 'file', 'filename', 'target_file'],
   write: ['file_path', 'filePath', 'path', 'file', 'filename', 'target_file'],
-  edit: ['file_path', 'filePath', 'path', 'file', 'filename', 'target_file'],
+  edit: ['file_path', 'filePath', 'notebook_path', 'path', 'file', 'filename', 'target_file'],
   grep: ['pattern', 'query', 'q', 'regex', 'search'],
   glob: ['pattern', 'glob', 'path', 'query'],
   list: ['path', 'dir', 'directory', 'file_path'],
@@ -592,21 +593,251 @@ function firstScalar(input: Record<string, unknown>, keys: string[]): string {
   return '';
 }
 
+// ---------------------------------------------------------------------------
+// Shell command classification
+// ---------------------------------------------------------------------------
+
+export interface ShellClassification {
+  /** `bash` when the command is not a single recognisable read/search/list. */
+  verb: 'bash' | 'read' | 'grep' | 'glob' | 'list';
+  /** The pattern or path for a classified command; the unwrapped command for `bash`. */
+  detail: string;
+}
+
+/**
+ * Split a command into words the way a shell would, or null when it contains
+ * an unquoted operator (pipe, list, redirect, substitution, newline). Being
+ * conservative here is the point: a command we cannot read as ONE simple
+ * command must stay a command.
+ */
+function tokenizeShell(input: string): string[] | null {
+  const tokens: string[] = [];
+  let cur = '';
+  let has = false;
+  let i = 0;
+  while (i < input.length) {
+    const c = input[i];
+    if (c === "'") {
+      const end = input.indexOf("'", i + 1);
+      if (end < 0) return null;
+      cur += input.slice(i + 1, end);
+      has = true;
+      i = end + 1;
+    } else if (c === '"') {
+      i++;
+      let closed = false;
+      while (i < input.length) {
+        const d = input[i];
+        if (d === '\\' && i + 1 < input.length && '"\\$`'.includes(input[i + 1])) {
+          cur += input[i + 1];
+          i += 2;
+        } else if (d === '"') {
+          closed = true;
+          i++;
+          break;
+        } else if (d === '`' || (d === '$' && input[i + 1] === '(')) {
+          return null;
+        } else {
+          cur += d;
+          i++;
+        }
+      }
+      if (!closed) return null;
+      has = true;
+    } else if (c === '\\') {
+      if (i + 1 >= input.length) return null;
+      cur += input[i + 1];
+      has = true;
+      i += 2;
+    } else if (/\s/.test(c)) {
+      if (c === '\n') return null;
+      if (has) tokens.push(cur);
+      cur = '';
+      has = false;
+      i++;
+    } else if ('|;&<>`'.includes(c) || (c === '$' && input[i + 1] === '(')) {
+      return null;
+    } else {
+      cur += c;
+      has = true;
+      i++;
+    }
+  }
+  if (has) tokens.push(cur);
+  return tokens;
+}
+
+const SHELL_NAMES = new Set(['bash', 'sh', 'zsh', 'dash']);
+const CD_PREFIX = /^\s*cd\s+(?:'[^']*'|"[^"]*"|[^\s;&|]+)\s*&&\s*/;
+
+/** `bash -lc 'x'` → `x`; null when `command` is not exactly one shell wrapper. */
+function unwrapShell(command: string): string | null {
+  const tokens = tokenizeShell(command.trim());
+  if (!tokens || tokens.length < 3 || !SHELL_NAMES.has(tokens[0].split('/').pop() ?? '')) return null;
+  const flagIdx = tokens.findIndex((t, i) => i > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t));
+  if (flagIdx < 0 || flagIdx !== tokens.length - 2) return null;
+  if (tokens.slice(1, flagIdx).some((t) => !t.startsWith('-'))) return null;
+  return tokens[flagIdx + 1];
+}
+
+/** Strip shell wrappers (twice at most), keeping any `cd` prefix. */
+function unwrapCommand(command: string): string {
+  let cur = command.trim();
+  for (let n = 0; n < 2; n++) {
+    const inner = unwrapShell(cur);
+    if (inner === null) break;
+    cur = inner.trim();
+  }
+  return cur;
+}
+
+const GREP_VALUE_FLAGS = new Set([
+  '-g', '--glob', '-t', '--type', '-T', '--type-not', '-A', '-B', '-C', '-m', '--max-count', '-d',
+  '--max-depth', '-j', '--threads', '--type-add', '-f', '--file', '--include', '--exclude',
+  '--exclude-dir', '--context', '--after-context', '--before-context', '--max-columns', '--sort',
+]);
+
+function isFlag(t: string): boolean {
+  return t.length > 1 && t.startsWith('-');
+}
+
+function lastNonFlag(args: string[], valueFlags: ReadonlySet<string> = new Set()): string | undefined {
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') {
+      rest.push(...args.slice(i + 1));
+      break;
+    }
+    if (isFlag(args[i])) {
+      if (valueFlags.has(args[i])) i++;
+      continue;
+    }
+    rest.push(args[i]);
+  }
+  return rest[rest.length - 1];
+}
+
+function nonFlags(args: string[], valueFlags: ReadonlySet<string>): string[] {
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') {
+      rest.push(...args.slice(i + 1));
+      break;
+    }
+    if (isFlag(args[i])) {
+      if (valueFlags.has(args[i])) i++;
+      continue;
+    }
+    rest.push(args[i]);
+  }
+  return rest;
+}
+
+/**
+ * Read a shell command as what it DOES, when it is one plain read, search or
+ * listing. Everything else stays `bash`, with the shell wrapper removed so the
+ * row shows the command and not `bash -lc '…'`.
+ *
+ * Done at render time on purpose: a stored Codex transcript gets the same
+ * treatment as a new one.
+ */
+export function classifyShellCommand(cmd: string): ShellClassification {
+  const unwrapped = unwrapCommand(cmd);
+  const fallback: ShellClassification = { verb: 'bash', detail: unwrapped };
+  const inner = unwrapped.replace(CD_PREFIX, '');
+  const tokens = tokenizeShell(inner);
+  if (!tokens || tokens.length === 0) return fallback;
+
+  const name = tokens[0].split('/').pop() ?? '';
+  const args = tokens.slice(1);
+
+  switch (name) {
+    case 'rg':
+    case 'grep':
+    case 'egrep':
+    case 'fgrep':
+    case 'ag':
+    case 'ack': {
+      if (args.includes('--files')) {
+        const dir = lastNonFlag(args, GREP_VALUE_FLAGS);
+        return { verb: 'glob', detail: dir ?? '' };
+      }
+      let pattern: string | undefined;
+      for (let i = 0; i < args.length; i++) {
+        if ((args[i] === '-e' || args[i] === '--regexp') && i + 1 < args.length) {
+          pattern = args[i + 1];
+          break;
+        }
+        if (args[i].startsWith('--regexp=')) {
+          pattern = args[i].slice('--regexp='.length);
+          break;
+        }
+      }
+      if (pattern === undefined) {
+        const values = new Set(GREP_VALUE_FLAGS);
+        values.add('-e');
+        values.add('--regexp');
+        pattern = nonFlags(args, values)[0];
+      }
+      return pattern ? { verb: 'grep', detail: pattern } : fallback;
+    }
+    case 'sed': {
+      const inPlace = args.some((a) => a === '--in-place' || /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place='));
+      const quiet = args.some((a) => a === '-n' || a === '--quiet' || a === '--silent' || /^-[a-zA-Z]*n[a-zA-Z]*$/.test(a));
+      const files = nonFlags(args, new Set(['-e', '-f', '--expression', '--file']));
+      if (inPlace || !quiet || files.length < 2) return fallback;
+      return { verb: 'read', detail: files[files.length - 1] };
+    }
+    case 'cat':
+    case 'head':
+    case 'tail':
+    case 'nl':
+    case 'bat': {
+      const file = lastNonFlag(args, new Set(['-n', '-c', '--lines', '--bytes']));
+      return file ? { verb: 'read', detail: file } : fallback;
+    }
+    case 'ls':
+      return { verb: 'list', detail: lastNonFlag(args) ?? '.' };
+    case 'find': {
+      // A find that acts on what it matches is not a listing.
+      if (args.some((a) => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fls'].includes(a))) {
+        return fallback;
+      }
+      const idx = args.findIndex((a) => a === '-name' || a === '-iname' || a === '-path' || a === '-ipath');
+      if (idx >= 0 && args[idx + 1]) return { verb: 'glob', detail: args[idx + 1] };
+      const dir = args.find((a) => !isFlag(a) && !a.startsWith('!') && !a.startsWith('('));
+      return { verb: 'glob', detail: dir ?? '.' };
+    }
+    case 'fd': {
+      const first = nonFlags(args, new Set(['-e', '--extension', '-t', '--type', '-E', '--exclude', '-d', '--max-depth']))[0];
+      return { verb: 'glob', detail: first ?? '.' };
+    }
+    default:
+      return fallback;
+  }
+}
+
 export function describeTool(name: string, input: unknown): ToolDescription {
   const canonical = TOOL_ALIASES[normaliseToolName(name)];
   // An unrecognised tool keeps its own name rather than being forced into one
   // of ours. MCP servers add tools constantly and a wrong verb is worse than
   // an unfamiliar one.
-  const label = canonical ?? name;
+  let label = canonical ?? name;
   const obj = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
 
-  const detail = canonical
+  let detail = canonical
     ? firstScalar(obj, DETAIL_KEYS[canonical] ?? [])
     : // Unknown tool: take the first string argument rather than dumping
       // `key=value` pairs. One readable value beats two truncated ones.
       firstScalar(obj, Object.keys(obj));
 
-  const isCommand = canonical === 'bash';
+  let isCommand = canonical === 'bash';
+  if (isCommand) {
+    const classified = classifyShellCommand(detail);
+    label = classified.verb;
+    detail = classified.detail;
+    isCommand = classified.verb === 'bash';
+  }
   // Commands are collapsed to one line here, not by the renderer: a multi-line
   // heredoc otherwise blows the row height out on a surface that renders one
   // call per line.
@@ -614,6 +845,162 @@ export function describeTool(name: string, input: unknown): ToolDescription {
     label,
     detail: isCommand ? detail.replace(/\s*\n\s*/g, ' ').trim() : detail,
     isCommand,
+  };
+}
+
+/** True for tools the transcript leaves out (the todo list has its own panel). */
+export function isHiddenTool(name: string): boolean {
+  return TOOL_ALIASES[normaliseToolName(name)] === 'todo';
+}
+
+/**
+ * Whether a settled tool call counts as failed.
+ *
+ * A shell search (`rg`, `grep`) exits 1 with no output when nothing matched,
+ * and Codex reports that as an error. That is an answer, not a failure.
+ */
+export function effectiveToolError(name: string, input: unknown, output: unknown, isError: boolean): boolean {
+  if (!isError) return false;
+  if (TOOL_ALIASES[normaliseToolName(name)] !== 'bash') return true;
+  if (describeTool(name, input).label !== 'grep') return true;
+  return formatToolOutput(output).text.trim() !== '';
+}
+
+// ---------------------------------------------------------------------------
+// Edit diffs
+// ---------------------------------------------------------------------------
+
+export interface EditDiffLine {
+  kind: 'add' | 'del' | 'ctx' | 'hunk';
+  text: string;
+}
+
+export interface EditDiff {
+  path: string;
+  added: number;
+  removed: number;
+  lines: EditDiffLine[];
+}
+
+const DIFF_CONTEXT = 2;
+const DIFF_MAX_CELLS = 250_000;
+
+function splitLines(text: string): string[] {
+  if (text === '') return [];
+  return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
+}
+
+/** Line diff of one old/new pair: LCS in the middle, a little context around it. */
+function diffLines(oldText: string, newText: string): EditDiffLine[] {
+  const a = splitLines(oldText);
+  const b = splitLines(newText);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--;
+    endB--;
+  }
+  if (start === endA && start === endB) return [];
+
+  const midA = a.slice(start, endA);
+  const midB = b.slice(start, endB);
+  const out: EditDiffLine[] = [];
+  for (const t of a.slice(Math.max(0, start - DIFF_CONTEXT), start)) out.push({ kind: 'ctx', text: t });
+
+  if (midA.length * midB.length > DIFF_MAX_CELLS) {
+    for (const t of midA) out.push({ kind: 'del', text: t });
+    for (const t of midB) out.push({ kind: 'add', text: t });
+  } else {
+    const n = midA.length;
+    const m = midB.length;
+    const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        lcs[i][j] = midA[i] === midB[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && midA[i] === midB[j]) {
+        out.push({ kind: 'ctx', text: midA[i] });
+        i++;
+        j++;
+      } else if (i < n && (j >= m || lcs[i + 1][j] >= lcs[i][j + 1])) {
+        out.push({ kind: 'del', text: midA[i++] });
+      } else {
+        out.push({ kind: 'add', text: midB[j++] });
+      }
+    }
+  }
+  for (const t of a.slice(endA, endA + DIFF_CONTEXT)) out.push({ kind: 'ctx', text: t });
+  return out;
+}
+
+function stringOf(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * The line diff an edit tool call carries in its own input, or null when it
+ * carries none (Codex `file_change` names paths only).
+ */
+export function editDiffFromInput(toolName: string, input: unknown): EditDiff | null {
+  if (!input || typeof input !== 'object') return null;
+  const obj = input as Record<string, unknown>;
+  const path = stringOf(obj.file_path) ?? stringOf(obj.notebook_path) ?? stringOf(obj.filePath) ?? stringOf(obj.path);
+  if (path === null) return null;
+
+  const pairs: Array<{ oldText: string; newText: string }> = [];
+  switch (normaliseToolName(toolName)) {
+    case 'edit': {
+      const oldText = stringOf(obj.old_string);
+      const newText = stringOf(obj.new_string);
+      if (oldText === null || newText === null) return null;
+      pairs.push({ oldText, newText });
+      break;
+    }
+    case 'multiedit': {
+      if (!Array.isArray(obj.edits)) return null;
+      for (const e of obj.edits) {
+        const rec = e && typeof e === 'object' ? (e as Record<string, unknown>) : {};
+        const oldText = stringOf(rec.old_string);
+        const newText = stringOf(rec.new_string);
+        if (oldText !== null && newText !== null) pairs.push({ oldText, newText });
+      }
+      if (pairs.length === 0) return null;
+      break;
+    }
+    case 'write': {
+      const content = stringOf(obj.content);
+      if (content === null) return null;
+      pairs.push({ oldText: '', newText: content });
+      break;
+    }
+    case 'notebookedit': {
+      const newText = stringOf(obj.new_source);
+      if (newText === null) return null;
+      pairs.push({ oldText: stringOf(obj.old_source) ?? '', newText });
+      break;
+    }
+    default:
+      return null;
+  }
+
+  const lines: EditDiffLine[] = [];
+  for (const { oldText, newText } of pairs) {
+    const part = diffLines(oldText, newText);
+    if (part.length === 0) continue;
+    if (lines.length > 0) lines.push({ kind: 'hunk', text: '' });
+    lines.push(...part);
+  }
+  return {
+    path,
+    added: lines.filter((l) => l.kind === 'add').length,
+    removed: lines.filter((l) => l.kind === 'del').length,
+    lines,
   };
 }
 
@@ -682,7 +1069,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
       const target = idx === undefined ? undefined : out[idx];
       if (target && target.kind === 'tool') {
         target.output = block.content;
-        target.isError = block.isError;
+        target.isError = effectiveToolError(target.name, target.input, block.content, block.isError);
         target.stopped = block.stopped === true;
         target.settled = true;
         continue;
@@ -695,7 +1082,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
         name: block.toolName ?? 'tool',
         input: block.toolInput,
         output: block.content,
-        isError: block.isError,
+        isError: effectiveToolError(block.toolName ?? 'tool', block.toolInput, block.content, block.isError),
         stopped: block.stopped === true,
         settled: true,
       });
@@ -862,13 +1249,35 @@ function safeStringify(value: unknown): string {
 export interface ToolGroupBlock {
   kind: 'tool_group';
   key: string;
+  /** Only the tool calls, in order. */
   tools: ToolBlock[];
+  /**
+   * Tool calls and the reasoning BETWEEN them, in order. Reasoning before the
+   * first call or after the last one stays outside the group.
+   */
+  children: ToolGroupChild[];
+  /** How many calls in the run failed. */
+  failedCount: number;
+  /** True when the final call failed, so the turn probably ended on it. */
+  lastFailed: boolean;
   /** e.g. "Ran 3 commands, read a file". */
   summary: string;
   /** True while any call in the run is still in flight. */
   running: boolean;
   /** True when any call in the run failed — the group says so without opening. */
   isError: boolean;
+}
+
+export type ThinkingBlock = Extract<Block, { kind: 'thinking' }>;
+export type ToolGroupChild = ToolBlock | ThinkingBlock;
+
+/** Failure figures for a run of calls, for a "· 1 failed" suffix. */
+export function toolRunFailures(tools: ToolBlock[]): { failedCount: number; lastFailed: boolean } {
+  const settled = tools.filter((t) => t.settled);
+  return {
+    failedCount: tools.filter((t) => t.isError).length,
+    lastFailed: tools.length > 0 && tools[tools.length - 1].isError && settled.includes(tools[tools.length - 1]),
+  };
 }
 
 export type GroupedBlock = Exclude<MergedBlock, ToolBlock> | ToolBlock | ToolGroupBlock;
@@ -933,27 +1342,42 @@ export function summariseToolRun(tools: ToolBlock[]): string {
 export function groupToolRuns(blocks: MergedBlock[]): GroupedBlock[] {
   const out: GroupedBlock[] = [];
   let run: ToolBlock[] = [];
+  let children: ToolGroupChild[] = [];
+  // Reasoning seen since the last call: inside the group only if another call follows.
+  let pending: ThinkingBlock[] = [];
 
   const flush = () => {
-    if (run.length === 0) return;
     if (run.length === 1) {
       out.push(run[0]);
-    } else {
+    } else if (run.length > 1) {
       out.push({
         kind: 'tool_group',
         key: `group-${run[0].key}`,
         tools: run,
+        children,
+        ...toolRunFailures(run),
         summary: summariseToolRun(run),
         running: run.some((t) => !t.settled),
         isError: run.some((t) => t.isError),
       });
     }
+    out.push(...pending);
     run = [];
+    children = [];
+    pending = [];
   };
 
   for (const block of blocks) {
     if (block.kind === 'tool') {
+      if (isHiddenTool(block.name)) continue;
+      children.push(...pending);
+      pending = [];
       run.push(block);
+      children.push(block);
+      continue;
+    }
+    if (block.kind === 'thinking' && run.length > 0) {
+      pending.push(block);
       continue;
     }
     flush();
@@ -973,7 +1397,7 @@ export function groupToolRuns(blocks: MergedBlock[]): GroupedBlock[] {
  */
 export function groupedBlockSignature(block: GroupedBlock): string {
   if (block.kind === 'tool_group') {
-    return `${block.key}:${block.tools.map(mergedBlockSignature).join(',')}`;
+    return `${block.key}:${block.children.map((c) => (c.kind === 'tool' ? mergedBlockSignature(c) : c.key)).join(',')}`;
   }
   return mergedBlockSignature(block);
 }

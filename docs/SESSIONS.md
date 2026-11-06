@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session chat: reads, searches and edit diffs (2026-11-06)
+
+The session chat looked busy and seemed to miss edits, reads and searches. Nothing was dropped. Codex reads and searches through the shell, so every `rg` or `sed -n` showed as a `bash -lc '…'` command. Edits showed only a path.
+- `classifyShellCommand` (`packages/shared/src/transcript.ts`) unwraps the shell wrapper and reads one plain `rg`, `grep`, `sed -n`, `cat`, `head`, `ls`, `find` or `fd` as a search, read or listing. A pipe, a chain or a redirect stays `bash`. A `find` with `-delete` or `-exec` stays `bash`. The classification happens at render time, so stored transcripts improve too.
+- A shell search that exits with an error and no output is "no matches" (`effectiveToolError`), not a failure.
+- `editDiffFromInput` builds a line diff from Claude's Edit, MultiEdit, Write and NotebookEdit input. The rows show `+N −M` and expand to the diff. A Codex `file_change` carries no diff, so it is now one row per file with an A/M/D badge.
+- A failed call no longer opens its group, unless the turn ended on it. The summary shows "· N failed". A thinking block between two tool calls stays inside the group as a "Thought" line. Todo rows are hidden because the sidebar shows them.
+- An unknown Codex item type now renders as a generic row and is no longer dropped.
+- Not changed: the web task terminal (`apps/web/src/components/terminal/AgentConversation.tsx`) is an older fork and keeps the old group behaviour. Subagent calls are still not nested under their Task row.
+
 ## Spaces in the web app (2026-11-06)
 
 Phase P4 of Teams and Spaces: the web app can switch between Personal and a team's space. Everything is behind the `spaces` flag; with it off, the app is as before.

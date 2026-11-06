@@ -405,7 +405,8 @@ interface CodexItem {
  * | `agent_message` completed | assistant `text` |
  * | `reasoning` completed | assistant `thinking` |
  * | `command_execution` | assistant `tool_use` Bash on start, user `tool_result` on completion |
- * | `file_change` | `tool_use` Edit + `tool_result` listing the changes |
+ * | `file_change` | one `tool_use` Edit + `tool_result` per changed file (`M path`) |
+ * | any other item with an id | generic `tool_use` named for the item type + `tool_result` |
  * | `mcp_tool_call` | `tool_use mcp__<server>__<tool>` + `tool_result` |
  * | `web_search` | `tool_use` WebSearch + `tool_result` |
  * | `todo_list` | `tool_use` TodoWrite (Claude's shape) + `tool_result`, on each change |
@@ -450,13 +451,32 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}, s
         return { name: `mcp__${item.server ?? 'server'}__${item.tool ?? 'tool'}`, input: item.arguments ?? {} };
       case 'web_search':
         return { name: 'WebSearch', input: { query: item.query ?? '' } };
-      case 'file_change': {
-        const changes = (item.changes ?? []).map((c) => ({ path: c.path ?? '', kind: c.kind ?? 'update' }));
-        return { name: 'Edit', input: { file_path: changes.map((c) => c.path).join(', '), changes } };
-      }
       default:
-        return null;
+        // Handled elsewhere (messages, reasoning, todos, errors, file changes)
+        // never reach here; anything else still gets a visible row.
+        return item.type ? { name: item.type, input: {} } : null;
     }
+  }
+
+  const changeLetter = (kind?: string) => (kind === 'add' ? 'A' : kind === 'delete' ? 'D' : 'M');
+
+  /** One Edit call per changed file; the first keeps the item id, later ones get `:<index>`. */
+  function handleFileChange(phase: 'started' | 'updated' | 'completed', item: CodexItem, out: AgentEventDraft[]): void {
+    const itemId = item.id ?? '';
+    if (!itemId) return;
+    (item.changes ?? []).forEach((c, i) => {
+      const id = i === 0 ? itemId : `${itemId}:${i}`;
+      const path = c.path ?? '';
+      const kind = c.kind ?? 'update';
+      if (!toolUseEmitted.has(id)) {
+        toolUseEmitted.add(id);
+        out.push(assistant(id, [{ type: 'tool_use', id, name: 'Edit', input: { file_path: path, kind } }]));
+      }
+      if (phase === 'completed' && !toolResultEmitted.has(id)) {
+        toolResultEmitted.add(id);
+        out.push(toolResult(id, `${changeLetter(kind)} ${path}`, item.status === 'failed'));
+      }
+    });
   }
 
   function emitToolUse(item: CodexItem, out: AgentEventDraft[]): void {
@@ -478,11 +498,6 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}, s
       case 'mcp_tool_call': {
         if (item.error?.message) return { content: item.error.message, isError: true };
         return { content: item.result?.content ?? item.result?.structured_content ?? '', isError: item.status === 'failed' };
-      }
-      case 'file_change': {
-        const letter = (kind?: string) => (kind === 'add' ? 'A' : kind === 'delete' ? 'D' : 'M');
-        const lines = (item.changes ?? []).map((c) => `${letter(c.kind)} ${c.path ?? ''}`);
-        return { content: lines.join('\n'), isError: item.status === 'failed' };
       }
       default:
         return { content: '', isError: item.status === 'failed' };
@@ -542,18 +557,18 @@ export function createCodexStreamParser(opts: { contextWindow?: number } = {}, s
           out.push({ type: 'system', subtype: 'stderr', ...base(), text: item.message ?? 'error' });
         }
         return;
-      case 'command_execution':
-      case 'mcp_tool_call':
-      case 'web_search':
       case 'file_change':
+        handleFileChange(phase, item, out);
+        return;
+      default:
+        // command_execution, mcp_tool_call, web_search and unrecognised types.
+        if (!id || !item.type) return;
         emitToolUse(item, out);
-        if (phase === 'completed' && id && !toolResultEmitted.has(id)) {
+        if (phase === 'completed' && !toolResultEmitted.has(id)) {
           toolResultEmitted.add(id);
           const { content, isError } = toolOutput(item);
           out.push(toolResult(id, content, isError));
         }
-        return;
-      default:
         return;
     }
   }

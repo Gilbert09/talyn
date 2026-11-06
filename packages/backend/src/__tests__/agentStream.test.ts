@@ -497,6 +497,8 @@ describe('createCodexStreamParser', () => {
       'tool_result',
       'tool_use:Edit',
       'tool_result',
+      'tool_use:Edit',
+      'tool_result',
       'tool_use:TodoWrite',
       'tool_result',
       'tool_use:mcp__linear__get_issue',
@@ -512,10 +514,11 @@ describe('createCodexStreamParser', () => {
     expect(tools.every((t) => t.kind === 'tool' && t.settled)).toBe(true);
     expect(tools[0]).toMatchObject({ name: 'Bash', input: { command: "bash -lc 'ls -la'" }, output: 'README.md\nsrc\n', isError: false });
     expect(tools.find((t) => t.kind === 'tool' && t.toolId === 'item_3')).toMatchObject({ isError: true, output: '1 failing\n' });
-    expect(tools.find((t) => t.kind === 'tool' && t.name === 'Edit')).toMatchObject({
-      input: { file_path: 'src/a.ts, src/new.ts' },
-      output: 'M src/a.ts\nA src/new.ts',
-    });
+    const edits = tools.filter((t) => t.kind === 'tool' && t.name === 'Edit');
+    expect(edits).toMatchObject([
+      { toolId: 'item_4', input: { file_path: 'src/a.ts', kind: 'update' }, output: 'M src/a.ts' },
+      { toolId: 'item_4:1', input: { file_path: 'src/new.ts', kind: 'add' }, output: 'A src/new.ts' },
+    ]);
     expect(tools.find((t) => t.kind === 'tool' && t.name.startsWith('mcp__'))).toMatchObject({
       input: { id: 'ENG-1' },
       output: [{ type: 'text', text: 'Issue ENG-1' }],
@@ -540,6 +543,29 @@ describe('createCodexStreamParser', () => {
     const blocks = buildBlocks(sequence(feed(createCodexStreamParser(), codexStream.slice(0, 4))));
     const merged = mergeToolBlocks(blocks);
     expect(merged[merged.length - 1]).toMatchObject({ kind: 'tool', name: 'Bash', settled: false });
+  });
+
+  it('emits one Edit per file across started and completed without duplicating', () => {
+    const item = (status: string) => ({ id: 'fc', type: 'file_change', status, changes: [{ path: 'a', kind: 'update' }, { path: 'b', kind: 'delete' }, { path: 'c', kind: 'add' }] });
+    const out = feed(createCodexStreamParser(), [
+      { type: 'item.started', item: item('in_progress') },
+      { type: 'item.completed', item: item('completed') },
+      { type: 'item.completed', item: item('completed') },
+    ]);
+    const blocks = buildBlocks(sequence(out));
+    expect(blocks.filter((b) => b.kind === 'tool_use').map((b) => (b as { toolId: string }).toolId)).toEqual(['fc', 'fc:1', 'fc:2']);
+    expect(blocks.filter((b) => b.kind === 'tool_result').map((b) => (b as { content: string }).content)).toEqual(['M a', 'D b', 'A c']);
+  });
+
+  it('renders an unrecognised item type as a generic tool call', () => {
+    const out = feed(createCodexStreamParser(), [
+      { type: 'item.started', item: { id: 'x1', type: 'collab_tool_call', status: 'in_progress' } },
+      { type: 'item.completed', item: { id: 'x1', type: 'collab_tool_call', status: 'completed' } },
+      { type: 'item.completed', item: { type: 'mystery' } },
+      { type: 'turn.started' },
+    ]);
+    const blocks = buildBlocks(sequence(out));
+    expect(blocks.map((b) => (b.kind === 'tool_use' ? `tool_use:${b.name}` : b.kind))).toEqual(['tool_use:collab_tool_call', 'tool_result']);
   });
 
   it('does not emit a todo tool call when the list did not change', () => {
@@ -590,9 +616,9 @@ describe('createCodexStreamParser', () => {
     expect(blocks).toEqual([{ kind: 'text', key: '1.0', text: 'hi' }]);
   });
 
-  it('ignores unknown events and item types, and counts non-JSON lines', () => {
+  it('ignores unknown events and id-less items, and counts non-JSON lines', () => {
     const parser = createCodexStreamParser();
-    expect(feed(parser, [{ type: 'turn.started' }, { type: 'something.new' }, { type: 'item.completed', item: { id: 'x', type: 'future_item' } }])).toEqual([]);
+    expect(feed(parser, [{ type: 'turn.started' }, { type: 'something.new' }, { type: 'item.completed', item: { type: 'future_item' } }])).toEqual([]);
     expect(parser.push('Reading prompt from stdin...')).toEqual([]);
     expect(parser.nonJsonLines).toBe(1);
   });

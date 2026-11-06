@@ -1,7 +1,13 @@
 import { beforeEach, describe, it, expect } from 'vitest';
 import {
   buildBlocks,
+  classifyShellCommand,
   describeTool,
+  editDiffFromInput,
+  effectiveToolError,
+  isHiddenTool,
+  summariseToolRun,
+  toolRunFailures,
   formatToolOutput,
   groupToolRuns,
   groupedBlockSignature,
@@ -310,7 +316,7 @@ describe('groupToolRuns', () => {
 
   it('folds consecutive calls into one section', () => {
     const out = grouped([
-      use('a', 'bash', { command: 'ls' }),
+      use('a', 'bash', { command: 'make' }),
       res('a', 'ok'),
       use('b', 'bash', { command: 'pwd' }),
       res('b', '/work'),
@@ -362,7 +368,7 @@ describe('groupToolRuns', () => {
 
   it('counts by canonical verb, not by tool name', () => {
     const out = grouped([
-      use('a', 'Bash', { command: 'ls' }),
+      use('a', 'Bash', { command: 'make' }),
       res('a', 'ok'),
       use('b', 'run_command', { cmd: 'pwd' }),
       res('b', 'ok'),
@@ -482,5 +488,242 @@ describe('Talyn messages', () => {
     ['an explicit user origin', { kind: 'user_message', origin: 'user' }],
   ])('leaves a message from %s to the bubble', (_label, talyn) => {
     expect(buildBlocks([userMessage('hello', talyn)])).toEqual([]);
+  });
+});
+
+
+describe('classifyShellCommand', () => {
+  it.each([
+    ["bash -lc 'rg -n foo src'", 'grep', 'foo'],
+    ['/bin/zsh -lc "rg -n foo src"', 'grep', 'foo'],
+    ["sh -c 'grep -rn needle .'", 'grep', 'needle'],
+    ['zsh -lc "rg -e \'a b\' src"', 'grep', 'a b'],
+    ['rg -e "foo.*bar" src', 'grep', 'foo.*bar'],
+    ['rg --regexp=abc src', 'grep', 'abc'],
+    ["rg -g '*.ts' -t ts needle src", 'grep', 'needle'],
+    ["rg -A 3 needle", 'grep', 'needle'],
+    ['grep -rn -- -weird src', 'grep', '-weird'],
+    ["bash -lc \"sed -n '1,200p' src/a.ts\"", 'read', 'src/a.ts'],
+    ["sed -n '10,20p' packages/x/b.ts", 'read', 'packages/x/b.ts'],
+    ['cat README.md', 'read', 'README.md'],
+    ['head -n 20 a.txt', 'read', 'a.txt'],
+    ['tail -n 5 log.txt', 'read', 'log.txt'],
+    ['nl -ba src/a.ts', 'read', 'src/a.ts'],
+    ["bash -lc 'cd /work/repo && cat src/a.ts'", 'read', 'src/a.ts'],
+    ["cd '/my dir' && rg foo", 'grep', 'foo'],
+    ['ls', 'list', '.'],
+    ['ls -la src', 'list', 'src'],
+    ['find . -name "*.ts"', 'glob', '*.ts'],
+    ['find . -name "*.tmp" -delete', 'bash', 'find . -name "*.tmp" -delete'],
+    ['find . -type f -exec rm {} +', 'bash', 'find . -type f -exec rm {} +'],
+    ['find src -type f', 'glob', 'src'],
+    ['fd config', 'glob', 'config'],
+    ['rg --files src', 'glob', 'src'],
+    ["bash -lc \"bash -lc 'cat a.md'\"", 'read', 'a.md'],
+  ])('classifies %s', (cmd, verb, detail) => {
+    expect(classifyShellCommand(cmd)).toEqual({ verb, detail });
+  });
+
+  it.each([
+    ['rg foo | head', 'rg foo | head'],
+    ['cat a && cat b', 'cat a && cat b'],
+    ['cat a; ls', 'cat a; ls'],
+    ['cat a || true', 'cat a || true'],
+    ['cat a > out.txt', 'cat a > out.txt'],
+    ['cat < in.txt', 'cat < in.txt'],
+    ['cat $(which x)', 'cat $(which x)'],
+    ['cat `which x`', 'cat `which x`'],
+    ['cat "$(which x)"', 'cat "$(which x)"'],
+    ["bash -lc 'rg foo | head'", 'rg foo | head'],
+    ["bash -lc 'npm test'", 'npm test'],
+    ['npm test', 'npm test'],
+    ["sed -i 's/a/b/' f.ts", "sed -i 's/a/b/' f.ts"],
+    ["sed 's/a/b/' f.ts", "sed 's/a/b/' f.ts"],
+    ['cat', 'cat'],
+    ['rg', 'rg'],
+    ['', ''],
+    ["bash -lc 'unterminated", "bash -lc 'unterminated"],
+  ])('keeps %j as bash', (cmd, detail) => {
+    expect(classifyShellCommand(cmd)).toEqual({ verb: 'bash', detail });
+  });
+
+  it('describeTool classifies Bash at render time', () => {
+    expect(describeTool('Bash', { command: "bash -lc 'rg -n foo'" })).toEqual({ label: 'grep', detail: 'foo', isCommand: false });
+    expect(describeTool('Bash', { command: "bash -lc 'cat a.ts'" })).toEqual({ label: 'read', detail: 'a.ts', isCommand: false });
+    expect(describeTool('Bash', { command: "bash -lc 'npm test'" })).toEqual({ label: 'bash', detail: 'npm test', isCommand: true });
+  });
+
+  it('describeTool knows NotebookEdit', () => {
+    expect(describeTool('NotebookEdit', { notebook_path: '/a.ipynb', new_source: 'x' })).toMatchObject({ label: 'edit', detail: '/a.ipynb' });
+  });
+});
+
+describe('tool runs: summaries, thinking, todos, failures', () => {
+  let s = 0;
+  const use = (id: string, name: string, input: Record<string, unknown>): AgentEvent =>
+    ({ seq: ++s, type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } }) as AgentEvent;
+  const res = (id: string, c: string, e = false): AgentEvent =>
+    ({ seq: ++s, type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: c, is_error: e }] } }) as AgentEvent;
+  const think = (t: string): AgentEvent =>
+    ({ seq: ++s, type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: t }] } }) as AgentEvent;
+  const say = (t: string): AgentEvent =>
+    ({ seq: ++s, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: t }] } }) as AgentEvent;
+  const call = (id: string, command: string, out = 'ok', err = false) => [use(id, 'Bash', { command }), res(id, out, err)];
+  const grouped = (events: AgentEvent[]) => groupToolRuns(mergeToolBlocks(buildBlocks(events)));
+  const kinds = (events: AgentEvent[]) => grouped(events).map((b) => b.kind);
+
+  beforeEach(() => {
+    s = 0;
+  });
+
+  it('counts classified shell commands as reads and searches', () => {
+    const out = grouped([
+      ...call('a', "bash -lc 'rg foo'"),
+      ...call('b', "bash -lc 'sed -n 1,5p a.ts'"),
+      ...call('c', "bash -lc 'cat b.ts'"),
+      ...call('d', 'npm test'),
+    ]);
+    expect((out[0] as { summary: string }).summary).toBe('Ran 1 command, read 2 files, 1 search');
+  });
+
+  it('summary never mentions failures', () => {
+    const out = grouped([...call('a', 'false', 'boom', true), ...call('b', 'true')]);
+    expect((out[0] as { summary: string }).summary).toBe('Ran 2 commands');
+  });
+
+  it('keeps thinking between calls inside the group, in order', () => {
+    const out = grouped([...call('a', 'ls x'), think('hmm'), ...call('b', 'npm test')]);
+    expect(out).toHaveLength(1);
+    const g = out[0] as { tools: unknown[]; children: { kind: string }[] };
+    expect(g.tools).toHaveLength(2);
+    expect(g.children.map((c) => c.kind)).toEqual(['tool', 'thinking', 'tool']);
+  });
+
+  it('leaves thinking at the edges of a run outside it', () => {
+    const out = grouped([think('first'), ...call('a', 'npm a'), ...call('b', 'npm b'), think('last')]);
+    expect(out.map((b) => b.kind)).toEqual(['thinking', 'tool_group', 'thinking']);
+    expect((out[1] as { children: unknown[] }).children).toHaveLength(2);
+  });
+
+  it('thinking next to a single call stays outside', () => {
+    expect(kinds([...call('a', 'npm a'), think('x')])).toEqual(['tool', 'thinking']);
+  });
+
+  it('text still ends a run, thinking before the text stays outside', () => {
+    expect(kinds([...call('a', 'npm a'), think('x'), say('hi'), ...call('b', 'npm b')])).toEqual(['tool', 'thinking', 'text', 'tool']);
+  });
+
+  it('hides todo tools', () => {
+    expect(isHiddenTool('TodoWrite')).toBe(true);
+    expect(isHiddenTool('Bash')).toBe(false);
+    expect(kinds([use('t', 'TodoWrite', { todos: [] }), res('t', 'ok')])).toEqual([]);
+    const out = grouped([...call('a', 'npm a'), use('t', 'TodoWrite', { todos: [] }), res('t', 'ok'), ...call('b', 'npm b')]);
+    expect(out).toHaveLength(1);
+    expect((out[0] as { tools: unknown[] }).tools).toHaveLength(2);
+  });
+
+  it('reports failedCount and lastFailed', () => {
+    const out = grouped([...call('a', 'x', 'boom', true), ...call('b', 'y'), ...call('c', 'z', 'bad', true)]);
+    expect(out[0]).toMatchObject({ failedCount: 2, lastFailed: true });
+    const out2 = grouped([...call('a', 'x', 'boom', true), ...call('b', 'y')]);
+    expect(out2[0]).toMatchObject({ failedCount: 1, lastFailed: false });
+    expect(toolRunFailures([])).toEqual({ failedCount: 0, lastFailed: false });
+  });
+
+  it.each([
+    ['Bash', "bash -lc 'rg nothing'", '', true, false],
+    ['Bash', "rg nothing", '  \n', true, false],
+    ['Bash', "rg nothing", 'rg: bad regex', true, true],
+    ['Bash', "npm test", '', true, true],
+    ['Bash', "rg nothing", '', false, false],
+    ['Grep', '', '', true, true],
+  ])('effectiveToolError(%s, %j, %j, %s) = %s', (name, command, output, isError, expected) => {
+    expect(effectiveToolError(name, { command }, output, isError)).toBe(expected);
+  });
+
+  it('a shell search with no matches merges as not failed', () => {
+    const out = grouped([...call('a', "bash -lc 'rg zzz'", '', true), ...call('b', 'cat a.ts')]);
+    expect((out[0] as { isError: boolean }).isError).toBe(false);
+  });
+
+  it('summariseToolRun accepts plain tool blocks', () => {
+    const blocks = mergeToolBlocks(buildBlocks([...call('a', 'cat x.ts')])).filter((b) => b.kind === 'tool');
+    expect(summariseToolRun(blocks as never)).toBe('Read a file');
+  });
+});
+
+describe('editDiffFromInput', () => {
+  it('diffs an Edit with context and counts', () => {
+    const d = editDiffFromInput('Edit', { file_path: '/a.ts', old_string: 'a\nb\nc\nd\ne\nf\ng', new_string: 'a\nb\nc\nD\ne\nf\ng' });
+    expect(d).toEqual({
+      path: '/a.ts',
+      added: 1,
+      removed: 1,
+      lines: [
+        { kind: 'ctx', text: 'b' },
+        { kind: 'ctx', text: 'c' },
+        { kind: 'del', text: 'd' },
+        { kind: 'add', text: 'D' },
+        { kind: 'ctx', text: 'e' },
+        { kind: 'ctx', text: 'f' },
+      ],
+    });
+  });
+
+  it('handles insert and delete', () => {
+    expect(editDiffFromInput('Edit', { file_path: 'a', old_string: '', new_string: 'x\ny\n' })).toMatchObject({ added: 2, removed: 0 });
+    expect(editDiffFromInput('Edit', { file_path: 'a', old_string: 'x\ny', new_string: '' })).toMatchObject({ added: 0, removed: 2 });
+  });
+
+  it('diffs a changed block with an LCS, keeping unchanged inner lines as context', () => {
+    const d = editDiffFromInput('Edit', { file_path: 'a', old_string: 'a\nkeep\nb', new_string: 'x\nkeep\ny' });
+    expect(d?.lines.map((l) => `${l.kind}:${l.text}`)).toEqual(['del:a', 'add:x', 'ctx:keep', 'del:b', 'add:y']);
+  });
+
+  it('MultiEdit separates edits with a hunk line', () => {
+    const d = editDiffFromInput('MultiEdit', {
+      file_path: 'a',
+      edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: 'd' }, { nope: 1 }],
+    });
+    expect(d?.lines.map((l) => l.kind)).toEqual(['del', 'add', 'hunk', 'del', 'add']);
+    expect(d).toMatchObject({ added: 2, removed: 2 });
+  });
+
+  it('Write is all additions', () => {
+    expect(editDiffFromInput('Write', { file_path: 'n.ts', content: 'a\nb\n' })).toEqual({
+      path: 'n.ts', added: 2, removed: 0, lines: [{ kind: 'add', text: 'a' }, { kind: 'add', text: 'b' }],
+    });
+  });
+
+  it('NotebookEdit uses notebook_path and new_source', () => {
+    expect(editDiffFromInput('NotebookEdit', { notebook_path: 'n.ipynb', new_source: 'x=1' })).toMatchObject({ path: 'n.ipynb', added: 1 });
+  });
+
+  it('identical strings give an empty diff', () => {
+    expect(editDiffFromInput('Edit', { file_path: 'a', old_string: 'same', new_string: 'same' })).toEqual({ path: 'a', added: 0, removed: 0, lines: [] });
+  });
+
+  it.each([
+    ['Edit', { file_path: 'a', changes: [{ path: 'a', kind: 'update' }] }],
+    ['Edit', { file_path: 'a', kind: 'update' }],
+    ['Edit', { old_string: 'a', new_string: 'b' }],
+    ['Edit', null],
+    ['Edit', 'str'],
+    ['Bash', { file_path: 'a', old_string: 'a', new_string: 'b' }],
+    ['MultiEdit', { file_path: 'a', edits: [] }],
+    ['MultiEdit', { file_path: 'a' }],
+    ['Write', { file_path: 'a' }],
+    ['NotebookEdit', { notebook_path: 'a' }],
+  ])('returns null for %s %j', (name, input) => {
+    expect(editDiffFromInput(name, input)).toBeNull();
+  });
+
+  it('falls back to all-del then all-add for huge inputs', () => {
+    const old = Array.from({ length: 600 }, (_, i) => `o${i}`).join('\n');
+    const neu = Array.from({ length: 600 }, (_, i) => `n${i}`).join('\n');
+    const d = editDiffFromInput('Edit', { file_path: 'a', old_string: old, new_string: neu });
+    expect(d).toMatchObject({ added: 600, removed: 600 });
+    expect(d?.lines.slice(0, 600).every((l) => l.kind === 'del')).toBe(true);
+    expect(d?.lines.slice(600).every((l) => l.kind === 'add')).toBe(true);
   });
 });
