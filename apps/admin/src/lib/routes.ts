@@ -30,6 +30,7 @@ export const ROUTES = {
   tasks: '/product/tasks',
   task: '/product/tasks/:taskId',
   sessions: '/product/sessions',
+  computeUsage: '/product/compute-usage',
   session: '/product/sessions/:sessionId',
 
   audit: '/audit',

@@ -8,6 +8,7 @@ import { adminAuditRoutes } from './audit.js';
 import { adminFleetRoutes } from './fleet.js';
 import { adminBillingRoutes } from './billing.js';
 import { adminSessionRoutes } from './sessions.js';
+import { adminComputeUsageRoutes } from './computeUsage.js';
 
 /**
  * The operator console's API (admin.talyn.dev).
@@ -89,6 +90,7 @@ export function adminRoutes(): Router {
 
   router.use(adminProductRoutes());
   router.use(adminBillingRoutes());
+  router.use('/usage', adminComputeUsageRoutes());
 
   router.use('/audit', adminAuditRoutes());
 

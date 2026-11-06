@@ -2551,6 +2551,35 @@ const adminFleet = {
   },
 };
 
+export interface AdminComputeUsageRow {
+  user_id: string;
+  email: string;
+  tier: string | null;
+  plan_override: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  period_used_hours: number;
+  period_included_hours: number;
+  credits_used_usd: number;
+  all_time_hours: number;
+  hours_last_7_days: number;
+  sessions_total: number;
+  sessions_active: number;
+  boxes_running: number;
+  last_active_at: string | null;
+}
+
+export interface AdminComputeUsage {
+  items: AdminComputeUsageRow[];
+  totals: {
+    users: number;
+    period_used_hours: number;
+    all_time_hours: number;
+    sessions_total: number;
+    boxes_running: number;
+  };
+}
+
 export const admin = {
   /**
    * Whether the caller is an operator, and what this deploy lets them do.
@@ -2611,6 +2640,8 @@ export const admin = {
   },
   /** Box-hours and credits across every account, for the Ops page. */
   usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
+  computeUsage: (params?: { sort?: string; order?: 'asc' | 'desc'; limit?: number; q?: string }) =>
+    request<AdminComputeUsage>('GET', `/admin/usage/compute${adminQuery({ ...params })}`),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
       request<AdminPage<AdminWorkspaceSummary>>(

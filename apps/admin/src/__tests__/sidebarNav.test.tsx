@@ -37,6 +37,7 @@ vi.mock('../lib/api', () => ({
         alerts: pending,
       },
       sessions: { list: pending, get: pending },
+      computeUsage: pending,
       users: { list: pending, get: pending },
       workspaces: { list: pending, get: pending },
       tasks: { list: pending, get: pending },
