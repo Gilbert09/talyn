@@ -153,10 +153,12 @@ describe('Sidebar threads', () => {
     expect(screen.queryByRole('group', { name: '' })).not.toBeInTheDocument();
   });
 
-  it('hides the section when there are no live threads', () => {
+  it('keeps the section and new-thread button when there are no live threads', () => {
     setWorkbenches([wb('solo'), thread('old', { archivedAt: '2026-10-12T00:00:00Z' })]);
     render(<AppSidebar />);
-    expect(screen.queryByRole('group', { name: 'Threads' })).not.toBeInTheDocument();
+    const section = screen.getByRole('group', { name: 'Threads' });
+    expect(within(section).getByRole('button', { name: 'New thread' })).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: 'Old thread' })).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'acme/app' })).toBeInTheDocument();
   });
 

@@ -15,8 +15,8 @@ import { openNewThread } from '../workbench/new/openNewWorkbench';
 
 /**
  * The sidebar's Threads section, above the sessions: each live thread with
- * how many of its sessions run, and its sessions under it. Hidden when the
- * workspace has no thread; "New thread" on the new-session page makes one.
+ * how many of its sessions run, and its sessions under it. The header stays
+ * visible when there are no live threads so a person can start one.
  */
 export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
@@ -25,8 +25,6 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
   const threads = useMemo(() => newestSessions(liveThreads(workbenches)), [workbenches]);
   const [collapsed, setCollapsed] = useState<Record<string, true>>({});
   const openId = route.view === 'workbench' ? route.id : null;
-
-  if (threads.length === 0) return null;
 
   return (
     <div className="mb-1" role="group" aria-label="Threads" data-attr="sidebar-threads">
