@@ -282,12 +282,13 @@ describe('sections', () => {
     expect(bars[1]).toHaveAttribute('aria-label', expect.stringContaining('1.5 box-hours'));
   });
 
-  it('opens a live session from the top list, and leaves archived and deleted ones as text', async () => {
+  it('opens live and archived sessions from the top list', async () => {
     await renderLoaded();
     const el = sectionEl('top');
     fireEvent.click(within(el).getByRole('button', { name: 'Fix login' }));
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb-live' });
-    expect(within(el).queryByRole('button', { name: 'Old work' })).toBeNull();
+    fireEvent.click(within(el).getByRole('button', { name: 'Old work' }));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb-arch' });
     expect(within(el).queryByRole('button', { name: 'Deleted session' })).toBeNull();
   });
 
@@ -486,7 +487,7 @@ describe('day chart', () => {
   it('shows round value ticks, date labels, and no bar for a zero day', () => {
     const days = [0, 0.001, 0.5, 1, 1.5, 0].map((value, index) => ({ date: `2026-11-0${index + 1}`, value }));
     render(<DayBars label="Box-hours per day" days={days} formatValue={(value) => `${value.toFixed(1)} box-hours`} />);
-    expect(screen.getByLabelText('Value axis').textContent).toBe('0.0 box-hours0.5 box-hours1.0 box-hours1.5 box-hours');
+    expect(screen.getByLabelText('Value axis').querySelector('div')?.textContent).toBe('0.00.51.01.5');
     expect(screen.getAllByTestId('day-bar')).toHaveLength(4);
     expect(screen.getAllByTestId('day-bar')[0]).toHaveStyle({ height: '2px' });
     expect(screen.getByText('Nov 1')).toBeInTheDocument();

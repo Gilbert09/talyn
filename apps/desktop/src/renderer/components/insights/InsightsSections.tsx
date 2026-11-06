@@ -59,7 +59,6 @@ export function ComputeSection({ data }: { data: InsightsComputeResponse }) {
             <DayBars
               label="Box-hours per day"
               testId="compute-days"
-              formatValue={(hours) => `${hours.toFixed(1)} box-hours`}
               points={data.days.map((d) => ({ date: d.date, value: d.wsec / 3600, valueText: formatBoxHoursLabel(d.wsec) }))}
             />
           </div>
@@ -190,11 +189,10 @@ export function AgentsSection({ data }: { data: InsightsAgentsResponse }) {
         <DayBars
           label="Tokens per day"
           testId="agents-days"
-          formatValue={(tokens) => `${formatTokenCount(tokens)} tokens`}
           points={data.days.map((d) => ({
             date: d.date,
             value: totalTokens(d),
-            valueText: `${formatTokenCount(totalTokens(d))} tokens, ${plural(d.turns, 'turn', 'turns')}`,
+            valueText: `${count(totalTokens(d))} tokens, ${plural(d.turns, 'turn', 'turns')}`,
           }))}
         />
       </div>
@@ -422,7 +420,7 @@ function TopList({ title, children }: { title: string; children: ReactNode }) {
 
 function SessionLabel({ session, onOpen }: { session: InsightsTopSession; onOpen?: (id: string) => void }) {
   const name = session.title ?? 'Deleted session';
-  const canOpen = Boolean(onOpen) && session.title !== null && !session.archived;
+  const canOpen = Boolean(onOpen) && session.title !== null;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       {canOpen ? (

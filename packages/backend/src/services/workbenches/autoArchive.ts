@@ -1,12 +1,15 @@
 import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
-import { pullRequests, workbenches } from '../../db/schema.js';
+import { pullRequests, workbenches, workspaces } from '../../db/schema.js';
 import { archiveWorkbench } from './lifecycle.js';
 
 type MergeArchiveInput =
   | { repoFullName: string; number: number; workspaceIds?: string[]; mergedAt?: Date | null }
   | { workbenchId: string };
+
+const mergeArchiveEnabled = sql`EXISTS (SELECT 1 FROM ${workspaces} ws WHERE ws.id = ${workbenches.workspaceId}
+  AND (ws.settings ->> 'autoArchiveOnMerge') IS DISTINCT FROM 'false')`;
 
 /** One entry point for the merge rule and its deferred completion. */
 export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<void> {
@@ -15,6 +18,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
   if ('workbenchId' in input) {
     const rows = await db.select({ id: workbenches.id }).from(workbenches).where(and(
       eq(workbenches.id, input.workbenchId), isNull(workbenches.archivedAt),
+      mergeArchiveEnabled,
       sql`${workbenches.settings} ->> 'archiveOnIdle' IS NOT NULL`,
       sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
         AND ${eligiblePr()} AND ${linkedBeforeMerge()})`,
@@ -32,6 +36,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
         sql`lower(${pullRequests.owner}) = ${owner}`,
         sql`lower(${pullRequests.repo}) = ${repo}`,
         eq(pullRequests.number, input.number), isNull(workbenches.archivedAt),
+        mergeArchiveEnabled,
         eligiblePr(), linkedBeforeMerge(mergeTime),
         input.workspaceIds ? inArray(workbenches.workspaceId, input.workspaceIds) : undefined,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
@@ -43,6 +48,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
         settings: sql`${workbenches.settings} || jsonb_build_object('archiveOnIdle', ${key}::text)`,
       }).where(and(
         eq(workbenches.id, match.id), eq(workbenches.pullRequestId, match.pullRequestId), isNull(workbenches.archivedAt),
+        mergeArchiveEnabled,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
         sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
           AND ${eligiblePr()} AND ${linkedBeforeMerge(mergeTime)})`,

@@ -199,6 +199,49 @@ describe('usage sweep against the fleet', () => {
     expect((await intervals())[`talyn-${TASK_ID}`].endReason).toBe('terminal');
   });
 
+  describe('a gateway lists a box under its own id, <talyn id>--<suffix>', () => {
+    const gatewayBox = (status: Box['status'] = 'busy') => host([{ id: 'talyn-wb-one--3542ee', status }], { gateway: true });
+
+    it('matches the interval the hook opened under the Talyn id, and opens no second one', async () => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      const sweep = new UsageSweep(async () => [gatewayBox()]);
+      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 0, listErrors: 0 });
+      expect(await sweep.run(new Date(NOW.getTime() + 60_000))).toEqual({ opened: 0, closed: 0, listErrors: 0 });
+      expect(Object.keys(await intervals())).toEqual(['talyn-wb-one']);
+    });
+
+    it('closes the Talyn-id interval when the suffixed box suspends', async () => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      const sweep = new UsageSweep(async () => [gatewayBox('suspended')]);
+      expect((await sweep.run(NOW)).closed).toBe(1);
+      expect((await intervals())['talyn-wb-one'].endReason).toBe('suspended');
+    });
+
+    it('opens a missing interval under the Talyn id', async () => {
+      const sweep = new UsageSweep(async () => [gatewayBox()]);
+      expect((await sweep.run(NOW)).opened).toBe(1);
+      expect((await intervals())['talyn-wb-one']).toMatchObject({ subjectKind: 'workbench', subjectId: 'wb-1', endedAt: null });
+    });
+
+    it('closes a duplicate already open for the same box at its own start, and keeps the older one', async () => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      const laterStart = new Date(NOW.getTime() - 60_000);
+      await insertOpenInterval({ ownerId: OWNER, workspaceId: 'ws', subjectKind: 'workbench', subjectId: 'wb-1', sandboxId: 'talyn-wb-one--3542ee', size: 'standard', startedAt: laterStart });
+      const sweep = new UsageSweep(async () => [gatewayBox()]);
+      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 1, listErrors: 0 });
+      const rows = await intervals();
+      expect(rows['talyn-wb-one'].endedAt).toBeNull();
+      expect(rows['talyn-wb-one--3542ee'].endedAt?.toISOString()).toBe(laterStart.toISOString());
+    });
+
+    it('closes an interval kept under a suffixed id once its box is missing for two ticks', async () => {
+      await open('talyn-wb-one--3542ee', 'workbench', 'wb-1');
+      const sweep = new UsageSweep(async () => [host([], { gateway: true })]);
+      expect((await sweep.run(NOW)).closed).toBe(0);
+      expect((await sweep.run(new Date(NOW.getTime() + 60_000))).closed).toBe(1);
+    });
+  });
+
   it('the meter sweeps, then charges every owner with a box running', async () => {
     await open(`talyn-${TASK_ID}`);
     const meter = new UsageMeter(async () => [host([{ id: `talyn-${TASK_ID}`, status: 'busy' }, { id: 'talyn-wb-one', status: 'idle' }])]);

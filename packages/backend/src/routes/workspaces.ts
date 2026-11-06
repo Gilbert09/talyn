@@ -2,10 +2,11 @@ import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js'
 import { disableRankingCollection, resumeRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
 import { Router, type Request, type Response } from 'express';
 import { v4 as uuid } from 'uuid';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
+  workbenches as workbenchesTable,
   repositories as repositoriesTable,
   integrations as integrationsTable,
 } from '../db/schema.js';
@@ -411,6 +412,9 @@ export function workspaceRoutes(): Router {
       if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
       }
+      if (body.settings.autoArchiveOnMerge !== undefined && typeof body.settings.autoArchiveOnMerge !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'settings.autoArchiveOnMerge must be true or false' });
+      }
       if (body.settings.autoArchiveIdleDays !== undefined) {
         const idleDays = normaliseAutoArchiveIdleDays(body.settings.autoArchiveIdleDays);
         if (!idleDays.ok) return res.status(400).json({ success: false, error: idleDays.error });
@@ -505,6 +509,16 @@ export function workspaceRoutes(): Router {
         .update(workspacesTable)
         .set(updates)
         .where(eq(workspacesTable.id, req.params.id));
+    }
+
+    if (body.settings?.autoArchiveOnMerge === false) {
+      await db.update(workbenchesTable).set({
+        settings: sql`${workbenchesTable.settings} - 'archiveOnIdle'`,
+      }).where(and(
+        eq(workbenchesTable.workspaceId, req.params.id),
+        isNull(workbenchesTable.archivedAt),
+        sql`${workbenchesTable.settings} ->> 'archiveOnIdle' IS NOT NULL`,
+      ));
     }
 
     const rows = await db

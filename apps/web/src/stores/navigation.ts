@@ -232,7 +232,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       return;
     }
     if (offered === null || route.view !== 'workbench' || !listLoaded) return;
-    if (!isLive(workbenches[route.id])) {
+    if (!workbenches[route.id]) {
       get().navigate(HOME, { replace: true });
       return;
     }

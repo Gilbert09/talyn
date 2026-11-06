@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { MENU_COMMANDS } from '../../lib/menuCommands';
-import { FOCUS_COMPOSER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
+import { FOCUS_COMPOSER_EVENT, OPEN_REPOSITORY_PICKER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, isInOverlay, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
@@ -97,6 +97,15 @@ export function buildAppShortcuts(): Shortcut[] {
       when: offered,
       run: () => openNewWorkbench(),
     }),
+    {
+      id: 'repository.open',
+      keys: '/',
+      label: 'Choose repository',
+      group: 'New session',
+      allowInInput: (target) => target instanceof HTMLTextAreaElement && target.hasAttribute('data-new-workbench-composer') && target.value === '',
+      when: () => nav().route.view === 'home' && !nav().paletteOpen && !isInOverlay(document.activeElement) && !document.querySelector('[data-radix-popper-content-wrapper], [role="dialog"][data-state="open"]') && Boolean(document.querySelector<HTMLButtonElement>('[data-attr="new-workbench-repo"]:not(:disabled)')),
+      run: () => window.dispatchEvent(new Event(OPEN_REPOSITORY_PICKER_EVENT)),
+    },
     fromMenu({
       id: 'settings.open',
       label: 'Open settings',

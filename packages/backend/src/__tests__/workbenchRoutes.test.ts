@@ -681,7 +681,8 @@ describe('workbench routes', () => {
       scriptedFleet((script) => {
         if (isAgentTurn(script)) {
           started = true;
-          return { stdout: [claudeTurnLines('sess-9', 'x')[0]], hold: new Promise<void>((_r, reject) => (kill = () => reject(new Error('killed')))) };
+          // The agent answered before the cancel, so its session is kept for the next turn.
+          return { stdout: claudeTurnLines('sess-9', 'x').slice(0, 2), hold: new Promise<void>((_r, reject) => (kill = () => reject(new Error('killed')))) };
         }
         return null;
       });

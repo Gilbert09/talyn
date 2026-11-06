@@ -1,10 +1,10 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Check, ChevronDown, FolderGit2, GitBranch, GitPullRequest, Layers, Split, X } from 'lucide-react';
 import type { WorkbenchAgent } from '@talyn/shared';
 import type { PRRow } from '../../../lib/api';
 import type { Choice } from '../../../lib/readiness';
 import { cn } from '../../../lib/utils';
-import { formatKeys } from '../../../lib/shortcuts';
+import { OPEN_REPOSITORY_PICKER_EVENT, formatKeys } from '../../../lib/shortcuts';
 import { FleetAgentMark } from '../../../lib/providerMeta';
 import type { WatchedRepo } from '../../../stores/workspace';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '../../ui/popover';
@@ -61,6 +61,13 @@ export function RepoPicker({
   allowAnyRepository?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (disabled) return undefined;
+    const show = () => setOpen(true);
+    window.addEventListener(OPEN_REPOSITORY_PICKER_EVENT, show);
+    return () => window.removeEventListener(OPEN_REPOSITORY_PICKER_EVENT, show);
+  }, [disabled]);
   const current = repositories.find((r) => r.id === value);
   const anyRepository = allowAnyRepository && value === ANY_REPOSITORY;
   return (
@@ -72,11 +79,12 @@ export function RepoPicker({
             {anyRepository ? 'Any repository' : current?.fullName ?? 'Choose a repository'}
           </span>
           <ChevronDown className="h-3 w-3 shrink-0" />
+          <Kbd keys="/" />
         </ControlChip>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
+      <PopoverContent align="start" className="w-72 p-0" onOpenAutoFocus={(event: Event) => { event.preventDefault(); searchRef.current?.focus(); }} onCloseAutoFocus={(event: Event) => { event.preventDefault(); document.querySelector<HTMLTextAreaElement>('[data-new-workbench-composer]')?.focus(); }}>
         <Command>
-          <CommandInput placeholder="Find a repository…" />
+          <CommandInput ref={searchRef} placeholder="Find a repository…" />
           <CommandList>
             <CommandEmpty>No watched repository matches.</CommandEmpty>
             {allowAnyRepository && (

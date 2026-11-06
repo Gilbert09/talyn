@@ -8,6 +8,7 @@ import { repositories, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
 import { FleetThrottleError } from '../services/selfHosted/client.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
+import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import { createWorkbenchSandbox } from '../services/workbenches/lifecycle.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import {
@@ -172,6 +173,8 @@ describe('sandbox size for a repository', () => {
       path === '' ? [{ name: 'docker-compose.base.yml', path: '', type: 'file', sha: '', size: 1 }, { name: 'README.md', path: '', type: 'file', sha: '', size: 1 }] : []);
     vi.spyOn(githubService, 'getFileContent').mockResolvedValue({ content: POSTHOG_LIKE, size: POSTHOG_LIKE.length });
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'agent-token' }, githubToken: 'github-token' });
+    vi.spyOn(accountSelection, 'resolveRunCredential')
+      .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'agent-token' } : null);
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'a/b', defaultBranch: 'main' });
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });
     vi.spyOn(runtime, 'gitAuthorFor').mockResolvedValue(undefined);
@@ -267,7 +270,8 @@ describe('sandbox size for a repository', () => {
       body: { id: 'talyn-wb-paris', workspaceId: 'ws', policy: { credentials: { github: 'none' } } },
     });
     await create();
-    expect(fleet.created[0].policy).toEqual({ credentials: { github: 'none' } });
+    // Only Claude is connected here, so OpenAI is suppressed beside GitHub.
+    expect(fleet.created[0].policy).toEqual({ credentials: { github: 'none', openai: 'none' } });
   });
 
   it.each<SandboxSize>(['small', 'standard', 'medium', 'large', 'xlarge'])('creates a %s box with its resources', async (size) => {
