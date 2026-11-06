@@ -157,6 +157,28 @@ describe('workbench turn launch', () => {
     expect(user?.talyn).toMatchObject({ sentAt });
   });
 
+  it('persists an inline image before it publishes the preview path', async () => {
+    const write = vi.spyOn(sandboxFiles, 'writeSandboxFiles');
+    await sendMessage('chat', {
+      text: 'Review this image',
+      attachments: [{ name: 'shot.jpeg', mimeType: 'image/png', dataBase64: 'aGVsbG8=' }],
+    });
+    await settled('idle');
+
+    const path = '.context/attachments/chat-1-0-shot.png';
+    expect(write).toHaveBeenCalledWith(
+      expect.anything(),
+      [{ path: `/work/app/${path}`, base64: 'aGVsbG8=' }],
+      { before: expect.stringContaining('.context/'), timeoutMs: 120_000 },
+    );
+    const user = (await events()).find((event) => (event.talyn as { kind?: string } | undefined)?.kind === 'user_message');
+    expect(user?.talyn).toMatchObject({
+      attachments: [{ name: 'shot.jpeg', mimeType: 'image/png', path }],
+    });
+    expect(JSON.stringify(user)).not.toContain('aGVsbG8=');
+    expect(fleet.scripts.find((script) => isAgentTurn(script))).toContain(`/work/app/${path} (image/png)`);
+  });
+
   it.each(['credentials', 'attachments', 'instructions', 'skills'] as const)('propagates a fatal %s failure after other steps finish', async (step) => {
     const failure = new FleetRunNotFoundError('missing sandbox');
     vi.spyOn(runtime, 'refreshSandboxCredentials').mockImplementation(async () => {

@@ -637,7 +637,10 @@ class EventBatcher {
   }
 }
 
-export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string, unknown> {
+export function userMessageEvent(
+  message: WorkbenchQueuedMessage,
+  attachments = message.attachments,
+): Record<string, unknown> {
   return {
     type: 'user',
     message: { role: 'user', content: [{ type: 'text', text: message.text }] },
@@ -652,7 +655,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
         : {}),
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
-      ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
+      ...(attachments ? { attachments: attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
     },
   };
 }
@@ -700,7 +703,12 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
-  if (!(await hasTurnEvent(chatId, turn, 'user_message'))) events.add(userMessageEvent(message));
+  let needsUserMessage = !(await hasTurnEvent(chatId, turn, 'user_message'));
+  const hasInlineAttachments = message.attachments?.some((attachment) => attachment.dataBase64) ?? false;
+  if (needsUserMessage && !hasInlineAttachments) {
+    events.add(userMessageEvent(message));
+    needsUserMessage = false;
+  }
   let parserResult: { isError: boolean; text: string } | null = null;
   let sawResult = false;
   let agentMayBeRunning = false;
@@ -771,11 +779,23 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         const memory = talynTools && (await sessionMemoryEnabled(wb.workspaceId).catch(() => false));
         return { talynTools, talynSkills, memory };
       })(),
-      writeAttachments(wb, chatId, turn, message.attachments ?? []),
+      writeAttachments(wb, chatId, turn, message.attachments ?? []).then((attached) => {
+        // Inline files have no path until the sandbox exists. Publish their
+        // transcript event only after its preview path is ready to read.
+        if (needsUserMessage) {
+          events.add(userMessageEvent(message, attached.transcript));
+          needsUserMessage = false;
+        }
+        return attached;
+      }),
     ] as const;
     const [refreshed, , { talynTools, talynSkills, memory }, attached] = await Promise.all(jobs).catch(async (err: unknown) => {
       // Finish every write before recovery, a retry, or another turn can start.
       await Promise.allSettled(jobs);
+      if (needsUserMessage) {
+        events.add(userMessageEvent(message));
+        needsUserMessage = false;
+      }
       throw err;
     });
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
@@ -1166,23 +1186,53 @@ async function writeAttachments(
   all: Array<{ path: string; mimeType: string }>;
   images: string[];
   other: Array<{ path: string; mimeType: string }>;
+  transcript: WorkbenchAttachment[];
 }> {
   const all: Array<{ path: string; mimeType: string }> = [];
   const files: SandboxFile[] = [];
-  const dir = `/tmp/talyn-attachments/${chatId}/${turn}`;
+  const transcript: WorkbenchAttachment[] = [];
+  const relativeDir = '.context/attachments';
   for (const [i, a] of attachments.entries()) {
     if (a.path) {
       all.push({ path: `${repoDirFor(wb)}/${assertRepoPath(a.path)}`, mimeType: a.mimeType });
+      transcript.push(a);
       continue;
     }
-    const target = `${dir}/${i}-${a.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
+    const name = inlineAttachmentName(a);
+    const path = `${relativeDir}/${safeMarker(chatId)}-${turn}-${i}-${name}`;
+    const target = `${repoDirFor(wb)}/${path}`;
     files.push({ path: target, base64: a.dataBase64 ?? '' });
     all.push({ path: target, mimeType: a.mimeType });
+    transcript.push({ name: a.name, mimeType: a.mimeType, path });
   }
-  if (files.length > 0) await writeSandboxFiles(wb, files);
+  if (files.length > 0) {
+    const exclude = isThread(wb) ? undefined : [
+      'exclude=$(git rev-parse --git-path info/exclude)',
+      'mkdir -p "$(dirname "$exclude")"',
+      'touch "$exclude"',
+      `grep -qxF ${shellQuote('.context/')} "$exclude" || printf '%s\\n' ${shellQuote('.context/')} >> "$exclude"`,
+    ].join('\n');
+    await writeSandboxFiles(wb, files, { before: exclude, timeoutMs: 120_000 });
+  }
   const images = all.filter((f) => f.mimeType.startsWith('image/')).map((f) => f.path);
   const other = all.filter((f) => !f.mimeType.startsWith('image/'));
-  return { all, images, other };
+  return { all, images, other, transcript };
+}
+
+const IMAGE_ATTACHMENT_EXTENSIONS: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+};
+
+/** A safe file name whose extension agrees with the declared image type. */
+function inlineAttachmentName(attachment: WorkbenchAttachment): string {
+  const safe = attachment.name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(0, 80) || 'file';
+  const extension = IMAGE_ATTACHMENT_EXTENSIONS[attachment.mimeType.toLowerCase()];
+  if (!extension) return safe;
+  const stem = safe.replace(/\.[^.]+$/, '').slice(0, 80 - extension.length) || 'image';
+  return `${stem}${extension}`;
 }
 
 // ============================================================================
