@@ -287,14 +287,17 @@ describe('WorkbenchHeader and threads', () => {
     expect(screen.queryByRole('button', { name: /Open the thread/ })).not.toBeInTheDocument();
   });
 
-  it('hides repository actions for a thread: no branch, no terminal, only Archive', () => {
+  it('hides repository actions for a thread: no branch and no terminal', () => {
     render(<WorkbenchHeader workbench={THREAD} pr={null} chat={chat} ops={ops()} />);
     expect(screen.getByText('Thread')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy the branch name' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Toggle the terminal' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('workbench-primary-action')).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
-    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['ArchiveCtrl+Alt+A']);
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      'Rename session',
+      'ArchiveCtrl+Alt+A',
+    ]);
   });
 
   it('does not offer Continue as thread for a session already in a thread', () => {

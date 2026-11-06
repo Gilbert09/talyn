@@ -8,6 +8,7 @@ import * as emit from '../services/workbenches/emit.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as sandboxSize from '../services/workbenches/sandboxSize.js';
+import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
 import {
   FleetCapacityError,
@@ -65,6 +66,8 @@ describe('a provision waits for a free sandbox', () => {
     fleet = new FakeFleet();
     messages = [];
     vi.spyOn(sandboxRun, 'resolveSandboxCredentials').mockResolvedValue({ ok: true, creds: { claudeToken: 'test' }, githubToken: 'test' });
+    vi.spyOn(accountSelection, 'resolveRunCredential')
+      .mockImplementation(async (_workspaceId, agent) => agent === 'claude' ? { token: 'test' } : null);
     vi.spyOn(sandboxRun, 'resolveRepository').mockResolvedValue({ slug: 'o/r', defaultBranch: 'main' });
     vi.spyOn(sandboxRun, 'buildSandboxCreateBody').mockImplementation(async (input) => ({ ok: true, body: { id: input.id, workspaceId: input.workspaceId } }));
     vi.spyOn(runtime, 'fleetCreateTarget').mockResolvedValue({ client: fleet.asClient() });

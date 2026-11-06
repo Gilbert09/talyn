@@ -516,10 +516,15 @@ export async function createWorkbenchSandbox(
   if (!built.ok) return { ok: false, error: built.error };
   built.body.anthropicKey = credentials.claude?.token;
   built.body.openaiKey = credentials.codex?.token;
+  const {
+    anthropic: _anthropic,
+    openai: _openai,
+    ...credentialPolicy
+  } = built.body.policy?.credentials ?? {};
   built.body.policy = {
     ...built.body.policy,
     credentials: {
-      ...built.body.policy?.credentials,
+      ...credentialPolicy,
       ...(!credentials.claude?.token ? { anthropic: 'none' as const } : {}),
       ...(!credentials.codex?.token ? { openai: 'none' as const } : {}),
     },

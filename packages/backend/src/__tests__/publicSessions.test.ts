@@ -172,13 +172,13 @@ describe('/v1 sessions and chats', () => {
       await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
     });
 
-    it('refuses when the fleet cannot run the agent, in the public error shape', async () => {
+    it('starts when only the other provider is connected', async () => {
       creds = { openaiKey: 'oa-codex' };
       const res = await call('POST', '/sessions', { workspace_id: 'ws-a', repository_id: 'repo-a', agent: 'claude' });
-      expect(res.status).toBeGreaterThanOrEqual(400);
-      expect(res.status).toBeLessThan(500);
-      expect(res.body.error.type).not.toBe('api_error');
-      expect(fleet.created).toEqual([]);
+      expect(res.status).toBe(201);
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
+      expect(res.body.agent).toBe('claude');
+      expect(fleet.created).toHaveLength(1);
     });
   });
 
