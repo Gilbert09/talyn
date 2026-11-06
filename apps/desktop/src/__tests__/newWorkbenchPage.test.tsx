@@ -23,6 +23,7 @@ jest.mock('../renderer/lib/imageDownscale', () => ({ downscaleImage: jest.fn() }
 const mockReadiness = jest.fn();
 const mockCreate = jest.fn();
 const mockSend = jest.fn();
+const mockRepositoryFiles = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   ApiNetworkError: class ApiNetworkError extends Error {
     online = true;
@@ -34,6 +35,9 @@ jest.mock('../renderer/lib/api', () => ({
       updateChat: jest.fn(),
       createChat: jest.fn(),
       sendMessage: (...args: unknown[]) => mockSend(...args),
+    },
+    repositories: {
+      files: (...args: unknown[]) => mockRepositoryFiles(...args),
     },
     pullRequests: {},
   },
@@ -117,6 +121,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   mockReadiness.mockResolvedValue(READY);
+  mockRepositoryFiles.mockResolvedValue({ paths: [] });
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
     workspaces: [
@@ -205,6 +210,18 @@ describe('repository shortcut', () => {
 });
 
 describe('NewWorkbenchPage', () => {
+  it('lists repository files after @ and inserts the selected path', async () => {
+    mockRepositoryFiles.mockResolvedValue({ paths: ['README.md', 'src/app.ts', 'src/other.ts'] });
+    await renderPage();
+
+    fireEvent.change(textarea(), { target: { value: 'Update @app' } });
+
+    expect(await screen.findByText('Files')).toBeInTheDocument();
+    await waitFor(() => expect(mockRepositoryFiles).toHaveBeenCalledWith('r1'));
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'src/app.ts' }));
+    expect(textarea()).toHaveValue('Update @src/app.ts ');
+  });
+
   it('starts a thread when "Any repository" is chosen, and keeps the draft', async () => {
     await renderPage();
     expect(screen.getByRole('heading', { name: 'What do you want to build?' })).toBeInTheDocument();

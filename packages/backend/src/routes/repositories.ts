@@ -38,6 +38,7 @@ import {
 import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
 import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
+import { githubService } from '../services/github.js';
 import {
   assertUser,
   handleAccessError,
@@ -149,6 +150,22 @@ export function repositoryRoutes(): Router {
   router.get('/:id/instructions', async (req, res) => {
     if (!(await previewGate(req, res))) return;
     res.json({ success: true, data: await getRepositoryInstructions(req.params.id) });
+  });
+
+  /** Files on the repository's default branch, for the new-session composer. */
+  router.get('/:id/files', async (req, res) => {
+    if (!(await previewGate(req, res))) return;
+    const row = await getPreviewRepository(req.params.id);
+    if (!row) return res.status(404).json({ success: false, error: 'Repository not found.' });
+    const [owner, name, ...rest] = row.name.split('/');
+    if (!owner || !name || rest.length > 0) {
+      return res.status(404).json({ success: false, error: 'Repository not found.' });
+    }
+    const tree = await githubService.getTreeRecursive(row.workspaceId, owner, name, 'HEAD');
+    const paths = tree?.entries
+      .filter((entry) => entry.type === 'blob')
+      .map((entry) => entry.path) ?? [];
+    res.json({ success: true, data: { paths } });
   });
 
   router.put('/:id/instructions', async (req, res) => {

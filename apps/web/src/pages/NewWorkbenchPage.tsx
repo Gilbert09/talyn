@@ -7,8 +7,10 @@ import {
   type WorkbenchEffort,
 } from '@talyn/shared';
 import { cn } from '../lib/utils';
+import { api } from '../lib/api';
 import { readSessionDefaults } from '../lib/sessionDefaults';
 import { FOCUS_COMPOSER_EVENT, formatKeys } from '../lib/shortcuts';
+import { fuzzyMatchPaths } from '../lib/workbenchFormat';
 import { agentChoice, isUnreachable, sandboxChoice, useReadiness } from '../lib/readiness';
 import { useNavigationStore } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -16,6 +18,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
+import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from '../components/workbench/ComposerPopover';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from '../components/workbench/useComposerImages';
 import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 import {
@@ -33,7 +36,7 @@ import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 
-const PLACEHOLDER = 'Describe a task. Enter creates the session and starts it. ⇧Enter for a new line.';
+const PLACEHOLDER = 'Describe a task. @ references files. Enter creates and starts the session. ⇧Enter adds a line.';
 const THREAD_PLACEHOLDER = 'What do you want to get done? A thread can work across repositories.';
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
 
@@ -72,6 +75,10 @@ export function NewWorkbenchPage() {
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
   const autoCreatePr = defaults.autoCreatePr;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
+  const [active, setActive] = useState(0);
+  const [filePaths, setFilePaths] = useState<Record<string, string[]>>({});
+  const [loadingRepositoryId, setLoadingRepositoryId] = useState<string | null>(null);
   const images = useComposerImages('sandbox');
 
   const repo = repositories.find((r) => r.id === repositoryId) ?? null;
@@ -102,6 +109,8 @@ export function NewWorkbenchPage() {
     if (mode !== 'thread' && !repositories.some((r) => r.id === repositoryId))
       setRepositoryId(defaultRepositoryId(workspaceId, repositories));
   }, [repositories, repositoryId, workspaceId, mode]);
+
+  useEffect(() => setTrigger(null), [repositoryId]);
 
   // Keep the agent usable for the runtime, and the model the agent's.
   useEffect(() => {
@@ -176,6 +185,40 @@ export function NewWorkbenchPage() {
     el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [prompt]);
 
+  const loadPaths = () => {
+    if (mode !== 'session' || !repo || filePaths[repo.id] || loadingRepositoryId === repo.id) return;
+    const requestedRepositoryId = repo.id;
+    setLoadingRepositoryId(requestedRepositoryId);
+    api.repositories
+      .files(requestedRepositoryId)
+      .then(({ paths }) => setFilePaths((current) => ({ ...current, [requestedRepositoryId]: paths })))
+      .catch(() => setFilePaths((current) => ({ ...current, [requestedRepositoryId]: [] })))
+      .finally(() => setLoadingRepositoryId((current) => current === requestedRepositoryId ? null : current));
+  };
+
+  const mentionItems = useMemo(
+    () => trigger?.kind === 'mention' && repo ? fuzzyMatchPaths(trigger.query, filePaths[repo.id] ?? []) : [],
+    [trigger, repo, filePaths],
+  );
+
+  const updateTrigger = (text: string, caret: number) => {
+    const next = mode === 'session' ? findTrigger(text, caret) : null;
+    setTrigger(next?.kind === 'mention' ? next : null);
+    setActive(0);
+    if (next?.kind === 'mention') loadPaths();
+  };
+
+  const pickMention = (path: string) => {
+    if (!trigger) return;
+    const next = applyTrigger(prompt, trigger, path);
+    setPrompt(next.text);
+    setTrigger(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+
   const blockedReason = mode === 'session' && !repo
     ? 'Choose a repository.'
     : !sandbox.available
@@ -211,6 +254,28 @@ export function NewWorkbenchPage() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (trigger && (mentionItems.length > 0 || e.key === 'Escape')) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive((index) => (index + 1) % Math.max(1, mentionItems.length));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive((index) => (index - 1 + mentionItems.length) % Math.max(1, mentionItems.length));
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && mentionItems[active]) {
+        e.preventDefault();
+        pickMention(mentionItems[active]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setTrigger(null);
+        return;
+      }
+    }
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
       setPlanMode((v) => !v);
@@ -242,10 +307,20 @@ export function NewWorkbenchPage() {
               onDragOver={(event) => event.preventDefault()}
               onDrop={images.onDrop}
               className={cn(
-                'rounded-xl border border-border bg-card shadow-sm transition-colors focus-within:border-ring/60',
+                'relative rounded-xl border border-border bg-card shadow-sm transition-colors focus-within:border-ring/60',
                 busy && 'opacity-80',
               )}
             >
+              {trigger && (
+                <ComposerPopover
+                  kind="mention"
+                  items={mentionItems}
+                  active={active}
+                  loading={loadingRepositoryId === repo?.id}
+                  onPick={pickMention}
+                  onHover={setActive}
+                />
+              )}
               <textarea
                 ref={textareaRef}
                 data-new-workbench-composer
@@ -253,9 +328,12 @@ export function NewWorkbenchPage() {
                 onChange={(e) => {
                   setPrompt(e.target.value);
                   if (createError) clearError();
+                  updateTrigger(e.target.value, e.target.selectionStart);
                 }}
+                onClick={(e) => updateTrigger(prompt, e.currentTarget.selectionStart)}
                 onKeyDown={onKeyDown}
                 onPaste={images.onPaste}
+                onBlur={() => setTrigger(null)}
                 placeholder={mode === 'thread' ? THREAD_PLACEHOLDER : PLACEHOLDER}
                 aria-label="Task"
                 rows={3}
