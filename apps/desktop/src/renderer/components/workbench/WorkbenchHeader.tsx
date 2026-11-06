@@ -10,6 +10,7 @@ import {
   GitMerge,
   GitPullRequest,
   Laptop,
+  ListChecks,
   Loader2,
   MessagesSquare,
   PanelBottom,
@@ -69,6 +70,7 @@ import { spacesOffered } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { moveToSpace } from '../spaces/MoveToSpace';
+import { useGitHubActions } from '../panels/github/useGitHubActions';
 
 const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
@@ -162,6 +164,8 @@ export function WorkbenchHeader({
   const openPrTab = () => setSideTab('pr');
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
+  const { setMergeQueue } = useGitHubActions();
+  const [queueBusy, setQueueBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkBusy, setLinkBusy] = useState(false);
@@ -202,6 +206,18 @@ export function WorkbenchHeader({
   const available = availableWorkbenchActions(workbench, prLike);
   const archived = isArchivedWorkbench(workbench);
 
+  const canQueue = owner && !archived && !thread && pr?.state === 'open';
+  const queueActionLabel = pr?.mergeQueued ? 'Remove from merge queue' : 'Add to merge queue';
+  const toggleQueue = async () => {
+    if (!canQueue || !pr || queueBusy) return;
+    setQueueBusy(true);
+    try {
+      await setMergeQueue(pr, !pr.mergeQueued);
+    } finally {
+      setQueueBusy(false);
+    }
+  };
+
   const restore = async () => {
     setRestoring(true);
     await restoreWorkbench(workbench);
@@ -209,7 +225,7 @@ export function WorkbenchHeader({
   };
 
   const disabled = (action: WorkbenchAction) =>
-    busy !== null ||
+    busy !== null || queueBusy ||
     ((PROMPT_ACTIONS.has(action) || action === 'create_pr') && Boolean(ops.unavailable)) ||
     (action === 'merge' && !pr);
 
@@ -340,6 +356,24 @@ export function WorkbenchHeader({
               Restore
             </Button>
           )}
+          {canQueue && (
+            <Button
+              variant={pr?.mergeQueued ? 'secondary' : 'outline'}
+              className="h-7 min-w-0 gap-1.5 px-2.5 text-xs"
+              onClick={() => void toggleQueue()}
+              disabled={queueBusy || busy !== null}
+              title={queueActionLabel}
+              aria-label={queueActionLabel}
+              data-attr="workbench-merge-queue"
+            >
+              {queueBusy ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <ListChecks className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span className="truncate">{pr?.mergeQueued ? 'Queued' : queueActionLabel}</span>
+            </Button>
+          )}
           {!archived && owner && (
             <div className="flex min-w-0 items-center">
               {primary && PrimaryIcon && (
@@ -382,7 +416,7 @@ export function WorkbenchHeader({
                         'bg-muted text-foreground hover:bg-muted/80',
                     )}
                     aria-label="More actions"
-                    disabled={busy !== null}
+                    disabled={busy !== null || queueBusy}
                   >
                     {!primary && 'Actions'}
                     <ChevronDown className="h-3.5 w-3.5" />
@@ -390,6 +424,15 @@ export function WorkbenchHeader({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[13rem]">
                   <DropdownMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename session</DropdownMenuItem>
+                  {canQueue && (
+                    <DropdownMenuItem
+                      disabled={queueBusy || busy !== null}
+                      onSelect={() => void toggleQueue()}
+                    >
+                      <ListChecks className="mr-2 h-3.5 w-3.5" />
+                      {queueActionLabel}
+                    </DropdownMenuItem>
+                  )}
                   {available.map((action) => {
                     const Icon = ACTION_ICON[action];
                     const keys = keysLabel(action);
