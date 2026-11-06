@@ -51,6 +51,7 @@ const { prMonitorService } = await import('../services/prMonitor.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { setPrBranchNamingDeadlineForTests } = await import('../services/workbenches/branchName.js');
+const { pullRequestBodyWithSession } = await import('../services/workbenches/pullRequest.js');
 const { getChat, getWorkbench, listChats, listEvents, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -105,6 +106,17 @@ function ghPr(number: number, over: { state?: 'open' | 'closed'; sha?: string; r
     },
   };
 }
+
+describe('pullRequestBodyWithSession', () => {
+  it.each([
+    ['a template body', '## Summary\n\nChanged.', '## Summary\n\nChanged.\n\n'],
+    ['an empty body', '', ''],
+  ])('adds the session link after %s', (_name, body, prefix) => {
+    expect(pullRequestBodyWithSession(body, 'session-1')).toBe(
+      `${prefix}---\n<!-- talyn-session-link -->\n[View this session in Talyn](https://app.talyn.dev/open/session/session-1)`
+    );
+  });
+});
 
 
 describe('workbench Create PR', () => {
@@ -484,7 +496,9 @@ describe('workbench Create PR', () => {
 
       expect(createPr).toHaveBeenCalledTimes(1);
       expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
-        title: 'feat: add the thing', head: wb.branch, base: 'main', body: '## Summary\nAdds it.', draft: false,
+        title: 'feat: add the thing', head: wb.branch, base: 'main',
+        body: `## Summary\nAdds it.\n\n---\n<!-- talyn-session-link -->\n[View this session in Talyn](https://app.talyn.dev/open/session/${wb.id})`,
+        draft: false,
       });
       expect(scriptsSinceMark().find((s) => s.includes('git commit --no-verify -m'))).toContain("git commit --no-verify -m 'feat: wip'");
       expect(prEvents(events)).toEqual([
@@ -797,7 +811,9 @@ describe('workbench Create PR', () => {
       expect([...order].sort((a, b) => a - b)).toEqual(order);
       expect(scripts.find((s) => s.includes('git commit --no-verify -m'))).toContain("git add -A\ngit commit --no-verify -m 'feat: wip'");
       expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', {
-        title: 'feat: add the thing', head: wb.branch, base: 'main', body: 'Body', draft: true,
+        title: 'feat: add the thing', head: wb.branch, base: 'main',
+        body: `Body\n\n---\n<!-- talyn-session-link -->\n[View this session in Talyn](https://app.talyn.dev/open/session/${wb.id})`,
+        draft: true,
       });
       expect(res.body.data).toMatchObject({ pullRequest: { number: 7, url: 'https://github.com/acme/app/pull/7' }, existing: false });
       expect(res.body.data.workbench).toMatchObject({ pullRequestId: 'pr-7', pr: { number: 7 } });

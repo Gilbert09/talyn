@@ -11,6 +11,7 @@
  * such flow falls back to rendering a "you can close this tab" page.
  */
 let cached: string | null | undefined;
+const HOSTED_WEB_APP_URL = 'https://app.talyn.dev';
 
 export function getWebAppUrl(): string | null {
   if (cached !== undefined) return cached;
@@ -60,6 +61,12 @@ export function webAppUrl(path: string, params?: Record<string, string>): string
   url.pathname = path;
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
   return url.toString();
+}
+
+/** A public session link. Hosted Talyn is the fallback for deployments without an override. */
+export function sessionLaunchUrl(sessionId: string): string {
+  const path = `/open/session/${encodeURIComponent(sessionId)}`;
+  return webAppUrl(path) ?? new URL(path, HOSTED_WEB_APP_URL).toString();
 }
 
 /** Tests: drop the memoised value between cases. */

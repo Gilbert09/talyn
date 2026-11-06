@@ -17,6 +17,7 @@ import {
   ipcMain,
   safeStorage,
 } from 'electron';
+import { sessionIdFromAppUrl } from '@talyn/shared';
 import MenuBuilder from './menu';
 import { registerWorkbenchIpc } from './workbench/ipc';
 import { resolveHtmlPath } from './util';
@@ -88,9 +89,10 @@ function isSlackChannelLink(url: string): boolean {
 // Buffer callbacks that arrive before the renderer is ready — macOS
 // open-url can fire during app launch, before any window exists.
 let pendingAuthCallbackUrl: string | null = null;
+let pendingSessionUrl: string | null = null;
 
 // ============================================================================
-// Auth deep-link handling
+// Deep-link handling
 // ============================================================================
 //
 // After a user signs in via GitHub in their system browser, Supabase
@@ -137,11 +139,26 @@ function forwardAuthCallback(url: string) {
   }
 }
 
+function forwardSessionUrl(url: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app:session-link', url);
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  } else {
+    pendingSessionUrl = url;
+  }
+}
+
+function handleDeepLink(url: string) {
+  if (sessionIdFromAppUrl(url)) forwardSessionUrl(url);
+  else if (url.startsWith(`${DEEP_LINK_SCHEME}://auth-callback`)) forwardAuthCallback(url);
+}
+
 // macOS delivers deep links via open-url even for already-running apps.
 app.on('open-url', (event, url) => {
   event.preventDefault();
   if (url.startsWith(`${DEEP_LINK_SCHEME}://`)) {
-    forwardAuthCallback(url);
+    handleDeepLink(url);
   }
 });
 
@@ -151,9 +168,11 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  const initialUrl = process.argv.find((arg) => arg.startsWith(`${DEEP_LINK_SCHEME}://`));
+  if (initialUrl) handleDeepLink(initialUrl);
   app.on('second-instance', (_event, argv) => {
     const url = argv.find((a) => a.startsWith(`${DEEP_LINK_SCHEME}://`));
-    if (url) forwardAuthCallback(url);
+    if (url) handleDeepLink(url);
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -182,6 +201,12 @@ ipcMain.handle('auth:get-redirect-url', async () => AUTH_REDIRECT_URL);
 ipcMain.handle('auth:drain-pending', async () => {
   const pending = pendingAuthCallbackUrl;
   pendingAuthCallbackUrl = null;
+  return pending;
+});
+
+ipcMain.handle('app:drain-session-link', async () => {
+  const pending = pendingSessionUrl;
+  pendingSessionUrl = null;
   return pending;
 });
 
@@ -388,6 +413,10 @@ const createWindow = async () => {
     if (pendingAuthCallbackUrl) {
       mainWindow.webContents.send('auth:callback', pendingAuthCallbackUrl);
       pendingAuthCallbackUrl = null;
+    }
+    if (pendingSessionUrl) {
+      mainWindow.webContents.send('app:session-link', pendingSessionUrl);
+      pendingSessionUrl = null;
     }
   });
 

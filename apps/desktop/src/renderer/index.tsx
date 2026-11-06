@@ -9,10 +9,11 @@ import '@fontsource/space-grotesk/600.css';
 import '@fontsource/space-grotesk/700.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
+import { sessionIdFromAppUrl } from '@talyn/shared';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { captureAnalyticsException, initAnalytics } from './lib/analytics';
-import { installNavigation } from './stores/navigation';
+import { installNavigation, useNavigationStore } from './stores/navigation';
 
 // Initialise PostHog before first render so session replay + autocapture
 // cover the whole session. No-op unless a key was baked in at build time.
@@ -31,6 +32,10 @@ const reportMainError = (frame: { source: 'main' | 'renderer'; operation: string
 window.electron?.mainErrors?.onEvent(reportMainError);
 void window.electron?.mainErrors?.drain().then((frames) => frames.forEach(reportMainError));
 installNavigation();
+window.electron?.app?.onSessionLink((url) => {
+  const id = sessionIdFromAppUrl(url);
+  if (id) useNavigationStore.getState().navigate({ view: 'workbench', id });
+});
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import {
   getWebAppUrl,
   webAppUrl,
+  sessionLaunchUrl,
   resetWebAppUrlCacheForTests,
 } from '../services/webApp.js';
 
@@ -111,5 +112,19 @@ describe('webAppUrl', () => {
     for (const path of ['/settings', '/', '/a/b/c']) {
       expect(new URL(webAppUrl(path)!).origin).toBe('https://app.talyn.dev');
     }
+  });
+});
+
+describe('sessionLaunchUrl', () => {
+  it('uses the configured web app and escapes the session id', () => {
+    withUrl('https://staging.talyn.dev');
+    expect(sessionLaunchUrl('session/with spaces')).toBe(
+      'https://staging.talyn.dev/open/session/session%2Fwith%20spaces'
+    );
+  });
+
+  it('uses the hosted web app when no override exists', () => {
+    withUrl(undefined);
+    expect(sessionLaunchUrl('session-1')).toBe('https://app.talyn.dev/open/session/session-1');
   });
 });
