@@ -72,6 +72,15 @@ function parseTime(value: string | undefined): Date | null {
   return Number.isFinite(ms) ? new Date(ms) : null;
 }
 
+/**
+ * The id Talyn gave a box. A fleet gateway lists a box under its own id,
+ * `<talyn id>--<suffix>` (the reaper's `logicalId`), while the hooks open an
+ * interval under Talyn's id. Keying on either alone counted one box twice.
+ */
+export function logicalSandboxId(id: string): string {
+  return id.split('--')[0];
+}
+
 /** The subject a Talyn box id names, from the deterministic id formats. Pure. */
 export function subjectForSandboxId(id: string): { kind: UsageSubjectKind; key: string } | null {
   if (id.startsWith('talyn-wb-')) return { kind: 'workbench', key: id };
@@ -116,7 +125,7 @@ async function resolveSubject(kind: UsageSubjectKind, key: string, sandboxId: st
       and(
         isNull(workbenches.archivedAt),
         or(
-          sql`split_part(${workbenches.sandboxId}, '--', 1) = ${sandboxId}`,
+          sql`split_part(${workbenches.sandboxId}, '--', 1) = ${logicalSandboxId(sandboxId)}`,
           sql`${workbenches.settings} ->> 'fleetSandboxId' = ${sandboxId}`,
         ),
       ),
@@ -145,8 +154,20 @@ export class UsageSweep {
   constructor(private readonly clients: () => Promise<TenantClient[]> = tenantClients) {}
 
   async run(now = new Date()): Promise<SweepResult> {
-    const open = await openIntervalsQuery();
-    const openBySandbox = new Map<string, IntervalRow>(open.map((i) => [i.sandboxId, i]));
+    const all = await openIntervalsQuery();
+    // One open interval per box. A duplicate (the same box under its two ids)
+    // closes at its own start, so it bills nothing more.
+    const openBySandbox = new Map<string, IntervalRow>();
+    let closed = 0;
+    for (const interval of [...all].sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())) {
+      const key = logicalSandboxId(interval.sandboxId);
+      if (!openBySandbox.has(key)) {
+        openBySandbox.set(key, interval);
+      } else if (await markIntervalClosed(interval.sandboxId, interval.startedAt, 'sweep')) {
+        closed += 1;
+      }
+    }
+    const open = [...openBySandbox.values()];
     const boxes = new Map<string, SweptBox>();
     let listErrors = 0;
 
@@ -160,15 +181,16 @@ export class UsageSweep {
         continue;
       }
       for (const ref of listed.sandboxes) {
+        const key = logicalSandboxId(ref.id);
         if (!gateway) {
-          boxes.set(ref.id, ref as FleetSandbox);
+          boxes.set(key, ref as FleetSandbox);
           continue;
         }
         // Read through the gateway only what can matter: boxes we meter, and
         // Talyn boxes that might be running without an interval.
-        if (!openBySandbox.has(ref.id) && !subjectForSandboxId(ref.id)) continue;
+        if (!openBySandbox.has(key) && !subjectForSandboxId(key)) continue;
         try {
-          boxes.set(ref.id, (await client.getSandbox(ref.id)).sandbox);
+          boxes.set(key, (await client.getSandbox(ref.id)).sandbox);
         } catch (error) {
           listErrors += 1;
           debugBus.recordEvent({ service: 'billing', action: 'usage_sweep_read_failed', summary: `Could not read ${ref.id}`, ok: false, error });
@@ -176,21 +198,21 @@ export class UsageSweep {
       }
     }
 
-    let closed = 0;
     for (const interval of open) {
-      const box = boxes.get(interval.sandboxId);
+      const key = logicalSandboxId(interval.sandboxId);
+      const box = boxes.get(key);
       let missingTicks = 0;
       if (box) {
-        this.missing.delete(interval.sandboxId);
+        this.missing.delete(key);
       } else if (listErrors === 0) {
-        missingTicks = (this.missing.get(interval.sandboxId) ?? 0) + 1;
-        this.missing.set(interval.sandboxId, missingTicks);
+        missingTicks = (this.missing.get(key) ?? 0) + 1;
+        this.missing.set(key, missingTicks);
       }
       const decision = decideOpenInterval(box, missingTicks, now);
       if (!decision.close) continue;
       if (await markIntervalClosed(interval.sandboxId, decision.at, decision.reason)) {
         closed += 1;
-        this.missing.delete(interval.sandboxId);
+        this.missing.delete(key);
         if (interval.subjectKind === 'workbench' && decision.reason === 'suspended') {
           await setWorkbenchSandboxState({ workbenchId: interval.subjectId }, 'running', 'suspended');
         }
@@ -201,9 +223,9 @@ export class UsageSweep {
     }
 
     let opened = 0;
-    for (const box of boxes.values()) {
-      if (!RUNNING.has(box.status) || openBySandbox.has(box.id)) continue;
-      const subject = subjectForSandboxId(box.id);
+    for (const [sandboxId, box] of boxes) {
+      if (!RUNNING.has(box.status) || openBySandbox.has(sandboxId)) continue;
+      const subject = subjectForSandboxId(sandboxId);
       if (!subject) continue;
       const resolved = await resolveSubject(subject.kind, subject.key, box.id);
       if (!resolved) continue;
@@ -212,7 +234,7 @@ export class UsageSweep {
         workspaceId: resolved.workspaceId,
         subjectKind: subject.kind,
         subjectId: resolved.subjectId,
-        sandboxId: box.id,
+        sandboxId,
         size: sizeForBox(box, subject.kind),
         startedAt: now,
       });
