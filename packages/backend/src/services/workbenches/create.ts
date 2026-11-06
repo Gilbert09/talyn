@@ -88,6 +88,11 @@ export interface CreateWorkbenchServiceInput extends CreateWorkbenchInput {
    * would name every branch the same.
    */
   namingText?: string;
+  /**
+   * The space the session starts in. Set only by the space route, after it
+   * checked that the actor is a member of the space's team.
+   */
+  spaceId?: string | null;
 }
 
 export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: ReadinessUser, sentAt = new Date().toISOString()): Promise<Workbench> {
@@ -104,7 +109,10 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   if (body.kind !== undefined && !WORKBENCH_KINDS.includes(body.kind)) {
     throw refuse(400, `kind must be one of: ${WORKBENCH_KINDS.join(', ')}`);
   }
-  if (body.kind === 'thread') return createThread(body, workspaceId, actor, sentAt);
+  if (body.kind === 'thread') {
+    if (body.spaceId) throw refuse(400, 'A thread cannot start in a space.');
+    return createThread(body, workspaceId, actor, sentAt);
+  }
   if (body.fromSessionId !== undefined) throw refuse(400, 'fromSessionId is only for a thread.');
   const threadId = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
 
@@ -226,6 +234,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
           ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),
         },
         source: body.source ?? null,
+        spaceId: body.spaceId ?? null,
       });
     } catch (err) {
       const constraint = uniqueViolationConstraint(err);

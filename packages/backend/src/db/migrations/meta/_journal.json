@@ -806,6 +806,13 @@
       "when": 1790900000035,
       "tag": "0115_chat_limit_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1790900000036,
+      "tag": "0116_teams_spaces",
+      "breakpoints": true
     }
   ]
 }

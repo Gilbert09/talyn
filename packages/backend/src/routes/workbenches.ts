@@ -32,6 +32,7 @@ import {
   type WorkbenchEvent,
   type WorkbenchKind,
   type WorkbenchSettings,
+  type Workbench,
   boxRefusalReason,
 } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
@@ -124,6 +125,8 @@ import {
   updateMemory,
 } from '../services/workbenches/memory.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
+import { isFeatureEnabled } from '../services/featureFlags.js';
+import { canViewItem, ownsWorkspace } from '../services/teams/access.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -189,6 +192,14 @@ function fail(res: Response, err: unknown): void {
 /** `?live=1` or `?live=true`: read the box now, and wake it if it sleeps. Only a person's refresh sends it. */
 const wantsLive = (req: Request) => req.query.live === '1' || req.query.live === 'true';
 
+/**
+ * A session as a teammate sees it: no sandbox id, device or local path. A
+ * teammate never wakes the owner's box either, so their reads never send live.
+ */
+function memberView(workbench: Workbench): Workbench {
+  return { ...workbench, sandboxId: null, deviceId: null, localPath: null, keptWorktree: null };
+}
+
 export function workbenchRoutes(): Router {
   const router = Router();
 
@@ -220,6 +231,59 @@ export function workbenchRoutes(): Router {
       return null;
     }
     return (await gate(req, res, row.workspaceId)) ? row : null;
+  }
+
+  /**
+   * The read-only path for a teammate (Teams and Spaces). The caller owns the
+   * session, or it is in a space of a team they belong to and their own GitHub
+   * account can read its repository. `member` is true on the second path. Only
+   * these GET routes use it: GET /:id, GET /chats/:chatId/events,
+   * GET /:id/changes, GET /:id/diff, GET /:id/file and GET /:id/files. Every
+   * other route stays owner-only through `gatedWorkbench` and `gatedChat`.
+   * The workbench store reads on the pool, so no owner-scoped RLS is in the way.
+   */
+  async function readableWorkbench(
+    req: Request,
+    res: Response,
+    row: WorkbenchRow | null,
+    notFound: string,
+  ): Promise<{ row: WorkbenchRow; member: boolean } | null> {
+    if (!row) {
+      bad(res, 404, notFound);
+      return null;
+    }
+    const user = assertUser(req);
+    if (row.spaceId && !(await ownsWorkspace(user.id, row.workspaceId))) {
+      const subject = { distinctId: user.id, email: user.email };
+      const allowed =
+        (await isFeatureEnabled('spaces', subject)) &&
+        (await canViewItem(user.id, { workspaceId: row.workspaceId, spaceId: row.spaceId, repoFullName: row.repoFullName || null }));
+      if (!allowed) {
+        bad(res, 404, notFound);
+        return null;
+      }
+      if (!(await userMayUseWorkbenches(subject))) {
+        bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+        return null;
+      }
+      return { row, member: true };
+    }
+    return (await gate(req, res, row.workspaceId)) ? { row, member: false } : null;
+  }
+
+  async function readableChat(
+    req: Request,
+    res: Response,
+    chatId: string,
+  ): Promise<{ chat: ChatRow; workbench: WorkbenchRow; member: boolean } | null> {
+    const chat = await getChat(chatId);
+    const workbench = chat ? await getWorkbench(chat.workbenchId) : null;
+    if (!chat) {
+      bad(res, 404, 'Chat not found');
+      return null;
+    }
+    const found = await readableWorkbench(req, res, workbench, 'Chat not found');
+    return found ? { chat, workbench: found.row, member: found.member } : null;
   }
 
   async function gatedChat(
@@ -329,7 +393,7 @@ export function workbenchRoutes(): Router {
   });
 
   router.get('/chats/:chatId/events', async (req, res) => {
-    const found = await gatedChat(req, res, req.params.chatId);
+    const found = await readableChat(req, res, req.params.chatId);
     if (!found) return;
     const after = Number(req.query.after ?? 0);
     const rawLimit = Number(req.query.limit);
@@ -560,10 +624,12 @@ export function workbenchRoutes(): Router {
   });
 
   router.get('/:id', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    // A teammate's read changes nothing: no PR link lookup on the owner's token.
+    if (found.member) return ok(res, memberView(await publicWorkbench(found.row)));
     // A PR opened since the last look — by the agent's own `gh pr create`.
-    ok(res, await publicWorkbench(await linkPullRequest(row)));
+    ok(res, await publicWorkbench(await linkPullRequest(found.row)));
   });
 
   router.post('/', async (req, res) => {
@@ -577,6 +643,7 @@ export function workbenchRoutes(): Router {
       const input: CreateWorkbenchServiceInput = { ...body, workspaceId };
       delete input.source;
       delete input.namingText;
+      delete input.spaceId;
       ok(res, await createWorkbench(input, { id: user.id, email: user.email }, sentAt));
     } catch (err) {
       fail(res, err);
@@ -913,11 +980,12 @@ export function workbenchRoutes(): Router {
   // ---- Files and diff (sandbox only: a local workbench's desktop reads its own disk) ----
 
   router.get('/:id/changes', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    const row = found.row;
     try {
       // Only `?live=1` (a person's refresh) wakes a sleeping box, with or without a stored list.
-      const changes = await readSessionChanges(row, { live: wantsLive(req), wakeWithoutSnapshot: false });
+      const changes = await readSessionChanges(row, { live: !found.member && wantsLive(req), wakeWithoutSnapshot: false });
       const etag = changesResponseEtag(changes);
       if (etag) {
         res.setHeader('ETag', etag);
@@ -934,8 +1002,9 @@ export function workbenchRoutes(): Router {
   });
 
   router.get('/:id/diff', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    const row = found.row;
     if (isThread(row)) return ok(res, { patch: '' });
     try {
       const scope = req.query.scope;
@@ -943,31 +1012,32 @@ export function workbenchRoutes(): Router {
         await requireReadySandbox(row);
         return bad(res, 400, 'Invalid diff scope.', 'bad_scope');
       }
-      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope, { live: wantsLive(req) }));
+      ok(res, await readSessionDiff(row, typeof req.query.path === 'string' && req.query.path ? req.query.path : undefined, scope, { live: !found.member && wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
   });
 
   router.get('/:id/file', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    const row = found.row;
     try {
       if (typeof req.query.path !== 'string' || !req.query.path) {
         await requireReadySandbox(row);
         return bad(res, 400, 'path is required');
       }
-      ok(res, await readSessionFile(row, req.query.path, { live: wantsLive(req) }));
+      ok(res, await readSessionFile(row, req.query.path, { live: !found.member && wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
   });
 
   router.get('/:id/files', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
     try {
-      ok(res, await listSessionFiles(row, { live: wantsLive(req) }));
+      ok(res, await listSessionFiles(found.row, { live: !found.member && wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }

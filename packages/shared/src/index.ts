@@ -118,6 +118,9 @@ export * from './publicApi.js';
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
+
+// Teams and Spaces: the multiplayer contract of `/teams` and `/spaces`.
+export * from './teams.js';
 // Insights: per-workspace usage analytics (compute, tokens, output, speed).
 export * from './insights.js';
 export * from './workbenchTitle.js';
@@ -1140,6 +1143,8 @@ export interface Task {
   assignedEnvironmentId?: string;
   result?: TaskResult;
   metadata?: Record<string, unknown>;
+  /** The space this task is in. Null or absent: Personal. */
+  spaceId?: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

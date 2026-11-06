@@ -29,6 +29,23 @@ import type {
   PRPriorityVerdict,
 } from '@talyn/shared';
 import type {
+  CreateSpaceRequest,
+  CreateSpaceSessionRequest,
+  CreateSpaceSessionResponse,
+  CreateSpacesTeamRequest,
+  InviteTeamMemberRequest,
+  MoveToSpaceRequest,
+  Space,
+  SpaceItemsResponse,
+  SpaceRepository,
+  SpacesTeam,
+  SpaceSessionRow,
+  SpaceTaskRow,
+  TeamMember,
+  TeamRole,
+  UpdateSpaceRequest,
+} from '@talyn/shared';
+import type {
   CodeReviewDismissReason,
   CodeReviewFinding,
   CodeReviewLensStat,
@@ -3316,6 +3333,48 @@ export const workbenches = {
 export const wsClient = new WebSocketClient();
 
 // ============================================================================
+// Teams and Spaces, behind the `spaces` flag. A non-member gets 404 for a
+// team or space id. The seat routes stay under `billing.team`.
+// ============================================================================
+
+export const teams = {
+  list: () => request<SpacesTeam[]>('GET', '/teams'),
+  create: (data: CreateSpacesTeamRequest) => request<SpacesTeam>('POST', '/teams', data),
+  rename: (teamId: string, name: string) => request<SpacesTeam>('PATCH', `/teams/${teamId}`, { name }),
+  members: (teamId: string) => request<TeamMember[]>('GET', `/teams/${teamId}/members`),
+  invite: (teamId: string, data: InviteTeamMemberRequest) =>
+    request<TeamMember>('POST', `/teams/${teamId}/members`, data),
+  setRole: (teamId: string, memberId: string, role: TeamRole) =>
+    request<TeamMember>('PATCH', `/teams/${teamId}/members/${memberId}`, { role }),
+  removeMember: (teamId: string, memberId: string) =>
+    request<null>('DELETE', `/teams/${teamId}/members/${memberId}`),
+  setHomeWorkspace: (teamId: string, workspaceId: string) =>
+    request<{ homeWorkspaceId: string }>('PUT', `/teams/${teamId}/home-workspace`, { workspaceId }),
+  createSpace: (teamId: string, data: CreateSpaceRequest) =>
+    request<Space>('POST', `/teams/${teamId}/spaces`, data),
+};
+
+export const spaces = {
+  update: (spaceId: string, data: UpdateSpaceRequest) => request<Space>('PATCH', `/spaces/${spaceId}`, data),
+  archive: (spaceId: string) => request<null>('DELETE', `/spaces/${spaceId}`),
+  repositories: (spaceId: string) => request<SpaceRepository[]>('GET', `/spaces/${spaceId}/repositories`),
+  addRepository: (spaceId: string, repoFullName: string) =>
+    request<SpaceRepository>('POST', `/spaces/${spaceId}/repositories`, { repoFullName }),
+  removeRepository: (spaceId: string, repoFullName: string) =>
+    request<null>('DELETE', `/spaces/${spaceId}/repositories/${repoFullName}`),
+  sessions: (spaceId: string) => request<SpaceItemsResponse<SpaceSessionRow>>('GET', `/spaces/${spaceId}/sessions`),
+  tasks: (spaceId: string) => request<SpaceItemsResponse<SpaceTaskRow>>('GET', `/spaces/${spaceId}/tasks`),
+  createSession: (spaceId: string, data: CreateSpaceSessionRequest) =>
+    request<CreateSpaceSessionResponse>('POST', `/spaces/${spaceId}/sessions`, data),
+  /** Move a session into a space, or back to Personal with null. Owner only. */
+  moveSession: (workbenchId: string, spaceId: string | null) =>
+    request<Workbench>('PUT', `/workbenches/${workbenchId}/space`, { spaceId } satisfies MoveToSpaceRequest),
+  /** Move a task into a space, or back to Personal with null. Owner only. */
+  moveTask: (taskId: string, spaceId: string | null) =>
+    request<Task>('PUT', `/tasks/${taskId}/space`, { spaceId } satisfies MoveToSpaceRequest),
+};
+
+// ============================================================================
 // Combined API export
 // ============================================================================
 
@@ -3345,6 +3404,8 @@ export const api = {
   codeReviews,
   mcpServers,
   workbenches,
+  teams,
+  spaces,
   admin,
   ws: wsClient,
 };

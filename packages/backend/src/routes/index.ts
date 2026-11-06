@@ -17,6 +17,7 @@ import { featureRoutes } from './features.js';
 import { systemRoutes } from './system.js';
 import { loopRoutes } from './loops.js';
 import { workbenchRoutes } from './workbenches.js';
+import { spaceRoutes } from './spaces.js';
 import { workbenchPullRequestRoutes } from './workbenchPullRequests.js';
 import { workbenchAttachmentRoutes } from './workbenchAttachments.js';
 import { codeReviewRoutes } from './codeReviews.js';
@@ -244,6 +245,14 @@ export function setupRoutes(app: Express): void {
   // a response open), and an owner-scoped transaction would pin a pooled
   // connection for that whole wait. Every handler authorises the workspace and
   // gates on the `workbenches` flag itself. See routes/workbenches.ts.
+  // Teams and Spaces: `/teams`, `/spaces`, and the move routes
+  // `/workbenches/:id/space` and `/tasks/:id/space`. Pre-ownerScope because
+  // the team and space tables are backend-pool-only and a space lists rows
+  // from several owners' workspaces. Every handler gates on the `spaces` flag
+  // and checks membership itself. Mounted at the API root, so it is before the
+  // workbench and task routers on their own paths. See routes/spaces.ts.
+  app.use(`${api}`, mount(spaceRoutes()));
+
   // The PR routes that are not in routes/workbenches.ts. Same prefix and gate, mounted first.
   app.use(`${api}/workbenches`, mount(workbenchPullRequestRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchAttachmentRoutes()));

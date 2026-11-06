@@ -171,7 +171,7 @@ function boxRow(box: Pick<WarmBox, 'id' | 'workspaceId' | 'repositoryId' | 'agen
     pullRequestId: null, pullRequestLinkedAt: null, pushedHeadShas: [], allocatedBranch: false,
     settings: { internetAccess: box.internetAccess, sandboxSize: box.size as SandboxSize }, source: null, diffStat: null,
     workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null, workCheckedAt: null, workUnpushedCommits: null,
-    workSaveFailures: 0, workSaveFailedAt: null, workSaveError: null, changesAt: null, changesEtag: null, archivedAt: null,
+    workSaveFailures: 0, workSaveFailedAt: null, workSaveError: null, changesAt: null, changesEtag: null, spaceId: null, archivedAt: null,
     createdAt: now, updatedAt: now,
   };
 }

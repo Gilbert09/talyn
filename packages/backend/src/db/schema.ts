@@ -225,6 +225,76 @@ export const teamSeats = pgTable(
   })
 );
 
+// ---------- Teams and Spaces (migration 0116) ----------
+//
+// A team is the multiplayer entity. Members are keyed by the numeric GitHub id,
+// so an invite works before sign-up; `user_id` is filled at the first read.
+// A space holds sessions and tasks, and each one still runs in its creator's
+// own workspace. All three tables are backend-pool-only: RLS on, no policy, no
+// talyn_backend grant. Access goes through `services/teams/access.ts`.
+export const teamMembers = pgTable(
+  'team_members',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    githubUserId: bigint('github_user_id', { mode: 'number' }).notNull(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    githubLogin: text('github_login').notNull(),
+    avatarUrl: text('avatar_url'),
+    role: text('role').notNull().default('member'), // TeamRole
+    source: text('source').notNull().default('invite'), // TeamMemberSource
+    /** The member's own workspace that hosts and pays for their work in this team. */
+    homeWorkspaceId: text('home_workspace_id').references((): AnyPgColumn => workspaces.id, {
+      onDelete: 'set null',
+    }),
+    invitedByUserId: text('invited_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    teamGithubUq: uniqueIndex('uq_team_members_team_github').on(t.teamId, t.githubUserId),
+    userIdx: index('idx_team_members_user').on(t.userId),
+    githubUserIdx: index('idx_team_members_github_user').on(t.githubUserId),
+  })
+);
+
+export const spaces = pgTable(
+  'spaces',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    color: text('color'),
+    createdByUserId: text('created_by_user_id'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    teamIdx: index('idx_spaces_team').on(t.teamId),
+  })
+);
+
+/** The space's repo picker. */
+export const spaceRepositories = pgTable(
+  'space_repositories',
+  {
+    spaceId: text('space_id')
+      .notNull()
+      .references(() => spaces.id, { onDelete: 'cascade' }),
+    repoFullName: text('repo_full_name').notNull(),
+    githubRepoId: bigint('github_repo_id', { mode: 'number' }),
+    addedByUserId: text('added_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.spaceId, t.repoFullName] }),
+  })
+);
+
 // ---------- Usage billing (migration 0110) ----------
 //
 // The box-hour ledger and USD credits. Money is integer micro-dollars, usage
@@ -630,12 +700,15 @@ export const tasks = pgTable(
     transcript: jsonb('transcript'),
     result: jsonb('result'),
     metadata: jsonb('metadata'),
+    /** The space this task is in (migration 0116). Null: Personal. */
+    spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
   },
   (t) => ({
     workspaceIdx: index('idx_tasks_workspace').on(t.workspaceId),
+    spaceIdx: index('idx_tasks_space').on(t.spaceId).where(sql`${t.spaceId} IS NOT NULL`),
     statusIdx: index('idx_tasks_status').on(t.status),
     repositoryIdx: index('idx_tasks_repository').on(t.repositoryId),
     // Drives the "is a run already working this PR?" guard, which every
@@ -2271,12 +2344,15 @@ export const workbenches = pgTable(
     changesEtag: text('changes_etag'),
     /** Activity the chat tables do not show: terminal input, a script start, a restore (migration 0108). */
     lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
+    /** The space this session is in (migration 0116). Null: Personal. */
+    spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     workspaceIdx: index('idx_workbenches_workspace').on(t.workspaceId, t.createdAt),
+    spaceIdx: index('idx_workbenches_space').on(t.spaceId).where(sql`${t.spaceId} IS NOT NULL`),
     allocatedBranchUq: uniqueIndex('uq_workbenches_allocated_branch').on(t.workspaceId, t.branch)
       .where(sql`${t.allocatedBranch}`),
     liveNameUq: uniqueIndex('uq_workbenches_workspace_name_live')

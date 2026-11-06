@@ -12,12 +12,14 @@ import {
 import { getPoolDbClient, isRealPostgres } from '../../db/client.js';
 import {
   teamAdmins as teamAdminsTable,
+  teamMembers as teamMembersTable,
   teamSeats as teamSeatsTable,
   teams as teamsTable,
   users as usersTable,
 } from '../../db/schema.js';
 import { withBlockingAdvisoryLock } from '../advisoryLock.js';
 import { ensureGithubUserId } from '../githubIdentity.js';
+import { addSeatMembers, removeSeatMember } from '../teams/seatSync.js';
 import { teamGrantsSeats } from './entitlements.js';
 
 export const TEAM_NO_SUBSCRIPTION_CODE = 'no_subscription';
@@ -120,10 +122,31 @@ export async function createTeam(userId: string, rawName: string): Promise<{ id:
   if (existing[0]) {
     throw new TeamError(409, 'You already manage a team.');
   }
+  const [creator] = await db
+    .select({ githubUserId: usersTable.githubUserId, githubLogin: usersTable.githubUsername })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+  const creatorGithubId = creator?.githubUserId ?? (await ensureGithubUserId(userId));
   const id = uuid();
   await db.transaction(async (tx) => {
     await tx.insert(teamsTable).values({ id, name, createdByUserId: userId });
     await tx.insert(teamAdminsTable).values({ teamId: id, userId });
+    // The creator owns the team in Teams and Spaces. Skipped when the GitHub
+    // account is not known, because a member is keyed by the GitHub id.
+    if (creatorGithubId && creator?.githubLogin) {
+      await tx.insert(teamMembersTable).values({
+        id: uuid(),
+        teamId: id,
+        githubUserId: creatorGithubId,
+        userId,
+        githubLogin: creator.githubLogin,
+        avatarUrl: githubAvatarUrl(creatorGithubId),
+        role: 'owner',
+        source: 'invite',
+        invitedByUserId: userId,
+      });
+    }
   });
   return { id };
 }
@@ -386,6 +409,17 @@ export async function assignNamedSeats(
       .onConflictDoNothing({ target: teamSeatsTable.githubUserId })
       .returning({ githubUserId: teamSeatsTable.githubUserId });
     const insertedIds = new Set(inserted.map((r) => r.githubUserId));
+    await addSeatMembers(
+      teamId,
+      rows
+        .filter((r) => insertedIds.has(r.githubUserId))
+        .map((r) => ({
+          githubUserId: r.githubUserId,
+          githubLogin: r.githubLogin,
+          avatarUrl: r.avatarUrl,
+          invitedByUserId: assignedByUserId,
+        }))
+    );
     for (const row of rows) {
       if (!insertedIds.has(row.githubUserId)) {
         failed.push({ login: row.githubLogin, reason: 'Already has a seat on another team.' });
@@ -536,6 +570,7 @@ async function dropMember(teamId: string, githubUserId: number): Promise<void> {
         );
     }
   });
+  await removeSeatMember(teamId, githubUserId);
 }
 
 /**
@@ -742,7 +777,7 @@ export async function seatAllAdmins(teamId: string): Promise<void> {
       // now rather than leave an admin without the seat they paid for.
       const githubUserId = admin.githubUserId ?? (await ensureGithubUserId(admin.userId));
       if (!githubUserId || !admin.githubUsername) continue;
-      await db
+      const seated = await db
         .insert(teamSeatsTable)
         .values({
           id: uuid(),
@@ -753,7 +788,20 @@ export async function seatAllAdmins(teamId: string): Promise<void> {
           source: 'named',
           assignedByUserId: admin.userId,
         })
-        .onConflictDoNothing({ target: teamSeatsTable.githubUserId });
+        .onConflictDoNothing({ target: teamSeatsTable.githubUserId })
+        .returning({ githubUserId: teamSeatsTable.githubUserId });
+      if (seated.length > 0) {
+        await addSeatMembers(teamId, [
+          {
+            githubUserId,
+            githubLogin: admin.githubUsername,
+            avatarUrl: githubAvatarUrl(githubUserId),
+            role: 'admin',
+            userId: admin.userId,
+            invitedByUserId: admin.userId,
+          },
+        ]);
+      }
     }
   });
 }

@@ -235,6 +235,8 @@ export interface Workbench {
   changesAt?: string | null;
   /** The stored copy's etag. Fetch the changes again when it moves. */
   changesEtag?: string | null;
+  /** The space this session is in. Null or absent: Personal. */
+  spaceId?: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;

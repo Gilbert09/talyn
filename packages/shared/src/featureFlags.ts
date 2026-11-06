@@ -325,6 +325,25 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Teams and Spaces: a team's members see and open each other's sessions and
+   * tasks in a shared space. Each item still runs in its creator's own
+   * workspace; nothing shares a workspace or a credential.
+   *
+   * Fallback OFF and gated while it rolls out: it shows one person's work to
+   * another, so a PostHog outage must not open it to accounts nobody chose.
+   * Evaluated for the CALLER on every team and space route. The `teams` flag
+   * still gates buying and managing seats.
+   */
+  spaces: {
+    posthogKey: 'spaces',
+    envOverride: 'SPACES_ENABLED',
+    fallback: false,
+    description: 'Teams and Spaces: shared sessions and tasks for a team',
+    availability: 'gated',
+    releaseScopes: ['spaces'],
+  },
+
+  /**
    * Trunk merge ETAs — when a PR in Trunk's merge queue will merge, read from
    * Trunk's API with the workspace's own Trunk token.
    *
@@ -481,6 +500,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingCandidate',
   'reviewRankingExport',
   'teams',
+  'spaces',
   'workbenches',
   'trunkMergeEta',
   'publicApi',
