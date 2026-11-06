@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
+  fleetModelForAgentSwitch,
   WORKBENCH_MOVING_MESSAGE,
   type Workbench,
   type WorkbenchAgent,
@@ -376,7 +377,7 @@ export function Composer({
           <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
           <AgentPicker
             value={agent}
-            onChange={(next) => void patchChat({ agent: next, model: defaultModelFor(next) })}
+            onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })}
             disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'}
           />
           <ModelPicker
