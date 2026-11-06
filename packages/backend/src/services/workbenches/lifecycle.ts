@@ -455,8 +455,14 @@ export const SESSION_SANDBOX_MILLI_VCPU = SANDBOX_SIZES.standard.milliVcpu;
 export const THREAD_SANDBOX_SIZE: SandboxSize = (Object.keys(SANDBOX_SIZES) as SandboxSize[]).reduce((smallest, size) =>
   SANDBOX_SIZES[size].memMib < SANDBOX_SIZES[smallest].memMib ? size : smallest);
 
-/** What a thread's box runs instead of the clone: the agent's working directory. */
-export const THREAD_WORKDIR_SCRIPT = `mkdir -p ${SANDBOX_WORK_ROOT}`;
+/**
+ * What a thread's box runs instead of the clone: the agent's working directory.
+ * Built at call time: sandboxRuntime is in an import cycle with this module, so
+ * at load time its constants can still be undefined (`mkdir -p undefined`).
+ */
+export function threadWorkdirScript(): string {
+  return `mkdir -p ${SANDBOX_WORK_ROOT}`;
+}
 
 export type CreatedWorkbenchSandbox =
   | {
@@ -846,7 +852,7 @@ async function finishThreadProvision(
   fail: (message: string) => Promise<void>,
   claim: ProvisionClaim,
 ): Promise<void> {
-  const prepared = await runCapture(row, THREAD_WORKDIR_SCRIPT, { cwd: '/', timeoutMs: 60_000 });
+  const prepared = await runCapture(row, threadWorkdirScript(), { cwd: '/', timeoutMs: 60_000 });
   if (prepared.exitCode !== 0) {
     return fail(`Could not prepare the thread's sandbox: ${prepared.stderr.trim().split('\n').slice(-3).join(' ') || `exit ${prepared.exitCode}`}`);
   }
