@@ -4,6 +4,7 @@ import { getPoolDbClient } from '../../../db/client.js';
 import { prCodeReviewRuns, tasks, workbenches, workspaces } from '../../../db/schema.js';
 import { debugBus } from '../../debugBus.js';
 import { setWorkbenchSandboxState } from '../../workbenches/sandboxState.js';
+import { currentBoxPayer } from '../../workbenches/store.js';
 import { listFleetHosts } from '../../fleetHosts.js';
 import { FleetClient, type FleetSandbox, type FleetSandboxStatus } from '../../selfHosted/client.js';
 import { fleetApiToken, fleetGatewayToken, fleetPinnedEndpoint } from '../../selfHosted/credentials.js';
@@ -95,6 +96,8 @@ interface ResolvedSubject {
   ownerId: string;
   workspaceId: string;
   subjectId: string;
+  /** A teammate who pays for a session box. `ownerId` is then that teammate. */
+  payerUserId?: string | null;
 }
 
 async function resolveSubject(kind: UsageSubjectKind, key: string, sandboxId: string): Promise<ResolvedSubject | null> {
@@ -131,7 +134,10 @@ async function resolveSubject(kind: UsageSubjectKind, key: string, sandboxId: st
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  // A session box bills the payer of its latest turn, else the workspace owner.
+  const payer = await currentBoxPayer(row.subjectId);
+  return payer ? { ...row, ownerId: payer.userId, payerUserId: payer.userId } : row;
 }
 
 /** The size a box runs at: from its booted resources, else the default for its kind. */
@@ -237,6 +243,7 @@ export class UsageSweep {
         sandboxId,
         size: sizeForBox(box, subject.kind),
         startedAt: now,
+        payerUserId: resolved.payerUserId ?? null,
       });
       if (!inserted) continue;
       opened += 1;

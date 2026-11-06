@@ -149,7 +149,7 @@ it('defers an unattended turn when the box gate refuses it', async () => {
   await account('codex');
   vi.mocked(existingBoxRefusal).mockResolvedValue(new UsageExhaustedError({ tier: 'free', periodEnd: new Date(Date.now() + 60 * 60_000) }));
   await handleChatLimit(await chat(), reason);
-  expect(existingBoxRefusal).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws' }), true);
+  expect(existingBoxRefusal).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws' }), true, null);
   expect((await chat()).resumeAt).not.toBeNull();
   expect(sendMessage).not.toHaveBeenCalled();
 });

@@ -145,3 +145,16 @@ export async function workbenchIntegrationSecrets(session: {
 export async function sessionHasTalynMcp(session: { id: string; workspaceId: string }): Promise<boolean> {
   return (await talynMcpFor(session, { mint: false })) !== null;
 }
+
+/**
+ * The credential half for a teammate's turn (Teams and Spaces): the payer's
+ * own MCP servers, and a `talyn` secret that opens nothing. The owner's
+ * session token acts as the owner, so it never stays on the box while somebody
+ * else prompts. A route the owner's server set made and the payer has no
+ * server for gets no credential, and its calls fail.
+ */
+export async function payerIntegrationSecrets(payerWorkspaceId: string): Promise<Record<string, string>> {
+  const out = { ...(await mcpIntegrationSecrets({ workspaceId: payerWorkspaceId, metadata: undefined })) };
+  if (talynMcpPublicUrl()) out[TALYN_MCP_SERVER_NAME] = `unclaimed-${randomBytes(24).toString('hex')}`;
+  return out;
+}

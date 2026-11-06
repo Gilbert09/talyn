@@ -295,6 +295,8 @@ interface GitHubRepo {
     login: string;
     avatar_url: string;
   };
+  /** What the token's user may do, when GitHub says (a user token always gets it). */
+  permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
 }
 
 interface GitHubPullRequest {

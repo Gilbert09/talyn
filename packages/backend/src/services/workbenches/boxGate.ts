@@ -4,7 +4,7 @@ import { billingEnabled, checkBoxGate, isBoxGateError, type BoxGateError, type B
 import { openIntervalOfSubjectQuery } from '../billing/usage/intervals.js';
 import { ownerOfWorkspace } from '../workflows/owner.js';
 import { sessionSandboxSize, sizeForSession } from './sandboxSize.js';
-import type { WorkbenchRow } from './store.js';
+import type { TurnPayerRef, WorkbenchRow } from './store.js';
 import { workbenchBoxSize } from './usageMeter.js';
 
 /**
@@ -70,8 +70,13 @@ async function boxIsAwake(row: Pick<WorkbenchRow, 'id'>): Promise<boolean> {
  * null. Budget always; the concurrency cap only when the box sleeps, because
  * waking it adds a box. The size is not checked again: the box exists.
  */
-export async function existingBoxRefusal(row: GateRow, unattended = false): Promise<BoxGateError | null> {
+export async function existingBoxRefusal(
+  row: GateRow,
+  unattended = false,
+  payer: TurnPayerRef | null = null,
+): Promise<BoxGateError | null> {
   if (row.runtime !== 'sandbox' || !billingEnabled()) return null;
+  if (payer) return payerBoxRefusal(row, unattended, payer);
   if (unattended) {
     const held = await workspaceBoxHold(row.workspaceId);
     if (held) return held;
@@ -89,6 +94,34 @@ export async function existingBoxRefusal(row: GateRow, unattended = false): Prom
         const owner = await ownerOfWorkspace(row.workspaceId);
         if (owner) noteBoxRefusal(owner, err);
       }
+      return err;
+    }
+    throw err;
+  }
+}
+
+/**
+ * A teammate's turn on the owner's box pays from the teammate's budget, and
+ * the owner is not asked. The box exists, so only the budget is checked: the
+ * size is not checked again, and the concurrency cap does not apply.
+ */
+async function payerBoxRefusal(row: GateRow, unattended: boolean, payer: TurnPayerRef): Promise<BoxGateError | null> {
+  if (unattended) {
+    const held = await workspaceBoxHold(payer.workspaceId);
+    if (held) return held;
+  }
+  try {
+    await checkBoxGate(payer.userId, {
+      unattended,
+      size: workbenchBoxSize(row),
+      existingBox: 'awake',
+      workspaceId: payer.workspaceId,
+    });
+    releaseBoxHold(payer.userId);
+    return null;
+  } catch (err) {
+    if (isBoxGateError(err)) {
+      if (unattended) noteBoxRefusal(payer.userId, err);
       return err;
     }
     throw err;

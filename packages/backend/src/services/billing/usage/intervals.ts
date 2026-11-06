@@ -5,7 +5,7 @@ import { getPoolDbClient } from '../../../db/client.js';
 import { usageIntervals } from '../../../db/schema.js';
 
 /** Why an interval closed. */
-export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep';
+export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep' | 'payer_change';
 
 export interface OpenIntervalInput {
   ownerId: string;
@@ -16,6 +16,8 @@ export interface OpenIntervalInput {
   size: SandboxSize;
   /** Defaults to now. */
   startedAt?: Date;
+  /** A teammate who pays for this box (Teams and Spaces). `ownerId` is then that teammate. */
+  payerUserId?: string | null;
 }
 
 /** What the charge step reads. No column here is large. */
@@ -30,6 +32,7 @@ export const INTERVAL_COLUMNS = {
   startedAt: usageIntervals.startedAt,
   endedAt: usageIntervals.endedAt,
   billedThrough: usageIntervals.billedThrough,
+  payerUserId: usageIntervals.payerUserId,
 } as const;
 
 export type IntervalRow = Pick<typeof usageIntervals.$inferSelect, keyof typeof INTERVAL_COLUMNS>;
@@ -52,6 +55,7 @@ export async function insertOpenInterval(input: OpenIntervalInput): Promise<bool
       weight: SIZE_WEIGHT[input.size].toFixed(2),
       startedAt,
       billedThrough: startedAt,
+      payerUserId: input.payerUserId ?? null,
     })
     .onConflictDoNothing({ target: usageIntervals.sandboxId, where: sql`${usageIntervals.endedAt} IS NULL` })
     .returning({ id: usageIntervals.id });

@@ -374,7 +374,7 @@ describe('space routes', () => {
 
     it.each([
       ['PATCH', '/workbenches/wb-app', { title: 'Mine now' }],
-      ['POST', '/workbenches/chats/chat-wb-app/messages', { text: 'hi' }],
+      ['POST', '/workbenches/chats/chat-wb-app/resume/cancel', {}],
       ['POST', '/workbenches/wb-app/archive', {}],
       ['GET', '/workbenches/wb-app/timing', undefined],
       ['GET', '/workbenches/chats/chat-wb-app/checkpoints', undefined],

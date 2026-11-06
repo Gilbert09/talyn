@@ -31,7 +31,9 @@ import {
   type WorkbenchChatStatus,
   type WorkbenchQueuedMessage,
   type WorkbenchStatus,
+  type WorkbenchTurnPayer,
 } from '@talyn/shared';
+import { payerRef, turnGitIdentityEnv } from '../teams/payer.js';
 import { debugBus, describeError } from '../debugBus.js';
 import { withRestorePhase } from './restorePhase.js';
 import { startDurableExec, followDurableExec, followDurableBatches, retryBatchWrite, durableExecExists, removeDurableExecs, durableMarker, fenceDurableExec } from './durableExec.js';
@@ -95,7 +97,10 @@ import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, typ
 import {
   abandonCapacityWait,
   appendEvents,
+  busyPayerLogin,
   claimOrEnqueue,
+  earlierOtherPayerTurn,
+  payerBlockedSiblings,
   finishTurn,
   getChat,
   getCheckpoint,
@@ -116,6 +121,7 @@ import {
   setTurnAttempt,
   queuedIdleChats,
   type TurnLease,
+  type TurnPayerRef,
   upsertCheckpoint,
   type ChatRow,
   type EventDraftInput,
@@ -275,12 +281,18 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 /**
  * Send a message to a chat. Starts a turn when the chat is idle and the
  * workbench is ready; otherwise the message waits in the queue (`queued`).
+ *
+ * `payer`: a teammate who prompts from a space and pays for the turn (Teams
+ * and Spaces). Absent means the owner. One payer per box: while another chat
+ * of the box runs a turn paid by somebody else, the message waits in the
+ * queue and `waitingFor` names that person's GitHub login. It starts when
+ * their turn ends.
  */
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number } = {},
-): Promise<{ queued: boolean }> {
+  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number; payer?: WorkbenchTurnPayer } = {},
+): Promise<{ queued: boolean; waitingFor?: string }> {
   const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
@@ -296,13 +308,15 @@ export async function sendMessage(
   if (wb.status === 'ready') assertSandboxAgent(wb, chat.agent === 'codex' ? 'codex' : 'claude');
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
+  if (opts.payer) message.payer = opts.payer;
+  const payer = payerRef(message.payer);
   // A person's message that would start a turn now asks the plan first, so
   // the route can answer 402 and the composer keeps the text. A message
   // behind a running turn just queues: that turn's box is already paid for,
   // and the next turn start asks then. Talyn's own messages never throw
   // here; their turn start holds them in the queue instead.
   if (wb.status === 'ready' && chat.status !== 'running' && opts.origin !== 'talyn') {
-    const refusal = await existingBoxRefusal(wb);
+    const refusal = await existingBoxRefusal(wb, false, payer);
     if (refusal) throw refusal;
   }
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready', opts.resumeVersion);
@@ -314,7 +328,10 @@ export async function sendMessage(
     }
     launchTurnLoop(chatId, claim.started);
   }
-  return { queued: claim.started?.message.id !== message.id };
+  const waitingFor = claim.payerBlocked
+    ? await busyPayerLogin(chatId, claim.chat.queuedMessages[0]?.payer?.userId ?? null)
+    : null;
+  return { queued: claim.started?.message.id !== message.id, ...(waitingFor ? { waitingFor } : {}) };
 }
 
 /** Start the head of the queue when nothing is running — after a provision, or a cancel. */
@@ -433,6 +450,7 @@ async function runTurnLoopBody(
       turn: heldTurn,
     });
     adoptFailures.delete(chatId);
+    if (fin) await startPayerBlockedSiblings(fin.chat.workbenchId, chatId);
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: heldTurn, finalStatus: outcome.status });
@@ -460,6 +478,19 @@ async function runTurnLoopBody(
       });
     }
     next = fin?.started ?? null;
+  }
+}
+
+/**
+ * After a turn: start the chats of the box that waited because this turn's
+ * payer held it (one payer per box). The claim checks again, so a chat whose
+ * payer is still busy stays queued. Never fails the turn.
+ */
+async function startPayerBlockedSiblings(workbenchId: string, chatId: string): Promise<void> {
+  try {
+    for (const sibling of await payerBlockedSiblings(workbenchId, chatId)) await startQueuedIfIdle(sibling.id);
+  } catch (err) {
+    console.warn(`[workbench] starting the chats that waited for chat ${chatId} failed:`, err);
   }
 }
 
@@ -615,6 +646,10 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
       messageId: message.id,
       sentAt: message.queuedAt,
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
+      // Who prompted, for a teammate's turn. The payer's workspace stays on the backend.
+      ...(message.payer
+        ? { payer: { userId: message.payer.userId, githubLogin: message.payer.githubLogin, avatarUrl: message.payer.avatarUrl } }
+        : {}),
       ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
       ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, ...(a.path ? { path: a.path } : {}) })) } : {}),
@@ -652,8 +687,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   // The plan, before anything wakes the box: a turn needs budget, and waking a
   // sleeping box needs a free box slot. A relaunch of a turn that already
   // started is not asked again; a turn already running is never stopped.
+  const payer = payerRef(message.payer);
+  // One payer per box: a turn of another payer that started first on another
+  // chat keeps the box. The claim cannot see a start in the same instant.
+  if (early && firstAttempt === 0 && (await earlierOtherPayerTurn(chatId))) {
+    return waitForOtherPayer(chatId, message);
+  }
   if (early && firstAttempt === 0) {
-    const refusal = await existingBoxRefusal(early, message.origin === 'talyn');
+    const refusal = await existingBoxRefusal(early, message.origin === 'talyn', payer);
     if (refusal) return holdTurn(chatId, message, refusal);
   }
   const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
@@ -702,21 +743,25 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         if (current) emitWorkbenchChat(current.workspaceId, rowToChat(current));
       },
     });
-    // The box is awake now (an exec wakes a box the fleet suspended), so it is billed.
-    await meterWorkbenchAwake(wb);
+    // The box is awake now (an exec wakes a box the fleet suspended), so it is
+    // billed, to this turn's payer from here on.
+    await meterWorkbenchAwake(wb, { payer });
     if (live.cancelRequested) return cancelledOutcome(events);
     const turnModel = message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     validateAgentModel(agent, turnModel);
+    // A teammate's commits are theirs. Before the push, so a refusal leaves the box as it was.
+    const gitIdentity = payer ? await turnGitIdentityEnv(payer.userId) : {};
     const jobs = [
-      refreshSandboxCredentials(wb, { agent, model: turnModel }),
+      refreshSandboxCredentials(wb, { agent, model: turnModel, payer }),
       syncInstructionFiles(wb, agent).catch((err) => {
         if (err instanceof FleetRunNotFoundError) throw err;
         console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
         recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
       }),
       (async () => {
-        const talynTools = await sessionHasTalynMcp(wb);
+        // Talyn's own server acts as the owner, so a teammate's turn goes without it.
+        const talynTools = !payer && (await sessionHasTalynMcp(wb));
         const talynSkills = await syncSkillPack(wb, { talynTools }).catch((err) => {
           if (err instanceof FleetRunNotFoundError) throw err;
           console.warn(`[workbench] syncing the skill pack for chat ${chatId} failed:`, err);
@@ -777,7 +822,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
     };
     let argv = buildArgv();
-    const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), TALYN_TURN_QUEUED_AT: message.queuedAt };
+    const env = {
+      ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
+    };
 
     let accountId = refreshed.accountId;
     let outcome!: Awaited<ReturnType<typeof followTurnOutput>>;
@@ -822,7 +869,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         if (live.cancelRequested) return cancelledOutcome(events);
         continue;
       }
-      const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)), agent);
+      const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)), agent, payer);
       const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
         noteRecapStarted();
         if (parser.result) { sawResult = true; attemptSawResult = true; }
@@ -854,9 +901,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       }
       if (failedOver) break;
       // The account this attempt ran on. The row can still name the one from before the turn-start switch.
-      const failedAccountId = accountId ?? workbenchFleetAccountId(wb, agent);
+      const failedAccountId = accountId ?? workbenchFleetAccountId(wb, agent, payer?.userId);
       if (!failedAccountId) break;
-      const hop = await failOverAccount(wb, agent, model, failedAccountId, detail);
+      const hop = await failOverAccount(wb, agent, model, failedAccountId, detail, payer);
       if (!hop) break;
       if (!attemptSawResult) events.add(errorResultEvent('error_during_execution', why));
       await events.flush();
@@ -924,16 +971,19 @@ async function failOverAccount(
   model: string | undefined,
   failedAccountId: string,
   detail: string,
+  payer: TurnPayerRef | null = null,
 ): Promise<{ accountId: string; note: string } | null> {
   const exhausted = exhaustedAgentFrom(detail) === agent;
   if (!exhausted && rateLimitedAgentFrom(detail) !== agent) return null;
-  if (exhausted) await noteExhaustedAgent(wb.workspaceId, agent, detail, failedAccountId);
+  // A teammate's limit is held on the teammate's workspace, and the hop is among their accounts.
+  const workspaceId = payer?.workspaceId ?? wb.workspaceId;
+  if (exhausted) await noteExhaustedAgent(workspaceId, agent, detail, failedAccountId);
   // Stored on the account, so the next turn start leaves it too, even when no hop was possible.
   else await noteRateLimitedAccount(failedAccountId, detail);
-  const selection = await selectFleetAccount(wb.workspaceId, agent, { model, avoidAccountIds: [failedAccountId] });
+  const selection = await selectFleetAccount(workspaceId, agent, { model, avoidAccountIds: [failedAccountId] });
   if (!selection.account || selection.account.id === failedAccountId) return null;
   const oldLabel = selection.accounts.find((a) => a.id === failedAccountId)?.label ?? agent;
-  const next = await refreshSandboxCredentials(wb, { agent, model, avoidAccountIds: [failedAccountId] });
+  const next = await refreshSandboxCredentials(wb, { agent, model, avoidAccountIds: [failedAccountId], payer });
   if (!next.accountId || next.accountId === failedAccountId) return null;
   const nextLabel = selection.accounts.find((a) => a.id === next.accountId)?.label ?? next.accountId;
   const limit = exhausted ? 'ran out of usage' : 'hit its rate limit';
@@ -946,6 +996,18 @@ async function failOverAccount(
 export const SESSION_RESET_NOTE = 'The agent could not resume its earlier session, so Talyn started a new one.';
 
 export const TURN_HELD_NOTE = 'Talyn did not start this message. It stays in the queue: send a message to try again.';
+
+/**
+ * Give the turn back to the queue: another payer's turn started first on
+ * another chat of the box. The chat is marked to drain, so the end of that
+ * turn, or the turn sweep, starts this one. Nothing ran.
+ */
+async function waitForOtherPayer(chatId: string, message: WorkbenchQueuedMessage): Promise<TurnOutcome> {
+  const requeued = await requeueTurn(chatId, message);
+  if (requeued) emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+  noteTurn('turn_payer_wait', chatId, requeued?.turnCount ?? 0, 'another payer holds the box');
+  return { status: 'idle', statusMessage: null, cancelled: false, requeued: true, held: true };
+}
 
 /** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
 async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
@@ -1275,6 +1337,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
       await archiveIdleSession(fin.chat.workbenchId);
       await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
+      await startPayerBlockedSiblings(fin.chat.workbenchId, chatId);
     }
   }
 }
@@ -1406,12 +1469,13 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     }
     // A rate limit on an adopted turn moves to another account, as a live one does.
     // Only the first attempt: a later one may already be the hop.
-    const hopFrom = workbenchFleetAccountId(wb, chat.agent === 'codex' ? 'codex' : 'claude');
+    const payer = payerRef(lease.message?.payer);
+    const hopFrom = workbenchFleetAccountId(wb, chat.agent === 'codex' ? 'codex' : 'claude', payer?.userId);
     if (lease.message && lease.attempt === 0 && hopFrom && outcome.exitCode !== 125) {
       const agent = chat.agent === 'codex' ? 'codex' : 'claude';
       const detail = [parser.result?.text, outcome.stderrTail].filter(Boolean).join('\n');
       const model = lease.message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
-      const hop = await failOverAccount(wb, agent, model, hopFrom, detail);
+      const hop = await failOverAccount(wb, agent, model, hopFrom, detail, payer);
       if (hop) {
         if (!parser.result?.isError && !(await hasTurnEvent(chatId, lease.turn, 'result', true))) {
           events.add(errorResultEvent('error_during_execution', parser.result?.text?.trim() || outcome.stderrTail.trim() || 'The agent stopped.'));

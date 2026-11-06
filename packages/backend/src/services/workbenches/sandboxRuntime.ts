@@ -50,7 +50,7 @@ import {
   HOT_SWAP_CHECK_INTERVAL_MS,
   recordHotSwap,
 } from '../selfHosted/hotSwap.js';
-import { workbenchIntegrationSecrets } from './talynMcp.js';
+import { payerIntegrationSecrets, workbenchIntegrationSecrets } from './talynMcp.js';
 import {
   aliveMarkerScript,
   frameCommand,
@@ -71,7 +71,9 @@ import { recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import { recordSandboxWake } from './boxStart.js';
-import { getWorkbenchBySandboxId, recordSandboxBootMetric, type WorkbenchRow } from './store.js';
+import {
+  currentBoxPayer, getWorkbenchBySandboxId, recordSandboxBootMetric, runningBoxPayer, type TurnPayerRef, type WorkbenchRow,
+} from './store.js';
 
 /**
  * The sandbox runtime's plumbing: which fleet client, which sandbox, which
@@ -1056,9 +1058,22 @@ export async function gitAuthorFor(workspaceId: string): Promise<{ name: string;
 // Which fleet account a session is on
 // ============================================================================
 
-/** Keep the original account field for the session agent. Store the other agent's account separately. */
-export function workbenchFleetAccountId(row: Pick<WorkbenchRow, 'settings'> & { agent?: string }, agent?: FleetAgent): string | undefined {
+/**
+ * Keep the original account field for the session agent. Store the other agent's account separately.
+ * A teammate who pays for turns has their own record under `payerFleetAccounts`, so their account
+ * never replaces the owner's.
+ */
+export function workbenchFleetAccountId(
+  row: Pick<WorkbenchRow, 'settings'> & { agent?: string },
+  agent?: FleetAgent,
+  payerUserId?: string | null,
+): string | undefined {
   const settings = row.settings as Record<string, unknown> | null | undefined;
+  if (payerUserId) {
+    const byPayer = settings?.payerFleetAccounts as Record<string, Record<string, unknown> | undefined> | undefined;
+    const value = byPayer?.[payerUserId]?.[agent ?? (row.agent === 'codex' ? 'codex' : 'claude')];
+    return typeof value === 'string' && value ? value : undefined;
+  }
   const value = agent && agent !== row.agent ? settings?.[`${agent}FleetAccountId`] : settings?.fleetAccountId;
   return typeof value === 'string' && value ? value : undefined;
 }
@@ -1068,7 +1083,26 @@ export async function setWorkbenchFleetAccount(
   row: Pick<WorkbenchRow, 'id' | 'settings'> & { agent?: string },
   accountId: string,
   agent?: FleetAgent,
+  payerUserId?: string | null,
 ): Promise<void> {
+  if (payerUserId) {
+    const vendor = agent ?? (row.agent === 'codex' ? 'codex' : 'claude');
+    const current = workbenchSettings(row).payerFleetAccounts as Record<string, Record<string, string>> | undefined;
+    await getPoolDbClient()
+      .update(workbenchesTable)
+      .set({
+        settings: sql`jsonb_set(COALESCE(${workbenchesTable.settings}, '{}'::jsonb), '{payerFleetAccounts}',
+          COALESCE(${workbenchesTable.settings} -> 'payerFleetAccounts', '{}'::jsonb) || jsonb_build_object(${payerUserId}::text,
+            COALESCE(${workbenchesTable.settings} -> 'payerFleetAccounts' -> ${payerUserId}::text, '{}'::jsonb)
+              || jsonb_build_object(${vendor}::text, ${accountId}::text)))`,
+      })
+      .where(eq(workbenchesTable.id, row.id));
+    row.settings = {
+      ...(row.settings ?? {}),
+      payerFleetAccounts: { ...(current ?? {}), [payerUserId]: { ...(current?.[payerUserId] ?? {}), [vendor]: accountId } },
+    } as WorkbenchRow['settings'];
+    return;
+  }
   const key = agent && agent !== row.agent ? `${agent}FleetAccountId` : 'fleetAccountId';
   await getPoolDbClient()
     .update(workbenchesTable)
@@ -1104,32 +1138,53 @@ export async function setSessionAccount(row: WorkbenchRow, accountId: string): P
   await setWorkbenchFleetAccount(row, accountId);
 }
 
+function workbenchSettings(row: Pick<WorkbenchRow, 'settings'>): Record<string, unknown> {
+  return (row.settings ?? {}) as Record<string, unknown>;
+}
+
+/** The options every credential resolution takes. `payer`: null is the owner; absent reads the box's current payer. */
+export interface SessionCredentialOptions {
+  agent?: FleetAgent;
+  model?: string;
+  avoidAccountIds?: readonly string[];
+  payer?: TurnPayerRef | null;
+}
+
+/** The payer to use: the one given, else whoever pays for the box's latest turn. */
+async function resolvePayer(row: Pick<WorkbenchRow, 'id'>, payer: TurnPayerRef | null | undefined): Promise<TurnPayerRef | null> {
+  return payer !== undefined ? payer : currentBoxPayer(row.id);
+}
+
 function agentOf(row: Pick<WorkbenchRow, 'agent'>): FleetAgent {
   return providerForAgent(row.agent) === 'openai' ? 'codex' : 'claude';
 }
 
-/** Refresh both vendor keys. Refuse if the turn's agent has no usable key. */
+/**
+ * Refresh both vendor keys. Refuse if the turn's agent has no usable key.
+ * `payer` absent means the owner: only a teammate's own turn names a payer, so
+ * an owner or Talyn action never runs on a teammate's credentials.
+ */
 export async function refreshSandboxCredentials(
   row: WorkbenchRow,
-  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
+  opts: SessionCredentialOptions = {},
 ): Promise<{ accountId: string | null; note: string | null }> {
   const sandboxId = requireSandbox(row);
   const agent = opts.agent ?? agentOf(row);
   assertSandboxAgent(row, agent);
-  const { creds, credentials, model } = await sandboxCredentialSet(row, opts);
+  const { creds, credentials, model, payer } = await sandboxCredentialSet(row, { ...opts, payer: opts.payer ?? null });
   const credential = credentials[agent];
-  if (!credential?.token) throw missingSessionCredential(agent);
-  const recorded = workbenchFleetAccountId(row, agent);
+  if (!credential?.token) throw missingSessionCredential(agent, payer);
+  const recorded = workbenchFleetAccountId(row, agent, payer?.userId);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
 
   let note: string | null = null;
   if (credential.accountId && credential.accountId !== recorded) {
-    await setWorkbenchFleetAccount(row, credential.accountId, agent).catch((err) =>
+    await setWorkbenchFleetAccount(row, credential.accountId, agent, payer?.userId).catch((err) =>
       console.warn(`[workbench] recording the fleet account for ${row.id} failed:`, err),
     );
     if (recorded) {
-      note = await describeAccountSwitch(row.workspaceId, recorded, credential.accountId, model).catch(
+      note = await describeAccountSwitch(payer?.workspaceId ?? row.workspaceId, recorded, credential.accountId, model).catch(
         () => null,
       );
       if (note) {
@@ -1143,45 +1198,66 @@ export async function refreshSandboxCredentials(
 /** Resolve both vendors with the same account rules used for a turn. */
 export async function workbenchAgentCredentials(
   row: WorkbenchRow,
-  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
+  opts: SessionCredentialOptions = {},
 ) {
   const selectedAgent = opts.agent ?? agentOf(row);
-  const accounts = await listFleetAccounts(row.workspaceId);
+  // A teammate's turn takes both vendors from the teammate's workspace only.
+  const payer = opts.payer ?? null;
+  const workspaceId = payer?.workspaceId ?? row.workspaceId;
+  const accounts = await listFleetAccounts(workspaceId);
   const unavailable = accounts.filter((account) => account.reauthRequiredAt
     || (account.quotaExhausted && isHeldBack(account.quotaExhausted))).map((account) => account.id);
-  const resolve = (agent: FleetAgent) => resolveRunCredential(row.workspaceId, agent, {
-    recordedAccountId: workbenchFleetAccountId(row, agent),
+  const resolve = (agent: FleetAgent) => resolveRunCredential(workspaceId, agent, {
+    recordedAccountId: workbenchFleetAccountId(row, agent, payer?.userId),
     model: agent === selectedAgent ? opts.model ?? (agent === row.agent ? row.model ?? undefined : undefined) : undefined,
     switchWhenOver: true,
     avoidAccountIds: [...unavailable, ...(agent === selectedAgent ? opts.avoidAccountIds ?? [] : [])],
   });
   const [claude, codex] = await Promise.all([resolve('claude'), resolve('codex')]);
-  if (!claude?.token && !codex?.token) throw missingSessionCredential();
+  if (!claude?.token && !codex?.token) throw missingSessionCredential(undefined, payer);
   return { claude, codex };
 }
 
-function missingSessionCredential(agent?: FleetAgent): WorkbenchError {
+function missingSessionCredential(agent?: FleetAgent, payer?: TurnPayerRef | null): WorkbenchError {
   const label = agent === 'codex' ? 'Codex (ChatGPT)' : agent === 'claude' ? 'Claude' : 'Claude or Codex';
   return new WorkbenchError(
-    `This workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet.`,
+    payer
+      ? `Your workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet to prompt this session.`
+      : `This workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet.`,
     409,
     'credentials_unavailable',
   );
 }
 
-/** A push replaces the full set, including the other vendor and MCP secrets. */
+/**
+ * A push replaces the full set, including the other vendor and MCP secrets.
+ *
+ * During a teammate's turn every part comes from the payer's workspace: the
+ * GitHub token, both agent keys and the MCP secrets. None of the owner's is in
+ * the set, and the owner's session token for Talyn's own server is replaced by
+ * one that opens nothing. `payer` absent reads the box's current payer, so a
+ * host pull between turns answers with the latest turn's set.
+ */
 export async function sandboxCredentialSet(
   row: WorkbenchRow,
-  opts: { agent?: FleetAgent; model?: string; avoidAccountIds?: readonly string[] } = {},
+  opts: SessionCredentialOptions = {},
 ): Promise<{
   creds: FleetSandboxCredentials;
   credentials: Awaited<ReturnType<typeof workbenchAgentCredentials>>;
   model: string | undefined;
+  payer: TurnPayerRef | null;
 }> {
-  const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
-  if (!githubToken) throw new WorkbenchError('Connect GitHub for this workspace.', 409, 'credentials_unavailable');
-  const credentials = await workbenchAgentCredentials(row, opts);
-  const integrations = await workbenchIntegrationSecrets(row);
+  const payer = await resolvePayer(row, opts.payer);
+  const githubToken = await githubService.getVerifiedAccessToken(payer?.workspaceId ?? row.workspaceId);
+  if (!githubToken) {
+    throw new WorkbenchError(
+      payer ? 'Connect GitHub in your workspace to prompt this session.' : 'Connect GitHub for this workspace.',
+      409,
+      'credentials_unavailable',
+    );
+  }
+  const credentials = await workbenchAgentCredentials(row, { ...opts, payer });
+  const integrations = payer ? await payerIntegrationSecrets(payer.workspaceId) : await workbenchIntegrationSecrets(row);
   const creds: FleetSandboxCredentials = {
     githubToken,
     ...(credentials.claude?.token ? { anthropicKey: credentials.claude.token } : {}),
@@ -1189,16 +1265,41 @@ export async function sandboxCredentialSet(
     ...(row.repoFullName ? { repo: row.repoFullName } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
   };
-  return { creds, credentials, model: opts.model ?? row.model ?? undefined };
+  return { creds, credentials, model: opts.model ?? row.model ?? undefined, payer };
 }
 
 export async function pushSessionCredentials(row: WorkbenchRow, sandboxId: string, client: FleetClient): Promise<void> {
-  const { creds, credentials } = await sandboxCredentialSet(row);
+  const { creds, credentials, payer } = await sandboxCredentialSet(row);
   await client.setSandboxCredentials(sandboxId, creds);
   for (const agent of ['claude', 'codex'] as const) {
     const credential = credentials[agent];
-    if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent)) {
-      await setWorkbenchFleetAccount(row, credential.accountId, agent);
+    if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent, payer?.userId)) {
+      await setWorkbenchFleetAccount(row, credential.accountId, agent, payer?.userId);
+    }
+  }
+}
+
+/**
+ * Run an owner or Talyn git action on the box (Talyn's PR step, "Create PR")
+ * as the owner: push the owner's set first, so the push and the GitHub API
+ * call are one identity. Commits use the box's git config, which is the
+ * owner's. A teammate turn still running on the box gets its own set back
+ * after; otherwise the next teammate turn pushes its set as usual.
+ */
+export async function withOwnerCredentials<T>(row: WorkbenchRow, fn: () => Promise<T>): Promise<T> {
+  await refreshSandboxCredentials(row, { payer: null });
+  try {
+    return await fn();
+  } finally {
+    try {
+      const running = await runningBoxPayer(row.id);
+      if (running && row.sandboxId) {
+        const { creds } = await sandboxCredentialSet(row, { payer: running });
+        const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+        await client.setSandboxCredentials(row.sandboxId, creds);
+      }
+    } catch (err) {
+      console.warn(`[workbench] giving ${row.id} back to the running turn's payer failed:`, err);
     }
   }
 }
@@ -1210,9 +1311,9 @@ export async function pushSessionCredentials(row: WorkbenchRow, sandboxId: strin
  * fetches as it always did. The turn's own push after the wake still runs,
  * and is what records an account switch.
  */
-export async function resumeCredentialsFor(row: WorkbenchRow): Promise<FleetSandboxCredentials | null> {
+export async function resumeCredentialsFor(row: WorkbenchRow, payer?: TurnPayerRef | null): Promise<FleetSandboxCredentials | null> {
   try {
-    return (await sandboxCredentialSet(row)).creds;
+    return (await sandboxCredentialSet(row, { payer })).creds;
   } catch (err) {
     console.warn(`[workbench] resuming ${row.sandboxId} without credentials; the fleet fetches them:`, err);
     return null;
@@ -1224,25 +1325,33 @@ export async function resumeCredentialsFor(row: WorkbenchRow): Promise<FleetSand
  * has crossed the threshold mid-turn. The push carries the whole set, as the
  * per-turn refresh does. Returns the note to show, or null when nothing moved.
  */
-export async function checkSandboxHotSwap(row: WorkbenchRow, model?: string, agent: FleetAgent = agentOf(row)): Promise<string | null> {
+export async function checkSandboxHotSwap(
+  row: WorkbenchRow,
+  model?: string,
+  agent: FleetAgent = agentOf(row),
+  payerArg?: TurnPayerRef | null,
+): Promise<string | null> {
   if (row.runtime !== 'sandbox' || !row.sandboxId) return null;
+  // A teammate's turn swaps among the teammate's own accounts.
+  const payer = await resolvePayer(row, payerArg);
+  const workspaceId = payer?.workspaceId ?? row.workspaceId;
   const decision = await findHotSwap({
-    key: `wb:${row.id}:${agent}`,
-    workspaceId: row.workspaceId,
+    key: payer ? `wb:${row.id}:${agent}:${payer.userId}` : `wb:${row.id}:${agent}`,
+    workspaceId,
     agent,
     model: model ?? row.model ?? undefined,
-    currentAccountId: workbenchFleetAccountId(row, agent),
+    currentAccountId: workbenchFleetAccountId(row, agent, payer?.userId),
   });
   if (!decision) return null;
   assertSandboxAgent(row, agent);
-  const { creds } = await sandboxCredentialSet(row, { agent, model });
+  const { creds } = await sandboxCredentialSet(row, { agent, model, payer });
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(row.sandboxId!, {
     ...creds,
     ...(agent === 'codex' ? { openaiKey: decision.token } : { anthropicKey: decision.token }),
   }));
-  await setWorkbenchFleetAccount(row, decision.to.id, agent);
-  recordHotSwap(row.workspaceId, `workbench ${row.id.slice(0, 8)}`, decision);
+  await setWorkbenchFleetAccount(row, decision.to.id, agent, payer?.userId);
+  recordHotSwap(workspaceId, `workbench ${row.id.slice(0, 8)}`, decision);
   return decision.note;
 }
 
@@ -1255,13 +1364,14 @@ export function startAccountWatch(
   model: string | undefined,
   onSwitch: (note: string) => void,
   agent: FleetAgent = agentOf(row),
+  payer: TurnPayerRef | null = null,
 ): () => void {
   let stopped = false;
   let running = false;
   const timer = setInterval(() => {
     if (stopped || running) return;
     running = true;
-    void checkSandboxHotSwap(row, model, agent)
+    void checkSandboxHotSwap(row, model, agent, payer)
       .then((note) => {
         if (note && !stopped) onSwitch(note);
       })

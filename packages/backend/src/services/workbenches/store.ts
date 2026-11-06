@@ -126,6 +126,8 @@ export const CHAT_COLUMNS = {
   statusMessage: chatsTable.statusMessage,
   queuedMessages: chatsTable.queuedMessages,
   turnCount: chatsTable.turnCount,
+  payerUserId: chatsTable.payerUserId,
+  payerWorkspaceId: chatsTable.payerWorkspaceId,
   importedFrom: chatsTable.importedFrom,
   closedAt: chatsTable.closedAt,
   createdAt: chatsTable.createdAt,
@@ -178,6 +180,13 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
   };
 }
 
+/** A payer's own workspace id stays on the backend. */
+function publicQueuedMessage(message: WorkbenchQueuedMessage): WorkbenchQueuedMessage {
+  if (!message.payer?.workspaceId) return message;
+  const { workspaceId: _workspaceId, ...payer } = message.payer;
+  return { ...message, payer };
+}
+
 export function rowToChat(row: ChatRow): WorkbenchChat {
   return {
     id: row.id,
@@ -191,7 +200,7 @@ export function rowToChat(row: ChatRow): WorkbenchChat {
     resumeAt: row.resumeAt?.toISOString() ?? null,
     resumeReason: row.resumeReason,
     status: row.status as WorkbenchChatStatus,
-    queuedMessages: row.queuedMessages ?? [],
+    queuedMessages: (row.queuedMessages ?? []).map(publicQueuedMessage),
     importedFrom: row.importedFrom ?? null,
     phase: row.status === 'running' && isRestoring(row.id) ? 'restoring' : null,
     createdAt: row.createdAt.toISOString(),
@@ -1133,6 +1142,8 @@ interface RawChatRow {
   status_message: string | null;
   queued_messages: WorkbenchQueuedMessage[] | string;
   turn_count: number;
+  payer_user_id: string | null;
+  payer_workspace_id: string | null;
   imported_from: WorkbenchImportedFrom | string | null;
   closed_at: Date | string | null;
   created_at: Date | string;
@@ -1160,6 +1171,8 @@ function rawToChatRow(r: RawChatRow): ChatRow {
     statusMessage: r.status_message,
     queuedMessages: queue ?? [],
     turnCount: Number(r.turn_count),
+    payerUserId: r.payer_user_id ?? null,
+    payerWorkspaceId: r.payer_workspace_id ?? null,
     importedFrom: (typeof r.imported_from === 'string' ? JSON.parse(r.imported_from) : r.imported_from) ?? null,
     closedAt: r.closed_at ? date(r.closed_at) : null,
     createdAt: date(r.created_at),
@@ -1176,7 +1189,7 @@ function rowsOf<T>(result: unknown): T[] {
 const RETURNING_CHAT = sql.raw(
   `c.id, c.workbench_id, c.workspace_id, c.title, c.agent, c.model, c.effort, c.plan_mode,
    c.resume_at, c.resume_reason, c.limit_count, c.resume_version, c.agent_session_id, c.status, c.status_message, c.queued_messages, c.turn_count,
-   c.imported_from, c.closed_at, c.created_at, c.updated_at`,
+   c.payer_user_id, c.payer_workspace_id, c.imported_from, c.closed_at, c.created_at, c.updated_at`,
 );
 
 /**
@@ -1208,7 +1221,28 @@ export interface ClaimResult {
   chat: ChatRow;
   /** The message that starts a turn now, with that turn's number; null when it queued. */
   started: { message: WorkbenchQueuedMessage; turn: number } | null;
+  /** The head could start, but another chat of the box runs a turn paid by someone else. */
+  payerBlocked?: boolean;
 }
+
+/**
+ * One payer per box (Teams and Spaces). The head of `queue` may not start
+ * while another chat of the same workbench runs a turn paid by somebody else:
+ * credentials belong to the whole box. A null payer is the session's owner.
+ * The blocked chat is marked `drain_pending`, so the turn sweep, or the end of
+ * the other turn, starts it later.
+ */
+function payerBusy(chatId: string, queue: SQL): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM workbench_chats o
+    WHERE o.workbench_id = (SELECT workbench_id FROM workbench_chats WHERE id = ${chatId})
+      AND o.id <> ${chatId} AND o.status = 'running'
+      AND o.payer_user_id IS DISTINCT FROM (${queue} -> 0 -> 'payer' ->> 'userId'))`;
+}
+
+/** A turn start records its payer. The columns stay after the turn, so the box's last payer is known. */
+const PAYER_ON_START = sql.raw(`payer_user_id = CASE WHEN merged.go THEN merged.mq -> 0 -> 'payer' ->> 'userId' ELSE c.payer_user_id END,
+      payer_workspace_id = CASE WHEN merged.go THEN merged.mq -> 0 -> 'payer' ->> 'workspaceId' ELSE c.payer_workspace_id END`);
 
 /**
  * Add `message` to the chat's queue and, when no turn is running and
@@ -1235,12 +1269,16 @@ export async function claimOrEnqueue(
   const result = await db().execute(sql`
     WITH ${workbenchState(chatId)}, old AS (
       SELECT status, queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
-    ), merged AS (
+    ), pre AS (
       SELECT status AS prev_status, queued_messages || ${add}::jsonb AS mq,
         (status <> 'running' AND ${canStart} AND NOT ${WORKBENCH_UNAVAILABLE}
           AND jsonb_array_length(queued_messages || ${add}::jsonb) > 0
-          AND NOT ${headWaitsForSandbox(sql`(queued_messages || ${add}::jsonb)`)}) AS go
+          AND NOT ${headWaitsForSandbox(sql`(queued_messages || ${add}::jsonb)`)}) AS ready
       FROM old
+    ), merged AS (
+      SELECT prev_status, mq, ready AND NOT ${payerBusy(chatId, sql`mq`)} AS go,
+        ready AND ${payerBusy(chatId, sql`mq`)} AS payer_blocked
+      FROM pre
     )
     UPDATE workbench_chats c SET
       resume_reason = CASE WHEN ${message !== null && resumeVersion === undefined} THEN '' ELSE c.resume_reason END,
@@ -1258,7 +1296,8 @@ export async function claimOrEnqueue(
       turn_offset = CASE WHEN merged.go THEN 0 ELSE c.turn_offset END,
       turn_attempt = CASE WHEN merged.go THEN 0 ELSE c.turn_attempt END,
       turn_message = CASE WHEN merged.go THEN merged.mq -> 0 ELSE c.turn_message END,
-      drain_pending = CASE WHEN merged.go THEN false ELSE c.drain_pending OR
+      ${PAYER_ON_START},
+      drain_pending = CASE WHEN merged.go THEN false ELSE c.drain_pending OR merged.payer_blocked OR
         (${deferred} AND c.status <> 'running' AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(merged.mq) > 0) END,
       updated_at = now()
     FROM merged
@@ -1266,15 +1305,16 @@ export async function claimOrEnqueue(
       AND (${resumeVersion ?? null}::int IS NULL OR (c.resume_version = ${resumeVersion ?? null}
         AND c.status <> 'running' AND jsonb_array_length(c.queued_messages) = 0))
       AND (merged.go OR ${message !== null} OR ${deferred})
-    RETURNING ${RETURNING_CHAT}, merged.go AS started, CASE WHEN merged.go THEN merged.mq -> 0 END AS started_message
+    RETURNING ${RETURNING_CHAT}, merged.go AS started, merged.payer_blocked AS payer_blocked,
+      CASE WHEN merged.go THEN merged.mq -> 0 END AS started_message
   `);
-  const row = rowsOf<RawChatRow & { started: boolean; started_message: unknown }>(result)[0];
+  const row = rowsOf<RawChatRow & { started: boolean; payer_blocked: boolean; started_message: unknown }>(result)[0];
   if (!row) {
     const current = await getChat(chatId);
     return current ? { chat: current, started: null } : null;
   }
   const chat = rawToChatRow(row);
-  if (!row.started) return { chat, started: null };
+  if (!row.started) return { chat, started: null, ...(row.payer_blocked ? { payerBlocked: true } : {}) };
   const startedMessage =
     typeof row.started_message === 'string' ? JSON.parse(row.started_message) : row.started_message;
   return { chat, started: { message: startedMessage as WorkbenchQueuedMessage, turn: chat.turnCount } };
@@ -1292,11 +1332,14 @@ export async function finishTurn(
   const result = await db().execute(sql`
     WITH ${workbenchState(chatId)}, old AS (
       SELECT queued_messages FROM workbench_chats WHERE id = ${chatId} FOR UPDATE
-    ), merged AS (
+    ), pre AS (
       SELECT queued_messages AS mq,
         (${opts.drain && !isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE} AND jsonb_array_length(queued_messages) > 0
-          AND NOT ${headWaitsForSandbox(sql`queued_messages`)}) AS go
+          AND NOT ${headWaitsForSandbox(sql`queued_messages`)}) AS ready
       FROM old
+    ), merged AS (
+      SELECT mq, ready AND NOT ${payerBusy(chatId, sql`mq`)} AS go, ready AND ${payerBusy(chatId, sql`mq`)} AS payer_blocked
+      FROM pre
     )
     UPDATE workbench_chats c SET
       limit_count = CASE WHEN ${opts.finalStatus === 'idle' && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
@@ -1314,7 +1357,8 @@ export async function finishTurn(
       turn_offset = CASE WHEN merged.go THEN 0 ELSE c.turn_offset END,
       turn_attempt = CASE WHEN merged.go THEN 0 ELSE c.turn_attempt END,
       turn_message = CASE WHEN merged.go THEN merged.mq -> 0 ELSE NULL END,
-      drain_pending = (${opts.drain && isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE}
+      ${PAYER_ON_START},
+      drain_pending = merged.payer_blocked OR (${opts.drain && isWorkbenchDraining()} AND NOT ${WORKBENCH_UNAVAILABLE}
         AND jsonb_array_length(merged.mq) > 0),
       updated_at = now()
     FROM merged
@@ -2013,6 +2057,83 @@ export async function queuedIdleChats(): Promise<Array<{ id: string }>> {
     eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
     sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
     sql`NOT ${headWaitsForSandbox(sql`${chatsTable.queuedMessages}`)}`,
+  ));
+}
+
+/** A teammate who pays for turns in a session, as the backend keeps it. */
+export interface TurnPayerRef {
+  userId: string;
+  workspaceId: string;
+}
+
+/**
+ * Whose credentials the box carries: the payer of the running turn, else of
+ * the latest turn. Null is the session's owner. A host pull between turns and
+ * the meter read this.
+ */
+export async function currentBoxPayer(workbenchId: string): Promise<TurnPayerRef | null> {
+  const [row] = await db()
+    .select({ userId: chatsTable.payerUserId, workspaceId: chatsTable.payerWorkspaceId })
+    .from(chatsTable)
+    .where(and(eq(chatsTable.workbenchId, workbenchId), isNotNull(chatsTable.turnStartedAt)))
+    .orderBy(sql`(${chatsTable.status} = 'running') DESC`, desc(chatsTable.turnStartedAt), asc(chatsTable.id))
+    .limit(1);
+  return row?.userId && row.workspaceId ? { userId: row.userId, workspaceId: row.workspaceId } : null;
+}
+
+/** The teammate who pays for a turn running on the box now, or null (none runs, or the owner's does). */
+export async function runningBoxPayer(workbenchId: string): Promise<TurnPayerRef | null> {
+  const [row] = await db()
+    .select({ userId: chatsTable.payerUserId, workspaceId: chatsTable.payerWorkspaceId })
+    .from(chatsTable)
+    .where(and(eq(chatsTable.workbenchId, workbenchId), eq(chatsTable.status, 'running'), isNotNull(chatsTable.payerUserId)))
+    .orderBy(asc(chatsTable.turnStartedAt), asc(chatsTable.id))
+    .limit(1);
+  return row?.userId && row.workspaceId ? { userId: row.userId, workspaceId: row.workspaceId } : null;
+}
+
+/**
+ * A running turn on another chat of the box, paid by somebody else, that
+ * started before this chat's turn. Two claims at the same moment cannot see
+ * each other's start, so the later one gives way after the fact.
+ */
+export async function earlierOtherPayerTurn(chatId: string): Promise<boolean> {
+  const result = await db().execute(sql`
+    SELECT 1 AS one FROM workbench_chats o JOIN workbench_chats me ON me.id = ${chatId}
+    WHERE o.workbench_id = me.workbench_id AND o.id <> me.id AND o.status = 'running'
+      AND o.payer_user_id IS DISTINCT FROM me.payer_user_id
+      AND (o.turn_started_at, o.id) < (me.turn_started_at, me.id)
+    LIMIT 1
+  `);
+  return rowsOf<{ one: number }>(result).length > 0;
+}
+
+/**
+ * The GitHub login of whoever pays for a turn running on another chat of the
+ * box, when that is not `payerUserId` (null is the owner). For "Waiting for
+ * <login>'s turn to finish."
+ */
+export async function busyPayerLogin(chatId: string, payerUserId: string | null): Promise<string | null> {
+  const result = await db().execute(sql`
+    SELECT COALESCE(pu.github_username, ou.github_username) AS login
+    FROM workbench_chats o
+    JOIN workbench_chats me ON me.id = ${chatId}
+    JOIN workspaces w ON w.id = o.workspace_id
+    LEFT JOIN users pu ON pu.id = o.payer_user_id
+    LEFT JOIN users ou ON ou.id = w.owner_id
+    WHERE o.workbench_id = me.workbench_id AND o.id <> me.id AND o.status = 'running'
+      AND o.payer_user_id IS DISTINCT FROM ${payerUserId}::text
+    LIMIT 1
+  `);
+  return rowsOf<{ login: string | null }>(result)[0]?.login ?? null;
+}
+
+/** Chats of the workbench held back by one payer per box, to start when a turn ends. */
+export async function payerBlockedSiblings(workbenchId: string, exceptChatId: string): Promise<Array<{ id: string }>> {
+  return db().select({ id: chatsTable.id }).from(chatsTable).where(and(
+    eq(chatsTable.workbenchId, workbenchId), ne(chatsTable.id, exceptChatId),
+    eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
+    sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
   ));
 }
 

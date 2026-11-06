@@ -32,6 +32,7 @@ import {
   type WorkbenchEvent,
   type WorkbenchKind,
   type WorkbenchSettings,
+  type WorkbenchTurnPayer,
   type Workbench,
   boxRefusalReason,
 } from '@talyn/shared';
@@ -126,7 +127,8 @@ import {
 } from '../services/workbenches/memory.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
 import { isFeatureEnabled } from '../services/featureFlags.js';
-import { canViewItem, ownsWorkspace } from '../services/teams/access.js';
+import { canPrompt, canViewItem, ownsWorkspace } from '../services/teams/access.js';
+import { turnPayerFor } from '../services/teams/payer.js';
 
 /**
  * Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
@@ -238,7 +240,8 @@ export function workbenchRoutes(): Router {
    * session, or it is in a space of a team they belong to and their own GitHub
    * account can read its repository. `member` is true on the second path. Only
    * these GET routes use it: GET /:id, GET /chats/:chatId/events,
-   * GET /:id/changes, GET /:id/diff, GET /:id/file and GET /:id/files. Every
+   * GET /:id/changes, GET /:id/diff, GET /:id/file and GET /:id/files, and the
+   * cancel of a turn the teammate pays for. Every
    * other route stays owner-only through `gatedWorkbench` and `gatedChat`.
    * The workbench store reads on the pool, so no owner-scoped RLS is in the way.
    */
@@ -284,6 +287,52 @@ export function workbenchRoutes(): Router {
     }
     const found = await readableWorkbench(req, res, workbench, 'Chat not found');
     return found ? { chat, workbench: found.row, member: found.member } : null;
+  }
+
+  /**
+   * The prompt path for a teammate (Teams and Spaces): the prompter pays. The
+   * owner, and any session outside a space, goes through `gate` as before
+   * (`payer` null). A teammate must pass `canPrompt`; the refusal's code tells
+   * the client what to connect. Their turn then runs on their own agent
+   * account, GitHub account and box-hours. Only POST /chats/:chatId/messages
+   * uses it. Cancel goes through `readableChat` plus a payer check.
+   */
+  async function promptableChat(
+    req: Request,
+    res: Response,
+    chatId: string,
+  ): Promise<{ chat: ChatRow; workbench: WorkbenchRow; payer: WorkbenchTurnPayer | null } | null> {
+    const chat = await getChat(chatId);
+    const workbench = chat ? await getWorkbench(chat.workbenchId) : null;
+    if (!chat || !workbench) {
+      bad(res, 404, 'Chat not found');
+      return null;
+    }
+    const user = assertUser(req);
+    if (!workbench.spaceId || (await ownsWorkspace(user.id, workbench.workspaceId))) {
+      return (await gate(req, res, workbench.workspaceId)) ? { chat, workbench, payer: null } : null;
+    }
+    const subject = { distinctId: user.id, email: user.email };
+    if (!(await isFeatureEnabled('spaces', subject))) {
+      bad(res, 404, 'Chat not found');
+      return null;
+    }
+    const decision = await canPrompt(user.id, {
+      workspaceId: workbench.workspaceId,
+      spaceId: workbench.spaceId,
+      repoFullName: workbench.repoFullName || null,
+      agent: chat.agent === 'codex' ? 'codex' : 'claude',
+    });
+    if (!decision.ok) {
+      bad(res, decision.status, decision.message, decision.reason === 'not_found' ? undefined : decision.reason);
+      return null;
+    }
+    if (!(await userMayUseWorkbenches(subject))) {
+      bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+      return null;
+    }
+    const payer = decision.payer ? await turnPayerFor(decision.payer.userId, decision.payer.workspaceId) : null;
+    return { chat, workbench, payer };
   }
 
   async function gatedChat(
@@ -364,11 +413,11 @@ export function workbenchRoutes(): Router {
 
   router.post('/chats/:chatId/messages', async (req, res) => {
     const sentAt = new Date().toISOString();
-    const found = await gatedChat(req, res, req.params.chatId);
+    const found = await promptableChat(req, res, req.params.chatId);
     if (!found) return;
     try {
       if (found.chat.closedAt) throw new WorkbenchError('This chat is closed.', 409, 'chat_closed');
-      ok(res, await sendMessage(found.chat.id, req.body ?? {}, { sentAt }));
+      ok(res, await sendMessage(found.chat.id, req.body ?? {}, { sentAt, ...(found.payer ? { payer: found.payer } : {}) }));
     } catch (err) {
       fail(res, err);
     }
@@ -382,8 +431,19 @@ export function workbenchRoutes(): Router {
   });
 
   router.post('/chats/:chatId/cancel', async (req, res) => {
-    const found = await gatedChat(req, res, req.params.chatId);
+    // A teammate who can view the session may stop a turn they started and pay for: the running
+    // one, or the one that waits for a sandbox. They need no prompt rights to stop their own spend.
+    const found = await readableChat(req, res, req.params.chatId);
     if (!found) return;
+    if (found.member) {
+      const userId = assertUser(req).id;
+      const { chat } = found;
+      const head = chat.queuedMessages[0];
+      const mine = chat.status === 'running'
+        ? chat.payerUserId === userId
+        : Boolean(head?.capacityWait) && head?.payer?.userId === userId;
+      if (!mine) return bad(res, 403, 'You can stop only a turn you started.', 'not_your_turn');
+    }
     try {
       await cancelTurn(found.chat.id);
       ok(res, null);

@@ -3212,9 +3212,10 @@ export const workbenches = {
   /**
    * Send a message. `queued: true` means a turn was already running: a sandbox
    * exec has no stdin, so the message waits and runs when that turn ends.
+   * `waitingFor` is the GitHub login of a teammate whose turn holds the box.
    */
   sendMessage: (chatId: string, input: SendWorkbenchMessageInput) =>
-    request<{ queued: boolean }>('POST', `/workbenches/chats/${enc(chatId)}/messages`, input),
+    request<{ queued: boolean; waitingFor?: string }>('POST', `/workbenches/chats/${enc(chatId)}/messages`, input),
   cancel: (chatId: string) => request<void>('POST', `/workbenches/chats/${enc(chatId)}/cancel`),
   /**
    * A page of stored transcript events, oldest first.

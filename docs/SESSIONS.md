@@ -13,6 +13,22 @@ The session chat looked busy and seemed to miss edits, reads and searches. Nothi
 - Not changed: the web task terminal (`apps/web/src/components/terminal/AgentConversation.tsx`) is an older fork and keeps the old group behaviour. Subagent calls are still not nested under their Task row.
 
 ## Spaces in the web app (2026-11-06)
+## Teams and Spaces, phase 3: the prompter pays (2026-11-06)
+
+**What changed.** A teammate can prompt a session in a space, and the turn runs and pays as them.
+
+- **Access.** `canPrompt` in `services/teams/access.ts`: the teammate can view the item, owns a home workspace for the team, that workspace has a usable fleet account for the chat's agent, and their GitHub account has `permissions.push` on the repository (cached 5 min). A refusal has a code (`no_home_workspace`, `no_agent_account`, `agent_reauth`, `no_github`, `no_push_access`) so the UI can say what to connect. `promptableChat` in `routes/workbenches.ts` opens only POST `/chats/:id/messages`.
+- **Where the payer lives.** On the queued message (`WorkbenchQueuedMessage.payer`), so a queued, held, requeued, adopted or resumed turn keeps it. The claim copies it to `workbench_chats.payer_user_id/payer_workspace_id` (migration `0117`), and the columns stay after the turn, so `currentBoxPayer` answers "whose set is on the box" between turns. Null means the owner, so existing rows work unchanged.
+- **Credentials.** `sandboxCredentialSet` takes `payer` (absent = read the box's current payer). For a teammate, the GitHub token, both agent keys and the MCP secrets come from the payer's workspace, and the owner's `talyn` session token is replaced by a secret that opens nothing. The teammate's fleet account is recorded under `settings.payerFleetAccounts[userId]`, never over the owner's `fleetAccountId`.
+- **Git identity.** The box's git config names the owner, so a teammate's turn exec carries `GIT_AUTHOR_*` and `GIT_COMMITTER_*` with the payer's no-reply address. A payer with no GitHub identity on record is refused rather than committing as the owner.
+- **One payer per box.** The claim (`claimOrEnqueue`, `finishTurn`) will not start a head whose payer differs from a turn running on another chat of the box. The chat keeps the message and `drain_pending`; the end of the other turn starts it (`startPayerBlockedSiblings`), and the turn sweep is the backstop. The send answers `{ queued: true, waitingFor: '<login>' }`. Two claims in the same instant cannot see each other, so `earlierOtherPayerTurn` makes the later one give way before it runs anything. This is a queue, not a 409.
+- **Billing.** `existingBoxRefusal(row, unattended, payer)` asks the payer's budget only (the box exists: no size or concurrency check). The meter bills the payer of the latest turn: `usage_intervals.owner_id` is the payer and `payer_user_id` marks it, so the charge step, budget and exhaustion need no change. A payer change closes the open interval (`payer_change`) and opens one for the new payer; the sweep's `resolveSubject` uses the current payer too.
+- **Limits.** Account failover, hot swap and limit resume use the payer's workspace for holds and account choice, and limit resume sends the resumed turn with the same payer.
+
+- **Owner actions stay the owner's.** `refreshSandboxCredentials` with no payer pushes the owner's set; only a teammate's own turn names a payer. Talyn's PR step and the "Create PR" button run through `withOwnerCredentials`: the owner's set goes on the box first, so the `git push` and the GitHub PR call are one identity (the owner), and a teammate turn still running gets its own set back after. The next teammate turn pushes its set as usual.
+- **Cancel.** A teammate needs only view access plus being the payer of that turn (`readableChat`), not full `canPrompt`, so losing push access never stops someone from ending their own spend.
+
+**Deferred.** The UI ("Waiting for <login>'s turn to finish") is P4. A host pull right after an owner action between turns answers with the latest turn's payer, until the next push.
 
 Phase P4 of Teams and Spaces: the web app can switch between Personal and a team's space. Everything is behind the `spaces` flag; with it off, the app is as before.
 

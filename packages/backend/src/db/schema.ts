@@ -326,6 +326,8 @@ export const usageIntervals = pgTable(
     endReason: text('end_reason'), // EndReason
     billedThrough: timestamp('billed_through', { withTimezone: true }).notNull(),
     billedWsec: bigint('billed_wsec', { mode: 'number' }).notNull().default(0),
+    /** A teammate who prompted the session and pays for this interval. `ownerId` is then that teammate. */
+    payerUserId: text('payer_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -2462,6 +2464,9 @@ export const workbenchChats = pgTable(
     turnOffset: bigint('turn_offset', { mode: 'number' }).notNull().default(0),
     turnAttempt: integer('turn_attempt').notNull().default(0),
     turnMessage: jsonb('turn_message').$type<WorkbenchQueuedMessage>(),
+    /** The teammate who pays for the chat's latest turn (Teams and Spaces). Null means the owner. */
+    payerUserId: text('payer_user_id'),
+    payerWorkspaceId: text('payer_workspace_id'),
     /** Set when the chat continues a local Claude Code conversation (`WorkbenchImportedFrom`). */
     importedFrom: jsonb('imported_from').$type<WorkbenchImportedFrom>(),
     /** The last event seq handed out. Bumped in the same statement as the insert. */

@@ -42,7 +42,7 @@ import { emitPrSession } from './prSessions.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
 import { notifyThreadOfLinkedPr } from './threads.js';
-import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps } from './sandboxRuntime.js';
+import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps, withOwnerCredentials } from './sandboxRuntime.js';
 import { appendEvents, listChats, updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
@@ -97,9 +97,16 @@ export function normalisePullRequestInput(
   };
 }
 
-/** Commit what is uncommitted, check there is something to open, and push. */
+/**
+ * Commit what is uncommitted, check there is something to open, and push. As
+ * the owner, also after a teammate's turn: the PR is opened with the owner's
+ * token, so the push uses the owner's set too.
+ */
 async function commitAndPush(row: WorkbenchRow, input: { title: string; commitMessage: string; base: string }): Promise<void> {
-  await refreshSandboxCredentials(row);
+  await withOwnerCredentials(row, () => commitAndPushAsOwner(row, input));
+}
+
+async function commitAndPushAsOwner(row: WorkbenchRow, input: { title: string; commitMessage: string; base: string }): Promise<void> {
   const status = await runGitSteps(row, [workingTreeStatus()], { timeoutMs: GIT_TIMEOUT_MS });
   if (status.exitCode !== 0) {
     throw new WorkbenchError(`Could not read the git status.\n${gitStderrTail(status.stderr)}`.trim(), 409, 'git_failed');

@@ -4,9 +4,10 @@ import { getPoolDbClient } from '../../db/client.js';
 import { workbenches } from '../../db/schema.js';
 import { meterBoxClosed, meterBoxOpened } from '../billing/usageHooks.js';
 import type { EndReason } from '../billing/usage/index.js';
+import { openIntervalOfSubjectQuery } from '../billing/usage/intervals.js';
 import { fleetInstant, type FleetSandbox } from '../selfHosted/client.js';
 import { setWorkbenchSandboxState } from './sandboxState.js';
-import type { WorkbenchRow } from './store.js';
+import { currentBoxPayer, type TurnPayerRef, type WorkbenchRow } from './store.js';
 
 /**
  * The usage meter's view of a session or thread box. A box is billed while it
@@ -38,14 +39,25 @@ export function workbenchBoxSize(row: Pick<WorkbenchRow, 'kind' | 'settings'>, s
   return isSandboxSize(row.settings?.sandboxSize) ? row.settings.sandboxSize : 'standard';
 }
 
-/** The box is awake: meter it, and show it as running again if it was asleep. */
+/**
+ * The box is awake: meter it, and show it as running again if it was asleep.
+ *
+ * The box bills the payer of its latest turn (Teams and Spaces): `payer`, or
+ * when absent, the payer the chats record. When that is not who the open
+ * interval bills, the interval closes (`payer_change`) and a new one opens for
+ * the new payer. Idle time then bills the new payer until the next turn or a
+ * suspend. A null payer is the workspace owner.
+ */
 export async function meterWorkbenchAwake(
   row: MeterRow & { sandboxId: string | null },
-  opts: { size?: SandboxSize; startedAt?: Date } = {},
+  opts: { size?: SandboxSize; startedAt?: Date; payer?: TurnPayerRef | null } = {},
 ): Promise<void> {
   if (!row.sandboxId) return;
+  const payer = opts.payer !== undefined ? opts.payer : await boxPayer(row.id);
+  await closeForPayerChange(row, payer);
   await meterBoxOpened({
     workspaceId: row.workspaceId,
+    ...(payer ? { ownerId: payer.userId, payerUserId: payer.userId } : {}),
     subjectKind: 'workbench',
     subjectId: row.id,
     sandboxId: row.sandboxId,
@@ -53,6 +65,27 @@ export async function meterWorkbenchAwake(
     ...(opts.startedAt ? { startedAt: opts.startedAt } : {}),
   });
   await setWorkbenchSandboxState({ sandboxId: row.sandboxId }, 'suspended', 'running');
+}
+
+/** The box's current payer. A failed read bills the owner, as before payers existed. */
+async function boxPayer(workbenchId: string): Promise<TurnPayerRef | null> {
+  try {
+    return await currentBoxPayer(workbenchId);
+  } catch (err) {
+    console.warn(`[workbench] reading the payer of ${workbenchId} failed; billing the owner:`, err);
+    return null;
+  }
+}
+
+/** Close the open interval when it bills somebody other than `payer`. Never throws. */
+async function closeForPayerChange(row: Pick<WorkbenchRow, 'id' | 'workspaceId'>, payer: TurnPayerRef | null): Promise<void> {
+  try {
+    const [open] = await openIntervalOfSubjectQuery('workbench', row.id);
+    if (!open || (open.payerUserId ?? null) === (payer?.userId ?? null)) return;
+    await meterBoxClosed({ sandboxId: open.sandboxId, reason: 'payer_change', workspaceId: row.workspaceId });
+  } catch (err) {
+    console.warn(`[workbench] moving the meter of ${row.id} to a new payer failed:`, err);
+  }
 }
 
 /**

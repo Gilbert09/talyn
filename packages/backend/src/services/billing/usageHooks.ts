@@ -63,6 +63,8 @@ export interface MeterOpenInput {
   sandboxId: string;
   size: SandboxSize;
   startedAt?: Date;
+  /** A teammate who pays for the box; `ownerId` should then be the same user. */
+  payerUserId?: string | null;
 }
 
 /** A box started or woke. Never throws. */
@@ -79,6 +81,7 @@ export async function meterBoxOpened(input: MeterOpenInput): Promise<void> {
         sandboxId: input.sandboxId,
         size: input.size,
         ...(input.startedAt ? { startedAt: input.startedAt } : {}),
+        ...(input.payerUserId ? { payerUserId: input.payerUserId } : {}),
       });
     });
   } catch (err) {

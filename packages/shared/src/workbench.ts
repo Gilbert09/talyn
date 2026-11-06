@@ -292,12 +292,29 @@ export interface WorkbenchQueuedMessage {
   origin?: 'user' | 'talyn';
   queuedAt: string;
   /**
+   * A teammate who prompted this session from a space, and pays for its turn
+   * (Teams and Spaces). Absent means the session's owner.
+   */
+  payer?: WorkbenchTurnPayer;
+  /**
    * Set while the message waits for a free sandbox. Its turn started, the
    * fleet had no room to wake the box, and the message went back to the head
    * of the queue. Its user message is already in the transcript, in `turn`.
    * Absent for an ordinary queued message.
    */
   capacityWait?: WorkbenchCapacityWait;
+}
+
+/**
+ * Who pays for a turn in a teammate's session. The turn runs on the payer's
+ * agent subscription, GitHub account and box-hours. `workspaceId` is the
+ * payer's own workspace; the backend never sends it to a client.
+ */
+export interface WorkbenchTurnPayer {
+  userId: string;
+  workspaceId?: string;
+  githubLogin: string | null;
+  avatarUrl: string | null;
 }
 
 /** A queued message that waits for a free sandbox. See `WorkbenchQueuedMessage.capacityWait`. */

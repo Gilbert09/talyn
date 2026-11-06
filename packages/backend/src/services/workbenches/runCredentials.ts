@@ -26,11 +26,12 @@ export async function resolveWorkbenchRunCredentials(host: string, sandboxId: st
   }
 
   try {
-    const { creds, credentials } = await sandboxCredentialSet(row);
+    // The set of the box's current payer: the running turn's, else the latest turn's (Teams and Spaces).
+    const { creds, credentials, payer } = await sandboxCredentialSet(row);
     for (const agent of ['claude', 'codex'] as const) {
       const credential = credentials[agent];
-      if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent)) {
-        await setWorkbenchFleetAccount(row, credential.accountId, agent).catch(() => undefined);
+      if (credential?.accountId && credential.accountId !== workbenchFleetAccountId(row, agent, payer?.userId)) {
+        await setWorkbenchFleetAccount(row, credential.accountId, agent, payer?.userId).catch(() => undefined);
       }
     }
     return { ok: true, credentials: creds };

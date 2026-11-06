@@ -16,6 +16,7 @@ import { switchChatAgent } from './sessionOps.js';
 import { workbenchFleetAccountId } from './sandboxRuntime.js';
 import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, rowToChat, type ChatRow } from './store.js';
 import { sendMessage } from './turns.js';
+import { turnPayerFor } from '../teams/payer.js';
 
 export function chatLimitAgent(chat: Pick<ChatRow, 'agent'>, text: string): FleetAgent | null {
   const agent = exhaustedAgentFrom(text) ?? rateLimitedAgentFrom(text);
@@ -44,11 +45,22 @@ async function enabled(workspaceId: string): Promise<boolean> {
   return Boolean(row) && (row.settings as { autoResumeOnLimit?: boolean } | null)?.autoResumeOnLimit !== false;
 }
 
-/** Record a new refusal once. A sweep only reads the existing holds. */
+/**
+ * Record a new refusal once. A sweep only reads the existing holds.
+ *
+ * A teammate's turn (Teams and Spaces) hit the teammate's limit: the holds,
+ * the account choice and the box gate all use the payer's workspace, and the
+ * resumed turn runs as that teammate again. The chat's payer columns name the
+ * payer of the turn that stopped, since no turn has started after it.
+ */
 export async function handleChatLimit(chat: ChatRow, text: string, retry = false): Promise<void> {
   const agent = retry && (exhaustedAgentFrom(text) || rateLimitedAgentFrom(text))
     ? chat.agent as FleetAgent : chatLimitAgent(chat, text);
-  if (!agent || !(await enabled(chat.workspaceId))) return;
+  const payer = chat.payerUserId && chat.payerWorkspaceId
+    ? { userId: chat.payerUserId, workspaceId: chat.payerWorkspaceId }
+    : null;
+  const workspaceId = payer?.workspaceId ?? chat.workspaceId;
+  if (!agent || !(await enabled(workspaceId))) return;
   const wb = await getWorkbench(chat.workbenchId);
   if (!wb || wb.archivedAt || wb.archivePendingAt || wb.runtime !== 'sandbox' || chat.closedAt) return;
   const db = getDbClient();
@@ -64,22 +76,22 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
       isNull(workbenchChats.resumeAt), sql`jsonb_array_length(${workbenchChats.queuedMessages}) = 0`)).returning(CHAT_COLUMNS);
     if (!claimed) return;
     current = claimed;
-    const accountId = workbenchFleetAccountId(wb, agent);
+    const accountId = workbenchFleetAccountId(wb, agent, payer?.userId);
     if (exhaustedAgentFrom(text)) {
-      await noteExhaustedAgent(chat.workspaceId, agent, text, accountId);
+      await noteExhaustedAgent(workspaceId, agent, text, accountId);
     } else {
       const resetsAt = resetInstantFrom(text, now);
-      await setFleetAccountExhausted(accountId ? { accountId } : { workspaceId: chat.workspaceId, agent }, {
+      await setFleetAccountExhausted(accountId ? { accountId } : { workspaceId, agent }, {
         at: now.toISOString(), kind: 'rate_limit', detail: text.slice(0, 500), ...(resetsAt ? { resetsAt } : {}),
       });
     }
   }
-  const [status, holds] = await Promise.all([fleetAgentStatus(chat.workspaceId), heldBackAgents(chat.workspaceId, now)]);
+  const [status, holds] = await Promise.all([fleetAgentStatus(workspaceId), heldBackAgents(workspaceId, now)]);
   const possible = sandboxAgents(wb).filter((a) => status.connectedAgents.includes(a) && !status.reauthAgents.includes(a));
   const other = agent === 'claude' ? 'codex' : 'claude';
   const candidates: FleetAgent[] = retry ? [agent, other] : [other];
   const chosen = candidates.find((a) => possible.includes(a) && !holds[a]);
-  const refusal = chosen && wb.status === 'ready' ? await existingBoxRefusal(wb, true) : null;
+  const refusal = chosen && wb.status === 'ready' ? await existingBoxRefusal(wb, true, payer) : null;
   if (chosen && wb.status === 'ready' && !refusal) {
     const fresh = await getChat(chat.id);
     if (!fresh || fresh.resumeVersion !== current.resumeVersion || fresh.status !== 'error' || fresh.queuedMessages.length) return;
@@ -92,7 +104,11 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
       emitWorkbenchEvents(chat.workspaceId, chat.id, events);
     }
     // Talyn messages use the unattended box gate at turn start.
-    await sendMessage(chat.id, { text: limitResumeMessage(text) }, { origin: 'talyn', resumeVersion: current.resumeVersion });
+    await sendMessage(chat.id, { text: limitResumeMessage(text) }, {
+      origin: 'talyn',
+      resumeVersion: current.resumeVersion,
+      ...(payer ? { payer: await turnPayerFor(payer.userId, payer.workspaceId) } : {}),
+    });
     return;
   }
   const resets = possible.map((a) => holds[a]?.resetsAt).filter((at): at is string => Boolean(at))

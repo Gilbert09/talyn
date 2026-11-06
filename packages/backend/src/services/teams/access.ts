@@ -1,8 +1,10 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
 import { spaces as spacesTable, workspaces as workspacesTable } from '../../db/schema.js';
-import { githubService } from '../github.js';
+import type { FleetAgent } from '@talyn/shared';
+import { GitHubNotConnectedError, githubService } from '../github.js';
 import { TeamError } from '../billing/teams.js';
+import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import {
   memberTeamIds as loadMemberTeamIds,
   resolveHomeWorkspace,
@@ -39,6 +41,7 @@ const repoReadCache = new Map<string, { allowed: boolean; at: number }>();
 
 export function resetRepoReadCacheForTests(): void {
   repoReadCache.clear();
+  repoPushCache.clear();
 }
 
 /**
@@ -167,4 +170,146 @@ export async function assertSpaceMember(userId: string, spaceId: string): Promis
     throw new TeamError(404, 'Space not found');
   }
   return space;
+}
+
+// ============================================================================
+// Prompting a teammate's session: the prompter pays
+// ============================================================================
+
+export interface PromptableItem extends ViewableItem {
+  /** The chat's agent: the prompter needs an account for it. */
+  agent: FleetAgent;
+}
+
+/** Why a member may not prompt. The UI uses the code to say what to connect. */
+export type PromptRefusalReason =
+  | 'not_found'
+  | 'no_home_workspace'
+  | 'no_agent_account'
+  | 'agent_reauth'
+  | 'no_github'
+  | 'no_push_access';
+
+export type PromptDecision =
+  | { ok: true; payer: { userId: string; workspaceId: string } | null }
+  | { ok: false; reason: PromptRefusalReason; status: number; message: string };
+
+export interface PromptDeps extends AccessDeps {
+  /** The member's home workspace for the team, only when they own it. */
+  homeWorkspace(teamId: string, userId: string): Promise<string | null>;
+  agentStatus(workspaceId: string): Promise<{ connectedAgents: FleetAgent[]; reauthAgents: FleetAgent[] }>;
+  /** True, false, or `no_github` when the workspace has no GitHub connection. */
+  canPushRepo(userId: string, workspaceId: string, repoFullName: string): Promise<boolean | 'no_github'>;
+}
+
+const repoPushCache = new Map<string, { allowed: boolean; at: number }>();
+
+/**
+ * Whether the user's own GitHub account may push to the repository, asked
+ * with their workspace's token (`permissions.push`). Cached per user and
+ * repository for five minutes, like the read check. A GitHub fault answers no
+ * and is not cached.
+ */
+export async function canUserPushRepo(
+  userId: string,
+  workspaceId: string,
+  repoFullName: string
+): Promise<boolean | 'no_github'> {
+  const match = /^([\w.-]+)\/([\w.-]+)$/.exec(repoFullName);
+  if (!match) return false;
+  const key = `${userId}\n${repoFullName.toLowerCase()}`;
+  const cached = repoPushCache.get(key);
+  if (cached && Date.now() - cached.at < REPO_READ_TTL_MS) return cached.allowed;
+  let allowed: boolean;
+  try {
+    const repo = await githubService.getRepository(workspaceId, match[1]!, match[2]!);
+    allowed = repo.permissions?.push === true;
+  } catch (err) {
+    if (err instanceof GitHubNotConnectedError) return 'no_github';
+    const status = (err as { status?: unknown }).status;
+    if (status === 403 || status === 404) {
+      allowed = false;
+    } else {
+      console.warn(`[spaces] repository push check for ${repoFullName} failed:`, err);
+      return false;
+    }
+  }
+  repoPushCache.set(key, { allowed, at: Date.now() });
+  return allowed;
+}
+
+export const defaultPromptDeps: PromptDeps = {
+  ...defaultAccessDeps,
+  homeWorkspace: resolveHomeWorkspace,
+  agentStatus: fleetAgentStatus,
+  canPushRepo: canUserPushRepo,
+};
+
+const AGENT_LABEL: Record<FleetAgent, string> = { claude: 'Claude', codex: 'Codex (ChatGPT)' };
+
+/**
+ * Whether the user may send a message to this session. The owner always may,
+ * and pays as before (`payer` null). A teammate needs all of these, and then
+ * pays for the turn from their home workspace for the team:
+ *
+ * - they can view the item (`canViewItem`);
+ * - they own a home workspace for the session's team;
+ * - that workspace has a usable fleet account for the chat's agent;
+ * - their own GitHub account may push to the repository.
+ *
+ * A person who cannot view the item gets `not_found`, so the session's
+ * existence does not leak.
+ */
+export async function canPrompt(
+  userId: string,
+  item: PromptableItem,
+  deps: PromptDeps = defaultPromptDeps
+): Promise<PromptDecision> {
+  const owned = await deps.ownedWorkspaceIds(userId);
+  if (owned.has(item.workspaceId)) return { ok: true, payer: null };
+  if (!(await canViewItem(userId, item, deps))) {
+    return { ok: false, reason: 'not_found', status: 404, message: 'Chat not found' };
+  }
+  const teamId = (await deps.spaceTeams([item.spaceId!])).get(item.spaceId!);
+  if (!teamId) return { ok: false, reason: 'not_found', status: 404, message: 'Chat not found' };
+  const home = await deps.homeWorkspace(teamId, userId);
+  if (!home || !owned.has(home)) {
+    return {
+      ok: false,
+      reason: 'no_home_workspace',
+      status: 409,
+      message: 'You need a workspace of your own to prompt this session. It pays for the turn.',
+    };
+  }
+  const status = await deps.agentStatus(home);
+  const label = AGENT_LABEL[item.agent];
+  if (!status.connectedAgents.includes(item.agent)) {
+    return {
+      ok: false,
+      reason: 'no_agent_account',
+      status: 409,
+      message: `Connect a ${label} subscription in Settings → Talyn Fleet to prompt this session.`,
+    };
+  }
+  if (status.reauthAgents.includes(item.agent)) {
+    return {
+      ok: false,
+      reason: 'agent_reauth',
+      status: 409,
+      message: `Sign in to ${label} again in Settings → Talyn Fleet to prompt this session.`,
+    };
+  }
+  const push = await deps.canPushRepo(userId, home, item.repoFullName!);
+  if (push === 'no_github') {
+    return { ok: false, reason: 'no_github', status: 409, message: 'Connect GitHub in your workspace to prompt this session.' };
+  }
+  if (!push) {
+    return {
+      ok: false,
+      reason: 'no_push_access',
+      status: 403,
+      message: `Your GitHub account cannot push to ${item.repoFullName}, so you cannot prompt this session.`,
+    };
+  }
+  return { ok: true, payer: { userId, workspaceId: home } };
 }
