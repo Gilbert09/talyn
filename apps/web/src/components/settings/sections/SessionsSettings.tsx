@@ -13,7 +13,7 @@ import {
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
-import { useWorkspaceStore } from '../../../stores/workspace';
+import { useWorkspaceStore, type SidebarOrder } from '../../../stores/workspace';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
 
@@ -259,9 +259,26 @@ function ModelRow({ agent }: { agent: WorkbenchAgent }) {
 
 export function SessionsSettings() {
   const defaults = useSessionDefaults();
+  const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
+  const setSidebarOrder = useWorkspaceStore((s) => s.setSidebarOrder);
 
   return (
     <SettingsPage title="Sessions" description="Choose defaults and archive rules for sessions.">
+      <SettingsSection title="Sidebar">
+        <SettingRow
+          label="Session order"
+          description="Active sessions need attention, work now, or have an open pull request."
+        >
+          <SettingsSelect
+            value={sidebarOrder}
+            onChange={(event) => setSidebarOrder(event.target.value as SidebarOrder)}
+            aria-label="Sidebar session order"
+          >
+            <option value="active_first">Active sessions first</option>
+            <option value="repository">Group by repository</option>
+          </SettingsSelect>
+        </SettingRow>
+      </SettingsSection>
       <SettingsSection title="Defaults">
         <SettingRow label="Agent">
           <SettingsSelect

@@ -51,6 +51,11 @@ export interface SessionState {
   label: string;
 }
 
+/** True when a session belongs in the sidebar's active group. */
+export function isActiveSessionState(state: SessionState): boolean {
+  return state.kind !== 'idle' && state.kind !== 'merged' && state.kind !== 'closed';
+}
+
 export function sessionState(
   workbench: Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>,
   chats: (Pick<WorkbenchChat, 'id' | 'status'> & { queuedMessages?: WorkbenchChat['queuedMessages'] })[],

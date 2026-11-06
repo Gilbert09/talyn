@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
-import { sessionPr, sessionState, type SessionStateKind } from '../lib/sessionState';
+import { isActiveSessionState, sessionPr, sessionState, type SessionStateKind } from '../lib/sessionState';
 
 type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
@@ -57,5 +57,17 @@ describe('sessionState', () => {
     } as Workbench;
     expect(sessionState(workbench, [], {}, sessionPr(workbench, null))).toEqual({ kind: 'merged', label: 'Done: #42 merged' });
     expect(sessionPr(workbench, pr('open') as PRRow)?.state).toBe('open');
+  });
+
+  it.each([
+    ['working', true],
+    ['needs_reply', true],
+    ['unshipped', true],
+    ['pr_waiting', true],
+    ['idle', false],
+    ['merged', false],
+    ['closed', false],
+  ] as [SessionStateKind, boolean][])('classifies %s for the active sidebar group', (kind, active) => {
+    expect(isActiveSessionState({ kind, label: kind })).toBe(active);
   });
 });

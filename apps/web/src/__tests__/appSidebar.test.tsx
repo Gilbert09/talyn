@@ -59,6 +59,7 @@ function setFeatures(features: Partial<Features> | null) {
     currentWorkspaceId: 'ws1',
     features: features as Features | null,
     sidebarCollapsed: false,
+    sidebarOrder: 'active_first',
     cloudProviders: [],
   });
 }
@@ -73,11 +74,12 @@ beforeAll(() => {
 
 beforeEach(() => {
   setFeatures({ workbenches: true });
+  useWorkbenchStore.setState({ chats: {}, unread: {}, unseen: {} });
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore
     .getState()
     .setWorkbenches('ws1', [
-      wb('lisbon', { repoFullName: 'acme/web', diffStat: { added: 12, removed: 3, files: 2 } }),
+      wb('lisbon', { repoFullName: 'acme/web' }),
       wb('oslo', { repoFullName: 'acme/api' }),
       wb('rome', { repoFullName: 'acme/api', createdAt: '2026-10-14T00:00:00Z' }),
       wb('gone', { repoFullName: 'acme/api', status: 'archived', archivedAt: '2026-10-13T02:00:00Z' }),
@@ -104,6 +106,26 @@ describe('AppSidebar', () => {
     expect(api.compareDocumentPosition(web) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('puts sessions that work or have an open pull request in one active group', () => {
+    useWorkbenchStore.getState().setChats('oslo', [
+      { id: 'c1', workbenchId: 'oslo', status: 'running', createdAt: 'a' } as WorkbenchChat,
+    ]);
+    useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', { repoFullName: 'acme/web', pullRequestId: 'p9' }));
+    usePullRequestStore.setState({ rows: [pr({ id: 'p9' })] });
+
+    render(<AppSidebar />);
+
+    const active = screen.getByRole('group', { name: 'Active' });
+    expect(within(active).getAllByRole('button').map((row) => row.textContent)).toEqual(['lisbon', 'oslo']);
+    expect(within(screen.getByRole('group', { name: 'acme/api' })).getByRole('button')).toHaveTextContent('rome');
+    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['lisbon', 'oslo', 'rome']);
+
+    act(() => useWorkspaceStore.getState().setSidebarOrder('repository'));
+    expect(screen.queryByRole('group', { name: 'Active' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'acme/api' })).getAllByRole('button').map((row) => row.textContent))
+      .toEqual(['rome', 'oslo']);
+  });
+
 
   it('keeps the creation order when a session changes, and the shortcuts follow it', () => {
     useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
@@ -118,6 +140,10 @@ describe('AppSidebar', () => {
   });
 
   it('shows the diff stat of a row', () => {
+    useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', {
+      repoFullName: 'acme/web',
+      diffStat: { added: 12, removed: 3, files: 2 },
+    }));
     render(<AppSidebar />);
     const row = screen.getByRole('button', { name: /lisbon/ });
     expect(row).toHaveTextContent('+12');

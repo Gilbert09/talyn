@@ -135,6 +135,7 @@ export interface WatchedRepo {
 }
 
 export type Theme = 'light' | 'dark' | 'system';
+export type SidebarOrder = 'active_first' | 'repository';
 
 // Get initial theme from localStorage or default to 'light'
 function getInitialTheme(): Theme {
@@ -178,6 +179,7 @@ export function onboardingStartedOnThisDevice(): boolean {
 }
 
 const SIDEBAR_COLLAPSED_KEY = 'talyn-sidebar-collapsed';
+const SIDEBAR_ORDER_KEY = 'talyn-sidebar-order';
 
 function getInitialSidebarCollapsed(): boolean {
   if (typeof window === 'undefined') return false;
@@ -185,6 +187,15 @@ function getInitialSidebarCollapsed(): boolean {
     return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
   } catch {
     return false;
+  }
+}
+
+function getInitialSidebarOrder(): SidebarOrder {
+  if (typeof window === 'undefined') return 'active_first';
+  try {
+    return localStorage.getItem(SIDEBAR_ORDER_KEY) === 'repository' ? 'repository' : 'active_first';
+  } catch {
+    return 'active_first';
   }
 }
 
@@ -291,6 +302,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
+  sidebarOrder: SidebarOrder;
   /** Derived from the route in stores/navigation.ts. Read-only for callers: write through setActivePanel. */
   activePanel: ActivePanel;
   selectedTaskId: string | null;
@@ -436,6 +448,7 @@ interface WorkspaceState {
   setRepositories: (repos: WatchedRepo[]) => void;
 
   toggleSidebar: () => void;
+  setSidebarOrder: (order: SidebarOrder) => void;
   setActivePanel: (panel: ActivePanel) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -453,6 +466,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   tasksLoadingMore: false,
   repositories: [],
   sidebarCollapsed: getInitialSidebarCollapsed(),
+  sidebarOrder: getInitialSidebarOrder(),
   activePanel: 'workbenches',
   selectedTaskId: null,
   theme: getInitialTheme(),
@@ -677,6 +691,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       }
       return { sidebarCollapsed };
     }),
+
+  setSidebarOrder: (sidebarOrder) => {
+    try {
+      localStorage.setItem(SIDEBAR_ORDER_KEY, sidebarOrder);
+    } catch {
+      // ignore quota / privacy-mode issues
+    }
+    set({ sidebarOrder });
+  },
 
   // An adapter over stores/navigation.ts: the ~25 callers keep their panel
   // vocabulary, and the route decides what is on screen.

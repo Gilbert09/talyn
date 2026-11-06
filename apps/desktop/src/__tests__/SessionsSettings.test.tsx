@@ -14,10 +14,11 @@ jest.mock('../renderer/stores/toast', () => ({
 }));
 
 const setWorkspaces = jest.fn();
+const setSidebarOrder = jest.fn();
 let workspaces: Workspace[] = [];
 jest.mock('../renderer/stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
-    selector({ workspaces, currentWorkspaceId: 'ws1', setWorkspaces }),
+    selector({ workspaces, currentWorkspaceId: 'ws1', setWorkspaces, sidebarOrder: 'active_first', setSidebarOrder }),
 }));
 
 const field = () => screen.getByLabelText('Branch prefix') as HTMLInputElement;
@@ -37,6 +38,14 @@ describe('SessionsSettings', () => {
   it('no longer draws "Your instructions", which lives on the Instructions page', () => {
     render(<SessionsSettings />);
     expect(screen.queryByText('Your instructions')).toBeNull();
+  });
+
+  it('lets the person switch to repository grouping', () => {
+    render(<SessionsSettings />);
+    const select = screen.getByLabelText('Sidebar session order') as HTMLSelectElement;
+    expect(select.value).toBe('active_first');
+    fireEvent.change(select, { target: { value: 'repository' } });
+    expect(setSidebarOrder).toHaveBeenCalledWith('repository');
   });
 });
 

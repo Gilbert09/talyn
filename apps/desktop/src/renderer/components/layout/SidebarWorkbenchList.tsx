@@ -29,8 +29,8 @@ import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { ThreadTag } from '../threads/ThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
-import { sessionPr, sessionState } from '../../lib/sessionState';
-import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
+import { isActiveSessionState, sessionPr, sessionState } from '../../lib/sessionState';
+import { groupSidebarWorkbenches, isArchived } from '../workbench/workbenchSelectors';
 import { useRenameSession } from '../workbench/useRenameSession';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
@@ -45,9 +45,31 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
-  const groups = useMemo(() => groupByRepository(workbenches.filter((w) => !isArchived(w))), [workbenches]);
+  const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
+  const unread = useWorkbenchStore((s) => s.unread);
+  const unseen = useWorkbenchStore((s) => s.unseen);
+  const live = useMemo(() => workbenches.filter((workbench) => !isArchived(workbench)), [workbenches]);
+  const activeIds = useMemo(() => {
+    const rowById = new Map(rows.map((row) => [row.id, row]));
+    return new Set(live.filter((workbench) => {
+      const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
+      const resolvedPr = sessionPr(workbench, pr);
+      const state = sessionState(
+        workbench,
+        chats[workbench.id] ?? workbench.chats ?? [],
+        unread,
+        resolvedPr,
+        isPrOnlyUnseen(unseen[workbench.id]),
+      );
+      return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
+    }).map((workbench) => workbench.id));
+  }, [live, rows, chats, unread, unseen]);
+  const groups = useMemo(
+    () => groupSidebarWorkbenches(live, activeIds, sidebarOrder === 'active_first'),
+    [live, activeIds, sidebarOrder],
+  );
   const candidates = useMemo(
     () => archiveAllCandidates(groups.flatMap((g) => g.items), new Set(rows.map((r) => r.id)), chats),
     [groups, rows, chats]
@@ -95,7 +117,7 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
         </button>
       </div>
       {groups.map((group) => (
-        <div key={group.repo} role="group" aria-label={group.repo}>
+        <div key={group.active ? 'active' : group.repo} role="group" aria-label={group.repo}>
           <div className="truncate px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-muted-foreground">{group.repo}</div>
           {group.items.map((wb) => {
             index += 1;
