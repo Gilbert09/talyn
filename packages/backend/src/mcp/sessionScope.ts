@@ -9,7 +9,8 @@
  * the account stays out:
  * - MCP server tools: they create, connect and delete stored credentials.
  * - Account tools (billing, cloud providers, what's new): account surfaces.
- * - Repository add/remove, and skill, workflow and loop create/edit/delete/run:
+ * - Repository add/remove (also through track_pull_request), and skill,
+ *   workflow and loop create/edit/delete/run:
  *   workspace configuration that outlives the session. Their reads are in.
  * (MCP token, credential and sign-in tools are not exposed to any token.)
  *
@@ -38,8 +39,10 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   // session's own PR, and only the owner's PRs or PRs a session opened.
   'talyn_close_pull_request',
   'talyn_fix_pull_request',
-  // track/untrack are a person's choice, so they are not here: a session's own
-  // PR is already shown by the session.
+  // Tracking only adds a PR to the watching list, and the tool refuses
+  // add_repository for a session. Untracking stays out: it undoes what a
+  // person chose to watch.
+  'talyn_track_pull_request',
   'talyn_set_review_hidden',
   // Merge queue
   'talyn_set_merge_queue_stack',
