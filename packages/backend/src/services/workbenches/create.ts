@@ -254,25 +254,27 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   const data = await publicWorkbench(row);
   sendWebhookSignal({ kind: 'session_created', workspaceId, sessionId: row.id });
   await emitWorkbenchUpdated(data);
-  if (row.runtime === 'sandbox') {
-    scheduleProvision(row.id);
-    notifyTodiex(async () => {
-      const ws = await describeWorkspace(workspaceId);
-      return {
-        kind: 'workspace.first_session',
-        level: 'success',
-        title: `${workspaceLabel(ws)} started its first Talyn session`,
-        message: [`Session started for ${repoFullName}.`, ownerLine(ws)].filter(Boolean).join(' '),
-        metadata: {
-          repository: repoFullName,
-          repository_id: repo.id,
-          ...workspaceMetadata(ws),
-          session_id: row.id,
-        },
-        dedupeKey: `workspace:${workspaceId}:first_session`,
-      };
-    });
-  }
+  if (row.runtime === 'sandbox') scheduleProvision(row.id);
+  // Sent on every session; the dedupe key keeps only the workspace's first.
+  // A local session counts too: a desktop user may never start a sandbox.
+  const local = row.runtime === 'local';
+  notifyTodiex(async () => {
+    const ws = await describeWorkspace(workspaceId);
+    return {
+      kind: 'workspace.first_session',
+      level: 'success',
+      title: `${workspaceLabel(ws)} started its first Talyn session`,
+      message: [`${local ? 'Local session' : 'Session'} started for ${repoFullName}.`, ownerLine(ws)].filter(Boolean).join(' '),
+      metadata: {
+        repository: repoFullName,
+        repository_id: repo.id,
+        ...workspaceMetadata(ws),
+        session_id: row.id,
+        runtime: row.runtime,
+      },
+      dedupeKey: `workspace:${workspaceId}:first_session`,
+    };
+  });
   return data;
 }
 

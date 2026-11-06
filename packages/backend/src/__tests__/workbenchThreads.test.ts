@@ -195,6 +195,23 @@ describe('threads', () => {
       expect(inboxEvents).toHaveLength(1);
     });
 
+    it('announces a local first session too, and says it is local', async () => {
+      vi.stubEnv('TODIEX_URL', base);
+      vi.stubEnv('TODIEX_TOKEN', 'tdx_test');
+
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'claude', deviceId: 'dev-1', localPath: '/tmp/app',
+      });
+      expect(res.status, res.body.error).toBe(200);
+      await vi.waitFor(() => expect(inboxEvents).toHaveLength(1));
+      expect(inboxEvents[0]).toMatchObject({
+        kind: 'workspace.first_session',
+        metadata: { workspace_id: 'ws-a', session_id: res.body.data.id, runtime: 'local' },
+        dedupeKey: 'workspace:ws-a:first_session',
+      });
+      expect(inboxEvents[0].message).toContain('Local session started for acme/app.');
+    });
+
     it('stores no repository and boots the smallest box with no clone', async () => {
       const thread = await createThread();
       expect(thread).toMatchObject({ kind: 'thread', repositoryId: null, repoFullName: '', branch: '', threadId: null });
