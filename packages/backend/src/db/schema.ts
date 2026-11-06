@@ -2220,7 +2220,7 @@ export const workbenches = pgTable(
     baseBranch: text('base_branch').notNull(),
     /** `WorkbenchRuntimeKind`. */
     runtime: text('runtime').notNull(),
-    /** `WorkbenchAgent`. Fixed at creation for a sandbox workbench. */
+    /** `WorkbenchAgent`. The initial agent for new chats. */
     agent: text('agent').notNull(),
     model: text('model'),
     deviceId: text('device_id'),
@@ -2311,7 +2311,7 @@ export const workbenchWarmBoxes = pgTable(
     sandboxId: text('sandbox_id').notNull(),
     workspaceId: text('workspace_id').notNull(),
     repositoryId: text('repository_id').notNull(),
-    /** `WorkbenchAgent`: the box's vendor route table is fixed at create. */
+    /** `WorkbenchAgent`: the initial agent used to match a warm box. */
     agent: text('agent').notNull(),
     /** `SandboxSize` the box was created at. */
     size: text('size').notNull(),

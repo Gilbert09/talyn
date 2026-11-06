@@ -4,6 +4,7 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_MOVING_MESSAGE,
   type Workbench,
+  type WorkbenchAgent,
   type WorkbenchCapacityWait,
   type WorkbenchChat,
   type WorkbenchContextUsage,
@@ -28,7 +29,7 @@ import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource,
 import { isThread, threadMentions } from '../../lib/threads';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
-import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
+import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 
 export function Composer({
@@ -64,7 +65,8 @@ export function Composer({
   const repositories = useWorkspaceStore((s) => s.repositories);
   const threadSessions = useThreadChildren(workbench.id);
 
-  const model = chat?.model ?? defaultModelFor(workbench.agent);
+  const agent = chat?.agent ?? workbench.agent;
+  const model = chat?.model ?? defaultModelFor(agent);
   const effort = chat?.effort ?? DEFAULT_WORKBENCH_EFFORT;
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';
@@ -129,7 +131,7 @@ export function Composer({
     if (mentionOptions) return mentionOptions.map((m) => m.value);
     if (trigger.kind === 'mention') return fuzzyMatchPaths(trigger.query, paths ?? []);
     const fileCommands = slashCommandsFrom(paths ?? []);
-    const commands = workbench.agent === 'codex'
+    const commands = agent === 'codex'
       ? fileCommands
       : [...new Set([...(slashCommands ?? CLAUDE_HEADLESS_SLASH_COMMANDS), ...fileCommands])].sort();
     const q = trigger.query.toLowerCase();
@@ -137,7 +139,7 @@ export function Composer({
       .filter((c) => c.toLowerCase().includes(q))
       .sort((a, b) => Number(b.toLowerCase().startsWith(q)) - Number(a.toLowerCase().startsWith(q)))
       .slice(0, 20);
-  }, [trigger, paths, slashCommands, workbench.agent, mentionOptions]);
+  }, [trigger, paths, slashCommands, agent, mentionOptions]);
 
   const updateTrigger = (text: string, caret: number) => {
     const next = findTrigger(text, caret);
@@ -160,12 +162,14 @@ export function Composer({
     });
   };
 
-  const patchChat = async (patch: { model?: string; effort?: WorkbenchEffort | null; planMode?: boolean }) => {
+  const patchChat = async (patch: { agent?: WorkbenchAgent; model?: string; effort?: WorkbenchEffort | null; planMode?: boolean }) => {
     if (!chat) return;
+    const previous = chat;
     useWorkbenchStore.getState().upsertChat({ ...chat, ...patch });
     try {
       useWorkbenchStore.getState().upsertChat(await api.workbenches.updateChat(chat.id, patch));
     } catch (err) {
+      useWorkbenchStore.getState().upsertChat(previous);
       captureWorkbenchFailure('update_chat_settings', err, workbench.id);
       toast.error('Could not save the chat setting', err instanceof Error ? err.message : undefined);
     }
@@ -331,7 +335,8 @@ export function Composer({
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
           <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
-          <ModelPicker agent={workbench.agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!chat || Boolean(ops.unavailable)} />
+          <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: defaultModelFor(next) })} disabled={!chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
+          <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!chat || Boolean(ops.unavailable)} />
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!chat || Boolean(ops.unavailable)} />
           <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!chat || Boolean(ops.unavailable)} />
           <TodoChip todos={todos} />

@@ -1,4 +1,4 @@
-import type { WorkbenchEffort } from '@talyn/shared';
+import type { WorkbenchAgent, WorkbenchEffort } from '@talyn/shared';
 import { Chat, IdParams } from '../../schemas/public/resources.js';
 import {
   CheckpointList,
@@ -14,7 +14,7 @@ import { toPublicChat } from '../../services/public/projections.js';
 import { getChatQuery } from '../../services/public/queries.js';
 import { toPublicCheckpoint, toPublicQueuedMessage } from '../../services/public/workProjections.js';
 import { queuedMessagesQuery } from '../../services/public/workQueries.js';
-import { clearQueuedMessages, closeChat, dropQueuedMessage, patchChat } from '../../services/workbenches/sessionOps.js';
+import { clearQueuedMessages, closeChat, dropQueuedMessage, patchChat, switchChatAgent } from '../../services/workbenches/sessionOps.js';
 import { getChat, getWorkbench, listCheckpoints, type ChatRow, type WorkbenchRow } from '../../services/workbenches/store.js';
 import { restoreCheckpoint } from '../../services/workbenches/turns.js';
 import { definePublicRoute, type PublicRoute } from './define.js';
@@ -46,7 +46,7 @@ export const chatWorkRoutes: PublicRoute[] = [
     path: '/chats/{id}',
     operationId: 'updateChat',
     summary: 'Update a chat',
-    description: 'Rename the chat, or change the model, effort or plan mode its next turns use. Send only the fields to change.',
+    description: 'Rename the chat, switch its agent, or change the model, effort or plan mode its next turns use. Send only the fields to change.',
     tag: 'Chats',
     scope: 'sessions:write',
     sessions: true,
@@ -54,12 +54,17 @@ export const chatWorkRoutes: PublicRoute[] = [
     body: UpdateChatBody,
     responses: { 200: { description: 'The chat.', schema: Chat } },
     async handler({ params, body, token }) {
-      const { chat } = await writableChat(token, params.id);
+      const { chat: initialChat, workbench } = await writableChat(token, params.id);
+      let chat = initialChat;
       const patch: Parameters<typeof patchChat>[1] = {};
       if (body.title !== undefined) patch.title = body.title.trim().slice(0, 200);
       if (body.model !== undefined) patch.model = body.model?.trim() || null;
       if (body.effort !== undefined) patch.effort = body.effort as WorkbenchEffort | null;
       if (body.plan_mode !== undefined) patch.planMode = body.plan_mode;
+      if (body.agent !== undefined && body.agent !== chat.agent) {
+        chat = await switchChatAgent(chat, workbench, body.agent as WorkbenchAgent, body.model?.trim() || null);
+        delete patch.model;
+      }
       if (Object.keys(patch).length > 0) await patchChat(chat, patch);
       return { status: 200, body: await publicChat(chat.id) };
     },

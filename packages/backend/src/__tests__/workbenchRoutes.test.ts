@@ -7,7 +7,7 @@ import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
-import { pullRequests, repositories, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workbenchChats, workspaces } from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
 import { userFacingError } from '../services/workbenches/errors.js';
 
@@ -704,7 +704,7 @@ describe('workbench routes', () => {
       await idle(chatId);
 
       const chat = await getChat(chatId);
-      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: 'sess-9' });
+      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: null });
       expect(chat?.queuedMessages.map((m) => m.text)).toEqual(['later']);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
       expect(page.body.data.events.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });
@@ -729,6 +729,87 @@ describe('workbench routes', () => {
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
       expect(page.body.data.events.at(-1).event.result).toBe(ORPHAN_MESSAGE);
       expect(await sweepOrphanedTurns()).toBe(0);
+    });
+  });
+
+  describe('agent switching', () => {
+    it('continues an idle Claude conversation with Codex through a recap', async () => {
+      const wb = await createSandboxWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Remember pineapple.' });
+      await idle(chatId);
+
+      const switched = await call('PATCH', `/workbenches/chats/${chatId}`, { agent: 'codex', model: null });
+      expect(switched.status).toBe(200);
+      expect(switched.body.data).toMatchObject({ agent: 'codex', model: null, agentSessionId: null });
+      expect(await getChat(chatId)).toMatchObject({ agent: 'codex', agentSessionId: null });
+      expect((await testDb.db.select({ pending: workbenchChats.recapPending })
+        .from(workbenchChats).where(eq(workbenchChats.id, chatId)))[0].pending).toBe(true);
+
+      scriptedFleet((script) => isAgentTurn(script, 'codex') ? {
+        stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'codex-session' }),
+          JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Pineapple.' } }),
+          JSON.stringify({ type: 'turn.completed', usage: {} }),
+        ],
+      } : null);
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'What should you remember?' });
+      await idle(chatId);
+
+      const turn = fleet.execs.findLast((entry) => isAgentTurn(entry.script, 'codex'))!;
+      expect(turn.script).toContain('User: Remember pineapple.');
+      expect(turn.script).toContain('Assistant: done');
+      expect(await getChat(chatId)).toMatchObject({
+        agent: 'codex', agentSessionId: 'codex-session', turnCount: 2,
+      });
+      expect((await testDb.db.select({ pending: workbenchChats.recapPending })
+        .from(workbenchChats).where(eq(workbenchChats.id, chatId)))[0].pending).toBe(false);
+    });
+
+    it('stops a running Claude turn before switching the chat to Codex', async () => {
+      let kill!: () => void;
+      let started = false;
+      scriptedFleet((script) => {
+        if (!isAgentTurn(script)) return null;
+        started = true;
+        return {
+          stdout: [claudeTurnLines('claude-session', 'working')[0]],
+          hold: new Promise<void>((_resolve, reject) => (kill = () => reject(new Error('killed')))),
+        };
+      });
+      const wb = await createSandboxWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Long task' });
+      await vi.waitFor(() => expect(started).toBe(true));
+      fleet.handler = ((previous) => async (script, req) => {
+        if (script.includes('send INT')) {
+          kill();
+          return { exitCode: 0 };
+        }
+        return previous(script, req);
+      })(fleet.handler);
+
+      const switched = await call('PATCH', `/workbenches/chats/${chatId}`, { agent: 'codex', model: null });
+      expect(switched.status).toBe(200);
+      expect(await getChat(chatId)).toMatchObject({
+        agent: 'codex', status: 'idle', statusMessage: null, agentSessionId: null,
+      });
+      expect((await testDb.db.select({ pending: workbenchChats.recapPending })
+        .from(workbenchChats).where(eq(workbenchChats.id, chatId)))[0].pending).toBe(true);
+      const page = await call('GET', `/workbenches/chats/${chatId}/events`);
+      expect(page.body.data.events.at(-1).event).toMatchObject({
+        type: 'system', subtype: 'agent_switched', talyn: { from: 'claude', to: 'codex' },
+      });
+    });
+
+    it('refuses a provider that the sandbox did not receive', async () => {
+      creds = { claudeToken: 'sk-ant-oat-claude' };
+      const wb = await createSandboxWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const res = await call('PATCH', `/workbenches/chats/${chatId}`, { agent: 'codex', model: null });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('sandbox_wrong_agent');
+      expect(await getChat(chatId)).toMatchObject({ agent: 'claude' });
     });
   });
 
@@ -954,7 +1035,7 @@ describe('workbench routes', () => {
       ['fleet_not_deployed', 503, () => vi.stubEnv('FLEET_API_TOKEN', '')],
       ['fleet_disabled', 503, () => (fleetRegistered = false)],
       ['fleet_not_allowed', 403, () => vi.stubEnv('FLEET_ALLOWED', 'false')],
-      ['agent_reauth_required', 409, () => (reauth = ['claude'])],
+      ['agent_reauth_required', 409, () => (reauth = ['claude', 'codex'])],
     ] as const)('refuses to create a sandbox workbench on %s, and inserts nothing', async (code, status, setup) => {
       setup();
       resetFeatureFlagsForTests();

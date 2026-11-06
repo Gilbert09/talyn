@@ -8,6 +8,16 @@ Loops can now choose `session` or `task` as their target. Existing loops keep th
 
 A session loop uses the normal session create path. It therefore gets the same readiness checks, box gate, branch allocation, first prompt, and automatic pull request behavior as a manual session. The run stores the session and first chat. It becomes successful when the first turn finishes, and the history opens the session directly. A deleted, failed, or human-blocked session records a clear run failure. Migration `0113` adds the target and session references.
 
+## Switch one chat between Claude and Codex (2026-11-05)
+
+**What changed.** The composer now has an agent picker beside the model picker. A person can move one sandbox chat between Claude and Codex.
+
+Talyn stops an active turn before it changes the provider. The database update refuses to change a chat while another turn runs. This closes the queue race.
+
+Provider session identifiers cannot cross vendors. Talyn clears the old identifier and gives the next provider a bounded transcript recap. Queued messages keep their order and use the new model.
+
+New sandboxes already receive every connected provider credential. Older single-provider sandboxes refuse the switch and explain that a new session is required.
+
 ## A chat stuck on a session that cannot be resumed (2026-11-05)
 
 **What happened.** A Codex session chat had several turns fail early on a fleet proxy 401. Each of those turns still stored the Codex thread id, because `appendEvents` wrote the parser's session id on every batch. The thread had no usable turns, so every later turn and every Retry failed at once with `thread/resume failed: list_turns is not supported yet (code -32601)`. Nothing cleared `agentSessionId` after a resume failure, so the chat was stuck.

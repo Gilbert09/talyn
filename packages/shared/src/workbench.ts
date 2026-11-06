@@ -183,9 +183,8 @@ export interface Workbench {
   baseBranch: string;
   runtime: WorkbenchRuntimeKind;
   /**
-   * The workbench's agent. FIXED at creation for a sandbox workbench: the
-   * sandbox's egress route table is built from its LLM vendor, so a Codex chat
-   * has no route to Anthropic and vice versa. A local workbench may mix.
+   * The agent selected when the workbench starts. A chat can use another
+   * connected agent when the sandbox was created with both providers.
    */
   agent: WorkbenchAgent;
   /** Local runtime only: the device that owns the worktree. */
@@ -570,6 +569,8 @@ export interface CreateWorkbenchChatInput {
 
 export interface UpdateWorkbenchChatInput {
   title?: string;
+  /** Stops a running turn, then continues the chat with this agent. */
+  agent?: WorkbenchAgent;
   model?: string | null;
   effort?: WorkbenchEffort | null;
   planMode?: boolean;
