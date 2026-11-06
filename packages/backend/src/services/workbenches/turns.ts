@@ -1207,6 +1207,8 @@ async function writeAttachments(
   }
   if (files.length > 0) {
     const exclude = isThread(wb) ? undefined : [
+      // The writer runs from /, and git must run in the checkout.
+      `cd ${shellQuote(repoDirFor(wb))}`,
       'exclude=$(git rev-parse --git-path info/exclude)',
       'mkdir -p "$(dirname "$exclude")"',
       'touch "$exclude"',

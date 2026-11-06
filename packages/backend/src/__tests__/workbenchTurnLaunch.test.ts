@@ -171,6 +171,10 @@ describe('workbench turn launch', () => {
       [{ path: `/work/app/${path}`, base64: 'aGVsbG8=' }],
       { before: expect.stringContaining('.context/'), timeoutMs: 120_000 },
     );
+    // The writer runs from /, so the exclude step must enter the checkout before it calls git.
+    const before = write.mock.calls[0][2]?.before ?? '';
+    expect(before.split('\n')[0]).toMatch(/^cd '?\/work\/app'?$/);
+    expect(before.indexOf('cd ')).toBeLessThan(before.indexOf('git rev-parse'));
     const user = (await events()).find((event) => (event.talyn as { kind?: string } | undefined)?.kind === 'user_message');
     expect(user?.talyn).toMatchObject({
       attachments: [{ name: 'shot.jpeg', mimeType: 'image/png', path }],
