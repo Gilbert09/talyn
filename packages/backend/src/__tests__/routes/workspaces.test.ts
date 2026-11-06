@@ -324,7 +324,7 @@ describe('routes/workspaces', () => {
       });
     });
 
-    describe.each(['sessionSkillPack', 'sessionMemory'])('settings.%s', (key) => {
+    describe.each(['sessionSkillPack', 'sessionMemory', 'fleetUseFullQuotaWhenAllOver'])('settings.%s', (key) => {
       it.each([[true], [false]])('stores %j', async (sent) => {
         await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
         const res = await fetch(`${serverUrl}/workspaces/p`, {

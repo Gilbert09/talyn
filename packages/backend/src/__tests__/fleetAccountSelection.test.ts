@@ -116,6 +116,13 @@ describe('choosing a fleet account by usage', () => {
       .where(eq(workspacesTable.id, WS));
   }
 
+  async function useFullQuotaWhenAllOver(value = true) {
+    await db
+      .update(workspacesTable)
+      .set({ settings: { fleetSwitchAtPercent: 95, fleetUseFullQuotaWhenAllOver: value } as never })
+      .where(eq(workspacesTable.id, WS));
+  }
+
   async function add(kind: Kind, label: string, usage?: Usage) {
     const account = await accounts.addFleetAccount(WS, {
       kind,
@@ -219,6 +226,22 @@ describe('choosing a fleet account by usage', () => {
       await setThreshold(95);
       await add('claude_oauth', 'A', fresh([win(99)]));
       await add('claude_oauth', 'B', fresh([win(95)]));
+      expect(await selection.chooseFleetAccount(WS, 'claude')).toBeNull();
+    });
+
+    it('uses an account below 100% when every account crossed the switch point', async () => {
+      await useFullQuotaWhenAllOver();
+      await add('claude_oauth', 'A', fresh([win(100)]));
+      await add('claude_oauth', 'B', fresh([win(97)]));
+      const picked = await selection.selectFleetAccount(WS, 'claude');
+      expect(picked.account?.label).toBe('B');
+      expect(picked.threshold).toBe(100);
+    });
+
+    it('does not extend the switch point when every account is at 100%', async () => {
+      await useFullQuotaWhenAllOver();
+      await add('claude_oauth', 'A', fresh([win(100)]));
+      await add('claude_oauth', 'B', fresh([win(100)]));
       expect(await selection.chooseFleetAccount(WS, 'claude')).toBeNull();
     });
 

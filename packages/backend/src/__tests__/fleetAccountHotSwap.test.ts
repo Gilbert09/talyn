@@ -274,6 +274,27 @@ describe('fleet accounts on a running run', () => {
       expect(extraOf(await taskMeta()).accountId).toBe(c.id);
     });
 
+    it('stays on the selected agent below 100% when full quota use is on', async () => {
+      await db.update(workspacesTable).set({
+        settings: { fleetSwitchAtPercent: 95, fleetUseFullQuotaWhenAllOver: true },
+      }).where(eq(workspacesTable.id, WS));
+      await seedTask({ model: 'claude-sonnet-5' });
+      const a = await add('claude_oauth', 'A', 99);
+      await add('claude_oauth', 'B', 97);
+      await add('codex_oauth', 'C', 10);
+      expect(await dispatchTaskToFleet(task(), ENV)).toEqual({ ok: true });
+
+      const body = fleet.createSandbox.mock.calls[0]![0] as {
+        openaiKey?: string;
+        anthropicKey?: string;
+        task: { provider: string };
+      };
+      expect(body.anthropicKey).toBe('tok-A');
+      expect(body.openaiKey).toBeUndefined();
+      expect(body.task.provider).toBe('anthropic');
+      expect(extraOf(await taskMeta()).accountId).toBe(a.id);
+    });
+
     it('runs on the least-full account rather than refusing, when nothing else can take it', async () => {
       await seedTask({ model: 'claude-sonnet-5' });
       const a = await add('claude_oauth', 'A', 99);
@@ -320,6 +341,29 @@ describe('fleet accounts on a running run', () => {
       expect(
         await hotSwap.findHotSwap({ key: 'k', workspaceId: WS, agent: 'claude', currentAccountId: a.id }),
       ).toBeNull();
+    });
+
+    it('keeps the current account when all accounts crossed the switch point', async () => {
+      await db.update(workspacesTable).set({
+        settings: { fleetSwitchAtPercent: 95, fleetUseFullQuotaWhenAllOver: true },
+      }).where(eq(workspacesTable.id, WS));
+      const a = await add('claude_oauth', 'A', 96);
+      await add('claude_oauth', 'B', 99);
+      expect(
+        await hotSwap.findHotSwap({ key: 'k', workspaceId: WS, agent: 'claude', currentAccountId: a.id }),
+      ).toBeNull();
+    });
+
+    it('moves from a full account when full quota use is on', async () => {
+      await db.update(workspacesTable).set({
+        settings: { fleetSwitchAtPercent: 95, fleetUseFullQuotaWhenAllOver: true },
+      }).where(eq(workspacesTable.id, WS));
+      const a = await add('claude_oauth', 'A', 100);
+      const b = await add('claude_oauth', 'B', 99);
+      const decision = await hotSwap.findHotSwap({
+        key: 'k', workspaceId: WS, agent: 'claude', currentAccountId: a.id,
+      });
+      expect(decision?.to.id).toBe(b.id);
     });
 
     it('never moves a run to the other vendor', async () => {

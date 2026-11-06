@@ -62,6 +62,44 @@ export function FleetSwitchThresholdRow() {
   </SettingRow>;
 }
 
+export function FleetFullQuotaRow() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const stored = workspaces.find((w) => w.id === currentWorkspaceId)?.settings?.fleetUseFullQuotaWhenAllOver === true;
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (value: boolean) => {
+    if (!currentWorkspaceId || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaces.update(currentWorkspaceId, {
+        settings: { fleetUseFullQuotaWhenAllOver: value } as Workspace['settings'],
+      });
+      setWorkspaces(workspaces.map((workspace) => workspace.id === currentWorkspaceId
+        ? { ...workspace, settings: { ...workspace.settings, fleetUseFullQuotaWhenAllOver: value } as Workspace['settings'] }
+        : workspace));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the full quota setting');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <SettingToggle
+    label="Use subscriptions to 100%"
+    description={<>
+      <span>When this agent's subscriptions reach the switch point, keep using them until one reaches 100%.</span>
+      {error && <span role="alert" className="mt-1 block text-destructive">{error}</span>}
+    </>}
+    checked={stored}
+    disabled={saving || !currentWorkspaceId}
+    onChange={(value) => void save(value)}
+  />;
+}
+
 export function AgentsSettings() {
   const defaults = useSessionDefaults();
 
@@ -82,6 +120,7 @@ export function AgentsSettings() {
       </SettingsSection>
       <SettingsSection title="Fleet switching">
         <FleetSwitchThresholdRow />
+        <FleetFullQuotaRow />
       </SettingsSection>
       {getWorkbenchBridge() && (
         <SettingsGroup title="On this computer">

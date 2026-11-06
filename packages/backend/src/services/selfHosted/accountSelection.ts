@@ -47,8 +47,9 @@ import {
  * over is the one to use. Unknown usage is not over: a vendor endpoint that
  * changed shape must never park a working account.
  *
- * Every account of an agent over is NOT handled here. The caller then runs the
- * cross-vendor rules it always had (the other agent, then quotaFailover's chain).
+ * When the full-quota option is on and every account crosses the switch point,
+ * selection runs again at 100%. Without that option, the caller runs the usual
+ * cross-vendor rules. An account at 100%, held, or in need of reauth stays over.
  */
 
 /** How old a usage snapshot may be before a dispatch, turn or hot-swap check reads it again. */
@@ -71,15 +72,32 @@ export interface FleetAccountVerdict {
   window?: FleetUsageWindow;
 }
 
-/** The workspace's switch threshold in percent, or the default when unset or invalid. */
-export async function fleetSwitchThreshold(workspaceId: string): Promise<number> {
+export interface FleetSwitchSettings {
+  /** The effective threshold. This is 100 during a full-quota extension. */
+  threshold: number;
+  useFullQuotaWhenAllOver: boolean;
+}
+
+/** The workspace's account-switch settings, with safe defaults for invalid stored values. */
+export async function fleetSwitchSettings(workspaceId: string): Promise<FleetSwitchSettings> {
   const [row] = await getDbClient()
-    .select({ value: sql<unknown>`${workspacesTable.settings} -> 'fleetSwitchAtPercent'` })
+    .select({
+      threshold: sql<unknown>`${workspacesTable.settings} -> 'fleetSwitchAtPercent'`,
+      useFullQuotaWhenAllOver: sql<unknown>`${workspacesTable.settings} -> 'fleetUseFullQuotaWhenAllOver'`,
+    })
     .from(workspacesTable)
     .where(eq(workspacesTable.id, workspaceId))
     .limit(1);
-  const parsed = normaliseFleetSwitchAtPercent(row?.value);
-  return parsed.ok ? parsed.value : DEFAULT_FLEET_SWITCH_AT_PERCENT;
+  const parsed = normaliseFleetSwitchAtPercent(row?.threshold);
+  return {
+    threshold: parsed.ok ? parsed.value : DEFAULT_FLEET_SWITCH_AT_PERCENT,
+    useFullQuotaWhenAllOver: row?.useFullQuotaWhenAllOver === true,
+  };
+}
+
+/** The workspace's switch threshold in percent, or the default when unset or invalid. */
+export async function fleetSwitchThreshold(workspaceId: string): Promise<number> {
+  return (await fleetSwitchSettings(workspaceId)).threshold;
 }
 
 /**
@@ -270,7 +288,8 @@ export async function selectFleetAccount(
   agent: FleetAgent,
   opts: ChooseFleetAccountOptions = {},
 ): Promise<FleetAccountSelection> {
-  const threshold = await fleetSwitchThreshold(workspaceId);
+  const settings = await fleetSwitchSettings(workspaceId);
+  let threshold = settings.threshold;
   const listed = await listFleetAccounts(workspaceId, agent);
   const ordered = orderFleetAccounts(listed, { preferId: opts.preferAccountId });
   const avoid = new Set(opts.avoidAccountIds ?? []);
@@ -287,6 +306,16 @@ export async function selectFleetAccount(
     const verdict = accountOverVerdict(account, threshold, opts.model);
     verdicts.set(account.id, verdict);
     if (!chosen && !avoid.has(account.id) && verdict.reason === null) chosen = account;
+  }
+
+  if (!chosen && settings.useFullQuotaWhenAllOver && threshold < 100) {
+    threshold = 100;
+    for (const account of accounts) {
+      verdicts.set(account.id, accountOverVerdict(account, threshold, opts.model));
+    }
+    chosen = accounts.find((account) =>
+      !avoid.has(account.id) && verdicts.get(account.id)?.reason === null,
+    ) ?? null;
   }
 
   let fallback: FleetAccount | null = null;

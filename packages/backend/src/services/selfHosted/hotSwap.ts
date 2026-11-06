@@ -4,10 +4,10 @@ import { getFleetAccount, type FleetAccount } from './accounts.js';
 import {
   accountOverVerdict,
   accountSwitchNote,
-  chooseFleetAccount,
   fleetSwitchThreshold,
   onlyAccountOptions,
   refreshAccountUsage,
+  selectFleetAccount,
   type FleetAccountVerdict,
 } from './accountSelection.js';
 import { getSelfHostedCredentials } from './credentials.js';
@@ -82,11 +82,12 @@ export async function findHotSwap(
   const verdict = accountOverVerdict(current, threshold, target.model);
   if (verdict.reason === null) return null;
 
-  const next = await chooseFleetAccount(target.workspaceId, target.agent, {
+  const selection = await selectFleetAccount(target.workspaceId, target.agent, {
     model: target.model,
-    avoidAccountIds: [current.id],
+    preferAccountId: current.id,
   });
-  if (!next) return null;
+  const next = selection.account;
+  if (!next || next.id === current.id) return null;
 
   const creds = await getSelfHostedCredentials(
     target.workspaceId,

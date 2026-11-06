@@ -636,6 +636,11 @@ export interface WorkspaceSettings {
    */
   fleetSwitchAtPercent?: number;
   /**
+   * When every account is over `fleetSwitchAtPercent`, keep using the selected
+   * agent while an account remains below 100%. Unset means false.
+   */
+  fleetUseFullQuotaWhenAllOver?: boolean;
+  /**
    * Which model Talyn Fleet runs use.
    *
    * Unset means the default for whichever agent the workspace connected —

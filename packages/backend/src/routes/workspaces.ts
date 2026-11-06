@@ -428,6 +428,15 @@ export function workspaceRoutes(): Router {
         const switchAt = normaliseFleetSwitchAtPercent(body.settings.fleetSwitchAtPercent);
         if (!switchAt.ok) return res.status(400).json({ success: false, error: switchAt.error });
       }
+      if (
+        body.settings.fleetUseFullQuotaWhenAllOver !== undefined &&
+        typeof body.settings.fleetUseFullQuotaWhenAllOver !== 'boolean'
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'settings.fleetUseFullQuotaWhenAllOver must be true or false',
+        });
+      }
       if (body.settings.visualReview !== undefined) {
         try {
           validateVisualReview(body.settings.visualReview);
