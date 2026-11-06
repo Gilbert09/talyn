@@ -19,6 +19,16 @@ The session chat looked busy and seemed to miss edits, reads and searches. Nothi
 - An unknown Codex item type now renders as a generic row and is no longer dropped.
 - Not changed: the web task terminal (`apps/web/src/components/terminal/AgentConversation.tsx`) is an older fork and keeps the old group behaviour. Subagent calls are still not nested under their Task row.
 
+## Spaces in the public API and MCP (2026-11-06)
+
+Phase P5 of Teams and Spaces. New scopes: `teams:read`, `spaces:read`, `spaces:write` (write implies read). Everything checks the `spaces` flag for the token owner.
+
+- **Routes.** `GET /v1/teams`, `GET /v1/spaces` (optional `team_id`), `GET /v1/spaces/{id}/sessions` with `hidden_count`. A non-member gets 404 `space_not_found`.
+- **Create.** `POST /v1/sessions` takes `space_id` and calls `createSessionInSpace`, the same service as the internal route. It needs `spaces:write`. `workspace_id` must match the home workspace when sent. A new `preflight` hook on public routes runs these checks before the idempotency claim.
+- **Reads.** `GET /v1/sessions/{id}`, the stream and chat reads let a space member who passes `canViewItem` read a teammate's session. Every write stays owner-only.
+- **MCP.** `talyn_create_session` takes `space_id`; `talyn_list_spaces` is new and is not in the session token allow-list.
+- **No public task create exists**, so tasks are not covered.
+
 ## Spaces in the web app (2026-11-06)
 ## Teams and Spaces, phase 3: the prompter pays (2026-11-06)
 

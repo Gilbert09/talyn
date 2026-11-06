@@ -18,6 +18,9 @@ export const API_TOKEN_PREFIX = 'talyn_pat_';
  */
 export const API_SCOPES = [
   'workspaces:read',
+  'teams:read',
+  'spaces:read',
+  'spaces:write',
   'repositories:read',
   'repositories:write',
   'sessions:read',
@@ -37,6 +40,9 @@ export type ApiScope = (typeof API_SCOPES)[number];
 /** What each scope allows, in words for the token form. */
 export const API_SCOPE_LABELS: Record<ApiScope, string> = {
   'workspaces:read': 'Read workspaces',
+  'teams:read': 'Read your teams',
+  'spaces:read': 'Read team spaces and their sessions',
+  'spaces:write': 'Start sessions in team spaces',
   'repositories:read': 'Read repositories and their settings',
   'repositories:write': 'Change repository settings and instructions',
   'sessions:read': 'Read sessions, chats and transcripts',

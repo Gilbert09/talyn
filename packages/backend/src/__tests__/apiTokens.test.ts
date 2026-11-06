@@ -78,6 +78,8 @@ describe('scopeAllows', () => {
   it.each([
     [['sessions:read'], 'sessions:read', true],
     [['sessions:write'], 'sessions:read', true],
+    [['spaces:write'], 'spaces:read', true],
+    [['spaces:read'], 'spaces:write', false],
     [['sessions:write'], 'sessions:write', true],
     [['sessions:read'], 'sessions:write', false],
     [['workspaces:read'], 'sessions:read', false],

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
+import { eq } from 'drizzle-orm';
 import { claudeTurnLines, FakeFleet, isAgentTurn, type ExecReply } from './helpers/fakeFleet.js';
 import { callPublic, mintToken, startPublicApi, type Loose } from './helpers/publicApi.js';
-import { repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
+import { repositories, spaceRepositories, spaces, teamMembers, teams, users, workbenchChats, workbenchEvents, workbenches, workspaces } from '../db/schema.js';
 
 /**
  * `/v1` sessions and chats end to end against a fake fleet: create, list,
@@ -36,6 +37,7 @@ const { settleArchivesForTests, sweepStrandedProvisions } = await import('../ser
 const { setWorkObjectStoreForTests } = await import('../services/workbenches/workStorage.js');
 const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
+const { resetRepoReadCacheForTests } = await import('../services/teams/access.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { getChat, getWorkbench, listChats, appendEvents } = await import('../services/workbenches/store.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -75,6 +77,7 @@ describe('/v1 sessions and chats', () => {
     vi.stubEnv('FLEET_GATEWAY_TOKEN', '');
     vi.stubEnv('FLEET_ALLOWED', 'true');
     resetFeatureFlagsForTests();
+    resetRepoReadCacheForTests();
     testDb = await createTestDb();
     await seedUser(testDb.db, { id: 'owner-a' });
     await seedUser(testDb.db, { id: 'owner-b' });
@@ -106,6 +109,88 @@ describe('/v1 sessions and chats', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     resetFeatureFlagsForTests();
+    resetRepoReadCacheForTests();
+  });
+
+  describe('teams and spaces', () => {
+    async function seedSpace(includeTeammate = false) {
+      vi.stubEnv('SPACES_ENABLED', 'true');
+      resetFeatureFlagsForTests();
+      await testDb.db.update(users).set({ githubUserId: 101, githubUsername: 'owner-a' }).where(eq(users.id, 'owner-a'));
+      await testDb.db.update(users).set({ githubUserId: 102, githubUsername: 'owner-b' }).where(eq(users.id, 'owner-b'));
+      await testDb.db.insert(teams).values({ id: 'team-a', name: 'Acme' });
+      await testDb.db.insert(teamMembers).values([
+        { id: 'member-a', teamId: 'team-a', githubUserId: 101, userId: 'owner-a', githubLogin: 'owner-a', role: 'owner' },
+        ...(includeTeammate ? [{ id: 'member-b', teamId: 'team-a', githubUserId: 102, userId: 'owner-b', githubLogin: 'owner-b', role: 'member' }] : []),
+      ]);
+      await testDb.db.insert(spaces).values({ id: 'space-a', teamId: 'team-a', name: 'Web', color: '#4f46e5' });
+      await testDb.db.insert(spaceRepositories).values([
+        { spaceId: 'space-a', repoFullName: 'acme/app' },
+        { spaceId: 'space-a', repoFullName: 'acme/secret' },
+      ]);
+    }
+
+    it('starts a session in a member space through the home workspace', async () => {
+      await seedSpace(true);
+      await testDb.db.insert(repositories).values({ id: 'repo-b-space', workspaceId: 'ws-b', name: 'acme/app', url: 'https://github.com/acme/app', defaultBranch: 'main' });
+      const member = await mintToken('owner-b');
+      const res = await call('POST', '/sessions', { space_id: 'space-a', repository_id: 'repo-b-space', agent: 'claude' }, undefined, member);
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body).toMatchObject({ workspace_id: 'ws-b', space_id: 'space-a', repository_full_name: 'acme/app' });
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
+      const mismatch = await call('POST', '/sessions', { space_id: 'space-a', workspace_id: 'ws-a', repository_id: 'repo-b-space', agent: 'claude' }, undefined, member);
+      expect(mismatch.body.error).toMatchObject({ code: 'invalid_parameter', param: 'workspace_id' });
+    });
+
+    it('refuses strangers, missing scopes, and a disabled flag', async () => {
+      await seedSpace();
+      const stranger = await mintToken('owner-b');
+      const body = { space_id: 'space-a', repository_full_name: 'acme/app', agent: 'claude' };
+      expect((await call('POST', '/sessions', body, undefined, stranger)).body.error.code).toBe('space_not_found');
+      const narrow = await mintToken('owner-a', { scopes: ['sessions:write'] });
+      const missing = await call('POST', '/sessions', body, undefined, narrow);
+      expect(missing.status).toBe(403);
+      expect(missing.body.error).toMatchObject({ code: 'insufficient_scope', required_scope: 'spaces:write' });
+      vi.stubEnv('SPACES_ENABLED', 'false');
+      resetFeatureFlagsForTests();
+      expect((await call('POST', '/sessions', body)).body.error.code).toBe('spaces_unavailable');
+    });
+
+    it('lists teams, spaces, and visible sessions with a hidden count', async () => {
+      await seedSpace(true);
+      await testDb.db.insert(repositories).values({ id: 'repo-secret', workspaceId: 'ws-a', name: 'acme/secret', url: 'https://github.com/acme/secret', defaultBranch: 'main' });
+      await testDb.db.insert(workbenches).values([
+        { id: 'space-visible', workspaceId: 'ws-a', repositoryId: 'repo-a', repoFullName: 'acme/app', name: 'visible', branch: 'visible', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready', spaceId: 'space-a', sandboxId: 'secret-sandbox', createdAt: new Date('2026-11-01T00:00:00Z') },
+        { id: 'space-hidden', workspaceId: 'ws-a', repositoryId: 'repo-secret', repoFullName: 'acme/secret', name: 'hidden', branch: 'hidden', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready', spaceId: 'space-a', createdAt: new Date('2026-11-02T00:00:00Z') },
+      ]);
+      vi.spyOn(githubService, 'canAccessRepository').mockImplementation(async (_workspace, _owner, repo) => repo === 'app');
+      const teammate = await mintToken('owner-b');
+      const listedTeams = await call('GET', '/teams', undefined, undefined, teammate);
+      expect(listedTeams.body.data[0]).toMatchObject({ id: 'team-a', name: 'Acme', my_role: 'member' });
+      const listedSpaces = await call('GET', '/spaces?team_id=team-a', undefined, undefined, teammate);
+      expect(listedSpaces.body.data[0]).toMatchObject({ id: 'space-a', team_id: 'team-a', color: '#4f46e5' });
+      const listed = await call('GET', '/spaces/space-a/sessions?limit=1', undefined, undefined, teammate);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toMatchObject({ object: 'list', hidden_count: 1, has_more: true });
+      const next = await call('GET', `/spaces/space-a/sessions?limit=1&cursor=${listed.body.next_cursor}`, undefined, undefined, teammate);
+      expect([...listed.body.data, ...next.body.data].map((row: Loose) => row.id)).toEqual(['space-visible']);
+      expect(next.body.data[0]).toMatchObject({ creator_github_login: 'owner-a', space_id: 'space-a' });
+      expect(JSON.stringify([...listed.body.data, ...next.body.data])).not.toContain('secret-sandbox');
+    });
+
+    it('lets a teammate read a session and transcript, but not change it', async () => {
+      await seedSpace(true);
+      await testDb.db.insert(workbenches).values({ id: 'teammate-session', workspaceId: 'ws-a', repositoryId: 'repo-a', repoFullName: 'acme/app', name: 'shared', branch: 'shared', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready', spaceId: 'space-a' });
+      await testDb.db.insert(workbenchChats).values({ id: 'teammate-chat', workbenchId: 'teammate-session', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' });
+      await testDb.db.insert(workbenchEvents).values({ chatId: 'teammate-chat', seq: 1, turn: 1, event: { type: 'user', text: 'hello' } });
+      vi.spyOn(githubService, 'canAccessRepository').mockResolvedValue(true);
+      const teammate = await mintToken('owner-b', { scopes: ['sessions:read'] });
+      expect((await call('GET', '/sessions/teammate-session', undefined, undefined, teammate)).status).toBe(200);
+      expect((await call('GET', '/chats/teammate-chat/events', undefined, undefined, teammate)).body.data).toHaveLength(1);
+      expect((await call('POST', '/sessions/teammate-session/archive', {}, undefined, teammate)).status).toBe(403);
+      const writer = await mintToken('owner-b', { scopes: ['sessions:write'] });
+      expect((await call('POST', '/sessions/teammate-session/archive', {}, undefined, writer)).status).toBe(404);
+    });
   });
 
   describe('creating', () => {

@@ -153,6 +153,9 @@ describe('the publicApi flag', () => {
 describe('scopes', () => {
   it.each([
     ['GET', '/workspaces', ['sessions:read'], 'workspaces:read'],
+    ['GET', '/teams', ['sessions:read'], 'teams:read'],
+    ['GET', '/spaces', ['sessions:read'], 'spaces:read'],
+    ['GET', '/spaces/space-1/sessions', ['sessions:read'], 'spaces:read'],
     ['GET', '/repositories?workspace_id=ws-a', ['workspaces:read'], 'repositories:read'],
     ['GET', '/sessions?workspace_id=ws-a', ['workspaces:read'], 'sessions:read'],
     ['POST', '/sessions', ['sessions:read'], 'sessions:write'],

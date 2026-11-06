@@ -437,7 +437,8 @@ export async function createSessionInSpace(
   spaceId: string,
   actor: ReadinessUser,
   body: Partial<CreateSpaceSessionRequest>,
-  sentAt = new Date().toISOString()
+  sentAt = new Date().toISOString(),
+  expectedWorkspaceId?: string
 ): Promise<CreateSpaceSessionResponse> {
   const space = liveSpace(await assertSpaceMember(actor.id, spaceId));
   const requested = typeof body.repoFullName === 'string' ? body.repoFullName.trim() : '';
@@ -447,6 +448,9 @@ export async function createSessionInSpace(
   const workspaceId = await resolveHomeWorkspace(space.teamId, actor.id);
   if (!workspaceId) {
     throw new TeamError(409, 'You need a workspace of your own to start a session in a space.');
+  }
+  if (expectedWorkspaceId && expectedWorkspaceId !== workspaceId) {
+    throw new TeamError(400, 'workspace_id must be your home workspace for this team.');
   }
 
   let repositoryId = await workspaceRepositoryId(workspaceId, repoFullName);

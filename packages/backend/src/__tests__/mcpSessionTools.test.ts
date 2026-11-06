@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { Features } from '@talyn/shared';
 import { listToolsFor } from '../mcp/server.js';
+import { SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
 import { TOOLS, type McpToolDefinition } from '../mcp/tools/index.js';
 
 const OWNER = 'user-test';
@@ -173,6 +174,24 @@ describe('session tools', () => {
     await expect(
       tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'gpt' })
     ).rejects.toThrow('agent must be');
+  });
+
+  it('creates a session in a space through the space route', async () => {
+    const { calls } = mockApi({
+      'POST /api/v1/spaces/space-1/sessions': () => ({ workbench: session({ id: 'space-session' }), workspaceId: 'ws1', addedRepository: false }),
+    });
+    const result = await tool('create_session').handler(OWNER, {
+      space_id: 'space-1', repository_full_name: 'acme/web', agent: 'claude', prompt: 'Fix it',
+    });
+    expect(calls[0].body).toMatchObject({ repoFullName: 'acme/web', agent: 'claude', prompt: 'Fix it' });
+    expect(result).toContain('space-session');
+  });
+
+  it('lists teams and their spaces outside session tokens', async () => {
+    mockApi({ 'GET /api/v1/teams': () => [{ id: 'team-1', name: 'Acme', role: 'member', spaces: [{ id: 'space-1', name: 'Web' }] }] });
+    const result = await tool('list_spaces').handler(OWNER, {});
+    expect(result).toContain('Web (space-1)');
+    expect(SESSION_TOKEN_TOOLS.has('talyn_list_spaces')).toBe(false);
   });
 
   it('send_session_message uses the first chat of a session', async () => {

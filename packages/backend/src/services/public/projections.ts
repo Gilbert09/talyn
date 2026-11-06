@@ -1,6 +1,10 @@
 import { sql } from 'drizzle-orm';
 import type { AgentEvent } from '@talyn/shared';
 import {
+  spaces as spacesTable,
+  teams as teamsTable,
+  teamMembers as teamMembersTable,
+  users as usersTable,
   repositories as reposTable,
   workbenchChats as chatsTable,
   workbenches as workbenchesTable,
@@ -93,12 +97,39 @@ export function toPublicRepository(row: PublicRepositoryRow) {
 }
 
 // ---------------------------------------------------------------------------
+// Teams and spaces
+// ---------------------------------------------------------------------------
+
+export const PUBLIC_TEAM_COLUMNS = {
+  id: teamsTable.id, name: teamsTable.name, role: teamMembersTable.role,
+  createdAt: teamsTable.createdAt, cursorTime: cursorTimeColumn(teamsTable.createdAt),
+} as const;
+
+export function toPublicTeam(row: { id: string; name: string; role: string; createdAt: Date }) {
+  return { object: 'team' as const, id: row.id, name: row.name,
+    my_role: row.role === 'owner' || row.role === 'admin' ? row.role : 'member',
+    created_at: row.createdAt.toISOString() };
+}
+
+export const PUBLIC_SPACE_COLUMNS = {
+  id: spacesTable.id, teamId: spacesTable.teamId, name: spacesTable.name,
+  color: spacesTable.color, createdAt: spacesTable.createdAt,
+  cursorTime: cursorTimeColumn(spacesTable.createdAt),
+} as const;
+
+export function toPublicSpace(row: { id: string; teamId: string; name: string; color: string | null; createdAt: Date }) {
+  return { object: 'space' as const, id: row.id, team_id: row.teamId,
+    name: row.name, color: row.color, created_at: row.createdAt.toISOString() };
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
 export const PUBLIC_SESSION_COLUMNS = {
   id: workbenchesTable.id,
   workspaceId: workbenchesTable.workspaceId,
+  spaceId: workbenchesTable.spaceId,
   kind: workbenchesTable.kind,
   threadId: workbenchesTable.threadId,
   repositoryId: workbenchesTable.repositoryId,
@@ -127,6 +158,7 @@ export const PUBLIC_SESSION_COLUMNS = {
 export interface PublicSessionRow {
   id: string;
   workspaceId: string;
+  spaceId: string | null;
   kind: string;
   threadId: string | null;
   repositoryId: string | null;
@@ -174,6 +206,7 @@ export function toPublicSession(row: PublicSessionRow, chats?: PublicChatRow[]) 
     object: 'session' as const,
     id: row.id,
     workspace_id: row.workspaceId,
+    space_id: row.spaceId ?? null,
     kind: row.kind === 'thread' ? ('thread' as const) : ('session' as const),
     thread_id: row.threadId ?? null,
     repository_id: row.repositoryId ?? null,
@@ -196,6 +229,15 @@ export function toPublicSession(row: PublicSessionRow, chats?: PublicChatRow[]) 
     updated_at: row.updatedAt.toISOString(),
     ...(chats ? { chats: chats.map(toPublicChat) } : {}),
   };
+}
+
+export const PUBLIC_SPACE_SESSION_COLUMNS = {
+  ...PUBLIC_SESSION_COLUMNS,
+  creatorLogin: usersTable.githubUsername,
+} as const;
+
+export function toPublicSpaceSession(row: PublicSessionRow & { spaceId: string | null; creatorLogin: string | null }) {
+  return { ...toPublicSession(row), space_id: row.spaceId!, creator_github_login: row.creatorLogin };
 }
 
 // ---------------------------------------------------------------------------

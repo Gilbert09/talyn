@@ -87,6 +87,7 @@ afterEach(() => {
 });
 
 const EXCLUDED = [
+  'talyn_list_spaces',
   // Credential surfaces
   'talyn_list_mcp_servers', 'talyn_get_mcp_server', 'talyn_test_mcp_server', 'talyn_set_mcp_server_enabled',
   'talyn_delete_mcp_server', 'talyn_connect_mcp_server', 'talyn_create_mcp_server',

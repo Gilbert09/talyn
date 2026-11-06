@@ -26,6 +26,8 @@ import {
   type WorkbenchDiff,
   type WorkbenchChat,
   type WorkbenchEvent,
+  type Workspace,
+  type CreateSpaceSessionResponse,
 } from '@talyn/shared';
 import {
   chatWorkbenchId,
@@ -467,6 +469,8 @@ export const SESSIONS = [
     {
       ...workspaceSchema,
       repository_id: textSchema,
+      space_id: { type: 'string', description: 'Start in this team space and use your home workspace.' },
+      repository_full_name: { type: 'string', description: 'Repository owner/name in the space. Use when it is not in one of your workspaces.' },
       agent: { type: 'string', enum: ['claude', 'codex'], description: 'Fixed for the life of the session.' },
       model: textSchema,
       prompt: { type: 'string', description: 'The first message.' },
@@ -477,11 +481,50 @@ export const SESSIONS = [
       internet_access: booleanSchema,
       auto_create_pr: booleanSchema,
     },
-    ['repository_id', 'agent'],
+    ['agent'],
     { openWorldHint: true },
     async (ownerId, args, ctx) => {
       const agent = str(args.agent);
       if (agent !== 'claude' && agent !== 'codex') throw new Error('agent must be "claude" or "codex"');
+      const spaceId = str(args.space_id);
+      if (spaceId) {
+        let repoFullName = str(args.repository_full_name);
+        const repositoryId = str(args.repository_id);
+        if (repositoryId) {
+          const workspaces = await callApi<Workspace[]>(ownerId, 'GET', '/workspaces');
+          const found = workspaces.flatMap((workspace) => workspace.repos).find((repo) => repo.id === repositoryId);
+          if (!found) throw new Error('repository_id was not found in your workspaces.');
+          if (repoFullName && repoFullName.toLowerCase() !== found.name.toLowerCase()) {
+            throw new Error('repository_id and repository_full_name must name the same repository.');
+          }
+          repoFullName = found.name;
+        }
+        if (!repoFullName) throw new Error('repository_id or repository_full_name is required.');
+        if (str(args.pull_request_id) || args.auto_create_pr !== undefined) {
+          throw new Error('pull_request_id and auto_create_pr are not supported in a space.');
+        }
+        const requestedWorkspace = str(args.workspace_id);
+        if (requestedWorkspace) {
+          const teams = await callApi<Array<{ homeWorkspaceId: string | null; spaces: Array<{ id: string }> }>>(ownerId, 'GET', '/teams');
+          const team = teams.find((item) => item.spaces.some((space) => space.id === spaceId));
+          if (team && requestedWorkspace !== team.homeWorkspaceId) {
+            throw new Error('workspace_id must be your home workspace for this team.');
+          }
+        }
+        const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;
+        if (reserved?.threadId) throw new Error('A thread cannot start a session in a space.');
+        const created = await callApi<CreateSpaceSessionResponse>(ownerId, 'POST', `/spaces/${encodeURIComponent(spaceId)}/sessions`, {
+          repoFullName, agent,
+          ...(str(args.model) ? { model: str(args.model) } : {}),
+          ...(str(args.prompt) ? { prompt: str(args.prompt) } : {}),
+          ...(str(args.name) ? { name: str(args.name) } : {}),
+          ...(str(args.base_branch) ? { baseBranch: str(args.base_branch) } : {}),
+          ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+          ...(args.internet_access !== undefined ? { internetAccess: bool(args, 'internet_access') } : {}),
+        });
+        if (ctx?.session) await recordSessionSpawn(created.workbench.id, ctx.session);
+        return sessionDetail(created.workbench);
+      }
       const body: Record<string, unknown> = {
         workspaceId: await resolveWorkspace(ownerId, args),
         repositoryId: requireId(args, 'repository_id'),

@@ -41,6 +41,9 @@ You can revoke a token in the same screen at any time.
 | Scope | Gives access to |
 | --- | --- |
 | `workspaces:read` | `GET /workspaces`, `GET /workspaces/{id}` |
+| `teams:read` | List your teams and roles. |
+| `spaces:read` | List spaces and visible sessions in them. |
+| `spaces:write` | Start sessions in spaces. Also includes `spaces:read`. |
 | `repositories:read` | `GET /repositories` |
 | `sessions:read` | Read sessions, chats and events. Open the streams. |
 | `sessions:write` | Start, archive, restore and retry sessions. Open chats. Send messages. Stop turns. Start a session on a pull request. Also includes `sessions:read`. |

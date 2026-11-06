@@ -1,4 +1,7 @@
 import { v4 as uuid } from 'uuid';
+import { eq } from 'drizzle-orm';
+import { getPoolDbClient } from '../../db/client.js';
+import { repositories as reposTable } from '../../db/schema.js';
 import type { WorkbenchAgent, WorkbenchEffort } from '@talyn/shared';
 import {
   Chat,
@@ -11,6 +14,10 @@ import {
 } from '../../schemas/public/resources.js';
 import {
   authorizedSession,
+  authorizedReadableSession,
+  assertSpacesAvailable,
+  assertSpacesWrite,
+  authorizeWorkspace,
   refuseLocalRuntime,
   resolveWorkspaceId,
 } from '../../services/public/authorize.js';
@@ -20,6 +27,10 @@ import { toPublicChat, toPublicSession } from '../../services/public/projections
 import { getChatQuery, getSessionQuery, listSessionsQuery, openChatsQuery } from '../../services/public/queries.js';
 import { streamSession } from '../../services/public/sse.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../../services/workbenches/create.js';
+import { createSessionInSpace } from '../../services/teams/spaces.js';
+import { TeamError } from '../../services/billing/teams.js';
+import { assertSpaceMember } from '../../services/teams/access.js';
+import { resolveHomeWorkspace } from '../../services/teams/membership.js';
 import { emitWorkbenchChat } from '../../services/workbenches/emit.js';
 import { archiveWorkbench, restoreWorkbench, retryWorkbench } from '../../services/workbenches/lifecycle.js';
 import { sandboxRefusal, workbenchReadiness } from '../../services/workbenches/readiness.js';
@@ -80,8 +91,56 @@ export const sessionRoutes: PublicRoute[] = [
     creates: true,
     body: CreateSessionBody,
     responses: { 201: { description: 'The new session. `status` is `provisioning`.', schema: Session } },
+    async preflight({ body, token }) {
+      if (!body.space_id) return;
+      assertSpacesWrite(token);
+      await assertSpacesAvailable(token);
+      try {
+        const space = await assertSpaceMember(token.ownerId, body.space_id);
+        const homeWorkspaceId = await resolveHomeWorkspace(space.teamId, token.ownerId);
+        if (homeWorkspaceId && body.workspace_id && body.workspace_id !== homeWorkspaceId) {
+          throw new PublicApiError(400, 'invalid_parameter', 'workspace_id must be your home workspace for this team.', { param: 'workspace_id' });
+        }
+        if (homeWorkspaceId) await authorizeWorkspace(token, homeWorkspaceId);
+      } catch (err) {
+        if (err instanceof TeamError && err.status === 404) throw notFound('space');
+        throw err;
+      }
+    },
     async handler({ body, token }) {
       const sentAt = new Date().toISOString();
+      if (body.space_id) {
+        if (body.kind === 'thread' || body.thread_id || body.pull_request_id || body.auto_create_pr !== undefined) {
+          throw new PublicApiError(400, 'invalid_parameter', 'This option is not supported when space_id is set.', { param: 'space_id' });
+        }
+        let repoFullName = body.repository_full_name;
+        if (body.repository_id) {
+          const [repo] = await getPoolDbClient().select({ name: reposTable.name, workspaceId: reposTable.workspaceId })
+            .from(reposTable).where(eq(reposTable.id, body.repository_id)).limit(1);
+          if (!repo) throw notFound('repository');
+          await authorizeWorkspace(token, repo.workspaceId);
+          if (repoFullName && repoFullName.toLowerCase() !== repo.name.toLowerCase()) {
+            throw new PublicApiError(400, 'invalid_parameter', 'repository_id and repository_full_name must name the same repository.', { param: 'repository_full_name' });
+          }
+          repoFullName = repo.name;
+        }
+        if (!repoFullName) throw new PublicApiError(400, 'missing_parameter', 'repository_id or repository_full_name is required.', { param: 'repository_id' });
+        try {
+          const created = await createSessionInSpace(body.space_id, { id: token.ownerId, email: token.email }, {
+            repoFullName, agent: body.agent, model: body.model, prompt: body.prompt, name: body.name,
+            baseBranch: body.base_branch, branch: body.branch, internetAccess: body.internet_access,
+          }, sentAt, body.workspace_id);
+          return { status: 201, body: await sessionWithChats(created.workbench.id) };
+        } catch (err) {
+          if (err instanceof TeamError) {
+            if (err.status === 404) throw notFound('space');
+            throw new PublicApiError(err.status, err.status === 400 ? 'invalid_parameter' : 'space_unavailable', err.message,
+              err.status === 400 && body.workspace_id ? { param: 'workspace_id' } : {});
+          }
+          throw err;
+        }
+      }
+      if (body.repository_full_name) throw new PublicApiError(400, 'invalid_parameter', 'repository_full_name needs space_id.', { param: 'repository_full_name' });
       const workspaceId = await resolveWorkspaceId(token, body.workspace_id);
       const input: CreateWorkbenchServiceInput = {
         workspaceId,
@@ -118,7 +177,7 @@ export const sessionRoutes: PublicRoute[] = [
     params: IdParams,
     responses: { 200: { description: 'The session, with its open chats.', schema: Session } },
     async handler({ params, token }) {
-      const row = await authorizedSession(token, params.id);
+      const row = await authorizedReadableSession(token, params.id);
       return { status: 200, body: toPublicSession(row, await openChatsQuery(row.id)) };
     },
   }),
@@ -238,7 +297,7 @@ export const sessionRoutes: PublicRoute[] = [
     params: IdParams,
     responses: { 200: { description: 'A `text/event-stream`.', contentType: 'text/event-stream' } },
     async handler({ req, res, params, token }) {
-      const row = await authorizedSession(token, params.id);
+      const row = await authorizedReadableSession(token, params.id);
       await streamSession(req, res, { token, session: row });
     },
   }),

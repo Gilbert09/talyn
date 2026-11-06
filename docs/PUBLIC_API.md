@@ -15,6 +15,8 @@ The API is behind a feature flag during early access. If the flag is off for you
 
 Session endpoints also need sessions to be on for your account. If they are not, the answer is `403` with the code `workbenches_unavailable`.
 
+Team and space endpoints need the `spaces` feature. Talyn checks this flag for the token owner. If it is off, Talyn answers `403` with `spaces_unavailable`.
+
 ## Quickstart
 
 The steps use `curl`. A TypeScript version of the whole flow follows the steps. Each guide in the `api` folder also has TypeScript examples.
@@ -214,6 +216,9 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | GET | `/me` | any valid token | Get the token and its owner |
 | GET | `/workspaces` | `workspaces:read` | List workspaces |
 | GET | `/workspaces/{id}` | `workspaces:read` | Get a workspace |
+| GET | `/teams` | `teams:read` | List your teams and roles |
+| GET | `/spaces` | `spaces:read` | List your live spaces; filter by `team_id` |
+| GET | `/spaces/{id}/sessions` | `spaces:read` | List visible sessions and `hidden_count` |
 | GET | `/repositories` | `repositories:read` | List repositories of a workspace |
 | GET | `/sessions` | `sessions:read` | List sessions |
 | POST | `/sessions` | `sessions:write` | Start a session |
@@ -300,6 +305,18 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | GET | `/repositories/{id}/setup_recipe` | `repositories:read` | Get the learned setup recipe |
 | POST | `/repositories/{id}/setup_recipe/steps/{step_id}/revert` | `repositories:write` | Revert a setup step |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
+
+## Sessions in spaces
+
+To start a session in a space, set `space_id` on `POST /sessions`. The token also needs `spaces:write`.
+
+Send `repository_id` from one of your workspaces, or send `repository_full_name` as `owner/name`.
+Talyn uses your home workspace for the team. Talyn adds the repository there when needed.
+If you send `workspace_id`, it must be that home workspace.
+
+A teammate can read a space session and its transcript when their GitHub account can read its repository.
+Only the session owner can change it.
+`hidden_count` counts sessions hidden on the current page.
 
 ## Local sessions
 

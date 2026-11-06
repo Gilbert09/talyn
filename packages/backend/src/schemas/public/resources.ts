@@ -59,6 +59,17 @@ export const Repository = z
 
 export const RepositoryList = listOf(Repository, 'RepositoryList');
 
+export const Team = z.object({
+  object: z.literal('team'), id: Id, name: z.string(), my_role: z.enum(['owner', 'admin', 'member']), created_at: Timestamp,
+}).openapi('Team');
+export const TeamList = listOf(Team, 'TeamList');
+export const Space = z.object({
+  object: z.literal('space'), id: Id, team_id: Id, name: z.string(), color: z.string().nullable(), created_at: Timestamp,
+}).openapi('Space');
+export const SpaceList = listOf(Space, 'SpaceList');
+export const ListSpacesQuery = z.object({ team_id: Id.optional(), ...PageQuery }).strict();
+export const ListSpaceSessionsQuery = z.object(PageQuery).strict();
+
 export const ListWorkspacesQuery = z.object(PageQuery).strict();
 
 export const ListRepositoriesQuery = z
@@ -108,6 +119,7 @@ export const Session = z
     id: Id,
     workspace_id: Id,
     kind: z.enum(SESSION_KINDS),
+    space_id: Id.nullable(),
     thread_id: Id.nullable().openapi({ description: 'The thread this session belongs to, if any.' }),
     repository_id: Id.nullable().openapi({ description: 'Null for a thread.' }),
     repository_full_name: z.string().nullable(),
@@ -137,6 +149,11 @@ export const Session = z
   .openapi('Session');
 
 export const SessionList = listOf(Session, 'SessionList');
+export const SpaceSession = Session.extend({
+  space_id: Id,
+  creator_github_login: z.string().nullable(),
+}).omit({ chats: true }).openapi('SpaceSession');
+export const SpaceSessionList = listOf(SpaceSession, 'SpaceSessionList').extend({ hidden_count: z.number().int() }).openapi('SpaceSessionList');
 
 const commaList = <T extends readonly [string, ...string[]]>(values: T, what: string) =>
   z
@@ -168,9 +185,11 @@ export const ListSessionsQuery = z
 
 export const CreateSessionBody = z
   .object({
-    workspace_id: Id.optional().openapi({ description: 'Required unless the token is bound to exactly one workspace.' }),
+    workspace_id: Id.optional().openapi({ description: 'Required unless space_id is set or the token is bound to one workspace.' }),
+    space_id: Id.optional().openapi({ description: 'Start in this space. Requires spaces:write and uses your home workspace.' }),
+    repository_full_name: z.string().min(3).max(200).optional().openapi({ description: 'Repository owner/name in the space. Use when no repository_id exists in your workspaces.' }),
     kind: z.enum(SESSION_KINDS).optional().openapi({ description: 'Default `session`. A thread takes no repository or branch.' }),
-    repository_id: Id.optional().openapi({ description: 'Required for a session.' }),
+    repository_id: Id.optional().openapi({ description: 'Required for a session unless space_id and repository_full_name are set.' }),
     agent: z.enum(AGENTS),
     model: z.string().min(1).max(200).optional(),
     prompt: z.string().min(1).max(100_000).optional().openapi({ description: 'The first message. The agent starts on it when the sandbox is ready.' }),

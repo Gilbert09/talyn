@@ -15,6 +15,7 @@ import {
   getSessionQuery,
   listRepositoriesQuery,
   listSessionsQuery,
+  listSpaceSessionsQuery,
   listWorkspacesQuery,
   openChatsQuery,
 } from '../services/public/queries.js';
@@ -106,7 +107,7 @@ describe('public projections', () => {
     expectNoSecrets(session);
     expect(Object.keys(session).sort()).toEqual(
       [
-        'object', 'id', 'workspace_id', 'kind', 'thread_id', 'repository_id', 'repository_full_name', 'name', 'title',
+        'object', 'id', 'workspace_id', 'space_id', 'kind', 'thread_id', 'repository_id', 'repository_full_name', 'name', 'title',
         'branch', 'base_branch', 'runtime', 'agent', 'model', 'status', 'status_message', 'pull_request_id',
         'internet_access', 'auto_create_pr', 'diff_stat', 'archived_at', 'created_at', 'updated_at', 'chats',
       ].sort(),
@@ -183,7 +184,7 @@ describe('egress', () => {
   const selectList = (sqlText: string) => sqlText.slice(0, sqlText.indexOf(' from '));
 
   it('the session reads never ship the settings or diff_stat blobs, nor any secret column', () => {
-    for (const query of [listSessionsQuery('ws-a', {}, null, 10), getSessionQuery('wb-1')]) {
+    for (const query of [listSessionsQuery('ws-a', {}, null, 10), getSessionQuery('wb-1'), listSpaceSessionsQuery('space-a', null, 10)]) {
       const select = selectList(query.toSQL().sql);
       for (const column of ['"device_id"', '"local_path"', '"sandbox_id"', '"fleet_host"', '"sandbox_state"', '"pushed_head_shas"']) {
         expect(select).not.toContain(column);

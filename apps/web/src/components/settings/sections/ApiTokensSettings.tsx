@@ -41,12 +41,14 @@ const EXPIRY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: NO_EXPIRY, label: 'No expiry' },
 ];
 
-type Resource = 'workspaces' | 'repositories' | 'sessions';
+type Resource = 'workspaces' | 'teams' | 'spaces' | 'repositories' | 'sessions';
 type Level = 'none' | 'read' | 'write';
 type Levels = Record<Resource, Level>;
 
 const RESOURCES: Array<{ key: Resource; label: string }> = [
   { key: 'workspaces', label: 'Workspaces' },
+  { key: 'teams', label: 'Teams' },
+  { key: 'spaces', label: 'Spaces' },
   { key: 'repositories', label: 'Repositories' },
   { key: 'sessions', label: 'Sessions' },
 ];
@@ -54,8 +56,8 @@ const LEVEL_LABELS: Record<Level, string> = { none: 'None', read: 'Read', write:
 const levelsFor = (resource: Resource): Level[] =>
   (API_SCOPES as readonly string[]).includes(`${resource}:write`) ? ['none', 'read', 'write'] : ['none', 'read'];
 
-const READ_ONLY: Levels = { workspaces: 'read', repositories: 'read', sessions: 'read' };
-const FULL_ACCESS: Levels = { workspaces: 'read', repositories: 'read', sessions: 'write' };
+const READ_ONLY: Levels = { workspaces: 'read', teams: 'read', spaces: 'read', repositories: 'read', sessions: 'read' };
+const FULL_ACCESS: Levels = { workspaces: 'read', teams: 'read', spaces: 'write', repositories: 'read', sessions: 'write' };
 
 /** The scopes a set of levels grants. Write sends its read scope too. */
 function scopesFor(levels: Levels): ApiScope[] {

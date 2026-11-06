@@ -124,6 +124,8 @@ async function runRoute(route: PublicRoute, req: Request, res: Response): Promis
   const params = route.params ? route.params.parse(req.params) : {};
   const query = route.query ? route.query.parse(req.query) : {};
   const body = route.body ? route.body.parse(req.body ?? {}) : undefined;
+  const context = { req, res, params, query, body, token };
+  if (route.preflight) await route.preflight(context);
 
   let claim: IdempotencyClaim | null = null;
   const rawKey = route.creates || route.idempotent ? req.header(IDEMPOTENCY_HEADER) : undefined;
@@ -139,7 +141,7 @@ async function runRoute(route: PublicRoute, req: Request, res: Response): Promis
 
   let result;
   try {
-    result = await route.handler({ req, res, params, query, body, token });
+    result = await route.handler(context);
   } catch (err) {
     if (claim?.kind === 'proceed') await claim.release().catch(() => undefined);
     throw err;

@@ -101,7 +101,7 @@ export async function callerGithubIdentity(
  * GitHub id that nobody has claimed yet. A row another account claimed stays
  * that account's.
  */
-function mineCondition(userId: string, githubUserId: number | null) {
+export function mineCondition(userId: string, githubUserId: number | null) {
   return githubUserId === null
     ? eq(teamMembersTable.userId, userId)
     : or(

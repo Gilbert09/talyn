@@ -70,6 +70,7 @@ export interface PublicRouteDefinition<P extends ZodTypeAny, Q extends ZodTypeAn
   params?: P;
   query?: Q;
   body?: B;
+  preflight?(ctx: PublicRouteContext<output<P>, output<Q>, output<B>>): Promise<void>;
   handler(ctx: PublicRouteContext<output<P>, output<Q>, output<B>>): Promise<PublicRouteResult>;
 }
 
@@ -78,6 +79,7 @@ export interface PublicRoute extends RouteFields {
   params?: ZodTypeAny;
   query?: ZodTypeAny;
   body?: ZodTypeAny;
+  preflight?(ctx: PublicRouteContext<unknown, unknown, unknown>): Promise<void>;
   handler(ctx: PublicRouteContext<unknown, unknown, unknown>): Promise<PublicRouteResult>;
 }
 

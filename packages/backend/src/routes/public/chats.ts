@@ -9,7 +9,7 @@ import {
   SendMessageBody,
   StreamEventsQuery,
 } from '../../schemas/public/resources.js';
-import { authorizedChat, authorizedSession, refuseLocalRuntime } from '../../services/public/authorize.js';
+import { authorizedChat, authorizedReadableChat, authorizedSession, refuseLocalRuntime } from '../../services/public/authorize.js';
 import { PublicApiError, notFound } from '../../services/public/errors.js';
 import { toPublicChat, toPublicEvent } from '../../services/public/projections.js';
 import { getChatQuery } from '../../services/public/queries.js';
@@ -31,7 +31,7 @@ export const chatRoutes: PublicRoute[] = [
     params: IdParams,
     responses: { 200: { description: 'The chat.', schema: Chat } },
     async handler({ params, token }) {
-      return { status: 200, body: toPublicChat(await authorizedChat(token, params.id)) };
+      return { status: 200, body: toPublicChat(await authorizedReadableChat(token, params.id)) };
     },
   }),
 
@@ -101,7 +101,7 @@ export const chatRoutes: PublicRoute[] = [
     query: ListEventsQuery,
     responses: { 200: { description: 'A page of events.', schema: EventPage } },
     async handler({ params, query, token }) {
-      const chat = await authorizedChat(token, params.id);
+      const chat = await authorizedReadableChat(token, params.id);
       if (query.before !== undefined) {
         if (query.after !== undefined) throw new PublicApiError(400, 'invalid_parameter', 'Send after or before, not both.', { param: 'before' });
         const page = await listOlderEvents(chat.id, query.before === 'latest' ? null : query.before, query.limit, MAX_EVENT_PAGE);
@@ -150,7 +150,7 @@ export const chatRoutes: PublicRoute[] = [
     query: StreamEventsQuery,
     responses: { 200: { description: 'A `text/event-stream`.', contentType: 'text/event-stream' } },
     async handler({ req, res, params, query, token }) {
-      const chat = await authorizedChat(token, params.id);
+      const chat = await authorizedReadableChat(token, params.id);
       const after = lastEventId(req) ?? query.after ?? 0;
       await streamChatEvents(req, res, { token, chat, after });
     },
