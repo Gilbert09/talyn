@@ -1,4 +1,4 @@
-import { mcpFetch, publicHttpsUrl as httpsUrl, readMcpBody } from './http.js';
+import { fetchFailureReason, mcpFetch, publicHttpsUrl as httpsUrl, readMcpBody } from './http.js';
 
 /**
  * Finding an MCP server's authorization server, per the MCP authorization spec.
@@ -97,21 +97,30 @@ export async function inspectMcpEndpoint(
   endpoint: string,
   signal: AbortSignal
 ): Promise<EndpointChallenge> {
-  const resp = await mcpFetch(endpoint, {
-    method: 'POST',
-    signal,
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-06-18',
-        capabilities: {},
-        clientInfo: { name: 'talyn', version: '1' },
-      },
-    }),
-  });
+  let resp: Response;
+  try {
+    resp = await mcpFetch(endpoint, {
+      method: 'POST',
+      signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'talyn', version: '1' },
+        },
+      }),
+    });
+  } catch (err) {
+    throw new McpDiscoveryError(
+      signal.aborted
+        ? 'the server did not answer in time'
+        : `could not reach the server: ${fetchFailureReason(err)}`
+    );
+  }
   const challenge = resp.headers.get('www-authenticate') ?? '';
   let anonymous = false;
   if (resp.ok)

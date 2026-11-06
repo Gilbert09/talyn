@@ -4,6 +4,8 @@ import {
   challengeParameter,
   discover,
   discoverAuthServer,
+  inspectMcpEndpoint,
+  McpDiscoveryError,
 } from '../services/mcpServers/discovery.js';
 import {
   isPublicAddress,
@@ -301,5 +303,28 @@ describe('MCP discovery network boundaries', () => {
   it('cancels oversized responses', async () => {
     const response = new Response('12345');
     await expect(readMcpBody(response, 4)).rejects.toThrow(/too large/);
+  });
+});
+
+describe('MCP endpoint failures', () => {
+  function fetchFailed(cause: Error & { code?: string }) {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    }));
+  }
+
+  it.each([
+    ['a redirect', new Error('unexpected redirect'), 'the server redirected to another address'],
+    [
+      'an unresolvable host',
+      Object.assign(new Error('getaddrinfo ENOTFOUND mcp.example.com'), { code: 'ENOTFOUND' }),
+      'the address cannot be resolved from Talyn’s servers',
+    ],
+    ['a private address', new Error('The server address must be public.'), 'The server address must be public.'],
+  ])('says why the server could not be reached after %s', async (_name, cause, reason) => {
+    fetchFailed(cause);
+    const failure = inspectMcpEndpoint(endpoint, new AbortController().signal);
+    await expect(failure).rejects.toBeInstanceOf(McpDiscoveryError);
+    await expect(failure).rejects.toThrow(`could not reach the server: ${reason}`);
   });
 });

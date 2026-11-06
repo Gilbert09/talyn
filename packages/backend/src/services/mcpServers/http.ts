@@ -55,6 +55,19 @@ export function publicHttpsUrl(value: unknown): string | null {
   }
 }
 
+/** undici says only "fetch failed" and keeps the reason on `cause`. */
+export function fetchFailureReason(err: unknown): string {
+  const cause = err instanceof Error && err.cause instanceof Error ? err.cause : err;
+  const code = (cause as { code?: unknown } | null)?.code;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message === 'unexpected redirect') return 'the server redirected to another address. Check the address';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN')
+    return 'the address cannot be resolved from Talyn’s servers';
+  if (code === 'ECONNREFUSED') return 'the server refused the connection';
+  if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') return 'the connection timed out';
+  return message;
+}
+
 export async function mcpFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const safe = publicHttpsUrl(url);
   if (!safe) throw new Error('Use a public HTTPS server address.');

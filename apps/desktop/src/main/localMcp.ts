@@ -58,13 +58,15 @@ function isUnreachableHost(hostname: string): boolean {
     h === 'localhost' ||
     h.endsWith('.localhost') ||
     h.endsWith('.local') ||
+    h.endsWith('.ts.net') ||
     h === '::1' ||
     /^127\./.test(h) ||
     /^10\./.test(h) ||
     /^0\./.test(h) ||
     /^192\.168\./.test(h) ||
     /^169\.254\./.test(h) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h)
   );
 }
 
