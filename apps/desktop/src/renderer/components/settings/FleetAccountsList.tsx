@@ -17,22 +17,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Could not update the account';
 }
 
-export function formatResetAt(iso: string, now = new Date()): string {
-  const reset = new Date(iso);
-  if (Number.isNaN(reset.getTime())) return 'resets at an unknown time';
+function formatTimeAt(iso: string, action: string, now = new Date()): string {
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return `${action} at an unknown time`;
 
   // Always with minutes: an hour alone ("22") read as a date.
-  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(reset);
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(instant);
   const localDay = (date: Date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
-  const daysAway = (localDay(reset) - localDay(now)) / 86_400_000;
-  if (daysAway === 0) return `resets today at ${time}`;
-  if (daysAway === 1) return `resets tomorrow at ${time}`;
+  const daysAway = (localDay(instant) - localDay(now)) / 86_400_000;
+  if (daysAway === 0) return `${action} today at ${time}`;
+  if (daysAway === 1) return `${action} tomorrow at ${time}`;
 
-  const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(reset);
-  if (daysAway > 1 && daysAway <= 6) return `resets ${weekday} at ${time}`;
+  const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(instant);
+  if (daysAway > 1 && daysAway <= 6) return `${action} ${weekday} at ${time}`;
 
-  const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(reset);
-  return `resets ${weekday} ${date} at ${time}`;
+  const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(instant);
+  return `${action} ${weekday} ${date} at ${time}`;
+}
+
+export function formatResetAt(iso: string, now = new Date()): string {
+  return formatTimeAt(iso, 'resets', now);
+}
+
+export function formatRetryAt(iso: string, now = new Date()): string {
+  return formatTimeAt(iso, 'can retry', now);
 }
 
 function updatedTime(value: string): string {
@@ -175,7 +183,7 @@ export function FleetAccountRow({
         {account.label.toLowerCase() !== kindLabel(account.kind).toLowerCase() && <span className="text-xs text-muted-foreground">{kindLabel(account.kind)}</span>}
         {active && <Badge variant="secondary">Active</Badge>}
         {account.needsReauth ? <Badge variant="destructive">Reconnect needed</Badge>
-          : account.held ? <Badge variant="secondary">Limit reached{account.held.until ? `, ${formatResetAt(account.held.until)}` : ''}</Badge>
+          : account.held ? <Badge variant="secondary">Limit reached{account.held.until ? `, ${formatRetryAt(account.held.until)}` : ''}</Badge>
             : account.over ? <Badge variant="destructive">{switchAtPercent === 100 ? 'Limit reached' : `Over ${switchAtPercent}%`}</Badge> : null}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
