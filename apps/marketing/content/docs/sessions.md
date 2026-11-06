@@ -93,6 +93,8 @@ Talyn also archives a session by itself:
 - When its pull request is merged and no chat is running.
 - When it has been idle for 7 days.
 
+Open **Settings > Sessions > Auto-archive** to change these rules. You can turn off either rule. You can also choose how long a session stays idle before Talyn archives it.
+
 To bring a session back, open **History** and select **Restore**.
 
 To delete a session for good, open **History** and select delete. This removes the session and its chats. It does not touch the branch on GitHub.

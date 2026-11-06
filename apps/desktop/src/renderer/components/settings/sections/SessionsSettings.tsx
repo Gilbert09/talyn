@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   FLEET_MODELS,
+  DEFAULT_AUTO_ARCHIVE_IDLE_DAYS,
   WORKBENCH_EFFORTS,
   defaultFleetModelForAgent,
   fleetAgentForModel,
@@ -24,6 +25,79 @@ const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
   xhigh: 'Extra-high',
   max: 'Max',
 };
+
+const IDLE_DAY_OPTIONS = [0, 1, 3, 7, 14, 30];
+
+function AutoArchiveSection() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const storedIdleDays = workspace?.settings?.autoArchiveIdleDays === undefined
+    ? DEFAULT_AUTO_ARCHIVE_IDLE_DAYS : (workspace.settings.autoArchiveIdleDays ?? 0);
+  const storedOnMerge = workspace?.settings?.autoArchiveOnMerge !== false;
+  const [idleDays, setIdleDays] = useState(storedIdleDays);
+  const [onMerge, setOnMerge] = useState(storedOnMerge);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setIdleDays(storedIdleDays), [storedIdleDays]);
+  useEffect(() => setOnMerge(storedOnMerge), [storedOnMerge]);
+
+  const save = async (settings: Workspace['settings']) => {
+    if (!currentWorkspaceId) return;
+    setSaving(true);
+    try {
+      await api.workspaces.update(currentWorkspaceId, { settings });
+      setWorkspaces(workspaces.map((w) => w.id === currentWorkspaceId
+        ? { ...w, settings: { ...w.settings, ...settings } as Workspace['settings'] } : w));
+    } catch (e) {
+      setIdleDays(storedIdleDays);
+      setOnMerge(storedOnMerge);
+      toast.error(e instanceof Error ? e.message : 'Could not save auto-archive settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const idleOptions = IDLE_DAY_OPTIONS.includes(idleDays)
+    ? IDLE_DAY_OPTIONS : [...IDLE_DAY_OPTIONS, idleDays].sort((a, b) => a - b);
+
+  return (
+    <SettingsSection title="Auto-archive">
+      <SettingRow
+        label="Archive idle sessions"
+        description="A session with no messages, terminal input or scripts for this long is archived. Its work is saved first."
+      >
+        <SettingsSelect
+          value={idleDays}
+          disabled={saving}
+          onChange={(e) => {
+            const value = Number(e.target.value);
+            setIdleDays(value);
+            void save({ autoArchiveIdleDays: value });
+          }}
+          aria-label="Archive idle sessions"
+        >
+          {idleOptions.map((days) => (
+            <option key={days} value={days}>
+              {days === 0 ? 'Off' : `After ${days} ${days === 1 ? 'day' : 'days'}${days === 7 ? ' (default)' : ''}`}
+            </option>
+          ))}
+        </SettingsSelect>
+      </SettingRow>
+      <SettingToggle
+        label="Archive when the pull request merges"
+        description="When a session's pull request merges, the session is archived."
+        checked={onMerge}
+        disabled={saving}
+        onChange={(value) => {
+          setOnMerge(value);
+          void save({ autoArchiveOnMerge: value });
+        }}
+      />
+    </SettingsSection>
+  );
+}
 
 function BranchPrefixRow() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -161,7 +235,7 @@ export function SessionsSettings() {
   const defaults = useSessionDefaults();
 
   return (
-    <SettingsPage title="Sessions" description="What a new session starts with. You can still change each one before you start it.">
+    <SettingsPage title="Sessions" description="Choose defaults and archive rules for sessions.">
       <SettingsSection title="Defaults">
         <SettingRow label="Runtime" description="Where new sessions run. When it is unavailable, Talyn uses the other one.">
           <SettingsSelect
@@ -213,6 +287,7 @@ export function SessionsSettings() {
       <SettingsSection title="Branches">
         <BranchPrefixRow />
       </SettingsSection>
+      <AutoArchiveSection />
       <SettingsSection title="Notifications">
         <SettingToggle
           label="Notify me when an agent finishes"

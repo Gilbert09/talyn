@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Request, Response } from 'express';
 import { eq, sql } from 'drizzle-orm';
 import { buildBlocks } from '@talyn/shared';
-import { createTestDb, seedUser } from './helpers/testDb.js';
+import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { FakeFleet, claudeTurnLines, isWorkSaveScript } from './helpers/fakeFleet.js';
 import { pullRequests, repositories, workbenchChats, workbenches, workspaces } from '../db/schema.js';
 import { githubService } from '../services/github.js';
@@ -12,6 +13,8 @@ import { _awaitCheckLedgerReseeds, upsertFromBatchResult } from '../services/prC
 import { _resetCoalesce, processWebhookDelivery } from '../services/webhookWorker.js';
 import { _resetWebhookIndex, refreshWebhookIndex } from '../services/webhookIndex.js';
 import { autoArchiveForMergedPr, sweepMergeArchives } from '../services/workbenches/autoArchive.js';
+import { backfillMergeArchives } from '../services/workbenches/mergeBackfill.js';
+import { workspaceRoutes } from '../routes/workspaces.js';
 import { restoreWorkbench, settleArchivesForTests } from '../services/workbenches/lifecycle.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import { claimOrEnqueue, finishTurn, getChat, getWorkbench, insertChat, insertWorkbench,
@@ -74,6 +77,21 @@ describe('archive sessions after a PR merge', () => {
     (event) => event.event.type === 'system' && event.event.subtype === 'pr_merged_archive',
   );
 
+  async function patchMergeSetting(value: unknown) {
+    const router = workspaceRoutes() as unknown as { stack: Array<{
+      route?: { path: string; methods: { patch?: boolean }; stack: Array<{ handle: (req: Request, res: Response) => Promise<unknown> }> };
+    }> };
+    const handler = router.stack.find((layer) => layer.route?.path === '/:id' && layer.route.methods.patch)!.route!.stack[0].handle;
+    const req = { params: { id: 'ws' }, body: { settings: { autoArchiveOnMerge: value } },
+      user: { id: TEST_USER_ID } } as unknown as Request;
+    let status = 200;
+    let body: unknown;
+    const res = { status(code: number) { status = code; return this; },
+      json(payload: unknown) { body = payload; return this; } } as unknown as Response;
+    await handler(req, res);
+    return { status, body };
+  }
+
   beforeEach(async () => {
     releases = [];
     testDb = await createTestDb();
@@ -118,6 +136,46 @@ describe('archive sessions after a PR merge', () => {
       await settleArchivesForTests();
       expect(fleet.deleted).toEqual(['box-wb']);
     }
+  });
+
+  it.each([undefined, false])('uses the workspace merge setting %s for webhooks', async (enabled) => {
+    if (enabled !== undefined) {
+      await testDb.db.update(workspaces).set({ settings: { autoArchiveOnMerge: enabled } }).where(eq(workspaces.id, 'ws'));
+    }
+    await deliver();
+    expect(Boolean((await row()).archivedAt)).toBe(enabled !== false);
+    expect(await notes()).toHaveLength(enabled === false ? 0 : 1);
+  });
+
+  it('skips merge completion and backfill when the workspace turns the rule off', async () => {
+    await testDb.db.update(workspaces).set({ settings: { autoArchiveOnMerge: false } }).where(eq(workspaces.id, 'ws'));
+    await testDb.db.update(pullRequests).set({ state: 'merged', mergedAt }).where(eq(pullRequests.id, 'pr-wb'));
+    await testDb.db.update(workbenches).set({
+      settings: sql`${workbenches.settings} || jsonb_build_object('archiveOnIdle', 'acme/widget#7')`,
+    }).where(eq(workbenches.id, 'wb'));
+    await autoArchiveForMergedPr({ workbenchId: 'wb' });
+    await autoArchiveForMergedPr({ repoFullName: 'acme/widget', number: 7 });
+    await backfillMergeArchives();
+    expect((await row()).archivedAt).toBeNull();
+    expect(await notes()).toHaveLength(0);
+  });
+
+  it.each(['off', 1, null])('rejects a non-boolean merge setting: %s', async (value) => {
+    const response = await patchMergeSetting(value);
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: 'settings.autoArchiveOnMerge must be true or false' });
+  });
+
+  it('clears a pending merge marker when the workspace turns the rule off', async () => {
+    await testDb.db.update(workbenches).set({
+      settings: sql`${workbenches.settings} || jsonb_build_object('archiveOnIdle', 'acme/widget#7')`,
+    }).where(eq(workbenches.id, 'wb'));
+    expect((await row()).settings).toHaveProperty('archiveOnIdle');
+    expect((await patchMergeSetting(false)).status).toBe(200);
+    const [workspace] = await testDb.db.select({ settings: workspaces.settings }).from(workspaces).where(eq(workspaces.id, 'ws'));
+    expect(workspace.settings).toMatchObject({ autoArchiveOnMerge: false });
+    const [session] = await testDb.db.select({ settings: workbenches.settings }).from(workbenches).where(eq(workbenches.id, 'wb'));
+    expect(session.settings).not.toHaveProperty('archiveOnIdle');
   });
 
   it('archives once for concurrent copies of the same delivery', async () => {

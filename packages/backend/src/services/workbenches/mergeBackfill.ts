@@ -1,6 +1,6 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
-import { pullRequests, workbenches } from '../../db/schema.js';
+import { pullRequests, workbenches, workspaces } from '../../db/schema.js';
 import { autoArchiveForMergedPr } from './autoArchive.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { withMaintenanceClaim } from './maintenanceClaim.js';
@@ -29,6 +29,8 @@ export async function backfillMergeArchives(): Promise<boolean> {
       workspaceId: workbenches.workspaceId }).from(workbenches)
       .innerJoin(pullRequests, eq(pullRequests.id, workbenches.pullRequestId))
       .where(and(isNull(workbenches.archivedAt), eq(pullRequests.state, 'merged'), eligiblePr(), linkedBeforeMerge(),
+        sql`EXISTS (SELECT 1 FROM ${workspaces} ws WHERE ws.id = ${workbenches.workspaceId}
+          AND (ws.settings ->> 'autoArchiveOnMerge') IS DISTINCT FROM 'false')`,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb)
           ? (lower(${pullRequests.owner}) || '/' || lower(${pullRequests.repo}) || '#' || ${pullRequests.number}::text))`));
     for (const row of merged) {

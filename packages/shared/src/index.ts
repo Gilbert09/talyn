@@ -622,6 +622,8 @@ export interface WorkspaceSettings {
    * Unset means DEFAULT_AUTO_ARCHIVE_IDLE_DAYS. 0 or null turns it off.
    */
   autoArchiveIdleDays?: number | null;
+  /** Unset means sessions archive when their pull request merges. */
+  autoArchiveOnMerge?: boolean;
   continuousBuild?: ContinuousBuildSettings;
   /**
    * The usage level, in percent, at which a fleet account counts as spent and

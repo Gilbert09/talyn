@@ -132,3 +132,23 @@ describe('SessionsSettings internet access', () => {
     expect(JSON.parse(localStorage.getItem(SESSION_DEFAULTS_KEY) ?? '{}')).toMatchObject({ internetAccess: false });
   });
 });
+
+describe('SessionsSettings auto-archive', () => {
+  it('shows the defaults and saves the idle window', async () => {
+    render(<SessionsSettings />);
+    const select = screen.getByLabelText('Archive idle sessions') as HTMLSelectElement;
+    expect(select.value).toBe('7');
+    expect(screen.getByRole('checkbox', { name: /^Archive when the pull request merges/ })).toBeChecked();
+    fireEvent.change(select, { target: { value: '0' } });
+    expect(select.value).toBe('0');
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith('ws1', { settings: { autoArchiveIdleDays: 0 } }));
+  });
+
+  it('keeps a custom idle window and saves the merge switch', async () => {
+    workspaces = [{ id: 'ws1', name: 'WS', settings: { autoArchiveIdleDays: 45 } } as Workspace];
+    render(<SessionsSettings />);
+    expect((screen.getByLabelText('Archive idle sessions') as HTMLSelectElement).value).toBe('45');
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Archive when the pull request merges/ }));
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith('ws1', { settings: { autoArchiveOnMerge: false } }));
+  });
+});
