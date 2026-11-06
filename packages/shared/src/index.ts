@@ -1220,7 +1220,16 @@ export interface AgentEvent {
 // WebSocket Events
 // ============================================================================
 
+export type WSClientMessage =
+  | import('./teams.js').SpaceClientMessage
+  | { type: 'auth'; token: string }
+  | { type: 'subscribe'; workspaceId: string; capabilities?: string[] }
+  | { type: 'unsubscribe'; workspaceId: string }
+  | { type: 'debug:filter'; owner: string | null }
+  | { type: 'ping' };
+
 export type WSEventType =
+  | 'space:presence'
   | 'task:status'
   | 'task:event'
   | 'task:created'

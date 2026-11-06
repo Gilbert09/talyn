@@ -114,6 +114,9 @@ import type {
   TeamDetail,
   TeamPricing,
   WSEvent,
+  WSClientMessage,
+  SpacePresenceMember,
+  SpacePresenceMessage,
   DebugEvent,
   DebugCategory,
   DebugSnapshot,
@@ -1904,6 +1907,9 @@ class WebSocketClient {
   /** When the previous heartbeat tick ran, to detect a throttled/frozen gap. */
   private lastTickAt = 0;
   private lifecycleBound = false;
+  private presenceTimer: number | null = null;
+  private spacePresence = new Map<string, SpacePresenceMessage>();
+  private subscribedSpaces = new Set<string>();
   private subscribedWorkspaces: Set<string> = new Set();
   /** Sent with every subscribe. The server holds back events a client did not opt in to. */
   private capabilities: string[] = [];
@@ -2014,6 +2020,10 @@ class WebSocketClient {
             for (const workspaceId of this.subscribedWorkspaces) {
               this.send(this.subscribeMessage(workspaceId));
             }
+            for (const spaceId of this.subscribedSpaces) {
+              this.send({ type: 'subscribe_space', spaceId });
+            }
+            for (const presence of this.spacePresence.values()) this.send(presence);
             if (this.debugFilter !== undefined) {
               this.send({ type: 'debug:filter', owner: this.debugFilter });
             }
@@ -2079,6 +2089,7 @@ class WebSocketClient {
 
   disconnect(): void {
     this.shouldReconnect = false;
+    this.spacePresence.clear();
     this.connectGeneration++;
     this.connecting = false;
     this.reconnectAttempts = 0;
@@ -2099,6 +2110,24 @@ class WebSocketClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.send(this.subscribeMessage(workspaceId));
     }
+  }
+
+  subscribeSpace(spaceId: string): void {
+    this.subscribedSpaces.add(spaceId);
+    if (this.authenticated) this.send({ type: 'subscribe_space', spaceId } satisfies WSClientMessage);
+  }
+
+  unsubscribeSpace(spaceId: string): void {
+    this.subscribedSpaces.delete(spaceId);
+    this.spacePresence.delete(spaceId);
+    if (this.authenticated) this.send({ type: 'unsubscribe_space', spaceId } satisfies WSClientMessage);
+  }
+
+  sendPresence(spaceId: string, sessionId: string | null, state: SpacePresenceMember['state']): void {
+    if (!this.subscribedSpaces.has(spaceId)) return;
+    const message: SpacePresenceMessage = { type: 'presence', spaceId, sessionId, state };
+    this.spacePresence.set(spaceId, message);
+    if (this.authenticated) this.send(message);
   }
 
   /**
@@ -2194,6 +2223,10 @@ class WebSocketClient {
     this.stopHeartbeat();
     this.awaitingPong = false;
     this.lastTickAt = Date.now();
+    this.presenceTimer = window.setInterval(() => {
+      if (!this.authenticated) return;
+      for (const presence of this.spacePresence.values()) this.send(presence);
+    }, 20_000);
     this.heartbeatTimer = window.setInterval(() => {
       const now = Date.now();
       const sinceLastTick = now - this.lastTickAt;
@@ -2229,6 +2262,10 @@ class WebSocketClient {
   }
 
   private stopHeartbeat(): void {
+    if (this.presenceTimer !== null) {
+      clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
+    }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;

@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
+import { randomUUID } from 'node:crypto';
 import { isIP } from 'net';
 import { eq } from 'drizzle-orm';
 import type {
@@ -17,12 +18,17 @@ import type {
   UsageExhaustedEvent,
   WorkflowRun,
   WSEvent,
+  SpacePresenceEvent,
 } from '@talyn/shared';
 import { domainEvents } from './events.js';
 import { sendWebhookSignal } from './apiWebhooks/signals.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
-import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser } from './wsBus.js';
+import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser, publishToSpace } from './wsBus.js';
 import { verifyTokenAndGetUser, enforceAllowList, AuthError, type AuthUser } from '../middleware/auth.js';
+import { isFeatureEnabled } from './featureFlags.js';
+import { assertSpaceMember } from './teams/access.js';
+import { PresenceStore, startPresenceSweep } from './teams/presence.js';
+import { spaceEvent, spaceItem, mayViewSpaceItem, SPACE_EVENT_TYPES } from './teams/spaceEvents.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable, users as usersTable } from '../db/schema.js';
 
@@ -31,6 +37,14 @@ const clients = new Set<WebSocket>();
 
 // Store subscriptions (client -> workspaceIds) and identities.
 const subscriptions = new Map<WebSocket, Set<string>>();
+const spaceSubscriptions = new Map<WebSocket, Map<string, number>>();
+let presenceVersion = 0;
+const presenceVersions = new Map<WebSocket, Map<string, number>>();
+const spaceDeliveryQueues = new Map<string, Promise<void>>();
+const socketIds = new Map<WebSocket, string>();
+const presence = new PresenceStore(undefined, (spaceId) => {
+  void broadcastSpacePresence(spaceId).catch((err) => console.warn('[ws] presence broadcast failed:', err));
+});
 const connectionUsers = new Map<WebSocket, AuthUser>();
 const connectionDeadlines = new Map<WebSocket, number>();
 // Per-client owner filter for the admin Debug stream. Absent = all owners.
@@ -154,7 +168,11 @@ export function setupWebSocket(
     all: deliverBroadcastLocal,
     workspace: deliverToWorkspaceLocal,
     user: deliverToUserLocal,
+    space: deliverSpacePresenceLocal,
   });
+
+  let stopPresenceSweep: (() => void) | undefined;
+  wss.once('close', () => stopPresenceSweep?.());
 
   wss.on('connection', (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
@@ -180,6 +198,17 @@ export function setupWebSocket(
       clearTimeout(refreshTimer);
       clearTimeout(accessTimer);
       const wasConnected = clients.delete(ws);
+      const user = connectionUsers.get(ws);
+      const spaceIds = [...(spaceSubscriptions.get(ws)?.keys() ?? [])];
+      const socketId = socketIds.get(ws);
+      spaceSubscriptions.delete(ws);
+      presenceVersions.delete(ws);
+      socketIds.delete(ws);
+      if (user && socketId) {
+        void messageChain.catch(() => undefined).then(async () => {
+          for (const spaceId of spaceIds) await presence.disconnect(spaceId, user.id, socketId);
+        }).catch((err) => console.warn('[ws] presence cleanup failed:', err));
+      }
       subscriptions.delete(ws);
       connectionUsers.delete(ws);
       connectionDeadlines.delete(ws);
@@ -222,6 +251,26 @@ export function setupWebSocket(
           return;
         }
         enforceAllowList(row.email);
+        for (const workspaceId of subscriptions.get(ws) ?? []) {
+          if (!await userOwnsWorkspace(user.id, workspaceId)) subscriptions.get(ws)?.delete(workspaceId);
+        }
+        for (const spaceId of [...(spaceSubscriptions.get(ws)?.keys() ?? [])]) {
+          const socketId = socketIds.get(ws);
+          if (await maySubscribeSpace({ ...user, ...row }, spaceId)) {
+            if (spaceSubscriptions.get(ws)?.has(spaceId)) {
+              spaceSubscriptions.get(ws)?.set(spaceId, checkedAt + authorizationRefreshMs * 2);
+              messageChain = messageChain.then(async () => {
+                if (socketId && subscribedToSpace(ws, spaceId)) await presence.connect(spaceId, user.id, socketId);
+              });
+              await messageChain;
+            }
+          } else {
+            spaceSubscriptions.get(ws)?.delete(spaceId);
+            await messageChain;
+            if (socketId) await presence.disconnect(spaceId, user.id, socketId);
+          }
+        }
+        if (closed || !canDeliver(ws)) return;
         authorizeUntil({ ...user, ...row }, checkedAt);
         if (!row.isAdmin) debugFilters.delete(ws);
         refreshTimer = setTimeout(() => { void refreshAuthorization(); }, authorizationRefreshMs);
@@ -297,6 +346,9 @@ export function setupWebSocket(
         clearTimeout(handshakeTimer);
         clients.add(ws);
         subscriptions.set(ws, new Set());
+        spaceSubscriptions.set(ws, new Map());
+        presenceVersions.set(ws, new Map());
+        socketIds.set(ws, randomUUID());
         authorizeUntil(user, checkedAt);
         refreshTimer = setTimeout(() => { void refreshAuthorization(); }, authorizationRefreshMs);
         debugBus.recordWs({
@@ -323,7 +375,9 @@ export function setupWebSocket(
       }
       pendingMessages++;
       messageChain = messageChain.then(async () => {
-        if (!closed && canDeliver(ws)) await handleMessage(ws, message, close);
+        if (!closed && canDeliver(ws)) await handleMessage(ws, message, close, authorizationRefreshMs, () => {
+          stopPresenceSweep ??= startPresenceSweep(presence);
+        });
       }).catch(() => {
         if (!closed) close(1013, 'message handling failed');
       }).finally(() => { pendingMessages--; });
@@ -342,11 +396,19 @@ export function setupWebSocket(
 async function handleMessage(
   ws: WebSocket,
   message: Record<string, unknown>,
-  close: (code: number, reason: string) => void
+  close: (code: number, reason: string) => void,
+  authorizationRefreshMs: number,
+  startSweep: () => void,
 ): Promise<void> {
   if (message.type === 'subscribe' || message.type === 'unsubscribe') {
     if (typeof message.workspaceId !== 'string' || !message.workspaceId || message.workspaceId.length > 128) {
       close(1008, 'invalid workspace');
+      return;
+    }
+  }
+  if (['subscribe_space', 'unsubscribe_space', 'presence'].includes(message.type as string)) {
+    if (typeof message.spaceId !== 'string' || !message.spaceId || message.spaceId.length > 128) {
+      close(1008, 'invalid space');
       return;
     }
   }
@@ -360,6 +422,49 @@ async function handleMessage(
     });
   }
   switch (message.type) {
+    case 'subscribe_space': {
+      const spaceId = message.spaceId as string;
+      const current = spaceSubscriptions.get(ws);
+      const user = connectionUsers.get(ws);
+      if (!current || !user || current.has(spaceId)) break;
+      if (current.size + (subscriptions.get(ws)?.size ?? 0) >= MAX_SUBSCRIPTIONS) {
+        close(1008, 'subscription limit');
+        break;
+      }
+      const checkedAt = Date.now();
+      if (await maySubscribeSpace(user, spaceId) && canDeliver(ws)) {
+        current.set(spaceId, checkedAt + authorizationRefreshMs * 2);
+        startSweep();
+        await presence.connect(spaceId, user.id, socketIds.get(ws)!);
+        await sendPresenceSnapshot(ws, spaceId);
+      }
+      break;
+    }
+    case 'unsubscribe_space': {
+      const spaceId = message.spaceId as string;
+      spaceSubscriptions.get(ws)?.delete(spaceId);
+      presenceVersions.get(ws)?.delete(spaceId);
+      const user = connectionUsers.get(ws);
+      if (user) await presence.disconnect(spaceId, user.id, socketIds.get(ws)!);
+      break;
+    }
+    case 'presence': {
+      const spaceId = message.spaceId as string;
+      if ((message.sessionId !== null && (typeof message.sessionId !== 'string' ||
+          !message.sessionId || message.sessionId.length > 128)) ||
+          (message.state !== 'active' && message.state !== 'away')) {
+        close(1008, 'invalid presence');
+        break;
+      }
+      const user = connectionUsers.get(ws);
+      if (!user || !subscribedToSpace(ws, spaceId)) break;
+      await presence.heartbeat(spaceId, socketIds.get(ws)!, {
+        userId: user.id, sessionId: message.sessionId as string | null, state: message.state,
+        githubLogin: user.githubUsername ?? null,
+        avatarUrl: user.githubUsername ? `https://github.com/${encodeURIComponent(user.githubUsername)}.png` : null,
+      });
+      break;
+    }
     case 'subscribe': {
       // Capabilities are per connection; every subscribe carries the full list.
       if (Array.isArray(message.capabilities)) {
@@ -372,7 +477,7 @@ async function handleMessage(
       const workspaceId = message.workspaceId as string;
       const current = subscriptions.get(ws);
       if (!current || current.has(workspaceId)) break;
-      if (current.size >= MAX_SUBSCRIPTIONS) {
+      if (current.size + (spaceSubscriptions.get(ws)?.size ?? 0) >= MAX_SUBSCRIPTIONS) {
         close(1008, 'subscription limit');
         break;
       }
@@ -416,6 +521,75 @@ async function handleMessage(
     default:
       close(1008, 'unknown message type');
   }
+}
+
+async function maySubscribeSpace(user: AuthUser, spaceId: string): Promise<boolean> {
+  try {
+    if (!await isFeatureEnabled('spaces', { distinctId: user.id, email: user.email })) return false;
+    await assertSpaceMember(user.id, spaceId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function subscribedToSpace(ws: WebSocket, spaceId: string): boolean {
+  return canDeliver(ws) && (spaceSubscriptions.get(ws)?.get(spaceId) ?? 0) > Date.now();
+}
+
+async function deliverWorkspaceEventToSpace(workspaceId: string, event: WSEvent, delivered: Set<WebSocket>): Promise<void> {
+  if (![...spaceSubscriptions.values()].some((spaces) => spaces.size > 0)) return;
+  const resolved = await spaceEvent(event);
+  if (!resolved || resolved.item.workspaceId !== workspaceId) return;
+  const { item, event: outgoing } = resolved;
+  let sent = 0;
+  for (const [client, user] of connectionUsers) {
+    if (!subscribedToSpace(client, item.spaceId!) || delivered.has(client)) continue;
+    if (await mayViewSpaceItem(user.id, item) && subscribedToSpace(client, item.spaceId!) &&
+        !delivered.has(client) && clientMayReceive(client, outgoing)) {
+      sendToClient(client, outgoing);
+      sent++;
+    }
+  }
+  debugBus.recordWs({ action: 'broadcast', summary: `space ${outgoing.type} (${sent})`,
+    meta: { type: outgoing.type, spaceId: item.spaceId, recipients: sent } });
+}
+
+async function sendPresenceSnapshot(ws: WebSocket, spaceId: string): Promise<void> {
+  if (!subscribedToSpace(ws, spaceId)) return;
+  const versions = presenceVersions.get(ws)!;
+  const version = ++presenceVersion;
+  versions.set(spaceId, version);
+  const user = connectionUsers.get(ws)!;
+  const members = await Promise.all((await presence.snapshot(spaceId)).map(async (member) => {
+    if (!member.sessionId) return member;
+    const item = await spaceItem('workbench', member.sessionId);
+    const visible = item?.spaceId === spaceId && await mayViewSpaceItem(user.id, item);
+    return visible ? member : { ...member, sessionId: null };
+  }));
+  if (subscribedToSpace(ws, spaceId) && versions.get(spaceId) === version) {
+    sendToClient(ws, { type: 'space:presence', payload: { spaceId, members }, timestamp: new Date().toISOString() });
+    debugBus.recordWs({ action: 'send', summary: 'send space:presence', meta: { type: 'space:presence', spaceId } });
+  }
+}
+
+function deliverSpacePresenceLocal(spaceId: string, event: WSEvent): void {
+  if (event.type !== 'space:presence') return;
+  // Read shared storage on receipt, so a delayed envelope cannot restore stale presence.
+  for (const client of spaceSubscriptions.keys()) {
+    if (subscribedToSpace(client, spaceId)) {
+      void sendPresenceSnapshot(client, spaceId).catch((err) => console.warn('[ws] presence delivery failed:', err));
+    }
+  }
+}
+
+async function broadcastSpacePresence(spaceId: string): Promise<void> {
+  const event: SpacePresenceEvent = {
+    type: 'space:presence', payload: { spaceId, members: await presence.snapshot(spaceId) },
+    timestamp: new Date().toISOString(),
+  };
+  deliverSpacePresenceLocal(spaceId, event);
+  publishToSpace(spaceId, event);
 }
 
 async function userOwnsWorkspace(userId: string, workspaceId: string): Promise<boolean> {
@@ -497,11 +671,22 @@ function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
   notifyWorkspaceListeners(workspaceId, event);
   const message = JSON.stringify(event);
   let sent = 0;
+  const delivered = new Set<WebSocket>();
   for (const [client, workspaces] of subscriptions) {
     if (workspaces.has(workspaceId) && canDeliver(client) && clientMayReceive(client, event)) {
       client.send(message);
+      delivered.add(client);
       sent++;
     }
+  }
+  if (SPACE_EVENT_TYPES.has(event.type) && [...spaceSubscriptions.values()].some((spaces) => spaces.size > 0)) {
+    const previous = spaceDeliveryQueues.get(workspaceId) ?? Promise.resolve();
+    const delivery = previous.then(() => deliverWorkspaceEventToSpace(workspaceId, event, delivered))
+      .catch((err) => console.warn('[ws] space delivery failed:', err));
+    spaceDeliveryQueues.set(workspaceId, delivery);
+    void delivery.finally(() => {
+      if (spaceDeliveryQueues.get(workspaceId) === delivery) spaceDeliveryQueues.delete(workspaceId);
+    });
   }
   if (event.type !== 'debug:event') {
     debugBus.recordWs({

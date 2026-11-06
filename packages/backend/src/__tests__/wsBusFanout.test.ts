@@ -5,6 +5,7 @@ import {
   setLocalDelivery,
   publishBroadcast,
   publishToWorkspace,
+  publishToSpace,
 } from '../services/wsBus.js';
 import type { WSEvent } from '@talyn/shared';
 
@@ -23,13 +24,16 @@ const evt: WSEvent = {
 
 let allDeliveries: WSEvent[];
 let workspaceDeliveries: Array<{ workspaceId: string; event: WSEvent }>;
+let spaceDeliveries: Array<{ spaceId: string; event: WSEvent }>;
 let userDeliveries: Array<{ userId: string; event: WSEvent }>;
 
 beforeEach(() => {
   allDeliveries = [];
   workspaceDeliveries = [];
   userDeliveries = [];
+  spaceDeliveries = [];
   setLocalDelivery({
+    space: (spaceId, event) => spaceDeliveries.push({ spaceId, event }),
     all: (event) => allDeliveries.push(event),
     workspace: (workspaceId, event) => workspaceDeliveries.push({ workspaceId, event }),
     user: (userId, event) => userDeliveries.push({ userId, event }),
@@ -88,6 +92,17 @@ describe('dispatchIncoming', () => {
     expect(workspaceDeliveries).toHaveLength(0);
   });
 
+  it('delivers presence only to the space sink', () => {
+    const presence: WSEvent = { type: 'space:presence', payload: { spaceId: 'space', members: [] }, timestamp: evt.timestamp };
+    expect(dispatchIncoming(envelope({ replicaId: 'other', scope: 'space', spaceId: 'space', event: presence }))).toBe('delivered');
+    expect(spaceDeliveries).toEqual([{ spaceId: 'space', event: presence }]);
+    expect(allDeliveries).toEqual([]);
+    expect(workspaceDeliveries).toEqual([]);
+    expect(userDeliveries).toEqual([]);
+    expect(dispatchIncoming(envelope({ replicaId: REPLICA_ID, scope: 'space', spaceId: 'space', event: presence }))).toBe('self');
+    expect(spaceDeliveries).toHaveLength(1);
+  });
+
   it('ignores malformed JSON without throwing', () => {
     expect(dispatchIncoming('not json{')).toBe('invalid');
     expect(allDeliveries).toHaveLength(0);
@@ -97,7 +112,7 @@ describe('dispatchIncoming', () => {
     // Override with an empty registration: simulate a sink that is present but
     // a fresh dispatch arriving for a different replica still routes through it.
     let received = 0;
-    setLocalDelivery({ all: () => (received += 1), workspace: () => undefined });
+    setLocalDelivery({ all: () => (received += 1), workspace: () => undefined, user: () => undefined });
     dispatchIncoming(envelope({ replicaId: 'other:1:zzzz', scope: 'all', event: evt }));
     expect(received).toBe(1);
   });
@@ -108,6 +123,7 @@ describe('publishers (Redis disabled)', () => {
     expect(process.env.REDIS_URL).toBeFalsy();
     expect(() => publishBroadcast(evt)).not.toThrow();
     expect(() => publishToWorkspace('ws-1', evt)).not.toThrow();
+    expect(() => publishToSpace('space', { ...evt, type: 'space:presence' })).not.toThrow();
     // Nothing is delivered locally by publishing — that is the caller's job.
     expect(allDeliveries).toHaveLength(0);
   });

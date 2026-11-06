@@ -170,3 +170,35 @@ export interface MoveToSpaceRequest {
   /** Null moves the item back to Personal. */
   spaceId: string | null;
 }
+
+export interface SpacePresenceMember extends SpaceItemCreator {
+  sessionId: string | null;
+  state: 'active' | 'away';
+  /** Time of the last heartbeat, in milliseconds since the Unix epoch. */
+  at: number;
+}
+
+export interface SubscribeSpaceMessage {
+  type: 'subscribe_space';
+  spaceId: string;
+}
+
+export interface UnsubscribeSpaceMessage {
+  type: 'unsubscribe_space';
+  spaceId: string;
+}
+
+export interface SpacePresenceMessage {
+  type: 'presence';
+  spaceId: string;
+  sessionId: string | null;
+  state: SpacePresenceMember['state'];
+}
+
+export type SpaceClientMessage = SubscribeSpaceMessage | UnsubscribeSpaceMessage | SpacePresenceMessage;
+
+export interface SpacePresenceEvent {
+  type: 'space:presence';
+  payload: { spaceId: string; members: SpacePresenceMember[] };
+  timestamp: string;
+}

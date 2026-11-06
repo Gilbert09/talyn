@@ -33,6 +33,7 @@ export const REPLICA_ID = `${process.env.HOSTNAME || 'local'}:${process.pid}:${r
 type Envelope =
   | { replicaId: string; scope: 'all'; event: WSEvent }
   | { replicaId: string; scope: 'workspace'; workspaceId: string; event: WSEvent }
+  | { replicaId: string; scope: 'space'; spaceId: string; event: WSEvent }
   | { replicaId: string; scope: 'user'; userId: string; event: WSEvent };
 
 /**
@@ -43,6 +44,7 @@ type Envelope =
  * (websocket → wsBus) with no cycle.
  */
 export interface LocalDelivery {
+  space?: (spaceId: string, event: WSEvent) => void;
   all: (event: WSEvent) => void;
   workspace: (workspaceId: string, event: WSEvent) => void;
   user: (userId: string, event: WSEvent) => void;
@@ -91,6 +93,7 @@ export function dispatchIncoming(raw: string): 'self' | 'delivered' | 'invalid' 
   if (env.replicaId === REPLICA_ID) return 'self';
   if (!localDeliver) return 'no-sink';
   if (env.scope === 'all') localDeliver.all(env.event);
+  else if (env.scope === 'space') localDeliver.space?.(env.spaceId, env.event);
   else if (env.scope === 'user') localDeliver.user(env.userId, env.event);
   else localDeliver.workspace(env.workspaceId, env.event);
   return 'delivered';
@@ -114,6 +117,12 @@ export function publishToWorkspace(workspaceId: string, event: WSEvent): void {
 export function publishToUser(userId: string, event: WSEvent): void {
   if (!pub || event.type === 'debug:event') return;
   const env: Envelope = { replicaId: REPLICA_ID, scope: 'user', userId, event };
+  void pub.publish(CHANNEL, JSON.stringify(env)).catch(() => undefined);
+}
+
+export function publishToSpace(spaceId: string, event: WSEvent): void {
+  if (!pub || event.type !== 'space:presence') return;
+  const env: Envelope = { replicaId: REPLICA_ID, scope: 'space', spaceId, event };
   void pub.publish(CHANNEL, JSON.stringify(env)).catch(() => undefined);
 }
 

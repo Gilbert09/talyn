@@ -2,6 +2,26 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Space subscriptions and presence (2026-11-06)
+
+WebSocket clients can subscribe to a space when the `spaces` flag and membership checks pass.
+Authorization refresh checks these subscriptions every 15 seconds.
+Workspace broadcasts also reach permitted space subscribers through an explicit event allowlist.
+Item lookups and repository visibility results use a 60-second cache.
+Workbench payloads clear sandbox identifiers, device identifiers, local paths, and retained worktree details.
+A socket that receives the workspace event does not receive a second space copy.
+
+Presence uses Redis hashes when Redis is configured, or memory otherwise.
+Each user has socket leases, so one disconnect does not remove another socket's presence.
+Entries expire after 60 seconds without a heartbeat.
+The registered sweep runs every 10 seconds and reports its result through the debug bus.
+Presence changes use the WebSocket bus across replicas.
+Each viewer receives a snapshot with inaccessible session identifiers replaced by null.
+Client helpers restore subscriptions after reconnect and renew presence every 20 seconds.
+
+Focused tests cover both stores, authorization, visibility, redaction, relay delivery, and client reconnects.
+The space UI remains separate work.
+
 ## Teams and Spaces, phase 1: the backend (2026-11-06)
 
 **What changed.** A team is now the multiplayer entity. A team has members and spaces. A space holds sessions and tasks. Each session or task still runs in its creator's own workspace, so no workspace, credential or RLS policy is shared. Everything is behind the new `spaces` PostHog flag (fallback OFF, `availability: 'gated'`, break glass `SPACES_ENABLED`). The `teams` flag still gates seat purchase only.

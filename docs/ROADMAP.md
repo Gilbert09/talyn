@@ -18,6 +18,11 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
+### Teams and Spaces
+
+- [x] Phase 2: space subscriptions, filtered WebSocket events, and presence across replicas.
+- [ ] Phase 4: connect the space UI to subscriptions and presence helpers.
+
 ### Team plan — seat billing, behind the `teams` flag (2026-09-29)
 
 Consolidated billing only. No workspace is shared, and none is planned (Tom's call). This does not replace the invite flow above, which is about workspace access.
