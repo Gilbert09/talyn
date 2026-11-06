@@ -240,11 +240,15 @@ export interface Workbench {
   updatedAt: string;
 }
 
-/**
- * Where a session came from. One kind today; a union so a later source (an
- * issue tracker, say) is a new member, not a new field.
- */
-export type WorkbenchSource = SlackSessionSource;
+/** A scheduled loop that started a session. */
+export interface LoopSessionSource {
+  kind: 'loop';
+  loopId: string;
+  runId: string;
+}
+
+/** Where a session came from when the app composer did not start it. */
+export type WorkbenchSource = SlackSessionSource | LoopSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {

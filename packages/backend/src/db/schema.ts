@@ -1566,6 +1566,8 @@ export const loops = pgTable(
     /** `LoopProvider` — the pinned provider. Never failed over; see dispatch.ts. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
+    /** `LoopTarget`: existing rows start cloud tasks; new rows may start sessions. */
+    target: text('target').notNull().default('task'),
     /** `LoopConcurrency` — what a firing does when the last run is still going. */
     concurrency: text('concurrency').notNull().default('skip'),
     /**
@@ -1703,7 +1705,13 @@ export const loopRuns = pgTable(
     /** Copied at fire time, so editing the loop cannot rewrite its history. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
+    /** `LoopTarget`, copied at fire time. */
+    target: text('target').notNull().default('task'),
     taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /** The reviewable session this firing started, when `target = 'session'`. */
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
+    /** Its first chat, used to settle the run after the first turn. */
+    workbenchChatId: text('workbench_chat_id').references(() => workbenchChats.id, { onDelete: 'set null' }),
     /**
      * When this run's task was created — the fact `task_id` cannot carry.
      *

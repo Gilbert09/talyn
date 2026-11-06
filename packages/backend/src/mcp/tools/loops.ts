@@ -3,6 +3,7 @@ import {
   emptyLoopInput,
   LOOP_CONCURRENCIES,
   LOOP_PROVIDERS,
+  LOOP_TARGETS,
   loopToInput,
   type LoopRun,
   type LoopWithStats,
@@ -32,6 +33,7 @@ const fields = {
   enabled: booleanSchema,
   provider: { type: 'string', enum: LOOP_PROVIDERS },
   model: textSchema,
+  target: { type: 'string', enum: LOOP_TARGETS },
   concurrency: { type: 'string', enum: LOOP_CONCURRENCIES },
   internetAccess: booleanSchema,
   mcpServerIds: { type: ['array', 'null'], items: textSchema },
@@ -78,9 +80,9 @@ async function current(ownerId: string, args: Record<string, unknown>): Promise<
 }
 
 const loopLine = (loop: LoopWithStats) =>
-  `${loop.id}  ${loop.name}  enabled: ${loop.enabled}  ${loop.cron} (${loop.timezone})  ${loop.provider}/${loop.model}  next: ${loop.nextRunAt ?? 'none'}${loop.disabledReason ? `  disabled: ${loop.disabledReason}` : ''}`;
+  `${loop.id}  ${loop.name}  enabled: ${loop.enabled}  ${loop.cron} (${loop.timezone})  ${loop.target} via ${loop.provider}/${loop.model}  next: ${loop.nextRunAt ?? 'none'}${loop.disabledReason ? `  disabled: ${loop.disabledReason}` : ''}`;
 const runLine = (run: LoopRun) =>
-  `${run.id}  [${run.status}]  ${run.scheduledFor}  task: ${run.taskId ?? 'none'}${run.error ? `  ${run.error}` : ''}${run.retryAfter ? `  retry: ${run.retryAfter}` : ''}${run.task?.prUrl ? `  ${run.task.prUrl}` : ''}`;
+  `${run.id}  [${run.status}]  ${run.scheduledFor}  ${run.target}: ${run.sessionId ?? run.taskId ?? 'none'}${run.error ? `  ${run.error}` : ''}${run.retryAfter ? `  retry: ${run.retryAfter}` : ''}${run.task?.prUrl ? `  ${run.task.prUrl}` : ''}`;
 
 async function repoName(
   ownerId: string,
@@ -135,7 +137,7 @@ export const LOOPS = [
   ),
   defineTool(
     'create_loop',
-    'Create recurring cloud work. Supply name, prompt, and repository_id. Defaults match the desktop, with timezone UTC.',
+    'Create recurring work. Set target to session for a reviewable sandbox session, or task for a cloud task.',
     inputSchema,
     [],
     { openWorldHint: true },
@@ -147,6 +149,9 @@ export const LOOPS = [
       requireId(values, 'repositoryId');
       await repoName(ownerId, workspaceId, values);
       const defaults = emptyLoopInput('UTC');
+      if (values.target === 'session' && values.provider === undefined) {
+        values.provider = 'selfhosted';
+      }
       if (values.provider === 'selfhosted' || values.provider === 'posthog_code')
         defaults.model = defaultModelForLoopProvider(values.provider);
       return loopLine(
@@ -210,7 +215,7 @@ export const LOOPS = [
   ),
   defineTool(
     'run_loop_now',
-    'Run a loop now through the normal task and billing checks.',
+    'Run a loop now through its normal session or task checks.',
     { loop_id: textSchema },
     ['loop_id'],
     { openWorldHint: true },

@@ -9,10 +9,17 @@ import {
   type LoopRunFailureCode,
   type LoopRunStatus,
   type LoopRunTrigger,
+  type LoopTarget,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { captureWorkspaceEvent } from '../analytics.js';
-import { loopRuns as runsTable, loops as loopsTable, tasks as tasksTable } from '../../db/schema.js';
+import {
+  loopRuns as runsTable,
+  loops as loopsTable,
+  tasks as tasksTable,
+  workbenchChats as chatsTable,
+  workbenches as workbenchesTable,
+} from '../../db/schema.js';
 
 /**
  * The scheduler's queries: find what is due, claim it, settle it, advance it.
@@ -39,6 +46,7 @@ export const DUE_LOOP_COLUMNS = {
   timezone: loopsTable.timezone,
   provider: loopsTable.provider,
   model: loopsTable.model,
+  target: loopsTable.target,
   concurrency: loopsTable.concurrency,
   internetAccess: loopsTable.internetAccess,
   // Small — a handful of ids or null — and read on every firing, so it earns
@@ -79,6 +87,7 @@ export interface ClaimedRun {
   fresh: boolean;
   status: LoopRunStatus;
   taskId: string | null;
+  workbenchId: string | null;
 }
 
 /**
@@ -116,19 +125,27 @@ export async function claimFiring(
       repoFullName: loop.repoFullName,
       provider: loop.provider,
       model: loop.model,
+      target: loop.target,
       status: 'queued',
       createdAt: new Date(),
     })
     .onConflictDoNothing({ target: [runsTable.loopId, runsTable.scheduledFor] })
     .returning({ id: runsTable.id });
 
-  if (inserted[0]) return { id: inserted[0].id, fresh: true, status: 'queued', taskId: null };
+  if (inserted[0]) {
+    return { id: inserted[0].id, fresh: true, status: 'queued', taskId: null, workbenchId: null };
+  }
 
   // Somebody else owns this occurrence — or we do, from a tick that died
   // between claiming and dispatching. Hand the caller what is actually there so
   // it can finish the job rather than start a second one.
   const existing = await getDbClient()
-    .select({ id: runsTable.id, status: runsTable.status, taskId: runsTable.taskId })
+    .select({
+      id: runsTable.id,
+      status: runsTable.status,
+      taskId: runsTable.taskId,
+      workbenchId: runsTable.workbenchId,
+    })
     .from(runsTable)
     .where(and(eq(runsTable.loopId, loop.id), eq(runsTable.scheduledFor, scheduledFor)))
     .limit(1);
@@ -137,9 +154,15 @@ export async function claimFiring(
     // The conflicting row has been deleted between the insert and this read.
     // Vanishingly rare (the loop would have to be deleted mid-tick), and the
     // honest answer is "not ours" rather than a retry loop.
-    return { id, fresh: false, status: 'skipped', taskId: null };
+    return { id, fresh: false, status: 'skipped', taskId: null, workbenchId: null };
   }
-  return { id: row.id, fresh: false, status: row.status as LoopRunStatus, taskId: row.taskId };
+  return {
+    id: row.id,
+    fresh: false,
+    status: row.status as LoopRunStatus,
+    taskId: row.taskId,
+    workbenchId: row.workbenchId,
+  };
 }
 
 /**
@@ -214,6 +237,8 @@ export async function settleRun(runId: string, input: SettleInput): Promise<bool
       model: runsTable.model,
       repoFullName: runsTable.repoFullName,
       taskId: runsTable.taskId,
+      workbenchId: runsTable.workbenchId,
+      target: runsTable.target,
       scheduledFor: runsTable.scheduledFor,
       createdAt: runsTable.createdAt,
       dispatchedAt: runsTable.dispatchedAt,
@@ -250,6 +275,8 @@ function captureLoopRan(
     model: string;
     repoFullName: string;
     taskId: string | null;
+    workbenchId: string | null;
+    target: string;
     scheduledFor: Date;
     createdAt: Date;
     dispatchedAt: Date | null;
@@ -268,7 +295,9 @@ function captureLoopRan(
     repo: row.repoFullName,
     // False for a run that never got a task at all (dispatch refused or lost),
     // which is the difference between "the agent failed" and "we never asked".
+    target: row.target,
     started_task: row.taskId !== null,
+    started_session: row.workbenchId !== null,
     failure_code: input.failureCode ?? null,
     // How long the agent ran. Null when it was never dispatched.
     duration_ms: row.dispatchedAt ? settledAt.getTime() - row.dispatchedAt.getTime() : null,
@@ -295,6 +324,26 @@ export async function markDispatched(runId: string, taskId: string): Promise<voi
     .update(runsTable)
     .set({
       taskId,
+      dispatchedAt: new Date(),
+      status: 'queued',
+      failureCode: null,
+      error: null,
+      retryAfter: null,
+    })
+    .where(eq(runsTable.id, runId));
+}
+
+/** Attach the sandbox session and its first chat to a firing. */
+export async function markSessionDispatched(
+  runId: string,
+  workbenchId: string,
+  workbenchChatId: string
+): Promise<void> {
+  await getDbClient()
+    .update(runsTable)
+    .set({
+      workbenchId,
+      workbenchChatId,
       dispatchedAt: new Date(),
       status: 'queued',
       failureCode: null,
@@ -428,6 +477,12 @@ export interface ActiveRunRow {
   createdAt: Date;
   dispatchedAt: Date | null;
   taskStatus: string | null;
+  target: LoopTarget;
+  workbenchId: string | null;
+  workbenchStatus: string | null;
+  workbenchArchivedAt: Date | null;
+  chatStatus: string | null;
+  chatTurnCount: number | null;
 }
 
 /**
@@ -453,6 +508,12 @@ export async function activeRunsWithTaskStatus(limit: number): Promise<ActiveRun
       createdAt: runsTable.createdAt,
       dispatchedAt: runsTable.dispatchedAt,
       taskStatus: tasksTable.status,
+      target: sql<LoopTarget>`${runsTable.target}`,
+      workbenchId: runsTable.workbenchId,
+      workbenchStatus: workbenchesTable.status,
+      workbenchArchivedAt: workbenchesTable.archivedAt,
+      chatStatus: chatsTable.status,
+      chatTurnCount: chatsTable.turnCount,
     })
     .from(runsTable)
     .innerJoin(loopsTable, and(
@@ -463,6 +524,15 @@ export async function activeRunsWithTaskStatus(limit: number): Promise<ActiveRun
       eq(tasksTable.id, runsTable.taskId),
       eq(tasksTable.workspaceId, loopsTable.workspaceId),
     ))
+    .leftJoin(workbenchesTable, and(
+      eq(workbenchesTable.id, runsTable.workbenchId),
+      eq(workbenchesTable.workspaceId, loopsTable.workspaceId),
+    ))
+    .leftJoin(chatsTable, and(
+      eq(chatsTable.id, runsTable.workbenchChatId),
+      eq(chatsTable.workbenchId, workbenchesTable.id),
+      eq(chatsTable.workspaceId, loopsTable.workspaceId),
+    ))
     .where(inArray(runsTable.status, ['queued', 'running']))
     .orderBy(asc(runsTable.createdAt))
     .limit(limit);
@@ -472,14 +542,31 @@ export async function activeRunsWithTaskStatus(limit: number): Promise<ActiveRun
 export async function runByClaim(
   loopId: string,
   scheduledFor: Date
-): Promise<{ id: string; status: LoopRunStatus; taskId: string | null } | null> {
+): Promise<{
+  id: string;
+  status: LoopRunStatus;
+  taskId: string | null;
+  workbenchId: string | null;
+} | null> {
   const rows = await getDbClient()
-    .select({ id: runsTable.id, status: runsTable.status, taskId: runsTable.taskId })
+    .select({
+      id: runsTable.id,
+      status: runsTable.status,
+      taskId: runsTable.taskId,
+      workbenchId: runsTable.workbenchId,
+    })
     .from(runsTable)
     .where(and(eq(runsTable.loopId, loopId), eq(runsTable.scheduledFor, scheduledFor)))
     .limit(1);
   const row = rows[0];
-  return row ? { id: row.id, status: row.status as LoopRunStatus, taskId: row.taskId } : null;
+  return row
+    ? {
+        id: row.id,
+        status: row.status as LoopRunStatus,
+        taskId: row.taskId,
+        workbenchId: row.workbenchId,
+      }
+    : null;
 }
 
 /**
@@ -511,6 +598,7 @@ export async function orphanedClaims(olderThan: Date, limit: number) {
       and(
         eq(runsTable.status, 'queued'),
         isNull(runsTable.taskId),
+        isNull(runsTable.workbenchId),
         isNull(runsTable.dispatchedAt),
         lt(runsTable.createdAt, olderThan)
       )
@@ -526,4 +614,9 @@ export function concurrencyOf(loop: DueLoop): LoopConcurrency {
 /** The provider a run dispatches at, narrowed from the stored text column. */
 export function providerOf(loop: DueLoop): LoopProvider {
   return loop.provider === 'selfhosted' ? 'selfhosted' : 'posthog_code';
+}
+
+/** The destination copied onto a due loop. Older rows read as tasks. */
+export function targetOf(loop: DueLoop): LoopTarget {
+  return loop.target === 'session' ? 'session' : 'task';
 }

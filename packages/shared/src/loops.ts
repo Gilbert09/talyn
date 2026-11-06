@@ -2,9 +2,9 @@
  * Loops — recurring prompts on a cron schedule.
  *
  * A loop is one sentence: *run this prompt, on this repository, with this
- * agent, on this schedule*. Every firing creates an ordinary cloud task, so
- * the poller, the transcript, the pull request the agent opens and the billing
- * gate all work unchanged. What Loops adds is the clock.
+ * agent, on this schedule*. A firing creates a reviewable session or a cloud
+ * task. Both use their normal transcript, pull request, and billing paths. What
+ * Loops adds is the clock.
  *
  * # Why this file holds the schedule arithmetic
  *
@@ -61,6 +61,16 @@ export const LOOP_PROVIDERS = ['posthog_code', 'selfhosted'] as const;
 export const LOOP_PROVIDER_LABELS: Record<LoopProvider, string> = {
   posthog_code: 'PostHog Code',
   selfhosted: 'Talyn Fleet',
+};
+
+/** What each firing starts. Existing loops default to a cloud task. */
+export type LoopTarget = 'task' | 'session';
+
+export const LOOP_TARGETS = ['session', 'task'] as const;
+
+export const LOOP_TARGET_LABELS: Record<LoopTarget, string> = {
+  session: 'Session',
+  task: 'Cloud task',
 };
 
 /** What a firing does when the previous run has not finished. */
@@ -127,8 +137,11 @@ export type LoopRunFailureCode =
   | 'environment_missing'
   | 'fleet_not_allowed'
   | 'agent_not_connected'
+  | 'sessions_not_allowed'
   | 'loops_not_allowed'
   | 'task_deleted'
+  | 'session_deleted'
+  | 'session_failed'
   | 'dispatch_lost'
   | 'dispatch_failed';
 
@@ -142,10 +155,13 @@ export const LOOP_RUN_FAILURE_LABELS: Record<LoopRunFailureCode, string> = {
   environment_missing: 'The agent is no longer connected',
   fleet_not_allowed: 'This workspace lost access to Talyn Fleet',
   agent_not_connected: 'That fleet agent is not connected',
+  sessions_not_allowed: 'Sessions are not available in this workspace',
   loops_not_allowed: 'This workspace lost access to Loops',
   task_deleted: 'The task was deleted before it finished',
+  session_deleted: 'The session was deleted before it finished',
+  session_failed: 'The session stopped before it finished',
   dispatch_lost: 'The run was claimed but never started',
-  dispatch_failed: 'The task could not be created',
+  dispatch_failed: 'The run could not start',
 };
 
 /** Why the engine — not the user — switched a loop off. */
@@ -192,6 +208,8 @@ export interface LoopDefinition {
   timezone: string;
   provider: LoopProvider;
   model: string;
+  /** Whether each firing starts a legacy cloud task or a reviewable session. */
+  target: LoopTarget;
   concurrency: LoopConcurrency;
   /**
    * Whether this loop's sandbox may reach the internet.
@@ -217,9 +235,9 @@ export interface LoopDefinition {
    * collapsing it into null would make that the one thing a loop could not ask
    * for. A list is exactly those.
    *
-   * It rides on the TASK at dispatch, not read from the loop at run time, for
-   * the reason `internetAccess` does: a revived run must get the posture it
-   * had, rather than whatever the loop says today.
+   * A cloud task gets this selection at dispatch. Sessions inherit the
+   * workspace selection because their tools remain available for follow-up
+   * turns.
    */
   mcpServerIds: string[] | null;
   /** Null only after the repository row was deleted; `repoFullName` survives. */
@@ -242,6 +260,7 @@ export interface LoopInput {
   timezone: string;
   provider: LoopProvider;
   model: string;
+  target?: LoopTarget;
   concurrency?: LoopConcurrency;
   internetAccess?: boolean;
   mcpServerIds?: string[] | null;
@@ -258,6 +277,7 @@ export interface NormalizedLoop {
   timezone: string;
   provider: LoopProvider;
   model: string;
+  target: LoopTarget;
   concurrency: LoopConcurrency;
   internetAccess: boolean;
   mcpServerIds: string[] | null;
@@ -280,6 +300,12 @@ export interface LoopRunTask {
   prNumber: number | null;
 }
 
+export interface LoopRunSession {
+  id: string;
+  status: string;
+  archivedAt: string | null;
+}
+
 export interface LoopRun {
   id: string;
   loopId: string;
@@ -292,7 +318,9 @@ export interface LoopRun {
   /** Copied from the loop at fire time, so history survives an edit. */
   provider: LoopProvider;
   model: string;
+  target: LoopTarget;
   taskId: string | null;
+  sessionId: string | null;
   status: LoopRunStatus;
   failureCode: LoopRunFailureCode | null;
   error: string | null;
@@ -300,6 +328,7 @@ export interface LoopRun {
   createdAt: string;
   settledAt: string | null;
   task?: LoopRunTask | null;
+  session?: LoopRunSession | null;
 }
 
 export interface LoopStats {
@@ -645,6 +674,14 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   if (!model) fail('a loop needs a model');
   validateProviderModel(provider, model);
 
+  const target = l.target === undefined ? 'task' : (l.target as LoopTarget);
+  if (!(LOOP_TARGETS as readonly string[]).includes(target)) {
+    fail('target must be task or session');
+  }
+  if (target === 'session' && provider !== 'selfhosted') {
+    fail('sessions run on Talyn Fleet — choose a Talyn Fleet agent');
+  }
+
   let concurrency = DEFAULT_LOOP_CONCURRENCY;
   if (l.concurrency !== undefined) {
     if (!(LOOP_CONCURRENCIES as readonly string[]).includes(l.concurrency as string)) {
@@ -684,6 +721,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     timezone,
     provider,
     model,
+    target,
     concurrency,
     internetAccess: l.internetAccess === true,
     mcpServerIds: Array.isArray(l.mcpServerIds) ? (l.mcpServerIds as string[]) : null,
@@ -727,6 +765,7 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     timezone,
     provider: 'posthog_code',
     model: DEFAULT_POSTHOG_CODE_MODEL_ID,
+    target: 'task',
     concurrency: DEFAULT_LOOP_CONCURRENCY,
     internetAccess: false,
     mcpServerIds: null,
@@ -744,6 +783,7 @@ export function loopToInput(loop: LoopDefinition): LoopInput {
     timezone: loop.timezone,
     provider: loop.provider,
     model: loop.model,
+    target: loop.target,
     concurrency: loop.concurrency,
     internetAccess: loop.internetAccess,
     mcpServerIds: loop.mcpServerIds,

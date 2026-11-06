@@ -51,10 +51,9 @@ import { getLoop, getLoopRun } from './store.js';
  * the job. The unique `(loop_id, scheduled_for)` index makes that re-entry
  * idempotent.
  *
- * The window that remains is the few milliseconds between `createCloudTask`
- * returning and `task_id` landing on the run row. A crash exactly there costs
- * one duplicate task — a redundant agent run, not a lost firing and not a
- * corrupt row. That is the right side of the trade to be on.
+ * The window that remains is the few milliseconds between target creation and
+ * its id landing on the run row. A crash exactly there costs one duplicate run,
+ * not a lost firing or a corrupt row. That is the right side of the trade.
  *
  * # Catch-up fires once
  *
@@ -201,7 +200,7 @@ class LoopScheduler {
       // still in the past. Finish whatever is unfinished, then advance — this
       // is the recovery path the dispatch-before-advance order creates.
       const existing = await runByClaim(loop.id, scheduledFor);
-      if (existing && existing.status === 'queued' && !existing.taskId) {
+      if (existing && existing.status === 'queued' && !existing.taskId && !existing.workbenchId) {
         await this.dispatchAndSettle(loop, existing.id, scheduledFor);
       }
       await advanceSchedule(loop, new Date());
@@ -253,7 +252,7 @@ class LoopScheduler {
   }
 
   /**
-   * The durable half of settlement: re-read the task behind every active run.
+   * The durable half of settlement: re-read the task or session behind each run.
    *
    * The `task:status` listener is faster, but it only fires on the replica that
    * finalised the task and it is lost entirely across a deploy. Without this, a
@@ -263,6 +262,10 @@ class LoopScheduler {
   private async settleBacklog(): Promise<void> {
     const rows = await activeRunsWithTaskStatus(SETTLE_BATCH);
     for (const row of rows) {
+      if (row.target === 'session') {
+        await this.applySessionStatus(row);
+        continue;
+      }
       if (!row.taskId) {
         // No task, but this run HAD one — `dispatched_at` is the memory the FK
         // erases. The task row was deleted while the run was in flight, which
@@ -284,6 +287,61 @@ class LoopScheduler {
       }
       if (row.taskStatus === null) continue;
       await this.applyTaskStatus(row.runId, row.loopId, row.workspaceId, row.taskStatus);
+    }
+  }
+
+  /** Settle a session run when its first turn finishes or stops for a person. */
+  private async applySessionStatus(row: Awaited<ReturnType<typeof activeRunsWithTaskStatus>>[number]): Promise<void> {
+    if (!row.workbenchId) {
+      if (row.dispatchedAt) {
+        const moved = await settleRun(row.runId, {
+          status: 'failed',
+          failureCode: 'session_deleted',
+          error: 'The session this run started was deleted before it finished.',
+        });
+        if (moved) await this.broadcast(row.workspaceId, row.runId);
+      }
+      return;
+    }
+    if (row.workbenchStatus === 'error' || row.workbenchStatus === 'archiveError') {
+      const moved = await settleRun(row.runId, {
+        status: 'failed',
+        failureCode: 'session_failed',
+        error: 'The session could not start.',
+      });
+      if (moved) {
+        await recordFailure(row.loopId);
+        await this.broadcast(row.workspaceId, row.runId);
+      }
+      return;
+    }
+    if (row.chatStatus === 'running') {
+      const moved = await settleRun(row.runId, { status: 'running' });
+      if (moved) await this.broadcast(row.workspaceId, row.runId);
+      return;
+    }
+    if ((row.chatTurnCount ?? 0) < 1) return;
+    if (row.chatStatus === 'idle') {
+      const moved = await settleRun(row.runId, { status: 'succeeded' });
+      if (moved) {
+        await clearFailures(row.loopId);
+        await this.broadcast(row.workspaceId, row.runId);
+      }
+      return;
+    }
+    if (row.chatStatus === 'awaiting_input' || row.chatStatus === 'error' || row.workbenchArchivedAt) {
+      const moved = await settleRun(row.runId, {
+        status: 'failed',
+        failureCode: 'session_failed',
+        error:
+          row.chatStatus === 'awaiting_input'
+            ? 'The session stopped and needs a person to continue.'
+            : 'The session stopped before its first turn finished.',
+      });
+      if (moved) {
+        await recordFailure(row.loopId);
+        await this.broadcast(row.workspaceId, row.runId);
+      }
     }
   }
 
@@ -401,6 +459,7 @@ class LoopScheduler {
           timezone: loop.timezone,
           provider: loop.provider,
           model: loop.model,
+          target: loop.target,
           concurrency: loop.concurrency,
           internetAccess: loop.internetAccess,
           mcpServerIds: loop.mcpServerIds,
