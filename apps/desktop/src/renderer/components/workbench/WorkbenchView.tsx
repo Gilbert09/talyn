@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { useIsWorkbenchOwner } from '../../lib/spaces';
 import { toast } from '../../stores/toast';
 import { chatInsights } from '../../lib/workbenchFormat';
 import { ensureChatHistory, loadOlderEvents, loadWorkbench } from '../../lib/workbenchData';
@@ -155,6 +156,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
 }
 
 function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
+  const owner = useIsWorkbenchOwner(workbench);
   const setTerminalTab = useWorkbenchStore((s) => s.setTerminalTab);
   const hasSetupOutput = useWorkbenchStore((s) => (s.scriptOutput[workbench.id]?.setup?.total ?? 0) > 0);
   const refusal = useBillingStore((s) => s.sessionRefusals[workbench.id]);
@@ -183,12 +185,12 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
         text={workbench.error ?? workbench.statusMessage ?? 'The session hit an error. Retry, or delete it.'}
         action={
           <>
-            {workbench.runtime === 'sandbox' && (
+            {owner && workbench.runtime === 'sandbox' && (
               <Button variant="outline" className="h-6 gap-1 px-2 text-xs" disabled={retrying} onClick={() => void retry()}>
                 {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Retry
               </Button>
             )}
-            {hasSetupOutput && (
+            {owner && hasSetupOutput && (
               <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTerminalTab('setup')}>
                 Show setup output
               </Button>
@@ -215,7 +217,7 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
               : 'Creating the worktree…')
         }
         action={
-          hasSetupOutput ? (
+          owner && hasSetupOutput ? (
             <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTerminalTab('setup')}>
               Show setup output
             </Button>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { useIsWorkbenchOwner } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { api } from '../../lib/api';
@@ -58,6 +59,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
   const [renaming, setRenaming] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const viewed = useRef(new Set<string>());
+  const owner = useIsWorkbenchOwner(workbench);
 
   useEffect(() => {
     if (!selected) return;
@@ -120,15 +122,16 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
                 className="truncate"
                 onClick={() => selectChat(workbench.id, chat.id)}
                 onDoubleClick={() => {
+                  if (!owner) return;
                   setTitle(chat.title);
                   setRenaming(chat.id);
                 }}
-                title="Double-click to rename"
+                title={owner ? 'Double-click to rename' : undefined}
               >
                 {chat.title || 'Chat'}
               </button>
             )}
-            <button
+            {owner && <button
               type="button"
               onClick={() => void closeChatTab(workbench, chat)}
               className="rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
@@ -136,11 +139,11 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
               aria-label={`Close ${chat.title || 'chat'}`}
             >
               <X className="h-3 w-3" />
-            </button>
+            </button>}
           </div>
         );
       })}
-      <button
+      {owner && <button
         type="button"
         onClick={() => void newChat()}
         disabled={creating}
@@ -149,7 +152,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
         aria-label="New chat"
       >
         {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-      </button>
+      </button>}
     </div>
   );
 }

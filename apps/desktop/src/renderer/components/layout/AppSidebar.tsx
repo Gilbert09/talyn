@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { workbenchesOffered } from '@talyn/shared';
 import {
   ArrowLeft,
@@ -34,6 +34,9 @@ import { SidebarSlackPending } from './SidebarSlackPending';
 import { UpdateNotice } from './UpdateNotice';
 import { SidebarAccountStatus } from './UsageGauge';
 import { UserChip } from './UserChip';
+import { SpaceSidebar } from './SpaceSidebar';
+import { useActiveSpace } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
 
 /**
  * The app's left column, top to bottom: the macOS drag strip, the workspace,
@@ -54,6 +57,10 @@ export function AppSidebar() {
   const setAddRepositoryOpen = useNavigationStore((s) => s.setAddRepositoryOpen);
   const workbenches = useWorkspaceWorkbenches();
   const { user } = useAuth();
+  const space = useActiveSpace();
+  useEffect(() => {
+    useSpacesStore.getState().setSelfUserId(user?.id ?? null);
+  }, [user?.id]);
 
   const offered = workbenchesOffered(features);
   const prCounts = usePrBadgeCounts();
@@ -116,9 +123,10 @@ export function AppSidebar() {
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5" aria-label="Sessions">
-          {offered && !collapsed && <SidebarSlackPending />}
-          {offered && !collapsed && <SidebarThreadList workbenches={workbenches} />}
-          {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
+          {offered && !collapsed && space && <SpaceSidebar active={space} />}
+          {offered && !collapsed && !space && <SidebarSlackPending />}
+          {offered && !collapsed && !space && <SidebarThreadList workbenches={workbenches} />}
+          {offered && !collapsed && !space && <SidebarWorkbenchList workbenches={workbenches} />}
           {/* Fades the last rows, so the list reads as one that scrolls on under the pages below. */}
           <div aria-hidden className="pointer-events-none sticky bottom-0 -mx-1.5 h-5 bg-gradient-to-t from-card to-transparent" />
         </nav>
@@ -135,18 +143,20 @@ export function AppSidebar() {
                 dataAttr="sidebar-history"
               />
             )}
-            <SidebarItem
-              icon={FolderPlus}
-              label="Add repository"
-              collapsed
-              onClick={() => setAddRepositoryOpen(true)}
-              dataAttr="sidebar-add-repository"
-            />
+            {!space && (
+              <SidebarItem
+                icon={FolderPlus}
+                label="Add repository"
+                collapsed
+                onClick={() => setAddRepositoryOpen(true)}
+                dataAttr="sidebar-add-repository"
+              />
+            )}
           </div>
         )}
 
-        {/* Its own shade, so the app pages read apart from the session list above. */}
-        <div className="space-y-0.5 border-t bg-muted/60 px-1.5 py-2" data-attr="sidebar-app-nav">
+        {/* Its own shade, so the app pages read apart from the session list above. Personal only. */}
+        {!space && <div className="space-y-0.5 border-t bg-muted/60 px-1.5 py-2" data-attr="sidebar-app-nav">
           <SidebarItem
             icon={GitPullRequest}
             label="Pull requests"
@@ -196,7 +206,7 @@ export function AppSidebar() {
             onClick={() => navigate({ view: 'insights' })}
             dataAttr="nav-insights"
           />
-        </div>
+        </div>}
 
         <div className="border-t p-2">
           <UpdateNotice collapsed={collapsed} />

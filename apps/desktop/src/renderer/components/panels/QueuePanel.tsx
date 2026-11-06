@@ -44,6 +44,8 @@ import {
 import type { TaskScheduleError } from '@talyn/shared';
 import type { Task, TaskStatus, TaskPriority } from '@talyn/shared';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
+import { spacesOffered } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
 
 const statusConfig: Record<
   TaskStatus,
@@ -525,6 +527,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             */}
             <div className="app-region-no-drag flex items-center gap-2 shrink-0">
               <TaskPRControls task={task} onOpen={setPRSheetId} />
+              <MoveTaskButton task={task} />
             </div>
           </div>
         </div>
@@ -612,6 +615,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             {/* PR pill + open-on-GitHub link on any task with a PR linked
                 (started-from-a-PR, or linked once the cloud run opened one). */}
             <TaskPRControls task={task} onOpen={setPRSheetId} />
+            <MoveTaskButton task={task} />
             {(task.status === 'failed' || taskNeedsHumanOpen(task)) && (
               <>
                 <Button size="sm" data-attr="task-retry" onClick={handleRetryTask} disabled={actionInFlight}>
@@ -977,5 +981,23 @@ function PRStatusPillForTask({
       labels={summary.labels}
       humanGates={summary.humanGates}
     />
+  );
+}
+
+/** "Move…" on a task: into one of my teams' spaces, or back to Personal. Owner only; the backend checks. */
+function MoveTaskButton({ task }: { task: Task }) {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  if (!offered) return null;
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      data-attr="task-move-to-space"
+      onClick={() =>
+        useSpacesStore.getState().openDialog({ kind: 'move', target: 'task', id: task.id, spaceId: task.spaceId ?? null })
+      }
+    >
+      {task.spaceId ? 'Move…' : 'Move to space…'}
+    </Button>
   );
 }

@@ -15,7 +15,6 @@ jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAn
 jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { create: jest.fn(), createChat: jest.fn(), sendMessage: jest.fn(), runScript: jest.fn() } } }));
 jest.mock('../renderer/lib/localWorkbench', () => ({ createLocalWorkbench: jest.fn() }));
 jest.mock('../renderer/stores/navigation', () => ({ useNavigationStore: { getState: () => ({ navigate: jest.fn() }) } }));
-jest.mock('../renderer/stores/workspace', () => ({ useWorkspaceStore: { getState: () => ({ workspaces: [] }) } }));
 jest.mock('../renderer/stores/billing', () => ({ maybeHandleBillingLimit: jest.fn(() => false) }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { error: jest.fn() } }));
 

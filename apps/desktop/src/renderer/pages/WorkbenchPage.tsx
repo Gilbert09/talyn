@@ -1,4 +1,5 @@
 import { Loader2 } from 'lucide-react';
+import { useSpacesStore } from '../stores/spaces';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { WorkbenchView } from '../components/workbench/WorkbenchView';
 
@@ -9,13 +10,14 @@ import { WorkbenchView } from '../components/workbench/WorkbenchView';
  */
 export function WorkbenchPage({ id }: { id: string }) {
   const workbench = useWorkbenchStore((s) => s.workbenches[id]);
+  const extraLoading = useSpacesStore((s) => s.extraLoads[id] === 'loading');
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
   const listError = useWorkbenchStore((s) => s.listError);
 
   if (workbench) return <WorkbenchView key={workbench.id} workbench={workbench} />;
   return (
     <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-      {listLoaded ? (
+      {listLoaded && !extraLoading ? (
         (listError ?? 'This session is not available.')
       ) : (
         <>

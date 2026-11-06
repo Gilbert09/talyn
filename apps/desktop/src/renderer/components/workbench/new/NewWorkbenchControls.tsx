@@ -50,6 +50,8 @@ export function RepoPicker({
   onChange,
   disabled,
   allowAnyRepository = false,
+  extraAction,
+  emptyText = 'No watched repository matches.',
 }: {
   repositories: WatchedRepo[];
   value: string;
@@ -57,6 +59,9 @@ export function RepoPicker({
   disabled?: boolean;
   /** Offer "Any repository", which starts a thread. */
   allowAnyRepository?: boolean;
+  /** One more item under the list, like "Add repository to space…". */
+  extraAction?: { label: string; onSelect: () => void };
+  emptyText?: string;
 }) {
   const [open, setOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -84,7 +89,7 @@ export function RepoPicker({
         <Command>
           <CommandInput ref={searchRef} placeholder="Find a repository…" />
           <CommandList>
-            <CommandEmpty>No watched repository matches.</CommandEmpty>
+            <CommandEmpty>{emptyText}</CommandEmpty>
             {allowAnyRepository && (
               <CommandGroup>
                 <CommandItem
@@ -121,6 +126,20 @@ export function RepoPicker({
                 </CommandItem>
               ))}
             </CommandGroup>
+            {extraAction && (
+              <CommandGroup>
+                <CommandItem
+                  value={`__action ${extraAction.label}`}
+                  data-attr="repo-picker-extra-action"
+                  onSelect={() => {
+                    setOpen(false);
+                    extraAction.onSelect();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{extraAction.label}</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
           </CommandList>
         </Command>
       </PopoverContent>

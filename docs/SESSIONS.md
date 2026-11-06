@@ -2,6 +2,13 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Spaces in the desktop app (2026-11-06)
+
+Phase P6 ports the web switcher to `apps/desktop`. It is a fork, so the code is written twice.
+- Same behaviour as the web: Personal/team context in the workspace store, a spaces store, presence heartbeat, `useSpaceLive`, space sidebar and home, move-to-space, session viewer, Teams settings. All of it renders only when `GET /features` returns `spaces: true`.
+- Local (on-device) sessions are Personal only. They never get "Move to space".
+- Shortcut stays Cmd+Alt+Shift+1-9. No preload or IPC change.
+
 ## Session chat: reads, searches and edit diffs (2026-11-06)
 
 The session chat looked busy and seemed to miss edits, reads and searches. Nothing was dropped. Codex reads and searches through the shell, so every `rg` or `sed -n` showed as a `bash -lc '…'` command. Edits showed only a path.

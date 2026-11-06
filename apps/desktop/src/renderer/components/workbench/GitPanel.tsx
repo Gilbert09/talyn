@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { useIsWorkbenchOwner } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
 import { trackEvent } from '../../lib/analytics';
 import type { PRRow } from '../../lib/api';
@@ -39,7 +40,8 @@ export function GitPanel({
   pr: PRRow | null;
 }) {
   const storedTab = useWorkbenchStore((s) => s.sideTab);
-  const hasSandbox = workbench.runtime === 'sandbox';
+  const owner = useIsWorkbenchOwner(workbench);
+  const hasSandbox = workbench.runtime === 'sandbox' && owner;
   const tab = storedTab === 'sandbox' && !hasSandbox ? 'changes' : storedTab;
   const setTab = useWorkbenchStore((s) => s.setSideTab);
   const width = useWorkbenchStore((s) => s.rightPanelWidth);
@@ -157,7 +159,7 @@ export function GitPanel({
           </div>
         )}
       </div>
-      <TerminalPanel workbench={workbench} ops={ops} />
+      {owner && <TerminalPanel workbench={workbench} ops={ops} />}
     </div>
   );
 }

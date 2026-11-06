@@ -30,10 +30,11 @@ export function isArchived(wb: Workbench): boolean {
   return wb.status === 'archived' || Boolean(wb.archivedAt);
 }
 
-/** The workbenches of the current workspace, archived included. */
+/** The workbenches of the current workspace, archived included. Viewed-only extras are left out. */
 export function useWorkspaceWorkbenches(): Workbench[] {
   const map = useWorkbenchStore((s) => s.workbenches);
-  return useMemo(() => Object.values(map), [map]);
+  const extra = useWorkbenchStore((s) => s.extraWorkbenchIds);
+  return useMemo(() => Object.values(map).filter((wb) => !extra[wb.id]), [map, extra]);
 }
 
 /** Live workbenches in sidebar order — the order ⌘1–9 counts in. */

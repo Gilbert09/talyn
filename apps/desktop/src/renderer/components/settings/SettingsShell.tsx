@@ -24,6 +24,8 @@ import {
   Wand2,
 } from 'lucide-react';
 import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
+import { TeamsSettings } from './sections/TeamsSettings';
+import { spacesOffered } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
 import { useBillingStore } from '../../stores/billing';
 import { hasUsageBilling } from '../../lib/usageBilling';
@@ -99,6 +101,8 @@ function SandboxSetupPage() {
 }
 
 function TeamPage() {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  if (offered) return <TeamsSettings />;
   return (
     <SettingsPage title="Team">
       <TeamSettings />
@@ -185,8 +189,8 @@ export function SettingsShell() {
         // Drawn for anyone the flag offers teams to, and for anyone already on a
         // team whatever the flag says: a seated member must always be able to
         // see who pays for them, and leave.
-        ...(features?.teams === true || billingStatus?.team
-          ? [{ id: 'teams' as const, icon: Users, label: 'Team' }]
+        ...(spacesOffered(features) || features?.teams === true || billingStatus?.team
+          ? [{ id: 'teams' as const, icon: Users, label: spacesOffered(features) ? 'Teams' : 'Team' }]
           : []),
         { id: 'billing', icon: CreditCard, label: hasUsageBilling(billingStatus) ? 'Plan and usage' : 'Billing' },
       ],

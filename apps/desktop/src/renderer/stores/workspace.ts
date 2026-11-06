@@ -211,6 +211,36 @@ function persistWorkspaceId(id: string | null) {
   }
 }
 
+// A space keeps currentWorkspaceId set to the Personal workspace.
+export type AppContext = { kind: 'personal'; workspaceId: string | null } | { kind: 'space'; spaceId: string };
+
+export const CONTEXT_PREF_KEY = 'talyn-current-context';
+
+export function readStoredContext(): AppContext {
+  const personal: AppContext = { kind: 'personal', workspaceId: getInitialWorkspaceId() };
+  if (typeof window === 'undefined') return personal;
+  try {
+    const raw = localStorage.getItem(CONTEXT_PREF_KEY);
+    if (!raw) return personal;
+    const parsed = JSON.parse(raw) as { kind?: unknown; spaceId?: unknown };
+    if (parsed.kind === 'space' && typeof parsed.spaceId === 'string' && parsed.spaceId) {
+      return { kind: 'space', spaceId: parsed.spaceId };
+    }
+  } catch {
+    // A broken value reads as Personal.
+  }
+  return personal;
+}
+
+function persistContext(context: AppContext) {
+  try {
+    if (context.kind === 'space') localStorage.setItem(CONTEXT_PREF_KEY, JSON.stringify(context));
+    else localStorage.removeItem(CONTEXT_PREF_KEY);
+  } catch {
+    // ignore quota / privacy-mode issues
+  }
+}
+
 // Apply theme to document
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return;
@@ -233,6 +263,8 @@ interface WorkspaceState {
   // Current workspace
   currentWorkspaceId: string | null;
   workspaces: Workspace[];
+  /** Personal or a space. See {@link AppContext}. */
+  currentContext: AppContext;
 
   // Environments
   environments: Environment[];
@@ -347,7 +379,9 @@ interface WorkspaceState {
   settingsSection: SettingsSection;
 
   // Actions
+  /** Switching workspace also switches the app to Personal. */
   setCurrentWorkspace: (id: string | null) => void;
+  setContext: (context: AppContext) => void;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (workspace: Workspace) => void;
   setCreateWorkspaceOpen: (open: boolean) => void;
@@ -411,6 +445,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   // Initial state
   currentWorkspaceId: getInitialWorkspaceId(),
   workspaces: [],
+  currentContext: readStoredContext(),
   environments: [],
   tasks: [],
   tasksHasMore: false,
@@ -444,7 +479,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   // Actions
   setCurrentWorkspace: (id) => {
     persistWorkspaceId(id);
-    set({ currentWorkspaceId: id });
+    const context: AppContext = { kind: 'personal', workspaceId: id };
+    persistContext(context);
+    set({ currentWorkspaceId: id, currentContext: context });
+  },
+
+  setContext: (context) => {
+    if (context.kind === 'personal') {
+      const id = context.workspaceId ?? useWorkspaceStore.getState().currentWorkspaceId;
+      persistWorkspaceId(id);
+      persistContext({ kind: 'personal', workspaceId: id });
+      set({ currentWorkspaceId: id, currentContext: { kind: 'personal', workspaceId: id } });
+      return;
+    }
+    persistContext(context);
+    set({ currentContext: context });
   },
 
   setWorkspaces: (workspaces) => set({ workspaces }),

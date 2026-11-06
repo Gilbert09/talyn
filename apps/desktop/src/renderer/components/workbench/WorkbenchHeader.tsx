@@ -64,6 +64,11 @@ import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
 import { timeAgo } from './new/RecentWorkbenches';
 import { useRenameSession } from './useRenameSession';
+import { SessionOwnerChip, SessionPresence, SessionSpaceChip, useSessionViewer } from '../spaces/SessionViewer';
+import { spacesOffered } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
+import { useWorkspaceStore } from '../../stores/workspace';
+import { moveToSpace } from '../spaces/MoveToSpace';
 
 const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
@@ -166,6 +171,9 @@ export function WorkbenchHeader({
   const [restoring, setRestoring] = useState(false);
   const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
+  const viewer = useSessionViewer(workbench);
+  const owner = viewer.owner;
+  const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
   const continueInThread = async () => {
     setContinuing(true);
     try {
@@ -231,13 +239,13 @@ export function WorkbenchHeader({
 
   // Shortcuts and the palette ask through an event, so they get the same
   // confirmations and busy state as a click.
-  const latest = useRef({ available, run, disabled, workbenchId: workbench.id });
-  latest.current = { available, run, disabled, workbenchId: workbench.id };
+  const latest = useRef({ available, run, disabled, workbenchId: workbench.id, owner });
+  latest.current = { available, run, disabled, workbenchId: workbench.id, owner };
   useEffect(() => {
     const onRequest = (e: Event) => {
       const { workbenchId, action } = (e as CustomEvent<WorkbenchActionRequest>).detail ?? {};
       const cur = latest.current;
-      if (workbenchId !== cur.workbenchId || !action) return;
+      if (workbenchId !== cur.workbenchId || !action || !cur.owner) return;
       if (!cur.available.includes(action)) {
         toast.info(`${NEXT_ACTION_LABEL[action]} does not apply to this session now`);
         return;
@@ -285,10 +293,13 @@ export function WorkbenchHeader({
         data-attr="workbench-header-title-row"
       >
         {rename.editing ? rename.input : (
-          <h1 className="app-region-no-drag min-w-0 flex-1 truncate text-sm font-semibold" onDoubleClick={rename.start} title="Double-click to rename">
+          <h1 className="app-region-no-drag min-w-0 flex-1 truncate text-sm font-semibold" onDoubleClick={owner ? rename.start : undefined} title={owner ? 'Double-click to rename' : undefined}>
             {workbenchDisplayName(workbench)}
           </h1>
         )}
+        {spacesOn && <SessionSpaceChip spaceId={workbench.spaceId} />}
+        {spacesOn && !owner && <SessionOwnerChip creator={viewer.creator} />}
+        {spacesOn && <SessionPresence viewers={viewer.viewers} />}
         <div className="app-region-no-drag flex min-w-0 max-w-[70%] shrink items-center gap-2">
           {pr?.state === 'open' && pr.summary.url && (
             <div className="flex min-w-0 items-center gap-0.5">
@@ -314,7 +325,7 @@ export function WorkbenchHeader({
               </Button>
             </div>
           )}
-          {archived && (
+          {archived && owner && (
             <Button
               variant="outline"
               className="h-7 gap-1.5 px-2.5 text-xs"
@@ -329,7 +340,7 @@ export function WorkbenchHeader({
               Restore
             </Button>
           )}
-          {!archived && (
+          {!archived && owner && (
             <div className="flex min-w-0 items-center">
               {primary && PrimaryIcon && (
                 <Button
@@ -434,6 +445,31 @@ export function WorkbenchHeader({
                           Continue as thread
                         </DropdownMenuItem>
                       )}
+                      {spacesOn && workbench.runtime !== 'local' && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            data-attr="workbench-move-to-space"
+                            onSelect={() =>
+                              useSpacesStore.getState().openDialog({
+                                kind: 'move',
+                                target: 'session',
+                                id: workbench.id,
+                                spaceId: workbench.spaceId ?? null,
+                              })
+                            }
+                          >
+                            Move to space…
+                          </DropdownMenuItem>
+                          {workbench.spaceId && (
+                            <DropdownMenuItem
+                              onSelect={() => void moveToSpace('session', workbench.id, workbench.spaceId ?? null, null)}
+                            >
+                              Move to Personal
+                            </DropdownMenuItem>
+                          )}
+                        </>
+                      )}
                     </>
                   )}
                 </DropdownMenuContent>
@@ -442,7 +478,7 @@ export function WorkbenchHeader({
           )}
         </div>
         <div className="app-region-no-drag flex shrink-0 items-center gap-1">
-          {!thread && (
+          {!thread && owner && (
             <Button
               variant="ghost"
               className="h-7 w-7 p-0"

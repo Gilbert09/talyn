@@ -25,6 +25,9 @@ import { slackSourceOf } from '../../lib/slackSession';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 import { useRenameSession } from '../workbench/useRenameSession';
+import { useWorkspaceStore } from '../../stores/workspace';
+import { useSpacesStore } from '../../stores/spaces';
+import { spacesOffered } from '../../lib/spaces';
 
 /**
  * The sidebar's workbench list: live sessions grouped by repository, in the
@@ -102,6 +105,7 @@ function WorkbenchRow({
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const rename = useRenameSession(workbench);
+  const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
 
   const copyBranch = () => {
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
@@ -189,6 +193,18 @@ function WorkbenchRow({
             <ContextMenuItem onSelect={() => void openExternal(prUrl)}>
               <ExternalLink className="h-3.5 w-3.5" />
               Open pull request
+            </ContextMenuItem>
+          )}
+          {spacesOn && workbench.runtime !== 'local' && (
+            <ContextMenuItem
+              data-attr="sidebar-move-to-space"
+              onSelect={() =>
+                useSpacesStore
+                  .getState()
+                  .openDialog({ kind: 'move', target: 'session', id: workbench.id, spaceId: workbench.spaceId ?? null })
+              }
+            >
+              Move to space…
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />

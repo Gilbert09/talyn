@@ -1,5 +1,11 @@
 import { useEffect } from 'react';
 import { workbenchesOffered } from '@talyn/shared';
+import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
+import { useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
+import { useSpacesStore } from '../../stores/spaces';
+import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
+import { MoveToSpaceDialog } from '../spaces/MoveToSpace';
+import { SpaceHomePage } from '../spaces/SpaceHomePage';
 import { AppSidebar } from './AppSidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { useAppShortcuts } from './appShortcuts';
@@ -54,6 +60,10 @@ export function AppShell() {
   useInstructionFileSync();
   useStartupCheckoutDetection();
   useAppShortcuts();
+  useSpacesBoot();
+  const space = useActiveSpace();
+  const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  useSpaceLive(space?.space.id ?? null);
   // Introduces code review once, to somebody who already uses Talyn. Deferred
   // while What's-New is open: the release that flips this feature's availability
   // fires both on the same launch, and two modals stacked on one another is how
@@ -79,6 +89,8 @@ export function AppShell() {
       <UpgradeModal open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen} />
       <ConnectAgentModal />
       <WhatsNewModal />
+      {spacesOn && <SpaceDialogsHost />}
+      {spacesOn && <MoveToSpaceDialog />}
       <CodeReviewIntroModal
         open={codeReviewIntro.open && !whatsNewOpen}
         examplePrId={codeReviewIntro.examplePrId}
@@ -96,6 +108,10 @@ export function AppShell() {
 /** The main column's content for the current route. */
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
+  const space = useActiveSpace();
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'insights')) {
+    return <SpaceHomePage active={space} />;
+  }
   switch (route.view) {
     case 'home':
       return <HomePage />;
@@ -127,6 +143,8 @@ function useWorkbenchList(): void {
   const offered = features === null ? null : workbenchesOffered(features);
   const workbenches = useWorkbenchStore((s) => s.workbenches);
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
+  const inSpace = useActiveSpace() !== null;
+  const extraLoads = useSpacesStore((s) => s.extraLoads);
   const route = useNavigationStore((s) => s.route);
 
   useEffect(() => {
@@ -135,6 +153,14 @@ function useWorkbenchList(): void {
   }, [workspaceId, offered]);
 
   useEffect(() => {
+    if (inSpace && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
+      const state = extraLoads[route.id];
+      if (!state) {
+        void loadExtraWorkbench(route.id);
+        return;
+      }
+      if (state === 'loading') return;
+    }
     useNavigationStore.getState().reconcileWorkbenchRoute({ workbenches, listLoaded, offered });
-  }, [route, workbenches, listLoaded, offered]);
+  }, [route, workbenches, listLoaded, offered, inSpace, extraLoads]);
 }

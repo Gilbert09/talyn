@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
 import { MENU_COMMANDS } from '../../../main/menuCommands';
 import {
   FOCUS_COMPOSER_EVENT,
@@ -21,9 +23,16 @@ import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
 
-/** Live workbenches in sidebar order, the order ⌘1–9 counts in. */
+// Keep the same context shortcut as the web app.
+export const CONTEXT_JUMP_KEYS = (n: number) => `mod+alt+shift+${n}`;
+
+export function orderedContexts() {
+  return contextEntries(useWorkspaceStore.getState().workspaces, useSpacesStore.getState().teams);
+}
+
 export function orderedLiveWorkbenches(): Workbench[] {
-  const all = Object.values(useWorkbenchStore.getState().workbenches).filter((w) => !isArchived(w));
+  const { workbenches, extraWorkbenchIds } = useWorkbenchStore.getState();
+  const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
   return groupByRepository(all).flatMap((g) => g.items);
 }
 
@@ -56,6 +65,14 @@ function stepWorkbench(delta: 1 | -1): void {
 
 const offered = () => workbenchesOffered(useWorkspaceStore.getState().features);
 const inWorkbench = () => currentWorkbench() !== null;
+const ownsCurrent = () => {
+  const wb = currentWorkbench();
+  if (!wb) return false;
+  if (!useWorkbenchStore.getState().extraWorkbenchIds[wb.id]) return true;
+  const ws = useWorkspaceStore.getState();
+  return isWorkbenchOwner(wb, ws.workspaces, ws.currentWorkspaceId);
+};
+const inOwnWorkbench = () => inWorkbench() && ownsCurrent();
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
@@ -75,7 +92,7 @@ function headerAction(id: string, action: WorkbenchAction): Shortcut {
     id,
     group: 'Session',
     allowInInput: true,
-    when: inWorkbench,
+    when: inOwnWorkbench,
     run: () => {
       const wb = currentWorkbench();
       if (wb) requestWorkbenchAction(wb.id, action);
@@ -103,7 +120,22 @@ export function buildAppShortcuts(): Shortcut[] {
     })
   );
 
+  const contextJumps: Shortcut[] = Array.from({ length: 9 }, (_, i) => ({
+    id: `context.jump.${i + 1}`,
+    keys: CONTEXT_JUMP_KEYS(i + 1),
+    label: `Switch to workspace or space ${i + 1}`,
+    group: 'General',
+    allowInInput: true,
+    hidden: true,
+    when: () => spacesOffered(useWorkspaceStore.getState().features) && orderedContexts().length > i,
+    run: () => {
+      const context = orderedContexts()[i];
+      if (context) switchContext(context);
+    },
+  }));
+
   return [
+    ...contextJumps,
     fromMenu({
       id: 'palette.open',
       label: 'Search',
@@ -201,14 +233,14 @@ export function buildAppShortcuts(): Shortcut[] {
       id: 'workbench.sandbox',
       group: 'Session',
       allowInInput: true,
-      when: () => currentWorkbench()?.runtime === 'sandbox',
+      when: () => ownsCurrent() && currentWorkbench()?.runtime === 'sandbox',
       run: () => wbStore().setSideTab('sandbox'),
     }),
     fromMenu({
       id: 'terminal.toggle',
       group: 'Session',
       allowInInput: true,
-      when: inWorkbench,
+      when: inOwnWorkbench,
       run: () => wbStore().toggleTerminal(),
     }),
     fromMenu({
@@ -226,7 +258,7 @@ export function buildAppShortcuts(): Shortcut[] {
       id: 'chat.new',
       group: 'Session',
       allowInInput: true,
-      when: inWorkbench,
+      when: inOwnWorkbench,
       run: () => {
         const wb = currentWorkbench();
         if (wb) void createChatTab(wb);
@@ -239,7 +271,7 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       when: () => {
         const wb = currentWorkbench();
-        return wb !== null && currentChat(wb) !== null;
+        return wb !== null && ownsCurrent() && currentChat(wb) !== null;
       },
       run: () => {
         const wb = currentWorkbench();
