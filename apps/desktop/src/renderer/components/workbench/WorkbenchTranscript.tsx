@@ -9,6 +9,7 @@ import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
+import { useWorkbenchStore, type OutgoingWorkbenchMessage } from '../../stores/workbenches';
 
 /**
  * A chat's transcript: each turn is the user's message, then the agent's
@@ -38,6 +39,7 @@ export function WorkbenchTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
+  const outgoing = useWorkbenchStore((state) => state.outgoingMessages[chat.id] ?? EMPTY_OUTGOING_MESSAGES);
   const turns = useStableTurns(events);
   const firstSeq = events.length ? events[0].seq : null;
   const prevFirstSeqRef = useRef(firstSeq);
@@ -78,7 +80,7 @@ export function WorkbenchTranscript({
     prevHeightRef.current = el.scrollHeight;
     // A page that does not fill the view gives no scroll to react to.
     maybeLoadOlder();
-  }, [events.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
+  }, [events.length, outgoing.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
 
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
@@ -92,7 +94,7 @@ export function WorkbenchTranscript({
         className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4 text-sm text-foreground"
       >
         {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
-        {turns.length === 0 && !loading && (
+        {turns.length === 0 && outgoing.length === 0 && !loading && (
           <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
             {emptyHint ?? 'Send a message to start.'}
           </div>
@@ -132,6 +134,18 @@ export function WorkbenchTranscript({
               />
             );
           })}
+          {outgoing.map((message) => (
+            <UserMessage
+              key={message.id}
+              chatId={chat.id}
+              turn={0}
+              text={message.text}
+              attachments={message.attachments}
+              ops={ops}
+              canRevert={false}
+              sending
+            />
+          ))}
           {running && (
             <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
@@ -159,6 +173,7 @@ export interface OlderHistory {
 }
 
 const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
+const EMPTY_OUTGOING_MESSAGES: OutgoingWorkbenchMessage[] = [];
 
 /** How close to the top a scroll must come before the next older page loads. */
 const LOAD_OLDER_THRESHOLD_PX = 400;
@@ -323,6 +338,7 @@ function UserMessage({
   attachments,
   ops,
   canRevert,
+  sending = false,
 }: {
   chatId: string;
   turn: number;
@@ -330,6 +346,7 @@ function UserMessage({
   attachments: TranscriptTurn['attachments'];
   ops: WorkbenchOps;
   canRevert: boolean;
+  sending?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -354,6 +371,11 @@ function UserMessage({
           {renderMarkdownish(text, 'surface')}
           {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}
         </div>
+        {sending && (
+          <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground" data-attr="outgoing-message">
+            <Loader2 className="h-3 w-3 animate-spin" /> Sending…
+          </div>
+        )}
         {canRevert && (
           <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">
             {confirming ? (

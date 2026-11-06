@@ -1,11 +1,12 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Composer } from '../renderer/components/workbench/Composer';
 import { sandboxOps } from '../renderer/lib/workbenchOps';
 import { api } from '../renderer/lib/api';
 import { downscaleImage } from '../renderer/lib/imageDownscale';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/lib/imageDownscale', () => ({ downscaleImage: jest.fn() }));
@@ -28,6 +29,29 @@ afterEach(() => {
   cleanup();
   jest.restoreAllMocks();
   jest.clearAllMocks();
+});
+
+beforeEach(() => {
+  useWorkbenchStore.setState({ outgoingMessages: {} });
+});
+
+it('stages a prompt before its send request finishes', async () => {
+  let finishSend: (result: { queued: boolean }) => void = () => undefined;
+  const send = jest.spyOn(api.workbenches, 'sendMessage').mockReturnValue(
+    new Promise<{ queued: boolean }>((resolve) => { finishSend = resolve; })
+  );
+  render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send the message' }));
+
+  expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('');
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([
+    expect.objectContaining({ text: 'Check the cache' }),
+  ]);
+  expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Check the cache' }));
+
+  await act(async () => finishSend({ queued: false }));
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([]);
 });
 
 it('uploads a pasted sandbox image and shows its chip', async () => {

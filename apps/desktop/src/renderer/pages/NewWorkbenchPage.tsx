@@ -49,6 +49,12 @@ const PLACEHOLDER = 'Describe a task. @ references files. Enter creates and star
 const THREAD_PLACEHOLDER = 'What do you want to get done? A thread can work across repositories.';
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
 
+interface LaunchingWorkbench {
+  kind: 'session' | 'thread';
+  prompt: string;
+  target: string;
+}
+
 /** A repository's local checkout, matched case-insensitively: a remote's case need not match GitHub's. */
 export function localPathFor(paths: Record<string, string>, repoFullName: string | undefined): string | null {
   if (!repoFullName) return null;
@@ -99,6 +105,7 @@ export function NewWorkbenchPage() {
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
   const autoCreatePr = defaults.autoCreatePr;
   const [pathError, setPathError] = useState<string | null>(null);
+  const [launching, setLaunching] = useState<LaunchingWorkbench | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
   const [active, setActive] = useState(0);
@@ -283,6 +290,11 @@ export function NewWorkbenchPage() {
   const submit = async (text: string) => {
     if (!canCreate || !workspaceId || (mode === 'session' && !repo)) return;
     setPathError(null);
+    setLaunching({
+      kind: mode,
+      prompt: text.trim(),
+      target: mode === 'thread' ? 'Any repository' : repo!.fullName,
+    });
     const wb = await create({
       workspaceId,
       ...(mode === 'thread' ? { kind: 'thread' as const } : { repositoryId: repo!.id, repoFullName: repo!.fullName }),
@@ -305,6 +317,8 @@ export function NewWorkbenchPage() {
       setPrompt('');
       images.clear();
       setSource(NEW_BRANCH);
+    } else {
+      setLaunching(null);
     }
   };
 
@@ -372,6 +386,28 @@ export function NewWorkbenchPage() {
   const unavailable = readinessKnown
     ? (mode === 'thread' ? ['sandbox'] as const : ['sandbox', 'local'] as const).filter((r) => !runtimes[r].available)
     : [];
+
+  if (launching) {
+    const label = launching.kind === 'thread' ? 'thread' : 'session';
+    return (
+      <TooltipProvider delayDuration={300}>
+        <div className="h-full overflow-y-auto" data-attr="new-workbench-launching">
+          <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center gap-6 px-6 py-16">
+            <h1 className="text-center font-display text-2xl font-semibold tracking-tight">Starting your {label}…</h1>
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
+                {launching.prompt}
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground" aria-live="polite">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Creating the {label} in {launching.target}…
+            </div>
+          </div>
+        </div>
+      </TooltipProvider>
+    );
+  }
 
   return (
     <TooltipProvider delayDuration={300}>

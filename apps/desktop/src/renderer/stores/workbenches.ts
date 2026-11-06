@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trackEvent } from '../lib/analytics';
 import type {
   Workbench,
+  WorkbenchAttachment,
   WorkbenchChat,
   WorkbenchEvent,
   WorkbenchQueuedMessage,
@@ -43,6 +44,13 @@ export interface ChatEventsState {
   oldestSeq: number | null;
   loadingOlder: boolean;
   olderError: string | null;
+}
+
+/** A prompt shown in the transcript while its send request is in flight. */
+export interface OutgoingWorkbenchMessage {
+  id: string;
+  text: string;
+  attachments: WorkbenchAttachment[];
 }
 
 /** What a history page says about the events below it. */
@@ -222,6 +230,8 @@ interface WorkbenchState {
   terminalTab: WorkbenchTerminalTab;
   /** Composer drafts per chat (or per workbench before it has a chat). */
   drafts: Record<string, string>;
+  /** Prompts shown before the server confirms their send request. */
+  outgoingMessages: Record<string, OutgoingWorkbenchMessage[]>;
   /** Chats that finished while nobody was looking. */
   unread: Record<string, true>;
   /**
@@ -270,6 +280,8 @@ interface WorkbenchState {
   setTerminalHeight: (height: number) => void;
   setTerminalTab: (tab: WorkbenchTerminalTab) => void;
   setDraft: (key: string, text: string) => void;
+  addOutgoingMessage: (chatId: string, message: OutgoingWorkbenchMessage) => void;
+  removeOutgoingMessage: (chatId: string, messageId: string) => void;
   /** Add text to the end of a draft, on its own paragraph. */
   appendDraft: (key: string, text: string) => void;
   markRead: (chatId: string) => void;
@@ -304,6 +316,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   terminalHeight: initialLayout.dockHeight,
   terminalTab: 'terminal',
   drafts: {},
+  outgoingMessages: {},
   unread: {},
   unseen: {},
   localQueues: {},
@@ -314,7 +327,15 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     set((s) =>
       s.workspaceId === workspaceId
         ? s
-        : { workspaceId, workbenches: {}, extraWorkbenchIds: {}, listLoaded: false, listError: null, selectedWorkbenchId: null }
+        : {
+            workspaceId,
+            workbenches: {},
+            extraWorkbenchIds: {},
+            listLoaded: false,
+            listError: null,
+            selectedWorkbenchId: null,
+            outgoingMessages: {},
+          }
     ),
 
   setWorkbenches: (workspaceId, list) =>
@@ -502,6 +523,22 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       else delete drafts[key];
       return { drafts };
     }),
+
+  addOutgoingMessage: (chatId, message) =>
+    set((s) => ({
+      outgoingMessages: {
+        ...s.outgoingMessages,
+        [chatId]: [...(s.outgoingMessages[chatId] ?? []), message],
+      },
+    })),
+
+  removeOutgoingMessage: (chatId, messageId) =>
+    set((s) => ({
+      outgoingMessages: {
+        ...s.outgoingMessages,
+        [chatId]: (s.outgoingMessages[chatId] ?? []).filter((message) => message.id !== messageId),
+      },
+    })),
 
   appendDraft: (key, text) => {
     const add = text.trim();
