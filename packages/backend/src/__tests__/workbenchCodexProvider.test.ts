@@ -18,7 +18,8 @@ const block = (url: string) => [
   '',
 ].join('\n');
 
-describe('Codex guest provider setup', () => {
+// The prelude runs in the guest's POSIX shell; Windows has no /bin/sh.
+describe.skipIf(process.platform === 'win32')('Codex guest provider setup', () => {
   const dirs: string[] = [];
   afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
