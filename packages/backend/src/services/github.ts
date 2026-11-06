@@ -547,6 +547,10 @@ class GitHubService extends EventEmitter {
   private deadCredentials: Map<string, string> = new Map();
   // Repository access decisions per workspace, with the instant of the check.
   private repoAccessCache: Map<string, { allowed: boolean; at: number }> = new Map();
+  // The last GitHub integration config read per workspace, keyed by an md5 of
+  // its jsonb text. `resolveAuth` still reads the row on every call; this only
+  // lets that read skip shipping a config the caller already holds.
+  private authConfigCache: Map<string, { hash: string; config: GitHubIntegrationConfig }> = new Map();
 
   // Refresh an expiring user token once it's within this window of expiry.
   private static readonly USER_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
@@ -842,6 +846,7 @@ class GitHubService extends EventEmitter {
    */
   private forgetResolvedAuth(workspaceId: string): void {
     this.deadCredentials.delete(workspaceId);
+    this.authConfigCache.delete(workspaceId);
     this.ownerCoverageCache.delete(workspaceId);
     // Access entries are keyed by credential, so the old token's entries can
     // never answer for the new one. They age out on their own.
@@ -1165,6 +1170,36 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * The workspace's GitHub integration row, with `config` left out (NULL) when
+   * its md5 equals `knownHash`. The hash covers the whole config, so a match
+   * means the caller's copy IS the stored config, whatever path wrote it and
+   * whether or not that path moved `updated_at`. A static method so tests can
+   * spy on it.
+   */
+  static readAuthRow(
+    db: Database,
+    workspaceId: string,
+    knownHash: string | null,
+  ): Promise<{ id: string; enabled: boolean; config: unknown; configHash: string; version: string } | undefined> {
+    const configHash = sql<string>`md5(${integrationsTable.config}::text)`;
+    return db
+      .select({
+        id: integrationsTable.id,
+        enabled: integrationsTable.enabled,
+        config: knownHash === null
+          ? integrationsTable.config
+          : sql<unknown>`CASE WHEN ${configHash} = ${knownHash} THEN NULL ELSE ${integrationsTable.config} END`,
+        configHash,
+        // Text preserves Postgres timestamp precision for the conditional write.
+        version: sql<string>`${integrationsTable.updatedAt}::text`,
+      })
+      .from(integrationsTable)
+      .where(and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github')))
+      .limit(1)
+      .then((rows) => rows[0]);
+  }
+
+  /**
    * Use the workspace user's permissions for every REST and GraphQL operation.
    * Installation credentials have wider access and cannot authorize a workspace.
    * This spends user API budget and attributes writes to the user instead of the bot.
@@ -1174,27 +1209,25 @@ class GitHubService extends EventEmitter {
   ): Promise<ResolvedAuth | null> {
     // Read the row every time. The database is the authority, so a credential
     // revoked or replaced by another replica has to stop granting access at
-    // once — a cache here would hold a deleted integration open for its TTL.
+    // once — a TTL cache here would hold a deleted integration open.
     // Reload after a successful refresh or a lost conditional write. Bound concurrent replacement retries.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const [row] = await this.db
-        .select({
-          id: integrationsTable.id,
-          enabled: integrationsTable.enabled,
-          config: integrationsTable.config,
-          // Text preserves Postgres timestamp precision for the conditional write.
-          version: sql<string>`${integrationsTable.updatedAt}::text`,
-        })
-        .from(integrationsTable)
-        .where(and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github')))
-        .limit(1);
-      const config = row?.config as GitHubIntegrationConfig | undefined;
+      const cached = this.authConfigCache.get(workspaceId);
+      const row = await GitHubService.readAuthRow(this.db, workspaceId, cached?.hash ?? null);
+      if (!row) this.authConfigCache.delete(workspaceId);
+      let config: GitHubIntegrationConfig | undefined;
+      if (row && row.config === null && cached?.hash === row.configHash) {
+        config = cached.config;
+      } else if (row && row.config) {
+        config = row.config as GitHubIntegrationConfig;
+        this.authConfigCache.set(workspaceId, { hash: row.configHash, config });
+      }
       const accessToken = row?.enabled && config ? readAccessToken(config) : null;
       if (this.tokens.get(workspaceId)?.accessToken !== accessToken) {
         this.viewerLoginCache.delete(workspaceId);
         this.viewerTeamsCache.delete(workspaceId);
       }
-      if (!accessToken || !config) {
+      if (!row || !accessToken || !config) {
         this.tokens.delete(workspaceId);
         return null;
       }

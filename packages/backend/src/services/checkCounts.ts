@@ -621,6 +621,34 @@ export function verdictFor(
  * a reseed passes false, because the full fetch that caused it has already
  * emitted its own snapshot event.
  */
+/**
+ * The ledger for one commit, as {@link CheckFact}s.
+ *
+ * `url` ships only for FAILING rows. Its one reader is `humanGatesIn`, which
+ * reads it only for a fact `isHumanFailure` accepts, and that needs
+ * `state = 'failure'`. The digests read name and state alone. The url was most
+ * of each row's bytes, and this read runs on every recompute.
+ */
+export async function readLedgerFacts(repoFullName: string, headSha: string): Promise<CheckFact[]> {
+  const rows = await getPoolDbClient()
+    .select({
+      name: prCheckStates.name,
+      state: prCheckStates.state,
+      required: prCheckStates.required,
+      rawState: prCheckStates.rawState,
+      url: sql<string | null>`CASE WHEN ${prCheckStates.state} = 'failure' THEN ${prCheckStates.url} END`,
+    })
+    .from(prCheckStates)
+    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
+  return rows.map((r) => ({
+    name: r.name,
+    state: r.state as CheckState,
+    required: r.required,
+    rawState: r.rawState,
+    url: r.url,
+  }));
+}
+
 async function recomputeVerdicts(
   repoFullName: string,
   headSha: string,
@@ -628,23 +656,7 @@ async function recomputeVerdicts(
   opts: { announceUnchanged: boolean },
 ): Promise<void> {
   const db = getPoolDbClient();
-  const rows = await db
-    .select({
-      name: prCheckStates.name,
-      state: prCheckStates.state,
-      required: prCheckStates.required,
-      rawState: prCheckStates.rawState,
-      url: prCheckStates.url,
-    })
-    .from(prCheckStates)
-    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
-  const facts: CheckFact[] = rows.map((r) => ({
-    name: r.name,
-    state: r.state as CheckState,
-    required: r.required,
-    rawState: r.rawState,
-    url: r.url,
-  }));
+  const facts = await readLedgerFacts(repoFullName, headSha);
   const counts = breakdownOf(facts);
   const digest = computeCheckDigest(headSha, facts);
   const failingChecksDigest = computeFailingChecksDigest(facts);
@@ -732,23 +744,156 @@ async function recomputeVerdicts(
 }
 
 /**
+ * Trailing window for the webhook path's recompute. One CI run reports ~190
+ * checks several times each, and every flush used to re-read the whole ledger
+ * (quadratic in the suite). 2s collapses a burst's flushes into one read and
+ * still moves a pill within a few seconds of the event.
+ */
+export const RECOMPUTE_COALESCE_MS = 2_000;
+
+export interface PendingRecompute {
+  repoFullName: string;
+  headSha: string;
+  repoIds: Set<string>;
+  announceUnchanged: boolean;
+  timer: NodeJS.Timeout | null;
+}
+
+/**
+ * Per-commit trailing coalescer for {@link recomputeVerdicts}. Requests inside
+ * one window merge (repo ids unioned, `announceUnchanged` OR-ed) into one run.
+ * A request that arrives while that commit's run is in flight is held and runs
+ * one window after it ends, so the last verdict always reads the last ledger.
+ *
+ * The run re-reads the affected PRs rather than reusing rows read up to a window
+ * ago: a full fetch can land in the window, and its facts are the newer ones.
+ * In-process only, like the check coalescer; a deploy overlap costs at most one
+ * extra recompute.
+ */
+export class VerdictRecomputeCoalescer {
+  private slots = new Map<string, { pending: PendingRecompute | null; running: Promise<void> | null }>();
+
+  /** `runOne` must not reject. */
+  constructor(
+    private readonly windowMs: number,
+    private readonly runOne: (p: PendingRecompute) => Promise<void> = runCoalescedRecompute,
+  ) {}
+
+  request(repoFullName: string, headSha: string, repoIds: string[], announceUnchanged: boolean): void {
+    const k = `${repoFullName} ${headSha}`;
+    let slot = this.slots.get(k);
+    if (!slot) {
+      slot = { pending: null, running: null };
+      this.slots.set(k, slot);
+    }
+    if (!slot.pending) {
+      slot.pending = { repoFullName, headSha, repoIds: new Set(), announceUnchanged: false, timer: null };
+      if (!slot.running) this.arm(k, slot.pending);
+    }
+    for (const id of repoIds) slot.pending.repoIds.add(id);
+    slot.pending.announceUnchanged ||= announceUnchanged;
+  }
+
+  private arm(k: string, pending: PendingRecompute): void {
+    const timer = setTimeout(() => void this.run(k), this.windowMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    pending.timer = timer;
+  }
+
+  private run(k: string): Promise<void> {
+    const slot = this.slots.get(k);
+    if (!slot) return Promise.resolve();
+    if (slot.running) return slot.running;
+    const pending = slot.pending;
+    if (!pending) return Promise.resolve();
+    slot.pending = null;
+    if (pending.timer) clearTimeout(pending.timer);
+    slot.running = this.runOne(pending).finally(() => {
+      slot.running = null;
+      if (slot.pending) {
+        if (!slot.pending.timer) this.arm(k, slot.pending);
+      } else if (this.slots.get(k) === slot) {
+        this.slots.delete(k);
+      }
+    });
+    return slot.running;
+  }
+
+  /** Run every pending recompute now and wait for all of them, follow-ups included. */
+  async flushAllNow(): Promise<void> {
+    for (;;) {
+      const work: Promise<void>[] = [];
+      for (const [k, slot] of this.slots) {
+        if (slot.running) work.push(slot.running);
+        else if (slot.pending) work.push(this.run(k));
+      }
+      if (work.length === 0) return;
+      await Promise.all(work);
+    }
+  }
+
+  /** Test helper — cancel pending recomputes without running them. */
+  _reset(): void {
+    for (const slot of this.slots.values()) {
+      if (slot.pending?.timer) clearTimeout(slot.pending.timer);
+      slot.pending = null;
+    }
+    this.slots.clear();
+  }
+
+  /** Test helper — the commits with a recompute pending or running. */
+  _keys(): string[] {
+    return [...this.slots.keys()];
+  }
+}
+
+/** Never rejects: a failed run is recorded, and the settle refresh recovers it. */
+async function runCoalescedRecompute(p: PendingRecompute): Promise<void> {
+  try {
+    await flushSlots(async () => {
+      const affected = await affectedPrsForSha([...p.repoIds], p.headSha, true);
+      if (affected.length === 0) return;
+      await recomputeVerdicts(p.repoFullName, p.headSha, affected, { announceUnchanged: p.announceUnchanged });
+    });
+  } catch (err) {
+    debugBus.recordEvent({
+      service: 'check_counts',
+      action: 'recompute',
+      ok: false,
+      summary: `verdict recompute ${p.repoFullName} ${p.headSha.slice(0, 7)} failed (settle refresh will recover): ${describeError(err)}`,
+    });
+  }
+}
+
+export const verdictRecomputes = new VerdictRecomputeCoalescer(RECOMPUTE_COALESCE_MS);
+
+/**
  * Apply check events for ONE commit: upsert, then re-derive every tracked PR on
- * that head, all under the commit's lock. Events for a head no tracked PR is on
- * are dropped (never stored — that would accumulate the whole firehose), and the
- * settle refresh still fires, because "no PR is on this head yet" is usually the
- * `synchronize` refresh not having landed, and the refresh is what catches up.
+ * that head. Events for a head no tracked PR is on are dropped (never stored —
+ * that would accumulate the whole firehose), and the settle refresh still fires,
+ * because "no PR is on this head yet" is usually the `synchronize` refresh not
+ * having landed, and the refresh is what catches up.
+ *
+ * `coalesce` hands the recompute to {@link verdictRecomputes} (the webhook
+ * path); otherwise it runs before this returns.
  */
 async function applyEvents(
   repoFullName: string,
   headSha: string,
   repoIds: string[],
   states: CheckEventInput[],
+  opts: { coalesce: boolean },
 ): Promise<number> {
   return flushSlots(() => withShaLock(repoFullName, headSha, async () => {
-    const affected = await affectedPrsForSha(repoIds, headSha, true);
+    // The coalesced recompute takes the row locks itself; this read only gates the upsert.
+    const affected = await affectedPrsForSha(repoIds, headSha, !opts.coalesce);
     if (affected.length === 0) return 0;
     await upsertCheckStates(states);
-    await recomputeVerdicts(repoFullName, headSha, affected, { announceUnchanged: true });
+    if (opts.coalesce) {
+      verdictRecomputes.request(repoFullName, headSha, repoIds, true);
+    } else {
+      await recomputeVerdicts(repoFullName, headSha, affected, { announceUnchanged: true });
+    }
     return affected.length;
   }));
 }
@@ -776,7 +921,7 @@ export async function ingestCheckRun(
     if (prNumbers.some((n) => nums.has(n))) repoIds.add(t.repositoryId);
   }
   if (repoIds.size === 0) return 0;
-  const n = await applyEvents(ev.repoFullName, ev.headSha, [...repoIds], [ev]);
+  const n = await applyEvents(ev.repoFullName, ev.headSha, [...repoIds], [ev], { coalesce: false });
   if (n > 0) {
     debugBus.recordEvent({
       service: 'check_counts',
@@ -876,12 +1021,12 @@ export function _armedSettleRefreshes(): string[] {
  * commit within a moment, then dozens of `completed` later. The coalescer
  * buffers them for a short window keyed by `(repoFullName, headSha)`, de-duped
  * to the latest state per check name, then flushes ONCE: one multi-row upsert,
- * one recompute, one UPDATE + broadcast per affected PR that changed.
+ * and a request to {@link verdictRecomputes}, which merges the flushes of one
+ * commit into one recompute per {@link RECOMPUTE_COALESCE_MS}.
  *
- * Buffers are per-process. That is safe now because the flush takes the
- * commit's advisory lock and recomputes from ALL stored states, so flushes from
- * two replicas (or two windows in one) serialize and the last one reads
- * everything the others wrote. Before the lock, the older read could land last.
+ * Buffers are per-process. The recompute reads ALL stored states, so a later
+ * one sees everything an earlier flush wrote. Two replicas can still race; the
+ * reseed and the settle refresh correct that.
  *
  * Durability: a delivery is acked before its flush lands, so a crash inside the
  * window, or a flush that throws, loses the buffered states. The settle refresh
@@ -928,7 +1073,7 @@ class CheckCountCoalescer {
     try {
       const targets = await targetsForRepo(repoFullName);
       const repoIds = [...new Set(targets.map((t) => t.repositoryId))];
-      const n = await applyEvents(repoFullName, headSha, repoIds, states);
+      const n = await applyEvents(repoFullName, headSha, repoIds, states, { coalesce: true });
       if (n === 0) return; // sha is no tracked PR's head (yet)
       debugBus.recordEvent({
         service: 'check_counts',
@@ -949,12 +1094,14 @@ class CheckCountCoalescer {
   /** Flush everything now — for graceful shutdown and deterministic tests. */
   async flushAllNow(): Promise<void> {
     for (const k of [...this.pending.keys()]) await this.flush(k);
+    await verdictRecomputes.flushAllNow();
   }
 
   /** Test helper — drop buffered state without flushing. */
   _reset(): void {
     for (const entry of this.pending.values()) clearTimeout(entry.timer);
     this.pending.clear();
+    verdictRecomputes._reset();
     _resetSettleRefresh();
   }
 }

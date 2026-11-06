@@ -9,6 +9,14 @@ Phase P6 ports the web switcher to `apps/desktop`. It is a fork, so the code is 
 - Local (on-device) sessions are Personal only. They never get "Move to space".
 - Shortcut stays Cmd+Alt+Shift+1-9. No preload or IPC change.
 
+## Supabase egress at the 275 GB limit (2026-11-06)
+
+A 7-minute pg_stat_statements sample on production (read-only) found two queries behind nearly all DB egress.
+- `recomputeVerdicts` (`services/checkCounts.ts`) re-read a commit's whole check ledger on every webhook flush: about 156 rows per call, about 220 GB a month. Webhook-path recomputes now coalesce per commit in a fixed 2 s window (`VerdictRecomputeCoalescer`), with one follow-up when a request arrives during a run. `ingestCheckRun` and `reseedCheckLedger` stay direct. The read ships `url` only for `failure` rows, the only state `humanGatesIn` reads it for.
+- `resolveAuth` (`services/github.ts`) shipped the full GitHub config before every API call, about 33 GB a month. It still reads the row every call, but the config comes back only when its md5 differs from the cached copy, so a revoked or replaced token still stops at once.
+- Not changed: `readSelfHostedConfig` and `readPostHogIntegration` read their config every call too. Both feed read-modify-write paths, so a cache there needs a clone per read.
+- Workbench events were not a significant source.
+
 ## Session chat: reads, searches and edit diffs (2026-11-06)
 
 The session chat looked busy and seemed to miss edits, reads and searches. Nothing was dropped. Codex reads and searches through the shell, so every `rg` or `sed -n` showed as a `bash -lc '…'` command. Edits showed only a path.

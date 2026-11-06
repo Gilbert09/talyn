@@ -23,9 +23,11 @@ import {
   parseStatusPayload,
   pruneChecksForSha,
   pruneStaleCheckStates,
+  readLedgerFacts,
   reseedCheckLedger,
   runSettleRefresh,
   verdictFor,
+  verdictRecomputes,
   _armedSettleRefreshes,
   _flushRequirednessRecheckTrailing,
   _resetRequirednessRecheck,
@@ -34,6 +36,9 @@ import {
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { debugBus } from '../services/debugBus.js';
+import { domainEvents, type DomainPrChecksEvent } from '../services/events.js';
+import { deriveCiVerdict, type CheckFact } from '@talyn/shared';
+import { computeCheckDigest, computeFailingChecksDigest } from '../services/githubGraphql.js';
 import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
@@ -638,6 +643,172 @@ describe('checkCounts', () => {
       await expect(checkCountCoalescer.flushAllNow()).resolves.toBeUndefined();
       // The flush failed, but the commit still has a settle refresh armed.
       expect(_armedSettleRefreshes()).toEqual(['acme/widget sha-A']);
+    });
+  });
+
+  describe('coalesced verdict recompute', () => {
+    let events: DomainPrChecksEvent[];
+    const onChecks = (e: DomainPrChecksEvent) => events.push(e);
+    beforeEach(() => {
+      events = [];
+      domainEvents.on('pr:checks', onChecks);
+    });
+    afterEach(() => {
+      domainEvents.off('pr:checks', onChecks);
+    });
+
+    const insertLedgerRow = (name: string, state: string, url: string | null = null) =>
+      db.insert(prCheckStates).values({
+        id: `row-${name}`,
+        repoFullName: 'acme/widget',
+        headSha: 'sha-A',
+        name,
+        source: 'check_run',
+        state,
+        url,
+        ts: at(1),
+      });
+
+    it('merges many requests for one commit into one recompute and one pr:checks', async () => {
+      await seedPr(7, 'sha-A');
+      await seedPr(8, 'sha-A');
+      await insertLedgerRow('a', 'success');
+      await insertLedgerRow('b', 'failure');
+      for (let i = 0; i < 25; i++) verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], i === 3);
+      expect(await checksOf(7)).toMatchObject({ total: 0 });
+      await verdictRecomputes.flushAllNow();
+      expect(await checksOf(7)).toMatchObject({ total: 2, passed: 1, failed: 1 });
+      expect(await checksOf(8)).toMatchObject({ total: 2, passed: 1, failed: 1 });
+      expect(events).toHaveLength(1);
+      expect(events[0].prs.map((p) => p.prId).sort()).toEqual(['pr-7', 'pr-8']);
+    });
+
+    it.each([
+      { announce: true, expected: 1 },
+      { announce: false, expected: 0 },
+    ])('announceUnchanged=$announce on an unchanged verdict emits $expected pr:checks', async ({ announce, expected }) => {
+      await seedPr(7, 'sha-A');
+      await insertLedgerRow('a', 'success');
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], true);
+      await verdictRecomputes.flushAllNow();
+      events.length = 0;
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], announce);
+      await verdictRecomputes.flushAllNow();
+      expect(events).toHaveLength(expected);
+    });
+
+    it('re-reads the PR rows at run time, so a head that moved in the window is not written', async () => {
+      await seedPr(7, 'sha-A');
+      await insertLedgerRow('b', 'failure');
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], true);
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: { headSha: 'sha-NEW', checks: { ...ZERO } } })
+        .where(eq(pullRequestsTable.id, 'pr-7'));
+      await verdictRecomputes.flushAllNow();
+      expect(await checksOf(7)).toMatchObject({ total: 0 });
+      expect(events).toHaveLength(0);
+    });
+
+    it('the webhook path lands its verdict through the coalescer; flushAllNow waits for it', async () => {
+      await seedPr(7, 'sha-A');
+      for (let i = 0; i < 10; i++) {
+        checkCountCoalescer.enqueue(ev({ name: `c${i}`, state: i < 7 ? 'success' : 'failure', ts: at(i) }));
+      }
+      await checkCountCoalescer.flushAllNow();
+      expect(await checksOf(7)).toMatchObject({ total: 10, passed: 7, failed: 3 });
+      expect(events).toHaveLength(1);
+      expect(verdictRecomputes._keys()).toEqual([]);
+    });
+
+    it('the direct path (ingestCheckRun) still answers before it returns', async () => {
+      await seedPr(7, 'sha-A');
+      await ingest({ name: 'lint', state: 'failure' });
+      expect(await checksOf(7)).toMatchObject({ total: 1, failed: 1 });
+      expect(verdictRecomputes._keys()).toEqual([]);
+    });
+
+    it('_reset drops a pending recompute', async () => {
+      await seedPr(7, 'sha-A');
+      await insertLedgerRow('a', 'success');
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], true);
+      checkCountCoalescer._reset();
+      await verdictRecomputes.flushAllNow();
+      expect(await checksOf(7)).toMatchObject({ total: 0 });
+    });
+  });
+
+  describe('readLedgerFacts', () => {
+    const URL = (name: string) => `https://ci.example/${encodeURIComponent(name)}`;
+    const LEDGER: Array<{ name: string; state: string; required: boolean | null; rawState: string | null }> = [
+      { name: 'Django Tests Pass', state: 'success', required: true, rawState: 'SUCCESS' },
+      { name: 'lint', state: 'failure', required: true, rawState: 'FAILURE' },
+      { name: 'flaky', state: 'failure', required: false, rawState: 'TIMED_OUT' },
+      { name: 'unknown-required', state: 'failure', required: null, rawState: 'FAILURE' },
+      { name: 'build', state: 'pending', required: true, rawState: 'QUEUED' },
+      { name: 'e2e', state: 'in_progress', required: false, rawState: 'IN_PROGRESS' },
+      { name: 'docs', state: 'skipped', required: false, rawState: 'SKIPPED' },
+      { name: 'neutral', state: 'success', required: false, rawState: 'NEUTRAL' },
+      { name: 'PostHog Visual Review / storybook', state: 'failure', required: false, rawState: 'FAILURE' },
+      { name: 'Visual regression tests pass', state: 'failure', required: true, rawState: 'FAILURE' },
+    ];
+
+    beforeEach(async () => {
+      await db.insert(prCheckStates).values(
+        LEDGER.map((c) => ({
+          id: `row-${c.name}`,
+          repoFullName: 'acme/widget',
+          headSha: 'sha-A',
+          name: c.name,
+          source: 'check_run',
+          state: c.state,
+          required: c.required,
+          rawState: c.rawState,
+          url: URL(c.name),
+          ts: at(1),
+        })),
+      );
+    });
+
+    it.each(LEDGER.map((c) => [c.name, c.state, c.state === 'failure'] as const))(
+      '%s (%s) ships its url: %s',
+      async (name, _state, shipsUrl) => {
+        const facts = await readLedgerFacts('acme/widget', 'sha-A');
+        const fact = facts.find((f) => f.name === name)!;
+        expect(fact.url).toBe(shipsUrl ? URL(name) : null);
+      },
+    );
+
+    it('a failing row with no stored url stays null', async () => {
+      await db.update(prCheckStates).set({ url: null }).where(eq(prCheckStates.name, 'lint'));
+      const facts = await readLedgerFacts('acme/widget', 'sha-A');
+      expect(facts.find((f) => f.name === 'lint')!.url).toBeNull();
+    });
+
+    it('derives the same verdict, gates and digests as a ledger read with every url', async () => {
+      const lean = await readLedgerFacts('acme/widget', 'sha-A');
+      const full: CheckFact[] = LEDGER.map((c) => ({
+        name: c.name,
+        state: c.state as CheckFact['state'],
+        required: c.required,
+        rawState: c.rawState,
+        url: URL(c.name),
+      }));
+      const byName = (a: CheckFact, b: CheckFact) => (a.name < b.name ? -1 : 1);
+      lean.sort(byName);
+      full.sort(byName);
+      for (const pr of [{}, { mergeable: 'MERGEABLE', mergeStateStatus: 'UNSTABLE' }]) {
+        expect(deriveCiVerdict(lean, pr)).toEqual(deriveCiVerdict(full, pr));
+      }
+      expect(deriveCiVerdict(lean).humanGates).toEqual([
+        expect.objectContaining({ name: 'PostHog Visual Review / storybook', url: URL('PostHog Visual Review / storybook') }),
+      ]);
+      expect(computeCheckDigest('sha-A', lean)).toBe(computeCheckDigest('sha-A', full));
+      expect(computeFailingChecksDigest(lean)).toBe(computeFailingChecksDigest(full));
+    });
+
+    it('returns nothing for another commit', async () => {
+      expect(await readLedgerFacts('acme/widget', 'sha-OTHER')).toEqual([]);
     });
   });
 
