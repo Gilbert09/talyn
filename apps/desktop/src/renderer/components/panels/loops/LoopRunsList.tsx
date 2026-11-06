@@ -9,6 +9,7 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useNavigationStore } from '../../../stores/navigation';
 import { useLoopRuns } from './useLoops';
 
 /** Failure codes that mean the plan refused the run's box (usage billing). */
@@ -87,6 +88,8 @@ function lateness(run: LoopRun): string | null {
 function RunRow({ run }: { run: LoopRun }) {
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
   const selectTask = useWorkspaceStore((s) => s.selectTask);
+  const navigate = useNavigationStore((s) => s.navigate);
+  const sessionId = run.sessionId;
   const late = lateness(run);
   const took = duration(run);
   return (
@@ -152,6 +155,16 @@ function RunRow({ run }: { run: LoopRun }) {
             }}
           >
             Open task
+          </Button>
+        )}
+        {sessionId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => navigate({ view: 'workbench', id: sessionId })}
+          >
+            Open session
           </Button>
         )}
       </div>

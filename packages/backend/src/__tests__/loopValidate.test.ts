@@ -29,6 +29,7 @@ describe('validateLoop', () => {
     // Skip is the default, and it is what makes a tight schedule harmless.
     expect(out.concurrency).toBe('skip');
     expect(out.name).toBe('Morning triage');
+    expect(out.target).toBe('task');
   });
 
   it.each([null, undefined, 'a string', 42, []])('refuses %j as a loop', (raw) => {
@@ -126,6 +127,28 @@ describe('validateLoop', () => {
       expect(() =>
         validateLoop(withField({ provider: 'codex_cloud' as LoopInput['provider'] }))
       ).toThrow(/posthog_code or selfhosted/);
+    });
+  });
+
+  describe('target', () => {
+    it('accepts a session on Talyn Fleet', () => {
+      expect(
+        validateLoop(
+          withField({ target: 'session', provider: 'selfhosted', model: 'gpt-6.1-sol' })
+        ).target
+      ).toBe('session');
+    });
+
+    it('refuses a session on PostHog Code', () => {
+      expect(() => validateLoop(withField({ target: 'session' }))).toThrow(
+        /sessions run on Talyn Fleet/
+      );
+    });
+
+    it('refuses an unknown target', () => {
+      expect(() => validateLoop(withField({ target: 'thread' as LoopInput['target'] }))).toThrow(
+        /task or session/
+      );
     });
   });
 

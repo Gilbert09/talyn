@@ -24,7 +24,18 @@ const AGENTS: CloudAgentChoice[] = [
   },
 ];
 
-function renderEditor(onSave: (i: LoopInput) => Promise<void> = async () => {}) {
+const FLEET_AGENT: CloudAgentChoice = {
+  type: 'selfhosted',
+  agent: 'codex',
+  displayName: 'Talyn Fleet (Codex)',
+  model: 'gpt-6.1-sol',
+  models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1', blurb: 'Latest Codex model.' }],
+};
+
+function renderEditor(
+  onSave: (i: LoopInput) => Promise<void> = async () => {},
+  agents: CloudAgentChoice[] = AGENTS
+) {
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
     repositories: [
@@ -32,7 +43,7 @@ function renderEditor(onSave: (i: LoopInput) => Promise<void> = async () => {}) 
     ],
   } as never);
   return render(
-    <LoopEditorPage editing={null} agents={AGENTS} onCancel={() => {}} onSave={onSave} />
+    <LoopEditorPage editing={null} agents={agents} onCancel={() => {}} onSave={onSave} />
   );
 }
 
@@ -53,6 +64,14 @@ describe('LoopEditorPage — when it complains', () => {
     // The editor opens blank by definition; announcing that on arrival is
     // telling somebody off for not having started.
     expect(problemShown()).toBe(false);
+  });
+
+  it('defaults new Fleet loops to reviewable sessions', () => {
+    renderEditor(async () => {}, [...AGENTS, FLEET_AGENT]);
+
+    expect(screen.getByText('Session')).toHaveClass('bg-primary');
+    expect(screen.getByLabelText('Agent')).toHaveValue('selfhosted:codex');
+    expect(screen.queryByText('MCP servers')).not.toBeInTheDocument();
   });
 
   it('explains the refusal when Create is pressed', async () => {

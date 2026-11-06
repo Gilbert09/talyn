@@ -4,12 +4,15 @@ import { ArrowLeft } from 'lucide-react';
 import type { CloudAgentChoice, LoopInput, LoopWithStats } from '@talyn/shared';
 import {
   cronForPreset,
+  defaultModelForLoopProvider,
   describeSchedule,
   emptyLoopInput,
   localTimezone,
   LOOP_CONCURRENCIES,
   LOOP_CONCURRENCY_LABELS,
   LOOP_SCHEDULE_PRESETS,
+  LOOP_TARGET_LABELS,
+  LOOP_TARGETS,
   loopInputProblem,
   loopToInput,
   MAX_LOOP_NAME_LENGTH,
@@ -77,9 +80,19 @@ export function LoopEditorPage({
   onSave: (input: LoopInput) => Promise<void>;
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
-  const [input, setInput] = useState<LoopInput>(() =>
-    editing ? loopToInput(editing) : emptyLoopInput()
-  );
+  const [input, setInput] = useState<LoopInput>(() => {
+    if (editing) return loopToInput(editing);
+    const initial = emptyLoopInput();
+    const fleet = agents.find((agent) => agent.type === 'selfhosted');
+    return fleet
+      ? {
+          ...initial,
+          target: 'session',
+          provider: 'selfhosted',
+          model: fleet.model ?? fleet.models[0]?.id ?? initial.model,
+        }
+      : initial;
+  });
   // The preset is derived state, not stored state: the cron expression is the
   // one source of truth, and reading it back is what lets a loop saved as
   // "Daily 09:00" re-open as that rather than as a raw cron box.
@@ -128,16 +141,20 @@ export function LoopEditorPage({
   );
 
   const agentKey = (a: CloudAgentChoice) => `${a.type}:${a.agent ?? ''}`;
+  const availableAgents = useMemo(
+    () => (input.target === 'session' ? agents.filter((agent) => agent.type === 'selfhosted') : agents),
+    [agents, input.target]
+  );
   const selectedAgent = useMemo(
     () =>
-      agents.find((a) => a.type === input.provider && (!a.agent || a.models.some((m) => m.id === input.model))) ??
-      agents.find((a) => a.type === input.provider) ??
+      availableAgents.find((a) => a.type === input.provider && (!a.agent || a.models.some((m) => m.id === input.model))) ??
+      availableAgents.find((a) => a.type === input.provider) ??
       null,
-    [agents, input.provider, input.model]
+    [availableAgents, input.provider, input.model]
   );
 
   const pickAgent = (key: string) => {
-    const agent = agents.find((a) => agentKey(a) === key);
+    const agent = availableAgents.find((a) => agentKey(a) === key);
     if (!agent) return;
     // The model moves with the agent. It has to: the fleet's two agents have
     // disjoint catalogues, so keeping the old model when switching from Claude
@@ -151,6 +168,24 @@ export function LoopEditorPage({
       // Only the fleet honours it, so a loop that kept it while pointed at
       // PostHog Code would read as having internet access and not have it.
       internetAccess: provider === 'selfhosted' ? p.internetAccess : false,
+    }));
+  };
+
+  const pickTarget = (target: 'task' | 'session') => {
+    if (target === 'task') {
+      setInput((previous) => ({ ...previous, target }));
+      return;
+    }
+    const fleet = agents.find((agent) => agent.type === 'selfhosted');
+    setInput((previous) => ({
+      ...previous,
+      target,
+      provider: 'selfhosted',
+      model:
+        fleet?.model ??
+        fleet?.models[0]?.id ??
+        defaultModelForLoopProvider('selfhosted'),
+      mcpServerIds: null,
     }));
   };
 
@@ -228,6 +263,30 @@ export function LoopEditorPage({
               onChange={(e) => setInput((p) => ({ ...p, prompt: e.target.value }))}
               placeholder="Look through the open PRs you have permission to touch and rebase any that have fallen behind main."
             />
+          </Section>
+
+          <Section title="Start each run as" description="Sessions stay in Talyn for review and follow-up. Cloud tasks keep the legacy task flow.">
+            <div className="flex flex-wrap gap-1">
+              {LOOP_TARGETS.map((target) => (
+                <button
+                  key={target}
+                  onClick={() => pickTarget(target)}
+                  className={cn(
+                    'inline-flex items-center rounded-full border px-2.5 py-1 text-xs transition-colors',
+                    (input.target ?? 'task') === target
+                      ? 'border-transparent bg-primary text-primary-foreground'
+                      : 'hover:bg-accent'
+                  )}
+                >
+                  {LOOP_TARGET_LABELS[target]}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {input.target === 'session'
+                ? 'Each firing creates a sandbox session. Open it from the run history to review the conversation and changes.'
+                : 'Each firing creates a cloud task and shows its transcript in the task queue.'}
+            </p>
           </Section>
 
           <Section title="Schedule" description={presetSpec?.hint}>
@@ -381,7 +440,7 @@ export function LoopEditorPage({
             title="Agent"
             description="Which agent runs the prompt, and on which model."
           >
-            {agents.length === 0 ? (
+            {availableAgents.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No agents are connected to this workspace. Connect one in Settings &rarr;
                 Integrations before a loop can run.
@@ -395,7 +454,7 @@ export function LoopEditorPage({
                     value={selectedAgent ? agentKey(selectedAgent) : ''}
                     onChange={(e) => pickAgent(e.target.value)}
                   >
-                    {agents.map((a) => (
+                    {availableAgents.map((a) => (
                       <option key={agentKey(a)} value={agentKey(a)}>
                         {a.displayName}
                       </option>
@@ -484,7 +543,7 @@ export function LoopEditorPage({
           {/* Fleet loops only, for the same reason internet access is: PostHog
               Code has no MCP servers, so offering the choice there would be a
               promise the provider cannot keep. The route refuses it too. */}
-          {input.provider === 'selfhosted' && (
+          {input.provider === 'selfhosted' && input.target !== 'session' && (
             <Section
               title="MCP servers"
               description="Which of this workspace's MCP servers this loop's agent can use."
