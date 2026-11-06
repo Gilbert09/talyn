@@ -58,8 +58,11 @@ it('classifies the reported 429 as a Claude rate limit', () => {
 });
 it('moves the chat to Codex and sends the resume message', async () => {
   await account('codex');
+  await updateChat('chat', { model: 'claude-opus-5-5' });
   await handleChatLimit(await chat(), reason);
-  expect(await chat()).toMatchObject({ agent: 'codex', status: 'running', resumeAt: null, agentSessionId: null });
+  expect(await chat()).toMatchObject({
+    agent: 'codex', model: 'gpt-6-astra', status: 'running', resumeAt: null, agentSessionId: null,
+  });
   expect(sendMessage).toHaveBeenCalledWith('chat', { text: limitResumeMessage(reason) }, { origin: 'talyn', resumeVersion: 0 });
   const rows = await testDb.pglite.query<{ event: { text: string } }>('select event from workbench_events');
   expect(rows.rows.some((row) => row.event.text === 'Claude reached its usage limit. Continuing with Codex.')).toBe(true);

@@ -639,11 +639,13 @@ describe('/v1 session work', () => {
         sandboxId: 'box-both',
         settings: { sandboxAgents: { 'box-both': ['claude', 'codex'] } },
       }).where(eq(workbenches.id, 's1'));
-      await testDb.db.update(workbenchChats).set({ queuedMessages: [] }).where(eq(workbenchChats.id, 'c1'));
+      await testDb.db.update(workbenchChats).set({
+        model: 'claude-opus-5-5', queuedMessages: [],
+      }).where(eq(workbenchChats.id, 'c1'));
       const res = await call('PATCH', '/chats/c1', { agent: 'codex', model: null });
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ object: 'chat', agent: 'codex', model: null, status: 'idle' });
-      expect(await getChat('c1')).toMatchObject({ agent: 'codex', agentSessionId: null });
+      expect(res.body).toMatchObject({ object: 'chat', agent: 'codex', model: 'gpt-6-astra', status: 'idle' });
+      expect(await getChat('c1')).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
     });
 
     it.each([

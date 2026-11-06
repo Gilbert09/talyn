@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { FleetAccountsList, codexConfig } from '../components/settings/FleetAccountsList';
+import { FleetAccountsList, codexConfig, formatResetAt, formatRetryAt } from '../components/settings/FleetAccountsList';
 
 const { saveConfig, onChanged } = vi.hoisted(() => ({ saveConfig: vi.fn(), onChanged: vi.fn() }));
 vi.mock('../lib/api', () => ({
@@ -16,6 +16,14 @@ afterEach(() => {
 });
 
 describe('FleetAccountsList on web', () => {
+  it('distinguishes the account retry from a usage reset', () => {
+    const retry = new Date(2026, 9, 23, 20);
+    const now = new Date(2026, 9, 23, 12);
+    const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(retry);
+    expect(formatRetryAt(retry.toISOString(), now)).toBe(`can retry today at ${time}`);
+    expect(formatResetAt(retry.toISOString(), now)).toBe(`resets today at ${time}`);
+  });
+
   it.each(['invalid', 'null', '{}'])('rejects bad auth JSON: %s', (value) => {
     expect(() => codexConfig(value)).toThrow();
   });

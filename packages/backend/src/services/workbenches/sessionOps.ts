@@ -8,7 +8,12 @@ import type {
   WorkbenchFileList,
   WorkbenchPreviewLink,
 } from '@talyn/shared';
-import { isSandboxSize, resolveWorkbenchConfig } from '@talyn/shared';
+import {
+  defaultFleetModelForAgent,
+  fleetModelForAgentSwitch,
+  isSandboxSize,
+  resolveWorkbenchConfig,
+} from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { billingEnabled, checkBoxGate } from '../billing/entitlements.js';
 import { mintPreviewTicket } from '../preview/previewLinks.js';
@@ -311,7 +316,11 @@ export async function switchChatAgent(
     if (current.agent === agent && current.status !== 'running') return current;
     if (current.status === 'running') await cancelTurn(current.id);
 
-    const switched = await switchChatAgentIfIdle(current.id, agent, model, automatic?.resumeVersion);
+    const currentModel = current.model
+      ?? (current.agent === workbench.agent ? workbench.model : null)
+      ?? defaultFleetModelForAgent(current.agent === 'codex' ? 'codex' : 'claude');
+    const switchedModel = model ?? fleetModelForAgentSwitch(currentModel, agent);
+    const switched = await switchChatAgentIfIdle(current.id, agent, switchedModel, automatic?.resumeVersion);
     if (switched) {
       if (switched.turnCount > 0 && !automatic) {
         const from = current.agent === 'codex' ? 'Codex' : 'Claude';

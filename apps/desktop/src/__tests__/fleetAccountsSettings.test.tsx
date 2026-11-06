@@ -3,7 +3,7 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FleetAccountView, Workspace } from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
-import { FleetAccountsList, formatResetAt } from '../renderer/components/settings/FleetAccountsList';
+import { FleetAccountsList, formatResetAt, formatRetryAt } from '../renderer/components/settings/FleetAccountsList';
 import { FleetFullQuotaRow, FleetSwitchThresholdRow } from '../renderer/components/settings/sections/AgentsSettings';
 
 const list = jest.fn();
@@ -100,7 +100,7 @@ it('shows account status and API key usage text', () => {
     account('3', { over: true }),
   ]);
   expect(screen.getByText('Reconnect needed')).toBeInTheDocument();
-  expect(screen.getByText(/Limit reached, resets/)).toBeInTheDocument();
+  expect(screen.getByText(/Limit reached, can retry/)).toBeInTheDocument();
   expect(screen.getByText('Over 95%')).toBeInTheDocument();
   expect(screen.getByText(/No usage data for API keys/)).toBeInTheDocument();
 });
@@ -161,6 +161,13 @@ it.each([
   const suffix = dayLabel === 'weekday' ? weekday : dayLabel === 'date' ? `${weekday} ${date}` : dayLabel;
   const day = dayLabel === 'today' || dayLabel === 'tomorrow' ? dayLabel : suffix;
   expect(formatResetAt(reset.toISOString(), now)).toBe(`resets ${day} at ${time}`);
+});
+
+it('distinguishes the account retry from a usage reset', () => {
+  const retry = new Date(2026, 9, 23, 20);
+  const now = new Date(2026, 9, 23, 12);
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(retry);
+  expect(formatRetryAt(retry.toISOString(), now)).toBe(`can retry today at ${time}`);
 });
 
 it.each([
