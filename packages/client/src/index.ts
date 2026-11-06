@@ -1723,6 +1723,7 @@ export const pullRequests = {
 };
 
 export const repositories = {
+  files: (id: string) => request<{ paths: string[] }>('GET', `/repositories/${enc(id)}/files`),
   preview: {
     get: (id: string) => request<RepositoryPreviewResponse>('GET', `/repositories/${enc(id)}/preview`),
     patch: (id: string, choice: RepositoryPreviewChoice) =>
