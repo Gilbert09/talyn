@@ -33,6 +33,8 @@ import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 
+let outgoingMessageSequence = 0;
+
 export function Composer({
   workbench,
   chat,
@@ -193,9 +195,19 @@ export function Composer({
     if (!owner && !chat) return;
     setSending(true);
     setRefusal(null);
+    let outgoingId: string | null = null;
+    let outgoingChatId: string | null = null;
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
+      outgoingMessageSequence += 1;
+      outgoingId = `outgoing-${Date.now()}-${outgoingMessageSequence}`;
+      outgoingChatId = target.id;
+      useWorkbenchStore.getState().addOutgoingMessage(target.id, {
+        id: outgoingId,
+        text,
+        attachments: attachments.slice(),
+      });
       setDraft(draftKey, '');
       setAttachments([]);
       setImageNotReady(false);
@@ -226,6 +238,7 @@ export function Composer({
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {
+      if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessage(outgoingChatId, outgoingId);
       setSending(false);
     }
   };

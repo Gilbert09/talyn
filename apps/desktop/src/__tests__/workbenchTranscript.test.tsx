@@ -6,11 +6,14 @@ import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { toast } from '../renderer/stores/toast';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
 const chat = { id: 'c1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat;
 const ops = { unavailable: null } as unknown as WorkbenchOps;
+
+beforeEach(() => useWorkbenchStore.setState({ outgoingMessages: {} }));
 
 const userEvent = (seq: number, turn: number): WorkbenchEvent => ({
   chatId: 'c1',
@@ -53,6 +56,18 @@ function setup(events: WorkbenchEvent[], o: OlderHistory) {
     view.rerender(<WorkbenchTranscript chat={chat} events={next} loading={false} error={null} ops={ops} older={nextOlder} />);
   return { ...view, box, rerender };
 }
+
+it('shows an outgoing prompt while its request is in flight', () => {
+  useWorkbenchStore.getState().addOutgoingMessage('c1', {
+    id: 'outgoing-1',
+    text: 'Check the cache',
+    attachments: [],
+  });
+  render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText('Check the cache')).toBeInTheDocument();
+  expect(screen.getByText('Sending…')).toBeInTheDocument();
+  expect(screen.queryByText('Send a message to start.')).not.toBeInTheDocument();
+});
 
 it('asks for older events when the scroll comes near the top', () => {
   const o = older();
