@@ -13,7 +13,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '../ui/context-menu';
-import { ArchiveWorkbenchDialog, archiveWorkbench, type ArchiveOptions } from '../workbench/archiveWorkbench';
+import {
+  ArchiveWorkbenchDialog,
+  archiveWorkbench,
+  archiveWorkbenches,
+  type ArchiveOptions,
+} from '../workbench/archiveWorkbench';
+import { ConfirmDialog } from '../ui/confirm-dialog';
+import { archiveAllCandidates } from '../../lib/archiveAll';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
@@ -39,6 +46,21 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
   const groups = useMemo(() => groupByRepository(workbenches.filter((w) => !isArchived(w))), [workbenches]);
+  const rows = usePullRequestStore((s) => s.rows);
+  const chats = useWorkbenchStore((s) => s.chats);
+  const candidates = useMemo(
+    () => archiveAllCandidates(groups.flatMap((g) => g.items), new Set(rows.map((r) => r.id)), chats),
+    [groups, rows, chats]
+  );
+  const [confirmingAll, setConfirmingAll] = useState(false);
+  const [archivingAll, setArchivingAll] = useState(false);
+
+  const archiveAll = async () => {
+    setArchivingAll(true);
+    await archiveWorkbenches(candidates.map((w) => w.id), openId);
+    setArchivingAll(false);
+    setConfirmingAll(false);
+  };
 
   if (groups.length === 0) {
     return (
@@ -54,6 +76,24 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   let index = 0;
   return (
     <div className="space-y-1" data-attr="sidebar-workbenches">
+      <div className="flex items-center px-3 pt-1.5">
+        <span className="flex-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Sessions</span>
+        <button
+          type="button"
+          onClick={() => setConfirmingAll(true)}
+          disabled={candidates.length === 0}
+          className="app-region-no-drag rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          aria-label="Archive all sessions without an open pull request"
+          title={
+            candidates.length === 0
+              ? 'No session to archive: each one has an open pull request or works now'
+              : `Archive all sessions without an open pull request (${candidates.length})`
+          }
+          data-attr="sidebar-archive-all"
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </button>
+      </div>
       {groups.map((group) => (
         <div key={group.repo} role="group" aria-label={group.repo}>
           <div className="truncate px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-muted-foreground">{group.repo}</div>
@@ -71,6 +111,27 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
           })}
         </div>
       ))}
+      <ConfirmDialog
+        open={confirmingAll}
+        title={`Archive ${candidates.length} ${candidates.length === 1 ? 'session' : 'sessions'}?`}
+        description={
+          <>
+            <span className="block">
+              Talyn archives each session without an open pull request: no PR, or a merged or closed one. Sessions that
+              work now stay.
+            </span>
+            <span className="mt-2 block">
+              They move to History. Their branches, chats and PRs stay, and you can restore them later. A local worktree
+              with uncommitted changes stays on disk.
+            </span>
+          </>
+        }
+        confirmLabel="Archive all"
+        busy={archivingAll}
+        confirmDisabled={candidates.length === 0}
+        onConfirm={() => void archiveAll()}
+        onCancel={() => setConfirmingAll(false)}
+      />
     </div>
   );
 }
