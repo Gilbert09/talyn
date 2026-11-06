@@ -519,6 +519,7 @@ export async function createWorkbenchSandbox(
   built.body.policy = {
     ...built.body.policy,
     credentials: {
+      ...built.body.policy?.credentials,
       ...(!credentials.claude?.token ? { anthropic: 'none' as const } : {}),
       ...(!credentials.codex?.token ? { openai: 'none' as const } : {}),
     },
