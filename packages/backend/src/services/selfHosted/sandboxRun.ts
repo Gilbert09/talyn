@@ -40,6 +40,7 @@ import {
 } from './accountSelection.js';
 import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
 import { isSizeRefusal } from '../workbenches/sandboxSize.js';
+import { sandboxPolicyForWorkspace } from './privateRoutes.js';
 
 /**
  * Booting one fleet microVM, for callers that are not a `tasks` row.
@@ -349,6 +350,12 @@ export async function buildSandboxCreateBody(
     ...extra,
   ];
 
+  const policy = await sandboxPolicyForWorkspace(spec.workspaceId, {
+    credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
+    // Private routes are additive. Public internet keeps the existing mode.
+    ...(spec.internetAccess === true ? { egress: { mode: 'open' as const } } : {}),
+  });
+
   const body: CreateSandboxInput = {
     id: spec.id,
     workspaceId: spec.workspaceId,
@@ -378,13 +385,7 @@ export async function buildSandboxCreateBody(
     // ONE vendor, never both, and never `github`: suppressing everything
     // nulls the refresh hook outright (`allCredentialsSuppressed`), which
     // would strip the key we just sent.
-    policy: {
-      credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
-      // Only when the caller asked for it. Absent means the fleet's default —
-      // no routed network — and absent is what all but internet-enabled work
-      // sends.
-      ...(spec.internetAccess === true ? { egress: { mode: 'open' as const } } : {}),
-    },
+    policy,
     // The workspace's MCP servers, with their credentials, defined on the
     // spot. Omitted entirely when there are none, so a workspace that has
     // connected nothing sends the body it always sent.

@@ -23,6 +23,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'shortcuts',
   'workspace',
   'sandboxSetup',
+  'privateRoutes',
   'integrations',
   'skills',
   'instructions',

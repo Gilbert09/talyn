@@ -52,7 +52,17 @@ import {
   type PromptTemplateSettings,
   type WorkspaceSettings,
   DEFAULT_MERGE_QUEUE_MODE,
+  type PrivateConnector,
 } from '@talyn/shared';
+import {
+  deletePrivateConnector,
+  getPrivateConnector,
+  mapPrivateRoutesError,
+  replacePrivateRoutes,
+  startPrivateConnector,
+  validatePrivateRoutes,
+  workspaceMayUsePrivateRoutes,
+} from '../services/selfHosted/privateRoutes.js';
 
 // Uploaded logos are stored inline as data URLs on the workspace row, so cap
 // them. The desktop downscales before sending, which lands well under this;
@@ -191,6 +201,29 @@ function mergedSettingsSql(
 export function workspaceRoutes(): Router {
   const router = Router();
 
+  async function gatePrivateRoutes(req: Request, res: Response): Promise<boolean> {
+    try {
+      await requireWorkspaceAccess(req, req.params.id);
+    } catch (error) {
+      handleAccessError(error, res);
+      return false;
+    }
+    if (!(await workspaceMayUsePrivateRoutes(req.params.id))) {
+      res.status(403).json({
+        success: false,
+        error: 'Private routes are not available for this workspace.',
+        code: 'private_routes_unavailable',
+      });
+      return false;
+    }
+    return true;
+  }
+
+  function privateRoutesFailure(error: unknown, res: Response): void {
+    const mapped = mapPrivateRoutesError(error);
+    res.status(mapped.status).json({ success: false, error: mapped.message, code: mapped.code });
+  }
+
   router.get('/', async (req, res) => {
     const user = assertUser(req);
     const db = getDbClient();
@@ -227,6 +260,47 @@ export function workspaceRoutes(): Router {
       success: true,
       data: rowToWorkspace(rows[0], relations),
     } as ApiResponse<Workspace>);
+  });
+
+  router.post('/:id/private-connector', async (req, res) => {
+    if (!(await gatePrivateRoutes(req, res))) return;
+    try {
+      const connector = await startPrivateConnector(req.params.id);
+      res.json({ success: true, data: connector } as ApiResponse<PrivateConnector>);
+    } catch (error) {
+      privateRoutesFailure(error, res);
+    }
+  });
+
+  router.get('/:id/private-connector', async (req, res) => {
+    if (!(await gatePrivateRoutes(req, res))) return;
+    try {
+      const connector = await getPrivateConnector(req.params.id);
+      res.json({ success: true, data: connector } as ApiResponse<PrivateConnector>);
+    } catch (error) {
+      privateRoutesFailure(error, res);
+    }
+  });
+
+  router.put('/:id/private-connector/routes', async (req, res) => {
+    if (!(await gatePrivateRoutes(req, res))) return;
+    try {
+      const routes = validatePrivateRoutes((req.body as { routes?: unknown } | null)?.routes);
+      const connector = await replacePrivateRoutes(req.params.id, routes);
+      res.json({ success: true, data: connector } as ApiResponse<PrivateConnector>);
+    } catch (error) {
+      privateRoutesFailure(error, res);
+    }
+  });
+
+  router.delete('/:id/private-connector', async (req, res) => {
+    if (!(await gatePrivateRoutes(req, res))) return;
+    try {
+      await deletePrivateConnector(req.params.id);
+      res.json({ success: true, data: undefined } as ApiResponse<void>);
+    } catch (error) {
+      privateRoutesFailure(error, res);
+    }
   });
 
   /**

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { mcpServersOffered, privateRoutesOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -33,6 +33,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   agents: 'Agents',
   repositories: 'Repositories',
   sandboxSetup: 'Sandbox setup',
+  privateRoutes: 'Private routes',
   shortcuts: 'Shortcuts',
   pullRequests: 'Pull requests',
   workspace: 'Workspace',
@@ -150,6 +151,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
       if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
+      if (section === 'privateRoutes' && !privateRoutesOffered(features)) continue;
       if (section === 'slack' && !workbenchesOffered(features)) continue;
       if (section === 'memory' && !workbenchesOffered(features)) continue;
       if (section === 'sandboxSetup' && !workbenchesOffered(features)) continue;

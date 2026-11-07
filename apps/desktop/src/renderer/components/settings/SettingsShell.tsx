@@ -12,6 +12,7 @@ import {
   Info,
   Keyboard,
   MessageSquare,
+  Network,
   Palette,
   KeyRound,
   Plug,
@@ -23,7 +24,7 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
+import { mcpServersOffered, privateRoutesOffered, workbenchesOffered } from '@talyn/shared';
 import { TeamsSettings } from './sections/TeamsSettings';
 import { spacesOffered } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
@@ -50,6 +51,7 @@ import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { MCPServerSettings } from './sections/McpSettings';
 import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
+import { PrivateRoutesSettings } from './sections/PrivateRoutesSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
 import { SandboxSetupSettings } from './sections/SandboxSetupSettings';
 import { SessionsSettings } from './sections/SessionsSettings';
@@ -119,6 +121,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   agents: AgentsSettings,
   repositories: RepositoriesSettings,
   sandboxSetup: SandboxSetupPage,
+  privateRoutes: PrivateRoutesSettings,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
   memory: MemoryPage,
@@ -156,6 +159,9 @@ export function SettingsShell() {
         { id: 'repositories', icon: FolderGit2, label: 'Repositories' },
         ...(workbenchesOffered(features)
           ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
+          : []),
+        ...(privateRoutesOffered(features)
+          ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
           : []),
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },

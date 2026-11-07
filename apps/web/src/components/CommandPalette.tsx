@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { mcpServersOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { mcpServersOffered, privateRoutesOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -32,6 +32,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   shortcuts: 'Shortcuts',
   workspace: 'Workspace',
   sandboxSetup: 'Sandbox setup',
+  privateRoutes: 'Private routes',
   integrations: 'Integrations',
   slack: 'Slack',
   skills: 'Skills',
@@ -143,6 +144,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
       if ((section === 'sessions' || section === 'slack' || section === 'memory' || section === 'sandboxSetup') && !workbenchesOffered(features)) continue;
+      if (section === 'privateRoutes' && !privateRoutesOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,
