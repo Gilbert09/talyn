@@ -1,6 +1,9 @@
 name: Test
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 # A newer push to the same branch cancels the older run. Each run holds a
 # macOS runner for 30-40 minutes, and old runs kept the release builds waiting
@@ -12,12 +15,14 @@ concurrency:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
 
     strategy:
       # Run every OS to the end: one red OS must not hide the others.
       fail-fast: false
       matrix:
         # windows-2022: see publish.yml (node-gyp cannot find Visual Studio 18).
+        # Each system builds the desktop app. Linux runs the shared checks.
         os: [macos-latest, windows-2022, ubuntu-latest]
 
     steps:
@@ -39,7 +44,7 @@ jobs:
           python-version: "3.11"
 
       - name: npm install
-        run: npm install
+        run: npm ci
 
       - name: Build shared package
         run: npm run build -w @talyn/shared
@@ -50,6 +55,7 @@ jobs:
         run: npm run build -w @talyn/client
 
       - name: Build backend
+        if: runner.os == 'Linux'
         run: npm run build -w @talyn/backend
 
       - name: Build desktop DLL
@@ -58,12 +64,6 @@ jobs:
       - name: Build desktop app
         run: npm run build -w @talyn/desktop
 
-      # A browser bundle is OS-independent, so this doesn't need the 3-OS
-      # matrix — but it's cheap (~2s) and running it here keeps one gate
-      # rather than a second workflow. The env vars are the same publishable
-      # repo variables the desktop build uses; vite.config.ts refuses to build
-      # a production bundle without them, which is the point.
-      #
       # PLACEHOLDER FALLBACKS, and they are load-bearing for outside
       # contributions: GitHub withholds repo VARIABLES from a pull_request run
       # raised off a fork, exactly as it withholds secrets, so `vars.*` arrives
@@ -74,6 +74,7 @@ jobs:
       # was never going to be given. A push to main still builds with the real
       # values, and the actual deploys read Vercel's own env, never this.
       - name: Build web app
+        if: runner.os == 'Linux'
         env:
           VITE_TALYN_API_URL: https://prod.talyn.dev
           VITE_TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL || 'https://fork-pr.placeholder.invalid' }}
@@ -87,6 +88,7 @@ jobs:
       # the same backend and the same Supabase project — what differs is who
       # the backend lets in.
       - name: Build admin console
+        if: runner.os == 'Linux'
         env:
           VITE_TALYN_API_URL: https://prod.talyn.dev
           VITE_TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL || 'https://fork-pr.placeholder.invalid' }}
@@ -96,12 +98,15 @@ jobs:
         run: npm run build -w @talyn/admin
 
       - name: Typecheck
+        if: runner.os == 'Linux'
         run: npm run typecheck
 
       - name: Lint
+        if: runner.os == 'Linux'
         run: npm run lint
 
       - name: Test
+        if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm test

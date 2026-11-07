@@ -10,6 +10,7 @@ import * as schema from '../db/schema.js';
 vi.mock('../services/selfHosted/credentials.js', () => ({
   getSelfHostedClient: vi.fn(),
   getSelfHostedCredentials: vi.fn(),
+  fleetAgentStatus: vi.fn(async () => ({ connectedAgents: [], reauthAgents: [] })),
 }));
 
 const WS = 'ws-1';

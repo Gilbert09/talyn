@@ -6,6 +6,11 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 10_000,
     globals: false,
+    poolOptions: {
+      forks: {
+        execArgv: ['--expose-gc'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

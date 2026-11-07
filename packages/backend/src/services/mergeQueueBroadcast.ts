@@ -138,6 +138,16 @@ export function _resetMergeQueueBroadcasts(): void {
   slots.clear();
 }
 
+export async function _drainMergeQueueBroadcastsForTests(): Promise<void> {
+  while (slots.size > 0) {
+    const active = [...slots.values()]
+      .flatMap((slot) => [slot.pending, slot.running])
+      .filter((run) => run !== null);
+    if (active.length === 0) return;
+    await Promise.all(active);
+  }
+}
+
 /**
  * Recompute and broadcast queue positions for every PR in the workspace's
  * merge queue. Call after any membership change (enqueue, dequeue, merge) so

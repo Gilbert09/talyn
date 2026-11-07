@@ -62,7 +62,10 @@ vi.mock('../services/codeReview/workspaceSettings.js', async (importOriginal) =>
 vi.mock('../services/taskCreate.js', () => ({ createCloudTask }));
 vi.mock('../services/prCloudFix.js', () => ({ resolveCloudEnv: vi.fn(async () => ({ envId: 'env-1', provider: 'selfhosted' })) }));
 vi.mock('../services/promptTemplates.js', () => ({ workspacePromptTemplate: vi.fn(async () => null) }));
-vi.mock('../services/selfHosted/credentials.js', () => ({ getSelfHostedClient: vi.fn() }));
+vi.mock('../services/selfHosted/credentials.js', () => ({
+  getSelfHostedClient: vi.fn(),
+  fleetAgentStatus: vi.fn(async () => ({ connectedAgents: [], reauthAgents: [] })),
+}));
 vi.mock('../services/posthogCode/credentials.js', () => ({ getPostHogCodeClient: vi.fn() }));
 
 const { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } = await import('../services/billing/entitlements.js');

@@ -42,7 +42,10 @@ vi.mock('../db/client.js', () => ({
   }),
   runWithoutScope: (fn: () => unknown) => fn(),
 }));
-vi.mock('../services/selfHosted/credentials.js', () => ({ getSelfHostedClient: vi.fn() }));
+vi.mock('../services/selfHosted/credentials.js', () => ({
+  getSelfHostedClient: vi.fn(),
+  fleetAgentStatus: vi.fn(async () => ({ connectedAgents: [], reauthAgents: [] })),
+}));
 vi.mock('../services/posthogCode/credentials.js', () => ({ getPostHogCodeClient: vi.fn() }));
 
 const { startReviewCycle } = await import('../services/codeReview/cycle.js');

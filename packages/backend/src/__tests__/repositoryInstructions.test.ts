@@ -31,6 +31,32 @@ vi.mock('../services/workbenches/sandboxRuntime.js', async (importOriginal) => (
     return { exitCode: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, stdoutBytes: Buffer.from(r.stdout) };
   },
 }));
+vi.mock('../services/workbenches/sandboxFiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/workbenches/sandboxFiles.js')>();
+  return {
+    ...actual,
+    writeSandboxFiles: async (
+      _row: unknown,
+      files: { path: string; base64: string }[],
+      opts: { before?: string; after?: string; env?: Record<string, string>; onLastOutput?: (output: string) => void } = {},
+    ) => {
+      const lines = ['set -e', opts.before ?? ''];
+      for (const file of files) {
+        const target = actual.shellPath(file.path);
+        lines.push(`mkdir -p "$(dirname ${target})"`, `printf %s '${file.base64}' | base64 -d > ${target}`);
+      }
+      lines.push(opts.after ?? '');
+      const script = lines.join('\n').replaceAll('/work/app', sandbox.repo);
+      const result = spawnSync('bash', [bashScriptFile(script)], {
+        cwd: '/',
+        env: { PATH: process.env.PATH, HOME: sandbox.home, ...(opts.env ?? {}) },
+        encoding: 'utf8',
+      });
+      opts.onLastOutput?.(result.stderr);
+      if (result.status !== 0) throw new Error(result.stderr);
+    },
+  };
+});
 
 const { repositoryRoutes } = await import('../routes/repositories.js');
 const { apiErrorHandler } = await import('../routes/index.js');
