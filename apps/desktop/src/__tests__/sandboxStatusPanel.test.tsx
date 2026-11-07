@@ -160,6 +160,25 @@ describe('SandboxStatusPanel', () => {
     expect(screen.getByText('Size: Standard · 4 GB, 4 vCPU')).toBeInTheDocument();
   });
 
+  it('shows memory use and the resource limits', () => {
+    renderPanel(status({
+      resources: { memoryUsedMib: 1463, memoryLimitMib: 4096, vcpus: 4, diskMib: 24234 },
+    }));
+    const resources = screen.getByTestId('sandbox-resources');
+    expect(resources).toHaveTextContent('Memory: 1.4 GB used of 4 GB');
+    expect(resources).toHaveTextContent('CPU: 4 vCPUs allocated');
+    expect(resources).toHaveTextContent('Disk capacity: 23.7 GB');
+  });
+
+  it('shows a memory limit when live use is unavailable', () => {
+    renderPanel(status({
+      resources: { memoryUsedMib: null, memoryLimitMib: 4096, vcpus: 1, diskMib: null },
+    }));
+    const resources = screen.getByTestId('sandbox-resources');
+    expect(resources).toHaveTextContent('Memory limit: 4 GB');
+    expect(resources).toHaveTextContent('CPU: 1 vCPU allocated');
+  });
+
   it('shows a loading line and then an error when there is no status', () => {
     const { rerender } = render(<SandboxStatusPanel workbench={WB} status={null} error={null} onRefresh={jest.fn()} />);
     expect(screen.getByText('Reading the sandbox status')).toBeInTheDocument();

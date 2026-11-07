@@ -274,6 +274,17 @@ export function sandboxStatusText(s: WorkbenchSandboxStatus): string {
   if (s.detail) lines.push(`Note: ${s.detail}`);
   const where = [s.host ? `host ${s.host}` : '', s.size ? `size ${s.size.label}` : ''].filter(Boolean).join(', ');
   if (where) lines.push(`Sandbox: ${where}.`);
+  if (s.resources) {
+    const r = s.resources;
+    lines.push('Resources:');
+    if (r.memoryUsedMib !== null) {
+      lines.push(`  Memory: ${r.memoryUsedMib} MiB used${r.memoryLimitMib !== null ? ` of ${r.memoryLimitMib} MiB` : ''}.`);
+    } else if (r.memoryLimitMib !== null) {
+      lines.push(`  Memory limit: ${r.memoryLimitMib} MiB.`);
+    }
+    if (r.vcpus !== null) lines.push(`  CPU: ${r.vcpus} vCPU${r.vcpus === 1 ? '' : 's'} allocated.`);
+    if (r.diskMib !== null) lines.push(`  Disk capacity: ${r.diskMib} MiB.`);
+  }
   if (s.since) lines.push(`${s.state === 'asleep' || s.state === 'hibernated' ? 'Asleep since' : 'Started at'}: ${s.since}`);
   if (s.sleepsAt) lines.push(`Goes to sleep at: ${s.sleepsAt}`);
   if (!s.fleet.known && s.fleet.error) lines.push(`The fleet did not answer: ${s.fleet.error}`);
@@ -722,7 +733,7 @@ export const SESSIONS = [
   ),
   defineTool(
     'session_sandbox_status',
-    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host and size, how the box started (the image it booted, the wait for a free sandbox, the clone or checkout, the setup and each Setup list step, the last wake, and how the start compares with the repository's median), what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
+    "Show the state of a session's sandbox in plain words: starting, running, idle (and when it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. Also shows the fleet host, size and resources, how the box started (the image it booted, the wait for a free sandbox, the clone or checkout, the setup and each Setup list step, the last wake, and how the start compares with the repository's median), what runs now (a turn, queued messages, a wait for a free sandbox, the setup script or another script), when the work was last saved and what is not pushed, and the last problem. Read-only.",
     {
       session_id: { type: 'string', description: 'The session. Default: the calling session. A session can read itself and the sessions of its thread.' },
     },

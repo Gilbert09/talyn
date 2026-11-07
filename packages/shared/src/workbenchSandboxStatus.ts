@@ -91,6 +91,17 @@ export interface SandboxStatusProblem {
   at: string | null;
 }
 
+/** Resource use and limits from the fleet's cached sandbox record. */
+export interface SandboxResources {
+  /** The VMM's current resident memory. Null when the sandbox is not running or the fleet is too old. */
+  memoryUsedMib: number | null;
+  memoryLimitMib: number | null;
+  /** CPU allocation. The fleet does not report live CPU utilization. */
+  vcpus: number | null;
+  /** Root filesystem capacity. The fleet does not report guest free space. */
+  diskMib: number | null;
+}
+
 /** The image a box booted: `SandboxImageLayer` in `setupLayers.ts`. */
 export type SandboxStartLayer = 'user' | 'repo' | 'legacy' | 'base';
 
@@ -224,6 +235,8 @@ export interface WorkbenchSandboxStatus {
   /** The fleet host that holds the box. */
   host: string | null;
   size: { key: SandboxSize | null; label: string; memMib: number | null; vcpus: number | null } | null;
+  /** Current resource use and limits. Null when no resource fact is known. */
+  resources?: SandboxResources | null;
   /** What runs or waits now. Empty: nothing. */
   activity: SandboxActivity[];
   work: SandboxWorkSafety | null;

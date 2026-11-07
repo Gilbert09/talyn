@@ -109,6 +109,7 @@ describe('session setup and timing tools', () => {
       detail: null, sleepsAt: '2099-01-01T12:12:00.000Z', since: '2099-01-01T10:30:00.000Z', replacementStarting: false,
       fleet: { known: true, status: 'idle', phase: 'agent', error: null }, host: 'hetzner-64',
       size: { key: 'standard', label: 'Standard · 4 GB, 4 vCPU', memMib: 4096, vcpus: 4 },
+      resources: { memoryUsedMib: 1463, memoryLimitMib: 4096, vcpus: 4, diskMib: 24234 },
       activity: [{ kind: 'queued', text: '1 message queued.', since: null }],
       work: {
         savedAt: '2099-01-01T10:00:00.000Z', savedBytes: 1554, checkedAt: '2099-01-01T11:00:00.000Z', unpushedCommits: 1,
@@ -131,6 +132,7 @@ describe('session setup and timing tools', () => {
       for (const part of [
         'Session s1: Idle. It goes to sleep in 12 minutes.',
         'Sandbox: host hetzner-64, size Standard · 4 GB, 4 vCPU.',
+        'Resources:\n  Memory: 1463 MiB used of 4096 MiB.\n  CPU: 4 vCPUs allocated.\n  Disk capacity: 24234 MiB.',
         'Started at: 2099-01-01T10:30:00.000Z',
         '  1 message queued.',
         'Last checkpoint: 2099-01-01T10:00:00.000Z; last check with no new changes: 2099-01-01T11:00:00.000Z',

@@ -132,6 +132,40 @@ describe('the state of the box', () => {
     expect(s.size).toEqual(expected);
     expect(s.host).toBe('hetzner-64');
   });
+
+  it.each<[string, Partial<FleetSandbox> | null, Partial<WorkbenchRow>, unknown]>([
+    [
+      'live use and limits',
+      { memUsedMib: 1463, memMib: 4096, milliVcpu: 4000, diskMib: 24234 },
+      {},
+      { memoryUsedMib: 1463, memoryLimitMib: 4096, vcpus: 4, diskMib: 24234 },
+    ],
+    [
+      'zero memory use',
+      { memUsedMib: 0, memMib: 4096, vcpuCount: 2, diskMib: 0 },
+      {},
+      { memoryUsedMib: 0, memoryLimitMib: 4096, vcpus: 2, diskMib: null },
+    ],
+    [
+      'the chosen size when the fleet is unavailable',
+      null,
+      { settings: { sandboxSize: 'large' } },
+      { memoryUsedMib: null, memoryLimitMib: 12288, vcpus: 6, diskMib: null },
+    ],
+    ['no known resources', null, {}, null],
+  ])('reads resources: %s', (_label, sandbox, patch, expected) => {
+    const s = describeSandboxStatus(input({ row: row(patch), fleet: sandbox ? fleet(sandbox) : { ok: false, error: 'x' } }));
+    expect(s.resources).toEqual(expected);
+  });
+
+  it('reads fleet resources for a thread without assigning a session size', () => {
+    const s = describeSandboxStatus(input({
+      row: row({ kind: 'thread' }),
+      fleet: fleet({ memUsedMib: 512, memMib: 4096, vcpuCount: 2, diskMib: 16384 }),
+    }));
+    expect(s.size).toBeNull();
+    expect(s.resources).toEqual({ memoryUsedMib: 512, memoryLimitMib: 4096, vcpus: 2, diskMib: 16384 });
+  });
 });
 
 describe('what runs on the box', () => {
