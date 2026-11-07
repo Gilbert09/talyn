@@ -10,6 +10,7 @@ import {
   defaultPromptTemplateHash,
 } from '@talyn/shared';
 import { githubService } from '../../services/github.js';
+import { FleetClient, FleetHttpError } from '../../services/selfHosted/client.js';
 import { workspaceRoutes } from '../../routes/workspaces.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
@@ -72,6 +73,99 @@ describe('routes/workspaces', () => {
   it('rejects unauthenticated callers', async () => {
     const res = await fetch(`${serverUrl}/workspaces`);
     expect(res.status).toBe(401);
+  });
+
+  describe('private connectors', () => {
+    const connector = {
+      id: 'connector-1', workspaceId: 'ws', createdAt: '2026-11-07T00:00:00Z',
+      status: 'connected' as const, routes: [{ host: 'db.corp', port: 5432 }],
+    };
+
+    beforeEach(async () => {
+      vi.stubEnv('TAILSCALE_PRIVATE_ROUTES_ENABLED', 'true');
+      vi.stubEnv('FLEET_PINNED_ENDPOINT', 'https://yas.test');
+      vi.stubEnv('FLEET_GATEWAY_TOKEN', 'gateway-token');
+      await db.insert(workspacesTable).values([
+        { id: 'ws', ownerId: TEST_USER_ID, name: 'Mine' },
+        { id: 'other-ws', ownerId: OTHER_USER_ID, name: 'Other' },
+      ]);
+    });
+
+    it.each([
+      ['POST', '/workspaces/other-ws/private-connector', undefined],
+      ['PUT', '/workspaces/other-ws/private-connector/routes', { routes: [] }],
+      ['DELETE', '/workspaces/other-ws/private-connector', undefined],
+    ])('checks workspace access before %s %s', async (method, path, body) => {
+      const start = vi.spyOn(FleetClient.prototype, 'startPrivateConnector').mockResolvedValue(connector);
+      const replace = vi.spyOn(FleetClient.prototype, 'replacePrivateRoutes').mockResolvedValue(connector);
+      const remove = vi.spyOn(FleetClient.prototype, 'deletePrivateConnector').mockResolvedValue();
+      const res = await fetch(`${serverUrl}${path}`, {
+        method,
+        headers: authHeaders,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      expect([403, 404]).toContain(res.status);
+      expect(start).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['POST', '/workspaces/ws/private-connector', undefined],
+      ['PUT', '/workspaces/ws/private-connector/routes', { routes: [] }],
+      ['DELETE', '/workspaces/ws/private-connector', undefined],
+    ])('enforces the backend flag for %s %s', async (method, path, body) => {
+      vi.stubEnv('TAILSCALE_PRIVATE_ROUTES_ENABLED', 'false');
+      const res = await fetch(`${serverUrl}${path}`, {
+        method,
+        headers: authHeaders,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('private_routes_unavailable');
+    });
+
+    it('treats a YAS 404 as disconnected', async () => {
+      vi.spyOn(FleetClient.prototype, 'getPrivateConnector').mockRejectedValue(
+        new FleetHttpError('internal connector URL', 404, 'connector_not_found'),
+      );
+      const res = await fetch(`${serverUrl}/workspaces/ws/private-connector`, { headers: authHeaders });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({
+        success: false,
+        code: 'connector_not_found',
+        error: 'This workspace has no private connector.',
+      });
+    });
+
+    it('validates and replaces the complete route list', async () => {
+      const replace = vi.spyOn(FleetClient.prototype, 'replacePrivateRoutes').mockResolvedValue(connector);
+      const res = await fetch(`${serverUrl}/workspaces/ws/private-connector/routes`, {
+        method: 'PUT', headers: authHeaders, body: JSON.stringify({ routes: [{ host: 'DB.CORP.', port: 5432 }] }),
+      });
+      expect(res.status).toBe(200);
+      expect(replace).toHaveBeenCalledWith('ws', [{ host: 'db.corp', port: 5432 }]);
+
+      const invalid = await fetch(`${serverUrl}/workspaces/ws/private-connector/routes`, {
+        method: 'PUT', headers: authHeaders, body: JSON.stringify({ routes: [{ host: '10.0.0.0/24', port: 443 }] }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports disconnect only after YAS confirms it', async () => {
+      let confirm!: () => void;
+      const deleted = new Promise<void>((resolve) => { confirm = resolve; });
+      vi.spyOn(FleetClient.prototype, 'deletePrivateConnector').mockReturnValue(deleted);
+      let settled = false;
+      const response = fetch(`${serverUrl}/workspaces/ws/private-connector`, {
+        method: 'DELETE', headers: authHeaders,
+      }).then((value) => { settled = true; return value; });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(settled).toBe(false);
+      confirm();
+      expect((await response).status).toBe(200);
+    });
   });
 
   describe('ranking collection authorization', () => {

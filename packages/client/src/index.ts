@@ -122,6 +122,8 @@ import type {
   DebugSnapshot,
   ListSkillsResponse,
   PlatformSkill,
+  PrivateConnector,
+  ReplacePrivateRoutesInput,
   CreatePlatformSkillRequest,
   UpdatePlatformSkillRequest,
   ExternalQueueState,
@@ -559,6 +561,16 @@ export const workspaces = {
     /** Run a disabled step again, with a clean failure count. */
     retryStep: (id: string, stepId: string) =>
       request<SetupListStep>('POST', `/workspaces/${enc(id)}/sandbox-setup/steps/${enc(stepId)}/retry`),
+  },
+  privateConnector: {
+    start: (id: string) =>
+      request<PrivateConnector>('POST', `/workspaces/${enc(id)}/private-connector`),
+    get: (id: string) =>
+      request<PrivateConnector>('GET', `/workspaces/${enc(id)}/private-connector`),
+    replaceRoutes: (id: string, input: ReplacePrivateRoutesInput) =>
+      request<PrivateConnector>('PUT', `/workspaces/${enc(id)}/private-connector/routes`, input),
+    disconnect: (id: string) =>
+      request<void>('DELETE', `/workspaces/${enc(id)}/private-connector`),
   },
   /**
    * The viewer's ranking model for the Reviews tab's Priority sort.

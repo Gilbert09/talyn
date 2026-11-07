@@ -66,6 +66,7 @@ export * from './releaseNotes.js';
 // `Features` shape `GET /features` answers. Shared so a flag key is never a
 // string typed twice.
 export * from './featureFlags.js';
+export * from './privateRoutes.js';
 
 // GitHub health — whether GitHub itself is up, the payload of
 // `GET /system/github-health` and of the `github:health` WebSocket event.

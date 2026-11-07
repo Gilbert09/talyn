@@ -11,7 +11,15 @@ import { createHash, randomBytes } from 'crypto';
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
 import type { Duplex } from 'stream';
-import { createSseJsonParser, type BakeStepResult, type CreateSandboxLayers, type LayerStepResult, type RepositoryBake } from '@talyn/shared';
+import {
+  createSseJsonParser,
+  type BakeStepResult,
+  type CreateSandboxLayers,
+  type LayerStepResult,
+  type PrivateConnector,
+  type PrivateRoute,
+  type RepositoryBake,
+} from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 
 /**
@@ -310,6 +318,18 @@ export interface CreateSandboxTaskInput {
   provider?: string;
 }
 
+export interface FleetPrivateRoute extends PrivateRoute {
+  connectorId: string;
+}
+
+export interface FleetSandboxPolicy {
+  version?: 2;
+  credentials?: { github?: 'none'; anthropic?: 'none'; openai?: 'none' };
+  github?: { readAllRepos?: boolean };
+  egress?: { mode?: 'proxy' | 'filtered' | 'open' };
+  privateRoutes?: FleetPrivateRoute[];
+}
+
 export interface CreateSandboxInput {
   /** Caller-chosen and idempotent: the fleet returns the existing sandbox for
    *  a repeated id rather than booting a second microVM. */
@@ -394,21 +414,7 @@ export interface CreateSandboxInput {
    * nulls its whole refresh hook when everything is suppressed, which would
    * strip the key this dispatch supplied.
    */
-  policy?: {
-    credentials?: { github?: 'none'; anthropic?: 'none'; openai?: 'none' };
-    github?: { readAllRepos?: boolean };
-    /**
-     * How far the box may reach. Absent means the fleet's default, `proxy`:
-     * no routed network at all, everything through the credential proxy.
-     *
-     * `open` is routed and unbounded, and it does NOT change what the box may
-     * spend — the fleet deleted the rule that coupled the two, so the proxy
-     * still attaches credentials in every mode. One refusal survives and Talyn
-     * satisfies it by construction: a routed run may not carry a GitHub token
-     * that names no repository, and every Talyn dispatch names one.
-     */
-    egress?: { mode?: 'proxy' | 'filtered' | 'open' };
-  };
+  policy?: FleetSandboxPolicy;
   /**
    * The workspace's MCP servers, defined on the spot.
    *
@@ -811,7 +817,7 @@ export class FleetClient {
   private async request<T>(
     path: string,
     init: RequestInit = {},
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number } = {},
   ): Promise<T> {
     return (await this.requestWithMeta<T>(path, init, opts)).data;
   }
@@ -819,7 +825,7 @@ export class FleetClient {
   private async requestWithMeta<T>(
     path: string,
     init: RequestInit = {},
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number } = {},
   ): Promise<{ data: T; host?: string }> {
     const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
     const started = Date.now();
@@ -870,7 +876,14 @@ export class FleetClient {
       );
     }
 
-    this.recordHttp(method, path, resp.status, started, resp.ok);
+    const expectedStatus = opts.expectedStatus;
+    this.recordHttp(
+      method,
+      path,
+      resp.status,
+      started,
+      resp.ok && (expectedStatus === undefined || resp.status === expectedStatus),
+    );
 
     if (resp.status === 503) {
       const { message, code } = await errorBody(resp, 'the fleet has no capacity');
@@ -901,9 +914,18 @@ export class FleetClient {
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
-      const lost = lostSandboxError(resp.status, message, code);
+      const lost = opts.preserveNotFound && resp.status === 404
+        ? null
+        : lostSandboxError(resp.status, message, code);
       if (lost) throw lost;
       throw new FleetHttpError(message, resp.status, code);
+    }
+    if (expectedStatus !== undefined && resp.status !== expectedStatus) {
+      throw new FleetHttpError(
+        `fleet returned ${resp.status}, expected ${expectedStatus}`,
+        502,
+        'unexpected_status',
+      );
     }
     // The gateway names the host that took a create, because Talyn has to bound
     // a later credential pull BY HOST and cannot read that off a registry it no
@@ -1080,6 +1102,37 @@ export class FleetClient {
       body: JSON.stringify(input),
     });
     return { sandbox: data, host };
+  }
+
+  /** Start one interactive customer-tailnet login for a Talyn workspace. */
+  async startPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
+    return this.request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector`, {
+      method: 'POST',
+    }, { preserveNotFound: true });
+  }
+
+  /** Read connector state. A missing connector returns a typed 404 error. */
+  async getPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
+    return this.request(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector`,
+      {},
+      { preserveNotFound: true },
+    );
+  }
+
+  /** Replace the complete exact-destination allow-list. */
+  async replacePrivateRoutes(workspaceId: string, routes: PrivateRoute[]): Promise<PrivateConnector> {
+    return this.request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector/routes`, {
+      method: 'PUT',
+      body: JSON.stringify({ routes }),
+    }, { preserveNotFound: true });
+  }
+
+  /** Disconnect only after YAS confirms deletion with 204. */
+  async deletePrivateConnector(workspaceId: string): Promise<void> {
+    await this.request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector`, {
+      method: 'DELETE',
+    }, { preserveNotFound: true, expectedStatus: 204 });
   }
 
   /**

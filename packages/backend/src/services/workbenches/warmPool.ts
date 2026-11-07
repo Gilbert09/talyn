@@ -9,6 +9,7 @@ import { hostIsDispatchable, listFleetHosts, type FleetHostView } from '../fleet
 import { githubService } from '../github.js';
 import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
+import { sandboxPolicyForWorkspace } from '../selfHosted/privateRoutes.js';
 import { resolveRepository } from '../selfHosted/sandboxRun.js';
 import { recordSandboxAgents } from './credentialPolicy.js';
 import { assertNewWorkbenchBox } from './boxGate.js';
@@ -212,8 +213,23 @@ export async function warmSpecHash(shape: WarmShape): Promise<string> {
       .orderBy(asc(mcpServersTable.name))
     : [];
   const author = (await gitAuthorFor(shape.workspaceId)) ?? null;
+  const privateRoutes = (await sandboxPolicyForWorkspace(shape.workspaceId, {})).privateRoutes ?? [];
   return createHash('sha256')
-    .update(JSON.stringify({ v: 1, ...shape, layers: image.layers, bake: image.bake, mcp, author }))
+    .update(JSON.stringify({
+      v: 2,
+      workspaceId: shape.workspaceId,
+      repositoryId: shape.repositoryId,
+      slug: shape.slug,
+      baseBranch: shape.baseBranch,
+      agent: shape.agent,
+      size: shape.size,
+      internetAccess: shape.internetAccess,
+      layers: image.layers,
+      bake: image.bake,
+      mcp,
+      author,
+      privateRoutes,
+    }))
     .digest('hex')
     .slice(0, 32);
 }
@@ -332,8 +348,21 @@ export async function claimWarmBox(row: WorkbenchRow): Promise<WarmClaim | null>
     const ready = await db().select(BOX_COLUMNS).from(boxes)
       .where(and(eq(boxes.repositoryId, repositoryId), eq(boxes.workspaceId, row.workspaceId), eq(boxes.status, 'ready')))
       .orderBy(asc(boxes.readyAt));
+    const expectedHashes = new Map(await Promise.all([...new Set(ready.map((box) => box.agent))].map(async (agent) => [
+      agent,
+      await warmSpecHash({
+        workspaceId: row.workspaceId,
+        repositoryId,
+        slug: row.repoFullName,
+        baseBranch: row.baseBranch,
+        agent,
+        size,
+        internetAccess,
+      }),
+    ] as const)));
     const fits = ready.filter((box) => (box.agent === row.agent || hasBothAgents(box)) && box.size === size
-      && box.internetAccess === internetAccess && box.baseBranch === row.baseBranch);
+      && box.internetAccess === internetAccess && box.baseBranch === row.baseBranch
+      && box.specHash === expectedHashes.get(box.agent));
     for (const candidate of fits) {
       const now = new Date();
       const [box] = await db()

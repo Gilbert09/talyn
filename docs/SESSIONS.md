@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Workspace Tailscale private routes (2026-11-07)
+
+- A gated **Private routes** settings page now connects one workspace to a customer tailnet through YAS.
+- The page opens the one-time Tailscale login URL. Tailscale does not redirect to Talyn, so the page polls connector state.
+- Users allow exact hostname-or-IP and TCP port pairs. YAS applies removed routes immediately. Added routes apply to new sandboxes.
+- The backend checks workspace access and the `tailscale-private-routes` flag for every connector operation.
+- One policy helper adds routes to every sandbox create body. It preserves credential rules and open public internet access.
+- Warm sandbox hashes include private routes. A route change prevents Talyn from claiming a stale warm sandbox.
+- YAS owns connector state. Talyn does not store or log login URLs and does not change the customer tailnet policy.
+
 ## Spaces in the desktop app (2026-11-06)
 
 Phase P6 ports the web switcher to `apps/desktop`. It is a fork, so the code is written twice.

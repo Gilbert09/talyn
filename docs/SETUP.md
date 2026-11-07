@@ -592,6 +592,10 @@ FLEET_PINNED_ENDPOINT=https://api.yetanothersandbox.dev
 FLEET_GATEWAY_TOKEN=yas_sk_...              # blank/unset = use the registry
 ```
 
+Workspace Tailscale connectors use this same authenticated gateway path. See
+[`PRIVATE_ROUTES.md`](./PRIVATE_ROUTES.md) for the release gate, YAS deployment
+variables, sandbox policy rules, and operational checks.
+
 **This is the normal path as of 2026-08-24.** The variable keeps its old name —
 it began as a debugging pin and renaming a deployed variable is a coordinated
 restart to change a string — but what it points at is now the yas control plane,

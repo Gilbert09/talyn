@@ -363,6 +363,21 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Private routes add exact customer-tailnet destinations to new sandboxes.
+   *
+   * The safe fallback is off. The backend enforces this flag for every
+   * connector operation and again when it builds a sandbox policy.
+   */
+  privateRoutes: {
+    posthogKey: 'tailscale-private-routes',
+    envOverride: 'TAILSCALE_PRIVATE_ROUTES_ENABLED',
+    fallback: false,
+    description: 'Private routes — exact TCP destinations through a workspace Tailscale connector',
+    availability: 'gated',
+    releaseScopes: ['tailscale'],
+  },
+
+  /**
    * The public API (`/v1`) and the personal access tokens that call it.
    *
    * Fails CLOSED: a token starts sandbox sessions on fleet hardware and spends
@@ -503,6 +518,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'spaces',
   'workbenches',
   'trunkMergeEta',
+  'privateRoutes',
   'publicApi',
 ] as const satisfies readonly FeatureFlagKey[];
 

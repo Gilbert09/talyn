@@ -477,6 +477,7 @@ describe('featuresForUser', () => {
     expect(Object.keys(features).sort()).toEqual([
       'loops',
       'mcpServers',
+      'privateRoutes',
       'publicApi',
       'reviewPriority',
       'reviewPriorityMode',
@@ -496,6 +497,7 @@ describe('featuresForUser', () => {
       workflows: false,
       loops: false,
       mcpServers: false,
+      privateRoutes: false,
       reviewPriority: false,
       reviewPriorityMode: true,
       reviewRankingCandidate: false,
@@ -519,6 +521,7 @@ describe('featuresForUser', () => {
       workflows: true,
       loops: false,
       mcpServers: false,
+      privateRoutes: false,
       reviewPriority: false,
       reviewPriorityMode: true,
       reviewRankingCandidate: false,

@@ -27,6 +27,7 @@ import {
   WARM_POOL,
   warmPoolConfig,
   warmSandboxId,
+  warmSpecHash,
   yieldWarmPool,
 } from '../services/workbenches/warmPool.js';
 
@@ -104,9 +105,16 @@ describe('the warm pool', () => {
   const insertReady = async (over: Partial<typeof workbenchWarmBoxes.$inferInsert> = {}) => {
     const id = randomUUID();
     const now = new Date();
+    const agent = over.agent ?? 'claude';
+    const size = over.size ?? 'standard';
+    const internetAccess = over.internetAccess ?? true;
+    const baseBranch = over.baseBranch ?? 'main';
+    const specHash = over.specHash ?? await warmSpecHash({
+      workspaceId: 'ws', repositoryId: 'repo', slug: 'o/r', agent, size, internetAccess, baseBranch,
+    });
     await testDb.db.insert(workbenchWarmBoxes).values({
-      id, sandboxId: warmSandboxId(id), workspaceId: 'ws', repositoryId: 'repo', agent: 'claude', size: 'standard',
-      internetAccess: true, baseBranch: 'main', specHash: 'spec', status: 'ready', fleetHost: 'scaleway-1',
+      id, sandboxId: warmSandboxId(id), workspaceId: 'ws', repositoryId: 'repo', agent, size,
+      internetAccess, baseBranch, specHash, status: 'ready', fleetHost: 'scaleway-1',
       record: { layer: 'user', repoCommit: SHA, legacyUserStepIds: [] }, checkoutCommit: SHA, fillMs: 12_000,
       readyAt: now, touchedAt: now, checkedAt: now, ...over,
     });

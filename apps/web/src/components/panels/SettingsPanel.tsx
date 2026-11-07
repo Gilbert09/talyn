@@ -38,6 +38,7 @@ import {
   SquareTerminal,
   Keyboard,
   Box,
+  Network,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { SlackSettings } from './SlackSettings';
@@ -45,6 +46,7 @@ import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
 import { SandboxSetupSettings } from '../settings/sections/SandboxSetupSettings';
+import { PrivateRoutesSettings } from '../settings/sections/PrivateRoutesSettings';
 import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
@@ -52,7 +54,7 @@ import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
-import { highlightsForSurface } from '@talyn/shared';
+import { highlightsForSurface, privateRoutesOffered } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -144,6 +146,9 @@ export function SettingsPanel() {
     ...(features?.workbenches === true
       ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
       : []),
+    ...(privateRoutesOffered(features)
+      ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
+      : []),
     { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
     { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
@@ -210,6 +215,7 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'sandboxSetup' && features?.workbenches === true && <SandboxSetupSettings />}
+            {activeSection === 'privateRoutes' && privateRoutesOffered(features) && <PrivateRoutesSettings />}
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
