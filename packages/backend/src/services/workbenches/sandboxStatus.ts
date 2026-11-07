@@ -247,6 +247,17 @@ function sizeOf(row: WorkbenchRow, sandbox: FleetSandbox | null): WorkbenchSandb
   return { key, label, memMib, vcpus };
 }
 
+function resourcesOf(size: WorkbenchSandboxStatus['size'], sandbox: FleetSandbox | null): WorkbenchSandboxStatus['resources'] {
+  const memoryUsedMib = typeof sandbox?.memUsedMib === 'number' ? sandbox.memUsedMib : null;
+  const memoryLimitMib = sandbox?.memMib ?? size?.memMib ?? null;
+  const vcpus = sandbox?.milliVcpu
+    ? sandbox.milliVcpu / 1000
+    : sandbox?.vcpuCount ?? size?.vcpus ?? null;
+  const diskMib = typeof sandbox?.diskMib === 'number' && sandbox.diskMib > 0 ? sandbox.diskMib : null;
+  if (memoryUsedMib === null && memoryLimitMib === null && vcpus === null && diskMib === null) return null;
+  return { memoryUsedMib, memoryLimitMib, vcpus, diskMib };
+}
+
 function activityOf(input: SandboxStatusInput): SandboxActivity[] {
   const { row, now } = input;
   const out: SandboxActivity[] = [];
@@ -466,6 +477,7 @@ export function describeSandboxStatus(input: SandboxStatusInput): WorkbenchSandb
   const activity = row.runtime === 'sandbox' && !row.archivedAt ? activityOf(input) : [];
   const answer = stateOf(input, activity);
   const sandbox = input.fleet?.ok ? input.fleet.sandbox : null;
+  const size = row.runtime === 'sandbox' && row.kind !== 'thread' ? sizeOf(row, sandbox) : null;
   const fleetError = sandbox?.error && ['failed', 'stopped', 'cancelled'].includes(sandbox.status) ? sandbox.error : null;
   const detail = row.statusMessage && row.status !== 'error' ? row.statusMessage : null;
   return {
@@ -483,7 +495,8 @@ export function describeSandboxStatus(input: SandboxStatusInput): WorkbenchSandb
         ? { known: true, status: input.fleet.sandbox.status ?? null, phase: input.fleet.sandbox.phase ?? null, error: input.fleet.sandbox.error ?? null }
         : { known: false, status: null, phase: null, error: input.fleet.error },
     host: row.fleetHost,
-    size: row.runtime === 'sandbox' && row.kind !== 'thread' ? sizeOf(row, sandbox) : null,
+    size,
+    resources: row.runtime === 'sandbox' && !row.archivedAt ? resourcesOf(size, sandbox) : null,
     activity,
     work: workOf(input, activity),
     problem: problemOf(input, fleetError),

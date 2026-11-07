@@ -342,6 +342,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function formatMib(mib: number): string {
+  if (mib < 1024) return `${Math.round(mib)} MB`;
+  const gib = mib / 1024;
+  return `${Number.isInteger(gib) ? gib : gib.toFixed(1)} GB`;
+}
+
 function WorkSafety({ work, now }: { work: SandboxWorkSafety; now: number }) {
   const checkedNewer =
     work.checkedAt && (!work.savedAt || new Date(work.checkedAt).getTime() > new Date(work.savedAt).getTime());
@@ -624,6 +630,25 @@ export function SandboxStatusPanel({
           <ul className="space-y-0.5 text-xs">
             {status.host && <li>Host: <span className="font-mono">{status.host}</span></li>}
             {status.size && <li>Size: {status.size.label}</li>}
+          </ul>
+        </Section>
+      )}
+
+      {status.resources && (
+        <Section title="Resources">
+          <ul className="space-y-0.5 text-xs" data-testid="sandbox-resources">
+            {status.resources.memoryUsedMib !== null ? (
+              <li>
+                Memory: {formatMib(status.resources.memoryUsedMib)} used
+                {status.resources.memoryLimitMib !== null && ` of ${formatMib(status.resources.memoryLimitMib)}`}
+              </li>
+            ) : status.resources.memoryLimitMib !== null ? (
+              <li>Memory limit: {formatMib(status.resources.memoryLimitMib)}</li>
+            ) : null}
+            {status.resources.vcpus !== null && (
+              <li>CPU: {status.resources.vcpus} vCPU{status.resources.vcpus === 1 ? '' : 's'} allocated</li>
+            )}
+            {status.resources.diskMib !== null && <li>Disk capacity: {formatMib(status.resources.diskMib)}</li>}
           </ul>
         </Section>
       )}
