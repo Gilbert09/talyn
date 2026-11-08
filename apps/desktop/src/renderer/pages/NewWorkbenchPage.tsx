@@ -27,12 +27,14 @@ import {
   AgentPicker,
   ANY_REPOSITORY,
   BaseBranchField,
+  ConnectAgentNotice,
   ControlChip,
   CreateFromPopover,
   NEW_BRANCH,
   RepoPicker,
   RuntimeToggle,
   SourceChip,
+  unconnectedAgents,
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
@@ -372,6 +374,10 @@ export function NewWorkbenchPage() {
   const unavailable = readinessKnown
     ? (mode === 'thread' ? ['sandbox'] as const : ['sandbox', 'local'] as const).filter((r) => !runtimes[r].available)
     : [];
+  // Only when a sandbox session can start at all: otherwise "Sandbox unavailable" already says why.
+  const missingAgents =
+    readinessKnown && effectiveRuntime === 'sandbox' && runtimes.sandbox.available ? unconnectedAgents(agent, choiceFor) : [];
+  const connectAgent = () => openSettings('agents');
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -505,8 +511,8 @@ export function NewWorkbenchPage() {
                   <span className="truncate font-mono">{repoPath ? shortPath(repoPath) : 'Choose folder…'}</span>
                 </ControlChip>
               )}
-              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
-              <ModelPicker agent={agent} value={model} onChange={setModel} />
+              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
+              <ModelPicker agent={agent} value={model} onChange={setModel} unconnected={missingAgents.map((m) => m.agent)} />
               <EffortPicker value={effort} onChange={setEffort} />
               {showImport && (
                 <ControlChip
@@ -520,7 +526,7 @@ export function NewWorkbenchPage() {
               )}
             </div>
 
-            {(error || unavailable.length > 0 || agentOk.warning) && (
+            {(error || unavailable.length > 0 || agentOk.warning || missingAgents.length > 0) && (
               <div className="space-y-0.5 px-2 text-xs" aria-live="polite">
                 {error && (
                   <p role="alert" className="text-destructive">
@@ -557,6 +563,7 @@ export function NewWorkbenchPage() {
                   </p>
                 ))}
                 {agentOk.available && agentOk.warning && <p className="text-muted-foreground">{agentOk.warning}</p>}
+                <ConnectAgentNotice agents={missingAgents} onConnect={connectAgent} />
               </div>
             )}
 

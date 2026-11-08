@@ -52,6 +52,23 @@ describe('agentChoice', () => {
   it('is unavailable while the sandbox answer is pending', () => {
     expect(agentChoice({ sandbox: null, local: null }, 'sandbox', 'claude').available).toBe(false);
   });
+  it.each([
+    ['agent_not_connected', 'connect'],
+    ['agent_reauth_required', 'reauth'],
+    ['flag_off', undefined],
+    ['fleet_not_allowed', undefined],
+  ])('marks %s as fixed in Settings: %s', (code, connect) => {
+    const sandbox = {
+      ...okSandbox,
+      agents: { ...okSandbox.agents, claude: { ok: false, reason: { code, message: 'Blocked' } } },
+    };
+    expect(agentChoice({ sandbox, local: null }, 'sandbox', 'claude').connect).toBe(connect);
+    expect(agentChoice({ sandbox, local: null }, 'sandbox', 'codex').connect).toBeUndefined();
+  });
+  it('never marks a local agent as fixed in Settings', () => {
+    const local = { ...okLocal, claude: { ok: false } };
+    expect(agentChoice({ sandbox: null, local }, 'local', 'claude').connect).toBeUndefined();
+  });
 });
 
 describe('runtimeChoice', () => {

@@ -24,12 +24,14 @@ import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelect
 import {
   AgentPicker,
   ANY_REPOSITORY,
+  ConnectAgentNotice,
   BaseBranchField,
   ControlChip,
   CreateFromPopover,
   NEW_BRANCH,
   RepoPicker,
   SourceChip,
+  unconnectedAgents,
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
@@ -295,6 +297,9 @@ export function NewWorkbenchPage() {
 
   const error = createError;
   const unavailable = readinessKnown && !sandbox.available;
+  // Only when a session can start at all: otherwise "Sandbox unavailable" already says why.
+  const missingAgents = readinessKnown && sandbox.available ? unconnectedAgents(agent, choiceFor) : [];
+  const connectAgent = () => openSettings('integrations');
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -404,12 +409,17 @@ export function NewWorkbenchPage() {
                 <Globe2 className="h-3.5 w-3.5" />
                 <span>Internet {internetAccess ? 'on' : 'off'}</span>
               </ControlChip>
-              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
-              <ModelPicker agent={agent} value={model} onChange={setModel} />
+              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
+              <ModelPicker
+                agent={agent}
+                value={model}
+                onChange={setModel}
+                unconnected={missingAgents.map((m) => m.agent)}
+              />
               <EffortPicker value={effort} onChange={setEffort} />
             </div>
 
-            {(error || unavailable || agentOk.warning) && (
+            {(error || unavailable || agentOk.warning || missingAgents.length > 0) && (
               <div className="space-y-0.5 px-2 text-xs" aria-live="polite">
                 {error && (
                   <p role="alert" className="text-destructive">
@@ -443,6 +453,7 @@ export function NewWorkbenchPage() {
                   </p>
                 )}
                 {agentOk.available && agentOk.warning && <p className="text-muted-foreground">{agentOk.warning}</p>}
+                <ConnectAgentNotice agents={missingAgents} onConnect={connectAgent} />
               </div>
             )}
           </div>

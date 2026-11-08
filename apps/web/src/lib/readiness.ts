@@ -19,7 +19,18 @@ export interface Choice {
   reason?: string;
   /** Does not block the choice. */
   warning?: string;
+  /**
+   * The fix is in Settings: connect this agent's subscription, or sign in to it
+   * again. Absent when the agent is blocked for another reason.
+   */
+  connect?: 'connect' | 'reauth';
 }
+
+/** Readiness codes that a sign-in in Settings fixes. */
+const CONNECT_CODES: Record<string, Choice['connect']> = {
+  agent_not_connected: 'connect',
+  agent_reauth_required: 'reauth',
+};
 
 const AGENT_NAMES: Record<WorkbenchAgent, string> = {
   claude: 'Claude Code',
@@ -36,6 +47,7 @@ export function agentChoice(readiness: ReadinessState, agent: WorkbenchAgent): C
     return {
       available: false,
       reason: entry.reason?.message ?? `${AGENT_NAMES[agent]} is not connected`,
+      ...(entry.reason && CONNECT_CODES[entry.reason.code] ? { connect: CONNECT_CODES[entry.reason.code] } : {}),
     };
   return { available: true };
 }
