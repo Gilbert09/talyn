@@ -40,7 +40,13 @@
     "mobile:doctor": "npm run doctor -w @talyn/mobile",
     "mobile:export:smoke": "npm run export:smoke -w @talyn/mobile",
     "mobile:build:packages": "npm run build -w @talyn/shared && npm run build -w @talyn/client",
-    "mobile:check:graph": "npm run check:graph -w @talyn/mobile"
+    "mobile:check:graph": "npm run check:graph -w @talyn/mobile",
+    "mobile:release:check": "npm run release:check -w @talyn/mobile",
+    "mobile:release:plan": "npm run release:plan -w @talyn/mobile",
+    "mobile:native:generate": "npm run native:generate -w @talyn/mobile",
+    "mobile:native:inspect": "npm run native:inspect -w @talyn/mobile",
+    "mobile:test:release": "npm run test:release -w @talyn/mobile",
+    "mobile:native:check": "npm run native:check -w @talyn/mobile"
   },
   "lint-staged": {
     "{apps,packages}/**/*.{js,jsx,ts,tsx}": [

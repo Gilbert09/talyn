@@ -1,3 +1,4 @@
+import { version } from '../../package.json';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { createClient } from '@supabase/supabase-js';
@@ -67,7 +68,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   });
   const initialized = supabase.auth.initialize();
   const bindClient = () => configureApiClient({
-    baseUrl: config.apiOrigin, clientVersion: 'mobile/0.1.0', runtime: { lifecycle },
+    baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle },
     getAccessToken: () => auth.getAccessToken(), recoverSession: () => auth.recoverSession(),
   });
   const workflow = new WorkflowStore(lifecycle);
@@ -145,7 +146,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
       subscription.subscription.unsubscribe();
       unbind(); lifecycle.dispose(); workspace.dispose(); wsClient.reset();
       // Rebinding also invalidates REST requests from the previous runtime.
-      configureApiClient({ baseUrl: config.apiOrigin, clientVersion: 'mobile/0.1.0',
+      configureApiClient({ baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`,
         getAccessToken: async () => null, recoverSession: async () => false,
         runtime: { lifecycle: { getSnapshot: () => ({ activity: 'suspended', reachability: 'unknown' }), subscribe: () => () => {} } },
       });

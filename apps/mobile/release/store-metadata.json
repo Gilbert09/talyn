@@ -1,0 +1,37 @@
+{
+  "status": "template; store-owner approval required",
+  "locale": "en-US",
+  "apple": {
+    "name": "Talyn",
+    "subtitle": null,
+    "description": null,
+    "keywords": null,
+    "category": null,
+    "supportUrl": null,
+    "privacyUrl": null,
+    "deletionUrl": null,
+    "copyright": null,
+    "reviewAccess": null,
+    "releaseNotes": null,
+    "countries": null,
+    "ageRating": null,
+    "privacyAnswers": null,
+    "assets": null
+  },
+  "google": {
+    "name": "Talyn",
+    "shortDescription": null,
+    "description": null,
+    "category": null,
+    "supportUrl": null,
+    "privacyUrl": null,
+    "deletionUrl": null,
+    "copyright": null,
+    "reviewAccess": null,
+    "releaseNotes": null,
+    "countries": null,
+    "ageRating": null,
+    "privacyAnswers": null,
+    "assets": null
+  }
+}
