@@ -49,7 +49,7 @@ export interface SandboxActivity {
   name?: string;
 }
 
-export type SandboxStatusActionKind = 'wake' | 'retry' | 'resize' | 'show_setup_output';
+export type SandboxStatusActionKind = 'wake' | 'retry' | 'resize' | 'restart' | 'show_setup_output';
 
 export interface SandboxStatusAction {
   kind: SandboxStatusActionKind;

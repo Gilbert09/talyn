@@ -15,6 +15,7 @@ import {
   PanelBottom,
   PanelRight,
   RotateCcw,
+  RefreshCw,
   Cloud,
   Wrench,
 } from 'lucide-react';
@@ -190,6 +191,8 @@ export function WorkbenchHeader({
   const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
   const viewer = useSessionViewer(workbench);
@@ -231,6 +234,27 @@ export function WorkbenchHeader({
       await setMergeQueue(pr, !pr.mergeQueued);
     } finally {
       setQueueBusy(false);
+    }
+  };
+
+  const canRestart = !thread && workbench.runtime === 'sandbox' && workbench.status === 'ready' && !!workbench.sandboxId;
+  const restartSandbox = async () => {
+    setRestarting(true);
+    try {
+      const res = await api.workbenches.restart(workbench.id);
+      trackEvent('session_moved', { workbench_id: workbench.id, reason: 'restart' });
+      toast.info(
+        res.outcome === 'restarting'
+          ? 'Restarting the sandbox'
+          : 'The sandbox restarts when the current turn ends',
+        "The new sandbox gets the workspace's current MCP servers.",
+      );
+      setRestartOpen(false);
+    } catch (err) {
+      captureWorkbenchFailure('sandbox_restart', err, workbench.id);
+      toast.error('Could not restart the sandbox', err instanceof Error ? err.message : undefined);
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -492,6 +516,17 @@ export function WorkbenchHeader({
                           Sandbox
                         </DropdownMenuItem>
                       )}
+                      {canRestart && (
+                        <DropdownMenuItem
+                          disabled={restarting}
+                          onSelect={() => setRestartOpen(true)}
+                          title="Move this session to a fresh sandbox, for example to load MCP servers connected after it started."
+                          data-attr="workbench-restart-sandbox"
+                        >
+                          <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                          Restart sandbox
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         disabled={linkBusy}
                         onSelect={() =>
@@ -720,6 +755,16 @@ export function WorkbenchHeader({
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={restartOpen}
+        title="Restart the sandbox?"
+        description="Talyn moves this session to a fresh sandbox with the workspace's current MCP servers. Files, branches, uncommitted changes and the conversation carry over. Running scripts and terminals stop. A running turn finishes first."
+        confirmLabel="Restart"
+        initialFocus="confirm"
+        busy={restarting}
+        onConfirm={() => void restartSandbox()}
+        onCancel={() => setRestartOpen(false)}
       />
       <ArchiveWorkbenchDialog
         workbench={workbench}

@@ -26,6 +26,7 @@ const sandboxStatus = vi.fn();
 const wake = vi.fn();
 const retry = vi.fn();
 const resize = vi.fn();
+const restart = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     workbenches: {
@@ -33,6 +34,7 @@ vi.mock('../lib/api', () => ({
       wake: (...a: unknown[]) => wake(...a),
       retry: (...a: unknown[]) => retry(...a),
       resize: (...a: unknown[]) => resize(...a),
+      restart: (...a: unknown[]) => restart(...a),
     },
   },
 }));
@@ -371,6 +373,28 @@ describe('SandboxStatusPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Medium · 8 GB/ }));
     expect(resize).not.toHaveBeenCalled();
     expect(screen.getByText('The box restarts.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['after_turn', 'The restart starts when the current turn ends.'],
+    ['restarting', 'Talyn is moving the session to a fresh box.'],
+  ])('restarts after the confirmation and says %s', async (outcome, text) => {
+    restart.mockResolvedValue({ outcome, continued: false });
+    const { onRefresh } = renderPanel(status({ actions: [action('restart', 'Restart sandbox', 'Running scripts and terminals stop.')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart sandbox' }));
+    expect(restart).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === 'Restart sandbox')!);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(restart).toHaveBeenCalledWith('wb1');
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it('does not restart when the confirmation is cancelled', () => {
+    renderPanel(status({ actions: [action('restart', 'Restart sandbox', 'Running scripts and terminals stop.')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart sandbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it('opens the setup output tab and closes the panel', () => {
