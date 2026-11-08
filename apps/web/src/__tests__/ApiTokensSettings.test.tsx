@@ -123,6 +123,10 @@ describe('ApiTokensSettings visibility', () => {
 });
 
 describe('ApiTokensSettings create', () => {
+  beforeEach(() => {
+    state.features = { publicApi: true, spaces: true };
+  });
+
   it('sends Teams and Spaces scopes with Full access when Spaces is offered', async () => {
     state.features = { publicApi: true, spaces: true };
     render(<ApiTokensSettings />);
@@ -290,6 +294,10 @@ describe('ApiTokensSettings create', () => {
 });
 
 describe('ApiTokensSettings new token', () => {
+  beforeEach(() => {
+    state.features = { publicApi: true, spaces: true };
+  });
+
   const createOnce = async () => {
     render(<ApiTokensSettings />);
     const dialog = await openDialog();
