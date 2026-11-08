@@ -6,7 +6,7 @@ import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/wor
 import { fleetErrorAsRefusal, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import { recordWorkbenchEvent, repoDirFor, runCapture } from '../services/workbenches/sandboxRuntime.js';
 import { writeSandboxFiles } from '../services/workbenches/sandboxFiles.js';
-import { getWorkbench } from '../services/workbenches/store.js';
+import { getWorkbench, isThread } from '../services/workbenches/store.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const ATTACHMENT_PATH = /^\.context\/attachments\/[A-Za-z0-9._-]+$/;
@@ -116,8 +116,11 @@ export function workbenchAttachmentRoutes(): Router {
       const safe = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(0, 80) || 'image';
       const path = `.context/attachments/${uuid()}-${safe}`;
       const exclude = `exclude=$(git rev-parse --git-path info/exclude)\nmkdir -p "$(dirname "$exclude")"\ntouch "$exclude"\ngrep -qxF ${shellQuote('.context/')} "$exclude" || printf '%s\\n' ${shellQuote('.context/')} >> "$exclude"`;
-      const prepared = await runCapture(row, `set -e\n${exclude}`, { quiet: true });
-      if (prepared.exitCode !== 0) throw new Error('Could not exclude session attachments from git.');
+      // A thread has no repository, so there is no git exclude file to update.
+      if (!isThread(row)) {
+        const prepared = await runCapture(row, `set -e\n${exclude}`, { quiet: true });
+        if (prepared.exitCode !== 0) throw new Error('Could not exclude session attachments from git.');
+      }
       await writeSandboxFiles(row, [{ path: `${repoDirFor(row)}/${path}`, base64: data.toString('base64') }], { timeoutMs: 120_000 });
       const attachment: WorkbenchAttachment = { name, mimeType, path };
       recordWorkbenchEvent(row, 'attachment_uploaded', path);

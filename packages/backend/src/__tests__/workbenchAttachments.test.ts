@@ -7,7 +7,9 @@ const writeSandboxFiles = vi.fn(async () => {});
 const runCapture = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' }));
 let flag = true;
 
-vi.mock('../services/workbenches/store.js', () => ({ getWorkbench }));
+vi.mock('../services/workbenches/store.js', () => ({
+  getWorkbench, isThread: (row: { kind?: string }) => row.kind === 'thread',
+}));
 vi.mock('../services/workbenches/sandboxFiles.js', () => ({ writeSandboxFiles }));
 vi.mock('../services/workbenches/sandboxRuntime.js', () => ({
   SANDBOX_WORK_ROOT: '/work', repoDirFor: () => '/work/acme/app', runCapture, recordWorkbenchEvent: vi.fn(),
@@ -89,6 +91,17 @@ describe('workbench image uploads', () => {
     expect(runCapture.mock.calls[0][1]).toContain('git rev-parse --git-path info/exclude');
     expect(runCapture.mock.calls[0][1]).toContain('grep -qxF');
     expect(runCapture.mock.invocationCallOrder[0]).toBeLessThan(writeSandboxFiles.mock.invocationCallOrder[0]);
+  });
+
+  it('stores an image in a thread without touching git', async () => {
+    const thread = { ...ready, kind: 'thread' };
+    getWorkbench.mockResolvedValue(thread);
+    const response = await upload(png);
+    expect(response.status).toBe(200);
+    expect(runCapture).not.toHaveBeenCalled();
+    expect(writeSandboxFiles).toHaveBeenCalledWith(thread, [
+      { path: `/work/acme/app/${response.body.data?.path}`, base64: png.toString('base64') },
+    ], { timeoutMs: 120_000 });
   });
 
   it('accepts 5 MB of image data past the global JSON limit', async () => {
