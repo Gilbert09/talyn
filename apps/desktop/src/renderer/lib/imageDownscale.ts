@@ -2,9 +2,9 @@
  * Load an image file, downscale it to fit within `maxDim` px (aspect ratio
  * preserved), and return a PNG data URL. Keeps inline-stored logos small.
  *
- * The file is read as a data: URL, not as an object URL. Both app shells send
- * a CSP with `img-src 'self' data: …`, and `'self'` does not cover the blob:
- * scheme. The browser refused every blob: object URL, so the image never
+ * The file is read as a data: URL, not as an object URL. The app shells once
+ * sent a CSP with `img-src 'self' data: …`, and `'self'` does not cover the
+ * blob: scheme. The browser refused every blob: object URL, so the image never
  * loaded and each upload failed with "Could not read that image."
  */
 export function downscaleImage(file: File, maxDim: number, format: 'image/png' | 'image/jpeg' = 'image/png', quality?: number): Promise<string> {

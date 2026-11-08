@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { MessageAttachments } from '../renderer/components/workbench/MessageAttachments';
 import { WorkbenchTranscript } from '../renderer/components/workbench/WorkbenchTranscript';
 import { rememberAttachmentBlob, rememberAttachmentPreview } from '../renderer/lib/attachmentPreviews';
@@ -73,4 +75,11 @@ test('revokes an object URL when the preview cache evicts it', () => {
     rememberAttachmentPreview(`.context/attachments/cache-${index}.png`, 'data:image/png;base64,YQ==');
   }
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first');
+});
+
+test('the renderer CSP lets a fetched sandbox image load from its blob: URL', () => {
+  // A new session's first image has no cached preview, so it always shows through a blob: URL.
+  const html = readFileSync(join(__dirname, '../renderer/index.ejs'), 'utf8');
+  const imgSrc = html.match(/img-src ([^;]+);/)?.[1].split(/\s+/) ?? [];
+  expect(imgSrc).toContain('blob:');
 });
