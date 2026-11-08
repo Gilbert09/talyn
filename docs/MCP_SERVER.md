@@ -175,6 +175,13 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
 | `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
 | `talyn_session_sandbox_status` | Read the state of a session's sandbox in plain words: starting, running, idle (with the time it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. It also shows the fleet host and size, what runs now, when the work was last saved, what is not pushed, failed saves and the last problem. Read-only. The fleet's record is cached for 10 seconds; when the fleet does not answer, that part is unknown. From a session token: the session itself, or a session in its thread. |
+| `talyn_run_background` | Start a shell command in the session's sandbox that outlives the turn. Talyn starts a new turn in the chat when it exits (`notify_on_exit`, default on). `keep_awake_seconds` (default 3600, at most a day) keeps the box awake while it runs, as billed box time. Behind the `session-background` flag. From a session token: the session itself only. |
+| `talyn_list_background` | List the session's background jobs: running ones, then recent ended ones. Read-only. |
+| `talyn_background_logs` | Read the last lines of a job's output (default 200, at most 2000). Records the exit if the job has exited. |
+| `talyn_stop_background` | Stop a job: INT, TERM, then KILL to its process group. |
+| `talyn_schedule_wakeup` | Ask Talyn to start a new turn in the chat later (`delay_seconds` or `at`, in the future, no upper bound). |
+| `talyn_list_wakeups` | List the session's wake-ups: scheduled, then recent fired, cancelled or failed ones. Read-only. |
+| `talyn_cancel_wakeup` | Cancel a scheduled wake-up. |
 | `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. |

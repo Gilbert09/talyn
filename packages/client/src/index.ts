@@ -3302,6 +3302,41 @@ export const workbenches = {
   restoreCheckpoint: (chatId: string, turn: number) =>
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
 
+  // ---- Background jobs and wake-ups (`features.sessionBackground`) ----
+  // Every route answers 404 while the flag is off. Live updates arrive as
+  // `workbench:background` WS events carrying the whole `WorkbenchBackground`.
+  /** The session's jobs (running first) and wake-ups (scheduled first). */
+  background: (id: string) =>
+    request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`),
+  /**
+   * The last lines of a job's output. A sleeping box is not woken unless
+   * `live: true`; then the answer has `asleep: true` and no lines.
+   */
+  backgroundJobLogs: (id: string, jobId: string, opts: { tail?: number; live?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.tail !== undefined) params.set('tail', String(opts.tail));
+    if (opts.live) params.set('live', '1');
+    const query = params.toString();
+    return request<import('@talyn/shared').WorkbenchBackgroundLogs>(
+      'GET', `/workbenches/${enc(id)}/background/jobs/${enc(jobId)}/logs${query ? `?${query}` : ''}`
+    );
+  },
+  /** Start a job. Talyn's MCP tool uses this for the agent; a UI need not. */
+  startBackgroundJob: (id: string, input: import('@talyn/shared').StartWorkbenchBackgroundJobInput) =>
+    request<import('@talyn/shared').WorkbenchBackgroundJob>('POST', `/workbenches/${enc(id)}/background/jobs`, input),
+  stopBackgroundJob: (id: string, jobId: string) =>
+    request<import('@talyn/shared').WorkbenchBackgroundJob>('POST', `/workbenches/${enc(id)}/background/jobs/${enc(jobId)}/stop`),
+  /** Keep the box awake `seconds` from now (at most a day). 0 stops keeping it awake. */
+  keepBackgroundJobAwake: (id: string, jobId: string, seconds: number) =>
+    request<import('@talyn/shared').WorkbenchBackgroundJob>(
+      'POST', `/workbenches/${enc(id)}/background/jobs/${enc(jobId)}/keep-awake`, { seconds }
+    ),
+  /** "Wake me later": exactly one of `delaySeconds` and `at`, in the future. */
+  scheduleWakeup: (id: string, input: import('@talyn/shared').ScheduleWorkbenchWakeupInput) =>
+    request<import('@talyn/shared').WorkbenchWakeup>('POST', `/workbenches/${enc(id)}/wakeups`, input),
+  cancelWakeup: (id: string, wakeupId: string) =>
+    request<import('@talyn/shared').WorkbenchWakeup>('DELETE', `/workbenches/${enc(id)}/wakeups/${enc(wakeupId)}`),
+
   // ---- Scripts (output arrives as `workbench:script` WS frames) ----
   /** A sleeping box answers with the config Talyn last read from it; `live: true` wakes it. */
   config: (id: string, opts: { live?: boolean } = {}) =>

@@ -4,6 +4,7 @@ import { FleetHttpError, FleetRunNotFoundError, type FleetClient, type FleetSand
 import { DISK_PROBE_SCRIPT, grownDiskMib, LOW_DISK_BYTES, parseDiskProbe, type DiskProbe } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { userFacingError } from './errors.js';
+import { markJobsLostAfterMove } from './backgroundSweep.js';
 import { publicWorkbench } from './prLink.js';
 import { recoverLostSandbox } from './recovery.js';
 import {
@@ -922,6 +923,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
     }
   }
   lease.stop();
+  await markJobsLostAfterMove(row.id, row.workspaceId, committed.sandboxId ?? null);
   await afterCommit(claimed, committed, reason, manifest, chats, stopped, opts);
   return { moved: true, row: committed };
 }

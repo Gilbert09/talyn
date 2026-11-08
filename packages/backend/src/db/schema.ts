@@ -3128,3 +3128,82 @@ export const workbenchPreviewSessions = pgTable(
     expiresIdx: index('idx_workbench_preview_sessions_expires').on(t.expiresAt),
   })
 );
+
+/**
+ * Session background jobs (migration 0119). A command an agent started in its
+ * session's sandbox, run by the durable supervisor so it outlives the turn.
+ * `sandboxId` is the box it started on: another box means the job is lost.
+ * Backend-pool-only.
+ */
+export const workbenchBackgroundJobs = pgTable(
+  'workbench_background_jobs',
+  {
+    id: text('id').primaryKey(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    sandboxId: text('sandbox_id').notNull(),
+    name: text('name').notNull(),
+    command: text('command').notNull(),
+    cwd: text('cwd').notNull(),
+    /** `WorkbenchBackgroundJobStatus`. */
+    status: text('status').notNull().default('running'),
+    exitCode: integer('exit_code'),
+    detail: text('detail'),
+    durableKey: text('durable_key').notNull(),
+    marker: text('marker').notNull(),
+    keepAwakeUntil: timestamp('keep_awake_until', { withTimezone: true }),
+    notifyOnExit: boolean('notify_on_exit').notNull().default(true),
+    payerUserId: text('payer_user_id'),
+    payerWorkspaceId: text('payer_workspace_id'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+  },
+  (t) => ({
+    runningIdx: index('idx_workbench_background_jobs_running').on(t.lastCheckedAt).where(sql`${t.status} = 'running'`),
+    workbenchIdx: index('idx_workbench_background_jobs_workbench').on(t.workbenchId, t.startedAt),
+  })
+);
+
+/**
+ * Session wake-ups (migration 0119). A turn Talyn sends into a chat at
+ * `wakeAt`, claimed by the sweep with `status = 'scheduled'`. `prompt` holds a
+ * job exit's message with its log tail; null means the text comes from
+ * `reason`. Backend-pool-only.
+ */
+export const workbenchWakeups = pgTable(
+  'workbench_wakeups',
+  {
+    id: text('id').primaryKey(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    wakeAt: timestamp('wake_at', { withTimezone: true }).notNull(),
+    reason: text('reason').notNull(),
+    prompt: text('prompt'),
+    /** `WorkbenchWakeupStatus`. */
+    status: text('status').notNull().default('scheduled'),
+    failureDetail: text('failure_detail'),
+    /** `WorkbenchWakeupCreatedBy`. */
+    createdBy: text('created_by').notNull().default('agent'),
+    payerUserId: text('payer_user_id'),
+    payerWorkspaceId: text('payer_workspace_id'),
+    sourceJobId: text('source_job_id').references(() => workbenchBackgroundJobs.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    firedAt: timestamp('fired_at', { withTimezone: true }),
+  },
+  (t) => ({
+    dueIdx: index('idx_workbench_wakeups_due').on(t.wakeAt).where(sql`${t.status} = 'scheduled'`),
+    workbenchIdx: index('idx_workbench_wakeups_workbench').on(t.workbenchId, t.createdAt),
+    sourceJobUq: uniqueIndex('uq_workbench_wakeups_source_job').on(t.sourceJobId).where(sql`${t.sourceJobId} IS NOT NULL`),
+  })
+);

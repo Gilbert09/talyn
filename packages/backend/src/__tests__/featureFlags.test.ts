@@ -483,6 +483,7 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'sessionBackground',
       'spaces',
       'teams',
       'trunkMergeEta',
@@ -507,6 +508,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      sessionBackground: false,
     });
   });
 
@@ -531,6 +533,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      sessionBackground: false,
     });
   });
 

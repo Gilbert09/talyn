@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { initChatLimitResume } from './services/workbenches/limitResumeSweep.js';
+import { initBackgroundSweep } from './services/workbenches/backgroundSweep.js';
 import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
 import { drainWorkbenchFollowers, workbenchDrainTimeoutMs } from './services/workbenches/lifecycle.js';
 import express from 'express';
@@ -209,6 +210,9 @@ async function main() {
   // partial indexes and finds nothing.
   initWorkbenches();
   initChatLimitResume();
+  // Session background jobs and wake-ups. Armed always: the flag is asked per
+  // workspace owner inside, and a pass with no rows reads two partial indexes.
+  initBackgroundSweep();
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
   // that matters is inside: the sweep asks the PostHog flag per workspace

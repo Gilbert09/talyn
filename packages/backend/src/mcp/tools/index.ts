@@ -12,6 +12,7 @@
 import type { AccountFeatureFlagKey } from '@talyn/shared';
 import type { SessionMcpBinding } from '../../services/sessionMcpToken.js';
 import { ACCOUNT } from './account.js';
+import { BACKGROUND } from './background.js';
 import { CODEREVIEW } from './codeReview.js';
 import { LOOPS } from './loops.js';
 import { MCPSERVERS } from './mcpServers.js';
@@ -57,6 +58,7 @@ export const TOOLS: McpToolDefinition[] = [
   ...CODEREVIEW,
   ...TASKS,
   ...SESSIONS,
+  ...BACKGROUND,
   ...SPACES,
   ...MEMORY,
   ...SKILLS,

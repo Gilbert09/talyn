@@ -119,6 +119,8 @@ export * from './publicApi.js';
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
+// Session background jobs and wake-ups (`sessionBackground` flag).
+export * from './workbenchBackground.js';
 
 // Teams and Spaces: the multiplayer contract of `/teams` and `/spaces`.
 export * from './teams.js';
@@ -1287,6 +1289,7 @@ export type WSEventType =
   | 'workbench:chat'
   | 'workbench:event'
   | 'workbench:script'
+  | 'workbench:background'
   // GitHub's own health changed (state, or the set of incidents on its status
   // page). Broadcast to all clients; payload is the whole GithubHealth. It
   // holds no tenant data.

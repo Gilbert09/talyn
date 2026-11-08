@@ -15,6 +15,7 @@ import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
 import type { SlackSessionSource } from './slack.js';
 import type { SandboxSize } from './sandboxSize.js';
+import type { WorkbenchBackground, WorkbenchMessageTrigger } from './workbenchBackground.js';
 
 // ============================================================================
 // Vocabulary
@@ -290,6 +291,12 @@ export interface WorkbenchQueuedMessage {
    * of its sessions changed. Absent means `user`.
    */
   origin?: 'user' | 'talyn';
+  /**
+   * Why Talyn wrote it: a wake-up, or a background job that exited. Set only
+   * with `origin: 'talyn'`. The transcript's user-message event carries it as
+   * `talyn.trigger`, so the clients show the turn as a system row.
+   */
+  trigger?: WorkbenchMessageTrigger;
   queuedAt: string;
   /**
    * A teammate who prompted this session from a space, and pays for its turn
@@ -695,6 +702,8 @@ export interface WorkbenchWsPayloads {
   'workbench:chat': { chat: WorkbenchChat };
   'workbench:event': { chatId: string; events: WorkbenchEvent[] };
   'workbench:script': WorkbenchScriptFrame;
+  /** A session's background jobs and wake-ups, whole, after any change. Owner only. */
+  'workbench:background': WorkbenchBackground;
 }
 
 // ============================================================================

@@ -20,6 +20,7 @@ import { workbenchRoutes } from './workbenches.js';
 import { spaceRoutes } from './spaces.js';
 import { workbenchPullRequestRoutes } from './workbenchPullRequests.js';
 import { workbenchAttachmentRoutes } from './workbenchAttachments.js';
+import { workbenchBackgroundRoutes } from './workbenchBackground.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
@@ -256,6 +257,8 @@ export function setupRoutes(app: Express): void {
   // The PR routes that are not in routes/workbenches.ts. Same prefix and gate, mounted first.
   app.use(`${api}/workbenches`, mount(workbenchPullRequestRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchAttachmentRoutes()));
+  // Background jobs and wake-ups: same prefix, gated on the sessionBackground flag.
+  app.use(`${api}/workbenches`, mount(workbenchBackgroundRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchRoutes()));
 
   // Owner-scoped DB enforcement for the data routers below: runs each request

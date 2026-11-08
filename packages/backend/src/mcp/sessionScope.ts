@@ -85,6 +85,15 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_retry_session',
   'talyn_session_timing',
   'talyn_session_sandbox_status',
+  // Background jobs and wake-ups: on the session itself only (the tools refuse
+  // another session). A job runs in the box the agent already runs in.
+  'talyn_run_background',
+  'talyn_list_background',
+  'talyn_background_logs',
+  'talyn_stop_background',
+  'talyn_schedule_wakeup',
+  'talyn_list_wakeups',
+  'talyn_cancel_wakeup',
   // Repository setup that outlives the session, allowed on purpose: the
   // backend refuses secrets, downloaded scripts piped into a shell and data
   // egress, logs each step with its session, and the step is only suggested

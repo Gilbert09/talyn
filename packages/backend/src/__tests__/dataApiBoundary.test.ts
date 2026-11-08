@@ -188,6 +188,8 @@ describe('Data API database boundary', () => {
       'api_tokens', 'api_idempotency_keys',
       // Public API webhooks (0101): encrypted signing secrets, and a worker with no request to scope by.
       'api_webhook_endpoints', 'api_webhook_deliveries', 'api_webhook_object_states',
+      // Session background jobs and wake-ups (0119): read by a sweep with no request.
+      'workbench_background_jobs', 'workbench_wakeups',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

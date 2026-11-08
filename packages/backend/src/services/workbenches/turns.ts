@@ -32,6 +32,7 @@ import {
   type WorkbenchQueuedMessage,
   type WorkbenchStatus,
   type WorkbenchTurnPayer,
+  type WorkbenchMessageTrigger,
 } from '@talyn/shared';
 import { payerRef, turnGitIdentityEnv } from '../teams/payer.js';
 import { debugBus, describeError } from '../debugBus.js';
@@ -291,7 +292,7 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number; payer?: WorkbenchTurnPayer } = {},
+  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number; payer?: WorkbenchTurnPayer; trigger?: WorkbenchMessageTrigger } = {},
 ): Promise<{ queued: boolean; waitingFor?: string }> {
   const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
@@ -308,6 +309,7 @@ export async function sendMessage(
   if (wb.status === 'ready') assertSandboxAgent(wb, chat.agent === 'codex' ? 'codex' : 'claude');
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
+  if (opts.origin === 'talyn' && opts.trigger) message.trigger = opts.trigger;
   if (opts.payer) message.payer = opts.payer;
   const payer = payerRef(message.payer);
   // A person's message that would start a turn now asks the plan first, so
@@ -697,6 +699,8 @@ export function userMessageEvent(
       sentAt: message.queuedAt,
       ...(model !== undefined ? { model } : {}),
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
+      // A wake-up or a job exit: the clients show the turn as a system row.
+      ...(message.origin === 'talyn' && message.trigger ? { trigger: message.trigger } : {}),
       // Who prompted, for a teammate's turn. The payer's workspace stays on the backend.
       ...(message.payer
         ? { payer: { userId: message.payer.userId, githubLogin: message.payer.githubLogin, avatarUrl: message.payer.avatarUrl } }
@@ -893,6 +897,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     let argv = buildArgv();
     const env = {
       ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
+      // The chat Talyn's background and wake-up tools act on.
+      TALYN_CHAT_ID: chatId,
     };
 
     let accountId = refreshed.accountId;

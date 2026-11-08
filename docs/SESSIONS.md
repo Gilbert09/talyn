@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session background jobs and wake-ups: backend (2026-11-08)
+
+An agent can now start a command that outlives its turn, and ask Talyn to start a new turn later. Behind the `session-background` PostHog flag (fallback OFF, gated, `SESSION_BACKGROUND_ENABLED`). The UI is separate work.
+- Tables `workbench_background_jobs` and `workbench_wakeups` (migration `0119`), backend-pool-only. Service in `services/workbenches/background.ts`, sweep in `backgroundSweep.ts`, routes in `routes/workbenchBackground.ts`, MCP tools in `mcp/tools/background.ts`.
+- A job runs under the durable supervisor (`durableExec.ts`) with segmented logs. One `node` probe reads the exit marker, the process group and the log tail in one exec.
+- The sweep runs every 30 s. It checks a job only while its keep-awake is in the future, or while a turn runs in the session. Every check is a request, so checking an idle box after keep-awake would keep it awake for ever. A sleeping box with keep-awake still on is woken through the box gate as unattended work; a refusal ends the keep-awake and notes why.
+- A job whose session moved (new sandbox id), lost its box or was archived becomes `lost`. `move.ts` marks them at commit; the sweep catches the other cases.
+- A wake-up is claimed with `UPDATE ... WHERE status = 'scheduled'`, then sent through `sendMessage` with `origin: 'talyn'` and a new `trigger` field, so the clients can draw a system row. A crash between the claim and the send loses that wake-up; the other order could send it twice.
+- A job exit with `notify_on_exit` inserts a wake-up due now (UNIQUE per job) whose text carries the last 40 log lines.
+- Prompter pays: a row stores the payer of its chat's running turn. Today a teammate's turn has no Talyn MCP tools, so in practice the payer is the owner.
+- Idle archive skips a session with a scheduled wake-up or a job that keeps its box awake. The turn env now has `TALYN_CHAT_ID`.
+
 ## Optimistic first prompt in a new session (2026-11-08)
 
 A new session opened on an empty chat with "Working…" and no prompt. The prompt came back only with its `user_message` event. The backend writes that event when the turn starts. With inline images it waits until the sandbox wakes and saves the files.

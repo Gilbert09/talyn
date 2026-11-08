@@ -1,9 +1,9 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchScriptFrame, WorkbenchWsPayloads } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchChat, WorkbenchEvent, WorkbenchScriptFrame, WorkbenchWsPayloads } from '@talyn/shared';
 import { broadcastToWorkspace } from '../websocket.js';
 import { emitPrSession } from './prSessions.js';
 
 /**
- * The five workbench WebSocket events, delivered to the workspace's
+ * The workbench WebSocket events, delivered to the workspace's
  * subscribers the way task events are. Payload shapes are `WorkbenchWsPayloads`
  * in `@talyn/shared`, so the client and this file cannot disagree.
  */
@@ -63,4 +63,9 @@ export function emitWorkbenchEvents(workspaceId: string, chatId: string, events:
 
 export function emitWorkbenchScript(workspaceId: string, frame: WorkbenchScriptFrame): void {
   send(workspaceId, 'workbench:script', frame);
+}
+
+/** A session's background jobs and wake-ups, whole. Not in the space allowlist: owner only. */
+export function emitWorkbenchBackground(workspaceId: string, background: WorkbenchBackground): void {
+  send(workspaceId, 'workbench:background', background);
 }

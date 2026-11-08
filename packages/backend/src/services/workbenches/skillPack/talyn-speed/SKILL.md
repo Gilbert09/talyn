@@ -42,7 +42,9 @@ A whole suite of a large repository can run longer than one command may run. Do 
 
 ## 4. Wait on long commands
 
-A command stops after about 10 minutes. For a command that can take longer:
+A command stops after about 10 minutes. Your own background shells (`&`, `nohup`) also stop when your turn ends.
+
+For a wait of a few minutes inside this turn, run the command in the background and check it:
 
 ```bash
 nohup <command> > /tmp/run.log 2>&1 &
@@ -58,6 +60,28 @@ sleep 45; tail -n 20 /tmp/run.log; kill -0 "$(cat /tmp/run.pid)" 2>/dev/null && 
 - Wait 60 seconds or less in each check.
 - Never `sleep` for minutes. A long sleep wastes the turn and shows nothing to the person.
 - Between checks, do other useful work: read code, write the next change, prepare the pull request text.
+
+For work that must outlive this turn, use Talyn's tools if you have them:
+
+```
+talyn_run_background
+  command: npm test -- --all
+  name: full test suite
+  chat_id: <the TALYN_CHAT_ID environment variable>
+```
+
+- The job keeps running after your turn ends. Talyn starts a new turn in your chat when it exits, with the exit code and the last 40 lines of output. End your turn after you start it.
+- `keep_awake_seconds` (default 3600) keeps the sandbox awake while the job runs. That time is billed box time. Use 0 to let the sandbox sleep; the job then pauses with the sandbox.
+- Read output with `talyn_background_logs`, list jobs with `talyn_list_background`, stop one with `talyn_stop_background`.
+- A move or resize of the session stops every job.
+
+To look at something later (a deploy, a CI run), schedule a wake-up and end your turn:
+
+```
+talyn_schedule_wakeup
+  delay_seconds: 1200
+  reason: Check that the deploy finished and the smoke tests pass.
+```
 
 Start Docker and database services only when a test needs them. Stop them when you are done.
 

@@ -78,6 +78,9 @@ export function idleArchiveGuard(now: Date): SQL {
     AND NOT EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${w.id}
       AND (c.status = 'running' OR c.drain_pending OR jsonb_array_length(c.queued_messages) > 0))
     AND NOT EXISTS (SELECT 1 FROM workbench_script_runs r WHERE r.workbench_id = ${w.id} AND r.running)
+    AND NOT EXISTS (SELECT 1 FROM workbench_wakeups k WHERE k.workbench_id = ${w.id} AND k.status = 'scheduled')
+    AND NOT EXISTS (SELECT 1 FROM workbench_background_jobs j WHERE j.workbench_id = ${w.id}
+      AND j.status = 'running' AND j.keep_awake_until > ${at})
     AND (${w.pullRequestId} IS NULL OR NOT EXISTS (
       SELECT 1 FROM pull_requests p WHERE p.id = ${w.pullRequestId} AND (p.merge_queued OR p.auto_keep_mergeable))
       AND NOT EXISTS (SELECT 1 FROM merge_queue_entries q WHERE q.pull_request_id = ${w.pullRequestId}
