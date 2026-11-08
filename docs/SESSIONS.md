@@ -7422,3 +7422,11 @@ Now `inPersonalList` (`lib/spaces.ts`, both apps) keeps a session with a `spaceI
 A space session shows in Personal again when the `spaces` flag is off or its space is not in my teams (archived, or I left the team), so it is never lost. While my teams load, it stays out, so it does not show and then go.
 History keeps archived space sessions (`useWorkspaceWorkbenches({ withSpaceSessions: true })`), because the space feed leaves archived sessions out.
 The store still holds space sessions, so opening one from the space feed needs no fetch. `countContextAttention` now counts a space session for its space only, not for its workspace. This replaces the rule in the context rail note above.
+
+### 2026-11-08 — CPU and memory charts in the Sandbox tab
+
+The **Resources** section of the Sandbox tab now shows two line charts: CPU and memory use over the last hour. Each chart has its own scale, and a hover shows the value at one time in both charts.
+The usage sweep (`billing/usage/sweep.ts`) already reads every running box each minute. It now also writes one row per running session box to `workbench_resource_samples` (migration 0121, backend-pool-only) and deletes rows older than two hours. So the chart needs no extra fleet read. A failure there costs one chart point, never a bill.
+`getSandboxStatus` returns the samples as `usage` and adds the live fleet read as the newest point. `resourceSamples.ts` calculates CPU % from the change in the fleet's cumulative `cpuSeconds` between two samples of the same box. It gives no figure across a gap longer than three minutes, a different box or a lower counter (a new VMM).
+`cpuSeconds` comes from yetanothersandbox-dev/yas#16. A host that runs an older fleetd sends no counter, and the CPU chart then says that the fleet does not report CPU use yet. Through a gateway, only the per-id read carries the usage figures, not the list; the sweep already reads gateway boxes by id.
+The web Sandbox panel also gets the Resources section that only the desktop panel had.

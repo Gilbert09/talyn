@@ -10,6 +10,7 @@ import {
   tasks,
   usageIntervals,
   usagePeriods,
+  workbenchResourceSamples,
   workbenches,
   workspaces,
 } from '../db/schema.js';
@@ -190,6 +191,57 @@ describe('usage sweep against the fleet', () => {
     await sweep.run(NOW);
     present = false;
     expect((await sweep.run(NOW)).closed).toBe(0);
+  });
+
+  describe('resource samples for the Sandbox panel chart', () => {
+    const samples = () => db.select().from(workbenchResourceSamples);
+
+    it('stores one sample per running session box, and none for tasks or boxes without figures', async () => {
+      await db.insert(workbenches).values({
+        id: 'wb-2', workspaceId: 'ws', repoFullName: 'acme/app', name: 'wb2', branch: 'c', baseBranch: 'main',
+        runtime: 'sandbox', agent: 'claude', sandboxId: 'talyn-wb-two', sandboxState: 'running', status: 'ready',
+      });
+      await open('talyn-wb-two', 'workbench', 'wb-2');
+      const sweep = new UsageSweep(async () => [host([
+        // Opened this tick: still sampled.
+        { id: 'talyn-wb-one', status: 'busy', memUsedMib: 900, cpuSeconds: 42.5, memMib: 4096, milliVcpu: 2000 },
+        // Already open, no figures: no sample.
+        { id: 'talyn-wb-two', status: 'idle', memMib: 4096 },
+        { id: `talyn-${TASK_ID}`, status: 'busy', memUsedMib: 500, cpuSeconds: 1 },
+      ])]);
+      await sweep.run(NOW);
+      expect(await samples()).toEqual([
+        { workbenchId: 'wb-1', sandboxId: 'talyn-wb-one', sampledAt: NOW, memUsedMib: 900, memLimitMib: 4096, cpuSeconds: 42.5, vcpus: 2 },
+      ]);
+    });
+
+    it.each([
+      ['suspended', { status: 'suspended' as const, suspendedAt: '2026-11-10T11:59:00Z' }],
+      ['queued', { status: 'queued' as const }],
+      ['stopped', { status: 'stopped' as const }],
+    ])('stores no sample for a %s box', async (_label, box) => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      await new UsageSweep(async () => [host([{ id: 'talyn-wb-one', memUsedMib: 900, cpuSeconds: 3, ...box }])]).run(NOW);
+      expect(await samples()).toEqual([]);
+    });
+
+    it('adds a row each tick and deletes rows older than two hours', async () => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      await db.insert(workbenchResourceSamples).values([
+        { workbenchId: 'wb-1', sandboxId: 'talyn-wb-one', sampledAt: new Date(NOW.getTime() - 3 * 3600_000), memUsedMib: 1 },
+        { workbenchId: 'wb-1', sandboxId: 'talyn-wb-one', sampledAt: new Date(NOW.getTime() - 3600_000), memUsedMib: 2 },
+      ]);
+      const sweep = new UsageSweep(async () => [host([{ id: 'talyn-wb-one', status: 'busy', memUsedMib: 3, cpuSeconds: 5 }])]);
+      await sweep.run(NOW);
+      await sweep.run(new Date(NOW.getTime() + 60_000));
+      expect((await samples()).map((r) => r.memUsedMib).sort()).toEqual([2, 3, 3]);
+    });
+
+    it('samples a session box read through a gateway', async () => {
+      await open('talyn-wb-one', 'workbench', 'wb-1');
+      await new UsageSweep(async () => [host([{ id: 'talyn-wb-one', status: 'idle', memUsedMib: 700 }], { gateway: true })]).run(NOW);
+      expect(await samples()).toMatchObject([{ workbenchId: 'wb-1', memUsedMib: 700, cpuSeconds: null }]);
+    });
   });
 
   it('reads each box through a gateway, which lists no status', async () => {

@@ -63,7 +63,7 @@ function makeOps(send = vi.fn(async () => ({ queued: false }))): WorkbenchOps {
 
 beforeEach(() => {
   useWorkspaceStore.setState({
-    workspaces: [{ id: 'ws1', name: 'Mine', repos: [] } as unknown as Workspace],
+    workspaces: [{ id: 'ws1', name: 'Mine', repos: [], settings: {} } as unknown as Workspace],
     currentWorkspaceId: 'ws1',
     features: { spaces: true, workbenches: true } as never,
   });

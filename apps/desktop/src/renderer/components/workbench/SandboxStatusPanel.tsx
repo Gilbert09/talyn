@@ -36,6 +36,7 @@ import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { formatMib, SandboxUsageChart } from './SandboxUsageChart';
 
 /** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
 const POLL_MS = 10_000;
@@ -342,12 +343,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function formatMib(mib: number): string {
-  if (mib < 1024) return `${Math.round(mib)} MB`;
-  const gib = mib / 1024;
-  return `${Number.isInteger(gib) ? gib : gib.toFixed(1)} GB`;
-}
-
 function WorkSafety({ work, now }: { work: SandboxWorkSafety; now: number }) {
   const checkedNewer =
     work.checkedAt && (!work.savedAt || new Date(work.checkedAt).getTime() > new Date(work.savedAt).getTime());
@@ -634,22 +629,25 @@ export function SandboxStatusPanel({
         </Section>
       )}
 
-      {status.resources && (
+      {(status.resources || status.usage) && (
         <Section title="Resources">
-          <ul className="space-y-0.5 text-xs" data-testid="sandbox-resources">
-            {status.resources.memoryUsedMib !== null ? (
-              <li>
-                Memory: {formatMib(status.resources.memoryUsedMib)} used
-                {status.resources.memoryLimitMib !== null && ` of ${formatMib(status.resources.memoryLimitMib)}`}
-              </li>
-            ) : status.resources.memoryLimitMib !== null ? (
-              <li>Memory limit: {formatMib(status.resources.memoryLimitMib)}</li>
-            ) : null}
-            {status.resources.vcpus !== null && (
-              <li>CPU: {status.resources.vcpus} vCPU{status.resources.vcpus === 1 ? '' : 's'} allocated</li>
-            )}
-            {status.resources.diskMib !== null && <li>Disk capacity: {formatMib(status.resources.diskMib)}</li>}
-          </ul>
+          {status.usage && <SandboxUsageChart usage={status.usage} checkedAt={status.checkedAt} />}
+          {status.resources && (
+            <ul className={cn('space-y-0.5 text-xs', status.usage && 'pt-1')} data-testid="sandbox-resources">
+              {status.usage ? null : status.resources.memoryUsedMib !== null ? (
+                <li>
+                  Memory: {formatMib(status.resources.memoryUsedMib)} used
+                  {status.resources.memoryLimitMib !== null && ` of ${formatMib(status.resources.memoryLimitMib)}`}
+                </li>
+              ) : status.resources.memoryLimitMib !== null ? (
+                <li>Memory limit: {formatMib(status.resources.memoryLimitMib)}</li>
+              ) : null}
+              {status.resources.vcpus !== null && (
+                <li>CPU: {status.resources.vcpus} vCPU{status.resources.vcpus === 1 ? '' : 's'} allocated</li>
+              )}
+              {status.resources.diskMib !== null && <li>Disk capacity: {formatMib(status.resources.diskMib)}</li>}
+            </ul>
+          )}
         </Section>
       )}
 
