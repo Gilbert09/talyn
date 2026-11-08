@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import {
   privateRoutesOffered,
   type PrivateConnector,
@@ -62,6 +62,12 @@ function peerHosts(peer: PrivatePeer): string[] {
   return [...new Set([peer.dnsName, ...peer.addresses].filter(Boolean))];
 }
 
+/** True when every word of the query occurs in the name, OS, an address or a subnet of the peer. */
+function peerMatches(peer: PrivatePeer, query: string): boolean {
+  const haystack = [peer.name, peer.os, ...peerHosts(peer), ...peer.subnetRoutes].join(' ').toLowerCase();
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => haystack.includes(word));
+}
+
 export function PrivateRoutesSettings() {
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
   const features = useWorkspaceStore((state) => state.features);
@@ -76,9 +82,14 @@ export function PrivateRoutesSettings() {
   const [peers, setPeers] = useState<PrivatePeer[] | null>(null);
   const [peersLoading, setPeersLoading] = useState(false);
   const [peersError, setPeersError] = useState<string | null>(null);
+  const [peerQuery, setPeerQuery] = useState('');
   const portInput = useRef<HTMLInputElement>(null);
   const peersRequest = useRef(0);
   const connected = connector?.status === 'connected';
+  const visiblePeers = useMemo(
+    () => peers?.filter((peer) => peerMatches(peer, peerQuery)) ?? null,
+    [peerQuery, peers],
+  );
 
   const readConnector = useCallback(async (showLoading = false) => {
     if (!workspaceId || !offered) return;
@@ -136,6 +147,7 @@ export function PrivateRoutesSettings() {
     setPeers(null);
     setPeersError(null);
     setPeersLoading(false);
+    setPeerQuery('');
     if (connected) void readPeers();
   }, [connected, connector?.id, readPeers]);
 
@@ -335,7 +347,40 @@ export function PrivateRoutesSettings() {
           {peers?.length === 0 && !peersError ? (
             <SettingRow label="No devices" description="The connector cannot see other devices on this tailnet." />
           ) : null}
-          {peers?.map((peer) => (
+          {peers && peers.length > 0 ? (
+            <div className="px-3 py-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  aria-label="Filter tailnet devices"
+                  placeholder="Filter by name, address or OS"
+                  className="pl-8 pr-8"
+                  value={peerQuery}
+                  onChange={(event) => setPeerQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && peerQuery) {
+                      event.preventDefault();
+                      setPeerQuery('');
+                    }
+                  }}
+                />
+                {peerQuery ? (
+                  <button
+                    type="button"
+                    aria-label="Clear device filter"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setPeerQuery('')}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {peers && peers.length > 0 && visiblePeers?.length === 0 ? (
+            <SettingRow label="No matching devices" description={`No device matches "${peerQuery.trim()}".`} />
+          ) : null}
+          {visiblePeers?.map((peer) => (
             <SettingRow
               key={`${peer.name}|${peer.dnsName}|${peer.addresses.join(',')}`}
               label={(

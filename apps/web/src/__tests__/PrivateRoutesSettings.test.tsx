@@ -115,3 +115,88 @@ test('reads devices again on refresh', async () => {
   expect(screen.queryByText('db-1')).not.toBeInTheDocument();
   expect(peersGet).toHaveBeenCalledTimes(2);
 });
+
+function filterPeers() {
+  peersGet.mockResolvedValue({
+    peers: [
+      peer(),
+      peer({ name: 'api-gateway', dnsName: 'api-gateway.tail.ts.net', addresses: ['100.64.0.6'], os: 'macOS' }),
+      peer({ name: 'router', dnsName: '', addresses: ['100.64.0.9'], os: 'windows', subnetRoutes: ['10.0.0.0/24'] }),
+    ],
+  });
+}
+
+test.each([
+  ['a name', 'API', ['api-gateway']],
+  ['a DNS name', 'db-1.tail', ['db-1']],
+  ['an IPv4 address', '100.64.0.9', ['router']],
+  ['an IPv6 address', 'fd7a:115c', ['db-1']],
+  ['an OS', 'macos', ['api-gateway']],
+  ['a subnet route', '10.0.0.0', ['router']],
+  ['several words', 'gateway  macos', ['api-gateway']],
+  ['blank space', '   ', ['db-1', 'api-gateway', 'router']],
+])('filters devices by %s', async (_label, query, expected) => {
+  filterPeers();
+  render(<PrivateRoutesSettings />);
+  await screen.findByText('db-1');
+
+  fireEvent.change(screen.getByLabelText('Filter tailnet devices'), { target: { value: query } });
+
+  for (const name of ['db-1', 'api-gateway', 'router']) {
+    if (expected.includes(name)) expect(screen.getByText(name)).toBeInTheDocument();
+    else expect(screen.queryByText(name)).not.toBeInTheDocument();
+  }
+});
+
+test('shows a message when no device matches the filter', async () => {
+  render(<PrivateRoutesSettings />);
+  await screen.findByText('db-1');
+
+  fireEvent.change(screen.getByLabelText('Filter tailnet devices'), { target: { value: 'nothing ' } });
+
+  expect(screen.getByText('No matching devices')).toBeInTheDocument();
+  expect(screen.getByText('No device matches "nothing".')).toBeInTheDocument();
+  expect(screen.queryByText('db-1')).not.toBeInTheDocument();
+});
+
+test.each([
+  ['the clear button', () => fireEvent.click(screen.getByRole('button', { name: 'Clear device filter' }))],
+  ['the Escape key', () => fireEvent.keyDown(screen.getByLabelText('Filter tailnet devices'), { key: 'Escape' })],
+])('clears the device filter with %s', async (_label, clear) => {
+  filterPeers();
+  render(<PrivateRoutesSettings />);
+  await screen.findByText('db-1');
+  fireEvent.change(screen.getByLabelText('Filter tailnet devices'), { target: { value: 'router' } });
+  expect(screen.queryByText('db-1')).not.toBeInTheDocument();
+
+  clear();
+
+  expect(screen.getByLabelText('Filter tailnet devices')).toHaveValue('');
+  expect(screen.getByText('db-1')).toBeInTheDocument();
+  expect(screen.getByText('api-gateway')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Clear device filter' })).not.toBeInTheDocument();
+});
+
+test('keeps the filter when devices are read again', async () => {
+  filterPeers();
+  render(<PrivateRoutesSettings />);
+  await screen.findByText('db-1');
+  fireEvent.change(screen.getByLabelText('Filter tailnet devices'), { target: { value: 'router' } });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh tailnet devices' }));
+
+  await waitFor(() => expect(peersGet).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText('Filter tailnet devices')).toHaveValue('router');
+  expect(screen.getByText('router')).toBeInTheDocument();
+  expect(screen.queryByText('db-1')).not.toBeInTheDocument();
+});
+
+test.each([
+  ['an empty tailnet', () => peersGet.mockResolvedValue({ peers: [] }), 'No devices'],
+  ['a failed request', () => peersGet.mockRejectedValue(new Error('The private connector is not connected.')), 'The private connector is not connected.'],
+])('does not show the device filter for %s', async (_label, arrange, text) => {
+  arrange();
+  render(<PrivateRoutesSettings />);
+  await screen.findByText(text);
+  expect(screen.queryByLabelText('Filter tailnet devices')).not.toBeInTheDocument();
+});
