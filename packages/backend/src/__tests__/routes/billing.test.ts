@@ -49,6 +49,9 @@ const POLAR_KEYS = [
   'POLAR_ENVIRONMENT',
   'POLAR_PRODUCT_ID_MONTHLY',
   'POLAR_PRODUCT_ID_ANNUAL',
+  'POLAR_PRODUCT_ID_MAX_MONTHLY',
+  'POLAR_PRODUCT_ID_MAX_ANNUAL',
+  'MAX_PLAN_ENABLED',
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -184,6 +187,47 @@ describe('GET /billing/status', () => {
       cancelAtPeriodEnd: true,
       currentPeriodEnd: '2026-08-06T00:00:00.000Z',
     });
+  });
+});
+
+describe('GET /billing/status: the Max plan', () => {
+  function setMax(flag: 'true' | 'false' | null, products = true) {
+    setPolarEnv();
+    if (products) {
+      process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'prod-max-m';
+      process.env.POLAR_PRODUCT_ID_MAX_ANNUAL = 'prod-max-a';
+    }
+    if (flag) process.env.MAX_PLAN_ENABLED = flag;
+  }
+
+  it('sends the Max prices when Max is offered', async () => {
+    setMax('true');
+    const status = await getStatus();
+    expect(status.pricing).toMatchObject({ maxMonthlyMicros: 100_000_000, maxAnnualMicros: 1_000_000_000 });
+  });
+
+  it.each([
+    ['the flag is off', 'false', true],
+    ['the flag has no answer', null, true],
+    ['the Max products are unset', 'true', false],
+  ] as const)('leaves the Max prices out when %s', async (_name, flag, products) => {
+    setMax(flag, products);
+    const status = await getStatus();
+    expect(status.pricing).toBeDefined();
+    expect(status.pricing?.maxMonthlyMicros).toBeUndefined();
+    expect(status.pricing?.maxAnnualMicros).toBeUndefined();
+  });
+
+  it('a Max subscriber reads Max, 1,000 hours and its prices even with the flag off', async () => {
+    setMax('false');
+    await db
+      .update(usersTable)
+      .set({ plan: 'unlimited', subscriptionStatus: 'active', polarProductId: 'prod-max-m', currentPeriodEnd: new Date('2099-01-01T00:00:00.000Z') })
+      .where(eq(usersTable.id, TEST_USER_ID));
+    const status = await getStatus();
+    expect(status).toMatchObject({ plan: 'max', tier: 'max', planSource: 'subscription', period: 'monthly' });
+    expect(status.usage?.includedWsec).toBe(1000 * 3600);
+    expect(status.pricing?.maxMonthlyMicros).toBe(100_000_000);
   });
 });
 

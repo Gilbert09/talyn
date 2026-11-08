@@ -99,7 +99,7 @@ export function isExhausted(input: { includedLeftWsec: number; creditMicros: Mic
 export async function readBudget(ownerId: string, now = new Date(), resolved?: UsageTier): Promise<UsageBudget> {
   const { tier, periodAnchor } = resolved ?? (await resolveUsageTier(ownerId));
   const period = usagePeriodFor({ now, anchor: periodAnchor });
-  await ensurePeriod(ownerId, tier, period);
+  await ensurePeriod(ownerId, tier, period, now);
   const row = await readPeriod(ownerId, period.start);
   const includedWsec = Number(row?.includedWsec ?? 0);
   const usedWsec = Number(row?.usedWsec ?? 0);
@@ -167,7 +167,7 @@ async function chargeInterval(
   if (!(await advanceBilledThrough(interval.id, interval.billedThrough, target, delta))) return false;
   for (const { period, wsec } of segments) {
     if (wsec <= 0) continue;
-    await ensurePeriod(ownerId, tier, period);
+    await ensurePeriod(ownerId, tier, period, now);
     const after = await addUsage(ownerId, period.start, wsec);
     if (!after) continue;
     const split = consumeBudget({ includedWsec: after.includedWsec, usedBeforeWsec: after.usedWsec - wsec, deltaWsec: wsec });

@@ -25,6 +25,8 @@ const ENV = {
   POLAR_ACCESS_TOKEN: 'polar-test-token',
   POLAR_PRODUCT_ID_PRO_MONTHLY: 'prod-pro-m',
   POLAR_PRODUCT_ID_PRO_ANNUAL: 'prod-pro-a',
+  POLAR_PRODUCT_ID_MAX_MONTHLY: 'prod-max-m',
+  POLAR_PRODUCT_ID_MAX_ANNUAL: 'prod-max-a',
   POLAR_PRODUCT_ID_CREDITS_25: 'prod-c25',
   POLAR_PRODUCT_ID_CREDITS_100: 'prod-c100',
   POLAR_PRODUCT_ID_CREDITS_500: 'prod-c500',
@@ -71,6 +73,8 @@ describe('product maps', () => {
   it.each([
     ['prod-pro-m', 'pro'],
     ['prod-pro-a', 'pro'],
+    ['prod-max-m', 'max'],
+    ['prod-max-a', 'max'],
     ['prod-legacy-m', 'legacy_pro'],
     ['prod-legacy-a', 'legacy_pro'],
     ['prod-team-pro-m', null],
@@ -86,10 +90,40 @@ describe('product maps', () => {
     ['prod-team-m', 'legacy_pro'],
     ['prod-team-a', 'legacy_pro'],
     ['prod-pro-m', null],
+    ['prod-max-m', null],
     [undefined, null],
   ])('teamProductTier(%s) → %s', (id, tier) => {
     expect(polar.teamProductTier(id)).toBe(tier);
     expect(polar.isTeamProductId(id)).toBe(tier !== null);
+  });
+
+  it.each([
+    ['prod-pro-m', false, 'Pro (monthly)'],
+    ['prod-max-m', false, 'Max (monthly)'],
+    ['prod-max-a', false, 'Max (annual)'],
+    ['prod-legacy-a', false, 'Legacy Pro (annual)'],
+    ['prod-team-pro-a', true, 'Team Pro (annual)'],
+    ['prod-unknown', false, null],
+  ] as const)('subscriptionProductLabel(%s, team=%s) → %s', (id, team, label) => {
+    expect(polar.subscriptionProductLabel(id, team)).toBe(label);
+  });
+
+  it.each([
+    ['both set', {}, true],
+    ['monthly only', { POLAR_PRODUCT_ID_MAX_ANNUAL: '' }, false],
+    ['neither', { POLAR_PRODUCT_ID_MAX_MONTHLY: '', POLAR_PRODUCT_ID_MAX_ANNUAL: '' }, false],
+  ])('maxProductsConfigured with %s → %s', (_name, overrides, expected) => {
+    Object.assign(process.env, overrides);
+    expect(polar.maxProductsConfigured()).toBe(expected);
+  });
+
+  it.each([
+    ['pro', 'monthly', 'prod-pro-m'],
+    ['pro', 'annual', 'prod-pro-a'],
+    ['max', 'monthly', 'prod-max-m'],
+    ['max', 'annual', 'prod-max-a'],
+  ] as const)('planProductId(%s, %s) → %s', (tier, period, id) => {
+    expect(polar.planProductId(tier, period)).toBe(id);
   });
 
   it('an unset env var never matches an empty or missing product id', () => {
@@ -155,6 +189,21 @@ describe('request shapes', () => {
     expect(sdk.checkoutsCreate).toHaveBeenCalledWith(
       expect.objectContaining({ products: [product], externalCustomerId: 'user-1', metadata: { kind: 'plan', plan: 'pro' } })
     );
+  });
+
+  it.each([
+    ['monthly', 'prod-max-m'],
+    ['annual', 'prod-max-a'],
+  ] as const)('Max checkout (%s) sells the Max product, linked to the user', async (period, product) => {
+    await polar.createCheckoutUrl('user-1', period, 'max');
+    expect(sdk.checkoutsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ products: [product], externalCustomerId: 'user-1', metadata: { kind: 'plan', plan: 'max' } })
+    );
+  });
+
+  it('Max checkout throws when the Max product is not configured', async () => {
+    delete process.env.POLAR_PRODUCT_ID_MAX_MONTHLY;
+    await expect(polar.createCheckoutUrl('user-1', 'monthly', 'max')).rejects.toThrow(/Max product id/);
   });
 
   it('Pro checkout throws when the Pro product is not configured', async () => {

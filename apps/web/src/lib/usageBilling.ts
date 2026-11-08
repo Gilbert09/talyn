@@ -10,6 +10,7 @@ import {
   formatBoxHoursUsage,
   formatUsd,
   isPlanTier,
+  sellableTierPrices,
   type BillingStatus,
   type PlanTier,
   type SandboxSize,
@@ -130,7 +131,7 @@ export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
  * The card's button, or null for none. Free cannot buy credits, so it always
  * gets "Upgrade". A paid plan gets "Add credits" only when less than
  * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
- * gets no button and Legacy Pro gets "Upgrade".
+ * and Max get no button and Legacy Pro gets "Upgrade".
  */
 export function gaugeAction(view: UsageBillingView): GaugeAction | null {
   const creditsAllowed = PLAN_LIMITS[view.tier].creditsAllowed;
@@ -138,7 +139,7 @@ export function gaugeAction(view: UsageBillingView): GaugeAction | null {
   const { includedWsec, usedWsec, exhausted } = view.usage;
   const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
   if (low) return 'add_credits';
-  return view.tier === 'pro' ? null : 'upgrade';
+  return view.tier === 'legacy_pro' ? 'upgrade' : null;
 }
 
 export function gaugeActionLabel(action: GaugeAction): string {
@@ -219,6 +220,18 @@ export function refusalTitle(code: UsageBillingErrorCode): string {
 export const PRO_INCLUDED_TEXT = formatBoxHoursLabel(PLAN_LIMITS.pro.includedBoxHours * 3600);
 export const FREE_INCLUDED_TEXT = formatBoxHoursLabel(PLAN_LIMITS.free.includedBoxHours * 3600);
 export const LEGACY_INCLUDED_TEXT = formatBoxHoursLabel(PLAN_LIMITS.legacy_pro.includedBoxHours * 3600);
+/** "1,000 box-hours", with a thousands separator. */
+export const MAX_INCLUDED_TEXT = `${PLAN_LIMITS.max.includedBoxHours.toLocaleString('en-US')} box-hours`;
+
+/**
+ * Max's prices, or null when this account may not buy Max. The backend sends
+ * them only when Max is on offer (or already held), so null means "never show Max".
+ */
+export function maxPricesOf(
+  status: Pick<BillingStatus, 'pricing'> | null | undefined
+): { monthlyMicros: number; annualMicros: number } | null {
+  return status?.pricing ? sellableTierPrices('max', status.pricing) : null;
+}
 
 /**
  * Leave the app for a hosted Polar page (checkout or portal).

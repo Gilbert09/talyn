@@ -2,9 +2,12 @@ import { Polar } from '@polar-sh/sdk';
 import type { Order } from '@polar-sh/sdk/models/components/order.js';
 import {
   CREDIT_PACK_IDS,
+  PLAN_TIER_LABELS,
   TEAM_MIN_SEATS,
   type BillingOrder,
   type CreditPackId,
+  type PaidTier,
+  type SellableTier,
   type TeamPriceTiers,
   type TeamPricing,
   type TeamTier,
@@ -28,6 +31,10 @@ import { billingEnabled } from './entitlements.js';
  *   POLAR_PRODUCT_ID_CREDITS_25   — one-time credit pack, $25
  *   POLAR_PRODUCT_ID_CREDITS_100  — one-time credit pack, $100 (+5% credit)
  *   POLAR_PRODUCT_ID_CREDITS_500  — one-time credit pack, $500 (+10% credit)
+ * Optional pair — Max, $100/mo and $1,000/yr. Max is offered only when BOTH
+ * are set (and the `max-plan` flag lets the account see it). A subscriber
+ * keeps Max while their product id is set, whatever the flag says:
+ *   POLAR_PRODUCT_ID_MAX_MONTHLY / POLAR_PRODUCT_ID_MAX_ANNUAL
  * Optional pair — the old Unlimited products, no longer sold. Their
  * subscribers resolve to Legacy Pro, so keep them set while any exist:
  *   POLAR_PRODUCT_ID_MONTHLY / POLAR_PRODUCT_ID_ANNUAL
@@ -45,6 +52,10 @@ export type BillingPeriod = 'monthly' | 'annual';
 const PRO_PRODUCT_ENV: Record<BillingPeriod, string> = {
   monthly: 'POLAR_PRODUCT_ID_PRO_MONTHLY',
   annual: 'POLAR_PRODUCT_ID_PRO_ANNUAL',
+};
+const MAX_PRODUCT_ENV: Record<BillingPeriod, string> = {
+  monthly: 'POLAR_PRODUCT_ID_MAX_MONTHLY',
+  annual: 'POLAR_PRODUCT_ID_MAX_ANNUAL',
 };
 const LEGACY_PRODUCT_ENV: Record<BillingPeriod, string> = {
   monthly: 'POLAR_PRODUCT_ID_MONTHLY',
@@ -78,6 +89,20 @@ export function proProductId(period: BillingPeriod): string | undefined {
   return envProduct(PRO_PRODUCT_ENV[period]);
 }
 
+export function maxProductId(period: BillingPeriod): string | undefined {
+  return envProduct(MAX_PRODUCT_ENV[period]);
+}
+
+/** The product that sells `tier` for `period`, or undefined when it is not set. */
+export function planProductId(tier: SellableTier, period: BillingPeriod): string | undefined {
+  return tier === 'max' ? maxProductId(period) : proProductId(period);
+}
+
+/** Both Max products are set, so this deployment can sell Max. */
+export function maxProductsConfigured(): boolean {
+  return Boolean(maxProductId('monthly') && maxProductId('annual'));
+}
+
 export function creditPackProductId(pack: CreditPackId): string | undefined {
   return envProduct(CREDIT_PACK_PRODUCT_ENV[pack]);
 }
@@ -90,11 +115,13 @@ export function creditPackForProduct(productId: string | null | undefined): Cred
 
 /**
  * The tier a personal subscription product gives: Pro for the Pro products,
- * Legacy Pro for the old Unlimited ones, null for anything else (a credit
+ * Max for the Max products, Legacy Pro for the old Unlimited ones, null for
+ * anything else (a credit
  * pack, a team product, an id this deployment does not know).
  */
-export function personalProductTier(productId: string | null | undefined): TeamTier | null {
+export function personalProductTier(productId: string | null | undefined): PaidTier | null {
   if (matchesAny(productId, Object.values(PRO_PRODUCT_ENV))) return 'pro';
+  if (matchesAny(productId, Object.values(MAX_PRODUCT_ENV))) return 'max';
   if (matchesAny(productId, Object.values(LEGACY_PRODUCT_ENV))) return 'legacy_pro';
   return null;
 }
@@ -112,11 +139,11 @@ export function subscriptionProductLabel(productId: string, team: boolean): stri
   if (!tier) return null;
   const products = team
     ? tier === 'pro' ? TEAM_PRO_PRODUCT_ENV : TEAM_LEGACY_PRODUCT_ENV
-    : tier === 'pro' ? PRO_PRODUCT_ENV : LEGACY_PRODUCT_ENV;
+    : tier === 'pro' ? PRO_PRODUCT_ENV : tier === 'max' ? MAX_PRODUCT_ENV : LEGACY_PRODUCT_ENV;
   const period = (Object.keys(products) as BillingPeriod[]).find(
     (candidate) => envProduct(products[candidate]) === productId,
   );
-  const name = `${team ? 'Team ' : ''}${tier === 'pro' ? 'Pro' : 'Legacy Pro'}`;
+  const name = `${team ? 'Team ' : ''}${PLAN_TIER_LABELS[tier]}`;
   return period ? `${name} (${period})` : name;
 }
 
@@ -191,7 +218,7 @@ async function timed<T>(method: string, label: string, fn: () => Promise<T>): Pr
 }
 
 /**
- * Create a hosted-checkout session for Pro (monthly or annual), pre-linked to
+ * Create a hosted-checkout session for Pro or Max (monthly or annual), pre-linked to
  * our user: `externalCustomerId` becomes the Polar customer's `external_id`,
  * which arrives on every subsequent webhook — that's the whole user-mapping
  * story. Returns the URL to open in the system browser.
@@ -199,15 +226,15 @@ async function timed<T>(method: string, label: string, fn: () => Promise<T>): Pr
  * The old Unlimited products are never sold again. Their subscribers move to
  * Pro through {@link changeSubscriptionProduct}, not a second checkout.
  */
-export async function createCheckoutUrl(userId: string, period: BillingPeriod): Promise<string> {
-  const productId = proProductId(period);
-  if (!productId) throw new Error(`Polar Pro product id for ${period} is not set`);
+export async function createCheckoutUrl(userId: string, period: BillingPeriod, plan: SellableTier = 'pro'): Promise<string> {
+  const productId = planProductId(plan, period);
+  if (!productId) throw new Error(`Polar ${PLAN_TIER_LABELS[plan]} product id for ${period} is not set`);
 
   const checkout = await timed('POST', 'checkouts.create', () =>
     getPolarClient().checkouts.create({
       products: [productId],
       externalCustomerId: userId,
-      metadata: { kind: 'plan', plan: 'pro' },
+      metadata: { kind: 'plan', plan },
       ...checkoutRedirects('plan'),
     })
   );
@@ -245,7 +272,8 @@ export async function createCreditCheckoutUrl(userId: string, pack: CreditPackId
 export const PLAN_CHANGE_PRORATION = 'invoice' as const;
 
 /**
- * Move a live subscription to another recurring product (Legacy Pro → Pro).
+ * Move a live subscription to another recurring product (Legacy Pro → Pro,
+ * Pro → Max). Only upgrades come here: see `POST /billing/change-plan`.
  * The `subscription.updated` webhook writes the new product id, and the tier
  * follows it; nothing is written here.
  */

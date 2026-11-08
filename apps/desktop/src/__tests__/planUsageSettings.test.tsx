@@ -142,6 +142,39 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('auto-topup')).toBeNull();
   });
 
+  it('offers Pro no Max upgrade when Max is not offered', () => {
+    show(usageStatus('pro', { overrides: { period: 'monthly' } }));
+    expect(screen.queryByRole('button', { name: 'Upgrade to Max' })).toBeNull();
+    expect(screen.getByTestId('plan-card')).not.toHaveTextContent('Max');
+  });
+
+  it('offers a Pro subscriber the move to Max in place', async () => {
+    changePlan.mockResolvedValue({ ok: true });
+    show(usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } }));
+    expect(within(screen.getByTestId('plan-card')).getByRole('button', { name: 'Manage billing' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max' }));
+    expect(screen.getByTestId('max-changes')).toHaveTextContent('200 box-hours a month becomes 1,000 box-hours');
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+    await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
+    expect(checkout).not.toHaveBeenCalled();
+  });
+
+  it('shows a Max subscriber the plan, its hours and the portal for a move to Pro', async () => {
+    portal.mockResolvedValue({ url: 'https://polar.test/portal' });
+    show(usageStatus('max', { usedHours: 250, overrides: { period: 'monthly' } }));
+    const card = screen.getByTestId('plan-card');
+    expect(card).toHaveTextContent('Max');
+    expect(screen.getByTestId('plan-period-line')).toHaveTextContent('Max · Monthly · $100/month');
+    expect(card).toHaveTextContent('1,000 box-hours a month, 100 boxes at once, every box size, credits and auto top-up.');
+    expect(screen.getByTestId('max-to-pro-hint')).toHaveTextContent('To move to Pro, use Manage billing.');
+    expect(screen.getByTestId('usage-card')).toHaveTextContent('250 of 1,000 box-hours used');
+    expect(screen.getByTestId('credits-card')).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Upgrade|Move to Pro/ })).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: 'Manage billing' }));
+    await waitFor(() => expect(portal).toHaveBeenCalled());
+    expect(changePlan).not.toHaveBeenCalled();
+  });
+
   it('shows Pro credits, lots and expiry, and buys a pack', async () => {
     creditCheckout.mockResolvedValue({ url: 'u' });
     show(
@@ -365,6 +398,8 @@ describe('BillingSettings with usage billing', () => {
       ['pro', 'monthly', 'Pro · Monthly · $40/month'],
       ['pro', 'annual', 'Pro · Annual · $400/year'],
       ['legacy_pro', 'monthly', 'Legacy Pro · Monthly · $15/month'],
+      ['max', 'monthly', 'Max · Monthly · $100/month'],
+      ['max', 'annual', 'Max · Annual · $1,000/year'],
     ] as const)('%s %s shows the period line', (tier, period, text) => {
       show(usageStatus(tier, { overrides: { period } }));
       expect(screen.getByTestId('plan-period-line')).toHaveTextContent(text);
@@ -385,6 +420,19 @@ describe('BillingSettings with usage billing', () => {
     ])('no switch offered when %s', (_name, overrides) => {
       show(usageStatus('pro', { overrides }));
       expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+    });
+
+    it('keeps the Max price list when the period is unknown', () => {
+      show(usageStatus('max', { overrides: { period: null } }));
+      expect(screen.getByTestId('plan-period-line')).toHaveTextContent('Plan prices: $100/month or $1,000/year');
+    });
+
+    it('switches a monthly Max subscriber to annual Max', async () => {
+      changePlan.mockResolvedValue({ ok: true });
+      show(usageStatus('max', { overrides: { period: 'monthly' } }));
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to annual · save $200 a year' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
+      await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'annual' }));
     });
 
     it('no switch offered on Free or Legacy Pro', () => {

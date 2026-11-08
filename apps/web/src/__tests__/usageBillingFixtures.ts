@@ -17,6 +17,13 @@ export const BILLING_PRICING_FOR_TESTS: BillingPricing = {
   boxHourMicros: BOX_HOUR_PRICE_MICROS,
 };
 
+/** The pricing a backend sends when this account may buy Max (or holds it). */
+export const BILLING_PRICING_WITH_MAX: BillingPricing = {
+  ...BILLING_PRICING_FOR_TESTS,
+  maxMonthlyMicros: PLAN_PRICES.max.monthlyMicros,
+  maxAnnualMicros: PLAN_PRICES.max.annualMicros ?? 0,
+};
+
 /** The old backend's status: no usage fields at all. */
 export function oldStatus(overrides: Partial<BillingStatus> = {}): BillingStatus {
   return {
@@ -43,7 +50,14 @@ export const PERIOD_END = '2026-11-30T00:00:00.000Z';
 /** A usage-billing status for `tier`, with `usedHours` box-hours used. */
 export function usageStatus(
   tier: PlanTier,
-  opts: { usedHours?: number; exhausted?: boolean; balanceMicros?: number; planSource?: BillingStatus['planSource'] } = {},
+  opts: {
+    usedHours?: number;
+    exhausted?: boolean;
+    balanceMicros?: number;
+    planSource?: BillingStatus['planSource'];
+    /** Send Max prices. A Max holder always gets them. */
+    maxOffered?: boolean;
+  } = {},
   overrides: Partial<BillingStatus> = {}
 ): BillingStatus {
   const included = includedWeightedSeconds(tier);
@@ -87,7 +101,7 @@ export function usageStatus(
       : {}),
     sizePrices: sizePriceTable(tier),
     concurrentBoxes: { used: 0, limit: limits.concurrentBoxes },
-    pricing: BILLING_PRICING_FOR_TESTS,
+    pricing: opts.maxOffered || tier === 'max' ? BILLING_PRICING_WITH_MAX : BILLING_PRICING_FOR_TESTS,
     ...overrides,
   };
 }

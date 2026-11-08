@@ -163,6 +163,7 @@ import type {
   CreditPackId,
   CreditSummary,
   PlanTier,
+  SellableTier,
   SizePrice,
   UsageSummary,
 } from './pricing.js';
@@ -1996,7 +1997,7 @@ export interface BillingStatus {
 export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
   /** The product to buy. Absent means the backend's default (Pro on usage billing). */
-  plan?: 'pro';
+  plan?: SellableTier;
 }
 
 /** `POST /billing/credits/checkout`. */
@@ -2006,7 +2007,8 @@ export interface CreditCheckoutRequest {
 
 /** `POST /billing/change-plan`: move a Legacy Pro subscription to Pro. */
 export interface ChangePlanRequest {
-  to: 'pro';
+  /** An upgrade only. A move to a smaller plan goes through the billing portal. */
+  to: SellableTier;
   period: 'monthly' | 'annual';
 }
 

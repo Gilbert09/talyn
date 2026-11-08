@@ -7,12 +7,14 @@ import {
   PLAN_PRICES,
   PLAN_TIER_LABELS,
   SANDBOX_SIZES,
-  formatBoxHoursLabel,
+  SELLABLE_TIERS,
   formatCreditPack,
   formatUsd,
-  boxHoursToWeightedSeconds,
+  isSellableTier,
+  isTierUpgrade,
   type CreditPackId,
   type PlanTier,
+  type SellableTier,
 } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
@@ -21,13 +23,26 @@ import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
 import { trackBillingFailure } from '../../stores/billing';
-import { formatShortDate, pricingOf, type BoxNotice, type UsageBillingStatus } from '../../lib/usageBilling';
+import {
+  formatShortDate,
+  includedHoursText,
+  maxPricesOf,
+  pricingOf,
+  type BoxNotice,
+  type UsageBillingStatus,
+} from '../../lib/usageBilling';
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 type Period = 'monthly' | 'annual';
+type Prices = { monthlyMicros: number; annualMicros: number };
 
-const hours = (tier: PlanTier) => formatBoxHoursLabel(boxHoursToWeightedSeconds(PLAN_LIMITS[tier].includedBoxHours));
+const hours = includedHoursText;
+
+const GRID_COLUMNS: Record<number, string> = { 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' };
+
+const perPeriod = (prices: Prices, period: Period) =>
+  period === 'annual' ? `${formatUsd(prices.annualMicros, 0)}/yr` : `${formatUsd(prices.monthlyMicros, 0)}/mo`;
 
 /**
  * The modal's title and first paragraph for a tier and a reason. The notice's
@@ -39,6 +54,8 @@ export function usageUpgradeCopy(input: {
   reason: UpgradeReason | null;
   notice: BoxNotice | null;
   periodEnd?: string;
+  /** True when the status carries Max prices, so this account may buy Max. */
+  maxOffered?: boolean;
 }): { title: string; body: string } {
   const { tier, reason, notice } = input;
   const reset = formatShortDate(notice?.periodEnd ?? input.periodEnd ?? '');
@@ -97,7 +114,10 @@ export function usageUpgradeCopy(input: {
           'Talyn wanted to fix one of your watched PRs, but your plan could not start a box. It tries again by itself.',
       };
     default:
-      if (tier === 'pro') {
+      if (tier === 'pro' && reason === 'upgrade' && input.maxOffered) {
+        return { title: 'Upgrade to Max', body: `Max includes ${hours('max')} a month instead of ${hours('pro')}.` };
+      }
+      if (isSellableTier(tier)) {
         return { title: 'Add credits', body: 'Credits keep your boxes running after your included box-hours.' };
       }
       if (tier === 'legacy_pro') {
@@ -128,6 +148,7 @@ export function UsageUpgradeModal({
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
   const [period, setPeriod] = useState<Period>('monthly');
+  const [plan, setPlan] = useState<SellableTier>('pro');
   const [busy, setBusy] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,15 +160,30 @@ export function UsageUpgradeModal({
     // Only the open edge matters; the live status is compared against it.
   }, [open]);
   const start = startRef.current;
-  const movedToPro = start != null && start.tier !== 'pro' && status.tier === 'pro';
+  const movedUp = start != null && isTierUpgrade(start.tier, status.tier);
   const creditsLanded = reason !== 'compare_plans' && start != null && (status.credits?.balanceMicros ?? 0) > start.balance;
 
   const pricing = pricingOf(status);
+  // Null when this account may not buy Max: then Max shows nowhere.
+  const maxPrices = maxPricesOf(status);
+  const proPrices: Prices = { monthlyMicros: pricing.proMonthlyMicros, annualMicros: pricing.proAnnualMicros };
+  const priceOf = (p: SellableTier): Prices => (p === 'max' && maxPrices ? maxPrices : proPrices);
   const { tier } = status;
-  const copy = usageUpgradeCopy({ tier, reason, notice, periodEnd: status.usage.periodEnd });
+  const subscribed = status.planSource === 'subscription';
+  const canMoveToMax = maxPrices != null && subscribed && (tier === 'pro' || tier === 'legacy_pro');
+  // A Pro subscriber who asked to upgrade: the modal sells Max in place of credits.
+  const upgradeToMax = tier === 'pro' && reason === 'upgrade' && canMoveToMax;
+  // Free and Legacy Pro pick between Pro and Max when Max is offered.
+  const choosePlan = maxPrices != null && (tier === 'free' || tier === 'legacy_pro');
+  const target: SellableTier = upgradeToMax ? 'max' : choosePlan ? plan : 'pro';
+  const targetPrices = priceOf(target);
+  // A paid annual plan cannot move to monthly in place; the backend refuses it.
+  const annualOnly = isSellableTier(tier) && status.period === 'annual';
+  const chosenPeriod: Period = annualOnly ? 'annual' : period;
+  const copy = usageUpgradeCopy({ tier, reason, notice, periodEnd: status.usage.periodEnd, maxOffered: maxPrices != null });
   const creditsAllowed = PLAN_LIMITS[tier].creditsAllowed;
-  // A full box cap on Pro is not something money fixes: there is nothing to sell.
-  const nothingToSell = tier === 'pro' && reason === 'concurrent_box_limit';
+  // A full box cap on Pro or Max is not something money fixes: there is nothing to sell.
+  const nothingToSell = isSellableTier(tier) && reason === 'concurrent_box_limit';
 
   function close(next: boolean) {
     if (!next) {
@@ -163,8 +199,9 @@ export function UsageUpgradeModal({
     try {
       await fn();
     } catch (err) {
-      const event = key === 'checkout' ? 'checkout_failed' : key === 'change' ? 'plan_change_failed' : 'credit_checkout_failed';
-      trackBillingFailure(event, 'create_checkout', err);
+      const event =
+        key === 'checkout' ? 'checkout_failed' : key === 'change' || key === 'portal' ? 'plan_change_failed' : 'credit_checkout_failed';
+      trackBillingFailure(event, key === 'portal' ? 'portal' : 'create_checkout', err);
       if (key === 'change') useBillingStore.getState().clearPlanChange();
       setError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
     } finally {
@@ -172,22 +209,30 @@ export function UsageUpgradeModal({
     }
   }
 
-  const checkoutPro = () =>
+  const checkout = (to: SellableTier) =>
     run('checkout', async () => {
-      trackEvent('checkout_started', { period, plan: 'pro', reason });
-      const { url } = await api.billing.checkout({ period, plan: 'pro' });
+      trackEvent('checkout_started', { period: chosenPeriod, plan: to, reason });
+      const { url } = await api.billing.checkout({ period: chosenPeriod, plan: to });
       await openExternal(url);
       startCheckoutPollBurst('plan');
       setWaiting(true);
     });
 
-  const moveToPro = () =>
+  const changePlan = (to: SellableTier) =>
     run('change', async () => {
-      trackEvent('plan_change_started', { period, from: tier, reason });
-      useBillingStore.getState().markPlanChangeStarted(period);
-      await api.billing.changePlan({ to: 'pro', period });
+      trackEvent('plan_change_started', { period: chosenPeriod, from: tier, to, reason });
+      useBillingStore.getState().markPlanChangeStarted(chosenPeriod);
+      await api.billing.changePlan({ to, period: chosenPeriod });
       startCheckoutPollBurst('plan');
       setWaiting(true);
+    });
+
+  // A move to a smaller plan (Max to Pro) goes through the portal, never change-plan.
+  const openPortal = () =>
+    run('portal', async () => {
+      const { url } = await api.billing.portal();
+      await openExternal(url);
+      startCheckoutPollBurst('plan');
     });
 
   const buyCredits = (pack: CreditPackId) =>
@@ -204,18 +249,18 @@ export function UsageUpgradeModal({
     openSettings('billing');
   };
 
-  if (movedToPro || creditsLanded) {
+  if (movedUp || creditsLanded) {
     return (
       <Dialog open={open} onOpenChange={close}>
         <DialogContent onClose={() => close(false)}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Zap className="h-4 w-4" />
-              {movedToPro ? 'You are on Pro' : 'Credits added'}
+              {movedUp ? `You are on ${PLAN_TIER_LABELS[tier]}` : 'Credits added'}
             </DialogTitle>
             <DialogDescription>
-              {movedToPro
-                ? `You have ${hours('pro')} a month and every box size.`
+              {movedUp
+                ? `You have ${hours(tier)} a month and every box size.`
                 : `Your credit balance is ${formatUsd(status.credits?.balanceMicros ?? 0)}.`}
             </DialogDescription>
           </DialogHeader>
@@ -227,28 +272,46 @@ export function UsageUpgradeModal({
     );
   }
 
-  const periodPicker = (
+  const periodPicker = (prices: Prices) => (
     <div className="grid grid-cols-2 gap-2">
       <PlanOption
         label="Annual"
-        price={`${formatUsd(pricing.proAnnualMicros, 0)}/yr`}
+        price={`${formatUsd(prices.annualMicros, 0)}/yr`}
         hint="2 months free"
-        selected={period === 'annual'}
+        selected={chosenPeriod === 'annual'}
         onSelect={() => setPeriod('annual')}
         disabled={busy !== null || waiting}
       />
       <PlanOption
         label="Monthly"
-        price={`${formatUsd(pricing.proMonthlyMicros, 0)}/mo`}
-        selected={period === 'monthly'}
+        price={`${formatUsd(prices.monthlyMicros, 0)}/mo`}
+        hint={annualOnly ? 'Not for an annual plan' : undefined}
+        selected={chosenPeriod === 'monthly'}
         onSelect={() => setPeriod('monthly')}
-        disabled={busy !== null || waiting}
+        disabled={busy !== null || waiting || annualOnly}
       />
+    </div>
+  );
+
+  const planPicker = choosePlan && (
+    <div className="grid grid-cols-2 gap-2" data-testid="plan-picker">
+      {SELLABLE_TIERS.map((p) => (
+        <PlanOption
+          key={p}
+          label={PLAN_TIER_LABELS[p]}
+          price={perPeriod(priceOf(p), chosenPeriod)}
+          hint={`${hours(p)} a month`}
+          selected={target === p}
+          onSelect={() => setPlan(p)}
+          disabled={busy !== null || waiting}
+        />
+      ))}
     </div>
   );
 
   if (reason === 'compare_plans') {
     const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
+    if (maxPrices || tier === 'max') plans.splice(2, 0, 'max');
     if (tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
     const current = tier === 'legacy_pro' ? tier : status.planSource === 'team' ? 'team' : tier;
     return (
@@ -258,48 +321,71 @@ export function UsageUpgradeModal({
             <DialogTitle>Compare plans</DialogTitle>
             <DialogDescription>See what each plan includes.</DialogDescription>
           </DialogHeader>
-          {(tier === 'free' || (tier === 'legacy_pro' && status.planSource === 'subscription')) && (
-            <div className="mb-4 max-w-sm">{periodPicker}</div>
+          {(tier === 'free' || (tier === 'legacy_pro' && subscribed) || canMoveToMax) && (
+            <div className="mb-4 max-w-sm">{periodPicker(priceOf(tier === 'pro' ? 'max' : 'pro'))}</div>
           )}
-          <div className={`grid gap-3 sm:grid-cols-2 ${plans.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
-            {plans.map((plan) => {
-              const limits = PLAN_LIMITS[plan === 'team' ? 'pro' : plan];
-              const monthly = plan === 'free' ? PLAN_PRICES.free.monthlyMicros : plan === 'legacy_pro' ? pricing.legacyProMonthlyMicros : pricing.proMonthlyMicros;
-              const annual = plan === 'legacy_pro' ? PLAN_PRICES.legacy_pro.annualMicros : pricing.proAnnualMicros;
+          <div className={`grid gap-3 sm:grid-cols-2 ${GRID_COLUMNS[plans.length] ?? 'lg:grid-cols-3'}`}>
+            {plans.map((card) => {
+              const limits = PLAN_LIMITS[card === 'team' ? 'pro' : card];
+              const monthly =
+                card === 'free'
+                  ? PLAN_PRICES.free.monthlyMicros
+                  : card === 'legacy_pro'
+                    ? pricing.legacyProMonthlyMicros
+                    : card === 'max'
+                      ? (maxPrices?.monthlyMicros ?? PLAN_PRICES.max.monthlyMicros)
+                      : pricing.proMonthlyMicros;
+              const annual =
+                card === 'legacy_pro'
+                  ? PLAN_PRICES.legacy_pro.annualMicros
+                  : card === 'max'
+                    ? (maxPrices?.annualMicros ?? PLAN_PRICES.max.annualMicros)
+                    : pricing.proAnnualMicros;
               return (
-                <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-[13px]">
-                  <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>
+                <div key={card} data-testid={`compare-plan-${card}`} className="flex flex-col rounded-md border p-3 text-[13px]">
+                  <div className="font-semibold">{card === 'team' ? 'Team' : PLAN_TIER_LABELS[card]}</div>
                   <div className="mt-1 font-medium">
-                    {formatUsd(monthly, 0)}/mo{plan === 'team' ? ' per seat' : ''}
+                    {formatUsd(monthly, 0)}/mo{card === 'team' ? ' per seat' : ''}
                   </div>
-                  {annual != null && plan !== 'free' && (
+                  {annual != null && card !== 'free' && (
                     <div className="text-muted-foreground">
-                      {formatUsd(annual, 0)}/yr{plan === 'team' ? ' per seat' : ''} · Save {formatUsd(monthly * 12 - annual, 0)}/yr
+                      {formatUsd(annual, 0)}/yr{card === 'team' ? ' per seat' : ''} · Save {formatUsd(monthly * 12 - annual, 0)}/yr
                     </div>
                   )}
                   <ul className="my-3 space-y-1 text-muted-foreground">
-                    <li>{hours(plan === 'team' ? 'pro' : plan)} per month</li>
+                    <li>{hours(card === 'team' ? 'pro' : card)} per month</li>
                     <li>{limits.concurrentBoxes} concurrent boxes</li>
                     <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
                     <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
-                    {plan === 'team' && <li>Each seat has its own included box-hours.</li>}
+                    {card === 'team' && <li>Each seat has its own included box-hours.</li>}
                   </ul>
                   <div className="mt-auto space-y-2">
-                    {plan === current ? (
+                    {card === current ? (
                       <>
                         <p className="font-medium text-primary">
-                          Your plan{plan !== 'team' && status.planSource === 'subscription' && status.period ? ` · ${BILLING_PERIOD_LABELS[status.period]}` : ''}
+                          Your plan{card !== 'team' && subscribed && status.period ? ` · ${BILLING_PERIOD_LABELS[status.period]}` : ''}
                         </p>
-                        {plan === 'pro' && <AnnualSwitch status={status} placement="compare_plans" />}
+                        {isSellableTier(card) && <AnnualSwitch status={status} placement="compare_plans" />}
                       </>
-                    ) : plan === 'pro' && tier === 'free' ? (
-                      <Button className="w-full" onClick={checkoutPro} disabled={busy !== null || waiting}>Upgrade to Pro</Button>
-                    ) : plan === 'pro' && tier === 'legacy_pro' && status.planSource === 'subscription' ? (
-                      <Button className="w-full" onClick={moveToPro} disabled={busy !== null || waiting}>Move to Pro</Button>
-                    ) : plan === 'team' ? (
+                    ) : card === 'pro' && tier === 'free' ? (
+                      <Button className="w-full" onClick={() => checkout('pro')} disabled={busy !== null || waiting}>Upgrade to Pro</Button>
+                    ) : card === 'pro' && tier === 'legacy_pro' && subscribed ? (
+                      <Button className="w-full" onClick={() => changePlan('pro')} disabled={busy !== null || waiting}>Move to Pro</Button>
+                    ) : card === 'pro' && tier === 'max' && subscribed ? (
+                      <>
+                        <p className="text-muted-foreground">To move to Pro, use Manage billing. The change starts at your next renewal.</p>
+                        <Button className="w-full" variant="outline" onClick={openPortal} disabled={busy !== null}>
+                          {busy === 'portal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Manage billing'}
+                        </Button>
+                      </>
+                    ) : card === 'max' && tier === 'free' ? (
+                      <Button className="w-full" onClick={() => checkout('max')} disabled={busy !== null || waiting}>Upgrade to Max</Button>
+                    ) : card === 'max' && canMoveToMax ? (
+                      <Button className="w-full" onClick={() => changePlan('max')} disabled={busy !== null || waiting}>Upgrade to Max</Button>
+                    ) : card === 'team' ? (
                       <Button className="w-full" variant="outline" onClick={() => { close(false); openSettings('teams'); }}>Explore Team</Button>
                     ) : null}
-                    {limits.creditsAllowed && plan === current && (
+                    {limits.creditsAllowed && card === current && (
                       <button type="button" className="text-xs text-primary hover:underline" onClick={goToSettings}>Add credits</button>
                     )}
                   </div>
@@ -315,6 +401,32 @@ export function UsageUpgradeModal({
     );
   }
 
+  // What a move in place changes: Legacy Pro to Pro or Max, or Pro to Max.
+  const fromPrice =
+    tier === 'legacy_pro'
+      ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)} a month`
+      : status.period === 'annual'
+        ? `${formatUsd(pricing.proAnnualMicros, 0)} a year`
+        : `${formatUsd(pricing.proMonthlyMicros, 0)} a month`;
+  const changes = (
+    <div className="rounded-md border p-3 text-[13px]" data-testid={tier === 'legacy_pro' ? 'legacy-changes' : 'max-changes'}>
+      <p className="font-medium">What changes when you move to {PLAN_TIER_LABELS[target]}</p>
+      <ul className="mt-1 space-y-0.5 text-muted-foreground">
+        <li>
+          {hours(tier)} a month becomes {hours(target)}.
+        </li>
+        <li>
+          {fromPrice} becomes{' '}
+          {chosenPeriod === 'annual'
+            ? `${formatUsd(targetPrices.annualMicros, 0)} a year`
+            : `${formatUsd(targetPrices.monthlyMicros, 0)} a month`}
+          .
+        </li>
+        <li>The change starts now. Your next invoice is adjusted for the days left.</li>
+      </ul>
+    </div>
+  );
+
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent onClose={() => close(false)}>
@@ -329,34 +441,21 @@ export function UsageUpgradeModal({
         <div className="space-y-3 py-2">
           {tier === 'free' && (
             <>
-              {periodPicker}
-              <ProFeatures />
+              {planPicker}
+              {periodPicker(targetPrices)}
+              <PlanFeatures tier={target} />
             </>
           )}
 
-          {tier === 'legacy_pro' && (
+          {(tier === 'legacy_pro' || upgradeToMax) && (
             <>
-              {periodPicker}
-              <div className="rounded-md border p-3 text-[13px]" data-testid="legacy-changes">
-                <p className="font-medium">What changes when you move to Pro</p>
-                <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                  <li>
-                    {hours('legacy_pro')} a month becomes {hours('pro')}.
-                  </li>
-                  <li>
-                    {formatUsd(pricing.legacyProMonthlyMicros, 0)} a month becomes{' '}
-                    {period === 'annual'
-                      ? `${formatUsd(pricing.proAnnualMicros, 0)} a year`
-                      : `${formatUsd(pricing.proMonthlyMicros, 0)} a month`}
-                    .
-                  </li>
-                  <li>The change starts now. Your next invoice is adjusted for the days left.</li>
-                </ul>
-              </div>
+              {planPicker}
+              {periodPicker(targetPrices)}
+              {changes}
             </>
           )}
 
-          {tier === 'pro' && creditsAllowed && !nothingToSell && (
+          {isSellableTier(tier) && creditsAllowed && !nothingToSell && !upgradeToMax && (
             <div className="grid grid-cols-3 gap-2" data-testid="credit-packs">
               {CREDIT_PACK_IDS.map((pack) => (
                 <Button
@@ -386,17 +485,13 @@ export function UsageUpgradeModal({
             {nothingToSell ? 'Done' : 'Not now'}
           </Button>
           {tier === 'free' && (
-            <Button onClick={checkoutPro} disabled={busy !== null || waiting}>
+            <Button onClick={() => checkout(target)} disabled={busy !== null || waiting}>
               {busy === 'checkout' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : waiting ? (
                 'Waiting for checkout…'
               ) : (
-                `Upgrade to Pro: ${
-                  period === 'annual'
-                    ? `${formatUsd(pricing.proAnnualMicros, 0)}/yr`
-                    : `${formatUsd(pricing.proMonthlyMicros, 0)}/mo`
-                }`
+                `Upgrade to ${PLAN_TIER_LABELS[target]}: ${perPeriod(targetPrices, chosenPeriod)}`
               )}
             </Button>
           )}
@@ -405,12 +500,21 @@ export function UsageUpgradeModal({
               <Button variant="outline" onClick={goToSettings} disabled={busy !== null}>
                 Add credits
               </Button>
-              <Button onClick={moveToPro} disabled={busy !== null || waiting}>
-                {busy === 'change' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Move to Pro'}
+              <Button onClick={() => changePlan(target)} disabled={busy !== null || waiting}>
+                {busy === 'change' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : target === 'max' ? 'Upgrade to Max' : 'Move to Pro'}
               </Button>
             </>
           )}
-          {tier === 'pro' && !nothingToSell && (
+          {upgradeToMax && (
+            <Button onClick={() => changePlan('max')} disabled={busy !== null || waiting}>
+              {busy === 'change' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                `Upgrade to Max: ${perPeriod(targetPrices, chosenPeriod)}`
+              )}
+            </Button>
+          )}
+          {isSellableTier(tier) && !nothingToSell && !upgradeToMax && (
             <Button variant="outline" onClick={goToSettings} disabled={busy !== null}>
               Turn on auto top-up
             </Button>
@@ -421,14 +525,15 @@ export function UsageUpgradeModal({
   );
 }
 
-function ProFeatures() {
+/** What a paid plan includes, for the Free upgrade. */
+function PlanFeatures({ tier }: { tier: SellableTier }) {
   return (
     <ul className="space-y-1 text-[13px] text-muted-foreground">
       <li className="flex items-center gap-2">
-        <Check className="h-3.5 w-3.5" /> {hours('pro')} a month
+        <Check className="h-3.5 w-3.5" /> {hours(tier)} a month
       </li>
       <li className="flex items-center gap-2">
-        <Check className="h-3.5 w-3.5" /> Every box size, up to {PLAN_LIMITS.pro.concurrentBoxes} at once
+        <Check className="h-3.5 w-3.5" /> Every box size, up to {PLAN_LIMITS[tier].concurrentBoxes} at once
       </li>
       <li className="flex items-center gap-2">
         <Check className="h-3.5 w-3.5" /> Credits and auto top-up when you need more

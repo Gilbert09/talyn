@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CreditCard, Download, Loader2, Lock, Smartphone, Zap } from 'lucide-react';
+import { AlertCircle, Download, Loader2, Lock, Smartphone, Zap } from 'lucide-react';
 import {
   PLAN_LIMITS,
   PLAN_PRICES,
@@ -9,13 +9,13 @@ import {
   formatPricePerHour,
   formatPlanPeriodLine,
   formatUsd,
+  isSellableTier,
   sizePriceTable,
   type BillingOrder,
   type PlanTier,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { trackEvent } from '../../../lib/analytics';
-import { trackBillingFailure } from '../../../stores/billing';
 import { cn } from '../../../lib/utils';
 import { openExternal } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -24,20 +24,21 @@ import {
   FREE_INCLUDED_TEXT,
   GAUGE_BAR_CLASS,
   LEGACY_INCLUDED_TEXT,
+  MAX_INCLUDED_TEXT,
   PRO_INCLUDED_TEXT,
   formatLeftPercent,
   formatLongDate,
   formatShortDate,
   gaugeTone,
-  goToHostedPage,
   leftPercent,
+  maxPricesOf,
   usageBillingOf,
   type UsageBillingView,
 } from '../../../lib/usageBilling';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
-import { CreditPackButtons, legacyMonthlyPrice, proPrices } from '../../billing/BillingActions';
+import { CreditPackButtons, PortalButton, legacyMonthlyPrice, planPrices, proPrices } from '../../billing/BillingActions';
 import { AnnualSwitch } from './AnnualSwitch';
 import { AutoTopupForm } from './AutoTopupForm';
 import { LegacyBillingSettings, formatOrderAmount } from './LegacyBillingSettings';
@@ -56,7 +57,7 @@ export function BillingSettings() {
 function tierPrice(tier: PlanTier, view: UsageBillingView): string {
   if (tier === 'free') return '$0';
   if (tier === 'legacy_pro') return `${legacyMonthlyPrice(view.status.pricing)}/month`;
-  const prices = proPrices(view.status.pricing);
+  const prices = planPrices(tier, view.status.pricing) ?? proPrices(undefined);
   return `${prices.monthly}/month or ${prices.annual}/year`;
 }
 
@@ -76,6 +77,8 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   const teamPaid = status.planSource === 'team';
   const subscribed = status.planSource === 'subscription';
   const pastDue = status.subscriptionStatus === 'past_due';
+  const canMoveToPro = tier === 'legacy_pro' && subscribed;
+  const canUpgradeToMax = tier === 'pro' && subscribed && maxPricesOf(status) != null;
 
   return (
     <div className="space-y-6" data-attr="plan-and-usage">
@@ -96,16 +99,24 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
                       proMonthlyMicros: status.pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros,
                       proAnnualMicros: status.pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros ?? 0,
                       legacyProMonthlyMicros: status.pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros,
+                      maxMonthlyMicros: status.pricing?.maxMonthlyMicros,
+                      maxAnnualMicros: status.pricing?.maxAnnualMicros,
                     }) ?? `Plan prices: ${tierPrice(tier, view)}`}
                     .{' '}
                   </span>
                 )}
                 {tier === 'free' &&
                   `${FREE_INCLUDED_TEXT} a month, small and standard boxes, ${limits.concurrentBoxes} at once.`}
-                {tier === 'pro' && `${PRO_INCLUDED_TEXT} a month, every size, up to ${limits.concurrentBoxes} at once.`}
+                {isSellableTier(tier) &&
+                  `${tier === 'max' ? MAX_INCLUDED_TEXT : PRO_INCLUDED_TEXT} a month, every size, up to ${limits.concurrentBoxes} at once.`}
                 {tier === 'legacy_pro' &&
                   `Your current plan: ${LEGACY_INCLUDED_TEXT} a month, every size, up to ${limits.concurrentBoxes} at once.`}
               </p>
+              {tier === 'max' && subscribed && (
+                <p className="mt-1 text-sm text-muted-foreground" data-testid="max-to-pro-hint">
+                  To move to Pro, use Manage billing. The change starts at your next renewal.
+                </p>
+              )}
               {comped && <p className="mt-1 text-sm text-muted-foreground">Complimentary plan. Nothing to pay.</p>}
               {teamPaid && status.team && (
                 <p className="mt-1 text-sm text-muted-foreground">Paid for by your team, {status.team.name}.</p>
@@ -140,9 +151,9 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
           <AnnualSwitch status={status} placement="plan_page" />
 
           <div className="flex flex-wrap items-center gap-2">
-            {tier === 'free' || (tier === 'legacy_pro' && subscribed) ? (
+            {tier === 'free' || canMoveToPro || canUpgradeToMax ? (
               <Button data-attr="plan-upgrade" onClick={() => openUpgrade(true, 'upgrade')}>
-                {tier === 'free' ? 'Upgrade' : 'Move to Pro'}
+                {canMoveToPro ? 'Move to Pro' : canUpgradeToMax ? 'Upgrade to Max' : 'Upgrade'}
               </Button>
             ) : teamPaid ? (
               <Button data-attr="plan-manage-billing" onClick={() => openSettings('teams')}>
@@ -151,7 +162,7 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
             ) : (
               subscribed && <PortalButton />
             )}
-            {tier === 'legacy_pro' && subscribed && <PortalButton secondary />}
+            {(canMoveToPro || canUpgradeToMax) && <PortalButton secondary />}
             <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'compare_plans'); }}>
               Compare plans
             </Button>
@@ -186,38 +197,6 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
       <BillingTeamNotice status={status} />
 
       <OrderHistory />
-    </div>
-  );
-}
-
-function PortalButton({ secondary = false }: { secondary?: boolean }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const open = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const { url } = await api.billing.portal();
-      goToHostedPage(url);
-    } catch (err) {
-      trackBillingFailure('plan_change_failed', 'portal', err);
-      setError(err instanceof Error ? err.message : 'Could not open the billing portal.');
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="space-y-2">
-      <Button
-        variant={secondary ? 'link' : 'default'}
-        data-attr="plan-manage-billing"
-        onClick={() => void open()}
-        disabled={busy}
-        className="gap-2"
-      >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-        Manage billing
-      </Button>
-      {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );
 }

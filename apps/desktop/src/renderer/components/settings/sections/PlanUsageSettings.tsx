@@ -8,13 +8,13 @@ import {
   PLAN_LIMITS,
   PLAN_TIER_LABELS,
   SANDBOX_SIZES,
-  boxHoursToWeightedSeconds,
-  formatBoxHoursLabel,
   formatBoxHoursUsage,
   formatCreditPack,
   formatPlanPeriodLine,
   formatPricePerHour,
   formatUsd,
+  isSellableTier,
+  sellableTierPrices,
   sizePriceTable,
   validateAutoTopupConfig,
   type AutoTopupConfig,
@@ -32,7 +32,9 @@ import {
   formatLeftPercent,
   formatShortDate,
   gaugeTone,
+  includedHoursText,
   leftPercent,
+  maxPricesOf,
   pricingOf,
   type UsageBillingStatus,
 } from '../../../lib/usageBilling';
@@ -48,7 +50,7 @@ import { SettingsPage } from '../../ui/settings';
 import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
 import { AnnualSwitch } from './AnnualSwitch';
 
-const hours = (tier: PlanTier) => formatBoxHoursLabel(boxHoursToWeightedSeconds(PLAN_LIMITS[tier].includedBoxHours));
+const hours = includedHoursText;
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</h3>;
@@ -158,10 +160,14 @@ function PlanCard({
   const pastDue = status.subscriptionStatus === 'past_due';
   const canManage = tier !== 'free' && !comped && !teamPaid;
   const canMove = tier === 'legacy_pro' && !teamPaid;
+  const canUpgradeToMax = tier === 'pro' && status.planSource === 'subscription' && maxPricesOf(status) != null;
+  const prices = isSellableTier(tier) ? sellableTierPrices(tier, pricing) : null;
   const price =
     tier === 'legacy_pro'
       ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)}/month`
-      : `${formatUsd(pricing.proMonthlyMicros, 0)}/month or ${formatUsd(pricing.proAnnualMicros, 0)}/year`;
+      : prices
+        ? `${formatUsd(prices.monthlyMicros, 0)}/month or ${formatUsd(prices.annualMicros, 0)}/year`
+        : null;
 
   const periodLine = formatPlanPeriodLine(tier, status.period, pricing);
 
@@ -175,13 +181,18 @@ function PlanCard({
         </p>
         {tier !== 'free' && !comped && !teamPaid && (
           <p className="mt-1 text-xs text-muted-foreground" data-testid="plan-period-line">
-            {periodLine ?? `Plan prices: ${price}`}
+            {periodLine ?? (price ? `Plan prices: ${price}` : null)}
           </p>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
           {hours(tier)} a month, {PLAN_LIMITS[tier].concurrentBoxes} boxes at once,{' '}
           {tier === 'free' ? 'small and standard boxes.' : 'every box size, credits and auto top-up.'}
         </p>
+        {tier === 'max' && canManage && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="max-to-pro-hint">
+            To move to Pro, use Manage billing. The change starts at your next renewal.
+          </p>
+        )}
         {comped && <p className="mt-1 text-xs text-muted-foreground">Complimentary plan. Nothing to pay.</p>}
         {teamPaid && status.team && (
           <p className="mt-1 text-xs text-muted-foreground">Paid for by your team, {status.team.name}.</p>
@@ -207,9 +218,9 @@ function PlanCard({
       )}
       <AnnualSwitch status={status} placement="plan_page" />
       <div className="flex flex-wrap items-center gap-2">
-        {tier === 'free' || canMove ? (
-          <Button size="sm" data-attr="plan-upgrade" onClick={() => openUpgrade(true)}>
-            {canMove ? 'Move to Pro' : 'Upgrade'}
+        {tier === 'free' || canMove || canUpgradeToMax ? (
+          <Button size="sm" data-attr="plan-upgrade" onClick={() => openUpgrade(true, canUpgradeToMax ? 'upgrade' : null)}>
+            {canMove ? 'Move to Pro' : canUpgradeToMax ? 'Upgrade to Max' : 'Upgrade'}
           </Button>
         ) : (
           (canManage || teamPaid) && (
@@ -228,7 +239,7 @@ function PlanCard({
             </Button>
           )
         )}
-        {canMove && canManage && (
+        {(canMove || canUpgradeToMax) && canManage && (
           <Button variant="link" size="sm" data-attr="plan-manage-billing" onClick={onPortal} disabled={busy !== null}>
             Manage billing
           </Button>

@@ -16,8 +16,11 @@ import {
   gaugeAction,
   gaugeTone,
   hasUsageBilling,
+  includedHoursText,
   leftPercent,
+  maxPricesOf,
   noticeFromDetails,
+  pricingOf,
   usageAlertKey,
   usageReasonForCode,
   type UsageBillingStatus,
@@ -80,7 +83,7 @@ describe('leftPercent and formatLeftPercent', () => {
 });
 
 describe('gaugeAction', () => {
-  const status = (tier: 'free' | 'pro' | 'legacy_pro', usedHours: number, exhausted = false) =>
+  const status = (tier: 'free' | 'pro' | 'max' | 'legacy_pro', usedHours: number, exhausted = false) =>
     usageStatus(tier, { usedHours, exhausted }) as UsageBillingStatus;
 
   it.each([
@@ -92,6 +95,9 @@ describe('gaugeAction', () => {
     ['pro with 5% left', status('pro', 190), null],
     ['pro with 4.5% left', status('pro', 191), 'add_credits'],
     ['pro exhausted', status('pro', 200, true), 'add_credits'],
+    ['max with hours left', status('max', 500), null],
+    ['max with 4.9% left', status('max', 951), 'add_credits'],
+    ['max exhausted', status('max', 1000, true), 'add_credits'],
     ['legacy with 20% left', status('legacy_pro', 40), 'upgrade'],
     ['legacy with 4% left', status('legacy_pro', 48), 'add_credits'],
     ['legacy exhausted', status('legacy_pro', 50, true), 'add_credits'],
@@ -156,6 +162,9 @@ describe('code mapping', () => {
     [USAGE_EXHAUSTED_ERROR_CODE, 'free', 'Upgrade'],
     [USAGE_EXHAUSTED_ERROR_CODE, 'pro', 'Add credits'],
     [USAGE_EXHAUSTED_ERROR_CODE, 'legacy_pro', 'Add credits'],
+    [USAGE_EXHAUSTED_ERROR_CODE, 'max', 'Add credits'],
+    [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'max', null],
+    [SIZE_REQUIRES_PRO_ERROR_CODE, 'max', null],
     [USAGE_EXHAUSTED_ERROR_CODE, null, 'Upgrade'],
     [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'free', 'Upgrade'],
     [CONCURRENT_BOX_LIMIT_ERROR_CODE, 'pro', null],
@@ -228,11 +237,23 @@ describe('usageUpgradeCopy', () => {
     ['legacy_pro', null, 'Move to Pro', /200 box-hours a month instead of 50 box-hours/],
     ['pro', null, 'Add credits', /Credits keep/],
     ['legacy_pro', 'usage_alert', 'Move to Pro', /instead of 50/],
+    ['pro', 'upgrade', 'Add credits', /Credits keep/],
+    ['max', null, 'Add credits', /Credits keep/],
+    ['max', 'usage_exhausted', 'You are out of box-hours', /Add credits or turn on auto top-up/],
   ] as const)('%s / %s → %s', (tier, reason, title, body) => {
     const copy = usageUpgradeCopy({ tier, reason, notice: null, periodEnd });
     expect(copy.title).toBe(title);
     expect(copy.body).toMatch(body);
     expect(copy.body).not.toMatch(/—/);
+  });
+
+  it.each([
+    ['pro', 'upgrade', true, 'Upgrade to Max', 'Max includes 1,000 box-hours a month instead of 200 box-hours.'],
+    ['pro', 'upgrade', false, 'Add credits', 'Credits keep your boxes running after your included box-hours.'],
+    ['max', 'upgrade', true, 'Add credits', 'Credits keep your boxes running after your included box-hours.'],
+    ['free', null, true, 'Upgrade to Pro', 'Pro includes 200 box-hours a month, every box size and up to 100 boxes at once.'],
+  ] as const)('%s / %s with maxOffered=%s → %s', (tier, reason, maxOffered, title, body) => {
+    expect(usageUpgradeCopy({ tier, reason, notice: null, periodEnd, maxOffered })).toEqual({ title, body });
   });
 
   it('uses the notice limit for a box cap', () => {
@@ -302,5 +323,31 @@ describe('agentWarnings', () => {
     expect(agentWarnings([provider({ type: 'posthog_code', displayName: 'PostHog Code' })], true)).toEqual([
       'PostHog Code needs reconnecting',
     ]);
+  });
+});
+
+describe('Max pricing', () => {
+  it.each([
+    ['no status', null, null],
+    ['pricing without Max', usageStatus('pro'), null],
+    ['pricing with Max', usageStatus('pro', { maxOffered: true }), { monthlyMicros: 100_000_000, annualMicros: 1_000_000_000 }],
+    ['a Max holder', usageStatus('max'), { monthlyMicros: 100_000_000, annualMicros: 1_000_000_000 }],
+  ] as const)('maxPricesOf: %s', (_label, status, prices) => {
+    expect(maxPricesOf(status)).toEqual(prices);
+  });
+
+  it('never invents Max prices when the status has none', () => {
+    expect(pricingOf(null).maxMonthlyMicros).toBeUndefined();
+    expect(pricingOf(usageStatus('pro')).maxMonthlyMicros).toBeUndefined();
+    expect(pricingOf(usageStatus('pro', { maxOffered: true })).maxMonthlyMicros).toBe(100_000_000);
+  });
+
+  it.each([
+    ['free', '10 box-hours'],
+    ['pro', '200 box-hours'],
+    ['max', '1,000 box-hours'],
+    ['legacy_pro', '50 box-hours'],
+  ] as const)('includedHoursText(%s) → %s', (tier, text) => {
+    expect(includedHoursText(tier)).toBe(text);
   });
 });

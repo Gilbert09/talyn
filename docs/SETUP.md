@@ -766,24 +766,36 @@ then keeps the old build serving, so nothing breaks, but nothing deploys.
    Legacy Pro. Keep the old team products and their two env vars; their teams
    stay on Legacy Pro terms. New teams buy the Pro team product as soon as its
    two vars are set.
-5. **Off-session charges (auto top-up).** Ask Polar to enable the
+5. **Max products (optional).** Create two recurring products:
+   - "Talyn Max (monthly)": fixed price, $100, every month.
+   - "Talyn Max (annual)": fixed price, $1,000, every year.
+
+   Copy the two ids to `POLAR_PRODUCT_ID_MAX_MONTHLY` and
+   `POLAR_PRODUCT_ID_MAX_ANNUAL`. Max is offered only when both are set and
+   the `max-plan` PostHog flag is on for the account. Talyn sends only
+   upgrades through its own plan change. Max → Pro goes through the Polar
+   customer portal, so set the org's portal plan changes to take effect at
+   the next renewal, with no credit for the unused part of the period.
+   Otherwise a customer can use all 1,000 hours and then get most of the
+   $100 back as a downgrade credit.
+6. **Off-session charges (auto top-up).** Ask Polar to enable the
    off-session charges preview on the org (it is the
    `off_session_charges_enabled` feature on Polar's side, on a paid Polar
    plan). Until it is on, every auto top-up records "Automatic charges are
    not available on this account yet" and the app shows the "buy credits"
    prompt. Nothing else changes, so this step does not block the release.
-6. **Access token.** Create an organization access token with these scopes:
+7. **Access token.** Create an organization access token with these scopes:
    `checkouts:write`, `customer_sessions:write`, `customers:read`,
    `orders:read`, `orders:write`, `products:read`, `subscriptions:write`.
    `orders:write` is new (auto top-up). Put it in `POLAR_ACCESS_TOKEN`.
-7. **Webhook.** Endpoint `<backend>/api/v1/webhooks/polar`, format "Raw".
+8. **Webhook.** Endpoint `<backend>/api/v1/webhooks/polar`, format "Raw".
    Subscribe to `subscription.created`, `subscription.active`,
    `subscription.updated`, `subscription.canceled`,
    `subscription.uncanceled`, `subscription.revoked`, `order.paid` and
    `order.refunded`. The two `order.*` events are new: `order.paid` grants a
    credit pack, `order.refunded` takes back what is left of it. Put the
    signing secret in `POLAR_WEBHOOK_SECRET`.
-8. **Return URLs.** Checkout returns to `WEB_APP_URL` +
+9. **Return URLs.** Checkout returns to `WEB_APP_URL` +
    `/settings/billing` (`?checkout=success&kind=plan|credits` on success).
    `POLAR_SUCCESS_URL`, when set, replaces the success page. With neither,
    Polar shows its own receipt page.
@@ -1086,6 +1098,8 @@ POSTHOG_HOST=https://us.i.posthog.com
 # POLAR_SUCCESS_URL=https://www.talyn.dev/checkout-success   # optional
 #
 # Optional pairs on top of the core group (both or neither):
+# POLAR_PRODUCT_ID_MAX_MONTHLY=<uuid of Max, $100/month>
+# POLAR_PRODUCT_ID_MAX_ANNUAL=<uuid of Max, $1,000/year>
 # POLAR_PRODUCT_ID_MONTHLY=<uuid of the OLD $15/mo Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_ANNUAL=<uuid of the OLD $150/yr Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY=<uuid of the $40/seat monthly team product>

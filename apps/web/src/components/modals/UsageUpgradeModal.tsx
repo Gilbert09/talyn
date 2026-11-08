@@ -7,15 +7,19 @@ import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { trackEvent } from '../../lib/analytics';
 import {
+  MAX_INCLUDED_TEXT,
   PRO_INCLUDED_TEXT,
+  maxPricesOf,
   refusalSentence,
   type BoxRefusalNotice,
   type UsageBillingView,
 } from '../../lib/usageBilling';
-import { CreditPackButtons, ProPlanForm, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
+import { CreditPackButtons, PlanForm, PortalButton, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
 
-/** What the modal offers, in order. */
-export type UsageOffer = 'pro_checkout' | 'move_to_pro' | 'credits' | 'auto_topup';
+/** What the modal offers, in order. The Max offers appear only when the status carries Max prices. */
+export type UsageOffer = 'pro_checkout' | 'max_checkout' | 'move_to_pro' | 'move_to_max' | 'credits' | 'auto_topup';
+
+const GRID_COLUMNS: Record<number, string> = { 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' };
 
 export interface UsageModalCopy {
   title: string;
@@ -38,13 +42,14 @@ export function usageModalCopy(
 ): UsageModalCopy {
   const { tier } = view;
   const said = notice ? refusalSentence(notice) : null;
+  const maxPrices = maxPricesOf(view.status);
 
   if (reason === 'compare_plans') {
     return { title: 'Compare plans', body: 'See what each plan includes.', offers: [] };
   }
 
   if (tier === 'free') {
-    const offers: UsageOffer[] = ['pro_checkout'];
+    const offers: UsageOffer[] = maxPrices ? ['pro_checkout', 'max_checkout'] : ['pro_checkout'];
     switch (reason) {
       case 'usage_exhausted':
         return { title: 'Out of box-hours', body: said ?? `You have used all ${PLAN_LIMITS.free.includedBoxHours} box-hours of this period. ${PRO_PITCH}`, offers };
@@ -91,7 +96,9 @@ export function usageModalCopy(
     }
   }
 
-  const canChangePlan = tier === 'legacy_pro' && view.status.planSource === 'subscription';
+  const subscribed = view.status.planSource === 'subscription';
+  const canChangePlan = tier === 'legacy_pro' && subscribed;
+  const canMoveToMax = maxPrices != null && subscribed && (tier === 'legacy_pro' || tier === 'pro');
   const topUpOff = !view.status.autoTopup?.enabled;
   const creditOffers: UsageOffer[] = topUpOff ? ['credits', 'auto_topup'] : ['credits'];
 
@@ -104,19 +111,29 @@ export function usageModalCopy(
     const move =
       `Pro gives you ${PLAN_LIMITS.pro.includedBoxHours} box-hours a month instead of ` +
       `${PLAN_LIMITS.legacy_pro.includedBoxHours}, for ${prices.monthly} a month instead of ${legacyMonthlyPrice(view.status.pricing)}.`;
+    const moves: UsageOffer[] = !canChangePlan ? [] : canMoveToMax ? ['move_to_pro', 'move_to_max'] : ['move_to_pro'];
     if (reason === 'upgrade') {
-      return { title: 'Move to Pro', body: move, offers: canChangePlan ? ['move_to_pro', 'credits'] : ['credits'] };
+      return { title: 'Move to Pro', body: move, offers: [...moves, 'credits'] };
     }
     const title = reason === 'usage_exhausted' ? 'Out of box-hours' : 'Add credits';
     const body = said ?? 'Credits keep new boxes starting after your included hours run out.';
     return {
       title,
       body: canChangePlan ? `${body} Or move to Pro: ${move}` : body,
-      offers: canChangePlan ? [...creditOffers, 'move_to_pro'] : creditOffers,
+      offers: [...creditOffers, ...moves],
     };
   }
 
-  // Pro.
+  // Pro and Max.
+  if (reason === 'upgrade' && tier === 'pro' && canMoveToMax) {
+    return {
+      title: 'Upgrade to Max',
+      body:
+        `Max gives you ${MAX_INCLUDED_TEXT} a month instead of ${PRO_INCLUDED_TEXT}, ` +
+        `for ${formatUsd(maxPrices.monthlyMicros, 0)} a month.`,
+      offers: ['move_to_max', 'credits'],
+    };
+  }
   if (reason === 'usage_exhausted') {
     return { title: 'Out of box-hours', body: said ?? 'Add credits or turn on auto top-up to start new boxes.', offers: creditOffers };
   }
@@ -127,7 +144,7 @@ export function usageModalCopy(
   };
 }
 
-/** The usage-billing modal: Pro checkout, Move to Pro, credit packs, auto top-up. */
+/** The usage-billing modal: Pro or Max checkout, a plan upgrade, credit packs, auto top-up. */
 export function UsageUpgradeModal({
   open,
   onOpenChange,
@@ -146,9 +163,12 @@ export function UsageUpgradeModal({
   const close = () => onOpenChange(false);
 
   if (reason === 'compare_plans') {
+    const maxPrices = maxPricesOf(view.status);
     const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
+    if (maxPrices || view.tier === 'max') plans.splice(2, 0, 'max');
     if (view.tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
     const current = view.tier === 'legacy_pro' ? view.tier : view.status.planSource === 'team' ? 'team' : view.tier;
+    const subscribed = view.status.planSource === 'subscription';
     const pricing = view.status.pricing;
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,19 +177,23 @@ export function UsageUpgradeModal({
             <DialogTitle>Compare plans</DialogTitle>
             <DialogDescription>See what each plan includes.</DialogDescription>
           </DialogHeader>
-          <div className={`grid gap-3 sm:grid-cols-2 ${plans.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+          <div className={`grid gap-3 sm:grid-cols-2 ${GRID_COLUMNS[plans.length] ?? 'lg:grid-cols-3'}`}>
             {plans.map((plan) => {
               const limits = PLAN_LIMITS[plan === 'team' ? 'pro' : plan];
               const monthly = plan === 'free'
                 ? PLAN_PRICES.free.monthlyMicros
                 : plan === 'legacy_pro'
                   ? pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros
-                  : pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros;
+                  : plan === 'max'
+                    ? maxPrices?.monthlyMicros ?? PLAN_PRICES.max.monthlyMicros
+                    : pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros;
               const annual = plan === 'free'
                 ? null
                 : plan === 'legacy_pro'
                   ? PLAN_PRICES.legacy_pro.annualMicros
-                  : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
+                  : plan === 'max'
+                    ? maxPrices?.annualMicros ?? PLAN_PRICES.max.annualMicros
+                    : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
               return (
                 <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-sm">
                   <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>
@@ -185,7 +209,7 @@ export function UsageUpgradeModal({
                     </div>
                   )}
                   <ul className="my-3 space-y-1 text-xs text-muted-foreground">
-                    <li>{formatBoxHoursLabel(boxHoursToWeightedSeconds(limits.includedBoxHours))} per month</li>
+                    <li>{plan === 'max' ? MAX_INCLUDED_TEXT : formatBoxHoursLabel(boxHoursToWeightedSeconds(limits.includedBoxHours))} per month</li>
                     <li>{limits.concurrentBoxes} concurrent boxes</li>
                     <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
                     <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
@@ -197,12 +221,21 @@ export function UsageUpgradeModal({
                         <p className="font-medium text-primary">
                           Your plan{plan !== 'team' && view.status.planSource === 'subscription' && view.status.period ? ` · ${BILLING_PERIOD_LABELS[view.status.period]}` : ''}
                         </p>
-                        {plan === 'pro' && <AnnualSwitch status={view.status} placement="compare_plans" />}
+                        {(plan === 'pro' || plan === 'max') && <AnnualSwitch status={view.status} placement="compare_plans" />}
                       </>
                     ) : plan === 'pro' && view.tier === 'free' ? (
-                      <ProPlanForm mode="checkout" placement="upgrade_modal" />
-                    ) : plan === 'pro' && view.tier === 'legacy_pro' && view.status.planSource === 'subscription' ? (
-                      <ProPlanForm mode="change" placement="upgrade_modal" onChanged={close} />
+                      <PlanForm mode="checkout" placement="upgrade_modal" />
+                    ) : plan === 'pro' && view.tier === 'legacy_pro' && subscribed ? (
+                      <PlanForm mode="change" placement="upgrade_modal" onChanged={close} />
+                    ) : plan === 'pro' && view.tier === 'max' && subscribed ? (
+                      <>
+                        <p className="text-xs text-muted-foreground">To move to Pro, use Manage billing. The change starts at your next renewal.</p>
+                        <PortalButton secondary />
+                      </>
+                    ) : plan === 'max' && view.tier === 'free' ? (
+                      <PlanForm plan="max" mode="checkout" placement="upgrade_modal" />
+                    ) : plan === 'max' && (view.tier === 'pro' || view.tier === 'legacy_pro') && subscribed ? (
+                      <PlanForm plan="max" mode="change" placement="upgrade_modal" onChanged={close} />
                     ) : plan === 'team' ? (
                       <Button variant="outline" className="w-full" onClick={() => { trackEvent('team_offer_opened', { placement: 'upgrade_modal' }); close(); openSettings('teams'); }}>Explore Team</Button>
                     ) : null}
@@ -237,7 +270,7 @@ export function UsageUpgradeModal({
               case 'pro_checkout':
                 return (
                   <div key={offer} className="space-y-3">
-                    <ProPlanForm mode="checkout" placement="upgrade_modal" />
+                    <PlanForm mode="checkout" placement="upgrade_modal" />
                     <ul className="space-y-1 text-sm text-muted-foreground">
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4" /> {PRO_INCLUDED_TEXT} every month
@@ -258,7 +291,19 @@ export function UsageUpgradeModal({
                 return (
                   <div key={offer} className="space-y-2">
                     <p className="text-sm font-medium">Move to Pro</p>
-                    <ProPlanForm mode="change" placement="upgrade_modal" onChanged={close} />
+                    <PlanForm mode="change" placement="upgrade_modal" onChanged={close} />
+                  </div>
+                );
+              case 'max_checkout':
+              case 'move_to_max':
+                return (
+                  <div key={offer} className="space-y-2" data-testid={`offer-${offer}`}>
+                    <p className="text-sm font-medium">Max · {MAX_INCLUDED_TEXT} a month</p>
+                    {offer === 'max_checkout' ? (
+                      <PlanForm plan="max" mode="checkout" placement="upgrade_modal" />
+                    ) : (
+                      <PlanForm plan="max" mode="change" placement="upgrade_modal" onChanged={close} />
+                    )}
                   </div>
                 );
               case 'credits':

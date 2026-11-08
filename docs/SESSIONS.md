@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Max plan (2026-11-08)
+
+A third paid tier: **Max**, $100 a month or $1,000 a year, 1,000 box-hours a month, every size, credits and auto features. Tom asked for "something like $100 with a lot more compute" that does not lose money.
+- Cost basis: the YAS price notes (a 256 GiB host at about $105 a month, about $1 a month per GiB of sold pool) and the fleet host files (CPU binds first; scaleway-1 caps 96 boxes on 24 threads). The cautious estimate is $0.04 a `standard` box-hour (`FLEET_BOX_HOUR_COST_ESTIMATE_MICROS`); the likely figure is about $0.02. Talyn sends no box-hour events to PostHog, so the real usage spread is only in the database (admin Compute usage page).
+- At full use and the cautious estimate, Max keeps 57% monthly (break-even $0.094 a box-hour after Polar's fees) and 49% annual. Pro keeps 78%. Every customer who leaves hours unused raises it.
+- Two leaks closed: a mid-period upgrade between paid tiers gets prorated hours (`includedAfterTierChange`), and a downgrade cannot go through `change-plan` (it uses the portal, at renewal). Without the first, Pro → Max on the last day cost about $2 for 800 hours. Without the second, somebody could use 1,000 hours and get most of $100 back as credit. Legacy Pro → Pro is prorated the same way now.
+- Gated by `max-plan` (fallback OFF) and by both Max product ids. A subscriber keeps Max whatever the flag says.
+
 ## Session background jobs and wake-ups: backend (2026-11-08)
 
 An agent can start a command that outlives its turn. It can ask Talyn to start a new turn later. These features are released to every account (decision 2026-11-08). The UI is separate work.

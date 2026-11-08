@@ -38,7 +38,7 @@ export const BOX_HOUR_SECONDS = 3600;
 // Plan tiers
 // ---------------------------------------------------------------------------
 
-export const PLAN_TIERS = ['free', 'pro', 'legacy_pro'] as const;
+export const PLAN_TIERS = ['free', 'pro', 'max', 'legacy_pro'] as const;
 
 /** The usage-billing plan tier. `legacy_pro` is the old Unlimited plan at its old price. */
 export type PlanTier = (typeof PLAN_TIERS)[number];
@@ -50,6 +50,7 @@ export function isPlanTier(value: unknown): value is PlanTier {
 export const PLAN_TIER_LABELS: Record<PlanTier, string> = {
   free: 'Free',
   pro: 'Pro',
+  max: 'Max',
   legacy_pro: 'Legacy Pro',
 };
 
@@ -84,6 +85,19 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     creditsAllowed: true,
     autoFeatures: true,
   },
+  /**
+   * Max: five times Pro's hours for two and a half times its price, so a
+   * box-hour costs $0.10 here against Pro's $0.20 and the $0.22 credit price.
+   * The margin holds while a fleet box-hour costs less than about $0.09 after
+   * Polar's fees, with every included hour used. See {@link breakEvenBoxHourMicros}.
+   */
+  max: {
+    includedBoxHours: 1000,
+    concurrentBoxes: 100,
+    sizes: ALL_SIZES,
+    creditsAllowed: true,
+    autoFeatures: true,
+  },
   legacy_pro: {
     includedBoxHours: 50,
     concurrentBoxes: 100,
@@ -103,11 +117,82 @@ export interface PlanPrice {
 export const PLAN_PRICES: Record<PlanTier, PlanPrice> = {
   free: { monthlyMicros: 0, annualMicros: null },
   pro: { monthlyMicros: 40 * MICROS_PER_DOLLAR, annualMicros: 400 * MICROS_PER_DOLLAR },
+  max: { monthlyMicros: 100 * MICROS_PER_DOLLAR, annualMicros: 1000 * MICROS_PER_DOLLAR },
   legacy_pro: { monthlyMicros: 15 * MICROS_PER_DOLLAR, annualMicros: 150 * MICROS_PER_DOLLAR },
 };
 
-/** A team seat is a paid tier. There is no free seat. */
-export type TeamTier = Exclude<PlanTier, 'free'>;
+/** The tiers a person can buy today. `legacy_pro` is no longer sold. */
+export const SELLABLE_TIERS = ['pro', 'max'] as const;
+export type SellableTier = (typeof SELLABLE_TIERS)[number];
+
+export function isSellableTier(value: unknown): value is SellableTier {
+  return typeof value === 'string' && (SELLABLE_TIERS as readonly string[]).includes(value);
+}
+
+/** Paid tiers in order of included hours, so "is this an upgrade" is one comparison. */
+const PAID_TIER_RANK: Record<PaidTier, number> = { legacy_pro: 1, pro: 2, max: 3 };
+
+/** True when moving from `from` to `to` buys more included hours. Free is below every paid tier. */
+export function isTierUpgrade(from: PlanTier, to: PlanTier): boolean {
+  const rank = (tier: PlanTier) => (tier === 'free' ? 0 : PAID_TIER_RANK[tier]);
+  return rank(to) > rank(from);
+}
+
+/**
+ * Polar's fee on one card payment, as a worst case for margin checks: 4% +
+ * $0.40, plus 1.5% for an international card and 0.5% for a subscription.
+ */
+export const PAYMENT_FEE_PERCENT = 6;
+export const PAYMENT_FEE_FIXED_MICROS: Micros = 400_000;
+
+/** What a payment of `micros` leaves after {@link PAYMENT_FEE_PERCENT} and the fixed fee. */
+export function netOfPaymentFees(micros: Micros): Micros {
+  if (micros <= 0) return 0;
+  return Math.max(0, Math.round((micros * (100 - PAYMENT_FEE_PERCENT)) / 100) - PAYMENT_FEE_FIXED_MICROS);
+}
+
+/**
+ * A cautious estimate of what one `standard` box-hour costs us on the fleet,
+ * for margin checks only. Nothing bills with it.
+ *
+ * Derivation (2026-11): the fleet runs on rented bare metal. The YAS price
+ * notes put a 256 GiB host at about $105 a month and a GiB of sold pool at
+ * about $1 a month, so a 4 GiB box held all month costs about $4, or
+ * $0.0055 an hour, on memory. CPU binds first: a 24-thread host at about
+ * $300 a month with one busy `standard` box per thread costs $0.017 a
+ * box-hour. Half that packing, plus suspension storage and the control
+ * plane, gives this figure of $0.04. Raise it if the hardware bill says so;
+ * the pricing tests then show which tier stops paying for itself.
+ */
+export const FLEET_BOX_HOUR_COST_ESTIMATE_MICROS: Micros = 40_000;
+
+/** The gross margin every paid tier must keep with all its included hours used. */
+export const MIN_FULL_USE_MARGIN_PERCENT = 50;
+
+/**
+ * The same floor for an annual price. Lower on purpose: the annual discount
+ * (two months free) buys a year of cash at once and less churn. Max annual
+ * keeps about 49% at the cost estimate with every hour used.
+ */
+export const MIN_ANNUAL_FULL_USE_MARGIN_PERCENT = 45;
+
+/**
+ * The fleet cost of one box-hour at which a tier's monthly price, net of
+ * payment fees, only just pays for every included hour. Above it, a customer
+ * who uses the whole allowance loses us money. Zero for a tier that includes
+ * nothing or costs nothing.
+ */
+export function breakEvenBoxHourMicros(tier: PlanTier): Micros {
+  const hours = PLAN_LIMITS[tier].includedBoxHours;
+  const net = netOfPaymentFees(PLAN_PRICES[tier].monthlyMicros);
+  return hours > 0 ? Math.floor(net / hours) : 0;
+}
+
+/** A tier somebody pays for. */
+export type PaidTier = Exclude<PlanTier, 'free'>;
+
+/** A team seat is a paid tier. There is no free seat, and teams do not sell Max. */
+export type TeamTier = Exclude<PaidTier, 'max'>;
 
 /** The tier of a team bought before usage billing. Existing seats keep Legacy Pro terms. */
 export const DEFAULT_TEAM_TIER: TeamTier = 'legacy_pro';
@@ -124,7 +209,7 @@ export function teamSeatTier(teamTier: string | null | undefined): TeamTier {
 }
 
 /** Values `users.plan_override` accepts. `unlimited` is the old comp value. */
-export const PLAN_OVERRIDE_VALUES = ['free', 'unlimited', 'pro', 'legacy_pro'] as const;
+export const PLAN_OVERRIDE_VALUES = ['free', 'unlimited', 'pro', 'max', 'legacy_pro'] as const;
 export type PlanOverride = (typeof PLAN_OVERRIDE_VALUES)[number];
 
 export function isPlanOverride(value: unknown): value is PlanOverride {
@@ -142,6 +227,8 @@ export function planTierFromOverride(override: string | null | undefined): PlanT
     case 'unlimited':
     case 'pro':
       return 'pro';
+    case 'max':
+      return 'max';
     case 'legacy_pro':
       return 'legacy_pro';
     default:
@@ -151,6 +238,38 @@ export function planTierFromOverride(override: string | null | undefined): PlanT
 
 export function includedWeightedSeconds(tier: PlanTier): number {
   return boxHoursToWeightedSeconds(PLAN_LIMITS[tier].includedBoxHours);
+}
+
+/**
+ * The included weighted seconds a usage period holds after its tier changes
+ * from `from` to `to` at `now`.
+ *
+ * An upgrade from one PAID tier to a bigger one adds only the share of the
+ * extra hours that is left in the period, the way Polar prorates the charge
+ * (`PLAN_CHANGE_PRORATION`). Without this, a Pro subscriber could move to Max
+ * on the last day of a period, pay about $2 and get 800 more box-hours.
+ *
+ * Every other change gives the new tier's full amount at once: a downgrade
+ * (the smaller allowance applies now), a move from Free (a checkout starts a
+ * new period anyway, so this is a comp), a move to Free, and an unknown tier.
+ * The result never goes above the new tier's full amount.
+ */
+export function includedAfterTierChange(input: {
+  from: string;
+  to: PlanTier;
+  currentIncludedWsec: number;
+  period: { start: Date; end: Date };
+  now: Date;
+}): number {
+  const full = includedWeightedSeconds(input.to);
+  const { from, to } = input;
+  if (!isPlanTier(from) || from === 'free' || to === 'free' || !isTierUpgrade(from, to)) return full;
+  const span = input.period.end.getTime() - input.period.start.getTime();
+  if (!(span > 0)) return full;
+  const left = Math.min(1, Math.max(0, (input.period.end.getTime() - input.now.getTime()) / span));
+  const extra = Math.round((full - includedWeightedSeconds(from)) * left);
+  const current = Number.isFinite(input.currentIncludedWsec) ? Math.max(0, input.currentIncludedWsec) : 0;
+  return Math.min(full, current + Math.max(0, extra));
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +691,13 @@ export interface BillingPricing {
   proAnnualMicros: Micros;
   legacyProMonthlyMicros: Micros;
   boxHourMicros: Micros;
+  /**
+   * Max prices. Sent only when this account may buy Max (the `max-plan` flag
+   * and both Max products are set) or already holds it. Absent means "do not
+   * offer Max", which is also how a client reads an older backend.
+   */
+  maxMonthlyMicros?: Micros;
+  maxAnnualMicros?: Micros;
 }
 
 /** One metered box interval, as `GET /billing/usage` lists it. */
@@ -644,11 +770,12 @@ export function formatSizePrice(size: SandboxSize): string {
 
 /**
  * Box-hours as text, floored to one decimal so the UI never claims more use
- * than happened: "37.5", "200", "0".
+ * than happened: "37.5", "200", "1,000", "0".
  */
 export function formatBoxHours(wsec: number): string {
   const tenths = Math.floor((Math.max(0, wsec) * 10) / BOX_HOUR_SECONDS);
-  return tenths % 10 === 0 ? String(tenths / 10) : (tenths / 10).toFixed(1);
+  const whole = Math.floor(tenths / 10).toLocaleString('en-US');
+  return tenths % 10 === 0 ? whole : `${whole}.${tenths % 10}`;
 }
 
 /** "1 box-hour", "2.5 box-hours". */
@@ -674,6 +801,16 @@ export function annualSavingsMicros(pricing: Pick<BillingPricing, 'proMonthlyMic
   return Math.max(0, pricing.proMonthlyMicros * 12 - pricing.proAnnualMicros);
 }
 
+/** The monthly and annual price of a sellable tier, or null when the pricing does not offer it. */
+export function sellableTierPrices(
+  tier: SellableTier,
+  pricing: BillingPricing,
+): { monthlyMicros: Micros; annualMicros: Micros } | null {
+  if (tier === 'pro') return { monthlyMicros: pricing.proMonthlyMicros, annualMicros: pricing.proAnnualMicros };
+  if (pricing.maxMonthlyMicros == null || pricing.maxAnnualMicros == null) return null;
+  return { monthlyMicros: pricing.maxMonthlyMicros, annualMicros: pricing.maxAnnualMicros };
+}
+
 export const BILLING_PERIOD_LABELS = { monthly: 'Monthly', annual: 'Annual' } as const;
 
 /**
@@ -684,7 +821,7 @@ export const BILLING_PERIOD_LABELS = { monthly: 'Monthly', annual: 'Annual' } as
 export function formatPlanPeriodLine(
   tier: PlanTier,
   period: 'monthly' | 'annual' | null | undefined,
-  pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros' | 'legacyProMonthlyMicros'>
+  pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros' | 'legacyProMonthlyMicros' | 'maxMonthlyMicros' | 'maxAnnualMicros'>
 ): string | null {
   if (tier === 'free' || !period) return null;
   const micros =
@@ -692,9 +829,13 @@ export function formatPlanPeriodLine(
       ? period === 'monthly'
         ? pricing.legacyProMonthlyMicros
         : PLAN_PRICES.legacy_pro.annualMicros
-      : period === 'monthly'
-        ? pricing.proMonthlyMicros
-        : pricing.proAnnualMicros;
+      : tier === 'max'
+        ? period === 'monthly'
+          ? (pricing.maxMonthlyMicros ?? PLAN_PRICES.max.monthlyMicros)
+          : (pricing.maxAnnualMicros ?? PLAN_PRICES.max.annualMicros)
+        : period === 'monthly'
+          ? pricing.proMonthlyMicros
+          : pricing.proAnnualMicros;
   if (micros == null) return null;
   return `${PLAN_TIER_LABELS[tier]} · ${BILLING_PERIOD_LABELS[period]} · ${formatUsd(micros, 0)}/${period === 'monthly' ? 'month' : 'year'}`;
 }

@@ -87,7 +87,10 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   //    resolve to Legacy Pro through these ids, so keep them while any exist.
   //  - The team products: the Pro team product ($40 a seat) is what new teams
   //    buy; the old team product stays recognised, its teams on Legacy Pro.
+  //  - The Max products: optional so a deployment can run without them; Max
+  //    is offered only once both are set.
   const optionalPairs: Array<{ label: string; vars: [string, string] }> = [
+    { label: 'The Max products', vars: ['POLAR_PRODUCT_ID_MAX_MONTHLY', 'POLAR_PRODUCT_ID_MAX_ANNUAL'] },
     { label: 'The old Unlimited products (Legacy Pro)', vars: ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] },
     { label: 'The Polar team plan', vars: ['POLAR_PRODUCT_ID_TEAM_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'] },
     {

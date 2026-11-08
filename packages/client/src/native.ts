@@ -1597,10 +1597,10 @@ export const insights = {
 // the old view", never as an error to show.
 export const billing = {
   status: () => request<BillingStatus>('GET', '/billing/status'),
-  /** Pro checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. */
+  /** Pro or Max checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. 403 `max_plan_unavailable` when Max is not offered. */
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
-  /** Legacy Pro → Pro on the live subscription. 409 `no_subscription` when there is none. */
+  /** An upgrade on the live subscription (Legacy Pro → Pro, Pro → Max). 409 `no_subscription` when there is none, `downgrade_via_portal` for a smaller plan. */
   changePlan: (data: ChangePlanRequest) =>
     request<{ ok: true }>('POST', '/billing/change-plan', data),
   /** Box-hours per UTC day and the recent intervals. `from`/`to` are ISO; default the last 30 days. */
