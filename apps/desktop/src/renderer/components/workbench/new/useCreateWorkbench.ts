@@ -65,18 +65,29 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       if (spec.prompt.trim() && !spec.attachments?.length && spec.runtime !== 'local') {
         trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0 });
       }
-      useWorkbenchStore.getState().upsertWorkbench(wb);
+      const store = useWorkbenchStore.getState();
+      store.upsertWorkbench(wb);
+      // The session opens with the prompt already in its chat, not an empty
+      // one: the prompt's own event comes only when the sandbox starts the turn.
+      const firstChat = wb.chats?.[0];
+      // A sandbox prompt without images went with the create request, so it is already sent.
+      const alreadySent = spec.runtime !== 'local' && !spec.attachments?.length;
+      const pending: PendingFirstMessage | null = firstChat && spec.prompt.trim()
+        ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: alreadySent }) }
+        : null;
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
-      if (spec.runtime === 'local') void startLocalChat(wb, spec);
+      if (spec.runtime === 'local') void startLocalChat(wb, spec, pending);
       else if (spec.attachments?.length) {
         try {
-          const chat = wb.chats?.[0] ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
+          const chat = firstChat ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
           const sent = await api.workbenches.sendMessage(chat.id, {
             text: spec.prompt.trim(), attachments: spec.attachments,
             model: spec.model, effort: spec.effort, planMode: spec.planMode,
           });
+          if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
           trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length });
         } catch (err) {
+          if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);
           captureWorkbenchFailure('send_first_message', err, wb.id);
           if (!maybeHandleBillingLimit(err, 'workbench_send')) {
             toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
@@ -160,8 +171,14 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
   return wb;
 }
 
+/** The first prompt, as the new session's transcript shows it before its event arrives. */
+interface PendingFirstMessage {
+  chatId: string;
+  id: string;
+}
+
 /** A new local workbench's first chat, and its first message when one was given. */
-async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec): Promise<void> {
+async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec, pending: PendingFirstMessage | null): Promise<void> {
   const prompt = spec.prompt.trim();
   const { effort } = spec;
   try {
@@ -185,9 +202,11 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec): Promise<vo
           : attachment))
         : undefined;
       const sent = await ops.send(chat, { text: prompt, attachments, model: spec.model, planMode: spec.planMode, effort });
+      if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
       trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: attachments?.length ?? 0 });
     }
   } catch (err) {
+    if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);
     captureWorkbenchFailure('send_first_message', err, wb.id);
     toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
   }

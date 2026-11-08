@@ -34,7 +34,6 @@ import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 
-let outgoingMessageSequence = 0;
 
 export function Composer({
   workbench,
@@ -201,14 +200,8 @@ export function Composer({
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
-      outgoingMessageSequence += 1;
-      outgoingId = `outgoing-${Date.now()}-${outgoingMessageSequence}`;
       outgoingChatId = target.id;
-      useWorkbenchStore.getState().addOutgoingMessage(target.id, {
-        id: outgoingId,
-        text,
-        attachments: attachments.slice(),
-      });
+      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice() });
       setDraft(draftKey, '');
       setAttachments([]);
       setImageNotReady(false);
@@ -220,6 +213,7 @@ export function Composer({
         model,
         effort,
       });
+      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId);
       trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
@@ -229,6 +223,7 @@ export function Composer({
       }
     } catch (err) {
       captureWorkbenchFailure('send_message', err, workbench.id);
+      if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessages(outgoingChatId, [outgoingId]);
       setDraft(draftKey, text);
       const refused = owner ? null : promptRefusal(err);
       if (refused) {
@@ -239,7 +234,6 @@ export function Composer({
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {
-      if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessage(outgoingChatId, outgoingId);
       setSending(false);
     }
   };
@@ -310,7 +304,7 @@ export function Composer({
               {ops.canRemoveQueued && chat && (
                 <button
                   type="button"
-                  onClick={() => ops.removeQueued(chat.id, m.id)}
+                  onClick={() => removeQueued(ops, chat.id, m)}
                   className="rounded p-0.5 hover:bg-accent hover:text-foreground"
                   aria-label="Remove the queued message"
                   title="Remove"
@@ -426,6 +420,15 @@ export function sandboxWaitText(workbench: Workbench): string | null {
   return null;
 }
 
+/** Remove a queued message, and the transcript's pending copy of it. */
+function removeQueued(ops: WorkbenchOps, chatId: string, message: WorkbenchQueuedMessage) {
+  const store = useWorkbenchStore.getState();
+  const text = message.text.trim();
+  const copies = (store.outgoingMessages[chatId] ?? []).filter((o) => o.text.trim() === text).map((o) => o.id);
+  if (copies.length) store.removeOutgoingMessages(chatId, copies);
+  ops.removeQueued(chatId, message.id);
+}
+
 /** A message that waits for a sandbox is the turn in progress, so it is a status line and not a queued chip. */
 function CapacityWaitLine({ message, wait, chatId, ops }: { message: WorkbenchQueuedMessage; wait: WorkbenchCapacityWait; chatId: string | undefined; ops: WorkbenchOps }) {
   const [now, setNow] = useState(() => Date.now());
@@ -440,7 +443,7 @@ function CapacityWaitLine({ message, wait, chatId, ops }: { message: WorkbenchQu
       {ops.canRemoveQueued && chatId && (
         <button
           type="button"
-          onClick={() => ops.removeQueued(chatId, message.id)}
+          onClick={() => removeQueued(ops, chatId, message)}
           className="rounded p-0.5 hover:bg-accent hover:text-foreground"
           aria-label="Stop waiting"
           title="Stop waiting"

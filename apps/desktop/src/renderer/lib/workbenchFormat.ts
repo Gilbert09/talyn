@@ -113,6 +113,53 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
 }
 
 // ============================================================================
+// Messages sent but not yet in the transcript
+// ============================================================================
+
+/** A prompt the user sent that the transcript does not show yet. */
+export interface PendingUserMessage {
+  id: string;
+  text: string;
+  attachments: WorkbenchAttachment[];
+  /** The newest event seq of the chat when it was sent. Only a later user event can be its echo. */
+  afterSeq: number | null;
+  /** When the send request finished. Absent while it is in flight. */
+  settledAt?: number;
+}
+
+/**
+ * How long a sent message stays on screen when its chat does not report it as
+ * queued or running. The chat update and the send response can arrive in
+ * either order.
+ */
+export const PENDING_MESSAGE_GRACE_MS = 10_000;
+
+/**
+ * What the transcript does with a sent message:
+ * - `show`: draw it as the user's bubble, until its own event arrives.
+ * - `hide`: the composer queue shows it.
+ * - `done`: its event arrived, or it will not run. Forget it.
+ *
+ * The backend writes the message's event only when its turn starts, and later
+ * still when it has inline images. Without this, a new session showed an empty
+ * chat with "Working…" until the sandbox woke.
+ */
+export function pendingMessageState(
+  message: PendingUserMessage,
+  ctx: { events: WorkbenchEvent[]; queued: readonly { text: string }[]; running: boolean; now: number },
+): 'show' | 'hide' | 'done' {
+  const text = message.text.trim();
+  const echoed = ctx.events.some(
+    (e) => (message.afterSeq === null || e.seq > message.afterSeq) && userMessageText(e.event)?.trim() === text,
+  );
+  if (echoed) return 'done';
+  if (message.settledAt === undefined) return 'show';
+  if (ctx.queued.some((q) => q.text.trim() === text)) return 'hide';
+  if (ctx.running || ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS) return 'show';
+  return 'done';
+}
+
+// ============================================================================
 // Derived chat state: to-dos and context usage
 // ============================================================================
 

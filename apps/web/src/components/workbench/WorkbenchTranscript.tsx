@@ -1,15 +1,16 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { History, Loader2, RotateCcw } from 'lucide-react';
-import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchQueuedMessage } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { renderMarkdownish } from '../../lib/markdown';
-import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
+import { chatTotals, compactCount, pendingMessageState, PENDING_MESSAGE_GRACE_MS, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
+import { useWorkbenchStore, type OutgoingWorkbenchMessage } from '../../stores/workbenches';
 
 /**
  * A chat's transcript: each turn is the user's message, then the agent's
@@ -39,6 +40,7 @@ export function WorkbenchTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
+  const outgoing = usePendingMessages(chat, events);
   const turns = useStableTurns(events);
   const firstSeq = events.length ? events[0].seq : null;
   const prevFirstSeqRef = useRef(firstSeq);
@@ -79,7 +81,7 @@ export function WorkbenchTranscript({
     prevHeightRef.current = el.scrollHeight;
     // A page that does not fill the view gives no scroll to react to.
     maybeLoadOlder();
-  }, [events.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
+  }, [events.length, outgoing.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
 
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
@@ -93,12 +95,12 @@ export function WorkbenchTranscript({
         className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4 text-sm text-foreground"
       >
         {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
-        {turns.length === 0 && !loading && (
+        {turns.length === 0 && outgoing.length === 0 && !loading && (
           <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
             {emptyHint ?? 'Send a message to start.'}
           </div>
         )}
-        {loading && turns.length === 0 && (
+        {loading && turns.length === 0 && outgoing.length === 0 && (
           <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the chat…
           </div>
@@ -133,6 +135,18 @@ export function WorkbenchTranscript({
               />
             );
           })}
+          {outgoing.map((message) => (
+            <UserMessage
+              key={message.id}
+              chatId={chat.id}
+              turn={0}
+              text={message.text}
+              attachments={message.attachments}
+              ops={ops}
+              canRevert={false}
+              sending={message.settledAt === undefined}
+            />
+          ))}
           {running && (
             <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
@@ -160,6 +174,46 @@ export interface OlderHistory {
 }
 
 const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
+const EMPTY_OUTGOING_MESSAGES: OutgoingWorkbenchMessage[] = [];
+const EMPTY_QUEUE: WorkbenchQueuedMessage[] = [];
+
+/**
+ * The prompts the user sent that the transcript does not show yet. The
+ * backend writes a prompt's event only when its turn starts, so a new
+ * session's first message would otherwise vanish until the sandbox woke.
+ * Prompts whose event arrived, or that will not run, are forgotten.
+ */
+function usePendingMessages(chat: WorkbenchChat, events: WorkbenchEvent[]): OutgoingWorkbenchMessage[] {
+  const outgoing = useWorkbenchStore((state) => state.outgoingMessages[chat.id] ?? EMPTY_OUTGOING_MESSAGES);
+  const queued = chat.queuedMessages ?? EMPTY_QUEUE;
+  const running = chat.status === 'running';
+  const [now, setNow] = useState(() => Date.now());
+  const states = useMemo(
+    () => outgoing.map((message) => pendingMessageState(message, { events, queued, running, now })),
+    [outgoing, events, queued, running, now],
+  );
+
+  const done = outgoing.filter((_, i) => states[i] === 'done').map((message) => message.id).join('\n');
+  useEffect(() => {
+    if (done) useWorkbenchStore.getState().removeOutgoingMessages(chat.id, done.split('\n'));
+  }, [chat.id, done]);
+
+  // Look again when the grace of a sent message ends.
+  const expiry = running
+    ? null
+    : outgoing.reduce<number | null>((soonest, message, i) => {
+        if (states[i] !== 'show' || message.settledAt === undefined) return soonest;
+        const end = message.settledAt + PENDING_MESSAGE_GRACE_MS;
+        return soonest === null ? end : Math.min(soonest, end);
+      }, null);
+  useEffect(() => {
+    if (expiry === null) return undefined;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, expiry - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [expiry]);
+
+  return useMemo(() => outgoing.filter((_, i) => states[i] === 'show'), [outgoing, states]);
+}
 
 /** How close to the top a scroll must come before the next older page loads. */
 const LOAD_OLDER_THRESHOLD_PX = 400;
@@ -336,6 +390,7 @@ function UserMessage({
   attachments,
   ops,
   canRevert,
+  sending = false,
 }: {
   chatId: string;
   turn: number;
@@ -343,6 +398,7 @@ function UserMessage({
   attachments: TranscriptTurn['attachments'];
   ops: WorkbenchOps;
   canRevert: boolean;
+  sending?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -367,6 +423,11 @@ function UserMessage({
           {renderMarkdownish(text, 'surface')}
           {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}
         </div>
+        {sending && (
+          <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground" data-attr="outgoing-message">
+            <Loader2 className="h-3 w-3 animate-spin" /> Sending…
+          </div>
+        )}
         {canRevert && (
           <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">
             {confirming ? (

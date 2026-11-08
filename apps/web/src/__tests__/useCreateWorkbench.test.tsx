@@ -3,7 +3,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 /**
  * @jest-environment jsdom
  */
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { useCreateWorkbench, type NewWorkbenchSpec } from '../components/workbench/new/useCreateWorkbench';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -19,6 +19,7 @@ const mockApi = {
   create: vi.fn(),
   updateChat: vi.fn(),
   createChat: vi.fn(),
+  sendMessage: vi.fn(),
 };
 vi.mock('../lib/api', () => ({
   api: {
@@ -26,6 +27,7 @@ vi.mock('../lib/api', () => ({
       create: (...args: unknown[]) => mockApi.create(...args),
       updateChat: (...args: unknown[]) => mockApi.updateChat(...args),
       createChat: (...args: unknown[]) => mockApi.createChat(...args),
+      sendMessage: (...args: unknown[]) => mockApi.sendMessage(...args),
     },
   },
 }));
@@ -108,6 +110,8 @@ beforeEach(() => {
     workbenches: {},
     chats: {},
     selectedChatByWorkbench: {},
+    outgoingMessages: {},
+    chatEvents: {},
   });
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore.getState().setWorkbenches('ws1', [workbench({ id: 'old', name: 'lisbon' })]);
@@ -226,3 +230,59 @@ describe('useCreateWorkbench: sandbox', () => {
 });
 
 afterEach(cleanup);
+
+describe('useCreateWorkbench: the first prompt in the new chat', () => {
+  const held = () => useWorkbenchStore.getState().outgoingMessages.c1 ?? [];
+  const image = { name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' };
+
+  it('opens the session with the prompt already sent', async () => {
+    mockApi.create.mockResolvedValue(workbench());
+    await run(spec());
+    expect(held()).toEqual([
+      expect.objectContaining({ text: 'Fix the login redirect', attachments: [], afterSeq: null, settledAt: expect.any(Number) }),
+    ]);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  \n '],
+  ])('adds nothing for an %s prompt', async (_label, prompt) => {
+    mockApi.create.mockResolvedValue(workbench());
+    await run(spec({ prompt }));
+    expect(held()).toEqual([]);
+  });
+
+  it('adds nothing when the row came back without a chat', async () => {
+    mockApi.create.mockResolvedValue(workbench({ chats: [] }));
+    await run(spec());
+    expect(useWorkbenchStore.getState().outgoingMessages).toEqual({});
+  });
+
+  it('shows a prompt with images while its send is in flight, then marks it sent', async () => {
+    let finish: (value: { queued: boolean }) => void = () => undefined;
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useCreateWorkbench());
+    let done: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      done = result.current.create(spec({ attachments: [image] }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockApi.sendMessage).toHaveBeenCalled());
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb1' });
+    expect(held()).toEqual([expect.objectContaining({ text: 'Fix the login redirect', attachments: [image] })]);
+    expect(held()[0].settledAt).toBeUndefined();
+    await act(async () => {
+      finish({ queued: true });
+      await done;
+    });
+    expect(held()[0].settledAt).toEqual(expect.any(Number));
+  });
+
+  it('drops a prompt with images when its send fails', async () => {
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockRejectedValue(new Error('Server error'));
+    await run(spec({ attachments: [image] }));
+    expect(held()).toEqual([]);
+  });
+});

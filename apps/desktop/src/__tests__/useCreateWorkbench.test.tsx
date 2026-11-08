@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { useCreateWorkbench, type NewWorkbenchSpec } from '../renderer/components/workbench/new/useCreateWorkbench';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
@@ -114,7 +114,7 @@ async function run(input: NewWorkbenchSpec) {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useWorkbenchStore.setState({ workbenches: {}, chats: {}, selectedChatByWorkbench: {} });
+  useWorkbenchStore.setState({ workbenches: {}, chats: {}, selectedChatByWorkbench: {}, outgoingMessages: {}, chatEvents: {} });
   useWorkbenchStore.getState().setWorkspace('ws1');
   useWorkbenchStore.getState().setWorkbenches('ws1', [workbench({ id: 'old', name: 'lisbon' })]);
   useNavigationStore.getState().navigate({ view: 'home' });
@@ -221,6 +221,62 @@ describe('useCreateWorkbench: sandbox', () => {
   });
 });
 
+describe('useCreateWorkbench: the first prompt in the new chat', () => {
+  const held = () => useWorkbenchStore.getState().outgoingMessages.c1 ?? [];
+  const image = { name: 'shot.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' };
+
+  it('opens the session with the prompt already sent', async () => {
+    mockApi.create.mockResolvedValue(workbench());
+    await run(spec());
+    expect(held()).toEqual([
+      expect.objectContaining({ text: 'Fix the login redirect', attachments: [], afterSeq: null, settledAt: expect.any(Number) }),
+    ]);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  \n '],
+  ])('adds nothing for an %s prompt', async (_label, prompt) => {
+    mockApi.create.mockResolvedValue(workbench());
+    await run(spec({ prompt }));
+    expect(held()).toEqual([]);
+  });
+
+  it('adds nothing when the row came back without a chat', async () => {
+    mockApi.create.mockResolvedValue(workbench({ chats: [] }));
+    await run(spec());
+    expect(useWorkbenchStore.getState().outgoingMessages).toEqual({});
+  });
+
+  it('shows a prompt with images while its send is in flight, then marks it sent', async () => {
+    let finish: (value: { queued: boolean }) => void = () => undefined;
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useCreateWorkbench());
+    let done: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      done = result.current.create(spec({ attachments: [image] }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockApi.sendMessage).toHaveBeenCalled());
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb1' });
+    expect(held()).toEqual([expect.objectContaining({ text: 'Fix the login redirect', attachments: [image] })]);
+    expect(held()[0].settledAt).toBeUndefined();
+    await act(async () => {
+      finish({ queued: true });
+      await done;
+    });
+    expect(held()[0].settledAt).toEqual(expect.any(Number));
+  });
+
+  it('drops a prompt with images when its send fails', async () => {
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockRejectedValue(new Error('Server error'));
+    await run(spec({ attachments: [image] }));
+    expect(held()).toEqual([]);
+  });
+});
+
 describe('useCreateWorkbench: local', () => {
   const local = (over: Partial<NewWorkbenchSpec> = {}) => spec({ runtime: 'local', repoPath: '/code/app', ...over });
 
@@ -288,6 +344,25 @@ describe('useCreateWorkbench: local', () => {
     await run(local());
     expect(mockApi.createChat).toHaveBeenCalledWith('wb1', { model: 'claude-sonnet', effort: 'high', planMode: false });
     expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ id: 'c9' }), expect.objectContaining({ text: 'Fix the login redirect' }));
+  });
+
+  it('shows the first prompt until the local send finishes', async () => {
+    mockCreateLocal.mockResolvedValue(workbench({ runtime: 'local', status: 'ready' }));
+    mockSend.mockResolvedValue({ queued: false });
+    await run(local());
+    expect(useWorkbenchStore.getState().outgoingMessages.c1).toEqual([
+      expect.objectContaining({ text: 'Fix the login redirect', settledAt: expect.any(Number) }),
+    ]);
+  });
+
+  it('drops the first prompt when the local send fails', async () => {
+    mockCreateLocal.mockResolvedValue(workbench({ runtime: 'local', status: 'ready' }));
+    mockSend.mockRejectedValue(new Error('no agent'));
+    await run(local());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useWorkbenchStore.getState().outgoingMessages.c1).toEqual([]);
   });
 
   it('sends nothing for an empty task', async () => {

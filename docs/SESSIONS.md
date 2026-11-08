@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Optimistic first prompt in a new session (2026-11-08)
+
+A new session opened on an empty chat with "Working…" and no prompt. The prompt came back only with its `user_message` event. The backend writes that event when the turn starts. With inline images it waits until the sandbox wakes and saves the files.
+- `useCreateWorkbench` adds the first prompt to the new chat's `outgoingMessages` before it opens the session. A prompt without images went with the create request, so it is marked sent at once. A prompt with images is in flight until its `sendMessage` call finishes, and is removed when that call fails.
+- The composer no longer drops its outgoing prompt when the send request finishes. It marks the prompt sent and removes it only when the send fails.
+- `pendingMessageState` (`lib/workbenchFormat.ts`) decides each pending prompt: `done` when a user event with the same text arrives after its `afterSeq`, `hide` while the composer queue shows it, `show` while the chat runs or for a 10 s grace after the send, and `done` after that. The grace covers a send response that arrives before the chat update.
+- Removing a queued message also removes its pending copy, so it cannot reappear while another turn runs.
+- The web app had no outgoing bubble before. It now has the same store, composer, transcript and create code as the desktop.
+
 ## Workspace Tailscale private routes (2026-11-07)
 
 - A gated **Private routes** settings page now connects one workspace to a customer tailnet through YAS.
