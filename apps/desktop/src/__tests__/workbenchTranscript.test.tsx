@@ -572,3 +572,38 @@ describe('failed prompts', () => {
     expect(screen.queryByText('Check the cache')).not.toBeInTheDocument();
   });
 });
+
+describe('message times', () => {
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const timed = (): WorkbenchEvent[] => [
+    { ...userEvent(1, 1), createdAt: minutesAgo(10) },
+    {
+      chatId: 'c1',
+      seq: 2,
+      turn: 1,
+      event: { seq: 2, type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } } as AgentEvent,
+      createdAt: minutesAgo(5),
+    },
+  ];
+
+  it('shows when the user sent a message and when the agent finished', () => {
+    const events = timed();
+    render(<WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} />);
+    expect(screen.getByText('10 minutes ago')).toHaveAttribute('datetime', events[0].createdAt);
+    expect(screen.getByText('5 minutes ago')).toHaveAttribute('datetime', events[1].createdAt);
+  });
+
+  it('leaves out the end time of a turn that is still running', () => {
+    const running = { ...chat, status: 'running' } as WorkbenchChat;
+    render(<WorkbenchTranscript chat={running} events={timed()} loading={false} error={null} ops={ops} />);
+    expect(screen.getByText('10 minutes ago')).toBeInTheDocument();
+    expect(screen.queryByText('5 minutes ago')).not.toBeInTheDocument();
+  });
+
+  it('shows no time for events from a server that does not send one', () => {
+    const { container } = render(
+      <WorkbenchTranscript chat={chat} events={timed().map(({ createdAt: _at, ...e }) => e)} loading={false} error={null} ops={ops} />,
+    );
+    expect(container.querySelector('time')).toBeNull();
+  });
+});

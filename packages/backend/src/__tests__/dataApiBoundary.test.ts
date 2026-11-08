@@ -176,6 +176,8 @@ describe('Data API database boundary', () => {
       'slack_installations', 'slack_user_links', 'slack_events', 'slack_oauth_states',
       'slack_threads', 'slack_trigger_messages', 'slack_repo_memory', 'session_mcp_tokens',
       'repository_instructions', 'workspace_memories',
+      // Memory uses (0120): which session saved or read an entry.
+      'workspace_memory_uses',
       // Preview links (0098): the host router reads them before any auth.
       'workbench_preview_hosts', 'workbench_preview_tickets', 'workbench_preview_sessions',
       // Turn time reports and setup recipes (0099): written by the turn-end job.

@@ -7,7 +7,7 @@ import type { AppContext } from '../stores/workspace';
  * The context rail: the bar on the far left that switches between my
  * workspaces and my teams' spaces, like Slack's workspace bar. It shows only
  * when there are two or more contexts. Its order is the switcher's order, so
- * ⌘⌥⇧1–9 counts the same tiles.
+ * ⌘⇧1–9 counts the same tiles.
  */
 
 export type RailEntry =

@@ -341,6 +341,21 @@ export function pushHeadStep(): GitStep {
   return { argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
 }
 
+/**
+ * The branch that {@link pushHeadStep} pushes. An agent can make and check out
+ * its own branch, so this can differ from the session's branch. Prints nothing
+ * on a detached HEAD.
+ */
+export function checkedOutBranchStep(): GitStep {
+  return { argv: ['git', 'symbolic-ref', '--short', '-q', 'HEAD'], allowFailure: true };
+}
+
+/** The branch from {@link checkedOutBranchStep}'s stdout, or null when there is none. */
+export function parseCheckedOutBranch(stdout: string): string | null {
+  const branch = stdout.trim().split('\n').pop()?.trim() ?? '';
+  return branch || null;
+}
+
 // ============================================================================
 // Signed publish (sandbox only)
 // ============================================================================

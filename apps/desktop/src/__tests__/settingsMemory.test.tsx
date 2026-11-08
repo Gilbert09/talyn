@@ -29,3 +29,33 @@ it('hides Memory when sessions are not offered', () => {
   render(<SettingsShell />);
   expect(within(screen.getByRole('navigation')).queryByRole('button', { name: 'Memory' })).toBeNull();
 });
+
+it('finds every settings section that matches a search term', () => {
+  useWorkspaceStore.setState({
+    features: { publicApi: true, workbenches: true } as Features,
+    settingsSection: 'appearance',
+  });
+  render(<SettingsShell />);
+  const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+
+  fireEvent.change(within(nav).getByRole('searchbox', { name: 'Search settings' }), {
+    target: { value: 'notifications' },
+  });
+
+  expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
+    'Sessions',
+    'Pull requests',
+  ]);
+});
+
+it('shows an empty result and clears search with Escape', () => {
+  useWorkspaceStore.setState({ features: {} as Features, settingsSection: 'appearance' });
+  render(<SettingsShell />);
+  const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+  const search = within(nav).getByRole('searchbox', { name: 'Search settings' });
+
+  fireEvent.change(search, { target: { value: 'not-a-setting' } });
+  expect(within(nav).getByRole('status')).toHaveTextContent('No settings found.');
+  fireEvent.keyDown(search, { key: 'Escape' });
+  expect(within(nav).getByRole('button', { name: 'Appearance' })).toBeInTheDocument();
+});

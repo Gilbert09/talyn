@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   WORKBENCH_CITY_NAMES,
   WORKBENCH_BRANCH_SLUG_MAX,
+  WORKBENCH_NAME_MAX,
   WORKBENCH_TASK_NAME_MAX,
   workbenchBranchFromTask,
+  uniqueWorkbenchName,
   workbenchNameFromTask,
 } from '../../../shared/src/workbench';
 import { isValidBranchName } from '../../../shared/src/workbenchGit';
@@ -95,6 +97,33 @@ describe('workbenchNameFromTask', () => {
     for (const text of ['Fix: it', 'Ünïcödé wörds', '__init__ cleanup', '-leading dash', '123 456']) {
       expect(workbenchNameFromTask(text, new Set())).toMatch(NAME_PATTERN);
     }
+  });
+});
+
+describe('uniqueWorkbenchName', () => {
+  const LONG = 'chore-data-warehouse-onboarding-friction-review-2026-11-08';
+  const MAX = 'a'.repeat(WORKBENCH_NAME_MAX);
+
+  it.each([
+    ['free', 'oslo', [], 'oslo'],
+    ['taken once', 'oslo', ['oslo'], 'oslo-2'],
+    ['first suffixes taken', 'oslo', ['oslo', 'oslo-2', 'oslo-3'], 'oslo-4'],
+    ['a gap in the suffixes', 'oslo', ['oslo', 'oslo-3'], 'oslo-2'],
+    ['only a suffixed name taken', 'oslo', ['oslo-2'], 'oslo'],
+    ['taken names are trimmed and lowercased', 'oslo', ['  OSLO '], 'oslo-2'],
+    ['a name that ends in a number', 'release-2', ['release-2'], 'release-2-2'],
+    ['a long name that fits with the suffix', LONG, [LONG], `${LONG}-2`],
+    ['a name at the limit is cut', MAX, [MAX], `${'a'.repeat(WORKBENCH_NAME_MAX - 2)}-2`],
+    ['a cut that ends on a hyphen drops it', `${'a'.repeat(60)}-bc`, [`${'a'.repeat(60)}-bc`], `${'a'.repeat(60)}-2`],
+    ['a two-digit suffix cuts one more', MAX, [MAX, ...Array.from({ length: 8 }, (_, i) => `${'a'.repeat(WORKBENCH_NAME_MAX - 2)}-${i + 2}`)], `${'a'.repeat(WORKBENCH_NAME_MAX - 3)}-10`],
+  ])('%s', (_label, name, taken, expected) => {
+    const result = uniqueWorkbenchName(name, taken);
+    expect(result).toBe(expected);
+    expect(result).toMatch(NAME_PATTERN);
+  });
+
+  it('accepts any iterable of taken names', () => {
+    expect(uniqueWorkbenchName('oslo', new Set(['oslo']))).toBe('oslo-2');
   });
 });
 
