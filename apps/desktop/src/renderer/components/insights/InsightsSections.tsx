@@ -214,13 +214,18 @@ export function AgentsSection({ data }: { data: InsightsAgentsResponse }) {
                 <tr key={`${m.agent}:${m.model}`} className="border-b last:border-0">
                   <td className="py-1 pr-2 font-mono">{modelLabel(m.model)}</td>
                   <td className="py-1 pr-2">{agentLabel(m.agent)}</td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{count(m.turns)}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{m.turns === 0 ? 'Subagents only' : count(m.turns)}</td>
                   <td className="py-1 pr-2 text-right tabular-nums">{formatTokenCount(totalTokens(m))}</td>
                   <td className="py-1 text-right tabular-nums">{costText(m.costMicros)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {data.byModel.some((m) => m.turns === 0) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Subagents only: the model ran inside the turns of other models. Its tokens and cost are not in their rows.
+            </p>
+          )}
         </div>
       )}
       {data.turnDuration.count > 0 && (

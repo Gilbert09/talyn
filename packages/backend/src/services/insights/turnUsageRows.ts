@@ -15,6 +15,8 @@
  *    that went down) starts again from zero. No cost is reported.
  */
 
+import { FLEET_MODELS, fleetProviderForModel } from '@talyn/shared';
+
 export interface StoredResultUsage {
   seq: number;
   at: Date;
@@ -33,6 +35,13 @@ export interface TurnFacts {
   endedAt: Date;
   /** The model named by the turn's `system/init` event (Claude). */
   initModel: string | null;
+  /** The agent that ran the turn, from its `system/init` event. Null: no init event. */
+  initAgent?: 'claude' | 'codex' | null;
+  /**
+   * The model Talyn launched the turn with, stamped on its user message. Null:
+   * the agent's default. Undefined: a turn from before the stamp.
+   */
+  turnModel?: string | null;
   /** When the backend received the turn's user message. */
   sentAt: Date | null;
   /** The first assistant event after that message. */
@@ -45,8 +54,11 @@ export interface ChatFacts {
   workbenchId: string;
   workspaceId: string;
   agent: string;
-  /** The chat's model, else the session's. Null: the agent's default. */
+  /** The chat's model. Null: the session's model, or the agent's default. */
   model: string | null;
+  /** The session's agent and model. They apply only to a chat on the session's agent. */
+  sessionAgent?: string | null;
+  sessionModel?: string | null;
 }
 
 export interface TurnUsageRow {
@@ -81,6 +93,42 @@ interface Tokens {
 
 interface ModelTotals extends Tokens {
   costMicros: number | null;
+}
+
+/**
+ * A Claude Code alias (`sonnet`, `opus`, `fable`) as the newest model of that
+ * family, so it is not a row of its own.
+ */
+const CLAUDE_ALIASES: Record<string, string> = Object.fromEntries(
+  ['fable', 'opus', 'sonnet', 'haiku'].flatMap((family) => {
+    const newest = FLEET_MODELS.find((m) => m.provider === 'anthropic' && m.id.startsWith(`claude-${family}-`));
+    return newest ? [[family, newest.id]] : [];
+  }),
+);
+
+/** True when `model` is clearly the other vendor's, so it cannot have run on `agent`. */
+function otherVendorModel(agent: 'claude' | 'codex', model: string): boolean {
+  if (agent === 'codex') return /^(claude|sonnet|opus|haiku|fable)\b/i.test(model);
+  return /^gpt-/i.test(model) || fleetProviderForModel(model) === 'openai';
+}
+
+/** A configured model as Insights stores it: aliases resolved, other-vendor ids dropped. */
+function configuredModel(agent: 'claude' | 'codex', model: string | null | undefined): string | null {
+  const trimmed = model?.trim();
+  if (!trimmed || otherVendorModel(agent, trimmed)) return null;
+  return agent === 'claude' ? CLAUDE_ALIASES[trimmed.toLowerCase()] ?? trimmed : trimmed;
+}
+
+/**
+ * The model a turn ran on when its own events do not say: the stamp on its
+ * user message, else what the chat and session say now. This mirrors the
+ * launcher (`turnModelFor`): the session's model applies only to a chat on
+ * the session's agent.
+ */
+export function configuredTurnModel(agent: 'claude' | 'codex', chat: ChatFacts, facts: TurnFacts): string | null {
+  if (facts.turnModel !== undefined) return configuredModel(agent, facts.turnModel);
+  return configuredModel(agent, chat.model)
+    ?? (chat.sessionAgent === undefined || chat.sessionAgent === agent ? configuredModel(agent, chat.sessionModel) : null);
 }
 
 const zero = (): Tokens => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
@@ -183,13 +231,15 @@ export function buildTurnUsageRows(chat: ChatFacts, facts: TurnFacts, previousCo
       costMicros: addCost(prev.costMicros, costMicros),
     });
   };
-  const fallbackModel = (chat.agent === 'codex' ? chat.model : facts.initModel ?? chat.model) || UNKNOWN_MODEL;
+  // The turn's own init event names its agent; the chat may have switched since.
+  const agent = facts.initAgent ?? (chat.agent === 'codex' ? 'codex' : 'claude');
+  const fallbackModel = (agent === 'codex' ? null : facts.initModel) ?? configuredTurnModel(agent, chat, facts) ?? UNKNOWN_MODEL;
   let agentSteps: number | null = null;
   let resultDurationMs: number | null = null;
   // Cost the per-model entries did not carry, kept for the main model.
   let unassignedCost: number | null = null;
 
-  if (chat.agent === 'codex') {
+  if (agent === 'codex') {
     let previous = previousCodexResult;
     for (const result of results) {
       add(fallbackModel, codexDelta(result, previous), null);
@@ -235,7 +285,7 @@ export function buildTurnUsageRows(chat: ChatFacts, facts: TurnFacts, previousCo
       model,
       workspaceId: chat.workspaceId,
       workbenchId: chat.workbenchId,
-      agent: chat.agent,
+      agent,
       isPrimary,
       inputTokens: totals.inputTokens,
       outputTokens: totals.outputTokens,

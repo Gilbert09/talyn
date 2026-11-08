@@ -1,6 +1,6 @@
-import { and, asc, eq, gt, gte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
-import { usageInsightsBackfill, workbenchChats } from '../../db/schema.js';
+import { usageInsightsBackfill, workbenchChats, workbenchTurnUsage } from '../../db/schema.js';
 import { withMaintenanceClaim } from '../workbenches/maintenanceClaim.js';
 import { bootSampleFromMetric, storeBootSamples, type BootSampleRow } from './bootSamples.js';
 import { loadChatFacts, loadTurnFacts, rowsForChat, storeTurnUsageRows } from './turnUsage.js';
@@ -25,6 +25,23 @@ import { loadChatFacts, loadTurnFacts, rowsForChat, storeTurnUsageRows } from '.
  */
 
 export const USAGE_INSIGHTS_BACKFILL = 'usage-insights-backfill';
+
+/**
+ * A second pass, after the first one completes: it writes every turn again
+ * with the model and agent attribution of today's writer. Earlier rows put a
+ * Codex chat's turns under the session's Claude model, and used the chat's
+ * current agent for a turn that ran on the other agent.
+ */
+export const USAGE_INSIGHTS_MODEL_REPAIR = 'usage-insights-model-repair';
+
+export interface BackfillRun {
+  name: string;
+  /** `keep`: a row already there wins. `repair`: the turn's rows are written again. */
+  mode: 'keep' | 'repair';
+}
+
+const FIRST_RUN: BackfillRun = { name: USAGE_INSIGHTS_BACKFILL, mode: 'keep' };
+const REPAIR_RUN: BackfillRun = { name: USAGE_INSIGHTS_MODEL_REPAIR, mode: 'repair' };
 
 /**
  * Chats per tick. A tick reads every event of these chats; the biggest chats
@@ -87,11 +104,11 @@ async function loadBootSamples(chatIds: readonly string[], chats: Map<string, { 
 }
 
 /** One batch. Exported for tests; production runs {@link backfillUsageInsights}. */
-export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS, now = new Date()): Promise<BackfillTick> {
+export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS, now = new Date(), run: BackfillRun = FIRST_RUN): Promise<BackfillTick> {
   const [state] = await db()
     .select({ cursor: usageInsightsBackfill.cursor, completedAt: usageInsightsBackfill.completedAt })
     .from(usageInsightsBackfill)
-    .where(eq(usageInsightsBackfill.name, USAGE_INSIGHTS_BACKFILL))
+    .where(eq(usageInsightsBackfill.name, run.name))
     .limit(1);
   if (state?.completedAt) return { chats: 0, turnRows: 0, bootSamples: 0, completed: true };
 
@@ -114,15 +131,28 @@ export async function backfillBatch(batchSize = BACKFILL_BATCH_CHATS, now = new 
       const chat = chats.get(chatId);
       return chat ? rowsForChat(chat, turns) : [];
     });
-    turnRows = await storeTurnUsageRows(rows, 'keep');
-    bootSamples = await storeBootSamples(await loadBootSamples(ids, chats));
+    if (run.mode === 'repair') {
+      // Every turn read again replaces its old rows, also rows under a model the turn no longer has.
+      const turns = new Map<string, Set<number>>();
+      for (const row of rows) turns.set(row.chatId, (turns.get(row.chatId) ?? new Set()).add(row.turn));
+      for (const [chatId, chatTurns] of turns) {
+        await db().delete(workbenchTurnUsage).where(and(
+          eq(workbenchTurnUsage.chatId, chatId),
+          inArray(workbenchTurnUsage.turn, [...chatTurns]),
+        ));
+      }
+      turnRows = await storeTurnUsageRows(rows, 'replace');
+    } else {
+      turnRows = await storeTurnUsageRows(rows, 'keep');
+      bootSamples = await storeBootSamples(await loadBootSamples(ids, chats));
+    }
   }
 
   const completed = ids.length < batchSize;
   const cursor = ids.length > 0 ? ids[ids.length - 1] : state?.cursor ?? null;
   await db()
     .insert(usageInsightsBackfill)
-    .values({ name: USAGE_INSIGHTS_BACKFILL, cursor, chatsDone: ids.length, completedAt: completed ? now : null })
+    .values({ name: run.name, cursor, chatsDone: ids.length, completedAt: completed ? now : null })
     .onConflictDoUpdate({
       target: usageInsightsBackfill.name,
       set: {
@@ -144,6 +174,8 @@ export async function backfillUsageInsights(now = new Date()): Promise<boolean> 
   if (!inBackfillWindow(now)) return false;
   return withMaintenanceClaim(USAGE_INSIGHTS_BACKFILL, async (renew) => {
     await renew();
-    await backfillBatch(BACKFILL_BATCH_CHATS, now);
+    const first = await backfillBatch(BACKFILL_BATCH_CHATS, now);
+    // The repair starts on the tick after the first pass completes.
+    if (first.completed && first.chats === 0) await backfillBatch(BACKFILL_BATCH_CHATS, now, REPAIR_RUN);
   });
 }

@@ -237,9 +237,14 @@ export const agentsSection: SectionSpec<'agents'> = {
               value: totalTokens(row),
               valueText: formatTokenCount(totalTokens(row)),
               tooltipValueText: `${count(totalTokens(row))} tokens`,
-              detail: `${count(row.turns)} turn${row.turns === 1 ? '' : 's'} · Estimated cost: ${costText(row.costMicros)}`,
+              detail: `${row.turns === 0 ? 'Subagents only' : `${count(row.turns)} turn${row.turns === 1 ? '' : 's'}`} · Estimated cost: ${costText(row.costMicros)}`,
             }))}
           />
+          {d.byModel.some((row) => row.turns === 0) && (
+            <p className="text-xs text-muted-foreground">
+              Subagents only: the model ran inside the turns of other models. Its tokens and cost are not in their rows.
+            </p>
+          )}
         </div>
       )}
     </div>
