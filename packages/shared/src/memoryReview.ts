@@ -6,8 +6,7 @@
  * person can restore a forgotten entry in the app.
  *
  * Off by default: each review boots a sandbox and spends the workspace's own
- * agent subscription. `settings.memoryReview` sets the cadence; the
- * `memoryReview` feature flag gates the whole feature.
+ * agent subscription. `settings.memoryReview` sets the cadence.
  */
 
 /** How often Talyn reviews the workspace memory. */

@@ -18,7 +18,6 @@ import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { memoryReviewRuns as runs, users, workspaces } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
-import { workspaceHasFeature } from '../featureFlags.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { workspaceAgentModel, workspaceFleetModel } from '../selfHosted/fleetModel.js';
 import { TickGuard } from '../tickGuard.js';
@@ -236,7 +235,6 @@ export type MemoryReviewSkip =
   | 'cadence_off'
   | 'memory_off'
   | 'already_ran'
-  | 'flag_off'
   | 'running'
   | 'too_few_entries'
   | 'unchanged';
@@ -260,9 +258,6 @@ export async function sweepMemoryReviewWorkspace(
     .where(and(eq(runs.workspaceId, workspaceId), eq(runs.periodStart, periodStart)))
     .limit(1);
   if (existing) return { skipped: 'already_ran' };
-
-  // The owner gate, after the cheap checks: a sweep has no caller.
-  if (!(await workspaceHasFeature('memoryReview', workspaceId)).enabled) return { skipped: 'flag_off' };
 
   const last = await lastStartedRun(workspaceId);
   if (await reviewInProgress(last?.workbenchId ?? null)) return { skipped: 'running' };

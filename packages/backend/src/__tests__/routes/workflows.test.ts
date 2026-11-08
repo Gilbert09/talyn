@@ -235,7 +235,6 @@ describe('workflow routes', () => {
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
-        memoryReview: false,
       });
     });
 
@@ -265,7 +264,6 @@ describe('workflow routes', () => {
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
-        memoryReview: false,
       });
     });
   });

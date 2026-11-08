@@ -132,7 +132,6 @@ describe('memory review sweep and routes', () => {
 
   beforeEach(async () => {
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
-    vi.stubEnv('MEMORY_REVIEW_ENABLED', 'true');
     resetFeatureFlagsForTests();
     threads = 0;
     fleetAgentStatus.mockResolvedValue({ connectedAgents: ['claude'], reauthAgents: [] });
@@ -225,15 +224,6 @@ describe('memory review sweep and routes', () => {
       expect(await sweepMemoryReviewWorkspace('ws-a', settings as Loose, WEEK1)).toEqual({ skipped });
       expect(createWorkbench).not.toHaveBeenCalled();
       expect(await runRows()).toHaveLength(0);
-    });
-
-    it('skips when the flag is off for the owner', async () => {
-      vi.stubEnv('MEMORY_REVIEW_ENABLED', 'false');
-      resetFeatureFlagsForTests();
-      await addMemory('build');
-      await addMemory('deploy');
-      expect(await sweepMemoryReviewWorkspace('ws-a', await settingsOf(), WEEK1)).toEqual({ skipped: 'flag_off' });
-      expect(createWorkbench).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -339,15 +329,6 @@ describe('memory review sweep and routes', () => {
       expect(res.body.data.cadence).toBe('weekly');
       expect(res.body.data.runs).toHaveLength(1);
       expect(res.body.data.runs[0]).toMatchObject({ status: 'started', workbenchId: 'thread-1', trigger: 'schedule' });
-    });
-
-    it('refuses when the flag is off', async () => {
-      vi.stubEnv('MEMORY_REVIEW_ENABLED', 'false');
-      resetFeatureFlagsForTests();
-      const res = await call('GET', '/workbenches/memory/reviews?workspaceId=ws-a');
-      expect(res.status).toBe(403);
-      expect(res.body.code).toBe('flag_off');
-      expect((await call('POST', '/workbenches/memory/reviews', { workspaceId: 'ws-a' })).status).toBe(403);
     });
 
     it("refuses another owner's workspace", async () => {

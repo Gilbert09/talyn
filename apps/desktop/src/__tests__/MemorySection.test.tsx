@@ -41,7 +41,6 @@ jest.mock('../renderer/stores/navigation', () => ({
 const mockSetWorkspaces = jest.fn();
 const mockState = {
   currentWorkspaceId: 'ws1',
-  features: null as { memoryReview?: boolean } | null,
   workspaces: [{ id: 'ws1', name: 'Acme', settings: {} as Record<string, unknown> }],
   setWorkspaces: (...args: unknown[]) => mockSetWorkspaces(...args),
   repositories: [
@@ -89,7 +88,6 @@ const ENTRIES = [
 ];
 
 beforeEach(() => {
-  mockState.features = null;
   mockState.workspaces = [{ id: 'ws1', name: 'Acme', settings: {} }];
   mockList.mockResolvedValue(ENTRIES);
   mockGet.mockImplementation(async (id: string) => ({ ...ENTRIES.find((e) => e.id === id)!, body: `Body of ${id}` }));
@@ -281,25 +279,8 @@ describe('MemorySection', () => {
     const reviewSelect = () => screen.getByRole('combobox', { name: 'Memory review' }) as HTMLSelectElement;
 
     beforeEach(() => {
-      mockState.features = { memoryReview: true };
       mockReviews.mockResolvedValue({ cadence: 'off', runs: [] });
       mockStartReview.mockResolvedValue(run({ trigger: 'manual' }));
-    });
-
-    it('is hidden when the feature is off', async () => {
-      mockState.features = { memoryReview: false };
-      render(<MemorySection />);
-      await loaded();
-      expect(screen.queryByRole('combobox', { name: 'Memory review' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Review now' })).toBeNull();
-      expect(mockReviews).not.toHaveBeenCalled();
-    });
-
-    it('is hidden when features have not loaded', async () => {
-      mockState.features = null;
-      render(<MemorySection />);
-      await loaded();
-      expect(screen.queryByRole('combobox', { name: 'Memory review' })).toBeNull();
     });
 
     it('shows the cadence of the workspace, off when unset', async () => {
@@ -402,7 +383,7 @@ describe('MemorySection', () => {
     });
 
     it('shows nothing, and no error toast, when the runs do not load', async () => {
-      mockReviews.mockRejectedValue(new Error('flag_off'));
+      mockReviews.mockRejectedValue(new Error('network down'));
       render(<MemorySection />);
       await loaded();
       await waitFor(() => expect(mockReviews).toHaveBeenCalled());

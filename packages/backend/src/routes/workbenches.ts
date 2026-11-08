@@ -128,7 +128,7 @@ import {
 } from '../services/workbenches/memory.js';
 import { manualReviewRefusal, memoryReviewState, startMemoryReview } from '../services/workbenches/memoryReview.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
-import { isFeatureEnabled, workspaceHasFeature } from '../services/featureFlags.js';
+import { isFeatureEnabled } from '../services/featureFlags.js';
 import { canPrompt, canViewItem, ownsWorkspace } from '../services/teams/access.js';
 import { turnPayerFor } from '../services/teams/payer.js';
 
@@ -654,19 +654,9 @@ export function workbenchRoutes(): Router {
 
   // ---- Memory review: a thread that cleans up the memory on a cadence. Before `/memory/:memoryId`. ----
 
-  /** The workspace gate, then the `memoryReview` flag on the workspace owner. */
-  async function gatedReview(req: Request, res: Response, workspaceId: string): Promise<boolean> {
-    if (!(await gate(req, res, workspaceId))) return false;
-    if (!(await workspaceHasFeature('memoryReview', workspaceId)).enabled) {
-      bad(res, 403, 'Memory review is not available for this workspace.', 'flag_off');
-      return false;
-    }
-    return true;
-  }
-
   router.get('/memory/reviews', async (req, res) => {
     const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
-    if (!(await gatedReview(req, res, workspaceId))) return;
+    if (!(await gate(req, res, workspaceId))) return;
     ok(res, await memoryReviewState(workspaceId));
   });
 
@@ -674,7 +664,7 @@ export function workbenchRoutes(): Router {
   router.post('/memory/reviews', async (req, res) => {
     const body = (req.body ?? {}) as { workspaceId?: unknown };
     const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
-    if (!(await gatedReview(req, res, workspaceId))) return;
+    if (!(await gate(req, res, workspaceId))) return;
     const refusal = await manualReviewRefusal(workspaceId);
     if (refusal) return bad(res, refusal.status, refusal.message, refusal.code);
     const run = await startMemoryReview(workspaceId, { trigger: 'manual', periodStart: new Date() });

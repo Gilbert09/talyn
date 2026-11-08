@@ -130,7 +130,7 @@ function runLine(run: MemoryReviewRun | undefined, openThread: (id: string) => v
   );
 }
 
-/** `settings.memoryReview`: how often Talyn reviews the notes. Shown when the `memoryReview` flag is on. */
+/** `settings.memoryReview`: how often Talyn reviews the notes. */
 function MemoryReviewRow({ workspaceId }: { workspaceId: string }) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
@@ -299,7 +299,6 @@ function MemoryRow({
  */
 export function MemorySection() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
-  const reviewEnabled = useWorkspaceStore((s) => s.features?.memoryReview) === true;
   const allRepositories = useWorkspaceStore((s) => s.repositories);
   const repositories = useMemo(
     () => allRepositories.filter((r) => r.workspaceId === workspaceId),
@@ -443,7 +442,7 @@ export function MemorySection() {
       }
     >
       <SessionMemorySwitch workspaceId={workspaceId} />
-      {reviewEnabled ? <MemoryReviewRow workspaceId={workspaceId} /> : null}
+      <MemoryReviewRow workspaceId={workspaceId} />
       <div className="flex flex-wrap items-center gap-3 px-3 py-2">
         <input
           type="search"
