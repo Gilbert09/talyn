@@ -30,9 +30,9 @@ import {
  *
  * # Two deliberate choices
  *
- * **Cancel takes focus, not Confirm.** A stray Enter or Space on an opening
- * dialog should do the safe thing. The destructive button is reachable in one
- * Tab and one click; it is simply not the default.
+ * **Cancel takes focus by default.** A stray Enter or Space on an opening
+ * dialog should do the safe thing. A caller can make Confirm the default when
+ * that action is the expected next step.
  *
  * **`busy` disables both buttons rather than only closing on success.** A slow
  * delete otherwise leaves a live Confirm under the cursor, which is the
@@ -46,6 +46,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   busy = false,
   confirmDisabled = false,
+  initialFocus = 'cancel',
   onConfirm,
   onCancel,
 }: {
@@ -59,10 +60,12 @@ export function ConfirmDialog({
   busy?: boolean;
   /** Confirm stays off, for example while the dialog still reads what is at stake. */
   confirmDisabled?: boolean;
+  initialFocus?: 'cancel' | 'confirm';
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const cancelRef = React.useRef<HTMLButtonElement>(null);
+  const confirmRef = React.useRef<HTMLButtonElement>(null);
 
   // Escape cancels. The Dialog primitive closes on a backdrop click and knows
   // nothing about keys, and a confirmation the keyboard cannot dismiss is one
@@ -77,12 +80,50 @@ export function ConfirmDialog({
   }, [open, busy, onCancel]);
 
   React.useEffect(() => {
-    if (open) cancelRef.current?.focus();
-  }, [open]);
+    if (!open) return;
+    const target = initialFocus === 'confirm' && !confirmDisabled
+      ? confirmRef.current
+      : cancelRef.current;
+    target?.focus();
+  }, [open, initialFocus, confirmDisabled]);
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (busy) return;
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelRef.current?.focus();
+      return;
+    }
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!confirmDisabled) confirmRef.current?.focus();
+      return;
+    }
+
+    if (event.key !== 'Enter') return;
+    if (event.target === cancelRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      onCancel();
+    } else if (event.target === confirmRef.current && !confirmDisabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      onConfirm();
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onCancel()}>
-      <DialogContent className="max-w-md" role="alertdialog" aria-modal="true">
+      <DialogContent
+        className="max-w-md"
+        role="alertdialog"
+        aria-modal="true"
+        onKeyDown={onKeyDown}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
@@ -97,7 +138,13 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </Button>
-          <Button variant="destructive" size="sm" onClick={onConfirm} disabled={busy || confirmDisabled}>
+          <Button
+            ref={confirmRef}
+            variant="destructive"
+            size="sm"
+            onClick={onConfirm}
+            disabled={busy || confirmDisabled}
+          >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : confirmLabel}
           </Button>
         </DialogFooter>
