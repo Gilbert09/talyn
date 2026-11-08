@@ -61,6 +61,7 @@ function setFeatures(features: Partial<Features> | null) {
     features: features as Features | null,
     sidebarCollapsed: false,
     sidebarOrder: 'active_first',
+    collapsedSessionGroups: {},
     cloudProviders: [],
   });
 }
@@ -89,13 +90,18 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+/** The session rows in a group, without its header. */
+function sessionRows(group: HTMLElement): HTMLElement[] {
+  return within(group).getAllByRole('button').filter((row) => row.getAttribute('data-attr') === 'sidebar-workbench-row');
+}
+
 describe('AppSidebar', () => {
   it('groups live workbenches by repository, repositories by activity, archived left out', () => {
     render(<AppSidebar />);
     const api = screen.getByRole('group', { name: 'acme/api' });
     const web = screen.getByRole('group', { name: 'acme/web' });
-    expect(within(api).getAllByRole('button').map((b) => b.textContent)).toEqual(['rome', 'oslo']);
-    expect(within(web).getByRole('button')).toHaveTextContent('lisbon');
+    expect(sessionRows(api).map((b) => b.textContent)).toEqual(['rome', 'oslo']);
+    expect(sessionRows(web).map((b) => b.textContent)).toEqual(['lisbon']);
     expect(screen.queryByText('gone')).not.toBeInTheDocument();
     // The newest acme/api session puts its group first.
     expect(api.compareDocumentPosition(web) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -111,13 +117,13 @@ describe('AppSidebar', () => {
     render(<AppSidebar />);
 
     const active = screen.getByRole('group', { name: 'Active' });
-    expect(within(active).getAllByRole('button').map((row) => row.textContent)).toEqual(['lisbon', 'oslo']);
-    expect(within(screen.getByRole('group', { name: 'acme/api' })).getByRole('button')).toHaveTextContent('rome');
+    expect(sessionRows(active).map((row) => row.textContent)).toEqual(['lisbon', 'oslo']);
+    expect(sessionRows(screen.getByRole('group', { name: 'acme/api' })).map((row) => row.textContent)).toEqual(['rome']);
     expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['lisbon', 'oslo', 'rome']);
 
     act(() => useWorkspaceStore.getState().setSidebarOrder('repository'));
     expect(screen.queryByRole('group', { name: 'Active' })).not.toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: 'acme/api' })).getAllByRole('button').map((row) => row.textContent))
+    expect(sessionRows(screen.getByRole('group', { name: 'acme/api' })).map((row) => row.textContent))
       .toEqual(['rome', 'oslo']);
   });
 
@@ -379,3 +385,89 @@ describe('AppSidebar', () => {
      expect(row).not.toHaveTextContent(/\+\d|−\d/);
    }
  });
+
+describe('collapsible session groups', () => {
+  const header = (repo: string) => screen.getByRole('button', { name: new RegExp(`^${repo.replace('/', '\\/')}`) });
+  const rowNames = () =>
+    screen.getAllByRole('button').filter((row) => row.getAttribute('data-attr') === 'sidebar-workbench-row').map((row) => row.textContent);
+
+  beforeEach(() => {
+    localStorage.removeItem('talyn-sidebar-collapsed-groups');
+    useWorkspaceStore.setState({ sidebarOrder: 'repository', collapsedSessionGroups: {} });
+  });
+
+  it('a click on a group name hides its sessions and shows how many it hides; a second click shows them again', () => {
+    render(<AppSidebar />);
+    const toggle = header('acme/api');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(within(toggle).queryByText('2')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('title', 'Show the sessions of acme/api');
+    expect(within(toggle).getByText('2')).toBeInTheDocument();
+    expect(rowNames()).toEqual(['lisbon']);
+    expect(screen.getByRole('group', { name: 'acme/web' })).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(rowNames()).toEqual(['rome', 'oslo', 'lisbon']);
+  });
+
+  it('remembers the collapsed groups on this machine', () => {
+    render(<AppSidebar />);
+    fireEvent.click(header('acme/api'));
+    fireEvent.click(header('acme/web'));
+    expect(JSON.parse(localStorage.getItem('talyn-sidebar-collapsed-groups') ?? '[]')).toEqual(['acme/api', 'acme/web']);
+    fireEvent.click(header('acme/api'));
+    expect(JSON.parse(localStorage.getItem('talyn-sidebar-collapsed-groups') ?? '[]')).toEqual(['acme/web']);
+  });
+
+  it.each<[string, string | null, string[], string]>([
+    ['no session is open', null, ['lisbon'], '2'],
+    ['the open session is in the group', 'oslo', ['oslo', 'lisbon'], '1'],
+    ['the open session is in another group', 'lisbon', ['lisbon'], '2'],
+  ])('a collapsed group keeps only the open session in view when %s', (_name, openId, rows, hidden) => {
+    useWorkspaceStore.setState({ collapsedSessionGroups: { 'acme/api': true } });
+    if (openId) useNavigationStore.getState().navigate({ view: 'workbench', id: openId });
+    render(<AppSidebar />);
+    expect(rowNames()).toEqual(rows);
+    expect(within(header('acme/api')).getByText(hidden)).toBeInTheDocument();
+  });
+
+  it.each<[string, string | null, string[]]>([
+    ['from home', null, ['lisbon']],
+    ['from a session in the collapsed group', 'rome', ['rome', 'lisbon']],
+  ])('the shortcuts count only the sessions in view, %s', (_name, openId, ids) => {
+    useWorkspaceStore.setState({ collapsedSessionGroups: { 'acme/api': true } });
+    if (openId) useNavigationStore.getState().navigate({ view: 'workbench', id: openId });
+    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(ids);
+    act(() => buildAppShortcuts().find((shortcut) => shortcut.id === 'workbench.jump.1')?.run());
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: ids[0] });
+  });
+
+  it('the Active group collapses too, apart from the repository groups', () => {
+    useWorkspaceStore.setState({ sidebarOrder: 'active_first' });
+    useWorkbenchStore.getState().setChats('oslo', [{ id: 'c1', workbenchId: 'oslo', status: 'running', createdAt: 'a' } as WorkbenchChat]);
+    render(<AppSidebar />);
+    fireEvent.click(header('Active'));
+    expect(useWorkspaceStore.getState().collapsedSessionGroups).toEqual({ active: true });
+    expect(rowNames()).toEqual(['rome', 'lisbon']);
+    expect(orderedLiveWorkbenches().map((row) => row.id)).toEqual(['rome', 'lisbon']);
+  });
+
+  it.each<[string, Record<string, true>, boolean]>([
+    ['a hidden session has a new reply', { 'acme/api': true }, true],
+    ['the group is open', {}, false],
+  ])('a group name is bold when %s', (_name, collapsed, bold) => {
+    useWorkbenchStore.getState().setChats('rome', [{ id: 'c2', workbenchId: 'rome', status: 'idle', createdAt: 'a' } as WorkbenchChat]);
+    useWorkbenchStore.setState({ unread: { c2: true } });
+    useWorkspaceStore.setState({ collapsedSessionGroups: collapsed });
+    render(<AppSidebar />);
+    if (bold) expect(header('acme/api')).toHaveClass('font-semibold');
+    else expect(header('acme/api')).not.toHaveClass('font-semibold');
+    expect(header('acme/web')).not.toHaveClass('font-semibold');
+  });
+});

@@ -39,6 +39,24 @@ export function groupSidebarWorkbenches(
   return active.length > 0 ? [{ repo: 'Active', items: active, active: true }, ...inactive] : inactive;
 }
 
+/** The key a group's collapsed state is saved under. A repository name always holds a slash, so 'active' cannot clash. */
+export function sessionGroupKey(group: RepoGroup): string {
+  return group.active ? 'active' : group.repo;
+}
+
+/**
+ * The rows a group shows. A collapsed group hides its sessions, but it keeps
+ * the open one so the sidebar still shows where you are.
+ */
+export function visibleGroupItems(
+  group: RepoGroup,
+  collapsed: Readonly<Record<string, true>>,
+  openId: string | null,
+): Workbench[] {
+  if (!collapsed[sessionGroupKey(group)]) return group.items;
+  return group.items.filter((workbench) => workbench.id === openId);
+}
+
 export function isArchived(wb: Workbench): boolean {
   return wb.status === 'archived' || Boolean(wb.archivedAt);
 }

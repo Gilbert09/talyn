@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Archive, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -29,8 +29,14 @@ import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { ThreadTag } from '../threads/ThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
-import { isActiveSessionState, sessionPr, sessionState } from '../../lib/sessionState';
-import { groupSidebarWorkbenches, isArchived } from '../workbench/workbenchSelectors';
+import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import {
+  groupSidebarWorkbenches,
+  isArchived,
+  sessionGroupKey,
+  visibleGroupItems,
+  type RepoGroup,
+} from '../workbench/workbenchSelectors';
 import { useRenameSession } from '../workbench/useRenameSession';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
@@ -46,14 +52,18 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
   const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
+  const collapsed = useWorkspaceStore((s) => s.collapsedSessionGroups);
+  const toggleGroup = useWorkspaceStore((s) => s.toggleSessionGroup);
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
   const unread = useWorkbenchStore((s) => s.unread);
   const unseen = useWorkbenchStore((s) => s.unseen);
   const live = useMemo(() => workbenches.filter((workbench) => !isArchived(workbench)), [workbenches]);
-  const activeIds = useMemo(() => {
+  const { activeIds, states } = useMemo(() => {
     const rowById = new Map(rows.map((row) => [row.id, row]));
-    return new Set(live.filter((workbench) => {
+    const byId = new Map<string, SessionState>();
+    const active = new Set<string>();
+    for (const workbench of live) {
       const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
       const resolvedPr = sessionPr(workbench, pr);
       const state = sessionState(
@@ -63,8 +73,10 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
         resolvedPr,
         isPrOnlyUnseen(unseen[workbench.id]),
       );
-      return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
-    }).map((workbench) => workbench.id));
+      byId.set(workbench.id, state);
+      if (isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId))) active.add(workbench.id);
+    }
+    return { activeIds: active, states: byId };
   }, [live, rows, chats, unread, unseen]);
   const groups = useMemo(
     () => groupSidebarWorkbenches(live, activeIds, sidebarOrder === 'active_first'),
@@ -116,23 +128,36 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
           <Archive className="h-3.5 w-3.5" />
         </button>
       </div>
-      {groups.map((group) => (
-        <div key={group.active ? 'active' : group.repo} role="group" aria-label={group.repo}>
-          <div className="truncate px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-muted-foreground">{group.repo}</div>
-          {group.items.map((wb) => {
-            index += 1;
-            return (
-              <WorkbenchRow
-                key={wb.id}
-                workbench={wb}
-                shortcut={index <= 9 ? index : null}
-                selected={wb.id === openId}
-                onSelect={() => navigate({ view: 'workbench', id: wb.id })}
-              />
-            );
-          })}
-        </div>
-      ))}
+      {groups.map((group) => {
+        const key = sessionGroupKey(group);
+        const items = visibleGroupItems(group, collapsed, openId);
+        return (
+          <div key={key} role="group" aria-label={group.repo}>
+            <GroupHeader
+              group={group}
+              groupKey={key}
+              expanded={!collapsed[key]}
+              hidden={group.items.filter((wb) => !items.includes(wb))}
+              states={states}
+              onToggle={() => toggleGroup(key)}
+            />
+            <div id={`sidebar-group-${key}`}>
+              {items.map((wb) => {
+                index += 1;
+                return (
+                  <WorkbenchRow
+                    key={wb.id}
+                    workbench={wb}
+                    shortcut={index <= 9 ? index : null}
+                    selected={wb.id === openId}
+                    onSelect={() => navigate({ view: 'workbench', id: wb.id })}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
       <ConfirmDialog
         open={confirmingAll}
         title={`Archive ${candidates.length} ${candidates.length === 1 ? 'session' : 'sessions'}?`}
@@ -155,6 +180,55 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
         onCancel={() => setConfirmingAll(false)}
       />
     </div>
+  );
+}
+
+/** A group's name. Click it to hide or show the group's sessions. */
+function GroupHeader({
+  group,
+  groupKey,
+  expanded,
+  hidden,
+  states,
+  onToggle,
+}: {
+  group: RepoGroup;
+  groupKey: string;
+  expanded: boolean;
+  hidden: Workbench[];
+  states: ReadonlyMap<string, SessionState>;
+  onToggle: () => void;
+}) {
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  // A collapsed group must not hide a reply: its name goes bold, as an unread row does.
+  const unreadHidden = hidden.filter((wb) => {
+    const kind = states.get(wb.id)?.kind;
+    return kind === 'needs_reply' || kind === 'pr_opened';
+  }).length;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={`sidebar-group-${groupKey}`}
+      title={expanded ? `Hide the sessions of ${group.repo}` : `Show the sessions of ${group.repo}`}
+      data-attr="sidebar-group-toggle"
+      className={cn(
+        'app-region-no-drag group/header flex w-full items-center gap-1 rounded px-3 pb-0.5 pt-1.5 text-left text-[11px] font-medium text-muted-foreground hover:text-foreground',
+        unreadHidden > 0 && 'font-semibold text-foreground'
+      )}
+    >
+      <span className="min-w-0 truncate">{group.repo}</span>
+      <Chevron
+        className={cn('h-3 w-3 shrink-0', expanded && 'opacity-0 group-hover/header:opacity-100 group-focus-visible/header:opacity-100')}
+        aria-hidden
+      />
+      {hidden.length > 0 && (
+        <span className="ml-auto shrink-0 tabular-nums" data-attr="sidebar-group-hidden-count">
+          {hidden.length}
+        </span>
+      )}
+    </button>
   );
 }
 
