@@ -4,7 +4,7 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 ## Session background jobs and wake-ups: backend (2026-11-08)
 
-An agent can now start a command that outlives its turn, and ask Talyn to start a new turn later. Behind the `session-background` PostHog flag (fallback OFF, gated, `SESSION_BACKGROUND_ENABLED`). The UI is separate work.
+An agent can start a command that outlives its turn. It can ask Talyn to start a new turn later. These features are released to every account (decision 2026-11-08). The UI is separate work.
 - Tables `workbench_background_jobs` and `workbench_wakeups` (migration `0119`), backend-pool-only. Service in `services/workbenches/background.ts`, sweep in `backgroundSweep.ts`, routes in `routes/workbenchBackground.ts`, MCP tools in `mcp/tools/background.ts`.
 - A job runs under the durable supervisor (`durableExec.ts`) with segmented logs. One `node` probe reads the exit marker, the process group and the log tail in one exec.
 - The sweep runs every 30 s. It checks a job only while its keep-awake is in the future, or while a turn runs in the session. Every check is a request, so checking an idle box after keep-awake would keep it awake for ever. A sleeping box with keep-awake still on is woken through the box gate as unattended work; a refusal ends the keep-awake and notes why.

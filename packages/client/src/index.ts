@@ -3302,9 +3302,9 @@ export const workbenches = {
   restoreCheckpoint: (chatId: string, turn: number) =>
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
 
-  // ---- Background jobs and wake-ups (`features.sessionBackground`) ----
-  // Every route answers 404 while the flag is off. Live updates arrive as
-  // `workbench:background` WS events carrying the whole `WorkbenchBackground`.
+  // ---- Background jobs and wake-ups ----
+  // Live updates arrive as `workbench:background` WS events carrying the
+  // whole `WorkbenchBackground`.
   /** The session's jobs (running first) and wake-ups (scheduled first). */
   background: (id: string) =>
     request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`),

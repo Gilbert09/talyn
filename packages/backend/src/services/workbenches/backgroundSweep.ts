@@ -2,7 +2,6 @@ import { BACKGROUND_EXIT_TAIL_LINES } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
-import { workspaceHasFeature } from '../featureFlags.js';
 import { existingBoxRefusal } from './boxGate.js';
 import { isWorkbenchDraining } from './ownership.js';
 import { wakeWithCredentials } from './sandboxRuntime.js';
@@ -43,8 +42,6 @@ import {
  * it to stay up. The wake goes through the box gate as unattended work; a
  * refusal ends the keep-awake and is recorded on the job, never a 402.
  *
- * Every gate asks the `sessionBackground` flag for the workspace OWNER, so
- * the flag stays a kill switch for rows that already exist.
  */
 export const BACKGROUND_POLLER = 'workbench-background';
 export const BACKGROUND_SWEEP_MS = 30_000;
@@ -57,21 +54,10 @@ const WAKEUP_PASS_LIMIT = 50;
 let timer: NodeJS.Timeout | undefined;
 let ticking = false;
 
-type FlagCache = Map<string, Promise<boolean>>;
-
-function flagOn(cache: FlagCache, workspaceId: string): Promise<boolean> {
-  let answer = cache.get(workspaceId);
-  if (!answer) {
-    answer = workspaceHasFeature('sessionBackground', workspaceId).then((d) => d.enabled, () => false);
-    cache.set(workspaceId, answer);
-  }
-  return answer;
-}
-
 export type JobCheckOutcome = 'running' | 'exited' | 'lost' | 'stopped' | 'skipped' | 'idle' | 'refused' | 'error';
 
 /** Check one running job. Never throws. */
-export async function checkJob(job: JobRow, flags: FlagCache, now = new Date()): Promise<JobCheckOutcome> {
+export async function checkJob(job: JobRow, now = new Date()): Promise<JobCheckOutcome> {
   try {
     const row = await getWorkbench(job.workbenchId);
     const lost = jobLostReason(job, row);
@@ -79,7 +65,7 @@ export async function checkJob(job: JobRow, flags: FlagCache, now = new Date()):
       if (await settleJob(job.id, { status: 'lost', detail: lost }, now)) await emitBackground(job.workspaceId, job.workbenchId);
       return 'lost';
     }
-    if (!row || !(await flagOn(flags, row.workspaceId))) return 'skipped';
+    if (!row) return 'skipped';
     if (row.status !== 'ready' || !row.sandboxId) return 'skipped';
     const keepAwake = Boolean(job.keepAwakeUntil && job.keepAwakeUntil.getTime() > now.getTime());
     if (!keepAwake) {
@@ -105,21 +91,20 @@ export async function checkJob(job: JobRow, flags: FlagCache, now = new Date()):
   }
 }
 
-async function sweepJobs(now: Date, flags: FlagCache): Promise<number> {
+async function sweepJobs(now: Date): Promise<number> {
   const jobs = await sweepJobsQuery(JOB_PASS_LIMIT);
   let checked = 0;
   for (let i = 0; i < jobs.length; i += JOB_CHECK_PARALLEL) {
-    const outcomes = await Promise.all(jobs.slice(i, i + JOB_CHECK_PARALLEL).map((job) => checkJob(job, flags, now)));
+    const outcomes = await Promise.all(jobs.slice(i, i + JOB_CHECK_PARALLEL).map((job) => checkJob(job, now)));
     checked += outcomes.filter((o) => o !== 'skipped' && o !== 'idle').length;
   }
   return checked;
 }
 
-async function sweepWakeups(now: Date, flags: FlagCache): Promise<number> {
+async function sweepWakeups(now: Date): Promise<number> {
   for (const touched of await cancelArchivedWakeups()) await emitBackground(touched.workspaceId, touched.workbenchId);
   let fired = 0;
   for (const due of await dueWakeupsQuery(now, WAKEUP_PASS_LIMIT)) {
-    if (!(await flagOn(flags, due.workspaceId))) continue;
     if (await fireWakeup(due.id, now)) fired++;
   }
   return fired;
@@ -133,9 +118,8 @@ export async function sweepBackground(now = new Date()): Promise<{ checked: numb
   let error: unknown;
   try {
     const outcome = await guardCrossReplica(BACKGROUND_POLLER, async () => {
-      const flags: FlagCache = new Map();
-      const checked = await sweepJobs(now, flags);
-      const fired = await sweepWakeups(now, flags);
+      const checked = await sweepJobs(now);
+      const fired = await sweepWakeups(now);
       return { checked, fired };
     });
     return outcome.result ?? { checked: 0, fired: 0 };

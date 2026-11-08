@@ -1,5 +1,5 @@
 /**
- * Session background jobs and wake-ups, behind the `sessionBackground` flag.
+ * Session background jobs and wake-ups.
  *
  * A background job is a shell command that an agent starts in its session's
  * sandbox. It outlives the turn that started it. A wake-up is a row that sends

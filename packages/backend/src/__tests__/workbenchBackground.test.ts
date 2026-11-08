@@ -92,7 +92,6 @@ beforeEach(async () => {
   startDurableExec = vi.spyOn(durable, 'startDurableExec').mockResolvedValue(undefined);
   vi.mocked(chooseReadSource).mockResolvedValue({ live: true });
   vi.mocked(existingBoxRefusal).mockResolvedValue(null);
-  vi.stubEnv('SESSION_BACKGROUND_ENABLED', 'true');
   vi.stubEnv('WORKBENCHES_ENABLED', 'true');
   resetFeatureFlagsForTests();
   testDb = await createTestDb();
@@ -231,14 +230,6 @@ describe('wake-ups', () => {
     expect(stored?.payerUserId ?? null).toBe(payer);
   });
 
-  it('does nothing while the flag is off for the owner', async () => {
-    vi.stubEnv('SESSION_BACKGROUND_ENABLED', 'false');
-    resetFeatureFlagsForTests();
-    await insertWakeup();
-    await sweepBackground();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(await getWakeup('wake')).toMatchObject({ status: 'scheduled' });
-  });
 });
 
 describe('background jobs', () => {
@@ -325,7 +316,7 @@ describe('background jobs', () => {
     await testDb.db.update(workbenchChats).set({ status: chatStatus }).where(eq(workbenchChats.id, 'chat'));
     vi.mocked(chooseReadSource).mockResolvedValue(box === 'awake' ? { live: true } : { live: false, reason: 'asleep' });
     runCapture.mockResolvedValue(probeAnswer('running'));
-    expect(await checkJob(job, new Map())).toBe(outcome);
+    expect(await checkJob(job)).toBe(outcome);
     expect(runCapture).toHaveBeenCalledTimes(probes);
     expect(wakeWithCredentials).toHaveBeenCalledTimes(wakes);
     if (probes) expect((await getJob('job'))?.lastCheckedAt).not.toBeNull();
@@ -335,7 +326,7 @@ describe('background jobs', () => {
     const job = await insertJob();
     vi.mocked(chooseReadSource).mockResolvedValue({ live: false, reason: 'asleep' });
     vi.mocked(existingBoxRefusal).mockResolvedValue({ message: 'Your box-hours ran out.' } as never);
-    expect(await checkJob(job, new Map())).toBe('refused');
+    expect(await checkJob(job)).toBe('refused');
     expect(wakeWithCredentials).not.toHaveBeenCalled();
     expect(runCapture).not.toHaveBeenCalled();
     expect(await getJob('job')).toMatchObject({ status: 'running', keepAwakeUntil: null });
@@ -426,32 +417,13 @@ describe('the probe script in a real process', () => {
   });
 });
 
-describe('the flag and the projections', () => {
+describe('the projections', () => {
   const names = BACKGROUND.map((t) => t.name);
   const base = { workflows: true } as unknown as Features;
 
-  it.each([
-    [false, 0],
-    [true, names.length],
-  ])('lists the MCP tools only when the flag is %s', (on, count) => {
-    const listed = listToolsFor({ ...base, sessionBackground: on }, { session: { tokenId: 't', workbenchId: 'wb', depth: 0 } });
-    expect(listed.filter((t) => names.includes(t.name))).toHaveLength(count);
-  });
-
-  it.each([
-    ['GET', '/:id/background', {}],
-    ['POST', '/:id/background/jobs', { command: 'x' }],
-    ['GET', '/:id/background/jobs/:jobId/logs', {}],
-    ['POST', '/:id/background/jobs/:jobId/stop', {}],
-    ['POST', '/:id/background/jobs/:jobId/keep-awake', { seconds: 60 }],
-    ['POST', '/:id/wakeups', { delaySeconds: 60, reason: 'x' }],
-    ['DELETE', '/:id/wakeups/:wakeupId', {}],
-  ])('answers 404 for %s %s while the flag is off', async (method, path, body) => {
-    vi.stubEnv('SESSION_BACKGROUND_ENABLED', 'false');
-    resetFeatureFlagsForTests();
-    const req = { params: { id: 'wb', jobId: 'job', wakeupId: 'wake' }, query: {}, body, user: { id: 'owner' } } as unknown as Request;
-    const { status } = await invokeRoute(workbenchBackgroundRoutes(), method, path, req);
-    expect(status).toBe(404);
+  it('lists the MCP tools', () => {
+    const listed = listToolsFor(base, { session: { tokenId: 't', workbenchId: 'wb', depth: 0 } });
+    expect(listed.filter((t) => names.includes(t.name))).toHaveLength(names.length);
   });
 
   it.each([
