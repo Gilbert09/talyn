@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Archive, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Copy, ExternalLink, Timer } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -34,6 +34,8 @@ import { useRenameSession } from '../workbench/useRenameSession';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
 import { spacesOffered } from '../../lib/spaces';
+import { isActiveBackground } from '../../lib/sessionBackground';
+import { useBackground } from '../../stores/sessionBackground';
 
 export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
@@ -197,6 +199,9 @@ function WorkbenchRow({
   const [archiving, setArchiving] = useState(false);
   const rename = useRenameSession(workbench);
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  const background = useBackground(workbench.id);
+  const runningJob = background?.jobs.some((job) => job.status === 'running');
+  const backgroundTitle = runningJob ? 'Background job running' : 'Wake-up scheduled';
 
   const copyBranch = () => {
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
@@ -265,6 +270,7 @@ function WorkbenchRow({
             )}
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
+            {isActiveBackground(background) && <span title={backgroundTitle} aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">
