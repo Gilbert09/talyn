@@ -264,6 +264,7 @@ it('shows arrow navigation and keeps bracket aliases hidden', () => {
   const shortcuts = buildAppShortcuts();
   expect(shortcuts.find((s) => s.id === 'workbench.new')?.keys).toBe('mod+shift+o');
   expect(shortcuts.find((s) => s.id === 'workbench.jump.1')?.keys).toBe('mod+alt+1');
+  expect(shortcuts.find((s) => s.id === 'context.jump.1')?.keys).toBe('mod+shift+1');
   expect(shortcuts.filter((s) => s.id.startsWith('nav.')).map((s) => [s.id, s.keys, s.hidden, s.menu])).toEqual([
     ['nav.back', 'mod+left', undefined, true],
     ['nav.forward', 'mod+right', undefined, true],

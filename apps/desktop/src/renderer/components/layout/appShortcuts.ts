@@ -27,7 +27,7 @@ import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workb
 import { buildGoToShortcuts } from './goToShortcuts';
 
 // Keep the same context shortcut as the web app.
-export const CONTEXT_JUMP_KEYS = (n: number) => `mod+alt+shift+${n}`;
+export const CONTEXT_JUMP_KEYS = (n: number) => `mod+shift+${n}`;
 
 export function orderedContexts() {
   return contextEntries(useWorkspaceStore.getState().workspaces, useSpacesStore.getState().teams);

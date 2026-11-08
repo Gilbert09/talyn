@@ -141,7 +141,7 @@ describe('context shortcuts', () => {
     const jumps = shortcuts.filter((shortcut) => shortcut.id.startsWith('context.jump.'));
     expect(jumps).toHaveLength(9);
     jumps.forEach((jump, index) => {
-      expect(jump.keys).toBe(`mod+alt+shift+${index + 1}`);
+      expect(jump.keys).toBe(`mod+shift+${index + 1}`);
       expect(MENU_COMMANDS.some((command) => command.keys === jump.keys)).toBe(false);
       expect(shortcuts.filter((shortcut) => shortcut.keys === jump.keys)).toHaveLength(1);
     });
