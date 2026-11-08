@@ -93,12 +93,14 @@ describe('routes/workspaces', () => {
 
     it.each([
       ['POST', '/workspaces/other-ws/private-connector', undefined],
+      ['GET', '/workspaces/other-ws/private-connector/peers', undefined],
       ['PUT', '/workspaces/other-ws/private-connector/routes', { routes: [] }],
       ['DELETE', '/workspaces/other-ws/private-connector', undefined],
     ])('checks workspace access before %s %s', async (method, path, body) => {
       const start = vi.spyOn(FleetClient.prototype, 'startPrivateConnector').mockResolvedValue(connector);
       const replace = vi.spyOn(FleetClient.prototype, 'replacePrivateRoutes').mockResolvedValue(connector);
       const remove = vi.spyOn(FleetClient.prototype, 'deletePrivateConnector').mockResolvedValue();
+      const peers = vi.spyOn(FleetClient.prototype, 'listPrivatePeers').mockResolvedValue({ peers: [] });
       const res = await fetch(`${serverUrl}${path}`, {
         method,
         headers: authHeaders,
@@ -108,10 +110,12 @@ describe('routes/workspaces', () => {
       expect(start).not.toHaveBeenCalled();
       expect(replace).not.toHaveBeenCalled();
       expect(remove).not.toHaveBeenCalled();
+      expect(peers).not.toHaveBeenCalled();
     });
 
     it.each([
       ['POST', '/workspaces/ws/private-connector', undefined],
+      ['GET', '/workspaces/ws/private-connector/peers', undefined],
       ['PUT', '/workspaces/ws/private-connector/routes', { routes: [] }],
       ['DELETE', '/workspaces/ws/private-connector', undefined],
     ])('enforces the backend flag for %s %s', async (method, path, body) => {
@@ -135,6 +139,32 @@ describe('routes/workspaces', () => {
         success: false,
         code: 'connector_not_found',
         error: 'This workspace has no private connector.',
+      });
+    });
+
+    it('lists tailnet peers', async () => {
+      const listed = vi.spyOn(FleetClient.prototype, 'listPrivatePeers').mockResolvedValue({
+        peers: [{ name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: [] }],
+      });
+      const res = await fetch(`${serverUrl}/workspaces/ws/private-connector/peers`, { headers: authHeaders });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        success: true,
+        data: { peers: [{ name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: [] }] },
+      });
+      expect(listed).toHaveBeenCalledWith('ws');
+    });
+
+    it('reports a connector that cannot list peers yet', async () => {
+      vi.spyOn(FleetClient.prototype, 'listPrivatePeers').mockRejectedValue(
+        new FleetHttpError('internal', 409, 'connector_not_connected'),
+      );
+      const res = await fetch(`${serverUrl}/workspaces/ws/private-connector/peers`, { headers: authHeaders });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        success: false,
+        code: 'connector_not_connected',
+        error: 'The private connector is not connected.',
       });
     });
 

@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import type { PrivateConnector, PrivateRoute } from '@talyn/shared';
+import type { PrivateConnector, PrivatePeer, PrivateRoute } from '@talyn/shared';
 import { workspaceHasFeature } from '../featureFlags.js';
 import {
   FleetCapacityError,
@@ -11,6 +11,7 @@ import {
 import { fleetGatewayToken, fleetPinnedEndpoint } from './credentials.js';
 
 const MAX_PRIVATE_ROUTES = 128;
+const MAX_PRIVATE_PEERS = 1_000;
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 export class PrivateRoutesServiceError extends Error {
@@ -56,6 +57,41 @@ export async function getPrivateConnector(workspaceId: string): Promise<PrivateC
   } catch (error) {
     throw mapPrivateRoutesError(error);
   }
+}
+
+export async function listPrivatePeers(workspaceId: string): Promise<PrivatePeer[]> {
+  try {
+    return normalizePrivatePeers((await client().listPrivatePeers(workspaceId))?.peers);
+  } catch (error) {
+    throw mapPrivateRoutesError(error);
+  }
+}
+
+/** Keep only well-formed peers so a YAS change cannot break the settings page. */
+export function normalizePrivatePeers(value: unknown): PrivatePeer[] {
+  if (!Array.isArray(value)) return [];
+  const strings = (list: unknown): string[] =>
+    Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
+  const peers: PrivatePeer[] = [];
+  for (const entry of value.slice(0, MAX_PRIVATE_PEERS)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const dnsName = typeof record.dnsName === 'string' ? record.dnsName.replace(/\.$/, '') : '';
+    const addresses = strings(record.addresses);
+    const name = typeof record.name === 'string' && record.name
+      ? record.name
+      : dnsName.split('.')[0] || addresses[0] || '';
+    if (!name || (!dnsName && addresses.length === 0)) continue;
+    peers.push({
+      name,
+      dnsName,
+      addresses,
+      os: typeof record.os === 'string' ? record.os : '',
+      online: record.online === true,
+      subnetRoutes: strings(record.subnetRoutes),
+    });
+  }
+  return peers;
 }
 
 export async function replacePrivateRoutes(
@@ -178,11 +214,13 @@ export function mapPrivateRoutesError(error: unknown): PrivateRoutesServiceError
   if (error instanceof FleetHttpError) {
     const message = error.status === 404
       ? 'This workspace has no private connector.'
-      : error.status === 409
-        ? 'The private connector cannot make that change in its current state.'
-        : error.status >= 400 && error.status < 500
-          ? 'The private-routes request was rejected.'
-          : 'Private routes are temporarily unavailable.';
+      : error.status === 409 && error.code === 'connector_not_connected'
+        ? 'The private connector is not connected.'
+        : error.status === 409
+          ? 'The private connector cannot make that change in its current state.'
+          : error.status >= 400 && error.status < 500
+            ? 'The private-routes request was rejected.'
+            : 'Private routes are temporarily unavailable.';
     return new PrivateRoutesServiceError(
       message,
       error.status,

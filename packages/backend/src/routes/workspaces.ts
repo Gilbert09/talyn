@@ -53,10 +53,12 @@ import {
   type WorkspaceSettings,
   DEFAULT_MERGE_QUEUE_MODE,
   type PrivateConnector,
+  type PrivatePeersResponse,
 } from '@talyn/shared';
 import {
   deletePrivateConnector,
   getPrivateConnector,
+  listPrivatePeers,
   mapPrivateRoutesError,
   replacePrivateRoutes,
   startPrivateConnector,
@@ -277,6 +279,16 @@ export function workspaceRoutes(): Router {
     try {
       const connector = await getPrivateConnector(req.params.id);
       res.json({ success: true, data: connector } as ApiResponse<PrivateConnector>);
+    } catch (error) {
+      privateRoutesFailure(error, res);
+    }
+  });
+
+  router.get('/:id/private-connector/peers', async (req, res) => {
+    if (!(await gatePrivateRoutes(req, res))) return;
+    try {
+      const peers = await listPrivatePeers(req.params.id);
+      res.json({ success: true, data: { peers } } as ApiResponse<PrivatePeersResponse>);
     } catch (error) {
       privateRoutesFailure(error, res);
     }

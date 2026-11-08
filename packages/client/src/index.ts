@@ -123,6 +123,7 @@ import type {
   ListSkillsResponse,
   PlatformSkill,
   PrivateConnector,
+  PrivatePeersResponse,
   ReplacePrivateRoutesInput,
   CreatePlatformSkillRequest,
   UpdatePlatformSkillRequest,
@@ -567,6 +568,8 @@ export const workspaces = {
       request<PrivateConnector>('POST', `/workspaces/${enc(id)}/private-connector`),
     get: (id: string) =>
       request<PrivateConnector>('GET', `/workspaces/${enc(id)}/private-connector`),
+    peers: (id: string) =>
+      request<PrivatePeersResponse>('GET', `/workspaces/${enc(id)}/private-connector/peers`),
     replaceRoutes: (id: string, input: ReplacePrivateRoutesInput) =>
       request<PrivateConnector>('PUT', `/workspaces/${enc(id)}/private-connector/routes`, input),
     disconnect: (id: string) =>

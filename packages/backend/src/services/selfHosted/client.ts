@@ -17,6 +17,7 @@ import {
   type CreateSandboxLayers,
   type LayerStepResult,
   type PrivateConnector,
+  type PrivatePeersResponse,
   type PrivateRoute,
   type RepositoryBake,
 } from '@talyn/shared';
@@ -1115,6 +1116,15 @@ export class FleetClient {
   async getPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
     return this.request(
       `/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector`,
+      {},
+      { preserveNotFound: true },
+    );
+  }
+
+  /** List the other devices on the connected tailnet. */
+  async listPrivatePeers(workspaceId: string): Promise<PrivatePeersResponse> {
+    return this.request(
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector/peers`,
       {},
       { preserveNotFound: true },
     );
