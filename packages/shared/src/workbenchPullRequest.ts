@@ -456,15 +456,21 @@ export function gitStderrTail(stderr: string, lines = 4): string {
  * A failed `git push`, in words a person can act on. In a sandbox the push
  * goes through the fleet proxy with the workspace's GitHub App token, so a
  * refusal there means the App lacks write access. On the user's machine it is
- * their own credentials.
+ * their own credentials. A change to a workflow file also needs the Workflows
+ * permission (or the `workflow` scope for an OAuth token).
  */
 export function describePushFailure(input: { stderr: string; runtime: 'sandbox' | 'local'; repoFullName: string }): string {
   const detail = gitStderrTail(input.stderr);
   const refused = /\b403\b|permission to .* denied|write access to repository not granted|access denied|denied to/i.test(
     input.stderr,
   );
+  const workflowRefused = /refusing to allow an? .+ to create or update workflow/i.test(input.stderr);
   let head: string;
-  if (refused && input.runtime === 'sandbox') {
+  if (workflowRefused && input.runtime === 'sandbox') {
+    head = `GitHub refused the push because the branch changes a file in .github/workflows. The Talyn GitHub App needs Workflows: Read & write on ${input.repoFullName}. Grant it, or remove the workflow change from the branch.`;
+  } else if (workflowRefused) {
+    head = `GitHub refused the push because the branch changes a file in .github/workflows. Your git credentials need the workflow scope on ${input.repoFullName}.`;
+  } else if (refused && input.runtime === 'sandbox') {
     head = `GitHub refused the push. The Talyn GitHub App needs Contents: Read & write on ${input.repoFullName}.`;
   } else if (refused) {
     head = `GitHub refused the push. Check that your git credentials can write to ${input.repoFullName}.`;

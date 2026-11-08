@@ -288,8 +288,11 @@ Talyn's.
 3. Connect a Claude subscription in Settings → Talyn Fleet.
 4. `npm run dev:desktop`. Local mode needs `claude` or `codex` on the login PATH and `node-pty`
    built for Electron (`npm run rebuild` in `apps/desktop/release/app`).
-5. To push from a sandbox, the GitHub App needs Contents: Read & write (and Workflows write for
-   workflow files).
+5. To push from a sandbox, the GitHub App needs Contents: Read & write. A branch that changes a
+   file in `.github/workflows` also needs Workflows: Read & write. Without it, GitHub answers
+   "refusing to allow a GitHub App to create or update workflow", and `describePushFailure`
+   names the missing permission. `fleet-publish` cannot avoid this: GitHub applies the same
+   rule to commits made through the API.
 
 ### Fleet changes this needs
 

@@ -272,6 +272,18 @@ describe('describePushFailure', () => {
     ['a 403 in a sandbox names the App permission', app403, 'sandbox', /^GitHub refused the push\. The Talyn GitHub App needs Contents: Read & write on acme\/app\.\n/],
     ['a denied push on the user machine names their credentials', 'remote: Permission to acme/app.git denied to tom.', 'local', /^GitHub refused the push\. Check that your git credentials can write to acme\/app\./],
     ['a non-fast-forward', ' ! [rejected]        HEAD -> oslo (fetch first)', 'sandbox', /^GitHub rejected the push: the remote branch has commits/],
+    [
+      'a workflow file in a sandbox names the Workflows permission',
+      " ! [remote rejected] HEAD -> tom/x (refusing to allow a GitHub App to create or update workflow `.github/workflows/test.yml` without `workflows` permission)",
+      'sandbox',
+      /^GitHub refused the push because the branch changes a file in \.github\/workflows\. The Talyn GitHub App needs Workflows: Read & write on acme\/app\./,
+    ],
+    [
+      'a workflow file on the user machine names the workflow scope',
+      " ! [remote rejected] HEAD -> tom/x (refusing to allow an OAuth App to create or update workflow `.github/workflows/test.yml` without `workflow` scope)",
+      'local',
+      /^GitHub refused the push because the branch changes a file in \.github\/workflows\. Your git credentials need the workflow scope on acme\/app\./,
+    ],
     ['anything else', 'fatal: unable to connect', 'local', /^Could not push the branch\.\nfatal: unable to connect$/],
   ])('%s', (_name, stderr, runtime, expected) => {
     expect(describePushFailure({ stderr, runtime, repoFullName: 'acme/app' })).toMatch(expected);
