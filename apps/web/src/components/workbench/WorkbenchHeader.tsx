@@ -379,7 +379,7 @@ export function WorkbenchHeader({
           )}
           {canQueue && (
             <Button
-              variant={pr?.mergeQueued ? 'secondary' : 'outline'}
+              variant={pr?.mergeQueued ? 'secondary' : 'default'}
               className="h-7 min-w-0 gap-1.5 px-2.5 text-xs"
               onClick={() => void toggleQueue()}
               disabled={queueBusy || busy !== null}
