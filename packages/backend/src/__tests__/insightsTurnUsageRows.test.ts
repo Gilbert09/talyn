@@ -127,6 +127,65 @@ describe('buildTurnUsageRows: Claude', () => {
   });
 });
 
+describe('buildTurnUsageRows: model and agent attribution', () => {
+  const codexUsageResult = () => result({ usage: codexUsage(10, 0, 1) });
+  const claudeResult = () => result({ modelUsage: { 'claude-opus-5-5': { inputTokens: 5, outputTokens: 5, costUSD: 0.5 } }, costUsd: 0.5 });
+
+  it.each<[string, Partial<ChatFacts>, Partial<TurnFacts>, string]>([
+    ['a Codex chat in a Claude session never takes the session model',
+      { model: null, sessionAgent: 'claude', sessionModel: 'claude-opus-5-5' }, {}, UNKNOWN_MODEL],
+    ['a Codex chat in a Codex session takes the session model',
+      { model: null, sessionAgent: 'codex', sessionModel: 'gpt-6.1-sol' }, {}, 'gpt-6.1-sol'],
+    ['a Claude model on a Codex chat is not the Codex model',
+      { model: 'claude-sonnet-5', sessionAgent: 'claude', sessionModel: 'claude-sonnet-5' }, {}, UNKNOWN_MODEL],
+    ['a Claude alias on a Codex chat is not the Codex model',
+      { model: 'opus', sessionAgent: 'codex', sessionModel: 'gpt-6-astra' }, {}, 'gpt-6-astra'],
+    ['the stamped model wins over the chat model',
+      { model: 'gpt-6-luna' }, { turnModel: 'gpt-6-astra' }, 'gpt-6-astra'],
+    ['a stamped agent default is unknown, whatever the chat says now',
+      { model: 'gpt-6-luna', sessionAgent: 'codex', sessionModel: 'gpt-6-luna' }, { turnModel: null }, UNKNOWN_MODEL],
+    ['a stamped Claude model on a Codex turn is unknown',
+      { model: null }, { turnModel: 'claude-opus-5-5' }, UNKNOWN_MODEL],
+  ])('Codex: %s', (_label, chatOverride, factsOverride, model) => {
+    const [row] = buildTurnUsageRows({ ...codexChat, ...chatOverride }, facts([codexUsageResult()], factsOverride));
+    expect(row).toMatchObject({ model, agent: 'codex' });
+  });
+
+  it.each<[string, Partial<ChatFacts>, Partial<TurnFacts>, string]>([
+    ['an alias is the newest model of its family', { model: 'sonnet' }, {}, 'claude-sonnet-5-5'],
+    ['an alias in any case', { model: 'Opus' }, {}, 'claude-opus-5-5'],
+    ['fable', { model: 'fable' }, {}, 'claude-fable-5-1'],
+    ['a full id stays', { model: 'claude-sonnet-5' }, {}, 'claude-sonnet-5'],
+    ['a stamped alias', { model: null }, { turnModel: 'sonnet' }, 'claude-sonnet-5-5'],
+    ['the init model wins over the stamp', { model: null }, { turnModel: 'claude-sonnet-5', initModel: 'claude-opus-5-5' }, 'claude-opus-5-5'],
+    ['a Codex model on a Claude chat falls to the session model',
+      { model: 'gpt-6.1-sol', sessionAgent: 'claude', sessionModel: 'claude-sonnet-5-5' }, {}, 'claude-sonnet-5-5'],
+    ['a Claude chat in a Codex session never takes the session model',
+      { model: null, sessionAgent: 'codex', sessionModel: 'gpt-6.1-sol' }, {}, UNKNOWN_MODEL],
+  ])('Claude without modelUsage: %s', (_label, chatOverride, factsOverride, model) => {
+    const [row] = buildTurnUsageRows({ ...claudeChat, ...chatOverride },
+      facts([result({ usage: { input_tokens: 1 }, isError: true })], factsOverride));
+    expect(row).toMatchObject({ model, agent: 'claude' });
+  });
+
+  it('keeps a Claude turn as Claude when the chat moved to Codex later', () => {
+    const rows = buildTurnUsageRows({ ...codexChat, model: 'gpt-6-astra' },
+      facts([claudeResult()], { initAgent: 'claude', initModel: 'claude-opus-5-5' }));
+    expect(rows).toEqual([expect.objectContaining({ model: 'claude-opus-5-5', agent: 'claude', costEstimateMicros: 500_000, isPrimary: true })]);
+  });
+
+  it('keeps a Codex turn as Codex when the chat moved to Claude later', () => {
+    const rows = buildTurnUsageRows({ ...claudeChat, model: 'claude-opus-5-5', sessionAgent: 'claude', sessionModel: 'claude-opus-5-5' },
+      facts([codexUsageResult()], { initAgent: 'codex', turnModel: 'gpt-6-astra' }));
+    expect(rows).toEqual([expect.objectContaining({ model: 'gpt-6-astra', agent: 'codex', inputTokens: 10, costEstimateMicros: null })]);
+  });
+
+  it('uses the chat agent when the turn has no init event', () => {
+    const [row] = buildTurnUsageRows(codexChat, facts([codexUsageResult()], { initAgent: null }));
+    expect(row.agent).toBe('codex');
+  });
+});
+
 describe('codexDelta: Codex reports thread totals', () => {
   it.each<[string, StoredResultUsage, StoredResultUsage | null, Record<string, number>]>([
     ['first turn: its own totals, cached tokens taken out of input',

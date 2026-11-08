@@ -256,6 +256,18 @@ describe('sections', () => {
     ).toBeInTheDocument();
   });
 
+  it.each<[string, number, boolean]>([
+    ['a model with no turns of its own', 0, true],
+    ['a model with turns', 4, false],
+  ])('subagent note: %s', async (_name, turns, shown) => {
+    const subagent = { inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, agent: 'claude', model: 'claude-fable-5-1', turns, costMicros: 72_140_000 };
+    serveAll({ ...DATA, agents: { ...agents, byModel: [...agents.byModel, subagent] } });
+    await renderLoaded();
+    const section = sectionEl('agents');
+    expect(section.textContent?.includes('Subagents only · Estimated cost: $72.14')).toBe(shown);
+    expect(section.textContent?.includes('the model ran inside the turns of other models')).toBe(shown);
+  });
+
   it('shows "Not reported" when no turn reported a cost', async () => {
     serveAll({ ...DATA, agents: { ...agents, totals: { ...agents.totals, costMicros: null, turnsWithCost: 0 } } });
     await renderLoaded();

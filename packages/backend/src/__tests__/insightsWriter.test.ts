@@ -17,6 +17,7 @@ import {
   backfillUsageInsights,
   inBackfillWindow,
   USAGE_INSIGHTS_BACKFILL,
+  USAGE_INSIGHTS_MODEL_REPAIR,
 } from '../services/insights/backfill.js';
 
 const T0 = new Date('2026-11-01T10:00:00.000Z');
@@ -101,6 +102,68 @@ describe('Insights writers', () => {
       [1, 'gpt-codex', 13_841, 8064, 5, null, 2000],
       [2, 'gpt-codex', 163, 21_760, 17, null, 2000],
     ]);
+  });
+
+  describe('model attribution', () => {
+    beforeEach(async () => {
+      // A Claude session whose chat runs Codex with no model of its own.
+      await insertChat({ id: 'chat-switched', workbenchId: 'wb', workspaceId: 'ws', title: 'Chat', agent: 'codex' });
+    });
+
+    async function switchedCodexTurn(turn: number, base: number, talynModel?: string | null) {
+      await event('chat-switched', turn, base, {
+        type: 'user', talyn: { kind: 'user_message', sentAt: at(base).toISOString(), ...(talynModel !== undefined ? { model: talynModel } : {}) },
+      });
+      await event('chat-switched', turn, base + 1, { type: 'system', subtype: 'init', agent: 'codex' });
+      await event('chat-switched', turn, base + 5, {
+        type: 'result', subtype: 'success', is_error: false, session_id: 't', usage: { input_tokens: 10 * turn, output_tokens: turn },
+      });
+    }
+
+    it.each<[string, string | null | undefined, string]>([
+      ['no stamp: the Claude session model is not used', undefined, 'unknown'],
+      ['a stamped agent default', null, 'unknown'],
+      ['a stamped model', 'gpt-6-astra', 'gpt-6-astra'],
+    ])('a Codex chat in a Claude session: %s', async (_label, stamp, model) => {
+      await switchedCodexTurn(1, 0, stamp);
+      await recordTurnUsage('chat-switched', 1);
+      expect((await usageRows()).map((r) => [r.model, r.agent, r.inputTokens])).toEqual([[model, 'codex', 10]]);
+    });
+
+    it('takes the agent from the turn, not from the chat it moved to', async () => {
+      await claudeTurn(1, 0, { 'claude-main': { inputTokens: 4, costUSD: 0.04 } });
+      await db.update(workbenchChats).set({ agent: 'codex', model: 'gpt-6-astra' }).where(eq(workbenchChats.id, 'chat-claude'));
+      await recordTurnUsage('chat-claude', 1);
+      expect((await usageRows()).map((r) => [r.model, r.agent, r.costEstimateMicros])).toEqual([['claude-main', 'claude', 40_000]]);
+    });
+
+    it('the repair pass after the first backfill writes old rows again', async () => {
+      await switchedCodexTurn(1, 0);
+      await switchedCodexTurn(2, 50, 'gpt-6-luna');
+      // Rows as the old writer stored them: under the session's Claude model.
+      const wrong = { chatId: 'chat-switched', workspaceId: 'ws', workbenchId: 'wb', agent: 'codex', model: 'wb-model', inputTokens: 1, endedAt: at(5) };
+      await db.insert(workbenchTurnUsage).values([{ ...wrong, turn: 1 }, { ...wrong, turn: 2 }, { ...wrong, turn: 3 }]);
+      const night = new Date('2026-11-05T02:00:00Z');
+      await db.update(workbenchChats).set({ updatedAt: new Date(night.getTime() - 86_400_000) });
+
+      // The first tick finishes the first pass; the old rows stay.
+      expect(await backfillUsageInsights(night)).toBe(true);
+      expect((await usageRows()).filter((r) => r.chatId === 'chat-switched').map((r) => r.model)).toEqual(['unknown', 'wb-model', 'gpt-6-luna', 'wb-model', 'wb-model']);
+      // The next tick repairs.
+      expect(await backfillUsageInsights(night)).toBe(true);
+      const repaired = (await usageRows()).filter((r) => r.chatId === 'chat-switched');
+      expect(repaired.map((r) => [r.turn, r.model, r.inputTokens])).toEqual([
+        [1, 'unknown', 10],
+        [2, 'gpt-6-luna', 10],
+        // A turn with no transcript left is not touched.
+        [3, 'wb-model', 1],
+      ]);
+      const [repair] = await db.select().from(usageInsightsBackfill).where(eq(usageInsightsBackfill.name, USAGE_INSIGHTS_MODEL_REPAIR));
+      expect(repair?.completedAt).toBeInstanceOf(Date);
+      // Done: a later tick changes nothing.
+      expect(await backfillUsageInsights(night)).toBe(true);
+      expect((await usageRows()).filter((r) => r.chatId === 'chat-switched')).toHaveLength(3);
+    });
   });
 
   it('records nothing for a turn without a result, or an unknown chat', async () => {

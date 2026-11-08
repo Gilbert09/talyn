@@ -51,6 +51,11 @@ export function turnFactsSql(chatIds: readonly string[], turn?: number): SQL {
           THEN e.event -> 'talyn' ->> 'sentAt' END AS sent_at,
         CASE WHEN e.event ->> 'type' = 'system' AND e.event ->> 'subtype' = 'init'
           THEN e.event ->> 'model' END AS init_model,
+        CASE WHEN e.event ->> 'type' = 'system' AND e.event ->> 'subtype' = 'init'
+          THEN COALESCE(e.event ->> 'agent', 'claude') END AS init_agent,
+        CASE WHEN e.event ->> 'type' = 'user' AND e.event -> 'talyn' ->> 'kind' = 'user_message'
+          AND e.event -> 'talyn' -> 'model' IS NOT NULL
+          THEN COALESCE(e.event -> 'talyn' ->> 'model', '') END AS turn_model,
         CASE WHEN e.event ->> 'type' = 'result' THEN jsonb_build_object(
           'seq', e.seq, 'at', e.created_at, 'sessionId', e.event -> 'session_id',
           'usage', e.event -> 'usage', 'modelUsage', e.event -> 'modelUsage',
@@ -67,6 +72,8 @@ export function turnFactsSql(chatIds: readonly string[], turn?: number): SQL {
       min(created_at) AS started_at,
       max(created_at) AS ended_at,
       (array_agg(init_model ORDER BY seq) FILTER (WHERE init_model IS NOT NULL))[1] AS init_model,
+      (array_agg(init_agent ORDER BY seq DESC) FILTER (WHERE init_agent IS NOT NULL))[1] AS init_agent,
+      (array_agg(turn_model ORDER BY seq) FILTER (WHERE turn_model IS NOT NULL))[1] AS turn_model,
       (array_agg(sent_at ORDER BY seq) FILTER (WHERE sent_at IS NOT NULL))[1] AS sent_at,
       min(created_at) FILTER (WHERE type = 'assistant' AND seq > user_seq) AS reply_at,
       jsonb_agg(result ORDER BY seq) FILTER (WHERE result IS NOT NULL) AS results
@@ -83,6 +90,8 @@ interface TurnFactsRow {
   started_at: unknown;
   ended_at: unknown;
   init_model: string | null;
+  init_agent?: string | null;
+  turn_model?: string | null;
   sent_at: string | null;
   reply_at: unknown;
   results: unknown;
@@ -99,6 +108,9 @@ export function parseTurnFacts(row: TurnFactsRow): TurnFacts | null {
     startedAt,
     endedAt,
     initModel: row.init_model || null,
+    initAgent: row.init_agent === 'codex' || row.init_agent === 'claude' ? row.init_agent : null,
+    // '' is a stamped "agent default"; absent is an older turn with no stamp.
+    turnModel: row.turn_model === null || row.turn_model === undefined ? undefined : row.turn_model || null,
     sentAt: toDate(row.sent_at),
     replyAt: toDate(row.reply_at),
     results,
@@ -132,7 +144,7 @@ export async function previousResult(chatId: string, turn: number): Promise<Stor
   return parseStoredResult({ seq: row.seq, at: toDate(row.created_at)?.toISOString(), sessionId: row.session_id, usage: typeof row.usage === 'string' ? JSON.parse(row.usage) : row.usage });
 }
 
-/** The chat columns the writer needs: the chat's agent and model, else the session's model. */
+/** The chat columns the writer needs: the chat's agent and model, and the session's. */
 export function chatFactsQuery(chatIds: readonly string[]) {
   return db()
     .select({
@@ -140,7 +152,9 @@ export function chatFactsQuery(chatIds: readonly string[]) {
       workbenchId: workbenchChats.workbenchId,
       workspaceId: workbenches.workspaceId,
       agent: workbenchChats.agent,
-      model: sql<string | null>`COALESCE(${workbenchChats.model}, ${workbenches.model})`,
+      model: workbenchChats.model,
+      sessionAgent: workbenches.agent,
+      sessionModel: workbenches.model,
     })
     .from(workbenchChats)
     .innerJoin(workbenches, eq(workbenches.id, workbenchChats.workbenchId))
@@ -202,7 +216,7 @@ export async function recordTurnUsage(chatId: string, turn: number): Promise<Tur
   if (!chat) return [];
   const facts = (await loadTurnFacts([chatId], turn)).get(chatId)?.[0];
   if (!facts) return [];
-  const previous = chat.agent === 'codex' ? await previousResult(chatId, turn) : null;
+  const previous = (facts.initAgent ?? chat.agent) === 'codex' ? await previousResult(chatId, turn) : null;
   const rows = buildTurnUsageRows(chat, facts, previous);
   await storeTurnUsageRows(rows, 'replace');
   await db().delete(workbenchTurnUsage).where(and(

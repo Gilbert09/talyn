@@ -304,7 +304,7 @@ export async function sendMessage(
   if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
   if (wb.status !== 'ready' && !workbenchQueuesMessages(wb.status as WorkbenchStatus)) throw notReadyError(wb.status);
   const message = { ...normaliseMessage(input), queuedAt: receivedAt };
-  validateAgentModel(chat.agent, message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model : undefined));
+  validateAgentModel(chat.agent, turnModelFor(message, chat, wb));
   if (wb.status === 'ready') assertSandboxAgent(wb, chat.agent === 'codex' ? 'codex' : 'claude');
   // Never from a request body: only Talyn's own callers write a Talyn message.
   if (opts.origin === 'talyn') message.origin = 'talyn';
@@ -665,9 +665,28 @@ class EventBatcher {
   }
 }
 
+/**
+ * The model a turn runs on. Undefined: the agent's own default. The session's
+ * model applies only to a chat on the session's agent, so a Codex chat in a
+ * Claude session never runs a Claude model.
+ */
+export function turnModelFor(
+  message: Pick<WorkbenchQueuedMessage, 'model'>,
+  chat: { agent: string; model: string | null },
+  wb: { agent: string; model: string | null },
+): string | undefined {
+  return message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+}
+
+/**
+ * The transcript line of a user message. `model` is the model the turn runs
+ * on (null: the agent's default). Insights reads it, because Codex does not
+ * name its model in its own events.
+ */
 export function userMessageEvent(
   message: WorkbenchQueuedMessage,
   attachments = message.attachments,
+  model?: string | null,
 ): Record<string, unknown> {
   return {
     type: 'user',
@@ -676,6 +695,7 @@ export function userMessageEvent(
       kind: 'user_message',
       messageId: message.id,
       sentAt: message.queuedAt,
+      ...(model !== undefined ? { model } : {}),
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       // Who prompted, for a teammate's turn. The payer's workspace stays on the backend.
       ...(message.payer
@@ -733,8 +753,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
   let needsUserMessage = !(await hasTurnEvent(chatId, turn, 'user_message'));
   const hasInlineAttachments = message.attachments?.some((attachment) => attachment.dataBase64) ?? false;
+  const stampedModel = early ? turnModelFor(message, chat, early) ?? null : undefined;
   if (needsUserMessage && !hasInlineAttachments) {
-    events.add(userMessageEvent(message));
+    events.add(userMessageEvent(message, message.attachments, stampedModel));
     needsUserMessage = false;
   }
   let parserResult: { isError: boolean; text: string } | null = null;
@@ -783,7 +804,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // billed, to this turn's payer from here on.
     await meterWorkbenchAwake(wb, { payer });
     if (live.cancelRequested) return cancelledOutcome(events);
-    const turnModel = message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+    const turnModel = turnModelFor(message, chat, wb);
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     validateAgentModel(agent, turnModel);
     // A teammate's commits are theirs. Before the push, so a refusal leaves the box as it was.
@@ -811,7 +832,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         // Inline files have no path until the sandbox exists. Publish their
         // transcript event only after its preview path is ready to read.
         if (needsUserMessage) {
-          events.add(userMessageEvent(message, attached.transcript));
+          events.add(userMessageEvent(message, attached.transcript, turnModel ?? null));
           needsUserMessage = false;
         }
         return attached;
@@ -821,7 +842,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       // Finish every write before recovery, a retry, or another turn can start.
       await Promise.allSettled(jobs);
       if (needsUserMessage) {
-        events.add(userMessageEvent(message));
+        events.add(userMessageEvent(message, message.attachments, turnModel ?? null));
         needsUserMessage = false;
       }
       throw err;
@@ -1556,7 +1577,7 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     if (lease.message && lease.attempt === 0 && hopFrom && outcome.exitCode !== 125) {
       const agent = chat.agent === 'codex' ? 'codex' : 'claude';
       const detail = [parser.result?.text, outcome.stderrTail].filter(Boolean).join('\n');
-      const model = lease.message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+      const model = turnModelFor(lease.message, chat, wb);
       const hop = await failOverAccount(wb, agent, model, hopFrom, detail, payer);
       if (hop) {
         if (!parser.result?.isError && !(await hasTurnEvent(chatId, lease.turn, 'result', true))) {

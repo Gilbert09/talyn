@@ -358,6 +358,19 @@ describe('agent cost copy', () => {
     const row = within(screen.getByTestId('agents-models')).getByText('Default model').closest('tr') as HTMLElement;
     expect(within(row).getByText('Not reported')).toBeInTheDocument();
   });
+
+  it.each<[string, number, boolean]>([
+    ['a model with no turns of its own', 0, true],
+    ['a model with turns', 4, false],
+  ])('subagent note: %s', async (_name, turns, shown) => {
+    const subagent = { inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, agent: 'claude', model: 'claude-fable-5-1', turns, costMicros: 72_140_000 };
+    respondWith({ ...FULL, agents: { ...AGENTS, byModel: [...AGENTS.byModel, subagent] } });
+    await renderPage();
+    const table = within(screen.getByTestId('agents-models'));
+    const row = table.getByText('claude-fable-5-1').closest('tr') as HTMLElement;
+    expect(within(row).queryByText('Subagents only') !== null).toBe(shown);
+    expect(within(sectionEl('agents')).queryByText(/the model ran inside the turns of other models/) !== null).toBe(shown);
+  });
 });
 
 describe('range picker', () => {
