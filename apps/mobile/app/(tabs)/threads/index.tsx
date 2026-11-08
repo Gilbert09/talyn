@@ -3,7 +3,7 @@ import { threadRoute } from '../../../src/navigation/routes';
 
 export default function ThreadsScreen() {
   return (
-    <ShellScreen title="Threads" description="Plan work across your repositories.">
+    <ShellScreen title="Threads" description="Example threads. Mobile thread workflows will follow in a later release.">
       <ShellLink href={threadRoute('example-thread')} label="Open example thread" />
     </ShellScreen>
   );

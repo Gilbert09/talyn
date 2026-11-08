@@ -24,7 +24,6 @@ export function ShellScreen({ title, description, children }: PropsWithChildren<
           <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{title}</Text>
           <Text style={[styles.description, { color: colors.muted }]}>{description}</Text>
           {children}
-          <Text style={[styles.note, { color: colors.muted }]}>Example data. Your account is not connected.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
