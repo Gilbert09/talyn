@@ -12,7 +12,16 @@ import type { AppContext } from '../stores/workspace';
 
 export type RailEntry =
   | { kind: 'workspace'; id: string; name: string; logo?: WorkspaceLogo; context: AppContext; groupStart: boolean }
-  | { kind: 'space'; id: string; name: string; teamName: string; color: string | null; context: AppContext; groupStart: boolean };
+  | {
+      kind: 'space';
+      id: string;
+      name: string;
+      teamName: string;
+      color: string | null;
+      image: string | null;
+      context: AppContext;
+      groupStart: boolean;
+    };
 
 export function railEntries(workspaces: Workspace[], teams: SpacesTeam[] | null, spacesOn: boolean): RailEntry[] {
   const out: RailEntry[] = workspaces.map((w) => ({
@@ -32,6 +41,7 @@ export function railEntries(workspaces: Workspace[], teams: SpacesTeam[] | null,
         name: s.name,
         teamName: team.name,
         color: s.color,
+        image: s.image ?? null,
         context: { kind: 'space', spaceId: s.id },
         // A line before each team's spaces, so the teams read apart.
         groupStart: i === 0,

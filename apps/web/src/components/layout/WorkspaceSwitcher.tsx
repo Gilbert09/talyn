@@ -62,7 +62,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
       >
         {active ? (
           <span className="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-md bg-muted">
-            <SpaceDot color={active.space.color} className="h-3 w-3" />
+            <SpaceDot color={active.space.color} image={active.space.image} className="h-3 w-3" />
           </span>
         ) : (
           <WorkspaceLogo logo={current?.logo} fallbackSeed={current?.id ?? 'talyn'} size={22} className="flex-shrink-0" />
@@ -160,7 +160,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   >
                     <Check className={cn('h-4 w-4 flex-shrink-0', active?.space.id === space.id ? 'opacity-100' : 'opacity-0')} />
                     <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-                      <SpaceDot color={space.color} />
+                      <SpaceDot color={space.color} image={space.image} />
                     </span>
                     <span className="min-w-0 flex-1 truncate">{space.name}</span>
                   </button>

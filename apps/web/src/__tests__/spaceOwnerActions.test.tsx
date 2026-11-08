@@ -73,7 +73,7 @@ beforeEach(() => {
     selfUserId: 'me',
     teams: [{
       id: 't1', name: 'Acme', role: 'member', homeWorkspaceId: 'ws1', createdAt: '',
-      spaces: [{ id: 's1', teamId: 't1', name: 'Web', color: '#10b981', createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' }],
+      spaces: [{ id: 's1', teamId: 't1', name: 'Web', color: '#10b981', image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' }],
     }],
     sessions: {
       s1: {

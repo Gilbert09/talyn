@@ -92,7 +92,7 @@ function MoveBody({ move, onDone }: { move: MoveDialog; onDone: () => void }) {
           <div key={team.id}>
             <div className="truncate px-2 pb-0.5 pt-2 text-xs font-medium text-muted-foreground">{team.name}</div>
             {team.spaces.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No spaces yet.</p>}
-            {team.spaces.map((space) => row(space.id, space.id, <SpaceDot color={space.color} />, space.name))}
+            {team.spaces.map((space) => row(space.id, space.id, <SpaceDot color={space.color} image={space.image} />, space.name))}
           </div>
         ))}
       </div>
