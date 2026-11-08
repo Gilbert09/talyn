@@ -91,6 +91,14 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 
 **Keep the session log out of this file.** A note in `docs/SESSIONS.md` is the record; this file carries only what is still true and still load-bearing — Core Concepts, the conventions above. It used to hold a summary of every recent session as well, which grew to 57% of the file: a strictly worse copy of the same notes, always behind, and loaded into every session's context whether or not it was relevant.
 
+## Docs — keep them current
+
+**A change to the public API, the MCP server or a feature that users see updates its docs in the same pull request.** The website pages in `apps/marketing/content/docs/` are written by hand. No test catches a page that is out of date, so the author of the change must do it.
+
+- **Public API** (`packages/backend/src/routes/public/`) → run `npm run openapi:generate -w @talyn/backend` and commit `docs/api/openapi.json`. Then update `docs/api/*.md`, the scopes and overview in `apps/marketing/content/docs/api.md`, and the endpoint in `apps/marketing/content/docs/api-reference.md`. Every endpoint in `openapi.json` must have an entry in `api-reference.md`.
+- **MCP tools** (`packages/backend/src/mcp/tools/`) → update the tool table in `docs/MCP_SERVER.md` and the areas in `apps/marketing/content/docs/mcp.md`. If a sandbox skill in `packages/backend/src/services/workbenches/skillPack/` or the briefing in `packages/shared/src/talynBriefing.ts` names the tool, update it too.
+- **Other user-facing behaviour** → update the matching page in `apps/marketing/content/docs/`. A new page also needs an entry in `DOCS_NAV` in `apps/marketing/lib/docs.ts`.
+
 ## Core Concepts (at a glance)
 
 - **Workspace** — groups related repos + integrations (e.g., "PostHog" = `posthog/posthog` + `posthog/posthog.com` + `posthog/charts`). **Every owner always has at least one**: `services/workspaceBootstrap.ts` mints a `DEFAULT_WORKSPACE_NAME` one on `GET /workspaces` (the call every client makes on boot), advisory-locked per owner so concurrent first-loads cannot double-insert. Onboarding therefore opens on **Connect GitHub**, not on naming a workspace. **Consequence to respect: a workspace existing no longer means the user is set up** — both front ends read `Workspace.integrations.github` to decide "already onboarded", because keying off `workspaces.length > 0` would skip the wizard (and its required GitHub step) for every new user. See Session 106 in [`docs/SESSIONS.md`](./docs/SESSIONS.md).
