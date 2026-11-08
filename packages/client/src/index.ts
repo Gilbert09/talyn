@@ -34,6 +34,11 @@ import type {
   CreateSpaceSessionResponse,
   CreateSpacesTeamRequest,
   InviteTeamMemberRequest,
+  InviteTeamEmailRequest,
+  InviteTeamEmailResponse,
+  TeamEmailInvite,
+  TeamInvitePreview,
+  TeamInviteTokenRequest,
   MoveToSpaceRequest,
   Space,
   SpaceItemsResponse,
@@ -3437,6 +3442,18 @@ export const teams = {
     request<TeamMember>('PATCH', `/teams/${teamId}/members/${memberId}`, { role }),
   removeMember: (teamId: string, memberId: string) =>
     request<null>('DELETE', `/teams/${teamId}/members/${memberId}`),
+  /** Pending email invites. Owners and admins only. */
+  emailInvites: (teamId: string) => request<TeamEmailInvite[]>('GET', `/teams/${teamId}/invites`),
+  /** Invite by email. Talyn emails an accept link; inviting the same email again sends a new link. */
+  inviteByEmail: (teamId: string, data: InviteTeamEmailRequest) =>
+    request<InviteTeamEmailResponse>('POST', `/teams/${teamId}/invites`, data),
+  revokeEmailInvite: (teamId: string, inviteId: string) =>
+    request<null>('DELETE', `/teams/${teamId}/invites/${inviteId}`),
+  /** Read an invite link's team before accepting. 404 when the link is used, expired or wrong. */
+  previewInvite: (token: string) =>
+    request<TeamInvitePreview>('POST', '/team-invites/preview', { token } satisfies TeamInviteTokenRequest),
+  acceptInvite: (token: string) =>
+    request<SpacesTeam>('POST', '/team-invites/accept', { token } satisfies TeamInviteTokenRequest),
   setHomeWorkspace: (teamId: string, workspaceId: string) =>
     request<{ homeWorkspaceId: string }>('PUT', `/teams/${teamId}/home-workspace`, { workspaceId }),
   createSpace: (teamId: string, data: CreateSpaceRequest) =>

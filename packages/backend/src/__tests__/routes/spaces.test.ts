@@ -191,6 +191,8 @@ describe('space routes', () => {
     ['GET', '/spaces/space-1/sessions'],
     ['POST', '/teams/team-1/spaces'],
     ['PUT', '/workbenches/wb-x/space'],
+    ['POST', '/teams/team-1/invites'],
+    ['POST', '/team-invites/accept'],
   ])('refuses %s %s when the spaces flag is off', async (method, path) => {
     vi.stubEnv('SPACES_ENABLED', 'false');
     resetFeatureFlagsForTests();
@@ -271,6 +273,54 @@ describe('space routes', () => {
       expect((await call('DELETE', '/spaces/space-1', BEN)).status).toBe(403);
       expect((await call('DELETE', '/spaces/space-1', ANA)).status).toBe(200);
       expect((await call('GET', '/teams', BEN)).body.data[0].spaces).toEqual([]);
+    });
+  });
+
+  describe('invites by email', () => {
+    const tokenOf = (url: string) => decodeURIComponent(new URL(url).pathname.split('/').pop()!);
+
+    // No email provider: the link comes back to the inviter.
+    beforeEach(() => {
+      vi.stubEnv('RESEND_API_KEY', '');
+    });
+
+    it('invites by email, then the invitee previews and accepts with the link', async () => {
+      const invited = await call('POST', '/teams/team-1/invites', ANA, { email: 'Cy.Work@Example.com' });
+      expect(invited.status).toBe(201);
+      expect(invited.body.data).toMatchObject({ emailSent: false, invite: { email: 'cy.work@example.com' } });
+      const token = tokenOf(invited.body.data.acceptUrl);
+
+      const pending = await call('GET', '/teams/team-1/invites', ANA);
+      expect(pending.body.data).toEqual([expect.objectContaining({ email: 'cy.work@example.com', invitedByLogin: 'ana' })]);
+
+      expect((await call('GET', '/spaces/space-1/sessions', CY)).status).toBe(404);
+      const preview = await call('POST', '/team-invites/preview', CY, { token });
+      expect(preview.body.data).toMatchObject({ teamId: 'team-1', teamName: 'Acme', alreadyMember: false });
+      const accepted = await call('POST', '/team-invites/accept', CY, { token });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.data).toMatchObject({ id: 'team-1', role: 'member', homeWorkspaceId: 'ws-c' });
+      expect((await call('GET', '/spaces/space-1/sessions', CY)).status).toBe(200);
+      expect((await call('POST', '/team-invites/accept', CY, { token })).status).toBe(404);
+      expect((await call('GET', '/teams/team-1/invites', ANA)).body.data).toEqual([]);
+    });
+
+    it.each([
+      [BEN, 403],
+      [CY, 404],
+    ])('refuses email invites from %s', async (user, status) => {
+      expect((await call('POST', '/teams/team-1/invites', user, { email: 'x@example.com' })).status).toBe(status);
+      expect((await call('GET', '/teams/team-1/invites', user)).status).toBe(status);
+    });
+
+    it('revokes an invite so its link stops working', async () => {
+      const invited = await call('POST', '/teams/team-1/invites', ANA, { email: 'x@example.com' });
+      const token = tokenOf(invited.body.data.acceptUrl);
+      expect((await call('DELETE', `/teams/team-1/invites/${invited.body.data.invite.id}`, ANA)).status).toBe(200);
+      expect((await call('POST', '/team-invites/preview', CY, { token })).status).toBe(404);
+    });
+
+    it.each([{}, { token: 12 }, { token: 'nope' }])('answers 404 for the accept body %j', async (body) => {
+      expect((await call('POST', '/team-invites/accept', CY, body)).status).toBe(404);
     });
   });
 

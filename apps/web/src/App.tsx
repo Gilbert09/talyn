@@ -11,6 +11,7 @@ import { useClosePopupAfterGithub } from './hooks/useClosePopupAfterGithub';
 import { useWorkspaceStore } from './stores/workspace';
 import { AuthCallback } from './routes/AuthCallback';
 import { McpCallback } from './routes/McpCallback';
+import { AcceptInvite } from './routes/AcceptInvite';
 import { OpenSession } from './routes/OpenSession';
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
       <Routes>
         <Route path="/mcp/callback" element={<McpCallback />} />
         <Route path="/open/session/:id" element={<OpenSession />} />
+        <Route path="/invite/:token" element={<AcceptInvite />} />
         <Route path="/*" element={<SessionRoutes />} />
       </Routes>
     </BrowserRouter>

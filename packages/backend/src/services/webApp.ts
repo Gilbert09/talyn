@@ -69,6 +69,12 @@ export function sessionLaunchUrl(sessionId: string): string {
   return webAppUrl(path) ?? new URL(path, HOSTED_WEB_APP_URL).toString();
 }
 
+/** The accept link of a team invite. The web app moves the token out of the URL at once. */
+export function teamInviteUrl(token: string): string {
+  const path = `/invite/${encodeURIComponent(token)}`;
+  return webAppUrl(path) ?? new URL(path, HOSTED_WEB_APP_URL).toString();
+}
+
 /** Tests: drop the memoised value between cases. */
 export function resetWebAppUrlCacheForTests(): void {
   cached = undefined;

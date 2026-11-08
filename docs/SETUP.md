@@ -1146,6 +1146,15 @@ POSTHOG_HOST=https://us.i.posthog.com
 # user on the API origin. Only ever read from env, never from a request.
 # WEB_APP_URL=https://app.talyn.dev
 #
+# RESEND_API_KEY: sends email through Resend (https://resend.com). Today only
+# team invites by email use it: the invitee gets a link to
+# `<WEB_APP_URL>/invite/<token>` (app.talyn.dev when WEB_APP_URL is unset).
+# Unset means no email is sent; the invite is still made, and Settings → Teams
+# shows the link to the inviter to share by hand. A send failure does the same.
+# EMAIL_FROM is the sender, and its domain must be verified in Resend.
+# RESEND_API_KEY=re_...
+# EMAIL_FROM="Talyn <noreply@talyn.dev>"   # optional, this is the default
+#
 # PREVIEW_BASE_DOMAIN: the domain for hosted session previews. A session port
 # gets the host `<random id>-<port>.<domain>`. Unset turns hosted previews off,
 # and the ticket route answers 404 `preview_links_unavailable`. It needs a
