@@ -214,6 +214,13 @@ A session sees workspace entries, its repository's entries and its thread's entr
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
 
+A memory review thread (source `memory_review`) sees every entry of its workspace.
+It writes a repository entry with `repository_id` and a thread entry with `thread_id`.
+Talyn starts this thread on the cadence in `settings.memoryReview` (`daily`, `weekly` or `monthly`), or when a person clicks "Review now".
+The thread merges entries that overlap and settles entries that disagree.
+The `memory-review` flag gates the feature. The sweep skips a period when fewer than two entries are live or no entry changed since the last review.
+The table `memory_review_runs` (migration `0120`) keeps one row for each review.
+
 | Tool | What it does |
 | --- | --- |
 | `talyn_memory_write` | Create an entry, or update the entry with the same name in the same scope. Name 64 characters, description 200, body 8 KB. |

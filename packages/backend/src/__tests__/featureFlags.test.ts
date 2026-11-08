@@ -477,6 +477,7 @@ describe('featuresForUser', () => {
     expect(Object.keys(features).sort()).toEqual([
       'loops',
       'mcpServers',
+      'memoryReview',
       'privateRoutes',
       'publicApi',
       'reviewPriority',
@@ -507,6 +508,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      memoryReview: false,
     });
   });
 
@@ -531,6 +533,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      memoryReview: false,
     });
   });
 

@@ -258,6 +258,7 @@ at the call site.
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
 | `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | gated |
+| `memory-review` | Memory review — a scheduled thread that cleans up workspace memory | `MEMORY_REVIEW_ENABLED=false` | **OFF** | gated |
 
 #### Public API (`/v1`)
 

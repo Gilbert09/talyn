@@ -16,6 +16,10 @@ vi.mock('../services/workbenches/store.js', async (original) => ({
     s1: { id: 's1', workspaceId: 'ws1', repositoryId: 'r1', kind: 'session', threadId: null },
     t1: { id: 't1', workspaceId: 'ws1', repositoryId: null, kind: 'thread', threadId: null },
     k1: { id: 'k1', workspaceId: 'ws1', repositoryId: 'r1', kind: 'session', threadId: 't1' },
+    rv: {
+      id: 'rv', workspaceId: 'ws1', repositoryId: null, kind: 'thread', threadId: null,
+      source: { kind: 'memory_review', runId: 'run-1' },
+    },
   })[id] ?? null),
 }));
 
@@ -24,6 +28,7 @@ const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1',
 const USER: McpCallContext = {};
 const THREAD: McpCallContext = { session: { tokenId: 'token-2', workbenchId: 't1', depth: 0 } };
 const CHILD: McpCallContext = { session: { tokenId: 'token-3', workbenchId: 'k1', depth: 1 } };
+const REVIEW: McpCallContext = { session: { tokenId: 'token-4', workbenchId: 'rv', depth: 0 } };
 
 const features: Features = {
   workflows: true,
@@ -129,6 +134,11 @@ describe('memory_write', () => {
     ['a thread, for the workspace', THREAD, { scope: 'workspace' }, { scope: 'workspace', repositoryId: null, threadId: null }],
     ['a session in a thread, by default', CHILD, {}, { scope: 'repository', repositoryId: 'r1', threadId: null }],
     ['a session in a thread, for its thread', CHILD, { scope: 'thread' }, { scope: 'thread', repositoryId: null, threadId: 't1' }],
+    ['an ordinary thread that names another thread', THREAD, { scope: 'thread', thread_id: 't9' }, { scope: 'thread', threadId: 't1' }],
+    ['a review thread, by default', REVIEW, {}, { scope: 'workspace', repositoryId: null, threadId: null, source: { kind: 'session', workbenchId: 'rv' } }],
+    ['a review thread, for any repository', REVIEW, { scope: 'repository', repository_id: 'r7' }, { scope: 'repository', repositoryId: 'r7', threadId: null }],
+    ['a review thread, for any thread', REVIEW, { scope: 'thread', thread_id: 't9' }, { scope: 'thread', repositoryId: null, threadId: 't9' }],
+    ['a review thread, for the workspace with targets', REVIEW, { scope: 'workspace', repository_id: 'r7', thread_id: 't9' }, { scope: 'workspace', repositoryId: null, threadId: null }],
   ])('writes from %s', async (_label, ctx, args, expected) => {
     const { calls } = mockApi({
       'POST /api/v1/workbenches/memory': (_url, body) => ({ entry: memory(body as object), outcome: 'created' }),
@@ -163,6 +173,9 @@ describe('memory_write', () => {
     ['an unknown scope', SELF, { scope: 'org' }, /scope must be/],
     ['a repository scope with no repository', USER, { workspace_id: 'ws1', scope: 'repository' }, /needs repository_id/],
     ['an unknown type', SELF, { type: 'note' }, /type must be one of/],
+    ['a repository scope with no repository from a review', REVIEW, { scope: 'repository' }, /needs repository_id/],
+    ['a thread scope with no thread from a review', REVIEW, { scope: 'thread' }, /needs thread_id/],
+    ['an unknown scope from a review', REVIEW, { scope: 'org' }, /scope must be/],
   ])('refuses %s without a write', async (_label, ctx, args, message) => {
     const { calls } = mockApi({});
     await expect(tool('memory_write').handler(OWNER, { ...writeArgs, ...args }, ctx)).rejects.toThrow(message);
@@ -202,6 +215,8 @@ describe('memory_search and memory_list', () => {
     ['a session in a thread', CHILD, {}, { workspaceId: 'ws1', repositoryId: 'r1', threadId: 't1', q: 'build' }],
     ['a user token', USER, { workspace_id: 'ws1' }, { workspaceId: 'ws1', q: 'build' }],
     ['a user token with a repository', USER, { workspace_id: 'ws1', repository_id: 'r9' }, { workspaceId: 'ws1', repositoryId: 'r9', q: 'build' }],
+    ['a review thread', REVIEW, {}, { workspaceId: 'ws1', q: 'build' }],
+    ['a review thread naming a repository', REVIEW, { repository_id: 'r9' }, { workspaceId: 'ws1', q: 'build' }],
   ])('search from %s asks for what it can see', async (_label, ctx, args, expected) => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches/memory': () => [memory()] });
     const text = await tool('memory_search').handler(OWNER, { ...args, query: 'build' }, ctx);
@@ -243,6 +258,9 @@ describe('memory_read and memory_forget', () => {
     ['another thread entry', { scope: 'thread', repositoryId: null, threadId: 's9' }, SELF, false],
     ['another workspace entry', { workspaceId: 'ws2', scope: 'workspace', repositoryId: null }, SELF, false],
     ['another repository entry, as a user token', { repositoryId: 'r2' }, { }, true],
+    ['any repository entry, as a review thread', { repositoryId: 'r2' }, REVIEW, true],
+    ['any thread entry, as a review thread', { scope: 'thread', repositoryId: null, threadId: 's9' }, REVIEW, true],
+    ['another workspace entry, as a review thread', { workspaceId: 'ws2', scope: 'workspace', repositoryId: null }, REVIEW, false],
   ])('a session reads %s: %s', async (_label, overrides, ctx, visible) => {
     mockApi({ 'GET /api/v1/workbenches/memory/m1': () => memory(overrides) });
     const read = tool('memory_read').handler(OWNER, { memory_id: 'm1', ...(ctx.session ? {} : { workspace_id: 'ws1' }) }, ctx);

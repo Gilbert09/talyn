@@ -3207,3 +3207,30 @@ export const workbenchWakeups = pgTable(
     sourceJobUq: uniqueIndex('uq_workbench_wakeups_source_job').on(t.sourceJobId).where(sql`${t.sourceJobId} IS NOT NULL`),
   })
 );
+
+/**
+ * Memory review runs (migration 0120): one row per review thread that Talyn
+ * started, or failed to start. `periodStart` is the scheduled key; see
+ * `services/workbenches/memoryReview.ts`.
+ */
+export const memoryReviewRuns = pgTable(
+  'memory_review_runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+    /** `MemoryReviewTrigger`. */
+    trigger: text('trigger').notNull(),
+    /** `MemoryReviewStatus`. */
+    status: text('status').notNull(),
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    periodUq: uniqueIndex('uq_memory_review_runs_period').on(t.workspaceId, t.periodStart),
+    recentIdx: index('idx_memory_review_runs_recent').on(t.workspaceId, t.createdAt),
+  })
+);

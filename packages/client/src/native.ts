@@ -171,6 +171,8 @@ import type {
   ListMemoryQuery,
   MemoryEntry,
   MemoryEntrySummary,
+  MemoryReviewRun,
+  MemoryReviewState,
   PutMemoryInput,
   PutMemoryResult,
   UpdateMemoryInput,
@@ -2375,6 +2377,12 @@ export const workbenches = {
     /** A soft delete. `restore` brings the entry back. */
     forget: (id: string) => request<MemoryEntrySummary>('DELETE', `/workbenches/memory/${enc(id)}`),
     restore: (id: string) => request<MemoryEntry>('POST', `/workbenches/memory/${enc(id)}/restore`),
+    /** Memory review: the cadence and the recent review threads. Needs the `memoryReview` flag. */
+    reviews: (workspaceId: string) =>
+      request<MemoryReviewState>('GET', `/workbenches/memory/reviews?workspaceId=${enc(workspaceId)}`),
+    /** "Review now": start a memory review thread at once. */
+    startReview: (workspaceId: string) =>
+      request<MemoryReviewRun>('POST', '/workbenches/memory/reviews', { workspaceId }),
   },
 
   // ---- Chats ----

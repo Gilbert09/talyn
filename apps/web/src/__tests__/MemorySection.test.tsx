@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MAX_MEMORY_NAME_CHARS, type MemoryEntrySummary } from '@talyn/shared';
 import { MemorySection } from '../components/settings/MemorySection';
 
-const { mockList, mockGet, mockPut, mockUpdate, mockForget, mockRestore, mockWorkspaceUpdate, mockToastError, mockNavigate, mockSetWorkspaces } = vi.hoisted(() => ({
+const { mockList, mockGet, mockPut, mockUpdate, mockForget, mockRestore, mockWorkspaceUpdate, mockToastError, mockToastSuccess, mockNavigate, mockSetWorkspaces, mockReviews, mockStartReview } = vi.hoisted(() => ({
   mockList: vi.fn(),
   mockGet: vi.fn(),
   mockPut: vi.fn(),
@@ -13,6 +13,9 @@ const { mockList, mockGet, mockPut, mockUpdate, mockForget, mockRestore, mockWor
   mockRestore: vi.fn(),
   mockWorkspaceUpdate: vi.fn(),
   mockToastError: vi.fn(),
+  mockToastSuccess: vi.fn(),
+  mockReviews: vi.fn(),
+  mockStartReview: vi.fn(),
   mockNavigate: vi.fn(),
   mockSetWorkspaces: vi.fn(),
 }));
@@ -26,19 +29,22 @@ vi.mock('../lib/api', () => ({
         update: (...args: unknown[]) => mockUpdate(...args),
         forget: (...args: unknown[]) => mockForget(...args),
         restore: (...args: unknown[]) => mockRestore(...args),
+        reviews: (...args: unknown[]) => mockReviews(...args),
+        startReview: (...args: unknown[]) => mockStartReview(...args),
       },
     },
     workspaces: { update: (...args: unknown[]) => mockWorkspaceUpdate(...args) },
   },
 }));
 vi.mock('../stores/toast', () => ({
-  toast: { success: vi.fn(), error: (...args: unknown[]) => mockToastError(...args), info: vi.fn() },
+  toast: { success: (...args: unknown[]) => mockToastSuccess(...args), error: (...args: unknown[]) => mockToastError(...args), info: vi.fn() },
 }));
 vi.mock('../stores/navigation', () => ({
   useNavigationStore: { getState: () => ({ navigate: mockNavigate }) },
 }));
 const mockState = {
   currentWorkspaceId: 'ws1',
+  features: null as { memoryReview?: boolean } | null,
   workspaces: [{ id: 'ws1', name: 'Acme', settings: {} as Record<string, unknown> }],
   setWorkspaces: (...args: unknown[]) => mockSetWorkspaces(...args),
   repositories: [
@@ -86,6 +92,7 @@ const ENTRIES = [
 ];
 
 beforeEach(() => {
+  mockState.features = null;
   mockState.workspaces = [{ id: 'ws1', name: 'Acme', settings: {} }];
   mockList.mockResolvedValue(ENTRIES);
   mockGet.mockImplementation(async (id: string) => ({ ...ENTRIES.find((e) => e.id === id)!, body: `Body of ${id}` }));
@@ -261,5 +268,149 @@ describe('MemorySection', () => {
       ).toBeTruthy(),
     );
     expect(screen.getByTestId('memory-count').textContent).toBe('0 of 500');
+  });
+
+  describe('memory review', () => {
+    const run = (over: Record<string, unknown> = {}) => ({
+      id: 'run1',
+      workspaceId: 'ws1',
+      trigger: 'schedule',
+      status: 'started',
+      workbenchId: 'wb7',
+      error: null,
+      createdAt: NOW,
+      ...over,
+    });
+    const reviewSelect = () => screen.getByRole('combobox', { name: 'Memory review' }) as HTMLSelectElement;
+
+    beforeEach(() => {
+      mockState.features = { memoryReview: true };
+      mockReviews.mockResolvedValue({ cadence: 'off', runs: [] });
+      mockStartReview.mockResolvedValue(run({ trigger: 'manual' }));
+    });
+
+    it('is hidden when the feature is off', async () => {
+      mockState.features = { memoryReview: false };
+      render(<MemorySection />);
+      await loaded();
+      expect(screen.queryByRole('combobox', { name: 'Memory review' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Review now' })).toBeNull();
+      expect(mockReviews).not.toHaveBeenCalled();
+    });
+
+    it('is hidden when features have not loaded', async () => {
+      mockState.features = null;
+      render(<MemorySection />);
+      await loaded();
+      expect(screen.queryByRole('combobox', { name: 'Memory review' })).toBeNull();
+    });
+
+    it('shows the cadence of the workspace, off when unset', async () => {
+      render(<MemorySection />);
+      await loaded();
+      expect(reviewSelect().value).toBe('off');
+      expect(within(reviewSelect()).getAllByRole('option').map((o) => o.textContent)).toEqual([
+        'Off',
+        'Daily',
+        'Weekly',
+        'Monthly',
+      ]);
+    });
+
+    it('shows the saved cadence', async () => {
+      mockState.workspaces = [{ id: 'ws1', name: 'Acme', settings: { memoryReview: 'monthly' } }];
+      render(<MemorySection />);
+      await loaded();
+      expect(reviewSelect().value).toBe('monthly');
+    });
+
+    it('saves a new cadence through the workspace setting', async () => {
+      render(<MemorySection />);
+      await loaded();
+      fireEvent.change(reviewSelect(), { target: { value: 'weekly' } });
+      await waitFor(() => expect(mockWorkspaceUpdate).toHaveBeenCalledWith('ws1', { settings: { memoryReview: 'weekly' } }));
+      await waitFor(() => expect(mockSetWorkspaces).toHaveBeenCalled());
+      expect(mockSetWorkspaces.mock.calls[0][0][0].settings).toEqual({ memoryReview: 'weekly' });
+    });
+
+    it('shows an error when the cadence does not save', async () => {
+      mockWorkspaceUpdate.mockRejectedValueOnce(new Error('nope'));
+      render(<MemorySection />);
+      await loaded();
+      fireEvent.change(reviewSelect(), { target: { value: 'daily' } });
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('nope'));
+      expect(mockSetWorkspaces).not.toHaveBeenCalled();
+    });
+
+    it('starts a review and loads the runs again', async () => {
+      render(<MemorySection />);
+      await loaded();
+      await waitFor(() => expect(mockReviews).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Review now' }));
+      await waitFor(() => expect(mockStartReview).toHaveBeenCalledWith('ws1'));
+      await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Memory review started'));
+      await waitFor(() => expect(mockReviews).toHaveBeenCalledTimes(2));
+    });
+
+    it('shows the refusal message when a review does not start', async () => {
+      mockStartReview.mockRejectedValueOnce(new Error('Memory has fewer than two notes'));
+      render(<MemorySection />);
+      await loaded();
+      fireEvent.click(screen.getByRole('button', { name: 'Review now' }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Memory has fewer than two notes'));
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    });
+
+    it('disables Review now while session memory is off', async () => {
+      mockState.workspaces = [{ id: 'ws1', name: 'Acme', settings: { sessionMemory: false } }];
+      render(<MemorySection />);
+      await loaded();
+      expect((screen.getByRole('button', { name: 'Review now' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('shows no line when there are no runs', async () => {
+      render(<MemorySection />);
+      await loaded();
+      await waitFor(() => expect(mockReviews).toHaveBeenCalled());
+      expect(screen.queryByText(/Last review/)).toBeNull();
+      expect(screen.queryByText('A review is starting')).toBeNull();
+    });
+
+    it('shows a started run with a link to its thread', async () => {
+      mockReviews.mockResolvedValue({ cadence: 'daily', runs: [run()] });
+      render(<MemorySection />);
+      await loaded();
+      await screen.findByText(/Last review:/);
+      expect(screen.getByText('just now')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
+      expect(mockNavigate).toHaveBeenCalledWith({ view: 'workbench', id: 'wb7' });
+    });
+
+    it('shows the error of a failed run', async () => {
+      mockReviews.mockResolvedValue({
+        cadence: 'daily',
+        runs: [run({ status: 'failed', workbenchId: null, error: 'No sandbox' }), run({ id: 'run0' })],
+      });
+      render(<MemorySection />);
+      await loaded();
+      expect(await screen.findByText('Last review failed: No sandbox')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Open thread' })).toBeNull();
+    });
+
+    it('shows a run that is starting', async () => {
+      mockReviews.mockResolvedValue({ cadence: 'daily', runs: [run({ status: 'starting', workbenchId: null })] });
+      render(<MemorySection />);
+      await loaded();
+      expect(await screen.findByText('A review is starting')).toBeTruthy();
+    });
+
+    it('shows nothing, and no error toast, when the runs do not load', async () => {
+      mockReviews.mockRejectedValue(new Error('flag_off'));
+      render(<MemorySection />);
+      await loaded();
+      await waitFor(() => expect(mockReviews).toHaveBeenCalled());
+      expect(screen.queryByText(/Last review/)).toBeNull();
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
   });
 });

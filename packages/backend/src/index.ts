@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { initChatLimitResume } from './services/workbenches/limitResumeSweep.js';
 import { initBackgroundSweep } from './services/workbenches/backgroundSweep.js';
+import { initMemoryReviewSweep, memoryReviewSweep } from './services/workbenches/memoryReview.js';
 import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
 import { drainWorkbenchFollowers, workbenchDrainTimeoutMs } from './services/workbenches/lifecycle.js';
 import express from 'express';
@@ -213,6 +214,10 @@ async function main() {
   // Session background jobs and wake-ups. Armed always: the flag is asked per
   // workspace owner inside, and a pass with no rows reads two partial indexes.
   initBackgroundSweep();
+  // Memory review: hourly, it starts a review thread for each workspace whose
+  // cadence period is due. The flag is asked per workspace owner inside, and a
+  // pass reads only the workspaces that set a cadence.
+  initMemoryReviewSweep();
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
   // that matters is inside: the sweep asks the PostHog flag per workspace
@@ -524,6 +529,7 @@ async function main() {
     // listener attached through a drain would have it settling runs against a
     // database connection that is about to close.
     loopScheduler.stop();
+    memoryReviewSweep.stop();
     stopWorkbenches();
 codeReviewPoller.stop();
 codeReviewReconciler.stop();

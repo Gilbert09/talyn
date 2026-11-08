@@ -393,6 +393,23 @@ export const FEATURE_FLAGS = {
     availability: 'general',
     releaseScopes: ['api', 'public-api'],
   },
+
+  /**
+   * Memory review: a thread that Talyn starts on the workspace's cadence to
+   * merge overlapping memory entries and settle contradicting ones.
+   *
+   * Fails CLOSED: a review boots a sandbox on fleet hardware and spends the
+   * owner's agent subscription with nobody at the keyboard. The sweep asks
+   * about the workspace OWNER; the review routes ask again.
+   */
+  memoryReview: {
+    posthogKey: 'memory-review',
+    envOverride: 'MEMORY_REVIEW_ENABLED',
+    fallback: false,
+    description: 'Memory review — scheduled clean-up of overlapping and contradicting memory entries',
+    availability: 'gated',
+    releaseScopes: ['memory-review'],
+  },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -520,6 +537,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'trunkMergeEta',
   'privateRoutes',
   'publicApi',
+  'memoryReview',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

@@ -14,6 +14,7 @@ import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
 import type { SlackSessionSource } from './slack.js';
+import type { MemoryReviewSessionSource } from './memoryReview.js';
 import type { SandboxSize } from './sandboxSize.js';
 import type { WorkbenchBackground, WorkbenchMessageTrigger } from './workbenchBackground.js';
 
@@ -251,7 +252,7 @@ export interface LoopSessionSource {
 }
 
 /** Where a session came from when the app composer did not start it. */
-export type WorkbenchSource = SlackSessionSource | LoopSessionSource;
+export type WorkbenchSource = SlackSessionSource | LoopSessionSource | MemoryReviewSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {
