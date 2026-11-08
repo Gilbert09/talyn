@@ -54,6 +54,7 @@ export const PROBLEM_NOTE_SUBTYPES = [
   'sandbox_recovered',
   'sandbox_disk_full',
   'sandbox_resize_failed',
+  'sandbox_restart_failed',
   'turn_interrupted',
   'work_checkpoint_failed',
   'work_checkpoint_too_large',
@@ -467,6 +468,11 @@ function actionsOf(input: SandboxStatusInput, state: SandboxStatusState, activit
   }
   if (row.status === 'ready' && row.kind !== 'thread' && state !== 'lost') {
     out.push({ kind: 'resize', label: 'Move to a new size', confirm: null });
+    out.push({
+      kind: 'restart',
+      label: 'Restart sandbox',
+      confirm: 'Talyn moves this session to a fresh sandbox with the workspace\'s current MCP servers. Files, branches, uncommitted changes and the conversation carry over. Running scripts and terminals stop. A running turn finishes first.',
+    });
   }
   const setup = input.scripts.find((s) => s.name === 'setup' && (!row.sandboxId || s.sandboxId === row.sandboxId));
   if (setup && (setup.running || (setup.exitCode !== null && setup.exitCode !== 0))) {

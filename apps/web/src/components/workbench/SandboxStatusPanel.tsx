@@ -119,6 +119,11 @@ const STATE_ICON: Record<SandboxStatusState, { icon: typeof Cloud; className: st
   unknown: { icon: CircleHelp, className: 'text-muted-foreground' },
 };
 
+const RESTART_OUTCOME: Record<'after_turn' | 'restarting', string> = {
+  after_turn: 'The restart starts when the current turn ends.',
+  restarting: 'Talyn is moving the session to a fresh box.',
+};
+
 const RESIZE_OUTCOME: Record<'unchanged' | 'after_turn' | 'moving', string> = {
   unchanged: 'The session already has this size.',
   after_turn: 'The move starts when the current turn ends.',
@@ -555,6 +560,11 @@ export function SandboxStatusPanel({
         if (res.outcome !== 'unchanged') trackEvent('session_moved', { workbench_id: workbench.id, reason: 'size' });
         setNote(RESIZE_OUTCOME[res.outcome]);
         setPicking(false);
+      }
+      else if (action.kind === 'restart') {
+        const res = await api.workbenches.restart(workbench.id);
+        trackEvent('session_moved', { workbench_id: workbench.id, reason: 'restart' });
+        setNote(RESTART_OUTCOME[res.outcome]);
       }
       await onRefresh();
     } catch (err) {
