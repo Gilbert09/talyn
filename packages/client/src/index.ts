@@ -1,4 +1,5 @@
 import type {
+  ContextAttentionCounts,
   PutRepositoryInstructionsInput,
   RepositoryInstructions,
   RepositoryInstructionsSummary,
@@ -554,6 +555,8 @@ export const workspaces = {
   update: (id: string, data: Partial<Workspace>) =>
     request<Workspace>('PATCH', `/workspaces/${id}`, data),
   delete: (id: string) => request<void>('DELETE', `/workspaces/${id}`),
+  /** The context rail's badges: what waits on me in each of my workspaces and spaces. */
+  attention: () => request<ContextAttentionCounts>('GET', '/workspaces/attention'),
   /** Settings → Sandbox setup: the dotfiles and the steps every repository's image gets. */
   sandboxSetup: {
     get: (id: string) => request<WorkspaceSandboxSetup>('GET', `/workspaces/${enc(id)}/sandbox-setup`),

@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react';
 import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { useRouteUrlSync } from '../../hooks/useRouteUrlSync';
 import { AppSidebar } from './AppSidebar';
+import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
@@ -57,6 +58,7 @@ export function AppShell() {
   return (
     <div className="flex h-screen flex-col bg-background">
       <div className="flex min-h-0 flex-1 overflow-hidden">
+        <ContextRail />
         <AppSidebar />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <SystemStatusBanner />

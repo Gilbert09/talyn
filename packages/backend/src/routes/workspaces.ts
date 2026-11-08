@@ -20,6 +20,7 @@ import {
 } from '../services/billing/entitlements.js';
 import { ensureDefaultWorkspace } from '../services/workspaceBootstrap.js';
 import { userMayUseWorkbenches } from '../services/workbenches/access.js';
+import { contextAttention } from '../services/workbenches/attention.js';
 import {
   getWorkspaceSandboxSetup,
   putWorkspaceSandboxSetup,
@@ -54,6 +55,7 @@ import {
   DEFAULT_MERGE_QUEUE_MODE,
   type PrivateConnector,
   type PrivatePeersResponse,
+  type ContextAttentionCounts,
 } from '@talyn/shared';
 import {
   deletePrivateConnector,
@@ -244,6 +246,19 @@ export function workspaceRoutes(): Router {
       success: true,
       data: rows.map((r) => rowToWorkspace(r, relations)),
     } as ApiResponse<Workspace[]>);
+  });
+
+  // The context rail's badges. Before `/:id`, which would read "attention" as an id.
+  router.get('/attention', async (req, res) => {
+    const user = assertUser(req);
+    const empty: ContextAttentionCounts = { workspaces: {}, spaces: {} };
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      return res.json({ success: true, data: empty } as ApiResponse<ContextAttentionCounts>);
+    }
+    const counts = await contextAttention(getDbClient(), user.id);
+    // Space counts only for a caller who can see spaces.
+    if (!(await isFeatureEnabled('spaces', { distinctId: user.id, email: user.email }))) counts.spaces = {};
+    res.json({ success: true, data: counts } as ApiResponse<ContextAttentionCounts>);
   });
 
   router.get('/:id', async (req, res) => {
