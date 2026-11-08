@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AtSign, FileText, Slash } from 'lucide-react';
+import { AtSign, FileText, Settings, Slash } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /**
@@ -44,6 +44,13 @@ export interface ComposerMentionSource {
   labels: Record<string, string>;
 }
 
+/** A `/` entry that opens a page of the app instead of going to the agent. */
+export interface ComposerLink {
+  id: string;
+  label: string;
+  description: string;
+}
+
 export function ComposerPopover({
   kind,
   items,
@@ -52,60 +59,119 @@ export function ComposerPopover({
   onPick,
   onHover,
   mentions,
+  descriptions,
+  links = [],
+  onPickLink,
 }: {
   kind: ComposerTrigger['kind'];
   items: string[];
+  /** Index into `items`, then `links`. */
   active: number;
   loading: boolean;
   onPick: (item: string) => void;
   onHover: (index: number) => void;
   mentions?: ComposerMentionSource;
+  /** One line under each item, by item. */
+  descriptions?: Record<string, string>;
+  links?: ComposerLink[];
+  onPickLink?: (id: string) => void;
 }) {
-  const listRef = useRef<HTMLUListElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = listRef.current?.children[active] as HTMLElement | undefined;
+    const el = listRef.current?.querySelector(`[data-index="${active}"]`);
     el?.scrollIntoView({ block: 'nearest' });
   }, [active]);
 
   const Icon = kind === 'mention' ? (mentions ? AtSign : FileText) : Slash;
+  const rowClass = (index: number) =>
+    cn(
+      'flex w-full items-center gap-2 px-2 py-1 text-left text-xs',
+      index === active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60',
+    );
   return (
     <div className="absolute bottom-full left-0 right-0 z-20 mb-1 max-h-60 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg">
       <div className="border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         {kind === 'mention' ? (mentions?.heading ?? 'Files') : 'Commands and skills'}
       </div>
-      {items.length === 0 ? (
+      {items.length === 0 && links.length === 0 ? (
         <p className="px-2 py-2 text-xs text-muted-foreground">
           {loading ? 'Loading…' : kind === 'mention' ? (mentions?.empty ?? 'No matching file.') : 'No matching command.'}
         </p>
       ) : (
-        <ul ref={listRef} className="max-h-52 overflow-y-auto py-1" role="listbox">
-          {items.map((item, i) => (
-            <li key={item} role="option" aria-selected={i === active}>
-              <button
-                type="button"
-                onMouseDown={(e) => {
-                  // Keep the textarea's focus and caret.
-                  e.preventDefault();
-                  onPick(item);
-                }}
-                onMouseEnter={() => onHover(i)}
+        <div ref={listRef} className="max-h-52 overflow-y-auto py-1">
+          {items.length > 0 && (
+            <ul role="listbox">
+              {items.map((item, i) => (
+                <li key={item} role="option" aria-selected={i === active} data-index={i}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      // Keep the textarea's focus and caret.
+                      e.preventDefault();
+                      onPick(item);
+                    }}
+                    onMouseEnter={() => onHover(i)}
+                    className={rowClass(i)}
+                  >
+                    <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    {mentions ? (
+                      <span className="min-w-0 truncate font-mono">{mentions.labels[item] ?? item}</span>
+                    ) : kind === 'mention' ? (
+                      <span dir="rtl" className="min-w-0 truncate text-left font-mono">
+                        <bdi>{item}</bdi>
+                      </span>
+                    ) : (
+                      <>
+                        <span className="min-w-0 max-w-[50%] shrink-0 truncate font-mono">{item}</span>
+                        {descriptions?.[item] && (
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={descriptions[item]}>
+                            {descriptions[item]}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {links.length > 0 && (
+            <>
+              <div
                 className={cn(
-                  'flex w-full items-center gap-2 px-2 py-1 text-left font-mono text-xs',
-                  i === active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
+                  'px-2 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground',
+                  items.length > 0 && 'mt-1 border-t',
                 )}
               >
-                <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-                {mentions ? (
-                  <span className="min-w-0 truncate">{mentions.labels[item] ?? item}</span>
-                ) : (
-                  <span dir="rtl" className="min-w-0 truncate text-left">
-                    <bdi>{item}</bdi>
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
+                Settings
+              </div>
+              <ul role="listbox" aria-label="Settings">
+                {links.map((link, i) => {
+                  const index = items.length + i;
+                  return (
+                    <li key={link.id} role="option" aria-selected={index === active} data-index={index}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          onPickLink?.(link.id);
+                        }}
+                        onMouseEnter={() => onHover(index)}
+                        className={rowClass(index)}
+                      >
+                        <Settings className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 max-w-[50%] shrink-0 truncate">{link.label}</span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={link.description}>
+                          {link.description}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
