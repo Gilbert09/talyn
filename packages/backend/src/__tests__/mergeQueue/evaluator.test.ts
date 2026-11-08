@@ -51,11 +51,15 @@ import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } fr
 import { noteBoxRefusal, resetBoxDeferralsForTests } from '../../services/billing/boxDeferral.js';
 import { ensureActiveEntry, getActiveEntryForPr } from '../../services/mergeQueue/store.js';
 import {
+  _drainMergeQueueEvaluationsForTests,
   evaluateGroupNow,
 } from '../../services/mergeQueue/evaluator.js';
 import { initMergeQueueTriggers } from '../../services/mergeQueue/triggers.js';
 import * as executorModule from '../../services/mergeQueue/executor.js';
-import { _resetMergeQueueBroadcasts } from '../../services/mergeQueueBroadcast.js';
+import {
+  _drainMergeQueueBroadcastsForTests,
+  _resetMergeQueueBroadcasts,
+} from '../../services/mergeQueueBroadcast.js';
 import * as prCloudFixModule from '../../services/prCloudFix.js';
 import { mergeQueueReconciler } from '../../services/mergeQueue/reconciler.js';
 
@@ -353,6 +357,8 @@ describe('mergeQueue v2 pipeline', () => {
   afterEach(async () => {
     resetBoxDeferralsForTests();
     // A merge broadcasts positions detached; it must not read the next test's DB.
+    await _drainMergeQueueEvaluationsForTests();
+    await _drainMergeQueueBroadcastsForTests();
     _resetMergeQueueBroadcasts();
     await cleanup();
     vi.restoreAllMocks();

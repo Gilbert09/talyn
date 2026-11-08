@@ -9,6 +9,7 @@ const { mockClient } = vi.hoisted(() => ({
 vi.mock('../services/selfHosted/credentials.js', () => ({
   getSelfHostedClient: vi.fn(async () => mockClient),
   getSelfHostedCredentials: vi.fn(async () => ({ claudeToken: 'sk-ant-oat01-x' })),
+  fleetAgentStatus: vi.fn(async () => ({ connectedAgents: [], reauthAgents: [] })),
 }));
 
 import { eq } from 'drizzle-orm';

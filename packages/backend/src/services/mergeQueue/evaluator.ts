@@ -64,6 +64,8 @@ interface GroupState {
   triggers: Set<string>;
   /** Set while the group waits out the re-run delay; ends the wait early. */
   wake?: () => void;
+  /** The detached group loop, exposed so tests can drain it before teardown. */
+  done?: Promise<void>;
 }
 
 const groups = new Map<string, GroupState>();
@@ -117,7 +119,16 @@ export function scheduleGroupEvaluation(
   // AsyncLocalStorage) into this detached evaluation — and by the time it
   // runs, that transaction has committed, so every query on it hangs until
   // the 45s timeout or dies with 25P02. The pipeline always runs on the pool.
-  runWithoutScope(() => void runGroupLoop(key, repositoryId, baseBranch, fresh));
+  fresh.done = runWithoutScope(() => runGroupLoop(key, repositoryId, baseBranch, fresh));
+  void fresh.done;
+}
+
+export async function _drainMergeQueueEvaluationsForTests(): Promise<void> {
+  while (groups.size > 0) {
+    const states = [...groups.values()];
+    for (const state of states) state.wake?.();
+    await Promise.all(states.map((state) => state.done).filter((done) => done !== undefined));
+  }
 }
 
 async function runGroupLoop(
