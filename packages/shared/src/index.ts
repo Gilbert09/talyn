@@ -147,6 +147,7 @@ export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
 export * from './workbenchMemory.js';
+export * from './memoryReview.js';
 export * from './workbenchThread.js';
 export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';
@@ -154,6 +155,7 @@ export * from './sessionLinks.js';
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
+import type { MemoryReviewCadence } from './memoryReview.js';
 import type { GithubHealth } from './githubHealth.js';
 import type {
   AutoTopupConfig,
@@ -700,6 +702,11 @@ export interface WorkspaceSettings {
    * tools refuse. People can still edit entries in the app.
    */
   sessionMemory?: boolean;
+  /**
+   * How often Talyn starts a memory review thread that merges overlapping
+   * entries and settles contradicting ones (`memoryReview.ts`). Unset: off.
+   */
+  memoryReview?: MemoryReviewCadence;
   /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and

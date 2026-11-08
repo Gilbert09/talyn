@@ -128,6 +128,7 @@ import {
   restoreMemory,
   updateMemory,
 } from '../services/workbenches/memory.js';
+import { manualReviewRefusal, memoryReviewState, startMemoryReview } from '../services/workbenches/memoryReview.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
 import { isFeatureEnabled } from '../services/featureFlags.js';
 import { canPrompt, canViewItem, ownsWorkspace } from '../services/teams/access.js';
@@ -651,6 +652,26 @@ export function workbenchRoutes(): Router {
     } catch (err) {
       fail(res, err);
     }
+  });
+
+  // ---- Memory review: a thread that cleans up the memory on a cadence. Before `/memory/:memoryId`. ----
+
+  router.get('/memory/reviews', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    ok(res, await memoryReviewState(workspaceId));
+  });
+
+  /** "Review now": start a review thread at once. */
+  router.post('/memory/reviews', async (req, res) => {
+    const body = (req.body ?? {}) as { workspaceId?: unknown };
+    const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    const refusal = await manualReviewRefusal(workspaceId);
+    if (refusal) return bad(res, refusal.status, refusal.message, refusal.code);
+    const run = await startMemoryReview(workspaceId, { trigger: 'manual', periodStart: new Date() });
+    if (!run) return bad(res, 409, 'A memory review is already starting.', 'memory_review_running');
+    ok(res, run);
   });
 
   router.get('/memory/:memoryId', async (req, res) => {

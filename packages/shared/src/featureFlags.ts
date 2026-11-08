@@ -393,6 +393,7 @@ export const FEATURE_FLAGS = {
     availability: 'general',
     releaseScopes: ['api', 'public-api'],
   },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
