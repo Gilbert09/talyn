@@ -4,6 +4,7 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   fleetModelForAgentSwitch,
   messageTriggerText,
+  TALYN_SKILL_PACK,
   WORKBENCH_MOVING_MESSAGE,
   type SendWorkbenchMessageInput,
   type Workbench,
@@ -81,6 +82,9 @@ export function Composer({
   const repositories = useWorkspaceStore((s) => s.repositories);
   const threadSessions = useThreadChildren(workbench.id);
   const features = useWorkspaceStore((s) => s.features);
+  const talynSkillsEnabled = useWorkspaceStore(
+    (s) => s.workspaces.find((workspace) => workspace.id === workbench.workspaceId)?.settings.sessionSkillPack !== false,
+  );
   const navigate = useNavigationStore((s) => s.navigate);
 
   const agent = chat?.agent ?? workbench.agent;
@@ -157,14 +161,14 @@ export function Composer({
     if (trigger.kind === 'mention') return fuzzyMatchPaths(trigger.query, paths ?? []);
     const fileCommands = Object.keys(commandFiles).sort();
     const commands = agent === 'codex'
-      ? fileCommands
+      ? [...new Set([...(talynSkillsEnabled ? TALYN_SKILL_PACK : []), ...fileCommands])].sort()
       : [...new Set([...(slashCommands ?? CLAUDE_HEADLESS_SLASH_COMMANDS), ...fileCommands])].sort();
     const q = trigger.query.toLowerCase();
     return commands
       .filter((c) => c.toLowerCase().includes(q))
       .sort((a, b) => Number(b.toLowerCase().startsWith(q)) - Number(a.toLowerCase().startsWith(q)))
       .slice(0, 20);
-  }, [trigger, commandFiles, slashCommands, agent, mentionOptions]);
+  }, [trigger, commandFiles, slashCommands, agent, mentionOptions, talynSkillsEnabled]);
 
   const descriptions = useMemo(() => {
     if (trigger?.kind !== 'slash') return undefined;
