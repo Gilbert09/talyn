@@ -322,16 +322,19 @@ export interface UsagePeriod {
  *
  * - `anchor` null (free users, comps): the calendar month in UTC.
  * - `anchor` set (subscribers; pass `current_period_end`): monthly windows on
- *   the anchor's day and time. Annual subscribers reset monthly too, because
- *   included hours are per month. Each boundary is `anchor + k months` from the
- *   anchor itself, never chained, so a 31st-day anchor does not drift to the 28th.
+ *   the anchor's DAY, starting at 00:00 UTC (Tom, 2026-11-08: a reset is a
+ *   calendar date, not the time of day the subscription began). Annual
+ *   subscribers reset monthly too, because included hours are per month. Each
+ *   boundary is `anchor + k months` from the anchor itself, never chained, so a
+ *   31st-day anchor does not drift to the 28th.
  */
 export function usagePeriodFor(input: { now: Date; anchor?: Date | null }): UsagePeriod {
-  const { now, anchor } = input;
-  if (!anchor || Number.isNaN(anchor.getTime())) {
+  const { now } = input;
+  if (!input.anchor || Number.isNaN(input.anchor.getTime())) {
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     return { start, end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)) };
   }
+  const anchor = new Date(Date.UTC(input.anchor.getUTCFullYear(), input.anchor.getUTCMonth(), input.anchor.getUTCDate()));
   let k =
     (now.getUTCFullYear() - anchor.getUTCFullYear()) * 12 + (now.getUTCMonth() - anchor.getUTCMonth());
   while (addMonthsUtc(anchor, k).getTime() > now.getTime()) k--;
