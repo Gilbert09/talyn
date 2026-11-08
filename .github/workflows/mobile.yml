@@ -1,0 +1,49 @@
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile:
+    name: Mobile shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: '1'
+      APP_ENV: development
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build shared packages
+        run: npm run mobile:build:packages
+      - name: Check the dependency graph
+        run: npm run mobile:check:graph
+      - name: Check mobile dependencies
+        run: npm run mobile:expo:check
+      - name: Run Expo doctor
+        run: npm run mobile:doctor
+      - name: Lint mobile
+        run: npm run mobile:lint
+      - name: Check mobile types and routes
+        run: npm run mobile:typecheck
+      - name: Test mobile
+        run: npm run mobile:test
+      - name: Export iOS and Android bundles
+        run: npm run mobile:export:smoke

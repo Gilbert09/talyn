@@ -1,0 +1,51 @@
+{
+  "name": "@talyn/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "description": "Talyn native development shell",
+  "engines": {
+    "node": "^22.13.0 || ^24.3.0 || ^26.0.0 || >=27.0.0"
+  },
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "lint": "eslint . --ext .js,.ts,.tsx",
+    "typecheck": "npm run routes:generate && tsc --noEmit",
+    "routes:generate": "expo customize tsconfig.json",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "expo:check": "expo install --check",
+    "doctor": "expo-doctor",
+    "export:smoke": "expo export --platform all --output-dir dist/smoke --max-workers 2",
+    "check:graph": "node scripts/check-dependency-graph.cjs"
+  },
+  "dependencies": {
+    "@talyn/client": "*",
+    "@talyn/shared": "*",
+    "expo": "~58.0.23",
+    "expo-constants": "~58.0.15",
+    "expo-dev-client": "~58.0.18",
+    "expo-font": "~58.0.11",
+    "expo-linking": "~58.0.16",
+    "expo-router": "~58.0.30",
+    "expo-symbols": "~58.0.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1"
+  },
+  "devDependencies": {
+    "@react-native/jest-preset": "0.88.1",
+    "@testing-library/react-native": "^14.1.0",
+    "@types/jest": "^30.0.0",
+    "@types/react": "~19.3.0",
+    "expo-doctor": "^1.18.0",
+    "jest": "^30.0.0",
+    "jest-expo": "~58.0.14",
+    "test-renderer": "^1.0.0",
+    "typescript": "~6.0.3"
+  }
+}
