@@ -120,6 +120,7 @@ import {
   forgetMemory,
   getMemory,
   listMemories,
+  listMemoriesUsedBy,
   memoryWorkspaceId,
   putMemory,
   restoreMemory,
@@ -621,6 +622,13 @@ export function workbenchRoutes(): Router {
       return bad(res, 400, `scope must be one of: ${MEMORY_SCOPES.join(', ')}`, 'bad_memory');
     }
     if (!(await gate(req, res, workspaceId))) return;
+    const usedBy = query('usedBy');
+    if (usedBy) {
+      return ok(res, await listMemoriesUsedBy(workspaceId, usedBy, {
+        includeForgotten: query('includeForgotten') === 'true',
+        includeBody: query('includeBody') === 'true',
+      }));
+    }
     ok(res, await listMemories(workspaceId, {
       scope: scope as MemoryScope | undefined,
       repositoryId: query('repositoryId'),

@@ -486,13 +486,10 @@ describe('workbench routes', () => {
       expect(res.body.error).toMatch(message);
     });
 
-    it('refuses a second live workbench with a name already in use', async () => {
+    it('adds a suffix when a live workbench already has the requested name', async () => {
       await createSandboxWorkbench({ name: 'oslo' });
-      const res = await call('POST', '/workbenches', {
-        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude', name: 'oslo',
-      });
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe('name_taken');
+      expect((await createSandboxWorkbench({ name: 'oslo' })).name).toBe('oslo-2');
+      expect((await createSandboxWorkbench({ name: 'oslo' })).name).toBe('oslo-3');
     });
 
     it('runs the first prompt once the box is ready', async () => {

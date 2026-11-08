@@ -6,7 +6,7 @@ import {
   type MemoryType,
   type PutMemoryResult,
 } from '@talyn/shared';
-import { announceMemoryChange, sessionMemoryEnabled } from '../../services/workbenches/memory.js';
+import { announceMemoryChange, recordMemoryUse, sessionMemoryEnabled } from '../../services/workbenches/memory.js';
 import { getWorkbench } from '../../services/workbenches/store.js';
 import { callApi, McpApiError } from '../api.js';
 import { defineTool, linesOrNone, requireId, resolveWorkspace, str, workspaceSchema } from './helpers.js';
@@ -269,6 +269,7 @@ export const MEMORY = [
       });
       const { entry, outcome } = result;
       if (context.workbenchId) {
+        await recordMemoryUse(entry.id, context.workbenchId, 'wrote');
         await announceMemoryChange(context.workbenchId, {
           action: outcome,
           memoryId: entry.id,
@@ -311,6 +312,7 @@ export const MEMORY = [
       const { entry: found, others } = await resolveEntry(ownerId, context, ref, { unique: false });
       const entry = 'body' in found ? (found as MemoryEntry) : await entryById(ownerId, found.id);
       if (!entry || !visibleTo(context, entry)) throw new Error(NOT_VISIBLE);
+      if (context.workbenchId) await recordMemoryUse(entry.id, context.workbenchId, 'read');
       const lines = [entryLine(entry), `updated: ${entry.updatedAt}`];
       if (others.length > 0) lines.push(`Other entries with this name, in wider scopes:\n${matchLines(others)}`);
       return [...lines, '', entry.body].join('\n');

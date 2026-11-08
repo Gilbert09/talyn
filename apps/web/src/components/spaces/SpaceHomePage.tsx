@@ -54,7 +54,7 @@ export function SpaceHomePage({ active }: { active: SpaceRef }) {
       <div className="h-full overflow-y-auto" data-attr="space-home">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[10vh]">
           <div className="flex items-center justify-center gap-2" data-attr="space-header">
-            <SpaceDot color={space.color} className="h-3 w-3" />
+            <SpaceDot color={space.color} image={space.image} className="h-3 w-3" />
             <h1 className="font-display text-2xl font-semibold tracking-tight">{space.name}</h1>
             <span className="text-sm text-muted-foreground">{team.name}</span>
           </div>

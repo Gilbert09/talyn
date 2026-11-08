@@ -1644,14 +1644,15 @@ export async function appendEvents(
     INSERT INTO workbench_events (chat_id, seq, turn, event)
     SELECT ${chatId}, alloc.base + e.ord, (e.value ->> 'turn')::int, e.value -> 'event'
     FROM alloc, jsonb_array_elements(${payload}::jsonb) WITH ORDINALITY AS e(value, ord)
-    RETURNING seq, turn, event
+    RETURNING seq, turn, event, created_at
   `);
-  const rows = rowsOf<{ seq: number | string; turn: number; event: unknown }>(result);
+  const rows = rowsOf<{ seq: number | string; turn: number; event: unknown; created_at: Date | string | null }>(result);
   return rows
     .map((r) => {
       const seq = Number(r.seq);
       const event = (typeof r.event === 'string' ? JSON.parse(r.event) : r.event) as Record<string, unknown>;
-      return { chatId, seq, turn: Number(r.turn), event: { ...event, seq } as AgentEvent };
+      const createdAt = r.created_at ? new Date(r.created_at).toISOString() : undefined;
+      return { chatId, seq, turn: Number(r.turn), event: { ...event, seq } as AgentEvent, ...(createdAt ? { createdAt } : {}) };
     })
     .sort((a, b) => a.seq - b.seq);
 }
@@ -1680,7 +1681,7 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
 /** The forward transcript page. */
 export function listEventsQuery(chatId: string, after: number, limit: number) {
   return db()
-    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event, createdAt: eventsTable.createdAt })
     .from(eventsTable)
     .where(and(eq(eventsTable.chatId, chatId), gt(eventsTable.seq, after)))
     .orderBy(asc(eventsTable.seq))
@@ -1698,6 +1699,7 @@ export async function listEvents(
     seq: r.seq,
     turn: r.turn,
     event: { ...r.event, seq: r.seq } as AgentEvent,
+    createdAt: r.createdAt.toISOString(),
   }));
   return { events, cursor: events.length > 0 ? events[events.length - 1].seq : after };
 }
@@ -1705,7 +1707,7 @@ export async function listEvents(
 /** The backward mode's page body: `seq` in `[from, to]`, oldest first. With `listEventsQuery`, the only reads of `event`. */
 export function listEventRangeQuery(chatId: string, from: number, to: number, limit: number) {
   return db()
-    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event, createdAt: eventsTable.createdAt })
     .from(eventsTable)
     .where(and(eq(eventsTable.chatId, chatId), gte(eventsTable.seq, from), lte(eventsTable.seq, to)))
     .orderBy(asc(eventsTable.seq))
@@ -1781,6 +1783,7 @@ export async function listOlderEvents(
     seq: r.seq,
     turn: r.turn,
     event: { ...r.event, seq: r.seq } as AgentEvent,
+    createdAt: r.createdAt.toISOString(),
   }));
   const oldestSeq = events.length ? events[0].seq : null;
   let hasOlder = false;

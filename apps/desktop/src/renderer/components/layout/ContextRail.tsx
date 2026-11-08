@@ -6,7 +6,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
 import { spacesOffered, switchContext, useActiveSpace } from '../../lib/spaces';
-import { railEntries, railEntryAttention, railInitials, useContextAttention, type RailEntry } from '../../lib/contextRail';
+import { railEntries, railEntryAttention, useContextAttention, type RailEntry } from '../../lib/contextRail';
+import { SpaceTile } from '../spaces/SpaceAvatars';
 import { CONTEXT_JUMP_KEYS } from './appShortcuts';
 
 const TILE = 36;
@@ -112,15 +113,7 @@ function RailTile({
             {entry.kind === 'workspace' ? (
               <WorkspaceLogo logo={entry.logo} fallbackSeed={entry.id} size={TILE} className="block" />
             ) : (
-              <span
-                className={cn(
-                  'flex items-center justify-center rounded-lg text-[13px] font-semibold text-white',
-                  !entry.color && 'bg-muted-foreground/60'
-                )}
-                style={{ width: TILE, height: TILE, ...(entry.color ? { backgroundColor: entry.color } : {}) }}
-              >
-                {railInitials(entry.name)}
-              </span>
+              <SpaceTile name={entry.name} color={entry.color} image={entry.image} size={TILE} />
             )}
             {badge && (
               <span

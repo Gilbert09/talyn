@@ -839,7 +839,28 @@
       "idx": 120,
       "version": "7",
       "when": 1790900000040,
-      "tag": "0120_memory_review_runs",
+      "tag": "0120_workspace_memory_uses",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1790900000041,
+      "tag": "0121_workbench_resource_samples",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1790900000042,
+      "tag": "0122_space_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1790900000043,
+      "tag": "0123_memory_review_runs",
       "breakpoints": true
     }
   ]

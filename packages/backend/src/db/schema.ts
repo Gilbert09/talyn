@@ -268,6 +268,7 @@ export const spaces = pgTable(
       .references(() => teams.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     color: text('color'),
+    image: text('image'),
     createdByUserId: text('created_by_user_id'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -3074,6 +3075,29 @@ export const workspaceMemories = pgTable(
 );
 
 /**
+ * Which session or thread saved or read which memory entry (migration 0120).
+ * Pool-only, like `workspace_memories`. The thread work panel lists from it.
+ */
+export const workspaceMemoryUses = pgTable(
+  'workspace_memory_uses',
+  {
+    memoryId: text('memory_id')
+      .notNull()
+      .references(() => workspaceMemories.id, { onDelete: 'cascade' }),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    wrote: boolean('wrote').notNull().default(false),
+    read: boolean('read').notNull().default(false),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.memoryId, t.workbenchId] }),
+    workbenchIdx: index('idx_workspace_memory_uses_workbench').on(t.workbenchId, t.lastUsedAt),
+  })
+);
+
+/**
  * Hosted preview links (migration 0098). Pool-only. A host maps a random id to
  * one session port. Tickets and cookies are stored as SHA-256 hashes. See
  * `services/preview/previewLinks.ts`.
@@ -3209,7 +3233,32 @@ export const workbenchWakeups = pgTable(
 );
 
 /**
- * Memory review runs (migration 0120): one row per review thread that Talyn
+ * Resource samples of a session's box (migration 0121). The usage sweep writes
+ * one row per running session box each minute and deletes rows older than
+ * `SAMPLE_RETENTION_MS`. `cpu_seconds` is the fleet's cumulative VMM CPU time;
+ * the Sandbox panel charts the change between rows. Backend-pool-only.
+ */
+export const workbenchResourceSamples = pgTable(
+  'workbench_resource_samples',
+  {
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    sampledAt: timestamp('sampled_at', { withTimezone: true }).notNull(),
+    sandboxId: text('sandbox_id').notNull(),
+    memUsedMib: integer('mem_used_mib'),
+    memLimitMib: integer('mem_limit_mib'),
+    cpuSeconds: doublePrecision('cpu_seconds'),
+    vcpus: real('vcpus'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workbenchId, t.sampledAt] }),
+    sampledIdx: index('idx_workbench_resource_samples_sampled').on(t.sampledAt),
+  })
+);
+
+/**
+ * Memory review runs (migration 0123): one row per review thread that Talyn
  * started, or failed to start. `periodStart` is the scheduled key; see
  * `services/workbenches/memoryReview.ts`.
  */

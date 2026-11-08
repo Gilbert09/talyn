@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Features } from '@talyn/shared';
 import { listToolsFor } from '../mcp/server.js';
 import { TOOLS, type McpCallContext, type McpToolDefinition } from '../mcp/tools/index.js';
-import { announceMemoryChange, sessionMemoryEnabled } from '../services/workbenches/memory.js';
+import { announceMemoryChange, recordMemoryUse, sessionMemoryEnabled } from '../services/workbenches/memory.js';
 import { getWorkbench } from '../services/workbenches/store.js';
 
 vi.mock('../services/workbenches/memory.js', async (original) => ({
   ...(await original<typeof import('../services/workbenches/memory.js')>()),
   announceMemoryChange: vi.fn(async () => undefined),
+  recordMemoryUse: vi.fn(async () => undefined),
   sessionMemoryEnabled: vi.fn(async () => true),
 }));
 vi.mock('../services/workbenches/store.js', async (original) => ({
@@ -163,6 +164,17 @@ describe('memory_write', () => {
     mockApi({ 'POST /api/v1/workbenches/memory': () => ({ entry: memory(), outcome: 'created' }) });
     await tool('memory_write').handler(OWNER, { ...writeArgs, workspace_id: 'ws1' }, USER);
     expect(announceMemoryChange).not.toHaveBeenCalled();
+    expect(recordMemoryUse).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, McpCallContext, string]>([
+    ['a session', SELF, 's1'],
+    ['a thread', THREAD, 't1'],
+    ['a session in a thread', CHILD, 'k1'],
+  ])('records the write as a use by %s', async (_label, ctx, workbenchId) => {
+    mockApi({ 'POST /api/v1/workbenches/memory': () => ({ entry: memory(), outcome: 'updated' }) });
+    await tool('memory_write').handler(OWNER, writeArgs, ctx);
+    expect(recordMemoryUse).toHaveBeenCalledWith('m1', workbenchId, 'wrote');
   });
 
   it.each<[string, McpCallContext, Record<string, unknown>, RegExp]>([
@@ -266,6 +278,8 @@ describe('memory_read and memory_forget', () => {
     const read = tool('memory_read').handler(OWNER, { memory_id: 'm1', ...(ctx.session ? {} : { workspace_id: 'ws1' }) }, ctx);
     if (visible) expect(await read).toMatch(/\n\nnpm run build$/);
     else await expect(read).rejects.toThrow('Memory entry not found.');
+    if (visible && ctx.session) expect(recordMemoryUse).toHaveBeenCalledWith('m1', ctx.session.workbenchId, 'read');
+    else expect(recordMemoryUse).not.toHaveBeenCalled();
   });
 
   it('forgets a visible entry and adds a card', async () => {

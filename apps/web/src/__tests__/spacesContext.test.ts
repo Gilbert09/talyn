@@ -41,6 +41,7 @@ const team = (id: string, spaces: string[]): SpacesTeam => ({
     teamId: id,
     name: `Space ${s}`,
     color: '#6366f1',
+    image: null,
     createdByUserId: null,
     archivedAt: null,
     createdAt: '2026-11-01T00:00:00Z',

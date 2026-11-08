@@ -585,3 +585,30 @@ describe('WorkbenchHeader merge queue', () => {
     }
   );
 });
+
+describe('WorkbenchHeader last message', () => {
+  afterEach(() => useWorkbenchStore.setState({ chatEvents: {} }));
+
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const held = (chatId: string, ...times: Array<string | undefined>) => ({
+    events: times.map((createdAt, i) => ({ chatId, seq: i + 1, turn: 1, event: { seq: i + 1, type: 'assistant' }, ...(createdAt ? { createdAt } : {}) })),
+  });
+
+  it('shows the newest event time across the session chats', () => {
+    const newest = minutesAgo(3);
+    useWorkbenchStore.setState({
+      chatEvents: { c1: held('c1', minutesAgo(20), minutesAgo(8)), c2: held('c2', newest, undefined) } as never,
+    });
+    const workbench = { ...WB, chats: [{ id: 'c1' }, { id: 'c2' }] } as typeof WB;
+    const { container } = render(<WorkbenchHeader workbench={workbench} pr={null} chat={chat} ops={ops()} />);
+    const label = screen.getByText('Last message 3 minutes ago');
+    expect(label).toHaveAttribute('datetime', newest);
+    expect(container.querySelector('[data-attr="workbench-header-meta-row"]')).toContainElement(label);
+  });
+
+  it('shows nothing when no held event has a time', () => {
+    useWorkbenchStore.setState({ chatEvents: { c1: held('c1', undefined) } as never });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    expect(screen.queryByText(/^Last message/)).not.toBeInTheDocument();
+  });
+});

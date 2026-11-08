@@ -7,12 +7,21 @@ import type { AppContext } from '../stores/workspace';
  * The context rail: the bar on the far left that switches between my
  * workspaces and my teams' spaces, like Slack's workspace bar. It shows only
  * when there are two or more contexts. Its order is the switcher's order, so
- * ⌘⌥⇧1–9 counts the same tiles.
+ * ⌘⇧1–9 counts the same tiles.
  */
 
 export type RailEntry =
   | { kind: 'workspace'; id: string; name: string; logo?: WorkspaceLogo; context: AppContext; groupStart: boolean }
-  | { kind: 'space'; id: string; name: string; teamName: string; color: string | null; context: AppContext; groupStart: boolean };
+  | {
+      kind: 'space';
+      id: string;
+      name: string;
+      teamName: string;
+      color: string | null;
+      image: string | null;
+      context: AppContext;
+      groupStart: boolean;
+    };
 
 export function railEntries(workspaces: Workspace[], teams: SpacesTeam[] | null, spacesOn: boolean): RailEntry[] {
   const out: RailEntry[] = workspaces.map((w) => ({
@@ -32,6 +41,7 @@ export function railEntries(workspaces: Workspace[], teams: SpacesTeam[] | null,
         name: s.name,
         teamName: team.name,
         color: s.color,
+        image: s.image ?? null,
         context: { kind: 'space', spaceId: s.id },
         // A line before each team's spaces, so the teams read apart.
         groupStart: i === 0,

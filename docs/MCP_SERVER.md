@@ -219,7 +219,7 @@ It writes a repository entry with `repository_id` and a thread entry with `threa
 Talyn starts this thread on the cadence in `settings.memoryReview` (`daily`, `weekly` or `monthly`), or when a person clicks "Review now".
 The thread merges entries that overlap and settles entries that disagree.
 The `memory-review` flag gates the feature. The sweep skips a period when fewer than two entries are live or no entry changed since the last review.
-The table `memory_review_runs` (migration `0120`) keeps one row for each review.
+The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 | Tool | What it does |
 | --- | --- |

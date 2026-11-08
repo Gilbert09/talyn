@@ -22,8 +22,8 @@ const TEAM: SpacesTeam = {
   homeWorkspaceId: 'ws1',
   createdAt: '',
   spaces: [
-    { id: 's1', teamId: 't1', name: 'Web', color: '#10b981', createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
-    { id: 's2', teamId: 't1', name: 'Infra', color: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
+    { id: 's1', teamId: 't1', name: 'Web', color: '#10b981', image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
+    { id: 's2', teamId: 't1', name: 'Infra', color: null, image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
   ],
 };
 
@@ -141,7 +141,7 @@ describe('context shortcuts', () => {
     const jumps = shortcuts.filter((shortcut) => shortcut.id.startsWith('context.jump.'));
     expect(jumps).toHaveLength(9);
     jumps.forEach((jump, index) => {
-      expect(jump.keys).toBe(`mod+alt+shift+${index + 1}`);
+      expect(jump.keys).toBe(`mod+shift+${index + 1}`);
       expect(MENU_COMMANDS.some((command) => command.keys === jump.keys)).toBe(false);
       expect(shortcuts.filter((shortcut) => shortcut.keys === jump.keys)).toHaveLength(1);
     });

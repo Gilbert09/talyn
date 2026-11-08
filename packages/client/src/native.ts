@@ -2367,6 +2367,7 @@ export const workbenches = {
       if (query.q) params.set('q', query.q);
       if (query.includeForgotten) params.set('includeForgotten', 'true');
       if (query.includeBody) params.set('includeBody', 'true');
+      if (query.usedBy) params.set('usedBy', query.usedBy);
       return request<Array<MemoryEntrySummary | MemoryEntry>>('GET', `/workbenches/memory?${params}`);
     },
     get: (id: string) => request<MemoryEntry>('GET', `/workbenches/memory/${enc(id)}`),
