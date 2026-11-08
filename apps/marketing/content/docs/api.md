@@ -14,6 +14,8 @@ https://api.talyn.dev/v1
 
 The API takes and returns JSON. Request bodies can be up to 1 MB. The full OpenAPI 3.1 document is at [api.talyn.dev/v1/openapi.json](https://api.talyn.dev/v1/openapi.json), and you can fetch it without a token.
 
+The API is not yet available to all accounts. If it is off for your account, each request returns `403` with the code `public_api_unavailable`, and **Settings** does not show **API tokens**.
+
 ## Create a token
 
 Every request needs a personal access token. Tokens start with `talyn_pat_`.
@@ -24,7 +26,7 @@ Every request needs a personal access token. Tokens start with `talyn_pat_`.
 4. Type a name, for example "CI script".
 5. Choose when the token expires: 30 days, 90 days (the default), 1 year, or no expiry.
 6. Choose **All workspaces** or one workspace.
-7. Choose the access. **Read only** and **Full access** are shortcuts. You can also set each of Workspaces, Repositories and Sessions to None, Read, or Read & write.
+7. Choose the access. **Read only** and **Full access** are shortcuts. You can also set each of Workspaces, Repositories and Sessions to None, Read, or Read & write. If spaces are on for your account, the form also shows Teams and Spaces.
 8. Select **Create token**.
 9. Copy the token. Talyn shows it one time only.
 
@@ -49,17 +51,37 @@ The API sends no CORS headers, so a web page in a browser cannot call it. Call i
 
 ## Scopes
 
-The access you choose in the token form gives these scopes. A write scope includes its read scope.
+Each endpoint needs one scope. A write scope includes its read scope. The [endpoint reference](/docs/api-reference) names the scope of each endpoint.
+
+The access you choose in the token form gives these scopes:
 
 | Access | Scope | Allows |
 | --- | --- | --- |
 | Workspaces: Read | `workspaces:read` | Read workspaces. |
+| Teams: Read | `teams:read` | Read the teams you are in. |
+| Spaces: Read | `spaces:read` | Read team spaces and their sessions. |
+| Spaces: Read & write | `spaces:write` | Start sessions in team spaces. |
 | Repositories: Read | `repositories:read` | Read repositories, their settings, instructions and setup. |
 | Repositories: Read & write | `repositories:write` | Change repository settings, instructions and setup. |
 | Sessions: Read | `sessions:read` | Read sessions, chats and transcripts, and open the streams. |
 | Sessions: Read & write | `sessions:write` | Start sessions and send messages, run scripts, open and merge pull requests. |
 
-**Read only** gives read access to all three. **Full access** gives read access to workspaces and repositories, and read and write access to sessions.
+The form shows Teams and Spaces only when spaces are on for your account. Spaces are not yet available to all accounts. If spaces are off for your account, the team and space endpoints return `403` with the code `spaces_unavailable`.
+
+**Read only** gives read access to workspaces, repositories and sessions. **Full access** gives read access to workspaces and repositories, and read and write access to sessions. When the form shows Teams and Spaces, **Read only** also gives read access to teams and spaces. **Full access** also gives read access to teams and read and write access to spaces.
+
+The API also has these scopes. The token form does not offer them yet, so a token from the app cannot call these endpoints:
+
+| Scope | Allows |
+| --- | --- |
+| `pull_requests:read` | Read pull requests and the merge queue. |
+| `pull_requests:write` | Refresh pull requests, change auto keep mergeable, and add to or remove from the merge queue. |
+| `code_reviews:read` | Read code reviews and their findings. |
+| `code_reviews:write` | Start and stop code reviews, dismiss findings and post them to GitHub. |
+| `memory:read` | Read workspace memory. |
+| `memory:write` | Save, change and forget workspace memory. |
+| `webhooks:read` | Read webhook endpoints and their deliveries. |
+| `webhooks:write` | Create, change, test and delete webhook endpoints, and send deliveries again. |
 
 A token bound to one workspace can only see that workspace. A request for anything outside it gets `404`.
 
@@ -141,7 +163,7 @@ An error has a status code and a JSON body:
 | 400 | `invalid_request_error` | `invalid_parameter`, `missing_parameter`, `invalid_cursor`, `invalid_json` |
 | 401 | `authentication_error` | `missing_token`, `invalid_token`, `token_revoked`, `token_expired` |
 | 402 | `plan_limit_error` | The plan limit that was hit, for example `concurrent_box_limit_reached` |
-| 403 | `permission_error` | `insufficient_scope`, `account_not_allowed` |
+| 403 | `permission_error` | `insufficient_scope`, `account_not_allowed`, `public_api_unavailable`, `workbenches_unavailable`, `spaces_unavailable` |
 | 404 | `not_found_error` | `route_not_found`, or `<thing>_not_found` |
 | 409 | `conflict_error` | The resource is not in a state that allows the request |
 | 413 | `payload_too_large_error` | `body_too_large` |
@@ -208,5 +230,6 @@ The version is in the path. Changes inside `v1` only add things: new endpoints, 
 
 ## Next
 
-- [Endpoint reference](/docs/api-reference) lists every endpoint you can call with a token from the app.
+- [Endpoint reference](/docs/api-reference) lists every endpoint, with its scope.
+- [Webhooks](/docs/webhooks) tells Talyn to send events to your server.
 - [Talyn MCP server](/docs/mcp) connects Claude Code or another MCP client to your Talyn account.

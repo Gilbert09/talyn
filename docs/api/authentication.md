@@ -21,9 +21,9 @@ Each of these answers `401` with the code `invalid_token`.
 ## Create a token
 
 1. Open the Talyn app.
-2. Go to Settings, then Developer, then API tokens.
-3. Choose a name, the scopes, and an expiry.
-4. Optionally, bind the token to some workspaces.
+2. Go to Settings, then API tokens.
+3. Choose a name, the access, and an expiry.
+4. Optionally, bind the token to one workspace.
 5. Copy the token.
 
 The app shows the plaintext one time. Talyn stores only a SHA-256 hash of it. If you lose the token, create a new one.
@@ -38,27 +38,44 @@ You can revoke a token in the same screen at any time.
 
 ## Scopes
 
+There are 16 scopes.
+
 | Scope | Gives access to |
 | --- | --- |
 | `workspaces:read` | `GET /workspaces`, `GET /workspaces/{id}` |
 | `teams:read` | List your teams and roles. |
 | `spaces:read` | List spaces and visible sessions in them. |
-| `spaces:write` | Start sessions in spaces. Also includes `spaces:read`. |
-| `repositories:read` | `GET /repositories` |
-| `sessions:read` | Read sessions, chats and events. Open the streams. |
-| `sessions:write` | Start, archive, restore and retry sessions. Open chats. Send messages. Stop turns. Start a session on a pull request. Also includes `sessions:read`. |
+| `spaces:write` | Start sessions in spaces: `POST /sessions` with `space_id`. That request also needs `sessions:write`. Also includes `spaces:read`. |
+| `repositories:read` | List and get repositories. Read repository settings, instructions, the Setup list, the workspace sandbox setup and the setup recipe. |
+| `repositories:write` | Change repository settings. Write and delete repository instructions. Write the Setup list and the workspace sandbox setup. Accept, dismiss, retry and revert setup steps. Also includes `repositories:read`. |
+| `sessions:read` | Read sessions, chats and events. Open the streams. Read changes, diffs, files, scripts, previews, queues, checkpoints, timing and workspace readiness. |
+| `sessions:write` | Start, archive, restore and retry sessions. Open, change and close chats. Send messages. Stop turns. Run scripts. Make preview links. Open and merge pull requests. Ask the agent to fix checks, resolve conflicts or address reviews. Continue as a thread. Resize sessions. Start a session on a pull request. Also includes `sessions:read`. |
+| `memory:read` | List and get workspace memory entries. |
+| `memory:write` | Save, change, forget and restore memory entries. Also includes `memory:read`. |
 | `pull_requests:read` | Read pull requests, their descriptions and the merge queue. |
 | `pull_requests:write` | Refresh pull requests from GitHub. Turn auto-keep on or off. Add, remove and re-submit merge-queue entries. Also includes `pull_requests:read`. |
 | `code_reviews:read` | Read code reviews, their findings and their history. |
 | `code_reviews:write` | Start and stop code reviews. Dismiss findings and undo a dismissal. Post findings to GitHub. Also includes `code_reviews:read`. |
 | `webhooks:read` | List and read webhook endpoints, their deliveries and the event types. |
 | `webhooks:write` | Create, change, delete and test webhook endpoints. Rotate secrets. Redeliver. Also includes `webhooks:read`. |
-| `repositories:read` | List and get repositories. Read repository settings, instructions and the setup recipe. |
-| `repositories:write` | Change repository settings. Write and delete repository instructions. Revert setup steps. Also includes `repositories:read`. |
-| `sessions:read` | Read sessions, chats and events. Open the streams. Read changes, diffs, files, scripts, previews, queues, checkpoints and timing. |
-| `sessions:write` | Start, archive, restore and retry sessions. Open, change and close chats. Send messages. Stop turns. Run scripts, make preview links, open and merge pull requests, resize sessions. Also includes `sessions:read`. |
-| `memory:read` | List and get workspace memory entries. |
-| `memory:write` | Save, change, forget and restore memory entries. Also includes `memory:read`. |
+
+### Scopes in the token form
+
+The token form sets the access for each resource: None, Read, or Read & write. It shows these resources:
+
+- Workspaces
+- Teams and Spaces, only when the `spaces` feature is on for your account
+- Repositories
+- Sessions
+
+The form does not offer the `pull_requests`, `code_reviews`, `webhooks` or `memory` scopes yet. The API accepts these scopes, but you cannot create a token with them in the app.
+
+The form has two presets:
+
+| Preset | Scopes |
+| --- | --- |
+| Read only | `workspaces:read`, `repositories:read`, `sessions:read`. With `spaces` on, also `teams:read` and `spaces:read`. |
+| Full access | `workspaces:read`, `repositories:read`, `sessions:write`. With `spaces` on, also `teams:read` and `spaces:write`. |
 
 A write scope includes its read scope. A token with `sessions:write` can call all `sessions:read` endpoints.
 
@@ -83,7 +100,7 @@ A request without the needed scope answers `403` with the code `insufficient_sco
 A token can be bound to some of your workspaces. `GET /me` shows the binding in `token.workspace_ids`. The value `null` means all workspaces.
 
 - A workspace outside the binding answers `404` `workspace_not_found`. The API does not say that the workspace exists.
-- If the token is bound to exactly one workspace, you can leave out `workspace_id`. This applies to `GET /repositories`, `GET /sessions` and `POST /sessions`.
+- If the token is bound to exactly one workspace, you can leave out `workspace_id`. This applies to `GET /repositories`, `GET /sessions`, `POST /sessions`, `GET /pull-requests`, `GET /merge-queue`, `GET /memories` and `POST /memories`.
 - If the token reaches more than one workspace, `workspace_id` is required. A request without it answers `400` `missing_parameter`.
 
 ## Check a token
@@ -114,6 +131,7 @@ console.log(me.token.scopes, me.token.workspace_ids, me.token.expires_at);
 | 403 | `insufficient_scope` | The token lacks the needed scope. |
 | 403 | `public_api_unavailable` | The API is not on for the account. |
 | 403 | `workbenches_unavailable` | Sessions are not on for the account. |
+| 403 | `spaces_unavailable` | The `spaces` feature is not on for the account. Team and space endpoints need it. |
 
 A `401` includes a `WWW-Authenticate: Bearer realm="talyn-api"` header. See [errors](errors.md) for the full list.
 
