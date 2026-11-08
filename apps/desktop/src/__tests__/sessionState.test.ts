@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../renderer/lib/api';
 import { isActiveSessionState, sessionPr, sessionState, type SessionStateKind } from '../renderer/lib/sessionState';
 
@@ -40,6 +40,38 @@ describe('sessionState', () => {
     expect(sessionState({ ...WB, ...over }, chats, unread, row).kind).toBe(kind);
   });
 
+  describe('background work', () => {
+    const job = (status: WorkbenchBackground['jobs'][number]['status']) => ({ status }) as WorkbenchBackground['jobs'][number];
+    const wakeup = (status: WorkbenchBackground['wakeups'][number]['status']) => ({ status }) as WorkbenchBackground['wakeups'][number];
+    const bg = (jobs: ReturnType<typeof job>[], wakeups: ReturnType<typeof wakeup>[] = []) => ({ jobs, wakeups });
+
+    it.each<[string, Partial<Wb>, ReturnType<typeof chat>[], Record<string, true>, ReturnType<typeof pr> | null, ReturnType<typeof bg> | undefined, SessionStateKind]>([
+      ['a running job replaces idle', {}, [chat('idle')], {}, null, bg([job('running')]), 'background_job'],
+      ['a running job replaces unshipped changes', { diffStat: { files: 2, added: 5, removed: 1 } } as Partial<Wb>, [], {}, null, bg([job('running')]), 'background_job'],
+      ['a running job wins over an open PR', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([job('running')]), 'background_job'],
+      ['a running job wins over a merged PR', {}, [], {}, pr('merged'), bg([job('running')]), 'background_job'],
+      ['a running chat wins over a running job', {}, [chat('running')], {}, null, bg([job('running')]), 'working'],
+      ['a question wins over a running job', {}, [chat('awaiting_input')], {}, null, bg([job('running')]), 'needs_reply'],
+      ['an unread reply wins over a running job', {}, [chat('idle')], { c1: true }, null, bg([job('running')]), 'needs_reply'],
+      ['a failure wins over a running job', {}, [chat('error')], {}, null, bg([job('running')]), 'failed'],
+      ['a finished job is not work', {}, [], {}, null, bg([job('exited'), job('stopped'), job('lost')]), 'idle'],
+      ['a scheduled wake-up replaces idle', {}, [], {}, null, bg([], [wakeup('scheduled')]), 'wakeup'],
+      ['a scheduled wake-up replaces unshipped changes', { committedStats: { files: 1, added: 5, removed: 1 } }, [], {}, null, bg([], [wakeup('scheduled')]), 'wakeup'],
+      ['an open PR wins over a scheduled wake-up', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([], [wakeup('scheduled')]), 'pr_waiting'],
+      ['a merged PR wins over a scheduled wake-up', {}, [], {}, pr('merged'), bg([], [wakeup('scheduled')]), 'merged'],
+      ['a running job wins over a scheduled wake-up', {}, [], {}, null, bg([job('running')], [wakeup('scheduled')]), 'background_job'],
+      ['a fired, cancelled or failed wake-up is not work', {}, [], {}, null, bg([], [wakeup('fired'), wakeup('cancelled'), wakeup('failed')]), 'idle'],
+      ['no background payload', {}, [], {}, null, undefined, 'idle'],
+    ])('%s', (_name, over, chats, unread, row, background, kind) => {
+      expect(sessionState({ ...WB, ...over }, chats, unread, row, false, background).kind).toBe(kind);
+    });
+
+    it('labels the background states', () => {
+      expect(sessionState(WB, [], {}, null, false, bg([job('running')])).label).toBe('Background job running');
+      expect(sessionState(WB, [], {}, null, false, bg([], [wakeup('scheduled')])).label).toBe('Wake-up scheduled');
+    });
+  });
+
   it('shows an idle session during a sandbox refresh', () => {
     expect(sessionState({ ...WB, status: 'moving' }, [], {}, null).label).toBe('Idle');
   });
@@ -62,6 +94,8 @@ describe('sessionState', () => {
     ['working', true],
     ['needs_reply', true],
     ['unshipped', true],
+    ['background_job', true],
+    ['wakeup', true],
     ['pr_waiting', true],
     ['idle', false],
     ['merged', false],
