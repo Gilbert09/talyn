@@ -479,7 +479,7 @@ Creates a sandbox session on a repository (or a thread, with `kind: "thread"`) a
 | `agent` (required) | `claude` \| `codex` |  |
 | `model` | string | max length 200 |
 | `prompt` | string | The first message. The agent starts on it when the sandbox is ready. |
-| `name` | string | Lowercase letters, digits and hyphens. Default: made from the prompt. |
+| `name` | string | Lowercase letters, digits and hyphens. Default: made from the prompt. A name that a live session uses gets `-2`, `-3` and so on; read `name` in the response. |
 | `base_branch` | string | max length 250 |
 | `branch` | string | An existing branch to work on. Default: a new branch. |
 | `pull_request_id` | string | Start from this pull request's head branch and link the session to it. |
@@ -1299,7 +1299,7 @@ Starts a sandbox session on the pull request's head branch and links it to the p
 | `agent` (required) | `claude` \| `codex` |  |
 | `model` | string | max length 200 |
 | `prompt` | string | The first message. The agent starts on it when the sandbox is ready. |
-| `name` | string | Lowercase letters, digits and hyphens. Default: made from the prompt. |
+| `name` | string | Lowercase letters, digits and hyphens. Default: made from the prompt. A name that a live session uses gets `-2`, `-3` and so on; read `name` in the response. |
 | `internet_access` | boolean |  |
 
 Returns `201`: The new session. `status` is `provisioning`. See [Session](#session).

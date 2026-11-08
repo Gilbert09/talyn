@@ -488,7 +488,7 @@ export const SESSIONS = [
       branch: { type: 'string', description: 'An existing branch to check out. Default: a new branch.' },
       base_branch: { type: 'string', description: "Default: the repository's default branch." },
       pull_request_id: { type: 'string', description: 'Start from this pull request’s branch.' },
-      name: { type: 'string', description: 'Lowercase letters, digits and hyphens.' },
+      name: { type: 'string', description: 'Lowercase letters, digits and hyphens. A name in use gets `-2`, `-3` and so on.' },
       internet_access: booleanSchema,
       auto_create_pr: booleanSchema,
     },
