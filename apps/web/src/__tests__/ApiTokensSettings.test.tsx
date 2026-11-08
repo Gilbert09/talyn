@@ -12,7 +12,7 @@ const { mockList, mockCreate, mockRevoke, mockOpenExternal, mockToast, state } =
   mockRevoke: vi.fn(),
   mockOpenExternal: vi.fn(),
   mockToast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-  state: { features: { publicApi: true } as { publicApi?: boolean } | null },
+  state: { features: { publicApi: true } as { publicApi?: boolean; spaces?: boolean } | null },
 }));
 vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
 vi.mock('../lib/api', () => ({
@@ -123,6 +123,22 @@ describe('ApiTokensSettings visibility', () => {
 });
 
 describe('ApiTokensSettings create', () => {
+  it('sends Teams and Spaces scopes with Full access when Spaces is offered', async () => {
+    state.features = { publicApi: true, spaces: true };
+    render(<ApiTokensSettings />);
+    const dialog = await openDialog();
+    expect(screen.getByRole('radiogroup', { name: 'Teams access' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Spaces access' })).toBeInTheDocument();
+    fillName('Scoped');
+    fireEvent.click(screen.getByRole('button', { name: 'Full access' }));
+    fireEvent.click(submitButton(dialog));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
+    expect(mockCreate.mock.calls[0][0].scopes).toEqual([
+      'workspaces:read', 'teams:read', 'spaces:read', 'spaces:write',
+      'repositories:read', 'sessions:read', 'sessions:write',
+    ]);
+  });
+
   it('sends the defaults: read access, all workspaces, 90 days', async () => {
     render(<ApiTokensSettings />);
     const dialog = await openDialog();

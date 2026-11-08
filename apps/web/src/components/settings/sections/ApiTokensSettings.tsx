@@ -11,6 +11,7 @@ import {
 import { api } from '../../../lib/api';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { openExternal } from '../../../lib/openExternal';
+import { spacesOffered } from '../../../lib/spaces';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { toast } from '../../../stores/toast';
@@ -52,25 +53,30 @@ const RESOURCES: Array<{ key: Resource; label: string }> = [
   { key: 'repositories', label: 'Repositories' },
   { key: 'sessions', label: 'Sessions' },
 ];
+const resourcesFor = (offered: boolean) =>
+  RESOURCES.filter(({ key }) => offered || (key !== 'teams' && key !== 'spaces'));
 const LEVEL_LABELS: Record<Level, string> = { none: 'None', read: 'Read', write: 'Read & write' };
 const levelsFor = (resource: Resource): Level[] =>
   (API_SCOPES as readonly string[]).includes(`${resource}:write`) ? ['none', 'read', 'write'] : ['none', 'read'];
 
-const READ_ONLY: Levels = { workspaces: 'read', teams: 'read', spaces: 'read', repositories: 'read', sessions: 'read' };
-const FULL_ACCESS: Levels = { workspaces: 'read', teams: 'read', spaces: 'write', repositories: 'read', sessions: 'write' };
+const READ_ONLY: Levels = { workspaces: 'read', teams: 'none', spaces: 'none', repositories: 'read', sessions: 'read' };
+const FULL_ACCESS: Levels = { workspaces: 'read', teams: 'none', spaces: 'none', repositories: 'read', sessions: 'write' };
+const READ_ONLY_WITH_SPACES: Levels = { ...READ_ONLY, teams: 'read', spaces: 'read' };
+const FULL_ACCESS_WITH_SPACES: Levels = { ...FULL_ACCESS, teams: 'read', spaces: 'write' };
 
 /** The scopes a set of levels grants. Write sends its read scope too. */
-function scopesFor(levels: Levels): ApiScope[] {
+function scopesFor(levels: Levels, offered: boolean): ApiScope[] {
   return API_SCOPES.filter((scope) => {
     const [resource, action] = scope.split(':') as [Resource, 'read' | 'write'];
+    if (!offered && (resource === 'teams' || resource === 'spaces')) return false;
     const level = levels[resource];
     return level === 'write' || (level === 'read' && action === 'read');
   });
 }
 
 /** One chip per resource. A write scope includes read, so it shows once. */
-function scopeChips(scopes: readonly string[]): string[] {
-  return RESOURCES.flatMap(({ key, label }) => {
+function scopeChips(scopes: readonly string[], offered: boolean): string[] {
+  return resourcesFor(offered).flatMap(({ key, label }) => {
     if (scopes.includes(`${key}:write`)) return [`${label}: read & write`];
     if (scopes.includes(`${key}:read`)) return [`${label}: read`];
     return [];
@@ -133,6 +139,7 @@ async function copy(text: string, label: string) {
  */
 export function ApiTokensSettings() {
   const publicApi = useWorkspaceStore((s) => s.features?.publicApi === true);
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const [tokens, setTokens] = useState<ApiToken[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -252,7 +259,7 @@ export function ApiTokensSettings() {
                     {expired && <Badge variant="error">Expired</Badge>}
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
-                    {scopeChips(t.scopes).map((chip) => (
+                    {scopeChips(t.scopes, offered).map((chip) => (
                       <Badge key={chip} variant="secondary" className="font-normal">
                         {chip}
                       </Badge>
@@ -298,6 +305,7 @@ export function ApiTokensSettings() {
       {createOpen && (
         <CreateTokenDialog
           workspaces={workspaces}
+          offered={offered}
           onCreated={(token) => setTokens((prev) => [token, ...(prev ?? [])])}
           onClose={() => setCreateOpen(false)}
         />
@@ -322,23 +330,25 @@ export function ApiTokensSettings() {
  */
 function CreateTokenDialog({
   workspaces,
+  offered,
   onCreated,
   onClose,
 }: {
   workspaces: Array<{ id: string; name: string }>;
+  offered: boolean;
   onCreated: (token: ApiToken) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState('');
   const [expiryDays, setExpiryDays] = useState(String(API_TOKEN_DEFAULT_EXPIRY_DAYS));
   const [workspaceId, setWorkspaceId] = useState(ALL_WORKSPACES);
-  const [levels, setLevels] = useState<Levels>(READ_ONLY);
+  const [levels, setLevels] = useState<Levels>(offered ? READ_ONLY_WITH_SPACES : READ_ONLY);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
 
   const trimmed = name.trim();
-  const scopes = scopesFor(levels);
+  const scopes = scopesFor(levels, offered);
   const canCreate = trimmed.length > 0 && scopes.length > 0 && !creating;
 
   // Escape closes the form, but never the token step: one stray key would lose the token.
@@ -509,7 +519,7 @@ function CreateTokenDialog({
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground"
-                  onClick={() => setLevels(READ_ONLY)}
+                  onClick={() => setLevels(offered ? READ_ONLY_WITH_SPACES : READ_ONLY)}
                 >
                   Read only
                 </button>
@@ -519,14 +529,14 @@ function CreateTokenDialog({
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground"
-                  onClick={() => setLevels(FULL_ACCESS)}
+                  onClick={() => setLevels(offered ? FULL_ACCESS_WITH_SPACES : FULL_ACCESS)}
                 >
                   Full access
                 </button>
               </div>
             </div>
             <div className="divide-y divide-border/60 rounded-lg border border-border">
-              {RESOURCES.map(({ key, label }) => (
+              {resourcesFor(offered).map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-3 px-3 py-2">
                   <div className="min-w-0">
                     <div className="text-[13px]">{label}</div>

@@ -10,7 +10,7 @@ const mockCreate = jest.fn();
 const mockRevoke = jest.fn();
 const mockOpenExternal = jest.fn();
 const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
-const mockState: { features: { publicApi?: boolean } | null } = { features: { publicApi: true } };
+const mockState: { features: { publicApi?: boolean; spaces?: boolean } | null } = { features: { publicApi: true } };
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
@@ -135,6 +135,22 @@ describe('ApiTokensSettings visibility', () => {
 });
 
 describe('ApiTokensSettings create', () => {
+  it('sends Teams and Spaces scopes with Full access when Spaces is offered', async () => {
+    mockState.features = { publicApi: true, spaces: true };
+    render(<ApiTokensSettings />);
+    const dialog = await openDialog();
+    expect(screen.getByRole('radiogroup', { name: 'Teams access' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Spaces access' })).toBeInTheDocument();
+    fillName('Scoped');
+    fireEvent.click(screen.getByRole('button', { name: 'Full access' }));
+    fireEvent.click(submitButton(dialog));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
+    expect(mockCreate.mock.calls[0][0].scopes).toEqual([
+      'workspaces:read', 'teams:read', 'spaces:read', 'spaces:write',
+      'repositories:read', 'sessions:read', 'sessions:write',
+    ]);
+  });
+
   it('sends the defaults: read access, all workspaces, 90 days', async () => {
     render(<ApiTokensSettings />);
     const dialog = await openDialog();
