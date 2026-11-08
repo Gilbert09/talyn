@@ -51,7 +51,8 @@ const { setWorkbenchFleetClientForTests } = await import('../services/workbenche
 const { getChat, getWorkbench, listChats, listEvents } = await import('../services/workbenches/store.js');
 const { capabilityFor } = await import('../services/websocket.js');
 const { continueAsThreadMessage } = await import('../services/workbenches/create.js');
-const { announceThreadSession, notifyThread, threadWakeText } = await import('../services/workbenches/threads.js');
+const { announceThreadSession, notifyThread, notifyThreadsOfMergedPr, threadWakeText } = await import('../services/workbenches/threads.js');
+const { prMonitorService } = await import('../services/prMonitor.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -596,6 +597,83 @@ describe('threads', () => {
       expect((await cards(chatId))[1]).toMatchObject({ action: 'session_finished', status: 'idle' });
     });
 
+    describe('a merged pull request', () => {
+      async function linkPr(sessionId: string, state: 'open' | 'merged', id = 'merge-pr', number = 9): Promise<void> {
+        await testDb.db.insert(pullRequests).values({
+          id, workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number, state: 'open',
+          lastSummary: { headBranch: 'b', createdAt: new Date().toISOString() },
+        });
+        await testDb.db.update(workbenches).set({ pullRequestId: id }).where(eq(workbenches.id, sessionId));
+        if (state === 'merged') {
+          await testDb.db.update(pullRequests).set({ state, mergedAt: new Date(Date.now() + 1000) }).where(eq(pullRequests.id, id));
+        }
+      }
+
+      it('writes a card and wakes the thread one time, however often the merge is seen', async () => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        const session = await createSession({ threadId: thread.id });
+        await linkPr(session.id, 'merged');
+
+        await notifyThreadsOfMergedPr('merge-pr');
+        await notifyThreadsOfMergedPr('merge-pr');
+        await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+        await idle(chatId);
+        await notifyThreadsOfMergedPr('merge-pr');
+
+        expect(await cards(chatId)).toEqual([
+          expect.objectContaining({ action: 'pr_merged', sessionId: session.id, prUrl: 'https://github.com/acme/app/pull/9' }),
+        ]);
+        expect(await talynMessages(chatId)).toHaveLength(1);
+        expect((await talynMessages(chatId))[0].message.content[0].text)
+          .toContain(`The pull request of session "${session.name}" (session id ${session.id}) on acme/app merged: https://github.com/acme/app/pull/9.`);
+      });
+
+      it('wakes the thread when the webhook path marks the pull request merged', async () => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        const session = await createSession({ threadId: thread.id });
+        await linkPr(session.id, 'open');
+
+        expect(await prMonitorService.markPrTerminal([{ repositoryId: 'repo-a' }], 9, { merged: true, mergedAt: new Date(Date.now() + 1000) })).toBe(1);
+        await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+        expect((await cards(chatId)).map((card) => card.action)).toEqual(['pr_merged']);
+      });
+
+      it.each([
+        ['an open pull request', 'open', true],
+        ['a session outside a thread', 'merged', false],
+      ] as const)('does nothing for %s', async (_name, state, inThread) => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        const session = await createSession(inThread ? { threadId: thread.id } : {});
+        await linkPr(session.id, state);
+        await notifyThreadsOfMergedPr('merge-pr');
+        expect(await cards(chatId)).toHaveLength(0);
+        expect(await talynMessages(chatId)).toHaveLength(0);
+      });
+
+      it('does nothing for a pull request linked after it merged', async () => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        const session = await createSession({ threadId: thread.id });
+        await linkPr(session.id, 'merged');
+        await testDb.db.update(pullRequests).set({ mergedAt: new Date(Date.now() - 1000) }).where(eq(pullRequests.id, 'merge-pr'));
+        await notifyThreadsOfMergedPr('merge-pr');
+        expect(await cards(chatId)).toHaveLength(0);
+      });
+
+      it('does nothing when the thread is archived', async () => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        const session = await createSession({ threadId: thread.id });
+        await linkPr(session.id, 'merged');
+        await testDb.db.update(workbenches).set({ archivedAt: new Date() }).where(eq(workbenches.id, thread.id));
+        await notifyThreadsOfMergedPr('merge-pr');
+        expect(await cards(chatId)).toHaveLength(0);
+      });
+    });
+
     it('does nothing for a session outside a thread', async () => {
       const thread = await createThread();
       const chatId = await threadChat(thread.id);
@@ -614,6 +692,14 @@ describe('threads', () => {
     ] as const)('words the wake for %s (%s, %s)', (action, status, prUrl, expected) => {
       const text = threadWakeText({ action, status, sessionId: 's1', name: 'api', repo: 'acme/api', ...(prUrl ? { prUrl } : {}) });
       expect(text.split('\n')[0]).toBe(`[Talyn] Session "api" (session id s1) on acme/api ${expected}`);
+    });
+
+    it.each([
+      ['https://x/pull/1', 'merged: https://x/pull/1.'],
+      [undefined, 'merged.'],
+    ] as const)('words the merge wake (%s)', (prUrl, expected) => {
+      const text = threadWakeText({ action: 'pr_merged', status: 'idle', sessionId: 's1', name: 'api', repo: 'acme/api', ...(prUrl ? { prUrl } : {}) });
+      expect(text.split('\n')[0]).toBe(`[Talyn] The pull request of session "api" (session id s1) on acme/api ${expected}`);
     });
   });
 

@@ -73,7 +73,7 @@ A thread is a conversation with no repository of its own. You give it a goal, an
 
 To start one, select **New thread** in the sidebar and describe the goal.
 
-The thread keeps track of its sessions. When a session finishes a turn, opens a pull request or needs an answer, the thread's agent hears about it and can act. When it needs you, it says so in the thread, with a link to the session.
+The thread keeps track of its sessions. When a session finishes a turn, opens a pull request, has its pull request merged or needs an answer, the thread's agent hears about it and can act. When it needs you, it says so in the thread, with a link to the session.
 
 Every session a thread starts is an ordinary session. You can open it, read its diff and send it messages yourself.
 

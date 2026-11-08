@@ -1,4 +1,4 @@
-import { AlertCircle, CircleCheck, GitPullRequest, MessageCircleQuestion, MessagesSquare, Pause, Play } from 'lucide-react';
+import { AlertCircle, CircleCheck, GitMerge, GitPullRequest, MessageCircleQuestion, MessagesSquare, Pause, Play } from 'lucide-react';
 import type { ThreadSessionEvent } from '@talyn/shared';
 import { threadSessionEventText } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -13,6 +13,8 @@ function iconFor(event: ThreadSessionEvent) {
       return Play;
     case 'pr_opened':
       return GitPullRequest;
+    case 'pr_merged':
+      return GitMerge;
     case 'needs_input':
       return MessageCircleQuestion;
     case 'paused':

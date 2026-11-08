@@ -1,4 +1,5 @@
 import { autoArchiveForMergedPr } from './workbenches/autoArchive.js';
+import { notifyThreadsOfMergedPr } from './workbenches/threads.js';
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -1475,6 +1476,7 @@ class PRMonitorService extends EventEmitter {
       .update(pullRequestsTable)
       .set({ state: nextState, mergedAt, updatedAt: new Date(), ...QUEUE_RESET_COLUMNS })
       .where(eq(pullRequestsTable.id, row.id));
+    if (nextState === 'merged') await notifyThreadsOfMergedPr(row.id);
     const summary = (prev[0]?.lastSummary as Record<string, unknown> | null) ?? {};
     emitPullRequestUpdated(workspaceId, {
       id: row.id,

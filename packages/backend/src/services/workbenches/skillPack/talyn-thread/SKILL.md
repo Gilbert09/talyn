@@ -1,6 +1,6 @@
 ---
 name: talyn-thread
-description: Use when you run in a Talyn thread, a conversation with no repository. Explains how to plan work across repositories, how to brief and start a session on each repository with talyn_create_session, why to end your turn instead of polling (Talyn wakes you when a session finishes, opens a pull request or needs an answer), how to review and report the results, and how to save decisions to thread memory.
+description: Use when you run in a Talyn thread, a conversation with no repository. Explains how to plan work across repositories, how to brief and start a session on each repository with talyn_create_session, why to end your turn instead of polling (Talyn wakes you when a session finishes, opens a pull request, has its pull request merged or needs an answer), how to review and report the results, and how to save decisions to thread memory.
 ---
 
 # Run a thread
@@ -70,8 +70,8 @@ another, start it after the first one finishes.
 After you start the sessions, say what you started and end your turn.
 
 Do not poll. Do not run `sleep`. Talyn writes a message to this thread when a
-session finishes a turn, opens a pull request or needs an answer, and that
-message starts your next turn.
+session finishes a turn, opens a pull request, has its pull request merged or
+needs an answer, and that message starts your next turn.
 
 ## 5. When Talyn wakes you
 
