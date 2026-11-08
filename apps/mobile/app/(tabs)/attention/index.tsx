@@ -3,7 +3,7 @@ import { pullRequestRoute } from '../../../src/navigation/routes';
 
 export default function AttentionScreen() {
   return (
-    <ShellScreen title="Attention" description="See pull requests that need your attention.">
+    <ShellScreen title="Attention" description="Example pull requests. Mobile review workflows will follow in a later release.">
       <ShellLink href={pullRequestRoute('example-pr')} label="Open example pull request" />
     </ShellScreen>
   );

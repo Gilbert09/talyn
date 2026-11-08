@@ -1,8 +1,93 @@
 # Native mobile client plan
 
-Status: proposed. Research date: **2026-11-08**.
+Status: approved plan; phases 1 and 2 have implementation evidence below. Research date: **2026-11-08**.
 Scope: production planning for iOS and Android in `Gilbert09/talyn`.
-No mobile app, dependency, or backend change forms part of this document.
+The original research is preserved below. Implementation evidence records the current mobile foundation.
+
+## Phase 2 implementation evidence
+
+The native adapter and Expo shell landed in [#119](https://github.com/Gilbert09/talyn/pull/119)
+and [#121](https://github.com/Gilbert09/talyn/pull/121).
+The original plan is [#116](https://github.com/Gilbert09/talyn/pull/116).
+This section supersedes proposed phase 2 choices where the implementation now supplies evidence.
+It does not remove the device or store release gates.
+
+Resolved implementation facts:
+
+- `apps/mobile` binds Supabase 2.103.3 to asynchronous Expo SecureStore storage and PKCE.
+  The client is created after a secure read, write, and removal check.
+  Persistence and automatic refresh are enabled. URL session detection is disabled.
+- GitHub remains the only provider. Expo WebBrowser opens a system authentication session with `skipBrowserRedirect`.
+  Expo Crypto supplies secure randomness and SHA-256 for S256 PKCE.
+  A real Supabase client test checks the challenge and exchange through a fake HTTP transport.
+- One attempt records the exact callback, start time, and exchange phase in secure storage.
+  Supabase owns OAuth state. The app validates callback parameters and claims each code before exchange.
+  Duplicate callbacks share one exchange. Cold callbacks require a saved attempt and verifier.
+  Attempts expire after five minutes. An interrupted exchange is not replayed after restart.
+- Native intent handling strips callback parameters before navigation.
+  Development and preview accept their explicit custom schemes.
+  Production requires explicit HTTPS API, Supabase, and callback configuration, plus a public Supabase key.
+  Builds fail when production configuration is incomplete.
+- Explicit HTTPS callbacks generate Associated Domains and an exact Android intent filter.
+  Expo's HTTPS authentication option requires iOS 17.4 or later.
+  No association file is published. Production domain, Apple Team ID, and signing certificate evidence remain missing.
+- SDK 58 lists NetInfo 12.0.1 and AsyncStorage 2.2.0 as compatible native dependencies.
+  AppState and NetInfo bind the shared client lifecycle. Reachability has online, offline, and unknown states.
+  Supabase refresh pauses while suspended or offline. The shared client retains its single 401 recovery sequence.
+- Unknown refresh errors, 5xx responses, timeouts, and network outages retain the account.
+  Automatic sign-out requires explicit refresh-token rejection from the auth service.
+  Account boundaries reset sockets, invalidate requests and token lookups, and clear user memory and preferences.
+- Auth restoration gates the tab shell. Workspace selection uses the existing workspaces API.
+  Only the workspace ID is persisted as a non-secret preference, scoped by environment and user.
+  Restoration validates access. Invalid selections are removed.
+- Settings exposes account details, sign-out, and native destructive confirmation for `users.wipeMe()`.
+  HTTP 409 shows the existing last-paying-team-administrator restriction.
+  Successful deletion clears secure auth storage, workspace selection, sockets, and user memory.
+  The sign-in screen confirms deletion of Talyn account data.
+- No backend behavior changes. Sessions, Threads, and Attention remain example screens.
+  Product workflows, push notifications, billing, analytics, and persistent content caches remain outside this phase.
+
+### Storage threat assessment
+
+This implementation uses native SecureStore for every session, verifier, and auth attempt value.
+It adds no encryption algorithm or plaintext fallback.
+ASCII chunks stay below 1800 bytes to cover historical native value limits.
+Secure metadata records the complete chunk count and revision.
+A journal records old and new revisions before writes. A single manifest replacement selects the complete value.
+Recovery removes unused chunks after an interrupted write. Cleanup failures block further auth operations.
+A corrupt manifest or missing chunk fails closed and shows a safe storage message.
+
+The covered threats include partial writes, concurrent updates, Unicode size expansion, stale callback delivery, and account crossover.
+Tests interrupt writes before and after manifest replacement. They also cover corrupt, missing, and unavailable storage.
+The adapter serializes storage operations. Logout waits for auth operations before its final secure removal.
+Each stored chunk uses `WHEN_UNLOCKED_THIS_DEVICE_ONLY` without a biometric prompt.
+SecureStore supplies the platform protection. A compromised running process can still access the active session.
+The adapter does not protect against a compromised operating system.
+
+Security review and physical-device evidence remain release gates.
+Test large real Supabase sessions, lock/unlock, killed processes, backup exclusions, and restore behavior.
+Confirm iOS Keychain behavior after uninstall. It can retain credentials.
+A mock storage driver cannot prove platform limits or secure deletion from device backups.
+
+### Remaining auth and release gates
+
+Apple App Review 4.8 remains a release gate. This phase does not add Sign in with Apple.
+Product must approve an exception rationale or an Apple provider and identity-linking design before iOS submission.
+Do not merge accounts by matching email strings.
+
+The deletion endpoint removes Talyn data but treats Supabase deletion and billing cancellation as best effort.
+Its success response does not confirm provider cleanup, backup removal, or deletion completion.
+Privacy and backend owners must define completion checks, retention periods, and support escalation before launch.
+Publish the support and deletion page, including any required Google Play deletion URL.
+No confirmed endpoint defect required a backend change in this phase.
+
+Confirm production identifiers, callback ownership, OS floors, EAS project, and signing custody.
+Publish AASA and Android asset links only after all required identifiers are verified.
+Test exact signed binaries on physical iOS and Android devices.
+Cover live OAuth, cancellations, timeouts, process death, account switching, offline recovery, workspace revocation, logout, and deletion.
+Also check screen readers, text growth, keyboard focus, contrast, dark mode, reduced motion, and destructive confirmation focus.
+Exports and simulated callbacks do not prove universal links, native startup, signed archives, or store acceptance.
+See [the mobile README](../apps/mobile/README.md) for configuration, allowlist entries, tests, and device gaps.
 
 ## 1. Reading guide and recommendation
 
