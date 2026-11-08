@@ -16,7 +16,7 @@ import { merge } from 'webpack-merge';
 import TerserPlugin from 'terser-webpack-plugin';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
-import { resolveAppVersion } from './appVersion';
+import { resolveAppVersion, resolveBuildCommit } from './appVersion';
 import { resolvePostHogKey } from './posthogKey';
 import checkNodeEnv from '../scripts/check-node-env';
 import deleteSourceMaps from '../scripts/delete-source-maps';
@@ -136,6 +136,8 @@ const configuration: webpack.Configuration = {
       // app.getVersion(); an unstamped local build reports `dev+<sha>` rather
       // than the committed placeholder — see ./appVersion.
       TALYN_APP_VERSION: resolveAppVersion(),
+      // Full commit SHA, shown with a GitHub link in Settings → Developer.
+      TALYN_BUILD_COMMIT: resolveBuildCommit(),
     }),
 
     new MiniCssExtractPlugin({

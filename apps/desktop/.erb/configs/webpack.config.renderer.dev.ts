@@ -13,7 +13,7 @@ import { execSync, spawn } from 'child_process';
 import ReactRefreshWebpackPlugin from '@pmmmwh/react-refresh-webpack-plugin';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
-import { resolveAppVersion } from './appVersion';
+import { resolveAppVersion, resolveBuildCommit } from './appVersion';
 import { resolvePostHogKey } from './posthogKey';
 import checkNodeEnv from '../scripts/check-node-env';
 
@@ -166,6 +166,8 @@ const configuration: webpack.Configuration = {
       // Baked app version for analytics — see the prod config note. A local
       // build reports `dev+<sha>`, never the committed placeholder.
       TALYN_APP_VERSION: resolveAppVersion(),
+      // Full commit SHA, shown with a GitHub link in Settings → Developer.
+      TALYN_BUILD_COMMIT: resolveBuildCommit(),
     }),
 
     new webpack.DefinePlugin({

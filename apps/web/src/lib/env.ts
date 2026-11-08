@@ -37,6 +37,18 @@ export const IS_DEV_BUILD = import.meta.env.DEV;
  */
 export const APP_VERSION = CLIENT_VERSION;
 
+/** The full commit SHA of this build, or null when the build did not bake one. */
+export const BUILD_COMMIT: string | null = /^[0-9a-f]{40}$/.test(
+  import.meta.env.VITE_TALYN_BUILD_COMMIT ?? ''
+)
+  ? (import.meta.env.VITE_TALYN_BUILD_COMMIT as string)
+  : null;
+
+/** The GitHub page for a commit in the Talyn repository. */
+export function commitUrl(sha: string): string {
+  return `https://github.com/Gilbert09/talyn/commit/${sha}`;
+}
+
 /**
  * The `LocalSkillFile` shape the desktop reads from `~/.claude/skills`.
  * Declared here rather than imported from the desktop's `main/preload`, which

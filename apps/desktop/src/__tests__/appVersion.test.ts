@@ -4,6 +4,7 @@ import {
   LOCAL_VERSION,
   PLACEHOLDER_VERSION,
   resolveAppVersion,
+  resolveBuildCommit,
 } from '../../.erb/configs/appVersion';
 import {
   DEFAULT_POSTHOG_KEY,
@@ -14,6 +15,8 @@ import {
   isReleaseVersion,
   releaseVersion,
   isReleaseBuild,
+  buildCommit,
+  commitUrl,
 } from '../renderer/lib/appVersion';
 
 /**
@@ -187,4 +190,52 @@ describe('resolvePostHogKey', () => {
       expect(resolvePostHogKey({ TALYN_ANALYTICS_DISABLED })).toBe(DEFAULT_POSTHOG_KEY);
     },
   );
+});
+
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+
+describe('resolveBuildCommit', () => {
+  it.each([
+    ['a full lowercase SHA', SHA, SHA],
+    ['a full uppercase SHA', SHA.toUpperCase(), SHA],
+    ['a SHA with whitespace', `  ${SHA}\n`, SHA],
+  ])('uses GITHUB_SHA when it is %s', (_name, value, expected) => {
+    expect(resolveBuildCommit({ GITHUB_SHA: value })).toBe(expected);
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['a short SHA', 'abc1234'],
+    ['not hex', 'z'.repeat(40)],
+  ])('falls back to git when GITHUB_SHA is %s', (_name, value) => {
+    // This test runs inside the repo checkout, so git answers.
+    expect(resolveBuildCommit({ GITHUB_SHA: value })).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe('buildCommit / commitUrl', () => {
+  const original = process.env.TALYN_BUILD_COMMIT;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.TALYN_BUILD_COMMIT;
+    else process.env.TALYN_BUILD_COMMIT = original;
+  });
+
+  it.each([
+    ['a full SHA', SHA, SHA],
+    ['an uppercase SHA', SHA.toUpperCase(), SHA],
+    ['an empty string', '', null],
+    ['a short SHA', 'abc1234', null],
+    ['a non-hex value', 'not-a-sha', null],
+    ['unset', undefined, null],
+  ])('reads %s', (_name, value, expected) => {
+    if (value === undefined) delete process.env.TALYN_BUILD_COMMIT;
+    else process.env.TALYN_BUILD_COMMIT = value;
+    expect(buildCommit()).toBe(expected);
+  });
+
+  it('links to the commit on GitHub', () => {
+    expect(commitUrl(SHA)).toBe(`https://github.com/Gilbert09/talyn/commit/${SHA}`);
+  });
 });
