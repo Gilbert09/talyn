@@ -9,7 +9,7 @@ import {
   type MemoryIndexEntry,
 } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { repositories, workspaceMemories, workspaces } from '../db/schema.js';
+import { repositories, workspaceMemories, workspaceMemoryUses, workspaces } from '../db/schema.js';
 
 /**
  * Workspace memory: the store, the routes and the index. Owner isolation is
@@ -21,7 +21,15 @@ const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { insertChat, insertWorkbench, listEvents } = await import('../services/workbenches/store.js');
-const { announceMemoryChange, listMemories, listMemoriesQuery, memoryIndexFor, sessionMemoryEnabled } = await import(
+const {
+  announceMemoryChange,
+  listMemories,
+  listMemoriesQuery,
+  listMemoriesUsedBy,
+  memoryIndexFor,
+  recordMemoryUse,
+  sessionMemoryEnabled,
+} = await import(
   '../services/workbenches/memory.js'
 );
 
@@ -437,6 +445,86 @@ describe('workspace memory', () => {
     it('does not show another workspace in the index', async () => {
       expect(await memoryIndexFor({ workspaceId: 'ws-b', repositoryId: 'repo-a' })).toEqual([]);
       expect(await listMemories('ws-b')).toEqual([]);
+    });
+  });
+
+  describe('the entries one thread used', () => {
+    const ids: Record<string, string> = {};
+    const names = (rows: Array<{ name: string }>) => rows.map((r) => r.name);
+    const usedBy = async (query = '') => {
+      const res = await call('GET', `/workbenches/memory?workspaceId=ws-a&usedBy=wb-a${query}`);
+      expect(res.status).toBe(200);
+      return res.body.data as Array<{ name: string; use: { wrote: boolean; read: boolean; lastUsedAt: string } }>;
+    };
+
+    beforeEach(async () => {
+      await insertWorkbench({
+        id: 'wb-a2', workspaceId: 'ws-a', repositoryId: 'repo-a', repoFullName: 'o/r', name: 'wb-a2',
+        branch: 'tom/wb-a2', baseBranch: 'main', runtime: 'sandbox', agent: 'claude', status: 'ready',
+      });
+      const make = async (name: string, overrides: Record<string, unknown> = {}) => {
+        const res = await create({ name, ...overrides });
+        expect(res.status).toBe(200);
+        ids[name] = res.body.data.entry.id;
+      };
+      await make('saved here', { source: { kind: 'session', workbenchId: 'wb-a' } });
+      await make('saved elsewhere', { source: { kind: 'session', workbenchId: 'wb-a2' } });
+      await make('read here');
+      await make('read elsewhere');
+      await make('never used');
+      await make('thread note', { scope: 'thread', threadId: 'wb-a', source: { kind: 'session', workbenchId: 'wb-a2' } });
+      await testDb.db.insert(workspaceMemoryUses).values([
+        { memoryId: ids['read here'], workbenchId: 'wb-a', read: true, lastUsedAt: new Date('2099-01-01T00:00:00Z') },
+        { memoryId: ids['saved here'], workbenchId: 'wb-a', wrote: true, lastUsedAt: new Date('2000-01-01T00:00:00Z') },
+        { memoryId: ids['read elsewhere'], workbenchId: 'wb-a2', read: true },
+      ]);
+    });
+
+    it('lists what it saved, read, and its own thread entries, the most recent use first', async () => {
+      const rows = await usedBy();
+      expect(names(rows)).toEqual(['read here', 'thread note', 'saved here']);
+      expect(rows.map((r) => r.use)).toEqual([
+        { wrote: false, read: true, lastUsedAt: '2099-01-01T00:00:00.000Z' },
+        { wrote: false, read: false, lastUsedAt: expect.any(String) },
+        { wrote: true, read: false, lastUsedAt: '2000-01-01T00:00:00.000Z' },
+      ]);
+    });
+
+    it('counts an entry it saved before uses were recorded', async () => {
+      await testDb.db.delete(workspaceMemoryUses);
+      const rows = await usedBy();
+      expect(names(rows)).toContain('saved here');
+      expect(rows.find((r) => r.name === 'saved here')?.use).toMatchObject({ wrote: true, read: false });
+    });
+
+    it('records a read and a write as one use, and moves it to the top', async () => {
+      await recordMemoryUse(ids['saved here'], 'wb-a', 'read');
+      await recordMemoryUse(ids['never used'], 'wb-a', 'wrote');
+      await recordMemoryUse(ids['never used'], 'wb-a', 'read');
+      const rows = await listMemoriesUsedBy('ws-a', 'wb-a');
+      expect(names(rows)).toEqual(['read here', 'never used', 'saved here', 'thread note']);
+      expect(rows.find((r) => r.name === 'saved here')?.use).toMatchObject({ wrote: true, read: true });
+      expect(rows.find((r) => r.name === 'never used')?.use).toMatchObject({ wrote: true, read: true });
+      const stored = await testDb.db.select().from(workspaceMemoryUses);
+      expect(stored.filter((r) => r.memoryId === ids['never used'])).toHaveLength(1);
+    });
+
+    it('does not throw when the use cannot be stored', async () => {
+      await expect(recordMemoryUse('no-such-entry', 'wb-a', 'read')).resolves.toBeUndefined();
+    });
+
+    it('hides a forgotten entry unless asked, and ships no body unless asked', async () => {
+      await call('DELETE', `/workbenches/memory/${ids['read here']}`);
+      expect(names(await usedBy())).not.toContain('read here');
+      expect(names(await usedBy('&includeForgotten=true'))).toContain('read here');
+      for (const row of await usedBy()) expect(row).not.toHaveProperty('body');
+      for (const row of await usedBy('&includeBody=true')) expect(row).toHaveProperty('body');
+    });
+
+    it('lists nothing from another workspace', async () => {
+      expect(await listMemoriesUsedBy('ws-b', 'wb-a')).toEqual([]);
+      const other = await call('GET', '/workbenches/memory?workspaceId=ws-b&usedBy=wb-a');
+      expect(other.status).not.toBe(200);
     });
   });
 

@@ -4,7 +4,7 @@ import { getPoolDbClient, type Database } from '../../db/client.js';
 import { workbenchResourceSamples as samples } from '../../db/schema.js';
 
 /**
- * CPU and memory samples of session boxes (migration 0120), for the chart in
+ * CPU and memory samples of session boxes (migration 0121), for the chart in
  * the Sandbox panel. The usage sweep writes them each minute, so the table is
  * backend-pool-only like the other sweep tables.
  */

@@ -839,7 +839,14 @@
       "idx": 120,
       "version": "7",
       "when": 1790900000040,
-      "tag": "0120_workbench_resource_samples",
+      "tag": "0120_workspace_memory_uses",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1790900000041,
+      "tag": "0121_workbench_resource_samples",
       "breakpoints": true
     }
   ]

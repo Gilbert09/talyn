@@ -4,6 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
   pickWorkbenchName,
+  uniqueWorkbenchName,
   WORKBENCH_KINDS,
   workbenchBranchFromTask,
   workbenchNameFromTask,
@@ -182,9 +183,10 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   const firstMessage: WorkbenchQueuedMessage | null = prompt ? { ...normaliseMessage({ text: prompt }), queuedAt: sentAt } : null;
   const naming = typeof body.namingText === 'string' && body.namingText.trim() ? body.namingText : prompt;
 
-  // The name is unique among live workbenches. It comes from the first
-  // message when there is one, else a city. Two creates in the same moment
-  // can pick the same name; the index decides, and the loser picks again.
+  // The name is unique among live workbenches. It comes from the caller, else
+  // the first message, else a city. A name in use gets `-2`, `-3`, … Two
+  // creates in the same moment can pick the same name; the index decides, and
+  // the loser picks again.
   // Only a branch Talyn names gets the workspace's prefix; a branch the
   // person picked (a PR, "from branch") is used as it is.
   const branchPrefix = branch ? '' : await sessionBranchPrefix(workspaceId);
@@ -196,10 +198,9 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   let row: WorkbenchRow | null = null;
   for (let attempt = 0; attempt < 4 && !row; attempt++) {
     const taken = await liveWorkbenchNames(workspaceId);
-    if (requestedName && taken.includes(requestedName)) {
-      throw refuse(409, `A session named "${requestedName}" already exists.`, 'name_taken');
-    }
-    const name = requestedName || (naming ? workbenchNameFromTask(naming, taken) : pickWorkbenchName(taken));
+    const name = requestedName
+      ? uniqueWorkbenchName(requestedName, taken)
+      : naming ? workbenchNameFromTask(naming, taken) : pickWorkbenchName(taken);
     const branchBase = (naming ? workbenchBranchFromTask(naming) : null) ?? name;
     try {
       row = await insertWorkbench({
@@ -236,8 +237,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
         localGenerated = false;
         continue;
       }
-      if (constraint !== 'uq_workbenches_allocated_branch'
-        && (constraint !== 'uq_workbenches_workspace_name_live' || requestedName)) throw err;
+      if (constraint !== 'uq_workbenches_allocated_branch' && constraint !== 'uq_workbenches_workspace_name_live') throw err;
     }
   }
   if (!row) throw refuse(409, 'Could not find a free name for the session; try again.', 'name_taken');
@@ -332,10 +332,9 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
   let row: WorkbenchRow | null = null;
   for (let attempt = 0; attempt < 4 && !row; attempt++) {
     const taken = await liveWorkbenchNames(workspaceId);
-    if (requestedName && taken.includes(requestedName)) {
-      throw refuse(409, `A session named "${requestedName}" already exists.`, 'name_taken');
-    }
-    const name = requestedName || (naming ? workbenchNameFromTask(naming, taken) : pickWorkbenchName(taken));
+    const name = requestedName
+      ? uniqueWorkbenchName(requestedName, taken)
+      : naming ? workbenchNameFromTask(naming, taken) : pickWorkbenchName(taken);
     try {
       row = await insertWorkbench({
         id,
@@ -358,7 +357,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
         source: body.source ?? null,
       });
     } catch (err) {
-      if (uniqueViolationConstraint(err) !== 'uq_workbenches_workspace_name_live' || requestedName) throw err;
+      if (uniqueViolationConstraint(err) !== 'uq_workbenches_workspace_name_live') throw err;
     }
   }
   if (!row) throw refuse(409, 'Could not find a free name for the thread; try again.', 'name_taken');

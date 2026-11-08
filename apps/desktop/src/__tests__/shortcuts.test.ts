@@ -53,6 +53,7 @@ describe('matchesKeys', () => {
     ['mod+alt+down', { key: 'ArrowDown', code: 'ArrowDown', metaKey: true, altKey: true }, true, true],
     ['mod+alt+down', { key: 'ArrowDown', code: 'ArrowDown', metaKey: true }, true, false],
     ['mod+1', { key: '1', code: 'Digit1', metaKey: true }, true, true],
+    ['mod+shift+1', { key: '!', code: 'Digit1', metaKey: true, shiftKey: true }, true, true],
     ['mod+9', { key: '1', code: 'Digit1', metaKey: true }, true, false],
     ['mod+[', { key: '[', code: 'BracketLeft', metaKey: true }, true, true],
     ['mod+]', { key: ']', code: 'BracketRight', ctrlKey: true }, false, true],

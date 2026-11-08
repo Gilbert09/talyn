@@ -3074,6 +3074,29 @@ export const workspaceMemories = pgTable(
 );
 
 /**
+ * Which session or thread saved or read which memory entry (migration 0120).
+ * Pool-only, like `workspace_memories`. The thread work panel lists from it.
+ */
+export const workspaceMemoryUses = pgTable(
+  'workspace_memory_uses',
+  {
+    memoryId: text('memory_id')
+      .notNull()
+      .references(() => workspaceMemories.id, { onDelete: 'cascade' }),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    wrote: boolean('wrote').notNull().default(false),
+    read: boolean('read').notNull().default(false),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.memoryId, t.workbenchId] }),
+    workbenchIdx: index('idx_workspace_memory_uses_workbench').on(t.workbenchId, t.lastUsedAt),
+  })
+);
+
+/**
  * Hosted preview links (migration 0098). Pool-only. A host maps a random id to
  * one session port. Tickets and cookies are stored as SHA-256 hashes. See
  * `services/preview/previewLinks.ts`.
@@ -3209,7 +3232,7 @@ export const workbenchWakeups = pgTable(
 );
 
 /**
- * Resource samples of a session's box (migration 0120). The usage sweep writes
+ * Resource samples of a session's box (migration 0121). The usage sweep writes
  * one row per running session box each minute and deletes rows older than
  * `SAMPLE_RETENTION_MS`. `cpu_seconds` is the fleet's cumulative VMM CPU time;
  * the Sandbox panel charts the change between rows. Backend-pool-only.

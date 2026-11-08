@@ -16,11 +16,8 @@ import { contextEntries, inPersonalList, isWorkbenchOwner, spacesOffered, switch
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 
-/**
- * ⌘1–9 belongs to the browser (switch tab), and ⌘⌥1–9 opens a session, so a
- * context jump adds ⇧: ⌘⌥⇧1–9 (Ctrl+Alt+Shift elsewhere).
- */
-export const CONTEXT_JUMP_KEYS = (n: number) => `mod+alt+shift+${n}`;
+/** ⌘1–9 belongs to the browser, and ⌘⌥1–9 opens a session. */
+export const CONTEXT_JUMP_KEYS = (n: number) => `mod+shift+${n}`;
 
 export function orderedContexts() {
   return contextEntries(useWorkspaceStore.getState().workspaces, useSpacesStore.getState().teams);

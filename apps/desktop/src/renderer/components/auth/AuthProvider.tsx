@@ -168,6 +168,11 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
+/** The auth state, or null outside <AuthProvider> (a surface that also renders without sign-in). */
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext);
+}
+
 /**
  * Read the PKCE callback: `?code=…` on success, `?error=…` when the user (or
  * GitHub) said no. Both halves matter — a callback carrying neither is a
