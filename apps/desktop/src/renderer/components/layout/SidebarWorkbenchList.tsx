@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Archive, ChevronDown, ChevronRight, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Cloud, Copy, ExternalLink, Laptop, Timer } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -41,6 +41,8 @@ import { useRenameSession } from '../workbench/useRenameSession';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
 import { spacesOffered } from '../../lib/spaces';
+import { isActiveBackground } from '../../lib/sessionBackground';
+import { useBackground } from '../../stores/sessionBackground';
 
 /**
  * The sidebar's workbench list: live sessions grouped by repository, in the
@@ -257,6 +259,9 @@ function WorkbenchRow({
   const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : 'Sandbox';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
   const diff = stats && stats.files > 0 ? stats : null;
+  const background = useBackground(workbench.id);
+  const runningJob = background?.jobs.some((job) => job.status === 'running');
+  const backgroundTitle = runningJob ? 'Background job running' : 'Wake-up scheduled';
 
   const prUrl = pr?.summary.url ?? workbench.pr?.url;
   const [confirming, setConfirming] = useState(false);
@@ -326,6 +331,7 @@ function WorkbenchRow({
               </span>
             )}
             <ThreadTag threadId={workbench.threadId} />
+            {isActiveBackground(background) && <span title={backgroundTitle} aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
             <SlackSessionMark source={slackSourceOf(workbench)} />
             <RuntimeIcon
               className={cn('h-3 w-3 shrink-0 text-muted-foreground', done && !selected && 'opacity-60')}

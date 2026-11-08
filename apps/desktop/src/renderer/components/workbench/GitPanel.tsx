@@ -8,6 +8,8 @@ import type { DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { clampPanelWidth, type GitPanelTab } from '../../lib/workbenchLayout';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { useBackground } from '../../stores/sessionBackground';
+import { BackgroundTab } from './BackgroundTab';
 import { ChangesTab } from './ChangesTab';
 import { FilesTab } from './FilesTab';
 import { PullRequestTab } from './PullRequestTab';
@@ -20,6 +22,7 @@ export const GIT_PANEL_TAB_LABELS: Array<{ id: GitPanelTab; label: string; hint:
   { id: 'changes', label: 'Changes', hint: 'Changes against the base branch (⌘⇧D)' },
   { id: 'pr', label: 'Pull request', hint: 'The pull request: status, checks, reviews and the merge queue' },
   { id: 'sandbox', label: 'Sandbox', hint: 'What the sandbox is doing, and whether the work is safe' },
+  { id: 'background', label: 'Background', hint: 'Jobs and wake-ups in this session' },
 ];
 
 /**
@@ -42,13 +45,15 @@ export function GitPanel({
   const storedTab = useWorkbenchStore((s) => s.sideTab);
   const owner = useIsWorkbenchOwner(workbench);
   const hasSandbox = workbench.runtime === 'sandbox' && owner;
-  const tab = storedTab === 'sandbox' && !hasSandbox ? 'changes' : storedTab;
+  const background = useBackground(workbench.id);
+  const runningJobs = background?.jobs.filter((job) => job.status === 'running').length ?? 0;
+  const tab = (storedTab === 'sandbox' && !hasSandbox) || (storedTab === 'background' && !owner) ? 'changes' : storedTab;
   const setTab = useWorkbenchStore((s) => s.setSideTab);
   const width = useWorkbenchStore((s) => s.rightPanelWidth);
   const setWidth = useWorkbenchStore((s) => s.setRightPanelWidth);
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const [comments, setComments] = useState<DiffComment[]>([]);
-  const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false, sandbox: false });
+  const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false, sandbox: false, background: false });
   const viewed = useRef(new Set<string>());
   const turnsEnded = useTurnsEnded(chats);
   const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox);
@@ -97,8 +102,8 @@ export function GitPanel({
         aria-label="Resize the right panel"
         aria-valuenow={width}
       />
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1.5" role="tablist" aria-label="Session panels">
-        {GIT_PANEL_TAB_LABELS.filter((t) => t.id !== 'sandbox' || hasSandbox).map((t) => (
+      <div className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5" role="tablist" aria-label="Session panels">
+        {GIT_PANEL_TAB_LABELS.filter((t) => (t.id !== 'sandbox' || hasSandbox) && (t.id !== 'background' || owner)).map((t) => (
           <button
             key={t.id}
             type="button"
@@ -107,11 +112,12 @@ export function GitPanel({
             onClick={() => setTab(t.id)}
             title={t.hint}
             className={cn(
-              'rounded px-2 py-1 text-xs font-medium',
+              'shrink-0 rounded px-2 py-1 text-xs font-medium',
               tab === t.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
             )}
           >
             {t.label}
+            {t.id === 'background' && runningJobs > 0 && <span className="ml-1 rounded bg-emerald-500/15 px-1 text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">{runningJobs}</span>}
             {t.id === 'changes' && workbench.diffStat && workbench.diffStat.files > 0 && (
               <span className="ml-1 tabular-nums text-muted-foreground">{workbench.diffStat.files}</span>
             )}
@@ -156,6 +162,11 @@ export function GitPanel({
         {hasSandbox && (mounted.sandbox || tab === 'sandbox') && (
           <div className={cn('h-full', tab !== 'sandbox' && 'hidden')}>
             <SandboxTab workbench={workbench} sandbox={sandbox} />
+          </div>
+        )}
+        {owner && (mounted.background || tab === 'background') && (
+          <div className={cn('h-full', tab !== 'background' && 'hidden')}>
+            <BackgroundTab workbenchId={workbench.id} />
           </div>
         )}
       </div>

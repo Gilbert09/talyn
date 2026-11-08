@@ -3,6 +3,7 @@ import { ArrowUp, Loader2, Square, X } from 'lucide-react';
 import {
   DEFAULT_WORKBENCH_EFFORT,
   fleetModelForAgentSwitch,
+  messageTriggerText,
   WORKBENCH_MOVING_MESSAGE,
   type SendWorkbenchMessageInput,
   type Workbench,
@@ -34,6 +35,8 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
+import { WakeupChips } from './WakeupChips';
+import { WakeLaterPopover } from './WakeLaterPopover';
 
 
 export function Composer({
@@ -296,6 +299,7 @@ export function Composer({
 
   return (
     <div className="border-t bg-background px-3 pb-3 pt-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+      <WakeupChips workbenchId={workbench.id} chatId={chat?.id ?? null} />
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (
@@ -306,10 +310,10 @@ export function Composer({
               <span className="shrink-0 text-[10px] uppercase tracking-wide">{m.origin === 'talyn' ? 'From Talyn' : index === 0 && waitText ? 'Waiting' : 'Queued'}</span>
               {index === 0 && waitText ? (
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{m.text}</span>
+                  <span className="block truncate">{m.trigger ? messageTriggerText(m.trigger) : m.text}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">{waitText}</span>
                 </span>
-              ) : <span className="min-w-0 flex-1 truncate">{m.text}</span>}
+              ) : <span className="min-w-0 flex-1 truncate">{m.trigger ? messageTriggerText(m.trigger) : m.text}</span>}
               {ops.canRemoveQueued && chat && (
                 <button
                   type="button"
@@ -379,6 +383,7 @@ export function Composer({
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <TodoChip todos={todos} />
+          {owner && chat && <WakeLaterPopover workbenchId={workbench.id} chatId={chat.id} />}
           <div className="flex-1" />
           <ContextMeter usage={contextUsage} />
           {running && owner ? (
