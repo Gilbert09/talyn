@@ -263,6 +263,13 @@ describe('menu commands (web key table)', () => {
   });
 
   it.each([
+    ['workbench.previous', 'mod+up'],
+    ['workbench.next', 'mod+down'],
+  ])('%s uses the %s arrow', (id, keys) => {
+    expect(MENU_COMMANDS.find((c) => c.id === id)?.keys).toBe(keys);
+  });
+
+  it.each([
     ['create_pr', 'mod+alt+p'],
     ['fix_checks', 'mod+alt+x'],
     ['merge', 'mod+alt+m'],

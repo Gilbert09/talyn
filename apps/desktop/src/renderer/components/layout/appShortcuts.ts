@@ -123,6 +123,7 @@ function headerAction(id: string, action: WorkbenchAction): Shortcut {
 export function buildAppShortcuts(): Shortcut[] {
   const nav = () => useNavigationStore.getState();
   const wbStore = () => useWorkbenchStore.getState();
+  const canStep = () => orderedLiveWorkbenches().length > 0;
 
   const jumps: Shortcut[] = Array.from({ length: 9 }, (_, i) =>
     fromMenu({
@@ -223,20 +224,43 @@ export function buildAppShortcuts(): Shortcut[] {
       when: () => nav().forwardStack.length > 0,
       run: () => nav().forward(),
     },
+    // ⌘↑ and ⌘↓ move the caret and pick the first or last item in a list, so they keep that meaning outside an empty composer.
     fromMenu({
       id: 'workbench.previous',
       group: 'Sessions',
-      allowInInput: true,
-      when: () => orderedLiveWorkbenches().length > 0,
+      allowInInput: isEmptyComposer,
+      when: () => canStep() && !isInOverlay(document.activeElement),
       run: () => stepWorkbench(-1),
     }),
     fromMenu({
       id: 'workbench.next',
       group: 'Sessions',
-      allowInInput: true,
-      when: () => orderedLiveWorkbenches().length > 0,
+      allowInInput: isEmptyComposer,
+      when: () => canStep() && !isInOverlay(document.activeElement),
       run: () => stepWorkbench(1),
     }),
+    {
+      id: 'workbench.previous.alt',
+      keys: 'mod+alt+up',
+      label: 'Previous Session',
+      group: 'Sessions',
+      hidden: true,
+      alias: true,
+      allowInInput: true,
+      when: canStep,
+      run: () => stepWorkbench(-1),
+    },
+    {
+      id: 'workbench.next.alt',
+      keys: 'mod+alt+down',
+      label: 'Next Session',
+      group: 'Sessions',
+      hidden: true,
+      alias: true,
+      allowInInput: true,
+      when: canStep,
+      run: () => stepWorkbench(1),
+    },
     ...jumps,
     fromMenu({
       id: 'workbench.changes',

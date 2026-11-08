@@ -262,6 +262,17 @@ describe('menu commands', () => {
     expect(menuPresentation(forward, true)).toEqual({ label: 'Forward (⌘→)' });
     expect(menuPresentation(back, false)).toEqual({ label: 'Back (Ctrl+←)' });
   });
+
+  it.each([
+    ['workbench.previous', 'mod+up', true, 'Previous Session (⌘↑)'],
+    ['workbench.previous', 'mod+up', false, 'Previous Session (Ctrl+↑)'],
+    ['workbench.next', 'mod+down', true, 'Next Session (⌘↓)'],
+    ['workbench.next', 'mod+down', false, 'Next Session (Ctrl+↓)'],
+  ])('leaves the %s arrow (%s) to the renderer (mac=%s) → %s', (id, keys, mac, label) => {
+    const command = MENU_COMMANDS.find((c) => c.id === id);
+    expect(command).toMatchObject({ keys, rendererOnly: true });
+    expect(menuPresentation(command!, mac)).toEqual({ label });
+  });
 });
 
 describe('sequences', () => {
