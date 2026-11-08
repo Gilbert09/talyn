@@ -834,6 +834,20 @@
       "when": 1790900000039,
       "tag": "0119_session_background",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1790900000040,
+      "tag": "0120_mobile_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1790900000041,
+      "tag": "0121_mobile_notification_events",
+      "breakpoints": true
     }
   ]
 }

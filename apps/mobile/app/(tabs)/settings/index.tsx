@@ -5,10 +5,11 @@ import { Alert, Button } from 'react-native';
 import { useAuth, useMobileRuntime, useNetwork, useWorkspace } from '../../../src/auth/AuthProvider';
 import { Status } from '../../../src/components/AuthControls';
 import { ShellScreen, ShellText } from '../../../src/components/ShellScreen';
+import { NotificationSettings } from '../../../src/notifications/Settings';
 
 export default function SettingsScreen() {
   const auth = useAuth();
-  const { account, auth: controller } = useMobileRuntime();
+  const { account, auth: controller, notifications, signOut } = useMobileRuntime();
   const workspace = useWorkspace();
   const router = useRouter();
   const offline = useNetwork() === 'offline';
@@ -33,7 +34,8 @@ export default function SettingsScreen() {
     {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
     {offline ? <Status message="You are offline. Account deletion needs an internet connection." /> : null}
     <Button title="Choose workspace" disabled={deleting} onPress={() => router.push('/workspaces')} />
-    <Button title="Sign out" disabled={deleting} onPress={() => { void controller.signOut(); }} />
+    <Button title="Sign out" disabled={deleting} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
+    {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
     <ShellText>Account deletion removes owned workspaces. Backups, billing records, and external provider records can remain.</ShellText>
     {deleting ? <Status message="Deleting your account" loading /> : null}
     {result ? <Status message={result} /> : null}

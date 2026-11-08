@@ -1,4 +1,4 @@
-import { getAppIdentity, readMobileConfig } from '../../app.config';
+import appConfig, { getAppIdentity, readMobileConfig } from '../../app.config';
 
 describe('app identity', () => {
   it.each([
@@ -68,4 +68,23 @@ it.each(['sb_secret_do-not-publish', 'not-a-key', `header.${Buffer.from(JSON.str
 it('accepts a legacy public anon key', () => {
   const key = `header.${Buffer.from(JSON.stringify({ role: 'anon' })).toString('base64url')}.signature`;
   expect(readMobileConfig({ ...publicValues, EXPO_PUBLIC_SUPABASE_KEY: key }, 'production', 'talyn-mobile')?.supabaseKey).toBe(key);
+});
+
+describe('push configuration', () => {
+  const previous = process.env;
+  afterEach(() => { process.env = previous; });
+  const build = () => appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
+  it('rejects a missing production EAS project', () => {
+    process.env = { ...previous, ...publicValues, APP_ENV: 'production' };
+    delete process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+    expect(build).toThrow('Production requires EXPO_PUBLIC_EAS_PROJECT_ID');
+  });
+  it('exports the public project and only alert capabilities', () => {
+    const projectId = '10000000-0000-4000-8000-000000000001';
+    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    const result = build();
+    expect(result.extra?.eas?.projectId).toBe(projectId);
+    expect(result.android?.blockedPermissions).toContain('android.permission.RECEIVE_BOOT_COMPLETED');
+    expect(result.plugins).toContainEqual(['expo-notifications', { mode: 'production', enableBackgroundRemoteNotifications: false }]);
+  });
 });

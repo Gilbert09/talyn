@@ -8,7 +8,7 @@ import { ShellScreen, ShellText } from '../src/components/ShellScreen';
 
 export default function WorkspacesScreen() {
   const state = useWorkspace();
-  const { workspace, auth: controller } = useMobileRuntime();
+  const { workspace, auth: controller, signOut } = useMobileRuntime();
   const user = useAuth().user;
   const offline = useNetwork() === 'offline';
   const router = useRouter();
@@ -23,6 +23,6 @@ export default function WorkspacesScreen() {
         if (workspace.getSnapshot().selected === choice.id) router.replace(consumeIntent() ?? '/sessions');
       }); }} /></View>)}
     <Button title="Account settings" onPress={() => router.push('/settings')} />
-    <Button title="Sign out" onPress={() => { void controller.signOut(); }} />
+    <Button title="Sign out" onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
   </ShellScreen>;
 }
