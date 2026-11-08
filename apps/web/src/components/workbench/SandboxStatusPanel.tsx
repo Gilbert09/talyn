@@ -36,6 +36,7 @@ import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { formatMib, SandboxUsageChart } from './SandboxUsageChart';
 
 /** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
 const POLL_MS = 10_000;
@@ -625,6 +626,28 @@ export function SandboxStatusPanel({
             {status.host && <li>Host: <span className="font-mono">{status.host}</span></li>}
             {status.size && <li>Size: {status.size.label}</li>}
           </ul>
+        </Section>
+      )}
+
+      {(status.resources || status.usage) && (
+        <Section title="Resources">
+          {status.usage && <SandboxUsageChart usage={status.usage} checkedAt={status.checkedAt} />}
+          {status.resources && (
+            <ul className={cn('space-y-0.5 text-xs', status.usage && 'pt-1')} data-testid="sandbox-resources">
+              {status.usage ? null : status.resources.memoryUsedMib !== null ? (
+                <li>
+                  Memory: {formatMib(status.resources.memoryUsedMib)} used
+                  {status.resources.memoryLimitMib !== null && ` of ${formatMib(status.resources.memoryLimitMib)}`}
+                </li>
+              ) : status.resources.memoryLimitMib !== null ? (
+                <li>Memory limit: {formatMib(status.resources.memoryLimitMib)}</li>
+              ) : null}
+              {status.resources.vcpus !== null && (
+                <li>CPU: {status.resources.vcpus} vCPU{status.resources.vcpus === 1 ? '' : 's'} allocated</li>
+              )}
+              {status.resources.diskMib !== null && <li>Disk capacity: {formatMib(status.resources.diskMib)}</li>}
+            </ul>
+          )}
         </Section>
       )}
 

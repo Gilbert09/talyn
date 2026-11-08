@@ -3207,3 +3207,28 @@ export const workbenchWakeups = pgTable(
     sourceJobUq: uniqueIndex('uq_workbench_wakeups_source_job').on(t.sourceJobId).where(sql`${t.sourceJobId} IS NOT NULL`),
   })
 );
+
+/**
+ * Resource samples of a session's box (migration 0120). The usage sweep writes
+ * one row per running session box each minute and deletes rows older than
+ * `SAMPLE_RETENTION_MS`. `cpu_seconds` is the fleet's cumulative VMM CPU time;
+ * the Sandbox panel charts the change between rows. Backend-pool-only.
+ */
+export const workbenchResourceSamples = pgTable(
+  'workbench_resource_samples',
+  {
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    sampledAt: timestamp('sampled_at', { withTimezone: true }).notNull(),
+    sandboxId: text('sandbox_id').notNull(),
+    memUsedMib: integer('mem_used_mib'),
+    memLimitMib: integer('mem_limit_mib'),
+    cpuSeconds: doublePrecision('cpu_seconds'),
+    vcpus: real('vcpus'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workbenchId, t.sampledAt] }),
+    sampledIdx: index('idx_workbench_resource_samples_sampled').on(t.sampledAt),
+  })
+);

@@ -166,6 +166,38 @@ describe('the state of the box', () => {
     expect(s.size).toBeNull();
     expect(s.resources).toEqual({ memoryUsedMib: 512, memoryLimitMib: 4096, vcpus: 2, diskMib: 16384 });
   });
+
+  const stored = (minutesAgo: number, cpuSeconds: number | null, memUsedMib = 1024) => ({
+    workbenchId: 'wb1', sandboxId: 'box', sampledAt: ago(minutesAgo * MIN), memUsedMib, memLimitMib: 4096, cpuSeconds, vcpus: 2,
+  });
+
+  it('charts the stored samples and the live read of an awake box', () => {
+    const s = describeSandboxStatus(input({
+      fleet: fleet({ status: 'busy', memUsedMib: 2048, cpuSeconds: 166, memMib: 4096, milliVcpu: 2000 }),
+      samples: [stored(2, 100), stored(1, 160)],
+    }));
+    expect(s.usage).toMatchObject({ windowMinutes: 60, memoryLimitMib: 4096, cpuReported: true });
+    expect(s.usage?.points.map((p) => [p.memoryUsedMib, p.cpuPercent])).toEqual([[1024, null], [1024, 50], [2048, 5]]);
+  });
+
+  it.each([
+    ['an asleep box adds no live point', { fleet: fleet({ status: 'suspended', memUsedMib: 2048 }), samples: [stored(5, 1)] }, 1],
+    ['a failed fleet read keeps the stored points', { fleet: { ok: false as const, error: 'x' }, samples: [stored(5, 1), stored(4, 2)] }, 2],
+    ['no samples and no figures', { fleet: fleet({ status: 'idle' }), samples: [] }, null],
+    ['samples not read', { fleet: fleet({ status: 'idle' }) }, null],
+  ])('usage: %s', (_label, given, points) => {
+    const s = describeSandboxStatus(input(given));
+    expect(s.usage?.points.length ?? null).toBe(points);
+  });
+
+  it.each([
+    ['a thread', { kind: 'thread' as const }],
+    ['an archived session', { archivedAt: ago(MIN) }],
+    ['a local session', { runtime: 'local' as const }],
+  ])('has no usage for %s', (_label, patch) => {
+    const s = describeSandboxStatus(input({ row: row(patch), fleet: fleet({ status: 'busy', memUsedMib: 1 }), samples: [stored(1, 1)] }));
+    expect(s.usage).toBeNull();
+  });
 });
 
 describe('what runs on the box', () => {

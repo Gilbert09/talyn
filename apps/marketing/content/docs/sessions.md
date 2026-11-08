@@ -31,7 +31,7 @@ The chat is in the middle. The panel on the right has four tabs:
 - **Changes**: the diff of the branch against its base branch.
 - **All files**: every file on the branch.
 - **Pull request**: the pull request's status, checks and reviews, once there is one.
-- **Sandbox**: what the sandbox is doing, and whether your work is saved.
+- **Sandbox**: what the sandbox is doing, its CPU and memory use over the last hour, and whether your work is saved.
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
 
