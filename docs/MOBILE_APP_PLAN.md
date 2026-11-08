@@ -180,6 +180,25 @@ Raise a floor only through an explicit product decision.
 Support current phone sizes, tablets, and resizable layouts from the first public release.
 Do not promise specialist desktop, TV, watch, or automotive support.
 
+### Resolved shell implementation facts
+
+The first shell uses Expo 58.0.23, React Native 0.88.1, and React 19.3.0.
+The mobile workspace uses TypeScript 6.0.3, as required by the installed Expo SDK.
+Root overrides align React, React DOM, and the test renderer to 19.3.0 for one dependency graph.
+This updates the installed React version for existing apps within their declared dependency ranges.
+The root TypeScript version remains separate from the mobile version.
+
+`apps/mobile` uses native tabs from `expo-router/native-tabs` and native stacks for detail routes.
+Expo generates typed route declarations before the mobile typecheck.
+Metro uses Expo defaults. One root npm lockfile covers the mobile workspace.
+The shell imports an inert shared helper and client types. It does not connect to a backend.
+The client adapter PR can land independently.
+
+The app configuration uses the candidate identities from section 11.1 with explicit environment overrides.
+Identifier ownership and availability remain unverified.
+EAS profiles define build boundaries. No EAS image, physical device result, signed archive, or store upload is established here.
+See [the mobile README](../apps/mobile/README.md) for setup and device gaps.
+
 ### 3.1 Managed configuration and native escape hatch
 
 Use CNG as the default meaning of the managed Expo workflow.

@@ -7,6 +7,7 @@
     "apps/desktop",
     "apps/web",
     "apps/admin",
+    "apps/mobile",
     "packages/*"
   ],
   "scripts": {
@@ -23,12 +24,23 @@
     "package": "npm run package -w @talyn/desktop",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run build -w @talyn/shared && npm run build -w @talyn/client && tsc --noEmit -p packages/backend/tsconfig.json && tsc --noEmit -p packages/cli/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/admin/tsconfig.json",
+    "typecheck": "npm run build -w @talyn/shared && npm run build -w @talyn/client && tsc --noEmit -p packages/backend/tsconfig.json && tsc --noEmit -p packages/cli/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/admin/tsconfig.json && npm run mobile:typecheck",
     "prepare": "husky",
     "build:web": "npm run build -w @talyn/web",
     "dev:web": "npm run dev -w @talyn/web",
     "build:admin": "npm run build -w @talyn/admin",
-    "dev:admin": "npm run dev -w @talyn/admin"
+    "dev:admin": "npm run dev -w @talyn/admin",
+    "mobile:start": "npm run start -w @talyn/mobile",
+    "mobile:android": "npm run android -w @talyn/mobile",
+    "mobile:ios": "npm run ios -w @talyn/mobile",
+    "mobile:lint": "npm run lint -w @talyn/mobile",
+    "mobile:typecheck": "npm run typecheck -w @talyn/mobile",
+    "mobile:test": "npm run test -w @talyn/mobile",
+    "mobile:expo:check": "npm run expo:check -w @talyn/mobile",
+    "mobile:doctor": "npm run doctor -w @talyn/mobile",
+    "mobile:export:smoke": "npm run export:smoke -w @talyn/mobile",
+    "mobile:build:packages": "npm run build -w @talyn/shared && npm run build -w @talyn/client",
+    "mobile:check:graph": "npm run check:graph -w @talyn/mobile"
   },
   "lint-staged": {
     "{apps,packages}/**/*.{js,jsx,ts,tsx}": [
@@ -39,13 +51,17 @@
     "concurrently": "^9.1.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
+    "react-test-renderer": "19.3.0",
     "supabase": "^2.105.0",
     "typescript": "^5.8.2"
   },
   "overrides": {
     "express@4": {
       "qs": "^6.16.0"
-    }
+    },
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-test-renderer": "19.3.0"
   },
   "engines": {
     "node": ">=18.x"
