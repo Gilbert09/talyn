@@ -210,17 +210,16 @@ describe('repository shortcut', () => {
 });
 
 describe('NewWorkbenchPage', () => {
-  it('shows the submitted prompt while a new session starts', async () => {
+  it('keeps the composer visible until the new session opens', async () => {
     let finishCreate: (workbench: Workbench) => void = () => undefined;
     mockCreate.mockReturnValue(new Promise<Workbench>((resolve) => { finishCreate = resolve; }));
     await renderPage();
     fireEvent.change(textarea(), { target: { value: 'Fix the slow search' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
 
-    expect(screen.getByRole('heading', { name: 'Starting your session…' })).toBeInTheDocument();
-    expect(screen.getByText('Fix the slow search')).toBeInTheDocument();
-    expect(screen.getByText('Creating the session in acme/api…')).toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
+    expect(textarea()).toHaveValue('Fix the slow search');
+    expect(textarea()).toBeDisabled();
+    expect(screen.queryByRole('heading', { name: 'Starting your session…' })).not.toBeInTheDocument();
 
     await act(async () => finishCreate(wb('fast-search')));
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'fast-search' });
