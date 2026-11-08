@@ -698,6 +698,7 @@ export function WorkbenchHeader({
           ) : undefined
         }
         confirmLabel="Merge"
+        initialFocus="confirm"
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
