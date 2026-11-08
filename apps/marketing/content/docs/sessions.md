@@ -26,7 +26,9 @@ Your defaults for new sessions are in **Settings > Sessions**: the agent, the mo
 
 ## The session screen
 
-The chat is in the middle. The panel on the right has four tabs:
+The chat is in the middle. Each message you send shows when you sent it, for example "5 minutes ago". Each finished agent reply shows when it ended. Hover over a time to see the full date and time. The session header shows **Last message** with the time of the newest message in the session.
+
+The panel on the right has four tabs:
 
 - **Changes**: the diff of the branch against its base branch.
 - **All files**: every file on the branch.

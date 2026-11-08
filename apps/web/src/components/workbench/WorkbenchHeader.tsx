@@ -59,6 +59,8 @@ import { LinkPullRequestDialog } from './LinkPullRequestDialog';
 import { SandboxStatusChip } from './SandboxStatusPanel';
 import { SessionPreviewLinks } from './SessionPreviewLinks';
 import { timeAgo } from './new/RecentWorkbenches';
+import { RelativeTime } from '../RelativeTime';
+import { newestEventAt } from '../../lib/relativeTime';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
@@ -170,6 +172,15 @@ export function WorkbenchHeader({
   const openPrTab = () => setSideTab('pr');
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
+  // The session's newest stored event across the chats this client holds.
+  const lastMessageAt = useWorkbenchStore((s) => {
+    let newest: string | null = null;
+    for (const id of [chat?.id, ...(workbench.chats ?? []).map((c) => c.id)]) {
+      const at = id ? newestEventAt(s.chatEvents[id]?.events) : null;
+      if (at && (!newest || at > newest)) newest = at;
+    }
+    return newest;
+  });
   const { setMergeQueue } = useGitHubActions();
   const [queueBusy, setQueueBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -616,6 +627,13 @@ export function WorkbenchHeader({
           )}
         </div>
         <div className="ml-auto flex min-w-0 flex-[0_100_auto] items-center gap-1.5">
+          {lastMessageAt && (
+            <RelativeTime
+              iso={lastMessageAt}
+              prefix="Last message"
+              className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"
+            />
+          )}
           <div
             className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&>*]:max-w-32 [&>*]:truncate"
             data-attr="workbench-header-chips"

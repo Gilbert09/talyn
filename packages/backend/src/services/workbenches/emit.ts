@@ -58,7 +58,10 @@ export function emitWorkbenchChat(workspaceId: string, chat: WorkbenchChat): voi
 
 export function emitWorkbenchEvents(workspaceId: string, chatId: string, events: WorkbenchEvent[]): void {
   if (events.length === 0) return;
-  send(workspaceId, 'workbench:event', { chatId, events });
+  // Some callers build events without a database read. Their rows were written just now.
+  const now = new Date().toISOString();
+  const stamped = events.some((e) => !e.createdAt) ? events.map((e) => (e.createdAt ? e : { ...e, createdAt: now })) : events;
+  send(workspaceId, 'workbench:event', { chatId, events: stamped });
 }
 
 export function emitWorkbenchScript(workspaceId: string, frame: WorkbenchScriptFrame): void {

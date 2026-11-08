@@ -158,6 +158,21 @@ describe('transcript turns', () => {
     expect(turns[0].userText).toBeNull();
     expect(turns[0].events).toHaveLength(2);
   });
+
+  it.each([
+    ['every event has a time', ['10:00', '10:01', '10:02'], '10:00', '10:02'],
+    ['the newest agent event has no time', ['10:00', '10:01', null], '10:00', '10:01'],
+    ['no event has a time', [null, null, null], null, null],
+    ['only the user message has a time', ['10:00', null, null], '10:00', null],
+  ])('keeps when a turn started and ended: %s', (_n, times, userAt, lastAt) => {
+    const iso = (t: string | null) => (t ? `2026-11-08T${t}:00.000Z` : undefined);
+    const events = [user(1, 1, 'hi'), we(2, 1, {}), we(3, 1, {})].map((e, i) =>
+      times[i] ? { ...e, createdAt: iso(times[i]) } : e,
+    );
+    const [turn] = splitTurns(events);
+    expect(turn.userAt).toBe(iso(userAt) ?? null);
+    expect(turn.lastAt).toBe(iso(lastAt) ?? null);
+  });
 });
 
 describe('chatTotals', () => {

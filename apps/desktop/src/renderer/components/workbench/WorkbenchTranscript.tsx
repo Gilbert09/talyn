@@ -8,6 +8,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
+import { RelativeTime } from '../RelativeTime';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
@@ -123,6 +124,7 @@ export function WorkbenchTranscript({
                 chatId={chat.id}
                 chat={chat}
                 turn={turn}
+                live={last && running}
                 ops={ops}
                 retryResult={canRetry && !loading && !error && (chat.status === 'idle' || chat.status === 'error') && !chat.queuedMessages?.length && result?.kind === 'result' && result.isError && !turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled')
                   ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.' }
@@ -353,6 +355,7 @@ const TurnView = React.memo(function TurnView({
   chatId,
   chat,
   turn,
+  live,
   ops,
   retryResult,
   canRevert,
@@ -361,6 +364,8 @@ const TurnView = React.memo(function TurnView({
   chatId: string;
   chat: WorkbenchChat;
   turn: TranscriptTurn;
+  /** The turn is still running, so its last event time keeps moving. */
+  live: boolean;
   ops: WorkbenchOps;
   retryResult?: { key: string; reason: string };
   canRevert: boolean;
@@ -370,7 +375,7 @@ const TurnView = React.memo(function TurnView({
   return (
     <div className="space-y-3">
       {turn.userText !== null && (
-        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} />
+        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} />
       )}
       {turn.events.length > 0 && (
         <AgentBlocks
@@ -381,6 +386,9 @@ const TurnView = React.memo(function TurnView({
         />
       )}
       {plan}
+      {!live && turn.events.length > 0 && turn.lastAt && (
+        <RelativeTime iso={turn.lastAt} className="block text-[11px] text-muted-foreground" />
+      )}
     </div>
   );
 });
@@ -425,6 +433,7 @@ function UserMessage({
   attachments,
   ops,
   canRevert,
+  at = null,
   sending = false,
   footer = null,
 }: {
@@ -434,6 +443,8 @@ function UserMessage({
   attachments: TranscriptTurn['attachments'];
   ops: WorkbenchOps;
   canRevert: boolean;
+  /** When the message was stored. */
+  at?: string | null;
   sending?: boolean;
   footer?: React.ReactNode;
 }) {
@@ -466,38 +477,41 @@ function UserMessage({
           </div>
         )}
         {footer}
-        {canRevert && (
-          <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">
-            {confirming ? (
-              <>
-                <span>Restore the files to before this message? Later changes are lost.</span>
+        {(canRevert || at) && (
+          <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
+            {canRevert && (
+              confirming ? (
+                <>
+                  <span>Restore the files to before this message? Later changes are lost.</span>
+                  <button
+                    type="button"
+                    onClick={() => void restore()}
+                    disabled={busy}
+                    className="rounded px-1.5 text-warning hover:bg-accent disabled:opacity-50"
+                  >
+                    {busy ? <Loader2 className="inline h-3 w-3 animate-spin" /> : 'Restore'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(false)}
+                    disabled={busy}
+                    className="rounded px-1.5 hover:bg-accent"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => void restore()}
-                  disabled={busy}
-                  className="rounded px-1.5 text-warning hover:bg-accent disabled:opacity-50"
+                  onClick={() => setConfirming(true)}
+                  className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                  title="Restore the files to how they were before this message"
                 >
-                  {busy ? <Loader2 className="inline h-3 w-3 animate-spin" /> : 'Restore'}
+                  <History className="h-3 w-3" /> Revert to here
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  disabled={busy}
-                  className="rounded px-1.5 hover:bg-accent"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirming(true)}
-                className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
-                title="Restore the files to how they were before this message"
-              >
-                <History className="h-3 w-3" /> Revert to here
-              </button>
+              )
             )}
+            {at && !confirming && <RelativeTime iso={at} />}
           </div>
         )}
       </div>
