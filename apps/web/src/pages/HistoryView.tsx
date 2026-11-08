@@ -53,7 +53,8 @@ export function filterAndGroupArchived(all: Workbench[], query: string): Array<{
 }
 
 export function HistoryView() {
-  const all = useWorkspaceWorkbenches();
+  // An archived space session is listed here: the space feed leaves archived sessions out.
+  const all = useWorkspaceWorkbenches({ withSpaceSessions: true });
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
   const listError = useWorkbenchStore((s) => s.listError);
   const [query, setQuery] = useState('');

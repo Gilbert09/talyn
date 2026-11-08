@@ -12,7 +12,7 @@ import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
-import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
+import { contextEntries, inPersonalList, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 
@@ -28,7 +28,11 @@ export function orderedContexts() {
 
 export function orderedLiveWorkbenches(): Workbench[] {
   const { workbenches, extraWorkbenchIds, chats, unread, unseen } = useWorkbenchStore.getState();
-  const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
+  const offered = spacesOffered(useWorkspaceStore.getState().features);
+  const { teams } = useSpacesStore.getState();
+  const all = Object.values(workbenches).filter(
+    (w) => !isArchived(w) && !extraWorkbenchIds[w.id] && inPersonalList(w, teams, offered),
+  );
   const rowById = new Map(usePullRequestStore.getState().rows.map((row) => [row.id, row]));
   const backgrounds = useSessionBackgroundStore.getState().byWorkbench;
   const activeIds = new Set(all.filter((workbench) => {
