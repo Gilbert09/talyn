@@ -20,8 +20,10 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
   },
 }));
 
-const { generateSandboxTitle, startTitleGeneration, resetTitleAttempts, MAX_TITLE_FAILURES } = await import('../services/workbenches/title.js');
-const { getWorkbench, insertWorkbench, setGeneratedTitle, updateWorkbench } = await import(
+const { generateSandboxTitle, startTitleFromQueue, startTitleGeneration, resetTitleAttempts, MAX_TITLE_FAILURES } = await import(
+  '../services/workbenches/title.js'
+);
+const { getWorkbench, insertChat, insertWorkbench, setGeneratedTitle, updateWorkbench } = await import(
   '../services/workbenches/store.js'
 );
 
@@ -261,6 +263,59 @@ describe('generateSandboxTitle', () => {
       release({ exitCode: 0, stdout: 'Slow Title', stderr: '', stdoutBytes: Buffer.from('Slow Title') });
       await first;
       expect((await row()).title).toBe('Slow Title');
+    });
+  });
+
+  describe('startTitleFromQueue', () => {
+    beforeEach(() => resetTitleAttempts());
+
+    const queued = (text: string) => ({ text, queuedAt: new Date().toISOString() });
+    const chat = (id: string, texts: string[], extra: { closedAt?: Date } = {}) =>
+      insertChat({ id, workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'claude', queuedMessages: texts.map(queued), ...extra });
+
+    it('titles the session from the first queued message, before any turn', async () => {
+      await chat('chat-1', ['explain how the merge queue works']);
+      const run = vi.fn(reply('Explain Merge Queue'));
+      await startTitleFromQueue(await row(), { run });
+      expect((await row()).title).toBe('Explain Merge Queue');
+      expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('explain how the merge queue works');
+    });
+
+    it.each([
+      ['no chat', [] as Array<{ texts: string[]; closed?: boolean }>],
+      ['an empty queue', [{ texts: [] }]],
+      ['only blank messages', [{ texts: ['   ', ''] }]],
+      ['a message only in a closed chat', [{ texts: ['fix it'], closed: true }]],
+    ])('makes no call with %s', async (_label, chats) => {
+      for (const [i, c] of chats.entries()) await chat(`chat-${i}`, c.texts, c.closed ? { closedAt: new Date() } : {});
+      const run = vi.fn(reply('Generated'));
+      await startTitleFromQueue(await row(), { run });
+      expect(run).not.toHaveBeenCalled();
+      expect((await row()).title).toBeNull();
+    });
+
+    it('skips a blank message and uses the next one', async () => {
+      await chat('chat-1', ['  ', 'add dark mode']);
+      const run = vi.fn(reply('Add Dark Mode'));
+      await startTitleFromQueue(await row(), { run });
+      expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('add dark mode');
+      expect((await row()).title).toBe('Add Dark Mode');
+    });
+
+    it('never replaces a title a person set', async () => {
+      await chat('chat-1', ['fix it']);
+      await updateWorkbench('wb-1', { title: 'My own name' });
+      const run = vi.fn(reply('Generated'));
+      await startTitleFromQueue(await row(), { run });
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('lets the first turn try again after an early failure', async () => {
+      await chat('chat-1', ['fix it']);
+      await startTitleFromQueue(await row(), { run: reply('', 1) });
+      expect((await row()).title).toBeNull();
+      await startTitleGeneration(await row(), 'fix it', { run: reply('Fix It') });
+      expect((await row()).title).toBe('Fix It');
     });
   });
 });

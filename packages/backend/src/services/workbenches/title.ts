@@ -3,7 +3,7 @@ import { askSessionAgent, type CheapAgentOptions } from './cheapAgent.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
 import { recordWorkbenchEvent } from './sandboxRuntime.js';
-import { setGeneratedTitle, type WorkbenchRow } from './store.js';
+import { listChats, setGeneratedTitle, type WorkbenchRow } from './store.js';
 
 /**
  * A display title for a sandbox session, from its first message.
@@ -38,6 +38,23 @@ export function startTitleGeneration(row: WorkbenchRow, message: string, opts: C
       console.warn(`[workbench] title for ${row.id} failed:`, err);
     })
     .finally(() => inFlight.delete(row.id));
+}
+
+/**
+ * Start the title as soon as a new box exists, from the first message that
+ * waits in a chat's queue. The first turn waits for the clone and the setup
+ * script, which can take minutes; the title needs neither. When no message
+ * waits yet, the first turn starts the title as before.
+ */
+export async function startTitleFromQueue(row: WorkbenchRow, opts: CheapAgentOptions = {}): Promise<void> {
+  if (row.title || row.runtime !== 'sandbox') return;
+  const chats = await listChats(row.id);
+  const text = chats
+    .filter((chat) => !chat.closedAt)
+    .flatMap((chat) => chat.queuedMessages ?? [])
+    .map((message) => message.text.trim())
+    .find(Boolean);
+  if (text) await startTitleGeneration(row, text, opts);
 }
 
 /** Test hook: forget the failure counts. */

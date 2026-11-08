@@ -83,12 +83,6 @@ export interface CreateWorkbenchServiceInput extends CreateWorkbenchInput {
   /** Where the session came from, when not the app. Stored once on the row. */
   source?: WorkbenchSource | null;
   /**
-   * The text the session's name and branch are made from, when it differs
-   * from the prompt. A Slack prompt starts with Talyn's own framing, which
-   * would name every branch the same.
-   */
-  namingText?: string;
-  /**
    * The space the session starts in. Set only by the space route, after it
    * checked that the actor is a member of the space's team.
    */

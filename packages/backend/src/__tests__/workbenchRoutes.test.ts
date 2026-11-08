@@ -330,6 +330,20 @@ describe('workbench routes', () => {
     });
 
     it.each([
+      ['a session', {}],
+      ['a thread', { kind: 'thread', repositoryId: undefined }],
+    ])('names %s from namingText when the first message goes separately', async (_label, extra) => {
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude',
+        namingText: 'Fix the login redirect loop', ...extra,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('fix-login-redirect');
+      if (!('kind' in extra)) expect(res.body.data.branch).toBe('fix-login-redirect-loop');
+      expect(res.body.data.chats[0]).toMatchObject({ title: 'Fix the login redirect loop', queuedMessages: [] });
+    });
+
+    it.each([
       ['claude', 'anthropic'],
       ['codex', 'openai'],
     ] as const)(

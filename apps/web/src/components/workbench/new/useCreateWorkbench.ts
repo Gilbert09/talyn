@@ -92,6 +92,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
       agent: spec.agent,
       model: spec.model,
       prompt: spec.attachments?.length ? undefined : prompt || undefined,
+      namingText: namingTextFor(spec, prompt),
       internetAccess: spec.internetAccess,
     });
   }
@@ -109,6 +110,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     branch,
     fromPullRequestId: spec.fromPullRequestId,
     prompt: spec.attachments?.length ? undefined : prompt || undefined,
+    namingText: namingTextFor(spec, prompt),
     internetAccess: spec.internetAccess,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
@@ -122,4 +124,12 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
       .catch((error) => captureWorkbenchFailure('update_first_chat', error, wb.id));
   }
   return wb;
+}
+
+/**
+ * A first message with attachments is sent after the create, so the create
+ * has no prompt. The text still names the session, its branch and its chat.
+ */
+function namingTextFor(spec: NewWorkbenchSpec, prompt: string): string | undefined {
+  return spec.attachments?.length && prompt ? prompt : undefined;
 }
