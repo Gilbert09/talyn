@@ -23,6 +23,24 @@ export interface PrivateConnector {
   loginExpiresAt?: string;
 }
 
+/** One device on the connected tailnet, as the connector sees it. */
+export interface PrivatePeer {
+  /** Short host name. */
+  name: string;
+  /** MagicDNS name without the trailing dot. Empty when the tailnet has no MagicDNS. */
+  dnsName: string;
+  /** Tailnet IP addresses, IPv4 first. */
+  addresses: string[];
+  os: string;
+  online: boolean;
+  /** Approved subnet routes that the peer advertises, without exit-node routes. */
+  subnetRoutes: string[];
+}
+
+export interface PrivatePeersResponse {
+  peers: PrivatePeer[];
+}
+
 export interface ReplacePrivateRoutesInput {
   routes: PrivateRoute[];
 }

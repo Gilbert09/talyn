@@ -19,7 +19,9 @@ vi.mock('../services/selfHosted/credentials.js', async (importOriginal) => ({
 import { FleetClient, FleetHttpError } from '../services/selfHosted/client.js';
 import {
   composePrivateRoutesPolicy,
+  listPrivatePeers,
   mapPrivateRoutesError,
+  normalizePrivatePeers,
   sandboxPolicyForWorkspace,
   validatePrivateRoutes,
 } from '../services/selfHosted/privateRoutes.js';
@@ -195,5 +197,70 @@ describe('private routes', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
     await expect(new FleetClient('https://yas.test', 'gateway-token').deletePrivateConnector('workspace-1'))
       .resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['a non-array value', 'nope', []],
+    ['a missing value', undefined, []],
+    ['a null entry', [null], []],
+    ['an array entry', [[]], []],
+    ['a peer with no name, DNS name, or address', [{ os: 'linux' }], []],
+    ['a peer with a name but no address', [{ name: 'lonely' }], []],
+    [
+      'a complete peer',
+      [{ name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: ['10.0.0.0/24'] }],
+      [{ name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: ['10.0.0.0/24'] }],
+    ],
+    [
+      'a trailing DNS dot and missing optional fields',
+      [{ name: 'db-1', dnsName: 'db-1.tail.ts.net.' }],
+      [{ name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: [], os: '', online: false, subnetRoutes: [] }],
+    ],
+    [
+      'a missing name taken from the DNS name',
+      [{ dnsName: 'api.tail.ts.net', addresses: ['100.64.0.6'] }],
+      [{ name: 'api', dnsName: 'api.tail.ts.net', addresses: ['100.64.0.6'], os: '', online: false, subnetRoutes: [] }],
+    ],
+    [
+      'a missing name taken from the first address',
+      [{ addresses: ['100.64.0.7', 7, ''] }],
+      [{ name: '100.64.0.7', dnsName: '', addresses: ['100.64.0.7'], os: '', online: false, subnetRoutes: [] }],
+    ],
+    [
+      'online values that are not true',
+      [{ name: 'x', addresses: ['100.64.0.8'], online: 'yes', subnetRoutes: 'nope' }],
+      [{ name: 'x', dnsName: '', addresses: ['100.64.0.8'], os: '', online: false, subnetRoutes: [] }],
+    ],
+  ])('normalizes peers with %s', (_label, input: unknown, expected) => {
+    expect(normalizePrivatePeers(input)).toEqual(expected);
+  });
+
+  it('caps the peer list', () => {
+    const many = Array.from({ length: 1_500 }, (_, index) => ({ name: `p${index}`, addresses: [`100.64.0.${index % 250}`] }));
+    expect(normalizePrivatePeers(many)).toHaveLength(1_000);
+  });
+
+  it('reads peers from YAS', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      peers: [{ name: 'db-1', dnsName: 'db-1.tail.ts.net.', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: [] }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await listPrivatePeers('workspace-1')).toEqual([
+      { name: 'db-1', dnsName: 'db-1.tail.ts.net', addresses: ['100.64.0.5'], os: 'linux', online: true, subnetRoutes: [] },
+    ]);
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0]))
+      .toBe('https://yas.test/v1/workspaces/workspace-1/private-connector/peers');
+  });
+
+  it.each([
+    [409, 'connector_not_connected', 'The private connector is not connected.'],
+    [409, 'conflict', 'The private connector cannot make that change in its current state.'],
+    [404, 'connector_not_found', 'This workspace has no private connector.'],
+  ])('maps a YAS %s %s error for peers', async (status, code, message) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: code, message: 'internal detail' }), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })));
+    await expect(listPrivatePeers('workspace-1')).rejects.toMatchObject({ status, code, message });
   });
 });

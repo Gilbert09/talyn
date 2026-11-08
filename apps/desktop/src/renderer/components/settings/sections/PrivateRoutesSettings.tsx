@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import {
   privateRoutesOffered,
   type PrivateConnector,
   type PrivateConnectorStatus,
+  type PrivatePeer,
   type PrivateRoute,
 } from '@talyn/shared';
 import { ApiError, api } from '../../../lib/api';
@@ -56,6 +57,11 @@ function routeProblem(host: string, port: string): string | null {
   return null;
 }
 
+/** The values a user can copy into the host field, best first. */
+function peerHosts(peer: PrivatePeer): string[] {
+  return [...new Set([peer.dnsName, ...peer.addresses].filter(Boolean))];
+}
+
 export function PrivateRoutesSettings() {
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
   const features = useWorkspaceStore((state) => state.features);
@@ -67,6 +73,12 @@ export function PrivateRoutesSettings() {
   const [error, setError] = useState<string | null>(null);
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
+  const [peers, setPeers] = useState<PrivatePeer[] | null>(null);
+  const [peersLoading, setPeersLoading] = useState(false);
+  const [peersError, setPeersError] = useState<string | null>(null);
+  const portInput = useRef<HTMLInputElement>(null);
+  const peersRequest = useRef(0);
+  const connected = connector?.status === 'connected';
 
   const readConnector = useCallback(async (showLoading = false) => {
     if (!workspaceId || !offered) return;
@@ -100,6 +112,32 @@ export function PrivateRoutesSettings() {
     }
     void readConnector(true).catch(() => undefined);
   }, [offered, readConnector, workspaceId]);
+
+  const readPeers = useCallback(async () => {
+    if (!workspaceId || !offered) return;
+    // A late answer for an earlier workspace or connector must not replace newer state.
+    const request = ++peersRequest.current;
+    setPeersLoading(true);
+    try {
+      const result = await api.workspaces.privateConnector.peers(workspaceId);
+      if (request !== peersRequest.current) return;
+      setPeers(result.peers);
+      setPeersError(null);
+    } catch (requestError) {
+      if (request !== peersRequest.current) return;
+      setPeersError(messageFor(requestError));
+    } finally {
+      if (request === peersRequest.current) setPeersLoading(false);
+    }
+  }, [offered, workspaceId]);
+
+  useEffect(() => {
+    peersRequest.current += 1;
+    setPeers(null);
+    setPeersError(null);
+    setPeersLoading(false);
+    if (connected) void readPeers();
+  }, [connected, connector?.id, readPeers]);
 
   useEffect(() => {
     if (!polling || !connector?.status || !POLLING_STATES.has(connector.status) || error) return;
@@ -206,7 +244,15 @@ export function PrivateRoutesSettings() {
             </Button>
           ) : null}
           {!loading && connector ? (
-            <Button size="sm" variant="outline" onClick={() => void readConnector().catch(() => undefined)} disabled={busy}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void readConnector().catch(() => undefined);
+                if (connected) void readPeers();
+              }}
+              disabled={busy}
+            >
               <RefreshCw className="mr-2 h-4 w-4" />
               Refresh
             </Button>
@@ -254,13 +300,80 @@ export function PrivateRoutesSettings() {
           <div className="space-y-2 px-3 py-3">
             <div className="flex gap-2">
               <Input aria-label="Hostname or IP" placeholder="db.corp or 10.0.0.8" value={host} onChange={(event) => setHost(event.target.value)} />
-              <Input aria-label="TCP port" className="w-28" inputMode="numeric" placeholder="5432" value={port} onChange={(event) => setPort(event.target.value)} />
+              <Input ref={portInput} aria-label="TCP port" className="w-28" inputMode="numeric" placeholder="5432" value={port} onChange={(event) => setPort(event.target.value)} />
               <Button size="sm" className="h-10" disabled={busy} onClick={() => void addRoute()}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add
               </Button>
             </div>
           </div>
+        </SettingsSection>
+      ) : null}
+
+      {connected ? (
+        <SettingsSection
+          title="Tailnet devices"
+          description="Devices that the connector can see. Select an address to put it in the hostname field."
+          actions={(
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Refresh tailnet devices"
+              disabled={peersLoading}
+              onClick={() => void readPeers()}
+            >
+              <RefreshCw className={`h-4 w-4${peersLoading ? ' animate-spin' : ''}`} />
+            </Button>
+          )}
+        >
+          {peers === null && peersLoading ? (
+            <SettingRow label="Loading devices" description="Talyn is reading the tailnet." />
+          ) : null}
+          {peersError ? (
+            <SettingRow label="Devices unavailable" description={peersError} />
+          ) : null}
+          {peers?.length === 0 && !peersError ? (
+            <SettingRow label="No devices" description="The connector cannot see other devices on this tailnet." />
+          ) : null}
+          {peers?.map((peer) => (
+            <SettingRow
+              key={`${peer.name}|${peer.dnsName}|${peer.addresses.join(',')}`}
+              label={(
+                <span className="flex items-center gap-2">
+                  <span
+                    aria-label={peer.online ? 'Online' : 'Offline'}
+                    className={`h-2 w-2 shrink-0 rounded-full ${peer.online ? 'bg-success' : 'bg-muted-foreground/40'}`}
+                  />
+                  <span className="font-medium">{peer.name}</span>
+                  {peer.os ? <span className="text-xs text-muted-foreground">{peer.os}</span> : null}
+                </span>
+              )}
+              description={(
+                <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {peerHosts(peer).map((address) => (
+                    <button
+                      key={address}
+                      type="button"
+                      title={`Use ${address} as the hostname`}
+                      className="rounded border border-border px-1.5 py-0.5 font-mono text-[11px] text-foreground hover:bg-muted"
+                      onClick={() => {
+                        setHost(address);
+                        setError(null);
+                        portInput.current?.focus();
+                      }}
+                    >
+                      {address}
+                    </button>
+                  ))}
+                  {peer.subnetRoutes.length > 0 ? (
+                    <span className="font-mono text-[11px]">
+                      Subnets: {peer.subnetRoutes.join(', ')}
+                    </span>
+                  ) : null}
+                </span>
+              )}
+            />
+          ))}
         </SettingsSection>
       ) : null}
 
