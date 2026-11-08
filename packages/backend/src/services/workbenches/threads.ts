@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type {
   ContinueWorkbenchAsThreadInput,
   ThreadSessionAction,
@@ -7,10 +7,11 @@ import type {
   WorkbenchAgent,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { pullRequests as prTable } from '../../db/schema.js';
+import { pullRequests as prTable, workbenches } from '../../db/schema.js';
 import { createWorkbench } from './create.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
+import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
 import type { ReadinessUser } from './readiness.js';
 import { appendEvents, getWorkbench, isThread, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
 import { sendMessage } from './turns.js';
@@ -18,17 +19,18 @@ import { sendMessage } from './turns.js';
 /**
  * Threads: a workbench with `kind = 'thread'` has no repository and starts
  * sessions on repositories. A session in a thread has `threadId` set. When
- * such a session starts, finishes a turn, opens a pull request or needs an
- * answer, Talyn writes a `talyn_thread` event in the thread's transcript. For
- * every change but a start, Talyn also queues a short message in the thread
- * chat, so the thread's agent takes a turn and reads what changed.
+ * such a session starts, finishes a turn, opens a pull request, has its pull
+ * request merged or needs an answer, Talyn writes a `talyn_thread` event in
+ * the thread's transcript. For every change but a start, Talyn also queues a
+ * short message in the thread chat, so the thread's agent takes a turn and
+ * reads what changed.
  *
  * Only a session's own turns call {@link notifyThread}: a thread has no
  * `threadId`, so a thread's turn (Talyn's message included) never notifies.
  */
 
 /** Changes that give the thread's agent a turn. A start is only a card: the thread started it. */
-const WAKES: ReadonlySet<ThreadSessionAction> = new Set(['session_finished', 'pr_opened', 'needs_input']);
+const WAKES: ReadonlySet<ThreadSessionAction> = new Set(['session_finished', 'pr_opened', 'pr_merged', 'needs_input']);
 
 /** The thread chat Talyn writes to: the running one, else the newest open one. */
 function activeChat(chats: ChatRow[]): ChatRow | null {
@@ -74,6 +76,8 @@ export function threadWakeText(event: ThreadSessionEvent): string {
   const what =
     event.action === 'pr_opened'
       ? `Session ${who} opened a pull request${event.prUrl ? `: ${event.prUrl}` : ''}.`
+      : event.action === 'pr_merged'
+        ? `The pull request of session ${who} merged${event.prUrl ? `: ${event.prUrl}` : ''}.`
       : event.action === 'needs_input'
         ? `Session ${who} is waiting for an answer.`
         : event.status === 'error'
@@ -143,6 +147,39 @@ export async function notifyThreadOfLinkedPr(child: WorkbenchRow): Promise<void>
   // A running turn ends in `session_finished`, which wakes the thread and names the pull request.
   const running = (await listChats(child.id).catch(() => [])).some((c) => c.status === 'running');
   await notifyThread(child, 'pr_opened', { wake: !running });
+}
+
+/**
+ * A pull request merged: tell the thread of each session that owns it. Call it
+ * after the row is `merged`, so the wake sees the new state as progress. The
+ * `threadToldOfMerge` mark makes sure that one merge wakes a thread one time,
+ * also when the webhook and the poll sweep both see it.
+ */
+export async function notifyThreadsOfMergedPr(pullRequestId: string): Promise<void> {
+  try {
+    const db = getPoolDbClient();
+    const children = await db.select({ id: workbenches.id }).from(workbenches)
+      .innerJoin(prTable, eq(prTable.id, workbenches.pullRequestId))
+      .where(and(
+        eq(workbenches.pullRequestId, pullRequestId), isNotNull(workbenches.threadId),
+        eq(prTable.state, 'merged'), eligiblePr(), linkedBeforeMerge(),
+        sql`NOT (COALESCE(${workbenches.settings} -> 'threadToldOfMerge', '[]'::jsonb) ? ${pullRequestId})`,
+      ));
+    for (const { id } of children) {
+      const [marked] = await db.update(workbenches).set({
+        settings: sql`COALESCE(${workbenches.settings}, '{}'::jsonb) || jsonb_build_object('threadToldOfMerge',
+          COALESCE(${workbenches.settings} -> 'threadToldOfMerge', '[]'::jsonb) || jsonb_build_array(${pullRequestId}::text))`,
+      }).where(and(
+        eq(workbenches.id, id), eq(workbenches.pullRequestId, pullRequestId),
+        sql`NOT (COALESCE(${workbenches.settings} -> 'threadToldOfMerge', '[]'::jsonb) ? ${pullRequestId})`,
+      )).returning({ id: workbenches.id });
+      if (!marked) continue;
+      const child = await getWorkbench(id);
+      if (child) await notifyThread(child, 'pr_merged');
+    }
+  } catch (err) {
+    console.warn(`[thread] telling threads that pull request ${pullRequestId} merged failed:`, err);
+  }
 }
 
 /** `talyn_create_session` from a thread: the session-started card. */

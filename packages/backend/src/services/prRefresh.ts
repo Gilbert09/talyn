@@ -6,6 +6,7 @@ import { QUEUE_RESET_COLUMNS } from './mergeQueueBroadcast.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { markRefreshed } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { notifyThreadsOfMergedPr } from './workbenches/threads.js';
 
 /**
  * Re-reading one pull request from GitHub. Shared by the app's
@@ -70,6 +71,7 @@ export async function reconcileTerminalState(row: ReconcileRow): Promise<boolean
     .update(pullRequestsTable)
     .set({ state: nextState, mergedAt, updatedAt: new Date(), ...queueReset })
     .where(eq(pullRequestsTable.id, row.id));
+  if (nextState === 'merged') await notifyThreadsOfMergedPr(row.id);
   const [updated] = await db.select(EMIT_COLUMNS).from(pullRequestsTable).where(eq(pullRequestsTable.id, row.id)).limit(1);
   // Tell every client, not just the caller. The reconcile is usually triggered
   // by ONE surface (a detail sheet opening, a merge that GitHub refused), but

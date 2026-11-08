@@ -63,6 +63,7 @@ export function threadCardTitle(event: Pick<ThreadSessionEvent, 'action' | 'stat
     session_started: 'Session started',
     session_finished: event.status === 'error' ? 'Session stopped with an error' : 'Session finished its turn',
     pr_opened: 'Pull request opened',
+    pr_merged: 'Pull request merged',
     needs_input: 'Session needs an answer',
     paused: 'Paused',
   };
