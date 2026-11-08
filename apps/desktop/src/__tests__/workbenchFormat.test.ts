@@ -1,15 +1,19 @@
-import type { AgentEvent, Workbench, WorkbenchEvent } from '@talyn/shared';
+import { TALYN_SKILL_PACK, type AgentEvent, type Workbench, type WorkbenchEvent } from '@talyn/shared';
 import { knownContextWindow, rememberContextWindow } from '../renderer/lib/contextWindows';
 import {
   buildFileTree,
+  CLAUDE_HEADLESS_SLASH_COMMANDS,
   chatInsights,
   chatTotals,
   compactCount,
   formatCommentsMessage,
   fuzzyMatchPaths,
+  knownSlashCommandDescription,
   makeUserMessageEvent,
   messageAttachments,
   nextActionInput,
+  slashCommandFileDescription,
+  slashCommandFiles,
   slashCommandsFrom,
   splitTurns,
   userMessageText,
@@ -361,3 +365,50 @@ describe('sidebar order', () => {
   });
 });
 
+describe('slash command descriptions', () => {
+  it.each([
+    ['commands, nested commands and skills', ['.claude/commands/review.md', '.claude/commands/git/sync.md', '.claude/skills/deploy/SKILL.md'], {
+      review: '.claude/commands/review.md',
+      'git:sync': '.claude/commands/git/sync.md',
+      deploy: '.claude/skills/deploy/SKILL.md',
+    }],
+    ['the first file wins a duplicate name', ['.claude/commands/review.md', '.claude/skills/review/SKILL.md'], { review: '.claude/commands/review.md' }],
+    ['no Claude files', ['src/app.ts', '.claude/settings.json'], {}],
+    ['no paths', [], {}],
+  ])('slashCommandFiles: %s', (_name, paths, expected) => {
+    expect(slashCommandFiles(paths)).toEqual(expected);
+  });
+
+  it.each([
+    ['a plain frontmatter description', '---\nname: deploy\ndescription: Ship the app\n---\n# Deploy\n', 'Ship the app'],
+    ['a quoted description', '---\ndescription: "Ship it: now"\n---\nBody', 'Ship it: now'],
+    ['a single-quoted description', "---\ndescription: 'Ship it'\n---\nBody", 'Ship it'],
+    ['a folded block description', '---\nname: x\ndescription: >\n  Ship the app\n  to production\nallowed-tools: Bash\n---\nBody', 'Ship the app to production'],
+    ['a literal block description', '---\ndescription: |-\n  One\n  Two\n---\nBody', 'One Two'],
+    ['Windows line endings', '---\r\ndescription: Ship it\r\n---\r\nBody', 'Ship it'],
+    ['the body when frontmatter has no description', '---\nallowed-tools: Bash\n---\n\n# Sync the branch\nMore', 'Sync the branch'],
+    ['the body when the description is empty', '---\ndescription:\n---\nRun the tests', 'Run the tests'],
+    ['the first line of a command without frontmatter', '\n\nReview the open pull request.\nThen comment.', 'Review the open pull request.'],
+    ['a heading without frontmatter', '## Release notes\n', 'Release notes'],
+    ['an empty file', '', null],
+    ['only frontmatter', '---\nname: x\n---\n', null],
+  ])('slashCommandFileDescription: %s', (_name, content, expected) => {
+    expect(slashCommandFileDescription(content)).toBe(expected);
+  });
+
+  it.each([
+    ['a Claude built-in', 'compact', 'Summarise the conversation to free context'],
+    ['a Talyn skill', 'talyn-ci-triage', 'Find why CI fails, re-run flaky jobs and fix real failures'],
+    ['an unknown command', 'deploy', undefined],
+    ['an Object prototype key', 'constructor', undefined],
+    ['an empty name', '', undefined],
+  ])('knownSlashCommandDescription: %s', (_name, command, expected) => {
+    expect(knownSlashCommandDescription(command)).toBe(expected);
+  });
+
+  it('describes every Talyn skill and every headless built-in', () => {
+    for (const name of [...TALYN_SKILL_PACK, ...CLAUDE_HEADLESS_SLASH_COMMANDS]) {
+      expect(knownSlashCommandDescription(name)).toBeTruthy();
+    }
+  });
+});

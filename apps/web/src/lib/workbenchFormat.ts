@@ -2,6 +2,7 @@ import {
   createClaudeStreamParser,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
+  TALYN_SKILL_SUMMARIES,
   type AgentEvent,
   type SendWorkbenchMessageInput,
   type AgentEventDraft,
@@ -445,16 +446,81 @@ export function fuzzyMatchPaths(query: string, paths: string[], limit = 20): str
 // Claude Code built-ins that work in print mode, shown until the first turn reports the real list.
 export const CLAUDE_HEADLESS_SLASH_COMMANDS = ['compact', 'context', 'cost', 'init', 'pr-comments', 'release-notes', 'review', 'security-review'];
 
-/** Slash commands and skills from Claude files. */
-export function slashCommandsFrom(paths: string[]): string[] {
-  const out = new Set<string>();
+// Claude's init event names its commands and skills without a description, so the `/` list describes the known ones.
+const CLAUDE_SLASH_COMMAND_DESCRIPTIONS: Record<string, string> = {
+  compact: 'Summarise the conversation to free context',
+  context: 'Show how full the context window is',
+  cost: 'Show the cost and duration of this chat',
+  init: 'Write a CLAUDE.md that documents this repository',
+  'pr-comments': 'Get the comments on a GitHub pull request',
+  'release-notes': 'Show the Claude Code release notes',
+  review: 'Review a pull request',
+  'security-review': 'Do a security review of the changes on this branch',
+  'code-review': 'Review the current diff for bugs',
+  simplify: 'Clean up the changed code',
+  todos: 'Show the current to-do list',
+  usage: 'Show the plan usage limits',
+  insights: 'Make a report on your Claude Code sessions',
+  loop: 'Run a prompt again on an interval',
+  'claude-api': 'Reference for the Claude API and Anthropic SDK',
+  'update-config': 'Change Claude Code settings, permissions and hooks',
+  'fewer-permission-prompts': 'Allow common read-only tools to stop permission prompts',
+  'keybindings-help': 'Change Claude Code keyboard shortcuts',
+  statusline: 'Set up the Claude Code status line',
+};
+
+const KNOWN_SLASH_COMMAND_DESCRIPTIONS: Record<string, string> = { ...CLAUDE_SLASH_COMMAND_DESCRIPTIONS, ...TALYN_SKILL_SUMMARIES };
+
+/** The description of a built-in Claude command or a Talyn skill, or undefined. */
+export function knownSlashCommandDescription(name: string): string | undefined {
+  return Object.hasOwn(KNOWN_SLASH_COMMAND_DESCRIPTIONS, name) ? KNOWN_SLASH_COMMAND_DESCRIPTIONS[name] : undefined;
+}
+
+/** Slash commands and skills from Claude files, mapped to the file that defines each one. */
+export function slashCommandFiles(paths: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const p of paths) {
     const command = /^\.claude\/commands\/(.+)\.md$/.exec(p);
     const skill = /^\.claude\/skills\/([^/]+)\/SKILL\.md$/.exec(p);
-    if (command) out.add(command[1].replace(/\//g, ':'));
-    if (skill) out.add(skill[1]);
+    if (command) out[command[1].replace(/\//g, ':')] ??= p;
+    if (skill) out[skill[1]] ??= p;
   }
-  return [...out].sort();
+  return out;
+}
+
+/** Slash commands and skills from Claude files. */
+export function slashCommandsFrom(paths: string[]): string[] {
+  return Object.keys(slashCommandFiles(paths)).sort();
+}
+
+/**
+ * The description of a command or skill file: its frontmatter `description`,
+ * else (as Claude Code does for a command) the first line of the body.
+ */
+export function slashCommandFileDescription(content: string): string | null {
+  const text = content.replace(/\r\n/g, '\n');
+  const front = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text);
+  if (front) {
+    const lines = front[1].split('\n');
+    const at = lines.findIndex((line) => /^description:/.test(line));
+    if (at >= 0) {
+      let value = lines[at].slice('description:'.length).trim();
+      // A YAML block scalar (`>` or `|`): the indented lines after the key.
+      if (/^[>|][+-]?$/.test(value)) {
+        const block: string[] = [];
+        for (const line of lines.slice(at + 1)) {
+          if (line.trim() && !/^\s/.test(line)) break;
+          block.push(line.trim());
+        }
+        value = block.filter(Boolean).join(' ');
+      }
+      value = value.replace(/^(['"])(.*)\1$/, '$2').trim();
+      if (value) return value;
+    }
+  }
+  const body = front ? text.slice(front[0].length) : text;
+  const first = body.split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean);
+  return first || null;
 }
 
 export function formatTokens(n: number): string {
