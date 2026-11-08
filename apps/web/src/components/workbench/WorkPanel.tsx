@@ -53,7 +53,8 @@ export function WorkPanel({ thread }: { thread: Workbench }) {
         aria-label="Resize the right panel"
         aria-valuenow={width}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* Each section keeps its header on screen and scrolls its own list. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <Section title="Sessions" count={children.length}>
           {children.length === 0 ? (
             <p className="px-3 text-xs text-muted-foreground">No sessions yet. Ask the thread to start one.</p>
@@ -66,7 +67,7 @@ export function WorkPanel({ thread }: { thread: Workbench }) {
           )}
         </Section>
         <MemorySection thread={thread} />
-        <Section title="Repositories" count={repos.length}>
+        <Section title="Repositories" count={repos.length} short>
           {repos.length === 0 ? (
             <p className="px-3 text-xs text-muted-foreground">No repositories yet.</p>
           ) : (
@@ -85,15 +86,28 @@ export function WorkPanel({ thread }: { thread: Workbench }) {
   );
 }
 
-function Section({ title, count, action, children }: { title: string; count?: number; action?: React.ReactNode; children: React.ReactNode }) {
+function Section({
+  title,
+  count,
+  action,
+  short,
+  children,
+}: {
+  title: string;
+  count?: number;
+  action?: React.ReactNode;
+  /** A short list keeps its full height, up to a cap, when the long lists shrink. */
+  short?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="border-b py-2" aria-label={title}>
-      <div className="flex items-center gap-1.5 px-3 pb-1.5">
+    <section className={cn('flex flex-col border-b py-2', short ? 'shrink-0' : 'min-h-14 shrink')} aria-label={title}>
+      <div className="flex shrink-0 items-center gap-1.5 px-3 pb-1.5">
         <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
         {count !== undefined && count > 0 && <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>}
         <div className="ml-auto">{action}</div>
       </div>
-      {children}
+      <div className={cn('min-h-0 overflow-y-auto', short && 'max-h-28')}>{children}</div>
     </section>
   );
 }
