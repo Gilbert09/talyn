@@ -13,7 +13,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One backend run uses three local workers. Four runners cut its wall time
+  # without increasing contention inside each runner.
+  backend_tests:
+    name: Backend tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: npm install
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @talyn/shared
+
+      - name: Test backend shard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm test -w @talyn/backend -- --shard=${{ matrix.shard }}/4
+
   test:
+    needs: backend_tests
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 
@@ -22,10 +63,14 @@ jobs:
       fail-fast: false
       matrix:
         # windows-2022: see publish.yml (node-gyp cannot find Visual Studio 18).
-        # Each system builds the desktop app. Linux runs the shared checks.
+        # Each system builds the desktop app. Linux runs the remaining checks.
         os: [macos-latest, windows-2022, ubuntu-latest]
 
     steps:
+      - name: Require backend tests
+        if: needs.backend_tests.result != 'success'
+        run: exit 1
+
       - name: Check out Git repository
         uses: actions/checkout@v4
 
@@ -105,8 +150,8 @@ jobs:
         if: runner.os == 'Linux'
         run: npm run lint
 
-      - name: Test
+      - name: Test other packages
         if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm test
+        run: npm test -w @talyn/desktop -w @talyn/web -w @talyn/admin -w @talyn/cli

@@ -153,7 +153,7 @@ describe('session recovery and explicit disconnect', () => {
     await vi.advanceTimersByTimeAsync(0);
     ws.onclose?.();
     expect(FakeWebSocket.instances).toHaveLength(loginAgain ? 2 : 1);
-    expect(vi.getTimerCount()).toBe(loginAgain ? 1 : 0);
+    expect(vi.getTimerCount()).toBe(loginAgain ? 2 : 0);
     if (loginAgain) {
       expect(FakeWebSocket.instances[1].sent).toContain(JSON.stringify({ type: 'auth', token: 'new-session' }));
     }

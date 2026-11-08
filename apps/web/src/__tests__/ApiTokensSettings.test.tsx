@@ -131,7 +131,7 @@ describe('ApiTokensSettings create', () => {
     await waitFor(() =>
       expect(mockCreate).toHaveBeenCalledWith({
         name: 'My token',
-        scopes: ['workspaces:read', 'repositories:read', 'sessions:read'],
+        scopes: ['workspaces:read', 'teams:read', 'spaces:read', 'repositories:read', 'sessions:read'],
         workspaceIds: null,
         expiresInDays: 90,
       }),
@@ -142,7 +142,15 @@ describe('ApiTokensSettings create', () => {
     [
       'the Full access preset',
       () => fireEvent.click(screen.getByRole('button', { name: 'Full access' })),
-      ['workspaces:read', 'repositories:read', 'sessions:read', 'sessions:write'],
+      [
+        'workspaces:read',
+        'teams:read',
+        'spaces:read',
+        'spaces:write',
+        'repositories:read',
+        'sessions:read',
+        'sessions:write',
+      ],
     ],
     [
       'Read only after Full access',
@@ -150,12 +158,14 @@ describe('ApiTokensSettings create', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Full access' }));
         fireEvent.click(screen.getByRole('button', { name: 'Read only' }));
       },
-      ['workspaces:read', 'repositories:read', 'sessions:read'],
+      ['workspaces:read', 'teams:read', 'spaces:read', 'repositories:read', 'sessions:read'],
     ],
     [
       'sessions read and write only',
       () => {
         pick('Workspaces', 'None');
+        pick('Teams', 'None');
+        pick('Spaces', 'None');
         pick('Repositories', 'None');
         pick('Sessions', 'Read & write');
       },
@@ -165,6 +175,8 @@ describe('ApiTokensSettings create', () => {
       'repositories only',
       () => {
         pick('Workspaces', 'None');
+        pick('Teams', 'None');
+        pick('Spaces', 'None');
         pick('Sessions', 'None');
       },
       ['repositories:read'],
@@ -187,6 +199,8 @@ describe('ApiTokensSettings create', () => {
         .getAllByRole('radio')
         .map((r) => r.textContent);
     expect(options('Workspaces')).toEqual(['None', 'Read']);
+    expect(options('Teams')).toEqual(['None', 'Read']);
+    expect(options('Spaces')).toEqual(['None', 'Read', 'Read & write']);
     expect(options('Repositories')).toEqual(['None', 'Read', 'Read & write']);
     expect(options('Sessions')).toEqual(['None', 'Read', 'Read & write']);
   });
@@ -217,7 +231,7 @@ describe('ApiTokensSettings create', () => {
     fireEvent.click(submitButton(dialog));
     await waitFor(() => expect(mockCreate).toHaveBeenCalled());
     expect(mockCreate.mock.calls[0][0].expiresInDays).toBe(expected);
-    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 3, expiry_set: value !== 'none' });
+    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 5, expiry_set: value !== 'none' });
   });
 
   it('keeps Create off with no name, or with no access picked', async () => {
@@ -229,6 +243,8 @@ describe('ApiTokensSettings create', () => {
     fillName('x');
     expect(submitButton(dialog)).toBeEnabled();
     pick('Workspaces', 'None');
+    pick('Teams', 'None');
+    pick('Spaces', 'None');
     pick('Repositories', 'None');
     pick('Sessions', 'None');
     expect(submitButton(dialog)).toBeDisabled();
@@ -271,7 +287,7 @@ describe('ApiTokensSettings new token', () => {
     expect(screen.getByText(/won't see this token again/i)).toBeInTheDocument();
     expect(screen.getByText(CURL)).toBeInTheDocument();
     expect(screen.getAllByTestId('api-token-row')).toHaveLength(1);
-    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 3, expiry_set: true });
+    expect(trackEvent).toHaveBeenCalledWith('api_token_created', { scopes_count: 5, expiry_set: true });
   });
 
   it.each([

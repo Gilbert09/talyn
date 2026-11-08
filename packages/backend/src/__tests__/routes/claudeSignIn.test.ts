@@ -45,6 +45,12 @@ vi.mock('../../services/cloudProviders/fleetAccess.js', async (orig) => ({
   workspaceMayUseFleet: async () => true,
   fleetRefusalReason: () => 'fleet off',
 }));
+vi.mock('../../services/selfHosted/claudeOauth.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  exchangeCode: async () => {
+    throw new Error('test token exchange failed');
+  },
+}));
 
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();

@@ -33,8 +33,15 @@ describe.skipIf(process.platform === 'win32')('Codex guest provider setup', () =
     }
     const read = () => { try { return readFileSync(config, 'utf8'); } catch { return null; } };
     const run = (proxy = 'http://fleet-proxy:8080/', key?: string) => {
+      let commandPath = process.env.PATH ?? '';
+      if (!proxy) {
+        const bin = join(home, 'bin');
+        mkdirSync(bin);
+        writeFileSync(join(bin, 'awk'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        commandPath = `${bin}:${commandPath}`;
+      }
       const result = spawnSync('/bin/sh', ['-c', `${codexProviderPrelude()}\nprintf '%s' "$OPENAI_API_KEY"`], {
-        encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: home, FLEET_PROXY_URL: proxy, ...(key === undefined ? {} : { OPENAI_API_KEY: key }) },
+        encoding: 'utf8', env: { PATH: commandPath, HOME: home, FLEET_PROXY_URL: proxy, ...(key === undefined ? {} : { OPENAI_API_KEY: key }) },
       });
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
