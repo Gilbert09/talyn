@@ -1,0 +1,8 @@
+appId: ${APP_ID}
+name: Verify a real notification tap
+---
+# Run after a tester taps an authorized session alert from the operating system.
+- extendedWaitUntil:
+    visible: "Conversation transcript"
+    timeout: 30000
+- assertVisible: ${SESSION_TITLE}

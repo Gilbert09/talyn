@@ -4,7 +4,32 @@ The app supports GitHub sign-in, workspace selection, conversations, and pull re
 Sessions, Threads, Attention, and notifications use the authenticated native client.
 See [the mobile plan](../../docs/MOBILE_APP_PLAN.md), [#116](https://github.com/Gilbert09/talyn/pull/116),
 [#119](https://github.com/Gilbert09/talyn/pull/119), [#121](https://github.com/Gilbert09/talyn/pull/121),
-[#126](https://github.com/Gilbert09/talyn/pull/126), and [#128](https://github.com/Gilbert09/talyn/pull/128).
+[#126](https://github.com/Gilbert09/talyn/pull/126), [#128](https://github.com/Gilbert09/talyn/pull/128),
+and [#129](https://github.com/Gilbert09/talyn/pull/129).
+
+## Beta and store release
+
+Use [the release runbook](../../docs/MOBILE_RELEASE.md) for exact configuration, secrets, signing, updates, and submission steps.
+Use [the release checklist](../../docs/MOBILE_RELEASE_CHECKLIST.md), [store asset inventory](../../docs/MOBILE_STORE_ASSETS.md),
+and [Maestro device flows](e2e/README.md) before beta and each store candidate.
+Merge #128, then #129, then this release change. Do not queue this stacked change before its parents.
+
+Development and preview remain useful without production secrets.
+Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
+The mobile package supplies the version. Both stores use `MOBILE_BUILD_NUMBER` with local EAS version management.
+Every profile uses a fingerprint runtime. Updates remain disabled until signed-update configuration is supplied.
+Local plans have no side effects. Execution requires the protected manual workflow on main.
+
+```sh
+npm run mobile:release:check
+npm run mobile:test:release
+npm run mobile:native:check
+npm run mobile:release:plan -- build preview android --dry-run
+```
+
+Native checks generate all four profiles with inert fixtures. Remove only disposable generated native directories before running them.
+No hosted EAS build, signed artifact, upload, production update, store review, or device result is supplied by these checks.
+Complete the documented account, policy, domain, privacy, signing, and physical-device gates before release.
 
 ## Notifications
 
@@ -20,7 +45,7 @@ Push needs a physical device, a development build, and an approved public EAS pr
 Set `EXPO_PUBLIC_EAS_PROJECT_ID` before generating native projects.
 The public configuration exposes it as `extra.eas.projectId`. Production rejects a missing or invalid ID.
 No provider credential belongs in public configuration or this repository.
-Phase 5 owns signing credentials and store submission.
+The protected release workflow owns signing and submission operations. Credentials remain in EAS or approved secret custody.
 
 The device stores only the installation ID in SecureStore with `WHEN_UNLOCKED_THIS_DEVICE_ONLY`.
 Expo tokens stay in memory during registration. They never enter AsyncStorage, route state, logs, or crash fields.
@@ -48,7 +73,7 @@ Normal snapshots and foreground recovery remain authoritative. No payload is per
 
 `npx expo config --type introspect --json` checks the generated plugin results.
 The notification plugin adds the iOS `aps-environment` entitlement.
-Its mode is `production` for production builds and `development` for other environments.
+Its mode is `development` for development clients and `production` for preview and store profiles.
 It does not add `UIBackgroundModes=remote-notification`. No background task is registered.
 Android's notification library declares `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED`.
 The app blocks `RECEIVE_BOOT_COMPLETED` because it does not schedule local notifications.
@@ -117,7 +142,7 @@ Callbacks permit no credentials, explicit non-default port, query parameters, or
 | --- | --- | --- | --- |
 | Development | `dev.talyn.mobile.development` | `talyn-mobile-development` | `talyn-mobile-development://auth/callback` |
 | Preview | `dev.talyn.mobile.preview` | `talyn-mobile-preview` | `talyn-mobile-preview://auth/callback` |
-| Production | `dev.talyn.mobile` | `talyn-mobile` | An explicitly approved HTTPS host with `/callback`. |
+| Production | Explicit approved identifiers are required. | An explicit approved scheme is required. | An explicitly approved HTTPS host with `/callback`. |
 
 These identifiers are candidates. Store availability and organization ownership remain unverified.
 `TALYN_MOBILE_IOS_BUNDLE_ID`, `TALYN_MOBILE_ANDROID_PACKAGE`, and `TALYN_MOBILE_SCHEME` replace the complete identity values.
@@ -218,7 +243,7 @@ npm run mobile:ios
 
 These commands generate native projects and install a development build.
 Generated `ios/`, `android/`, `.expo/`, and export output stay out of git.
-EAS profiles preserve separate development, preview, and production identities.
+EAS profiles preserve separate development and preview identities. Internal beta and production share the approved store identities.
 Confirm organization ownership and link an approved EAS project before an EAS build.
 This change supplies no signing credentials, EAS tokens, store uploads, or OTA updates.
 

@@ -1,25 +1,77 @@
 {
   "cli": {
-    "version": ">= 16.0.0",
-    "appVersionSource": "local"
+    "version": "27.5.0",
+    "appVersionSource": "local",
+    "requireCommit": true
   },
   "build": {
     "development": {
-      "developmentClient": true,
       "distribution": "internal",
+      "environment": "development",
+      "channel": "development",
+      "autoIncrement": false,
       "env": {
         "APP_ENV": "development"
-      }
+      },
+      "developmentClient": true
     },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
+      "channel": "preview",
+      "autoIncrement": false,
       "env": {
         "APP_ENV": "preview"
       }
     },
-    "production": {
+    "internal-beta": {
+      "distribution": "store",
+      "environment": "production",
+      "channel": "internal-beta",
+      "autoIncrement": false,
       "env": {
         "APP_ENV": "production"
+      },
+      "credentialsSource": "remote",
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
+    "production": {
+      "distribution": "store",
+      "environment": "production",
+      "channel": "production",
+      "autoIncrement": false,
+      "env": {
+        "APP_ENV": "production"
+      },
+      "credentialsSource": "remote",
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  },
+  "submit": {
+    "internal-beta": {
+      "android": {
+        "track": "internal",
+        "releaseStatus": "draft",
+        "changesNotSentForReview": true
+      },
+      "ios": {
+        "ascAppId": "$MOBILE_ASC_APP_ID",
+        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
+      }
+    },
+    "production": {
+      "android": {
+        "track": "production",
+        "releaseStatus": "draft",
+        "changesNotSentForReview": true
+      },
+      "ios": {
+        "ascAppId": "$MOBILE_ASC_APP_ID",
+        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
       }
     }
   }

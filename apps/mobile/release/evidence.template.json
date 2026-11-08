@@ -1,0 +1,23 @@
+{
+  "sourceCommit": null,
+  "profile": null,
+  "platform": null,
+  "buildNumber": null,
+  "runtimeVersion": null,
+  "buildId": null,
+  "artifactSha256": null,
+  "metadataSha256": null,
+  "approvals": {
+    "security": null,
+    "privacy": null,
+    "policy": null,
+    "metadata": null,
+    "signing": null,
+    "devices": null,
+    "links": null,
+    "push": null,
+    "deletion": null,
+    "rollback": null,
+    "backendCompatibility": null
+  }
+}

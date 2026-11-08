@@ -1,0 +1,16 @@
+appId: ${APP_ID}
+name: Delete an isolated disposable account
+---
+- assertTrue: ${ALLOW_ACCOUNT_DELETION == 'disposable-test-account'}
+- launchApp
+- tapOn: "Settings"
+- tapOn: "Delete Talyn account"
+- assertVisible: "Delete your Talyn account?"
+- tapOn: "Cancel"
+- assertVisible: "Settings"
+- tapOn: "Delete Talyn account"
+- tapOn: "Delete account"
+- extendedWaitUntil:
+    visible: "Your Talyn account data was deleted."
+    timeout: 30000
+- assertVisible: "Sign in to Talyn"

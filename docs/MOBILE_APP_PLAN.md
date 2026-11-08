@@ -1,8 +1,45 @@
 # Native mobile client plan
 
-Status: approved plan; phases 1 through 4 have implementation evidence below. Research date: **2026-11-08**.
+Status: approved plan; phases 1 through 5 have implementation evidence below. External release gates remain open.
+Research date: **2026-11-08**.
 Scope: production planning for iOS and Android in `Gilbert09/talyn`.
 The original research is preserved below. Implementation evidence records the current mobile foundation.
+
+## Phase 5 implementation evidence
+
+Release tooling stacks on [#129](https://github.com/Gilbert09/talyn/pull/129).
+Merge [#128](https://github.com/Gilbert09/talyn/pull/128), then #129, then the phase 5 pull request.
+No default-branch merge is included in this stack.
+
+- EAS profiles cover development, preview, internal beta, and production.
+  Beta and production share explicit approved store identities. Production defaults cannot silently reserve an identifier.
+  The mobile package owns the marketing version. Explicit increasing build numbers apply to both stores.
+- Runtime compatibility uses the native fingerprint policy. Updates remain disabled until signed-update configuration is supplied.
+  Publication compares the platform fingerprint with the inspected installed runtime.
+  Guarded update and embedded rollback operations target explicit channels and one platform.
+- Manual release CI requires an approved source commit on main and a protected environment.
+  Store operations require candidate-specific approval references. Submission uses an exact inspected EAS build ID.
+  Pull request CI has no release credentials or publication path.
+- CI validates profiles, channels, version policy, dependency graph, privacy inventory drift, metadata structure, and credential patterns.
+  Native generation checks all four profiles with inert fixtures and a temporary test certificate.
+  Doctor, mobile tests, lint, types, and both platform exports remain required checks.
+- Deterministic release journeys cover authentication, workspace validation, sessions, threads, PRs, notification taps, logout, deletion, and expiry.
+  Maestro device flows define the corresponding release procedures with explicit browser, device, and disposable-account gates.
+- Store templates retain unresolved fields as null. The existing owl icon is reused.
+  Asset requirements cover icons, adaptive masks, screenshots, feature graphics, locales, review access, and legal approvals.
+  Privacy preparation records actual auth, memory, push, update, and processor behavior without inventing store attestations.
+- Runbooks define signed package inspection, Android ELF alignment checks, 16 KB device gates, staged rollout, incident response, and rollback drills.
+  They require checksums, source/build records, restricted artifact custody, and available hosted provenance.
+
+See [release operations](MOBILE_RELEASE.md), [the release checklist](MOBILE_RELEASE_CHECKLIST.md),
+[store assets](MOBILE_STORE_ASSETS.md), and [mobile device flows](../apps/mobile/e2e/README.md).
+These operator instructions supersede earlier proposed phase 5 implementation choices below.
+
+No hosted EAS operation, signed archive, store upload, or physical-device result is claimed.
+Organization accounts, final identifiers, public pages, protected environments, signing custody, and channel mappings remain external gates.
+Apple login policy, payment scope, generated-content safeguards, privacy disclosures, deletion completion, and review access need owner decisions.
+TestFlight, Play internal testing, final permissions/manifests, 16 KB compatibility, accessibility, links, push, and rollback drills require evidence.
+The repository tooling is ready for those operations. Launch approval remains with the named release owners.
 
 ## Phase 4 implementation evidence
 
