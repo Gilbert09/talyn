@@ -7402,3 +7402,9 @@ Now the message stays in the chat with the error and two actions: Retry and Disc
 This is client state only: `PendingUserMessage.failed` in `workbenchFormat.ts`, set by `failOutgoingMessage` in both stores. A failed message is shown until it is sent, discarded, or its own event arrives. A page reload or a workspace switch loses it.
 A plan limit or a prompt refusal does not use this path. Those still remove the message and restore the draft, because they need a different action from the user.
 The first message of a new session with images uses the same path.
+
+### 2026-11-08 — Context rail for workspaces and spaces
+
+Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⌥⇧1–9 counts the same tiles. The open context gets a pill and a ring. Each other context gets a red count of the items that need the person.
+The count comes from `GET /workspaces/attention` (`services/workbenches/attention.ts`). The rule is `sessionNeedsAttention` in `packages/shared/src/contextAttention.ts`: a live session or thread that failed, that asks a question, or whose open pull request has conflicts. A running turn or a queued message wins, as in the sidebar. An unread reply is not counted: read state is kept only in the open app. A session in a space counts for its workspace and for its space, because both sidebars show it. The rail asks every 30 seconds while the window shows, on window focus, and on a context switch. The two reads are narrow; `contextAttention.test.ts` pins that.
+The rail is `ContextRail.tsx` with `lib/contextRail.ts`, in both apps. On macOS desktop, the top strip of the rail is a drag area under the traffic lights.
