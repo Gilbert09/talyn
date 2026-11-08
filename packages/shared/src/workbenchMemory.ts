@@ -40,6 +40,16 @@ export interface MemoryEntrySummary {
   createdAt: string;
   updatedAt: string;
   forgottenAt: string | null;
+  /** Set only on a `usedBy` list: how that session or thread used the entry. */
+  use?: MemoryUse;
+}
+
+/** How one session or thread used an entry: it saved it, read it, or both. */
+export interface MemoryUse {
+  wrote: boolean;
+  read: boolean;
+  /** The last write or read. For an entry with no recorded use, its `updatedAt`. */
+  lastUsedAt: string;
 }
 
 export interface MemoryEntry extends MemoryEntrySummary {
@@ -83,6 +93,12 @@ export interface ListMemoryQuery {
   q?: string;
   includeForgotten?: boolean;
   includeBody?: boolean;
+  /**
+   * A session or thread id: only the entries it saved or read, and the entries
+   * of its own thread scope, the most recent use first. Only `includeForgotten` and
+   * `includeBody` still apply.
+   */
+  usedBy?: string;
 }
 
 // A name is one short line in the index; 64 characters keeps it a label, not a sentence.

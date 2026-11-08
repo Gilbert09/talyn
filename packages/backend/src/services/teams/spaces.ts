@@ -3,8 +3,10 @@ import { v4 as uuid } from 'uuid';
 import {
   canManageTeam,
   isTeamRole,
+  MAX_SPACE_IMAGE_LENGTH,
   MAX_SPACE_NAME_LENGTH,
   SPACE_COLOR_PATTERN,
+  SPACE_IMAGE_PATTERN,
   type CreateSpaceSessionRequest,
   type CreateSpaceSessionResponse,
   type Space,
@@ -45,7 +47,7 @@ import { publicWorkbench } from '../workbenches/prLink.js';
 import type { ReadinessUser } from '../workbenches/readiness.js';
 import { getWorkbench, isThread, updateWorkbench } from '../workbenches/store.js';
 import { assertSpaceMember, filterViewable, ownsWorkspace, type AccessDeps, defaultAccessDeps } from './access.js';
-import { assertTeamMember, resolveHomeWorkspace, SPACE_COLUMNS, toSpace } from './membership.js';
+import { assertTeamMember, resolveHomeWorkspace, SPACE_DETAIL_COLUMNS, toSpace } from './membership.js';
 
 /**
  * Spaces: a team's containers for sessions and tasks. Each session or task in
@@ -77,6 +79,19 @@ function validColor(raw: unknown): string | null {
   return raw.toLowerCase();
 }
 
+function validImage(raw: unknown): string | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw !== 'string') throw new TeamError(400, 'image must be a PNG, JPEG, WebP or GIF data URL.');
+  // The length check comes first, so the pattern never scans an oversized body.
+  if (raw.length > MAX_SPACE_IMAGE_LENGTH) {
+    throw new TeamError(400, 'The space image is too large. Try a smaller or simpler one.');
+  }
+  if (!SPACE_IMAGE_PATTERN.test(raw)) {
+    throw new TeamError(400, 'image must be a PNG, JPEG, WebP or GIF data URL.');
+  }
+  return raw;
+}
+
 function liveSpace<T extends { archivedAt: Date | null }>(space: T): T {
   if (space.archivedAt) throw new TeamError(409, 'This space is archived.');
   return space;
@@ -85,32 +100,34 @@ function liveSpace<T extends { archivedAt: Date | null }>(space: T): T {
 export async function createSpace(
   teamId: string,
   userId: string,
-  body: { name?: unknown; color?: unknown }
+  body: { name?: unknown; color?: unknown; image?: unknown }
 ): Promise<Space> {
   await assertTeamMember(teamId, userId);
   const name = validSpaceName(body.name);
   const color = validColor(body.color);
+  const image = validImage(body.image);
   const [row] = await getPoolDbClient()
     .insert(spacesTable)
-    .values({ id: uuid(), teamId, name, color, createdByUserId: userId })
-    .returning(SPACE_COLUMNS);
+    .values({ id: uuid(), teamId, name, color, image, createdByUserId: userId })
+    .returning(SPACE_DETAIL_COLUMNS);
   return toSpace(row!);
 }
 
 export async function updateSpace(
   spaceId: string,
   userId: string,
-  body: { name?: unknown; color?: unknown }
+  body: { name?: unknown; color?: unknown; image?: unknown }
 ): Promise<Space> {
   liveSpace(await assertSpaceMember(userId, spaceId));
-  const patch: { name?: string; color?: string | null } = {};
+  const patch: { name?: string; color?: string | null; image?: string | null } = {};
   if (body.name !== undefined) patch.name = validSpaceName(body.name);
   if (body.color !== undefined) patch.color = validColor(body.color);
+  if (body.image !== undefined) patch.image = validImage(body.image);
   const [row] = await getPoolDbClient()
     .update(spacesTable)
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(spacesTable.id, spaceId))
-    .returning(SPACE_COLUMNS);
+    .returning(SPACE_DETAIL_COLUMNS);
   return toSpace(row!);
 }
 

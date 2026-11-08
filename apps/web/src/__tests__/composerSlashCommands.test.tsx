@@ -2,7 +2,7 @@ import { vi, it, expect, afterEach, beforeEach, describe } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Features, Workbench, WorkbenchChat, Workspace } from '@talyn/shared';
 import { Composer } from '../components/workbench/Composer';
 import { ComposerPopover } from '../components/workbench/ComposerPopover';
 import { sandboxOps, type WorkbenchOps } from '../lib/workbenchOps';
@@ -25,6 +25,15 @@ const workbench = {
   settings: {},
 } as Workbench;
 const chat = { id: 'chat-1', status: 'idle', queuedMessages: [] } as unknown as WorkbenchChat;
+const workspace = {
+  id: 'ws-1',
+  name: 'Workspace',
+  repos: [],
+  integrations: {},
+  settings: {},
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+} as Workspace;
 
 const FILES: Record<string, string> = {
   '.claude/commands/deploy.md': '---\ndescription: Ship the app to production\n---\nRun the deploy.',
@@ -58,7 +67,7 @@ beforeEach(() => {
   // jsdom has no layout.
   Element.prototype.scrollIntoView = vi.fn();
   useWorkbenchStore.setState({ outgoingMessages: {}, drafts: {} });
-  useWorkspaceStore.setState({ features: { workbenches: true, mcpServers: true } as Features });
+  useWorkspaceStore.setState({ features: { workbenches: true, mcpServers: true } as Features, workspaces: [workspace] });
   useNavigationStore.setState({ navigate });
 });
 
@@ -68,6 +77,40 @@ afterEach(() => {
 });
 
 describe('the composer slash list', () => {
+  it('lists the installed Talyn skills for Codex', async () => {
+    render(
+      <Composer
+        workbench={{ ...workbench, agent: 'codex' }}
+        chat={chat}
+        ops={opsWithFiles()}
+        todos={null}
+        contextUsage={null}
+        slashCommands={['compact']}
+      />,
+    );
+    type('/');
+    await screen.findByText('Open or update the pull request for this session');
+    expect(screen.getByText('talyn-ship-pr')).toBeInTheDocument();
+    expect(screen.queryByText('Summarise the conversation to free context')).not.toBeInTheDocument();
+  });
+
+  it('hides Talyn skills for Codex when the skill pack is off', async () => {
+    useWorkspaceStore.setState({ workspaces: [{ ...workspace, settings: { sessionSkillPack: false } }] });
+    render(
+      <Composer
+        workbench={{ ...workbench, agent: 'codex' }}
+        chat={chat}
+        ops={opsWithFiles()}
+        todos={null}
+        contextUsage={null}
+        slashCommands={null}
+      />,
+    );
+    type('/talyn');
+    await screen.findByText('No matching command.');
+    expect(screen.queryByText('talyn-ship-pr')).not.toBeInTheDocument();
+  });
+
   it('describes built-in commands, Talyn skills and the repository files', async () => {
     const ops = renderComposer(undefined, ['compact', 'talyn-ship-pr', 'mystery']);
     type('/');

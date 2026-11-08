@@ -33,6 +33,8 @@ Work that runs without you, such as loops, workflows and fix runs, uses a Small 
 
 If a session needs more memory, you or the agent can move it to another size. The move starts when the current turn ends. Talyn moves your work to the new box and the session carries on there.
 
+To see if a session needs a larger box, open the **Sandbox** tab. The **Resources** section shows CPU and memory use over the last hour, with one point each minute. Move the pointer over a chart to see the value at a time.
+
 ## Sleep and wake
 
 A sandbox that is idle for 10 minutes goes to sleep. A sleeping sandbox uses no box-hours.

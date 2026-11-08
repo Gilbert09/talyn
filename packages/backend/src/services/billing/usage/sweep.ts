@@ -8,6 +8,7 @@ import { currentBoxPayer } from '../../workbenches/store.js';
 import { listFleetHosts } from '../../fleetHosts.js';
 import { FleetClient, type FleetSandbox, type FleetSandboxStatus } from '../../selfHosted/client.js';
 import { fleetApiToken, fleetGatewayToken, fleetPinnedEndpoint } from '../../selfHosted/credentials.js';
+import { pruneResourceSamples, recordResourceSamples, sampleFromFleet, type ResourceSample } from '../../workbenches/resourceSamples.js';
 import { insertOpenInterval, markIntervalClosed, openIntervalsQuery, type EndReason, type IntervalRow } from './intervals.js';
 
 /**
@@ -22,6 +23,9 @@ import { insertOpenInterval, markIntervalClosed, openIntervalsQuery, type EndRea
  *   a row (`'sweep'`), never on a tick where a host listing failed;
  * - a running box (`starting | idle | busy`) with no open interval opens one
  *   at now, when its id maps to a Talyn task, review unit or workbench.
+ *
+ * The same list also gives each running session box's CPU and memory sample
+ * for the Sandbox panel's chart, so the chart costs no extra fleet read.
  */
 
 export interface TenantClient {
@@ -50,7 +54,9 @@ const ENDED: ReadonlySet<FleetSandboxStatus> = new Set(['stopped', 'failed', 'ca
 /** Ticks in a row a box must be missing from every list before its interval closes. */
 export const MISSING_TICKS_TO_CLOSE = 2;
 
-type SweptBox = Pick<FleetSandbox, 'id' | 'status' | 'endedAt' | 'memMib' | 'vcpuCount'> & { suspendedAt?: string };
+type SweptBox = Pick<FleetSandbox, 'id' | 'status' | 'endedAt' | 'memMib' | 'vcpuCount' | 'milliVcpu' | 'memUsedMib' | 'cpuSeconds'> & {
+  suspendedAt?: string;
+};
 
 /** What should happen to an open interval, given its box (or its absence). Pure. */
 export function decideOpenInterval(
@@ -228,6 +234,11 @@ export class UsageSweep {
       if (!openBySandbox.has(sandboxId)) this.missing.delete(sandboxId);
     }
 
+    const sessionBoxes = new Map<string, string>();
+    for (const interval of open) {
+      if (interval.subjectKind === 'workbench') sessionBoxes.set(logicalSandboxId(interval.sandboxId), interval.subjectId);
+    }
+
     let opened = 0;
     for (const [sandboxId, box] of boxes) {
       if (!RUNNING.has(box.status) || openBySandbox.has(sandboxId)) continue;
@@ -245,10 +256,30 @@ export class UsageSweep {
         startedAt: now,
         payerUserId: resolved.payerUserId ?? null,
       });
+      if (subject.kind === 'workbench') sessionBoxes.set(sandboxId, resolved.subjectId);
       if (!inserted) continue;
       opened += 1;
       if (subject.kind === 'workbench') await setWorkbenchSandboxState({ workbenchId: resolved.subjectId }, 'suspended', 'running');
     }
+
+    await this.recordSamples(boxes, sessionBoxes, now);
     return { opened, closed, listErrors };
+  }
+
+  /** A failure here costs one chart point, never a bill. */
+  private async recordSamples(boxes: Map<string, SweptBox>, sessionBoxes: Map<string, string>, now: Date): Promise<void> {
+    const rows: ResourceSample[] = [];
+    for (const [sandboxId, workbenchId] of sessionBoxes) {
+      const box = boxes.get(sandboxId);
+      if (!box || !RUNNING.has(box.status)) continue;
+      const sample = sampleFromFleet(workbenchId, box, now);
+      if (sample) rows.push(sample);
+    }
+    try {
+      await recordResourceSamples(rows);
+      await pruneResourceSamples(now);
+    } catch (error) {
+      debugBus.recordEvent({ service: 'billing', action: 'resource_samples_failed', summary: 'Could not store box resource samples', ok: false, error });
+    }
   }
 }

@@ -543,10 +543,14 @@ describe('NewWorkbenchPage', () => {
     expect(screen.getByRole('combobox', { name: 'Base branch' })).toHaveValue('');
   });
 
-  it('lists recent workbenches, newest first, and links to History for archived ones', async () => {
+  it('lists recent workbenches by creation time and links to History for archived ones', async () => {
     useWorkbenchStore.getState().setWorkbenches('ws1', [
-      wb('older', { updatedAt: '2026-10-10T00:00:00Z' }),
-      wb('newer', { updatedAt: '2026-10-14T00:00:00Z', repoFullName: 'acme/web' }),
+      wb('older', { createdAt: '2026-10-10T00:00:00Z', updatedAt: '2026-10-15T00:00:00Z' }),
+      wb('newer', {
+        createdAt: '2026-10-14T00:00:00Z',
+        updatedAt: '2026-10-14T00:00:00Z',
+        repoFullName: 'acme/web',
+      }),
       wb('gone', { status: 'archived', archivedAt: '2026-10-12T00:00:00Z' }),
     ]);
     await renderPage();

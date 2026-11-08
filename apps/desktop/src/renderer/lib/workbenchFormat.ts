@@ -91,6 +91,10 @@ export interface TranscriptTurn {
   attachments: ReturnType<typeof messageAttachments>;
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
+  /** When the user's message was stored. Null when unknown. */
+  userAt: string | null;
+  /** When the turn's newest agent event was stored. Null when unknown. */
+  lastAt: string | null;
 }
 
 /** Split a chat's events into turns, each led by the user's message. */
@@ -100,15 +104,17 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   for (const e of events) {
     const text = userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], events: [] };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], events: [], userAt: null, lastAt: null };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
       current.userText = text;
       current.userSeq = e.seq;
       current.attachments = messageAttachments(e.event);
+      current.userAt = e.createdAt ?? null;
     } else {
       current.events.push(e.event);
+      if (e.createdAt) current.lastAt = e.createdAt;
     }
   }
   return turns;

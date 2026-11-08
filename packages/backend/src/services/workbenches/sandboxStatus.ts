@@ -8,6 +8,7 @@ import {
   type SandboxStatusAction,
   type SandboxStatusProblem,
   type SandboxStatusState,
+  type SandboxUsageHistory,
   type SandboxWorkSafety,
   type WorkbenchCapacityWait,
   type WorkbenchSandboxStatus,
@@ -16,6 +17,7 @@ import {
 import { getPoolDbClient } from '../../db/client.js';
 import { workbenchChats as chats, workbenchEvents as events, workbenchScriptRuns as runs } from '../../db/schema.js';
 import type { FleetSandbox } from '../selfHosted/client.js';
+import { describeUsageHistory, readResourceSamples, sampleFromFleet, type ResourceSample } from './resourceSamples.js';
 import { describeBoxStart, parseStartHistory, startHistoryQuery, type StartHistoryEntry } from './boxStart.js';
 import { fleetClientFor, isResuming } from './sandboxRuntime.js';
 import { checkpointTime } from './workCheckpointScripts.js';
@@ -206,6 +208,8 @@ export interface SandboxStatusInput {
   now: Date;
   /** The repository's recent box starts. Absent: not read. */
   history?: StartHistoryEntry[] | null;
+  /** The box's stored resource samples. Absent: not read. */
+  samples?: ResourceSample[] | null;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -497,6 +501,7 @@ export function describeSandboxStatus(input: SandboxStatusInput): WorkbenchSandb
     host: row.fleetHost,
     size,
     resources: row.runtime === 'sandbox' && !row.archivedAt ? resourcesOf(size, sandbox) : null,
+    usage: usageOf(input, sandbox),
     activity,
     work: workOf(input, activity),
     problem: problemOf(input, fleetError),
@@ -505,17 +510,26 @@ export function describeSandboxStatus(input: SandboxStatusInput): WorkbenchSandb
   };
 }
 
+function usageOf(input: SandboxStatusInput, sandbox: FleetSandbox | null): SandboxUsageHistory | null {
+  const { row, now } = input;
+  if (row.runtime !== 'sandbox' || row.kind === 'thread' || row.archivedAt) return null;
+  const awake = sandbox && ['starting', 'idle', 'busy'].includes(sandbox.status);
+  const live = awake ? sampleFromFleet(row.id, sandbox, now) : null;
+  return describeUsageHistory(input.samples ?? [], live, now);
+}
+
 /** Whether the fleet is worth asking: a box exists and the row cannot answer alone. */
 function asksFleet(row: WorkbenchRow): row is WorkbenchRow & { sandboxId: string } {
   return row.runtime === 'sandbox' && !row.archivedAt && row.status === 'ready' && !!row.sandboxId && row.sandboxState !== 'lost';
 }
 
 export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Promise<WorkbenchSandboxStatus> {
-  const [chatRows, scripts, fleet, history] = await Promise.all([
+  const [chatRows, scripts, fleet, history, samples] = await Promise.all([
     statusChatsQuery(row.id) as Promise<StatusChat[]>,
     row.runtime === 'sandbox' ? (statusScriptsQuery(row.id) as Promise<StatusScript[]>) : Promise.resolve([]),
     asksFleet(row) ? readFleetRecord(row, now.getTime()) : Promise.resolve(null),
     readStartHistory(row),
+    readSamples(row, now),
   ]);
   const open = chatRows.filter((c) => !c.closedAt);
   const notes = open.length ? await problemNoteQuery(open) : [];
@@ -529,7 +543,19 @@ export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Pro
     resuming: row.sandboxId ? isResuming(row.sandboxId) : false,
     now,
     history,
+    samples,
   });
+}
+
+/** The box's recent resource samples. Null when there is no box to chart, or the read fails. */
+async function readSamples(row: WorkbenchRow, now: Date): Promise<ResourceSample[] | null> {
+  if (row.runtime !== 'sandbox' || row.kind === 'thread' || row.archivedAt) return null;
+  try {
+    return await readResourceSamples(row.id, now);
+  } catch (err) {
+    console.warn(`[workbench] reading the resource samples of ${row.id} failed:`, err);
+    return null;
+  }
 }
 
 /** The repository's recent starts, for a sandbox session. Null when there is nothing to compare, or the read fails. */

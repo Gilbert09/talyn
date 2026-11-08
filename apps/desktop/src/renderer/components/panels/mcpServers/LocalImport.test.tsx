@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { LocalImport } from './LocalImport';
 
@@ -11,6 +12,7 @@ it('opens once, scans on demand, and imports from the modal', async () => {
   const props = { connectedUrls: new Set<string>(), onImport };
   const first = render(<LocalImport {...props} />);
   expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Import from this machine' })).toHaveFocus();
   expect(localStorage.getItem('talyn:mcp-local-import-seen')).toBe('1');
   await screen.findByText('No servers found in your Claude or Codex configuration.');
   fireEvent.click(screen.getByRole('button', { name: 'Done' }));

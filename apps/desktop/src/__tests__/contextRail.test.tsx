@@ -21,15 +21,15 @@ const TEAM: SpacesTeam = {
   homeWorkspaceId: 'ws1',
   createdAt: '',
   spaces: [
-    { id: 's1', teamId: 't1', name: 'Web', color: '#10b981', createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
-    { id: 's2', teamId: 't1', name: 'Data Platform', color: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
+    { id: 's1', teamId: 't1', name: 'Web', color: '#10b981', image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
+    { id: 's2', teamId: 't1', name: 'Data Platform', color: null, image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
   ],
 };
 const TEAM2: SpacesTeam = {
   ...TEAM,
   id: 't2',
   name: 'Beta',
-  spaces: [{ id: 's3', teamId: 't2', name: 'Ops', color: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' }],
+  spaces: [{ id: 's3', teamId: 't2', name: 'Ops', color: null, image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' }],
 };
 
 /** Lets the first badge fetch settle inside act. */

@@ -106,6 +106,12 @@ export interface FleetSandbox {
    * as zero.
    */
   memUsedMib?: number;
+  /**
+   * The VMM's cumulative CPU time in seconds, guest vCPU threads included.
+   * Absent like `memUsedMib`, and from a fleetd that predates the field. A new
+   * box starts again from zero.
+   */
+  cpuSeconds?: number;
   vcpuCount?: number;
   golden?: string;
   bake?: RepositoryBake;

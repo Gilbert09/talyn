@@ -47,6 +47,10 @@ export function LocalImport(props: LocalImportProps) {
   });
 
   useEffect(() => {
+    if (open) document.getElementById('mcp-import-title')?.focus();
+  }, [open]);
+
+  useEffect(() => {
     introSeen = true;
     try {
       localStorage.setItem(INTRO_SEEN_KEY, '1');
@@ -86,7 +90,7 @@ export function LocalImport(props: LocalImportProps) {
           onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}
         >
           <DialogHeader>
-            <DialogTitle id="mcp-import-title">Import from this machine</DialogTitle>
+            <DialogTitle id="mcp-import-title" tabIndex={-1}>Import from this machine</DialogTitle>
             <DialogDescription>
               Choose a server from your Claude or Codex configuration. You may need to sign in or enter its key.
             </DialogDescription>
@@ -109,7 +113,7 @@ export function LocalImport(props: LocalImportProps) {
             props.onImport(input);
           }} />}
           <div className="mt-4 flex justify-end">
-            <Button autoFocus variant="outline" onClick={() => setOpen(false)}>Done</Button>
+            <Button variant="outline" onClick={() => setOpen(false)}>Done</Button>
           </div>
         </DialogContent>
       </Dialog>

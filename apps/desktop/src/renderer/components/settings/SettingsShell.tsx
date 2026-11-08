@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import { useState, type ComponentType } from 'react';
 import {
   Bot,
   Box,
@@ -18,6 +18,7 @@ import {
   Plug,
   PlugZap,
   ScanSearch,
+  Search,
   Settings,
   SquareTerminal,
   User,
@@ -62,6 +63,39 @@ interface NavEntry {
   id: SettingsSection;
   icon: ComponentType<{ className?: string }>;
   label: string;
+}
+
+const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  agents: 'Claude Codex subscriptions accounts providers API keys models usage rate limits',
+  repositories: 'GitHub watched repositories local checkouts scan setup run command preview',
+  sandboxSetup: 'dotfiles setup steps install commands branch repository',
+  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
+  shortcuts: 'keyboard hotkeys keys navigation',
+  instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
+  memory: 'notes session remember forget',
+  skills: 'SKILL.md local repository workspace tools',
+  mcpServers: 'model context protocol tools servers integrations',
+  pullRequests: 'auto keep mergeable fix runs tasks defaults model notifications merge queue blocked labels human comments',
+  codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
+  workspace: 'name logo delete',
+  integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
+  slack: 'workspace bot emoji invite sessions channel',
+  teams: 'members roles invite spaces home workspace seats',
+  billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
+  account: 'email sign out privacy analytics usage data session replays',
+  appearance: 'theme light dark system look',
+  developer: 'build version commit GitHub rate limits events account delete data local storage',
+  mcp: 'Claude Desktop Claude Code token command model context protocol',
+  apiTokens: 'developer API access keys token scopes expiry revoke',
+  about: 'version update changelog release notes software',
+};
+
+function matchesSearch(entry: NavEntry, query: string): boolean {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const text = `${entry.label} ${SETTINGS_SEARCH_TERMS[entry.id]}`.toLocaleLowerCase();
+  return terms.every((term) => text.includes(term));
 }
 
 // These render their own content but no page title.
@@ -149,6 +183,7 @@ export function SettingsShell() {
   const setActiveSection = useWorkspaceStore((s) => s.setSettingsSection);
   const features = useWorkspaceStore((s) => s.features);
   const billingStatus = useBillingStore((s) => s.status);
+  const [search, setSearch] = useState('');
 
   const groups: Array<{ label: string; entries: NavEntry[] }> = [
     {
@@ -218,37 +253,67 @@ export function SettingsShell() {
     },
   ];
 
+  const filteredGroups = groups
+    .map((group) => ({
+      ...group,
+      entries: group.entries.filter((entry) => matchesSearch(entry, search)),
+    }))
+    .filter((group) => group.entries.length > 0);
+
   const Body = SECTION_BODY[activeSection];
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader title="Settings" />
       <div className="flex min-h-0 flex-1">
-        <nav className="w-48 shrink-0 space-y-4 overflow-y-auto border-r p-2">
-          {groups.map((group) => (
-            <div key={group.label} className="space-y-0.5">
-              <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                {group.label}
-              </p>
-              {group.entries.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  onClick={() => setActiveSection(entry.id)}
-                  aria-current={activeSection === entry.id ? 'page' : undefined}
-                  className={cn(
-                    'flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors',
-                    activeSection === entry.id
-                      ? 'bg-secondary text-foreground'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  )}
-                >
-                  <entry.icon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{entry.label}</span>
-                </button>
-              ))}
+        <nav className="flex w-48 shrink-0 flex-col border-r" aria-label="Settings sections">
+          <div className="border-b p-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                aria-label="Search settings"
+                placeholder="Search settings"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setSearch('');
+                }}
+                className="h-7 w-full rounded-md border border-input bg-background pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+              />
             </div>
-          ))}
+          </div>
+          <div className="flex-1 space-y-4 overflow-y-auto p-2">
+            {filteredGroups.map((group) => (
+              <div key={group.label} className="space-y-0.5">
+                <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {group.label}
+                </p>
+                {group.entries.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => setActiveSection(entry.id)}
+                    aria-current={activeSection === entry.id ? 'page' : undefined}
+                    className={cn(
+                      'flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors',
+                      activeSection === entry.id
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                    )}
+                  >
+                    <entry.icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{entry.label}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+            {filteredGroups.length === 0 && (
+              <p role="status" className="px-2 py-3 text-xs text-muted-foreground">
+                No settings found.
+              </p>
+            )}
+          </div>
         </nav>
 
         <div className="min-w-0 flex-1 overflow-hidden">

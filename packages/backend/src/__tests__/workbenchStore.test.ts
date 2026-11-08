@@ -131,6 +131,19 @@ describe('workbench store', () => {
       }
     });
 
+    it('returns when each event was stored, on append and on every read', async () => {
+      const before = Date.now() - 1000;
+      const [appended] = await appendEvents('chat-1', [{ turn: 1, event: { type: 'user' } }]);
+      const forward = (await listEvents('chat-1', 0, 10)).events;
+      const backward = (await listOlderEvents('chat-1', null, 10, 100)).events;
+      for (const event of [appended, ...forward, ...backward]) {
+        expect(event.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(new Date(event.createdAt!).getTime()).toBeGreaterThanOrEqual(before);
+      }
+      expect(forward[0].createdAt).toBe(appended.createdAt);
+      expect(backward[0].createdAt).toBe(appended.createdAt);
+    });
+
     it('appends nothing for an empty batch and nothing for a missing chat', async () => {
       expect(await appendEvents('chat-1', [])).toEqual([]);
       expect(await appendEvents('no-such-chat', [{ turn: 1, event: { type: 'x' } }])).toEqual([]);

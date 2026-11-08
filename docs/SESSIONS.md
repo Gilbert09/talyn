@@ -92,7 +92,7 @@ Phase P4 of Teams and Spaces: the web app can switch between Personal and a team
 - **Teams store.** `stores/spaces.ts` holds my teams, members, each space's sessions, tasks, repositories and presence. It applies `workbench:*` and `task:*` frames to the space lists, and re-lists a space when a frame names a session it does not have, because a row needs its creator.
 - **Teammate sessions are "extras" in the workbench store.** `extraWorkbenchIds` lets the session view hold a session from another workspace without it showing in the Personal lists. A workbench in the main list is always mine; only an extra is checked against my workspaces (`useIsWorkbenchOwner`). On a teammate's session the header, chat tabs, composer settings, terminal and sandbox tab hide their owner-only actions. The composer says who pays, and shows a refusal from send-message inline (`payer_busy`, or any 403/409).
 - **Presence.** `usePresenceHeartbeat` subscribes to the space, sends the open session on each navigation and every 20s, and sends `away` while the tab is hidden. The client also resends the last presence on its own heartbeat; the extra frame costs little.
-- **Keys.** The browser keeps ⌘1–9, and ⌘⌥1–9 opens a session, so a context jump is ⌘⌥⇧1–9 (`context.jump.N` in `appShortcuts.ts`).
+- **Keys.** The browser keeps ⌘1–9, and ⌘⌥1–9 opens a session, so a context jump is ⌘⇧1–9 (`context.jump.N` in `appShortcuts.ts`).
 - **Not done here.** A teammate's task shows status, creator and PR link only: there is no member read route for a task transcript yet. Sending to a teammate's session depends on P3 (prompter pays). Until it lands, the send route is owner-only and the composer shows its error as a toast. The desktop port is P6.
 
 ## Space subscriptions and presence (2026-11-06)
@@ -7405,7 +7405,7 @@ The first message of a new session with images uses the same path.
 
 ### 2026-11-08 — Context rail for workspaces and spaces
 
-Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⌥⇧1–9 counts the same tiles. The open context gets a pill and a ring. Each other context gets a red count of the items that need the person.
+Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⇧1–9 counts the same tiles. The open context gets a pill and a ring. Each other context gets a red count of the items that need the person.
 The count comes from `GET /workspaces/attention` (`services/workbenches/attention.ts`). The rule is `sessionNeedsAttention` in `packages/shared/src/contextAttention.ts`: a live session or thread that failed, that asks a question, or whose open pull request has conflicts. A running turn or a queued message wins, as in the sidebar. An unread reply is not counted: read state is kept only in the open app. A session in a space counts for its workspace and for its space, because both sidebars show it. The rail asks every 30 seconds while the window shows, on window focus, and on a context switch. The two reads are narrow; `contextAttention.test.ts` pins that.
 The rail is `ContextRail.tsx` with `lib/contextRail.ts`, in both apps. On macOS desktop, the top strip of the rail is a drag area under the traffic lights.
 
@@ -7422,3 +7422,11 @@ Now `inPersonalList` (`lib/spaces.ts`, both apps) keeps a session with a `spaceI
 A space session shows in Personal again when the `spaces` flag is off or its space is not in my teams (archived, or I left the team), so it is never lost. While my teams load, it stays out, so it does not show and then go.
 History keeps archived space sessions (`useWorkspaceWorkbenches({ withSpaceSessions: true })`), because the space feed leaves archived sessions out.
 The store still holds space sessions, so opening one from the space feed needs no fetch. `countContextAttention` now counts a space session for its space only, not for its workspace. This replaces the rule in the context rail note above.
+
+### 2026-11-08 — CPU and memory charts in the Sandbox tab
+
+The **Resources** section of the Sandbox tab now shows two line charts: CPU and memory use over the last hour. Each chart has its own scale, and a hover shows the value at one time in both charts.
+The usage sweep (`billing/usage/sweep.ts`) already reads every running box each minute. It now also writes one row per running session box to `workbench_resource_samples` (migration 0121, backend-pool-only) and deletes rows older than two hours. So the chart needs no extra fleet read. A failure there costs one chart point, never a bill.
+`getSandboxStatus` returns the samples as `usage` and adds the live fleet read as the newest point. `resourceSamples.ts` calculates CPU % from the change in the fleet's cumulative `cpuSeconds` between two samples of the same box. It gives no figure across a gap longer than three minutes, a different box or a lower counter (a new VMM).
+`cpuSeconds` comes from yetanothersandbox-dev/yas#16. A host that runs an older fleetd sends no counter, and the CPU chart then says that the fleet does not report CPU use yet. Through a gateway, only the per-id read carries the usage figures, not the list; the sweep already reads gateway boxes by id.
+The web Sandbox panel also gets the Resources section that only the desktop panel had.
