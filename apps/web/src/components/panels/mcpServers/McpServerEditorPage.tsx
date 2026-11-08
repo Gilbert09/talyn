@@ -42,6 +42,15 @@ function analyticsHost(url: string): string {
   }
 }
 
+function parsesAsUrl(value: string): boolean {
+  try {
+    new URL(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The tool-server editor.
  *
@@ -230,12 +239,16 @@ export function McpServerEditorPage({
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
 
   const connected = probe?.ok === true || oauthConnected;
-  const validAddress = !mcpServerInputProblem({
+  const addressProblem = mcpServerInputProblem({
     name: 'discovery',
     url: input.url,
     authKind: 'none',
     enabled: true,
   }, privateRoutes);
+  const validAddress = !addressProblem;
+  // Silent while the address is still being typed: only a URL that parses
+  // gets a reason, so "htt" does not read as an error.
+  const addressHint = addressProblem && parsesAsUrl(input.url) ? addressProblem : null;
 
   const edit = useCallback((patch: Partial<McpServerInput>) => {
     if ('secret' in patch || 'inject' in patch || 'url' in patch || 'authKind' in patch) {
@@ -422,6 +435,11 @@ export function McpServerEditorPage({
                 }}
                 placeholder="https://mcp.linear.app/mcp"
               />
+              {addressHint && (
+                <p role="alert" className="text-sm text-red-500">
+                  {addressHint}
+                </p>
+              )}
             </Section>
           )}
 
