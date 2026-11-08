@@ -108,7 +108,10 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
             }}
             className={ITEM}
           >
-            <Plus className="h-4 w-4 flex-shrink-0" />
+            <span aria-hidden className="h-4 w-4 flex-shrink-0" />
+            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+              <Plus className="h-4 w-4" />
+            </span>
             New workspace…
           </button>
           {!active && (
@@ -170,7 +173,10 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   }}
                   className={ITEM}
                 >
-                  <Plus className="h-4 w-4 flex-shrink-0" />
+                  <span aria-hidden className="h-4 w-4 flex-shrink-0" />
+                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                    <Plus className="h-4 w-4" />
+                  </span>
                   New space…
                 </button>
                 <button type="button" onClick={() => openTeamSettings(team.id)} className={cn(ITEM, 'text-muted-foreground')}>
