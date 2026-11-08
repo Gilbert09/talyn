@@ -86,6 +86,12 @@ describe('stored MCP authentication', () => {
     expect((await mcpOAuthStore.read(id))?.accessTokenEnc).toBeTruthy();
   });
 
+  it('stores and returns repository access', async () => {
+    await updateMcpServer(id, validateMcpServer({ ...input, repositoryIds: ['repo-a'] }));
+    expect((await getMcpServer(id))?.repositoryIds).toEqual(['repo-a']);
+    expect((await listMcpServers('ws-1'))[0]?.repositoryIds).toEqual(['repo-a']);
+  });
+
   it.each([
     { url: 'https://other.example.com/mcp' },
     { authKind: 'none' },

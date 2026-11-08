@@ -23,8 +23,17 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../../lib/api', () => ({ api: { mcpServers: mocks, workspaces: { privateConnector: { get: mocks.privateConnector } } } }));
 vi.mock('../../../lib/openExternal', () => ({ openExternal: mocks.openExternal, prepareSignInWindow: () => ({ open: mocks.openSignIn, close: mocks.closeSignIn }) }));
 vi.mock('../../../stores/workspace', () => ({
-  useWorkspaceStore: (selector: (state: { currentWorkspaceId: string }) => unknown) =>
-    selector({ currentWorkspaceId: 'ws-1' }),
+  useWorkspaceStore: (selector: (state: {
+    currentWorkspaceId: string;
+    repositories: { id: string; workspaceId: string; fullName: string }[];
+  }) => unknown) =>
+    selector({
+      currentWorkspaceId: 'ws-1',
+      repositories: [
+        { id: 'repo-a', workspaceId: 'ws-1', fullName: 'acme/api' },
+        { id: 'repo-b', workspaceId: 'ws-1', fullName: 'acme/web' },
+      ],
+    }),
 }));
 
 const url = 'https://mcp.example.com/mcp';
@@ -73,6 +82,29 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('MCP authentication setup', () => {
+  it('defaults to all repositories and saves a selected repository list', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    setup({
+      ...server,
+      hasSecret: true,
+      lastProbe: { ok: true, at: '', toolNames: ['read_documents'] },
+    });
+
+    expect((screen.getByRole('radio', { name: /All repositories/ }) as HTMLInputElement).checked)
+      .toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Only selected repositories' }));
+    const webRepository = screen.getByRole('checkbox', { name: 'acme/web' }) as HTMLInputElement;
+    fireEvent.click(webRepository);
+    await waitFor(() => expect(webRepository.checked).toBe(false));
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryIds: ['repo-a'] })
+    ));
+  });
+
   it('allows a private hostname after the exact route loads', async () => {
     mocks.privateConnector.mockResolvedValue({ routes: [{ host: 'mcp.local', port: 443 }] });
     mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });

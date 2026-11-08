@@ -109,6 +109,9 @@ export interface McpServerDefinition {
   /** null = every tool the server advertises, [] = none, [...] = exactly these.
    *  The three are distinct and nothing may collapse them. */
   tools?: string[] | null;
+  /** null = every repository, [] = no repository, [...] = exactly these.
+   *  A server with a restricted list is not available to repository-free threads. */
+  repositoryIds?: string[] | null;
   enabled: boolean;
   lastProbe?: McpProbeResult | null;
   createdAt: string;
@@ -138,6 +141,8 @@ export interface McpServerInput {
    *  clear it. The same rule the fleet's own PUT follows. */
   secret?: string;
   tools?: string[] | null;
+  /** Omit or null to allow every repository. A list limits access to those repositories. */
+  repositoryIds?: string[] | null;
   enabled: boolean;
 }
 
@@ -152,6 +157,7 @@ export interface NormalizedMcpServer {
   inject: McpInjection | null;
   secret: string | undefined;
   tools: string[] | null;
+  repositoryIds: string[] | null;
   enabled: boolean;
 }
 
@@ -299,6 +305,20 @@ export function validateMcpServer(raw: unknown, privateRoutes: readonly PrivateR
     }
   }
 
+  let repositoryIds: string[] | null = null;
+  if (o.repositoryIds !== undefined && o.repositoryIds !== null) {
+    if (!Array.isArray(o.repositoryIds)) fail('the allowed repositories must be a list');
+    const seen = new Set<string>();
+    repositoryIds = [];
+    for (const value of o.repositoryIds) {
+      const id = str(value);
+      if (!id) fail('an allowed repository needs an id');
+      if (seen.has(id)) continue;
+      seen.add(id);
+      repositoryIds.push(id);
+    }
+  }
+
   return {
     name,
     displayName: str(o.displayName).slice(0, 120) || null,
@@ -318,6 +338,7 @@ export function validateMcpServer(raw: unknown, privateRoutes: readonly PrivateR
     inject,
     secret,
     tools,
+    repositoryIds,
     enabled: o.enabled === undefined ? true : o.enabled === true,
   };
 }
@@ -742,7 +763,14 @@ export function mcpServersOffered(features: { mcpServers?: boolean } | null): bo
 }
 
 export function emptyMcpServerInput(): McpServerInput {
-  return { name: '', url: '', authKind: 'bearer', enabled: true, tools: null };
+  return {
+    name: '',
+    url: '',
+    authKind: 'bearer',
+    enabled: true,
+    tools: null,
+    repositoryIds: null,
+  };
 }
 
 export function mcpServerToInput(s: McpServerDefinition): McpServerInput {
@@ -758,6 +786,7 @@ export function mcpServerToInput(s: McpServerDefinition): McpServerInput {
     // a new one, and prefilling a masked placeholder would make "clear it" and
     // "leave it alone" the same gesture.
     tools: s.tools ?? null,
+    repositoryIds: s.repositoryIds ?? null,
     enabled: s.enabled,
   };
 }
@@ -772,6 +801,7 @@ export function mcpServerFromCatalog(entry: McpCatalogEntry): McpServerInput {
     authKind: entry.authKind,
     inject: entry.inject,
     tools: null,
+    repositoryIds: null,
     enabled: true,
   };
 }

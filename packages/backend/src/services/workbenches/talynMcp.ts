@@ -134,8 +134,14 @@ export function unclaimedTalynMcpServer(): FleetMcpServerInline | null {
 export async function workbenchIntegrationSecrets(session: {
   id: string;
   workspaceId: string;
+  repositoryId?: string | null;
+  kind?: string;
 }): Promise<Record<string, string>> {
-  const out = { ...(await mcpIntegrationSecrets({ workspaceId: session.workspaceId, metadata: undefined })) };
+  const out = { ...(await mcpIntegrationSecrets({
+    workspaceId: session.workspaceId,
+    metadata: undefined,
+    repositoryId: session.kind === 'thread' ? null : session.repositoryId ?? null,
+  })) };
   const talyn = await talynMcpFor(session, { mint: false });
   if (talyn) out[TALYN_MCP_SERVER_NAME] = talyn.token;
   return out;
@@ -153,8 +159,15 @@ export async function sessionHasTalynMcp(session: { id: string; workspaceId: str
  * else prompts. A route the owner's server set made and the payer has no
  * server for gets no credential, and its calls fail.
  */
-export async function payerIntegrationSecrets(payerWorkspaceId: string): Promise<Record<string, string>> {
-  const out = { ...(await mcpIntegrationSecrets({ workspaceId: payerWorkspaceId, metadata: undefined })) };
+export async function payerIntegrationSecrets(
+  payerWorkspaceId: string,
+  repositoryId?: string | null,
+): Promise<Record<string, string>> {
+  const out = { ...(await mcpIntegrationSecrets({
+    workspaceId: payerWorkspaceId,
+    metadata: undefined,
+    repositoryId: repositoryId ?? null,
+  })) };
   if (talynMcpPublicUrl()) out[TALYN_MCP_SERVER_NAME] = `unclaimed-${randomBytes(24).toString('hex')}`;
   return out;
 }

@@ -23,10 +23,13 @@ import { mcpServersForDispatch } from './store.js';
 export async function mcpIntegrationSecrets(task: {
   workspaceId: string;
   metadata: Task['metadata'];
+  repositoryId?: string | null;
 }): Promise<Record<string, string>> {
   if (!(await workspaceMayUseMcpServers(task.workspaceId))) return {};
   const pinned = mcpServerIdsFromMetadata(task.metadata);
-  const servers = await mcpServersForDispatch(task.workspaceId, pinned);
+  const servers = await mcpServersForDispatch(task.workspaceId, pinned, {
+    repositoryId: task.repositoryId ?? null,
+  });
   const out: Record<string, string> = {};
   for (const s of servers) {
     // A server with NO credential contributes no entry. It still has a route

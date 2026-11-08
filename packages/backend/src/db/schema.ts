@@ -1741,6 +1741,12 @@ export const mcpServers = pgTable(
      * "allow everything" is the worst available guess.
      */
     tools: jsonb('tools').$type<string[] | null>(),
+    /**
+     * The repository allow-list. Null means every repository, including ones
+     * added later. An empty list means no repository. Repository-free threads
+     * can use only servers with a null list.
+     */
+    repositoryIds: jsonb('repository_ids').$type<string[] | null>(),
     enabled: boolean('enabled').notNull().default(true),
     /** The last initialize/tools-list probe. Never a credential. */
     lastProbe: jsonb('last_probe').$type<McpProbeResult | null>(),
