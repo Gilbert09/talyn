@@ -31,7 +31,7 @@ export function RecentWorkbenches({ workbenches }: { workbenches: Workbench[] })
   const { recent, archived } = useMemo(() => {
     const live = workbenches.filter((w) => !isArchived(w));
     return {
-      recent: live.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_LIMIT),
+      recent: live.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, RECENT_LIMIT),
       archived: workbenches.length - live.length,
     };
   }, [workbenches]);
