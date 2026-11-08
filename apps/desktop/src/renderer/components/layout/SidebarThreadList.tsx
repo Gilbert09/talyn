@@ -3,6 +3,7 @@ import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { sessionPr, sessionState } from '../../lib/sessionState';
+import { useBackground } from '../../stores/sessionBackground';
 import { liveThreads, runningSessionCount, threadChildren, threadSummary } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
 import { usePullRequestStore } from '../../stores/pullRequests';
@@ -105,9 +106,10 @@ function ThreadRow({
 }) {
   const chats = useWorkbenchStore((s) => s.chats[thread.id]);
   const unread = useWorkbenchStore((s) => s.unread);
-  const own = sessionState(thread, chats ?? [], unread, null);
+  const background = useBackground(thread.id);
+  const own = sessionState(thread, chats ?? [], unread, null, false, background);
   // A resting thread whose sessions work is working too. Its own reply, question or failure still wins.
-  const state = sessionsRunning > 0 && own.kind === 'idle'
+  const state = sessionsRunning > 0 && (own.kind === 'idle' || own.kind === 'wakeup')
     ? { kind: 'working' as const, label: sessionsRunning === 1 ? '1 session working' : `${sessionsRunning} sessions working` }
     : own;
   const name = workbenchDisplayName(thread);
@@ -190,7 +192,8 @@ function ThreadChildRow({ session, selected, onSelect }: { session: Workbench; s
     session.pullRequestId ? s.rows.find((r) => r.id === session.pullRequestId) : undefined
   );
   const pr = sessionPr(session, row);
-  const state = sessionState(session, chats ?? [], unread, pr);
+  const background = useBackground(session.id);
+  const state = sessionState(session, chats ?? [], unread, pr, false, background);
   const repo = session.repoFullName.split('/').pop() || session.repoFullName;
   return (
     <button

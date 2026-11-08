@@ -14,6 +14,7 @@ import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workb
 import { buildGoToShortcuts } from './goToShortcuts';
 import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
+import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 
 /**
  * ⌘1–9 belongs to the browser (switch tab), and ⌘⌥1–9 opens a session, so a
@@ -29,6 +30,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
   const { workbenches, extraWorkbenchIds, chats, unread, unseen } = useWorkbenchStore.getState();
   const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
   const rowById = new Map(usePullRequestStore.getState().rows.map((row) => [row.id, row]));
+  const backgrounds = useSessionBackgroundStore.getState().byWorkbench;
   const activeIds = new Set(all.filter((workbench) => {
     const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
     const resolvedPr = sessionPr(workbench, pr);
@@ -38,6 +40,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
       unread,
       resolvedPr,
       isPrOnlyUnseen(unseen[workbench.id]),
+      backgrounds[workbench.id],
     );
     return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
   }).map((workbench) => workbench.id));

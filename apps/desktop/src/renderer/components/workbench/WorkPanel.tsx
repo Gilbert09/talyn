@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { clampPanelWidth } from '../../lib/workbenchLayout';
 import { sessionPr, sessionState } from '../../lib/sessionState';
+import { useBackground } from '../../stores/sessionBackground';
 import { prCiLabel, threadRepositories, WORK_PANEL_MEMORY_LIMIT } from '../../lib/threads';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePullRequestStore } from '../../stores/pullRequests';
@@ -120,7 +121,8 @@ function SessionRow({ session }: { session: Workbench }) {
     session.pullRequestId ? s.rows.find((r) => r.id === session.pullRequestId) : undefined
   );
   const pr = sessionPr(session, row);
-  const state = sessionState(session, chats ?? [], unread, pr);
+  const background = useBackground(session.id);
+  const state = sessionState(session, chats ?? [], unread, pr, false, background);
   const archived = isArchived(session);
   const ci = pr?.state === 'open' ? prCiLabel(pr.summary.ciStatus) : null;
   const name = workbenchDisplayName(session);

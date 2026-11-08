@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
+import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 import { MENU_COMMANDS } from '../../../main/menuCommands';
 import {
   FOCUS_COMPOSER_EVENT,
@@ -36,6 +37,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
   const { workbenches, extraWorkbenchIds, chats, unread, unseen } = useWorkbenchStore.getState();
   const all = Object.values(workbenches).filter((w) => !isArchived(w) && !extraWorkbenchIds[w.id]);
   const rowById = new Map(usePullRequestStore.getState().rows.map((row) => [row.id, row]));
+  const backgrounds = useSessionBackgroundStore.getState().byWorkbench;
   const activeIds = new Set(all.filter((workbench) => {
     const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
     const resolvedPr = sessionPr(workbench, pr);
@@ -45,6 +47,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
       unread,
       resolvedPr,
       isPrOnlyUnseen(unseen[workbench.id]),
+      backgrounds[workbench.id],
     );
     return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
   }).map((workbench) => workbench.id));
