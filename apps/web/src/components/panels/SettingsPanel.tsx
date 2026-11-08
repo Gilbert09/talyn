@@ -54,6 +54,7 @@ import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
 import { TrunkSettingsCard } from './TrunkSettingsCard';
+import { BuildInfo } from './BuildInfo';
 import { highlightsForSurface, privateRoutesOffered } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -2419,9 +2420,11 @@ function DeveloperSettings() {
       <div>
         <h3 className="text-lg font-medium mb-1">Developer</h3>
         <p className="text-sm text-muted-foreground">
-          Your account's GitHub rate limits, agents and recent activity
+          This build, and your account's GitHub rate limits, agents and recent activity
         </p>
       </div>
+
+      <BuildInfo />
 
       <DeveloperInternals />
 

@@ -45,3 +45,17 @@ export function releaseVersion(): string | null {
 export function isReleaseBuild(): boolean {
   return releaseVersion() !== null;
 }
+
+const REPO_URL = 'https://github.com/Gilbert09/talyn';
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/** The full commit SHA this build came from, or null when it was not baked. */
+export function buildCommit(): string | null {
+  const sha = (process.env.TALYN_BUILD_COMMIT ?? '').trim().toLowerCase();
+  return FULL_SHA.test(sha) ? sha : null;
+}
+
+/** The GitHub page for a commit in the Talyn repository. */
+export function commitUrl(sha: string): string {
+  return `${REPO_URL}/commit/${sha}`;
+}

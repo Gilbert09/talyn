@@ -85,6 +85,31 @@ export function appVersionFrom(
   return buildId ? `${LOCAL_VERSION}+${buildId}` : LOCAL_VERSION;
 }
 
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * The full commit SHA this bundle was built from, for Settings → Developer.
+ *
+ * CI sets GITHUB_SHA. Elsewhere, ask git. Returns '' when neither answers,
+ * so the renderer shows "unknown" rather than a broken GitHub link.
+ */
+export function resolveBuildCommit(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const fromEnv = (env.GITHUB_SHA ?? '').trim().toLowerCase();
+  if (FULL_SHA.test(fromEnv)) return fromEnv;
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: path.resolve(__dirname, '../..'),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return FULL_SHA.test(sha) ? sha : '';
+  } catch {
+    return '';
+  }
+}
+
 export function resolveAppVersion(): string {
   // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
   const raw = require('../../release/app/package.json').version;
