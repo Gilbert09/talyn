@@ -39,6 +39,7 @@ import {
   Keyboard,
   Box,
   Network,
+  Search,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { SlackSettings } from './SlackSettings';
@@ -107,7 +108,7 @@ import {
   parseAutoKeepMergeableLabels,
   type FleetAgent,
 } from '@talyn/shared';
-import { useWorkspaceStore, type Theme } from '../../stores/workspace';
+import { useWorkspaceStore, type SettingsSection, type Theme } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import {
   useWorkspaceActions,
@@ -128,6 +129,28 @@ import {
   formatAge,
 } from '../../lib/repoCache';
 
+const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  shortcuts: 'keyboard hotkeys keys navigation',
+  workspace: 'name logo repositories GitHub delete code review',
+  sandboxSetup: 'dotfiles setup steps install commands branch repository',
+  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
+  integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
+  slack: 'workspace bot emoji invite sessions channel',
+  skills: 'SKILL.md local repository workspace tools',
+  instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
+  memory: 'notes session remember forget',
+  codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
+  account: 'email sign out privacy analytics usage data session replays',
+  billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
+  teams: 'members roles invite spaces home workspace seats',
+  appearance: 'theme light dark system look',
+  developer: 'build version commit GitHub rate limits events account delete data local storage',
+  mcp: 'Claude Desktop Claude Code token command model context protocol',
+  apiTokens: 'developer API access keys token scopes expiry revoke',
+  about: 'version update changelog release notes software',
+};
+
 export function SettingsPanel() {
   // Section lives in the store so other surfaces (e.g. the sidebar cloud-provider
   // status, the per-task "Set default" action) can deep-link to a section.
@@ -135,6 +158,7 @@ export function SettingsPanel() {
   const setActiveSection = useWorkspaceStore((s) => s.setSettingsSection);
   const features = useWorkspaceStore((s) => s.features);
   const billingStatus = useBillingStore((s) => s.status);
+  const [search, setSearch] = useState('');
 
   // Slack's callback lands on /settings?slack=…; show the Slack section so the
   // result is visible.
@@ -185,6 +209,13 @@ export function SettingsPanel() {
     { id: 'about' as const, icon: Info, label: 'About' },
   ];
 
+  const searchTerms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const filteredSections = sections.filter((section) => {
+    if (searchTerms.length === 0) return true;
+    const text = `${section.label} ${SETTINGS_SEARCH_TERMS[section.id]}`.toLocaleLowerCase();
+    return searchTerms.every((term) => text.includes(term));
+  });
+
   return (
     <div className="flex h-full">
       {/* Settings Navigation */}
@@ -195,18 +226,41 @@ export function SettingsPanel() {
             Settings
           </h2>
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {sections.map((section) => (
-            <Button
-              key={section.id}
-              variant={activeSection === section.id ? 'secondary' : 'ghost'}
-              className="w-full justify-start gap-2"
-              onClick={() => setActiveSection(section.id)}
-            >
-              <section.icon className="w-4 h-4" />
-              {section.label}
-            </Button>
-          ))}
+        <nav className="flex min-h-0 flex-1 flex-col" aria-label="Settings sections">
+          <div className="border-b p-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                aria-label="Search settings"
+                placeholder="Search settings"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setSearch('');
+                }}
+                className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-2 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
+          <div className="flex-1 space-y-1 overflow-y-auto p-2">
+            {filteredSections.map((section) => (
+              <Button
+                key={section.id}
+                variant={activeSection === section.id ? 'secondary' : 'ghost'}
+                className="w-full justify-start gap-2"
+                onClick={() => setActiveSection(section.id)}
+              >
+                <section.icon className="w-4 h-4" />
+                {section.label}
+              </Button>
+            ))}
+            {filteredSections.length === 0 && (
+              <p role="status" className="px-2 py-3 text-xs text-muted-foreground">
+                No settings found.
+              </p>
+            )}
+          </div>
         </nav>
       </div>
 
