@@ -1,4 +1,5 @@
 import { receiveCallback } from '../src/auth/callback';
+import { productPath, rememberIntent } from '../src/navigation/intents';
 
 export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
   try {
@@ -8,6 +9,8 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
       receiveCallback(path);
       return '/auth/callback';
     }
+    const product = productPath(path);
+    if (product) { rememberIntent(path); return product; }
     return url.pathname;
   } catch {
     return '/';

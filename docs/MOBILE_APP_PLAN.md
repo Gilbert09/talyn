@@ -1,8 +1,68 @@
 # Native mobile client plan
 
-Status: approved plan; phases 1 and 2 have implementation evidence below. Research date: **2026-11-08**.
+Status: approved plan; phases 1, 2, and 3 have implementation evidence below. Research date: **2026-11-08**.
 Scope: production planning for iOS and Android in `Gilbert09/talyn`.
 The original research is preserved below. Implementation evidence records the current mobile foundation.
+
+## Phase 3 implementation evidence
+
+The read-focused workflow replaces the example screens in `apps/mobile`.
+This section records implemented facts. It supersedes proposed content persistence and notification scope for this phase.
+The earlier work is [#116](https://github.com/Gilbert09/talyn/pull/116),
+[#119](https://github.com/Gilbert09/talyn/pull/119), [#121](https://github.com/Gilbert09/talyn/pull/121),
+and [#126](https://github.com/Gilbert09/talyn/pull/126).
+
+- Sessions and Threads use the existing workbench kinds and native client methods.
+  Lists show scope, status, activity, and supplied text response gates.
+  No shared unread contract is invented. Lists use full snapshots because these endpoints have no paging cursor.
+- Session details show chat selection, transcript history, live events, readiness, current capabilities, and linked work.
+  Thread details include child sessions and their pull request links.
+  Current model, effort, and plan mode are read only. Capability choices need a validated per-session contract.
+- A narrow memory store owns server snapshots, cursors, drafts, delivery state, selection, and reading positions.
+  Keys contain schema version, environment, authenticated user, workspace, entity, and identifier.
+  Runtime boundaries clear all workflow state on auth or workspace changes, logout, and successful account deletion.
+  No workflow content survives a process restart. No new persistence adapter is added.
+- REST snapshots remain authoritative. Socket events update transcripts and invalidate watched resources.
+  The shared client owns reconnect, subscription restoration, reachability, and suspension.
+  Resume and reconnect coalesce recovery. Data remains stale until a successful snapshot resolves its invalidation.
+  The workflow adds no second reconnect loop or automatic message retry.
+- Transcript events use chat and sequence for deduplication.
+  Gaps use existing forward history. Older pages use the existing backward cursor.
+  Recovery has a four-page forward bound after the initial page. Larger backlogs require another refresh.
+  Late responses cannot restore deleted data or cross an auth or workspace boundary.
+- FlatList virtualizes product lists, child sessions, transcript rows, and server queue rows.
+  Transcript windows retain at most 1200 events and approximately 2 MB of serialized UTF-16 content.
+  Text blocks are limited to 16000 characters. Selectable code chunks are limited to 4000 characters.
+  Partial windows have recovery controls. Large fixtures assert fewer than 50 rendered rows in the test host.
+- Text messages use existing chats and supported text responses.
+  Sending, Queued on server, Sent, Failed, and Delivery unknown remain distinct.
+  Unknown delivery requires refreshed history and server queue state before manual resend is offered.
+  Confirmation warns about duplicate delivery. Transcript text is never matched to infer delivery.
+  Offline sends are blocked. Drafts remain in memory within the same auth and workspace scope.
+- Attention reuses existing PR rows and status contracts.
+  PR details show supplied review, CI, mergeability, human gate, stack, session relation, queue state, and timeline.
+  Unknown values remain Unknown within their status domain. No PR mutation is exposed.
+  Missing provider detail is separate from a missing or inaccessible PR.
+- Native text renders prose, code, system events, and interruption states.
+  No raw HTML is rendered. External HTTP and HTTPS links require confirmation.
+  Controls use labels, disabled states, and minimum 48-point targets.
+  Streaming content has no live announcements. Important delivery changes use a polite live region.
+  Text retains native scaling. Navigation has no custom animation.
+- Cold and warm product links use current authorized detail reads.
+  Pending destinations survive authentication and workspace selection in memory.
+  A wrong-workspace link shows recovery instead of selecting an unvalidated workspace.
+
+No backend, shared contract, or client method change was required.
+No dependency was added. The existing root lockfile remains the dependency authority.
+The [mobile README](../apps/mobile/README.md) lists exact check commands and manual procedures.
+Checks cover mobile auth and workflow, client transport, shared transcripts, and selected web and desktop regressions.
+Expo graph checks, installation checks, Doctor, lint, typecheck, and both platform exports are required before publication.
+
+Physical iOS and Android devices remain a gate for accessibility, performance, keyboard behavior, and reading position.
+Live-backend auth, streaming, revocation, delivery uncertainty, queue state, and resume need device evidence.
+Exports and mocks do not prove universal links, native accessibility, signed archives, or store review.
+The phase 2 Apple login, production identity, privacy, and deletion-completion gates remain open.
+Push notifications remain **phase 4**. Store release operations remain **phase 5**.
 
 ## Phase 2 implementation evidence
 

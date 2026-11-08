@@ -10,6 +10,8 @@ import { AppState } from 'react-native';
 import type { MobileConfig } from '../config';
 import { createNativeLifecycle } from '../native/lifecycle';
 import { WorkspaceController } from '../workspaces/controller';
+import { clearIntent } from '../navigation/intents';
+import { WorkflowStore } from '../workflow/store';
 import { AccountActions } from './account';
 import { installAuthCrypto } from './crypto';
 import { AuthController } from './controller';
@@ -65,6 +67,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     baseUrl: config.apiOrigin, clientVersion: 'mobile/0.1.0', runtime: { lifecycle },
     getAccessToken: () => auth.getAccessToken(), recoverSession: () => auth.recoverSession(),
   });
+  const workflow = new WorkflowStore(lifecycle);
   const auth = new AuthController({
     getSession: () => supabase.auth.getSession(),
     refreshSession: () => supabase.auth.refreshSession(),
@@ -77,6 +80,8 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     open: (url, callback) => WebBrowser.openAuthSessionAsync(url, callback, { preferEphemeralSession: true, preferUniversalLinks: callback.startsWith('https:') }),
     dismiss: () => { try { WebBrowser.dismissAuthSession(); } catch { /* No active browser session. */ } },
   }, config.callbackUrl, (priorUser) => {
+    workflow.setScope(null);
+    if (priorUser) clearIntent();
     wsClient.reset();
     bindClient();
     return workspace.clear(priorUser);
@@ -92,10 +97,19 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   };
   const unbind = lifecycle.subscribe(active);
   active();
+  const bindWorkflow = () => {
+    const account = auth.getSnapshot();
+    const selected = workspace.getSnapshot();
+    workflow.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+      ? { environment: namespace, user: account.user.id, workspace: selected.selected } : null);
+  };
+  const unbindAuth = auth.subscribe(bindWorkflow);
+  const unbindWorkspace = workspace.subscribe(bindWorkflow);
   return {
-    auth, workspace, lifecycle, account: new AccountActions(auth, users.wipeMe),
+    auth, workspace, lifecycle, workflow, account: new AccountActions(auth, users.wipeMe),
     async start() { await auth.restore(); active(); },
     dispose() {
+      workflow.dispose(); unbindAuth(); unbindWorkspace();
       previousStorageDrain = storage.seal();
       auth.dispose();
       subscription.subscription.unsubscribe();
