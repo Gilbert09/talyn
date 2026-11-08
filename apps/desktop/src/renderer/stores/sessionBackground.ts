@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
-import type { WorkbenchBackground, WorkbenchWakeup } from '@talyn/shared';
+import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 import { api } from '../lib/api';
 
 interface SessionBackgroundState {
@@ -46,4 +46,11 @@ const EMPTY_WAKEUPS: WorkbenchWakeup[] = [];
 export function useScheduledWakeupsForChat(id: string, chatId: string): WorkbenchWakeup[] {
   const wakeups = useSessionBackgroundStore((state) => state.byWorkbench[id]?.wakeups);
   return useMemo(() => wakeups?.filter((wakeup) => wakeup.chatId === chatId && wakeup.status === 'scheduled') ?? EMPTY_WAKEUPS, [wakeups, chatId]);
+}
+
+const EMPTY_JOBS: WorkbenchBackgroundJob[] = [];
+
+export function useRunningJobs(id: string): WorkbenchBackgroundJob[] {
+  const jobs = useSessionBackgroundStore((state) => state.byWorkbench[id]?.jobs);
+  return useMemo(() => jobs?.filter((job) => job.status === 'running') ?? EMPTY_JOBS, [jobs]);
 }

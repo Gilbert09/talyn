@@ -45,7 +45,7 @@ import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './us
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { SessionUsageNotice } from './SessionUsageNotice';
 import { promptRefusal, useIsWorkbenchOwner } from '../../lib/spaces';
-import { WakeupChips } from './WakeupChips';
+import { BackgroundChips } from './BackgroundChips';
 import { WakeLaterPopover } from './WakeLaterPopover';
 
 export function Composer({
@@ -342,7 +342,7 @@ export function Composer({
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <WakeupChips workbenchId={workbench.id} chatId={chat?.id ?? null} />
+      <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (

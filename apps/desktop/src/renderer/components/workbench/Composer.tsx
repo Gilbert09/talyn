@@ -44,7 +44,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
-import { WakeupChips } from './WakeupChips';
+import { BackgroundChips } from './BackgroundChips';
 import { WakeLaterPopover } from './WakeLaterPopover';
 
 
@@ -339,7 +339,7 @@ export function Composer({
 
   return (
     <div className="border-t bg-background px-3 pb-3 pt-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
-      <WakeupChips workbenchId={workbench.id} chatId={chat?.id ?? null} />
+      <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (
