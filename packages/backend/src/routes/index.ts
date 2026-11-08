@@ -1,4 +1,5 @@
 import { Express, NextFunction, Request, Response } from 'express';
+import { mobileNotificationRoutes } from './mobileNotifications.js';
 import { workspaceRoutes } from './workspaces.js';
 import { environmentRoutes } from './environments.js';
 import { taskRoutes } from './tasks.js';
@@ -192,6 +193,7 @@ export function setupRoutes(app: Express): void {
   // own users row, which RLS blocks from the authenticated role; handlers
   // hard-scope every query to req.user.id instead. See routes/users.ts.
   app.use(`${api}/users`, mount(userRoutes()));
+  app.use(`${api}/mobile`, mount(mobileNotificationRoutes()));
 
   // Billing (plan status / checkout / portal). Pre-ownerScope on purpose:
   // checkout + portal block on Polar's API, and an owner-scoped transaction

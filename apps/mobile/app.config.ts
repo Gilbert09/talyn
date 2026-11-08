@@ -60,8 +60,18 @@ export function getAppIdentity(env: IdentityEnvironment) {
   };
 }
 
+export function readPushProjectId(env: PublicEnvironment, environment: AppEnvironment): string | undefined {
+  const projectId = env.EXPO_PUBLIC_EAS_PROJECT_ID;
+  if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
+    throw new Error('Use a valid public EAS project ID.');
+  }
+  if (environment === 'production' && !projectId) throw new Error('Production requires EXPO_PUBLIC_EAS_PROJECT_ID.');
+  return projectId;
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const identity = getAppIdentity(process.env);
+  const projectId = readPushProjectId(process.env, identity.environment);
 
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
   const httpsCallback = mobile?.callbackUrl.startsWith('https:') ? new URL(mobile.callbackUrl) : null;
@@ -81,13 +91,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: identity.androidPackage,
+      blockedPermissions: ['android.permission.RECEIVE_BOOT_COMPLETED'],
       ...(httpsCallback ? { intentFilters: [{ action: 'VIEW', autoVerify: true,
         category: ['BROWSABLE', 'DEFAULT'],
         data: [{ scheme: 'https', host: httpsCallback.hostname, path: httpsCallback.pathname }],
       }] } : {}),
     },
-    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store'],
+    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-notifications', {
+      mode: identity.environment === 'production' ? 'production' : 'development', enableBackgroundRemoteNotifications: false,
+    }]],
     experiments: { typedRoutes: true },
-    extra: { appEnvironment: identity.environment, mobile },
+    extra: { appEnvironment: identity.environment, mobile, ...(projectId ? { eas: { projectId } } : {}) },
   };
 };

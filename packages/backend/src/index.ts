@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { startMobileNotifications, stopMobileNotifications } from './services/mobileNotifications/worker.js';
 import { initChatLimitResume } from './services/workbenches/limitResumeSweep.js';
 import { initBackgroundSweep } from './services/workbenches/backgroundSweep.js';
 import { beginWorkbenchDrain } from './services/workbenches/ownership.js';
@@ -283,6 +284,7 @@ async function main() {
   // Public API webhooks: session emits become events, and the delivery worker
   // sends what is due. Cheap with no endpoints: a partial-index lookup every 5 s.
   startApiWebhooks();
+  startMobileNotifications();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
@@ -529,6 +531,7 @@ codeReviewPoller.stop();
 codeReviewReconciler.stop();
     slackEventSweep.stop();
     stopApiWebhooks();
+    stopMobileNotifications();
     // posthog-node batches the `$feature_flag_called` events that make a flag's
     // rollout visible in PostHog. Without this flush they are lost on every
     // deploy — and a deploy is when a rollout is most interesting to look at.

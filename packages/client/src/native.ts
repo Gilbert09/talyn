@@ -196,8 +196,10 @@ import type {
   WorkbenchReadiness,
 } from '@talyn/shared';
 import { getAuthToken, request, rawRequest } from './http.js';
+import { mobileNotifications } from './mobileNotifications.js';
 import { wsClient } from './socket.js';
 export { ApiError, ApiNetworkError, ClientInactiveError } from './http.js';
+export { mobileNotifications };
 export { WebSocketClient, wsClient } from './socket.js';
 export type * from './runtime.js';
 
@@ -2626,6 +2628,7 @@ export const spaces = {
 // ============================================================================
 
 export const api = {
+  mobileNotifications,
   workspaces,
   environments,
   tasks,

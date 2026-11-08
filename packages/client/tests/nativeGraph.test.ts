@@ -26,10 +26,10 @@ describe('native package boundary', () => {
         conditions: [condition],
       });
       const files = Object.keys(result.metafile!.inputs).filter((file) => file !== '<stdin>');
-      expect(files).toHaveLength(5);
+      expect(files).toHaveLength(6);
       const format = condition === 'import' ? 'esm' : 'cjs';
       expect(files.every((file) => file.includes(`dist/${format}/`))).toBe(true);
-      for (const file of files) expect(file).toMatch(/\/(native|config|runtime|http|socket)\.js$/);
+      for (const file of files) expect(file).toMatch(/\/(native|config|runtime|http|socket|mobileNotifications)\.js$/);
       const sandbox: Record<string, unknown> = {};
       for (const name of [
         'window',
@@ -53,6 +53,7 @@ describe('native package boundary', () => {
       runInNewContext(result.outputFiles[0].text, sandbox);
       const client = sandbox.client as Record<string, unknown>;
       expect(client.configureApiClient).toBeTypeOf('function');
+      expect(client.mobileNotifications).toHaveProperty('resolveNotification');
       expect(client.workbenches).not.toHaveProperty('uploadAttachment');
       expect(client.workbenches).not.toHaveProperty('import');
       expect(client.workbenches).not.toHaveProperty('attachmentBlob');
