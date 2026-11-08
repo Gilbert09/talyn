@@ -19,7 +19,7 @@ This page is about giving Talyn's agents more tools. To use Talyn itself from Cl
 
 The catalog includes Linear, Sentry, Notion, Jira and Confluence, Asana, Stripe, Supabase, Neon, PostHog, Vercel, Netlify, Cloudflare, Figma, Slack, Context7, Hugging Face and more. For a server that is not in the catalog, paste its address. Talyn checks the address and finds how it signs in.
 
-Talyn supports remote MCP servers over HTTP. The server must be on the public internet: a sandbox cannot reach your computer or a private network. The address cannot hold a username, a password, a query string or a `#fragment`.
+Talyn supports remote MCP servers over HTTP. Use a public server or an exact workspace private route. For a private server, connect the workspace connector first. Add its exact hostname and port in private route settings. Use HTTPS. OAuth endpoints on other private hosts need their own routes. Setup does not require a sandbox. The address cannot hold a username, a password, a query string or a `#fragment`.
 
 ## Sign in or paste a key
 

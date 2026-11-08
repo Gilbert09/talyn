@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(),
   complete: vi.fn(),
   validateState: vi.fn(),
+  privateEnabled: vi.fn(), connector: vi.fn(), create: vi.fn(), list: vi.fn(), update: vi.fn(),
+  probe: vi.fn(), dispatch: vi.fn(), record: vi.fn(), account: vi.fn(),
 }));
 vi.mock('../../middleware/auth.js', () => ({
   assertUser: () => ({ id: 'user-1' }),
@@ -27,18 +29,23 @@ vi.mock('../../services/mcpServersAccess.js', () => ({
 vi.mock('../../services/mcpServers/authDiscovery.js', () => ({ discoverMcpAuth: mocks.discover }));
 vi.mock('../../services/mcpServers/store.js', () => ({
   getMcpServer: mocks.get,
+  createMcpServer: mocks.create, listMcpServers: mocks.list, updateMcpServer: mocks.update,
+  mcpServersForDispatch: mocks.dispatch, recordMcpProbe: mocks.record,
   mcpOAuthStore: { read: mocks.read, write: mocks.write },
 }));
 vi.mock('../../services/mcpServers/oauth.js', () => ({
   serverIdFromState: () => 'srv-1',
   validateMcpOAuthState: mocks.validateState,
   completeMcpOAuth: mocks.complete,
+  readMcpAccount: mocks.account,
 }));
 
 vi.mock('../../db/client.js', () => ({ getDbClient: () => ({}) }));
 vi.mock('../../services/advisoryLock.js', () => ({
   withBlockingAdvisoryLock: async (_db: unknown, _key: string, fn: () => Promise<unknown>) => fn(),
 }));
+vi.mock('../../services/selfHosted/privateRoutes.js', () => ({ workspaceMayUsePrivateRoutes: mocks.privateEnabled, getPrivateConnector: mocks.connector, mapPrivateRoutesError: (error: unknown) => error }));
+vi.mock('../../services/mcpServers/probe.js', () => ({ probeMcpServer: mocks.probe }));
 vi.mock('../../services/analytics.js', () => ({ captureWorkspaceEvent: vi.fn() }));
 
 let server: Server;
@@ -47,6 +54,7 @@ beforeEach(async () => {
   vi.resetAllMocks();
   mocks.access.mockResolvedValue(undefined);
   mocks.allowed.mockResolvedValue(true);
+  mocks.privateEnabled.mockResolvedValue(false);
   mocks.discover.mockResolvedValue({ methods: ['oauth'], source: 'server' });
   const app = express();
   app.use(express.json());
@@ -82,7 +90,7 @@ describe('MCP discovery route', () => {
       data: { methods: ['oauth'], source: 'server' },
     });
     expect(mocks.access).toHaveBeenCalledWith(expect.anything(), 'ws-1');
-    expect(mocks.discover).toHaveBeenCalledWith('https://mcp.example.com/mcp');
+    expect(mocks.discover).toHaveBeenCalledWith('https://mcp.example.com/mcp', expect.objectContaining({ workspaceId: 'ws-1', purpose: 'discovery' }));
   });
   it.each(['missing workspace', 'no access', 'flag off', 'invalid address'])(
     'refuses %s before network discovery',
@@ -115,6 +123,7 @@ describe('OAuth callback failures', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ success: true, data: null });
     expect(mocks.access).not.toHaveBeenCalled();
+    expect(mocks.complete).toHaveBeenCalledWith(expect.anything(), 'srv-1.state', 'valid-code', expect.any(Date), { workspaceId: 'ws-1', purpose: 'exchange' });
     expect(mocks.write).toHaveBeenCalledWith('srv-1', { status: 'connected', lastCompletedFlowId: 'flow-1' });
   });
   it('refuses a callback when the workspace flag is disabled', async () => {
@@ -165,5 +174,46 @@ describe('OAuth callback failures', () => {
       'srv-1',
       expect.objectContaining({ status: 'connected', accessTokenEnc: 'existing', flow: undefined })
     );
+  });
+});
+
+
+describe('workspace private setup routes', () => {
+  const saved = { id: 'srv-1', workspaceId: 'stored-workspace', name: 'private', url: 'https://mcp.local/mcp', authKind: 'none' };
+  beforeEach(() => {
+    mocks.privateEnabled.mockResolvedValue(true);
+    mocks.connector.mockResolvedValue({ id: 'connector-1', workspaceId: 'ws-1', routes: [{ host: 'mcp.local', port: 443 }], status: 'connected' });
+    mocks.get.mockResolvedValue(saved);
+    mocks.list.mockResolvedValue([]);
+    mocks.create.mockResolvedValue(saved);
+    mocks.update.mockResolvedValue(saved);
+    mocks.dispatch.mockResolvedValue([]);
+    mocks.probe.mockResolvedValue({ ok: true });
+    mocks.account.mockResolvedValue({ name: 'Example' });
+  });
+  it('allows an exact private destination for discovery and creation', async () => {
+    expect((await post('discover-auth', { workspaceId: 'ws-1', url: saved.url })).status).toBe(200);
+    const created = await post('', { workspaceId: 'ws-1', name: 'private', url: saved.url, authKind: 'none' });
+    expect(created.status).toBe(201);
+    expect(mocks.create).toHaveBeenCalledWith('ws-1', expect.objectContaining({ url: saved.url }));
+  });
+  it('refuses an unlisted port before discovery', async () => {
+    expect((await post('discover-auth', { workspaceId: 'ws-1', url: 'https://mcp.local:8443/mcp' })).status).toBe(400);
+    expect(mocks.discover).not.toHaveBeenCalled();
+  });
+  it('uses stored ownership for PATCH, test, and account reads', async () => {
+    const response = await fetch(`${base}/srv-1`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: 'attacker-workspace', url: saved.url, authKind: 'none' }) });
+    expect(response.status).toBe(200);
+    expect(mocks.connector).toHaveBeenCalledWith('stored-workspace', expect.any(AbortSignal));
+    expect((await post('srv-1/test', { workspaceId: 'attacker-workspace' })).status).toBe(200);
+    expect(mocks.probe).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'stored-workspace', url: saved.url }));
+    expect((await fetch(`${base}/srv-1/account?workspaceId=attacker-workspace`)).status).toBe(200);
+    expect(mocks.account).toHaveBeenCalledWith('srv-1', expect.anything(), { workspaceId: 'stored-workspace', purpose: 'account' });
+  });
+  it('checks workspace access before it reads private route state', async () => {
+    mocks.access.mockRejectedValue(new Error('Forbidden'));
+    expect((await post('discover-auth', { workspaceId: 'ws-1', url: saved.url })).status).toBe(403);
+    expect(mocks.connector).not.toHaveBeenCalled();
+    expect(mocks.discover).not.toHaveBeenCalled();
   });
 });

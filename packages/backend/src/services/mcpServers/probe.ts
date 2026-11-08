@@ -1,5 +1,5 @@
 import type { McpInjection, McpProbeResult, McpServerDefinition } from '@talyn/shared';
-import { fetchFailureReason } from './http.js';
+import { fetchFailureReason, mcpFetch, readMcpBody, mcpJsonFrames } from './http.js';
 
 /**
  * Talk to an MCP server directly: `initialize`, then `tools/list`.
@@ -30,6 +30,7 @@ const PROBE_TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 export interface ProbeInput {
+  workspaceId?: string;
   url: string;
   authKind: McpServerDefinition['authKind'];
   inject?: McpInjection | null;
@@ -72,36 +73,6 @@ function applyAuth(input: ProbeInput, headers: Headers, url: URL): void {
   }
 }
 
-/**
- * Pull JSON-RPC results out of a response that may be either JSON or SSE.
- *
- * Streamable HTTP lets a server answer a single POST with `application/json` or
- * with an event stream, and the same servers do both depending on the method.
- * Splitting on `data:` lines handles the second without pulling in an SSE
- * client for two messages.
- */
-function jsonFrames(contentType: string, body: string): unknown[] {
-  if (!contentType.includes('text/event-stream')) {
-    try {
-      return [JSON.parse(body)];
-    } catch {
-      return [];
-    }
-  }
-  const out: unknown[] = [];
-  for (const line of body.split(/\r?\n/)) {
-    if (!line.startsWith('data:')) continue;
-    const payload = line.slice(5).trim();
-    if (!payload || payload === '[DONE]') continue;
-    try {
-      out.push(JSON.parse(payload));
-    } catch {
-      // A frame we cannot read is not the whole response failing.
-    }
-  }
-  return out;
-}
-
 interface RpcOutcome {
   status: number;
   result?: Record<string, unknown>;
@@ -128,18 +99,18 @@ async function rpc(
   applyAuth(input, headers, url);
   if (sessionId) headers.set('mcp-session-id', sessionId);
 
-  const resp = await fetch(url, {
+  const resp = await mcpFetch(url.toString(), {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
     signal,
-    redirect: 'follow',
-  });
+  }, input.workspaceId ? { workspaceId: input.workspaceId, purpose: 'probe' } : undefined);
 
   const returnedSession = resp.headers.get('mcp-session-id') ?? undefined;
   if (!resp.ok) {
     // An RFC 9728 challenge is a specific, actionable answer and not a generic
     // failure: the server works, it just wants to be signed in to.
+    await resp.body?.cancel();
     const challenge = resp.headers.get('www-authenticate') ?? '';
     if (resp.status === 401) {
       return {
@@ -153,15 +124,14 @@ async function rpc(
     return { status: resp.status, error: `the server answered ${resp.status}`, sessionId: returnedSession };
   }
 
-  const raw = await resp.text();
-  if (raw.length > MAX_BODY_BYTES) {
-    return { status: resp.status, error: 'the server answered with more than we can read' };
-  }
-  for (const frame of jsonFrames(resp.headers.get('content-type') ?? '', raw)) {
+  const contentType = resp.headers.get('content-type') ?? '';
+  const raw = await readMcpBody(resp, MAX_BODY_BYTES, (text) =>
+    mcpJsonFrames(contentType, text).some((frame) => (frame as { id?: unknown })?.id === id));
+  for (const frame of mcpJsonFrames(contentType, raw)) {
     const f = frame as { id?: unknown; result?: unknown; error?: { message?: string } };
     if (f.id !== id) continue;
     if (f.error) {
-      return { status: resp.status, error: f.error.message ?? 'the server refused', sessionId: returnedSession };
+      return { status: resp.status, error: 'the server refused this request', sessionId: returnedSession };
     }
     if (f.result && typeof f.result === 'object') {
       return { status: resp.status, result: f.result as Record<string, unknown>, sessionId: returnedSession };
@@ -179,7 +149,8 @@ async function rpc(
 export async function probeMcpServer(input: ProbeInput): Promise<McpProbeResult> {
   const at = new Date().toISOString();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), PROBE_TIMEOUT_MS);
+  let sessionId: string | undefined;
   try {
     const init = await rpc(
       input,
@@ -193,6 +164,7 @@ export async function probeMcpServer(input: ProbeInput): Promise<McpProbeResult>
       undefined,
       controller.signal
     );
+    sessionId = init.sessionId;
     if (!init.result) {
       return { ok: false, at, status: init.status, detail: init.error ?? 'the server did not introduce itself' };
     }
@@ -251,6 +223,7 @@ export async function probeMcpServer(input: ProbeInput): Promise<McpProbeResult>
         : `could not reach the server: ${fetchFailureReason(err)}`,
     };
   } finally {
+    if (sessionId) await closeSession(input, sessionId, controller.signal);
     clearTimeout(timer);
   }
 }
@@ -270,13 +243,25 @@ async function notifyInitialized(
     });
     applyAuth(input, headers, url);
     if (sessionId) headers.set('mcp-session-id', sessionId);
-    await fetch(url, {
+    const response = await mcpFetch(url.toString(), {
       method: 'POST',
       headers,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
       signal,
-    });
+    }, input.workspaceId ? { workspaceId: input.workspaceId, purpose: 'probe' } : undefined);
+    await response.body?.cancel();
   } catch {
     // Ignored on purpose.
   }
+}
+
+async function closeSession(input: ProbeInput, sessionId: string, signal: AbortSignal): Promise<void> {
+  try {
+    const url = new URL(input.url);
+    const headers = new Headers({ 'mcp-session-id': sessionId, 'mcp-protocol-version': PROTOCOL_VERSION });
+    applyAuth(input, headers, url);
+    const response = await mcpFetch(url.toString(), { method: 'DELETE', headers, signal },
+      input.workspaceId ? { workspaceId: input.workspaceId, purpose: 'probe' } : undefined);
+    await response.body?.cancel();
+  } catch { /* Cleanup uses the probe deadline. */ }
 }

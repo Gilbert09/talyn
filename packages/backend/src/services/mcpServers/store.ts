@@ -1,13 +1,14 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type {
+  McpInjection,
   McpServerDefinition,
   McpProbeResult,
   NormalizedMcpServer,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { mcpServers as mcpServersTable } from '../../db/schema.js';
-import { decryptString, encryptString } from '../tokenCrypto.js';
+import { decryptString, encryptString, isEncryptedEnvelope, type EncryptedEnvelope } from '../tokenCrypto.js';
 import { grantStatus, resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
 
 /**
@@ -56,6 +57,16 @@ const HAS_SECRET = {
   hasSecret: sql<boolean>`${mcpServersTable.secretEnc} is not null`,
 } as const;
 
+function readInjection(value: McpInjection | EncryptedEnvelope | null): McpInjection | null {
+  return isEncryptedEnvelope(value) ? JSON.parse(decryptString(value)) as McpInjection : value;
+}
+
+function sameInjection(left: McpInjection | null, right: McpInjection | null): boolean {
+  const canonical = (value: McpInjection | null) => JSON.stringify(value, value
+    ? [...new Set([...Object.keys(value), ...Object.keys(value.extra ?? {})])].sort() : undefined);
+  return canonical(left) === canonical(right);
+}
+
 function rowToDefinition(row: PublicRow, hasSecret: boolean): McpServerDefinition {
   return {
     id: row.id,
@@ -66,7 +77,7 @@ function rowToDefinition(row: PublicRow, hasSecret: boolean): McpServerDefinitio
     description: row.description,
     catalogHandle: row.catalogHandle,
     authKind: row.authKind as McpServerDefinition['authKind'],
-    inject: row.inject,
+    inject: readInjection(row.inject),
     hasSecret,
     oauth: grantStatus(row.oauth as StoredMcpOAuth | null),
     tools: row.tools,
@@ -112,7 +123,7 @@ export async function createMcpServer(
       description: input.description,
       catalogHandle: input.catalogHandle,
       authKind: input.authKind,
-      inject: input.inject,
+      inject: input.inject ? encryptString(JSON.stringify(input.inject)) : null,
       // An empty string clears rather than stores. Matching the fleet's own
       // rule, so "leave it alone" and "remove it" stay distinct gestures.
       secretEnc: input.secret ? encryptString(input.secret) : null,
@@ -128,6 +139,10 @@ export async function updateMcpServer(
   id: string,
   input: NormalizedMcpServer
 ): Promise<McpServerDefinition | null> {
+  const [previous] = await getDbClient().select({ inject: mcpServersTable.inject })
+    .from(mcpServersTable).where(eq(mcpServersTable.id, id)).limit(1);
+  if (!previous) return null;
+  const injectionUnchanged = sameInjection(readInjection(previous.inject), input.inject);
   await getDbClient()
     .update(mcpServersTable)
     .set({
@@ -137,20 +152,22 @@ export async function updateMcpServer(
       description: input.description,
       catalogHandle: input.catalogHandle,
       authKind: input.authKind,
-      inject: input.inject,
+      inject: input.inject ? encryptString(JSON.stringify(input.inject)) : null,
       // Absent keeps what is stored; an empty string clears it. A PATCH that
       // did not say anything about the credential must not lose one, or every
       // rename would silently disconnect the server.
       secretEnc: input.secret === undefined
         ? sql`case when ${mcpServersTable.url} = ${input.url}
             and ${mcpServersTable.authKind} = ${input.authKind}
-            and ${mcpServersTable.inject} is not distinct from ${input.inject === null ? null : JSON.stringify(input.inject)}::jsonb
+            and ${injectionUnchanged}
+            and ${mcpServersTable.inject} is not distinct from ${previous.inject === null ? null : JSON.stringify(previous.inject)}::jsonb
           then ${mcpServersTable.secretEnc} else null end`
         : input.secret === '' ? null : encryptString(input.secret),
       oauth: input.secret !== undefined ? null : sql`case
         when ${mcpServersTable.url} = ${input.url}
           and ${mcpServersTable.authKind} = ${input.authKind}
-          and ${mcpServersTable.inject} is not distinct from ${input.inject === null ? null : JSON.stringify(input.inject)}::jsonb
+          and ${injectionUnchanged}
+            and ${mcpServersTable.inject} is not distinct from ${previous.inject === null ? null : JSON.stringify(previous.inject)}::jsonb
         then ${mcpServersTable.oauth} else null end`,
       tools: input.tools,
       enabled: input.enabled,
@@ -195,6 +212,10 @@ export const mcpOAuthStore: McpOAuthStore = {
     return (rows[0]?.oauth as StoredMcpOAuth | null) ?? null;
   },
   write: async (serverId, next) => {
+    if (next.flow?.verifier) {
+      const { verifier, ...flow } = next.flow;
+      next = { ...next, flow: { ...flow, verifierEnc: encryptString(verifier) } };
+    }
     await getDbClient()
       .update(mcpServersTable)
       .set({ oauth: next as never, updatedAt: new Date() })
@@ -262,7 +283,7 @@ export async function mcpServersForDispatch(
     // refusing it rather than as an authorization to renew.
     const grant = row.oauth as StoredMcpOAuth | null;
     if (grant) {
-      secret = await resolveMcpAccessToken(row.id, mcpOAuthStore);
+      secret = await resolveMcpAccessToken(row.id, mcpOAuthStore, new Date(), { workspaceId, purpose: 'refresh' });
       if (!secret) {
         console.warn(
           `[mcp] the sign-in for MCP server "${row.name}" is not usable, so this run goes ` +
@@ -287,7 +308,7 @@ export async function mcpServersForDispatch(
       url: row.url,
       description: row.description,
       authKind: row.authKind as McpServerDefinition['authKind'],
-      inject: row.inject,
+      inject: readInjection(row.inject),
       tools: row.tools,
       secret,
     });

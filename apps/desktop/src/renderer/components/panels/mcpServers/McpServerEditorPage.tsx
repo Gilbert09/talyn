@@ -8,6 +8,7 @@ import {
   mcpServerInputProblem,
   mcpServerToInput,
   mcpServerFromAddress,
+  type PrivateRoute,
   type McpAuthMethod,
   type McpAuthDiscovery,
   type McpProbeResult,
@@ -102,6 +103,18 @@ export function McpServerEditorPage({
   const [probing, setProbing] = useState(false);
 
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
+  const [routeState, setRouteState] = useState<{ workspaceId: string; routes: PrivateRoute[] } | null>(null);
+  const privateRoutes = useMemo(() => routeState?.workspaceId === workspaceId ? routeState.routes : [], [routeState, workspaceId]);
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void api.workspaces.privateConnector.get(workspaceId).then((response) => {
+      if (!cancelled) setRouteState({ workspaceId, routes: response.routes ?? [] });
+    }).catch(() => {
+      if (!cancelled) setRouteState({ workspaceId, routes: [] });
+    });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
   const [method, setMethod] = useState<McpAuthMethod>(editing?.oauth ? 'oauth' : input.authKind);
   const [discovery, setDiscovery] = useState<McpAuthDiscovery | null>(null);
   const [oauthConnected, setOauthConnected] = useState(editing?.oauth?.status === 'connected');
@@ -117,7 +130,7 @@ export function McpServerEditorPage({
     if (
       manual ||
       !workspaceId ||
-      mcpServerInputProblem({ name: 'discovery', url: input.url, authKind: 'none', enabled: true })
+      mcpServerInputProblem({ name: 'discovery', url: input.url, authKind: 'none', enabled: true }, privateRoutes)
     )
       return;
     if (new URL(input.url).origin === 'https://mcp.slack.com' && !(editingRef.current?.url === input.url && editingRef.current.oauth)) {
@@ -185,7 +198,7 @@ export function McpServerEditorPage({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [input.url, workspaceId, manual]);
+  }, [input.url, workspaceId, manual, privateRoutes]);
 
   const credentialStored =
     editing?.url === input.url &&
@@ -214,7 +227,7 @@ export function McpServerEditorPage({
     });
   };
 
-  const problem = useMemo(() => mcpServerInputProblem(input), [input]);
+  const problem = useMemo(() => mcpServerInputProblem(input, privateRoutes), [input, privateRoutes]);
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
 
   const connected = probe?.ok === true || oauthConnected;
@@ -223,7 +236,7 @@ export function McpServerEditorPage({
     url: input.url,
     authKind: 'none',
     enabled: true,
-  });
+  }, privateRoutes);
 
   const edit = useCallback((patch: Partial<McpServerInput>) => {
     if ('secret' in patch || 'inject' in patch || 'url' in patch || 'authKind' in patch) {

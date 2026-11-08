@@ -10,7 +10,7 @@ import {
 import { discoverAuthServer, McpDiscoveryError } from '../services/mcpServers/discovery.js';
 import * as discovery from '../services/mcpServers/discovery.js';
 import { resetWebAppUrlCacheForTests } from '../services/webApp.js';
-import { encryptString } from '../services/tokenCrypto.js';
+import { encryptString, decryptString } from '../services/tokenCrypto.js';
 
 /**
  * Brokering a sign-in to somebody else's MCP server.
@@ -22,6 +22,8 @@ import { encryptString } from '../services/tokenCrypto.js';
  */
 
 const originalWebAppUrl = process.env.WEB_APP_URL;
+
+vi.mock('../services/selfHosted/privateRoutes.js', () => ({ workspaceMayUsePrivateRoutes: async () => false }));
 
 const KEY = Buffer.alloc(32, 9).toString('base64');
 
@@ -146,7 +148,7 @@ describe('starting a sign-in', () => {
       },
     });
     stubFetch({ 'https://auth.example.com/register': { client_id: 'local-client' } });
-    const started = await startMcpOAuth({ id: 'srv-1', url: 'https://mcp.example.com/mcp' }, null, new Date());
+    const started = await startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, null, new Date());
     expect(started.stored.clientSource).toBe(source);
     expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(`${origin}/mcp/callback`);
     if (source === 'dcr') {
@@ -169,13 +171,13 @@ describe('starting a sign-in', () => {
         clientIdMetadataDocumentSupported: true,
       },
     });
-    await expect(startMcpOAuth({ id: 'srv-1', url: 'https://mcp.example.com/mcp' }, null, new Date()))
+    await expect(startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, null, new Date()))
       .rejects.toThrow('public HTTPS client identity document');
   });
 
   it('builds an authorize URL with PKCE, state and the RFC 8707 resource', async () => {
     const started = await startMcpOAuth(
-      { id: 'srv-1', url: 'https://mcp.example.com/mcp' },
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
       stored,
       new Date('2026-09-16T12:00:00Z')
     );
@@ -187,7 +189,7 @@ describe('starting a sign-in', () => {
     // it spent somewhere else. Sent whether or not the AS advertises support.
     expect(url.searchParams.get('resource')).toBe('https://mcp.example.com/mcp');
     // The verifier is kept, and the state only as a hash.
-    expect(started.stored.flow?.verifier).toBeTruthy();
+    expect(started.stored.flow?.verifierEnc).toBeTruthy();
     expect(started.stored.flow?.stateHash).toBeTruthy();
     expect(JSON.stringify(started.stored.flow)).not.toContain(
       url.searchParams.get('state') as string
@@ -198,7 +200,7 @@ describe('starting a sign-in', () => {
   // nothing else — and the id half must survive the round trip.
   it('names the server in the state', async () => {
     const started = await startMcpOAuth(
-      { id: 'srv-1', url: 'https://mcp.example.com/mcp' },
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
       stored,
       new Date()
     );
@@ -210,7 +212,7 @@ describe('starting a sign-in', () => {
   // healthy server as disconnected.
   it('leaves a connected server connected while a reconnect is in flight', async () => {
     const started = await startMcpOAuth(
-      { id: 'srv-1', url: 'https://mcp.example.com/mcp' },
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
       { ...stored, status: 'connected' },
       new Date()
     );
@@ -223,7 +225,7 @@ describe('starting a sign-in', () => {
   it('reuses a known client rather than registering again', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    await startMcpOAuth({ id: 'srv-1', url: 'https://mcp.example.com/mcp' }, stored, new Date());
+    await startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, stored, new Date());
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
@@ -231,7 +233,7 @@ describe('starting a sign-in', () => {
 describe('finishing a sign-in', () => {
   async function started() {
     return startMcpOAuth(
-      { id: 'srv-1', url: 'https://mcp.example.com/mcp' },
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
       {
         status: 'pending',
         authorizationEndpoint: 'https://auth.example.com/authorize',
@@ -254,7 +256,7 @@ describe('finishing a sign-in', () => {
         expires_in: 3600,
       },
     });
-    const next = await completeMcpOAuth(s.stored, state, 'code-1', new Date());
+    const next = await completeMcpOAuth(s.stored, state, 'code-1', new Date(), { workspaceId: 'ws-1', purpose: 'exchange' });
     expect(next.status).toBe('connected');
     // Encrypted, and the flow cleared so a replay finds nothing.
     expect(JSON.stringify(next)).not.toContain('at-1');
@@ -265,7 +267,7 @@ describe('finishing a sign-in', () => {
 
   it('refuses a state that does not match', async () => {
     const s = await started();
-    await expect(completeMcpOAuth(s.stored, 'srv-1.forged', 'code-1', new Date())).rejects.toThrow(
+    await expect(completeMcpOAuth(s.stored, 'srv-1.forged', 'code-1', new Date(), { workspaceId: 'ws-1', purpose: 'exchange' })).rejects.toThrow(
       /did not come from here/
     );
   });
@@ -274,7 +276,7 @@ describe('finishing a sign-in', () => {
     const s = await started();
     const state = new URL(s.authorizeUrl).searchParams.get('state') as string;
     const later = new Date(Date.now() + 11 * 60 * 1000);
-    await expect(completeMcpOAuth(s.stored, state, 'code-1', later)).rejects.toThrow(/took too long/);
+    await expect(completeMcpOAuth(s.stored, state, 'code-1', later, { workspaceId: 'ws-1', purpose: 'exchange' })).rejects.toThrow(/took too long/);
   });
 
   // Rotation is a MUST for a public client, so a response whose new refresh
@@ -286,7 +288,7 @@ describe('finishing a sign-in', () => {
     stubFetch({
       'https://auth.example.com/token': { access_token: 'at-2', refresh_token: 'rt-new' },
     });
-    const next = await completeMcpOAuth(before, state, 'code-1', new Date());
+    const next = await completeMcpOAuth(before, state, 'code-1', new Date(), { workspaceId: 'ws-1', purpose: 'exchange' });
     expect(next.refreshTokenEnc).not.toEqual(before.refreshTokenEnc);
   });
 });
@@ -332,7 +334,7 @@ describe('optional MCP account details', () => {
       status: 'connected', issuer: 'https://auth.example.com', accessTokenEnc: encryptString('access'),
       expiresAt: new Date(Date.now() + 3600000).toISOString(),
     };
-    expect(await readMcpAccount('srv-1', { read: async () => stored, write: vi.fn() })).toEqual(expected);
+    expect(await readMcpAccount('srv-1', { read: async () => stored, write: vi.fn() }, { workspaceId: 'ws-1', purpose: 'account' })).toEqual(expected);
     if (endpoint !== 'https://auth.example.com/userinfo') expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
@@ -355,7 +357,7 @@ describe('Slack registered client', () => {
     vi.stubEnv('SLACK_MCP_CLIENT_ID', 'talyn-client');
     vi.stubEnv('SLACK_MCP_CLIENT_SECRET', 'talyn-secret');
     mockSlack();
-    const flow = await startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date());
+    const flow = await startMcpOAuth({ id: 'slack-server', workspaceId: 'ws-1', url: 'https://mcp.slack.com/mcp' }, null, new Date());
     const url = new URL(flow.authorizeUrl);
     expect(url.origin + url.pathname).toBe(slack.authorizationEndpoint);
     expect(url.searchParams.get('client_id')).toBe('talyn-client');
@@ -365,24 +367,24 @@ describe('Slack registered client', () => {
     expect(flow.authorizeUrl).not.toContain('talyn-secret');
     expect(JSON.stringify(flow.stored)).not.toContain('talyn-secret');
     stubFetch({ [slack.tokenEndpoint]: { access_token: 'slack-access', refresh_token: 'slack-refresh', expires_in: 43200 } });
-    const stored = await completeMcpOAuth(flow.stored, url.searchParams.get('state')!, 'code', new Date());
+    const stored = await completeMcpOAuth(flow.stored, url.searchParams.get('state')!, 'code', new Date(), { workspaceId: 'ws-1', purpose: 'exchange' });
     expect(stored.status).toBe('connected');
     const body = vi.mocked(fetch).mock.calls[0][1]?.body as URLSearchParams;
     expect(body.get('client_secret')).toBe('talyn-secret');
     expect(body.get('resource')).toBe('https://mcp.slack.com');
-    expect(body.get('code_verifier')).toBe(flow.stored.flow?.verifier);
+    expect(body.get('code_verifier')).toBe(decryptString(flow.stored.flow!.verifierEnc!));
   });
   it.each([['', ''], ['client', ''], ['', 'secret']])('explains missing deployment credentials', async (id, secret) => {
     vi.stubEnv('SLACK_MCP_CLIENT_ID', id);
     vi.stubEnv('SLACK_MCP_CLIENT_SECRET', secret);
     mockSlack();
-    await expect(startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('Slack sign-in is not configured');
+    await expect(startMcpOAuth({ id: 'slack-server', workspaceId: 'ws-1', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('Slack sign-in is not configured');
   });
   it.each(['issuer', 'authorizationEndpoint', 'tokenEndpoint'])('refuses an unexpected Slack %s', async (field) => {
     vi.stubEnv('SLACK_MCP_CLIENT_ID', 'client');
     vi.stubEnv('SLACK_MCP_CLIENT_SECRET', 'secret');
     mockSlack({ [field]: 'https://other.example.com/oauth' });
-    await expect(startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('unexpected sign-in endpoints');
+    await expect(startMcpOAuth({ id: 'slack-server', workspaceId: 'ws-1', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('unexpected sign-in endpoints');
   });
 });
 
@@ -400,9 +402,10 @@ describe('Slack account identity', () => {
       tokenEndpoint: 'https://slack.com/api/oauth.v2.user.access',
       accessTokenEnc: encryptString('slack-access'), expiresAt: new Date(Date.now() + 3600000).toISOString(),
     };
-    expect(await readMcpAccount('slack', { read: async () => stored, write: vi.fn() })).toEqual(expected);
+    expect(await readMcpAccount('slack', { read: async () => stored, write: vi.fn() }, { workspaceId: 'ws-1', purpose: 'account' })).toEqual(expected);
     expect(fetch).toHaveBeenCalledWith('https://slack.com/api/auth.test', expect.objectContaining({
-      method: 'POST', headers: expect.objectContaining({ authorization: 'Bearer slack-access' }),
+      method: 'POST', headers: expect.any(Headers),
     }));
+    expect(new Headers(vi.mocked(fetch).mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer slack-access');
   });
 });

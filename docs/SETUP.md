@@ -1226,3 +1226,66 @@ Slack displays its workspace selection and consent page. Talyn does not select a
 The backend encrypts the client secret with the stored grant. The browser receives only the authorization URL.
 Without these credentials, Talyn displays a deployment setup error instead of trying automatic registration.
 An administrator may need to approve the Slack app before users can connect.
+
+### Private MCP setup through YAS
+
+The workspace owner must have the `tailscale-private-routes` PostHog flag.
+Configure the workspace connector and add each exact hostname and TCP port in private route settings.
+Use HTTPS for private MCP endpoints.
+OAuth hosts need separate routes when their hostname or port differs from the MCP endpoint.
+Metadata never creates routes.
+Setup does not require a sandbox.
+
+The backend uses the existing YAS gateway endpoint and tenant key.
+It sends `POST /v1/workspaces/{workspace}/private-routes/dial` with these upgrade headers:
+
+```http
+Connection: Upgrade
+Upgrade: yas-private-tcp
+Content-Type: application/json
+```
+
+The JSON body contains only `connectorId`, the canonical `host`, and the effective `port`.
+The request uses the existing tenant key as a bearer token.
+After `101 Switching Protocols`, Talyn starts TLS inside the opaque TCP stream.
+TLS uses the destination hostname for SNI and certificate verification.
+MCP credentials and OAuth secrets travel only inside that TLS stream.
+Customer Tailscale policy does not change.
+
+Every outbound destination gets a fresh route decision under the owning workspace.
+This includes discovery, registration, code exchange, refresh, probes, tool lists, and account reads.
+Public destinations keep the public DNS and SSRF checks.
+A private connection failure never selects another connector or a public connection.
+GET redirects get another destination decision.
+Cross-origin redirects remove all resource headers.
+A matched destination cannot change connectors or switch to public transport during redirects.
+POST and DELETE redirects fail without a replay.
+
+Private connections have a five-second limit for the upgrade and TLS phase.
+Existing operation deadlines remain in effect through response consumption and session cleanup.
+Responses have byte limits, and complete SSE events can finish a request before the stream closes.
+Connections are isolated by tenant, workspace, connector, hostname, and port.
+They close after response consumption or cancellation.
+Route changes and connector replacement evict active connections when the backend observes the new state.
+Local route changes also evict connections immediately.
+Active private requests also check route state every two seconds.
+YAS enforces current access on every dial.
+
+Runtime sandbox policy carries exact grants even when the connector is disconnected.
+YAS then rejects the private dial instead of selecting public transport.
+A route lookup failure stops sandbox creation.
+A connector from another workspace is refused.
+These rules also apply to tasks, session moves, and warm sandboxes.
+
+Transport audits include the workspace, connector, destination hostname and port, purpose, result, duration, and request ID.
+They exclude URL paths, queries, headers, bodies, and credentials.
+New writes encrypt MCP injection settings and PKCE verifiers, in addition to existing token encryption.
+Existing records remain readable and become encrypted when saved.
+
+The public callback is `<WEB_APP_URL>/mcp/callback` and does not require a browser session.
+The checked-in CIMD document is `apps/web/public/.well-known/oauth-client/talyn.json`.
+It identifies `https://app.talyn.dev` and lists that origin's exact callback.
+A deployment with another `WEB_APP_URL` must publish a document with the matching identity and callback.
+
+Deploy [YAS #14](https://github.com/yetanothersandbox-dev/yas/pull/14) before this backend change.
+The related Talyn work is tracked in [Talyn #92](https://github.com/Gilbert09/talyn/pull/92).

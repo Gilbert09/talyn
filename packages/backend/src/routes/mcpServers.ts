@@ -1,3 +1,4 @@
+import { getPrivateConnector, mapPrivateRoutesError, workspaceMayUsePrivateRoutes } from '../services/selfHosted/privateRoutes.js';
 import { getDbClient } from '../db/client.js';
 import { withBlockingAdvisoryLock } from '../services/advisoryLock.js';
 import { discoverMcpAuth } from '../services/mcpServers/authDiscovery.js';
@@ -56,6 +57,20 @@ function serverShape(s: McpServerDefinition): Record<string, unknown> {
     mcp_tool_count: Array.isArray(s.tools) ? s.tools.length : null,
     mcp_enabled: s.enabled,
   };
+}
+
+async function validateWorkspaceMcpServer(raw: unknown, workspaceId: string) {
+  try { return validateMcpServer(raw); }
+  catch (validationError) {
+    if (!(await workspaceMayUsePrivateRoutes(workspaceId))) throw validationError;
+    try {
+      const connector = await getPrivateConnector(workspaceId, AbortSignal.timeout(5_000));
+      return validateMcpServer(raw, connector.routes);
+    } catch (error) {
+      if (mapPrivateRoutesError(error).status === 404) throw validationError;
+      throw error;
+    }
+  }
 }
 
 export function mcpServerRoutes(): Router {
@@ -135,18 +150,18 @@ export function mcpServerRoutes(): Router {
     if (!(await gate(req, res, workspaceId))) return;
     let url: string;
     try {
-      url = validateMcpServer({ name: 'discovery', url: req.body?.url, authKind: 'none' }).url;
+      url = (await validateWorkspaceMcpServer({ name: 'discovery', url: req.body?.url, authKind: 'none' }, workspaceId)).url;
     } catch (err) {
       return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'Invalid server address.' });
     }
-    const data = await discoverMcpAuth(url);
+    const data = await discoverMcpAuth(url, { workspaceId, purpose: 'discovery', requestId: req.requestId });
     res.json({ success: true, data });
   });
 
   router.get('/:id/account', async (req: Request, res: Response) => {
     const server = await loadAndGate(req, res);
     if (!server) return;
-    const data = await readMcpAccount(server.id, mcpOAuthStore);
+    const data = await readMcpAccount(server.id, mcpOAuthStore, { workspaceId: server.workspaceId, purpose: 'account' });
     res.json({ success: true, data });
   });
 
@@ -162,7 +177,7 @@ export function mcpServerRoutes(): Router {
 
     let normalized;
     try {
-      normalized = validateMcpServer(req.body);
+      normalized = await validateWorkspaceMcpServer(req.body, workspaceId);
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -195,7 +210,7 @@ export function mcpServerRoutes(): Router {
 
     let normalized;
     try {
-      normalized = validateMcpServer({ ...req.body, name: req.body?.name ?? server.name });
+      normalized = await validateWorkspaceMcpServer({ ...req.body, name: req.body?.name ?? server.name }, server.workspaceId);
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -246,6 +261,7 @@ export function mcpServerRoutes(): Router {
     // comes to mean nothing.
     const [withSecret] = await mcpServersForDispatch(server.workspaceId, [server.id]);
     const probe = await probeMcpServer({
+      workspaceId: server.workspaceId,
       url: server.url,
       authKind: server.authKind,
       inject: server.inject,
@@ -388,7 +404,7 @@ export function mcpOAuthCallbackRoutes(): Router {
         return res.json({ success: true, data: null });
       }
       try {
-        const next = await completeMcpOAuth(stored, state, code, new Date());
+        const next = await completeMcpOAuth(stored, state, code, new Date(), { workspaceId: server.workspaceId, purpose: 'exchange' });
         await mcpOAuthStore.write(server.id, next);
         captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
         res.json({ success: true, data: null });

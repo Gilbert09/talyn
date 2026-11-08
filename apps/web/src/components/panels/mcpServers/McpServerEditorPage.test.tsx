@@ -11,6 +11,7 @@ import { McpServerEditorPage } from './McpServerEditorPage';
 
 const mocks = vi.hoisted(() => ({
   discoverAuth: vi.fn(),
+  privateConnector: vi.fn(),
   startSignIn: vi.fn(),
   signInStatus: vi.fn(),
   disconnect: vi.fn(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   openSignIn: vi.fn(),
   closeSignIn: vi.fn(),
 }));
-vi.mock('../../../lib/api', () => ({ api: { mcpServers: mocks } }));
+vi.mock('../../../lib/api', () => ({ api: { mcpServers: mocks, workspaces: { privateConnector: { get: mocks.privateConnector } } } }));
 vi.mock('../../../lib/openExternal', () => ({ openExternal: mocks.openExternal, prepareSignInWindow: () => ({ open: mocks.openSignIn, close: mocks.closeSignIn }) }));
 vi.mock('../../../stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: { currentWorkspaceId: string }) => unknown) =>
@@ -63,6 +64,7 @@ function setup(
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.privateConnector.mockResolvedValue({ routes: [] });
   mocks.openSignIn.mockResolvedValue(true);
   mocks.account.mockResolvedValue(null);
   onSave.mockResolvedValue(server);
@@ -71,6 +73,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('MCP authentication setup', () => {
+  it('allows a private hostname after the exact route loads', async () => {
+    mocks.privateConnector.mockResolvedValue({ routes: [{ host: 'mcp.local', port: 443 }] });
+    mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });
+    setup(null, { name: 'private', url: 'https://mcp.local/mcp', authKind: 'none', enabled: true });
+    await waitFor(() => expect(mocks.discoverAuth).toHaveBeenCalledWith('ws-1', 'https://mcp.local/mcp'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://mcp.local/mcp' })));
+  });
+
   it('uses an internal user token for a new Slack connection', async () => {
     setup(null, mcpServerFromCatalog(mcpCatalogEntry('slack')!));
     expect(await screen.findByText('Connect your own Slack app')).toBeTruthy();

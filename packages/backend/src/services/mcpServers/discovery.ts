@@ -1,4 +1,4 @@
-import { fetchFailureReason, mcpFetch, publicHttpsUrl as httpsUrl, readMcpBody } from './http.js';
+import { fetchFailureReason, mcpFetch, mcpHttpsUrl as httpsUrl, mcpJsonFrames, type McpRequestContext, readMcpBody } from './http.js';
 
 /**
  * Finding an MCP server's authorization server, per the MCP authorization spec.
@@ -45,12 +45,12 @@ export interface ResourceMetadata {
 
 export class McpDiscoveryError extends Error {}
 
-async function getJson(url: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
+async function getJson(url: string, signal: AbortSignal, context?: McpRequestContext): Promise<Record<string, unknown> | null> {
   let resp: Response;
   try {
-    resp = await mcpFetch(url, { signal, headers: { accept: 'application/json' } });
-  } catch {
-    return null;
+    resp = await mcpFetch(url, { signal, headers: { accept: 'application/json' } }, context);
+  } catch (error) {
+    throw new McpDiscoveryError(fetchFailureReason(error));
   }
   if (!resp.ok) {
     await resp.body?.cancel();
@@ -72,15 +72,10 @@ interface EndpointChallenge {
 }
 
 function initializeResult(text: string): boolean {
-  const frames = text.trimStart().startsWith('{')
-    ? [text]
-    : text
-        .split(/\r?\n/)
-        .filter((s) => s.startsWith('data:'))
-        .map((s) => s.slice(5));
+  const frames = mcpJsonFrames(text.trimStart().startsWith('{') ? 'application/json' : 'text/event-stream', text);
   return frames.some((frame) => {
     try {
-      const doc = JSON.parse(frame);
+      const doc = frame as { id?: unknown; result?: { protocolVersion?: unknown; serverInfo?: { name?: unknown } } };
       return (
         doc.id === 1 &&
         doc.result &&
@@ -95,7 +90,8 @@ function initializeResult(text: string): boolean {
 
 export async function inspectMcpEndpoint(
   endpoint: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<EndpointChallenge> {
   let resp: Response;
   try {
@@ -113,7 +109,7 @@ export async function inspectMcpEndpoint(
           clientInfo: { name: 'talyn', version: '1' },
         },
       }),
-    });
+    }, context);
   } catch (err) {
     throw new McpDiscoveryError(
       signal.aborted
@@ -126,6 +122,16 @@ export async function inspectMcpEndpoint(
   if (resp.ok)
     anonymous = initializeResult(await readMcpBody(resp, MAX_METADATA_BYTES, initializeResult));
   else await resp.body?.cancel();
+  const sessionId = resp.headers.get('mcp-session-id');
+  if (sessionId) {
+    try {
+      const closed = await mcpFetch(endpoint, {
+        method: 'DELETE', signal,
+        headers: { 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      }, context);
+      await closed.body?.cancel();
+    } catch { /* Cleanup stays within the discovery deadline. */ }
+  }
   return { challenge, status: resp.status, anonymous };
 }
 
@@ -142,7 +148,8 @@ export function challengeParameter(challenge: string, name: string): string | un
 export async function resourceMetadataFromChallenge(
   endpoint: string,
   challenge: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<ResourceMetadata> {
   const named = challengeParameter(challenge, 'resource_metadata');
   const scope = challengeParameter(challenge, 'scope');
@@ -154,7 +161,7 @@ export async function resourceMetadataFromChallenge(
         `${base.origin}/.well-known/oauth-protected-resource`,
       ];
   for (const url of new Set(candidates)) {
-    const doc = await getJson(url, signal);
+    const doc = await getJson(url, signal, context);
     if (!doc) continue;
     const resourceUrl = httpsUrl(doc.resource);
     if (!resourceUrl) continue;
@@ -181,10 +188,11 @@ export async function resourceMetadataFromChallenge(
 
 export async function discoverResourceMetadata(
   endpoint: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<ResourceMetadata> {
-  const { challenge } = await inspectMcpEndpoint(endpoint, signal);
-  return resourceMetadataFromChallenge(endpoint, challenge, signal);
+  const { challenge } = await inspectMcpEndpoint(endpoint, signal, context);
+  return resourceMetadataFromChallenge(endpoint, challenge, signal, context);
 }
 
 /**
@@ -195,7 +203,8 @@ export async function discoverResourceMetadata(
  */
 export async function discoverAuthServer(
   issuer: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<AuthServerMetadata> {
   const u = new URL(issuer);
   const path = u.pathname === '/' ? '' : u.pathname.replace(/\/$/, '');
@@ -206,7 +215,7 @@ export async function discoverAuthServer(
   ];
 
   for (const url of candidates) {
-    const doc = await getJson(url, signal);
+    const doc = await getJson(url, signal, context);
     if (!doc) continue;
     const authorizationEndpoint = httpsUrl(doc.authorization_endpoint);
     const tokenEndpoint = httpsUrl(doc.token_endpoint);
@@ -251,18 +260,20 @@ export async function discoverAuthServer(
 
 /** Run both legs under one deadline. */
 export async function discover(
-  endpoint: string
+  endpoint: string,
+  context?: McpRequestContext,
+  signal?: AbortSignal
 ): Promise<{ resource: ResourceMetadata; server: AuthServerMetadata }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), DISCOVERY_TIMEOUT_MS);
   try {
-    const resource = await discoverResourceMetadata(endpoint, controller.signal);
+    const resource = await discoverResourceMetadata(endpoint, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, context);
     // The first authorization server, which is what a client with no reason to
     // prefer another does. A server naming several is rare and none of them
     // documents how to choose.
     const issuer = resource.authorizationServers[0];
     if (!issuer) throw new McpDiscoveryError('this server named no authorization server');
-    const server = await discoverAuthServer(issuer, controller.signal);
+    const server = await discoverAuthServer(issuer, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, context);
     return { resource, server };
   } finally {
     clearTimeout(timer);
