@@ -89,14 +89,19 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 
 | Area | Examples |
 | --- | --- |
-| Pull requests | List your pull requests or the ones that need attention, read a diff or reviews, fix a pull request with an agent, turn on keep mergeable, merge |
+| Pull requests | List your pull requests or the ones that need attention, read a diff or reviews, fix a pull request with an agent, turn on keep mergeable, merge, track or close a pull request |
 | Merge queue | Add or remove a pull request, queue a stack, read the queue history |
 | Code review | Start a review at a depth, read findings, fix or dismiss findings |
-| Sessions | Start a session, send a message, read the transcript, read the diff, open the pull request, archive |
-| Repositories | List and add repositories, read setup steps |
+| Tasks | Start a cloud task, read its result, stop it, retry it or delete it |
+| Sessions | Start a session, send a message, read the transcript, read the diff, open the pull request, archive, list the sessions of a thread |
+| Session accounts and sandboxes | List your Claude and Codex accounts, choose the account for a session, move a session to a sandbox of another size, read the sandbox status, see where a session spent its time |
+| Background jobs and wake-ups | Run a long command in a session's sandbox after the turn ends, read its output, stop it, schedule a new turn for later |
+| Memory | Save, search, read, list and forget short notes that later sessions can read |
+| Repositories | List, add and remove repositories, read setup steps, record or dismiss a setup step |
 | Skills | List, read, create and change skills |
-| Workflows and loops | List, create, change, turn on or off, and read the runs |
+| Workflows and loops | List, create, change, turn on or off, run a loop now, and read the runs |
 | MCP servers | List the servers your workspace connects, and connect one that uses OAuth or no auth |
+| Spaces | List your teams and their spaces, start a session in a space. Spaces are not yet available to all accounts. |
 | Account | Your plan and usage, your connected agents, and what is new |
 
 Your client lists every tool with its description and parameters when it connects.

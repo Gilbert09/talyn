@@ -4,6 +4,8 @@ Talyn tracks pull requests for each workspace: the pull requests you opened, the
 
 Scopes: `pull_requests:read` and `pull_requests:write` for pull requests and the merge queue. `code_reviews:read` and `code_reviews:write` for code reviews. See [authentication](authentication.md).
 
+The token form in the app does not offer these scopes yet. See [scopes in the token form](authentication.md#scopes-in-the-token-form).
+
 ## Read pull requests
 
 ```bash
@@ -39,7 +41,9 @@ curl -s -X POST https://api.talyn.dev/v1/pull-requests/$PR_ID/refresh \
   -H "Authorization: Bearer $TALYN_TOKEN"
 ```
 
-A refresh uses your own GitHub rate limit. The API allows 30 refreshes and posts each minute for each token. See [rate limits](rate-limits.md).
+A refresh uses your own GitHub rate limit. The API allows 30 GitHub calls each minute for each token. Refreshes, code review posts, and the session `pull_request` and `merge` actions count against this limit. See [rate limits](rate-limits.md).
+
+A refresh answers `409` `cannot_refresh` when GitHub does not return the pull request, or Talyn does not know its branch yet. A pull request that is no longer open gets its `closed` or `merged` state.
 
 `GET /pull-requests/{id}` also gives `session_ids` (the sessions that work on the pull request) and `code_review` (a summary of the latest review). The full description is at `GET /pull-requests/{id}/description`.
 
@@ -56,7 +60,9 @@ When auto-keep is on, Talyn starts a fix when the pull request gets conflicts or
 
 ## Start a session on a pull request
 
-`POST /pull-requests/{id}/sessions` starts a session on the head branch of the pull request. The session links to the pull request. This is the same as `POST /sessions` with `pull_request_id`. It needs `sessions:write`.
+`POST /pull-requests/{id}/sessions` starts a session on the head branch of the pull request. The session links to the pull request. This is the same as `POST /sessions` with `pull_request_id`. It needs `sessions:write`. A pull request that is not open answers `409` `pull_request_not_open`.
+
+The body has `agent` (required), and optionally `model`, `prompt`, `name` and `internet_access`.
 
 ```bash
 curl -s https://api.talyn.dev/v1/pull-requests/$PR_ID/sessions \
@@ -77,11 +83,13 @@ curl -s -X POST https://api.talyn.dev/v1/pull-requests/$PR_ID/merge-queue \
   -d '{ "method": "squash" }'
 ```
 
-- `DELETE /pull-requests/{id}/merge-queue` removes the pull request. It also turns off a GitHub auto-merge that Talyn armed.
-- `GET /merge-queue?workspace_id=...` lists the queue in the order the pull requests joined. `position` counts from 1 in each repository and base branch.
-- `GET /pull-requests/{id}/merge-queue/events` tells you what the queue did and why.
+`method` is `squash`, `merge` or `rebase`. If you leave it out, Talyn uses the last method for this pull request, else `squash`. If the pull request is in the queue already, the request changes only its `method`. A pull request that is not open answers `409` `pull_request_not_open`.
+
+- `DELETE /pull-requests/{id}/merge-queue` removes the pull request. It also turns off a GitHub auto-merge that Talyn armed. A pull request that is not in the queue gets the same answer.
+- `GET /merge-queue?workspace_id=...` lists the queue in the order the pull requests joined. The list has one page. `position` counts from 1 in each repository and base branch.
+- `GET /pull-requests/{id}/merge-queue/events` tells you what the queue did and why. It gives the newest 100 events at most, newest first.
 - A `blocked` entry has a `blocked_code` and a `blocked_reason`.
-- `POST /pull-requests/{id}/merge-queue/resubmit` sends a parked entry again, after an external merge queue (trunk.io) gave it back.
+- `POST /pull-requests/{id}/merge-queue/resubmit` sends a parked entry again, after an external merge queue (trunk.io) gave it back. It answers `409` `not_queued`, `not_parked` or `no_external_queue` when there is nothing to re-submit.
 
 The API cannot merge a pull request directly. Use the merge queue.
 
@@ -101,9 +109,21 @@ curl -s https://api.talyn.dev/v1/pull-requests/$PR_ID/code-reviews \
   -d '{ "preset": "standard" }'
 ```
 
-The answer is `201` with the review. If a cycle already runs, the answer is `200` with that cycle. Read `GET /code-reviews/{id}` until `phase` is `ready` or `failed`. A review takes some minutes. Poll each 30 seconds or less often.
+The body is optional. `preset` is `quick`, `standard` or `deep`. The default is the workspace setting. Send `"reset": true` to discard the findings on record. Else the findings carry over.
 
-The free plan runs 1 review at a time. Over that, the answer is `402` `code_review_limit_reached`.
+The answer is `201` with the review. If a cycle already runs, the answer is `200` with that cycle. Read `GET /code-reviews/{id}` until `phase` is at rest, for example `ready`, `failed` or `cancelled`. A review takes some minutes. Poll each 30 seconds or less often.
+
+A review runs on a box. The plan limits on boxes apply, so the answer can be `402`. See [plan limits](errors.md#plan-limits). Other refusals:
+
+- `409` `pr_closed`: the pull request is not open.
+- `409` `no_reviewers`: the workspace turned off Talyn's reviewers and has none of its own for this repository.
+- `404` `pr_missing`: Talyn does not track the pull request any more.
+
+### Other review endpoints
+
+- `GET /pull-requests/{id}/code-reviews` lists the review of a pull request, without findings. The list has one item at most.
+- `POST /code-reviews/{id}/cancel` stops the reviewers of the running cycle. A review at rest gets an answer with no change.
+- `GET /code-reviews/{id}/events` lists each phase change and action, with the reason. It gives the newest 200 events at most, newest first.
 
 ### Read the findings
 

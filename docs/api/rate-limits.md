@@ -23,6 +23,7 @@ These endpoints count as creates and actions:
 - `POST /sessions/{id}/pull_request`
 - `POST /sessions/{id}/fix_checks`
 - `POST /sessions/{id}/resolve_conflicts`
+- `POST /sessions/{id}/address_review`
 - `POST /sessions/{id}/merge`
 - `POST /sessions/{id}/resize`
 - `POST /sessions/{id}/previews`
@@ -63,7 +64,7 @@ Each response has these headers.
 | `RateLimit-Remaining` | Requests left in the window. |
 | `RateLimit-Reset` | Seconds until the window ends. |
 
-On a normal response, the headers describe the token budget (600 each minute). On a create, they describe the tighter create budget (60 each minute).
+On a normal response, the headers describe the token budget (600 each minute). When more than one limit applies, the headers describe the limit with fewer requests left. On a create, this is usually the create budget (60 each minute).
 
 A `429` also has the header `Retry-After`. It gives the seconds to wait. The error body has `retry_after` with the same number.
 
