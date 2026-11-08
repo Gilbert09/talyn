@@ -54,7 +54,8 @@ export function onConfigChange(listener: () => void): () => void {
 }
 
 export function getRuntime() {
-  return resolveRuntime(getConfig().runtime);
+  // An error constructor reads this, so it must not throw before configureApiClient.
+  return resolveRuntime(config?.runtime);
 }
 
 /**
