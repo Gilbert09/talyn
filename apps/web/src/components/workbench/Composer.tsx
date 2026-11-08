@@ -192,9 +192,13 @@ export function Composer({
     if (!owner && !chat) return;
     setSending(true);
     setRefusal(null);
+    let outgoingId: string | null = null;
+    let outgoingChatId: string | null = null;
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
+      outgoingChatId = target.id;
+      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice() });
       setDraft(draftKey, '');
       setAttachments([]);
       setImageNotReady(false);
@@ -206,6 +210,7 @@ export function Composer({
         model,
         effort,
       });
+      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId);
       trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
@@ -217,6 +222,7 @@ export function Composer({
       }
     } catch (err) {
       captureWorkbenchFailure('send_message', err, workbench.id);
+      if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessages(outgoingChatId, [outgoingId]);
       setDraft(draftKey, text);
       // A box refusal (out of hours, every box busy) opens the plan modal with
       // its own sentence and action; the text stays in the composer.
@@ -307,7 +313,7 @@ export function Composer({
               {ops.canRemoveQueued && chat && (
                 <button
                   type="button"
-                  onClick={() => ops.removeQueued(chat.id, m.id)}
+                  onClick={() => removeQueued(ops, chat.id, m)}
                   className="rounded p-0.5 hover:bg-accent hover:text-foreground"
                   aria-label="Remove the queued message"
                   title="Remove"
@@ -453,6 +459,15 @@ export function sandboxWaitText(workbench: Workbench): string | null {
   return null;
 }
 
+/** Remove a queued message, and the transcript's pending copy of it. */
+function removeQueued(ops: WorkbenchOps, chatId: string, message: WorkbenchQueuedMessage) {
+  const store = useWorkbenchStore.getState();
+  const text = message.text.trim();
+  const copies = (store.outgoingMessages[chatId] ?? []).filter((o) => o.text.trim() === text).map((o) => o.id);
+  if (copies.length) store.removeOutgoingMessages(chatId, copies);
+  ops.removeQueued(chatId, message.id);
+}
+
 /** A message that waits for a sandbox is the turn in progress, so it is a status line and not a queued chip. */
 function CapacityWaitLine({ message, wait, chatId, ops }: { message: WorkbenchQueuedMessage; wait: WorkbenchCapacityWait; chatId: string | undefined; ops: WorkbenchOps }) {
   const [now, setNow] = useState(() => Date.now());
@@ -467,7 +482,7 @@ function CapacityWaitLine({ message, wait, chatId, ops }: { message: WorkbenchQu
       {ops.canRemoveQueued && chatId && (
         <button
           type="button"
-          onClick={() => ops.removeQueued(chatId, message.id)}
+          onClick={() => removeQueued(ops, chatId, message)}
           className="rounded p-0.5 hover:bg-accent hover:text-foreground"
           aria-label="Stop waiting"
           title="Stop waiting"

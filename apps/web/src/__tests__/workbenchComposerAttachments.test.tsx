@@ -1,13 +1,14 @@
 import { MessageAttachments } from '../components/workbench/MessageAttachments';
-import { vi, it, expect, afterEach } from 'vitest';
+import { vi, it, expect, afterEach, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Composer } from '../components/workbench/Composer';
 import { sandboxOps } from '../lib/workbenchOps';
 import { api } from '../lib/api';
 import { downscaleImage } from '../lib/imageDownscale';
+import { useWorkbenchStore } from '../stores/workbenches';
 
 vi.mock('../lib/supabase', () => ({
   isSupabaseConfigured: () => false,
@@ -45,6 +46,10 @@ function paste() {
     },
   });
 }
+
+beforeEach(() => {
+  useWorkbenchStore.setState({ outgoingMessages: {}, drafts: {} });
+});
 
 afterEach(() => {
   cleanup();
@@ -206,4 +211,47 @@ it('switches the chat provider at the same model tier', async () => {
     agent: 'codex',
     model: 'gpt-6-astra',
   })));
+});
+
+it('stages a prompt before its send request finishes', async () => {
+  let finishSend: (result: { queued: boolean }) => void = () => undefined;
+  const send = vi.spyOn(api.workbenches, 'sendMessage').mockReturnValue(
+    new Promise<{ queued: boolean }>((resolve) => { finishSend = resolve; }),
+  );
+  render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send the message' }));
+
+  expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('');
+  await waitFor(() => expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Check the cache' })));
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([expect.objectContaining({ text: 'Check the cache' })]);
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1'][0].settledAt).toBeUndefined();
+
+  await act(async () => finishSend({ queued: false }));
+  // The prompt stays in the transcript until its own event arrives.
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([
+    expect.objectContaining({ text: 'Check the cache', settledAt: expect.any(Number) }),
+  ]);
+});
+
+it('drops the staged prompt when its send fails', async () => {
+  vi.spyOn(api.workbenches, 'sendMessage').mockRejectedValue(new Error('Server error'));
+  render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Send the message' }));
+  });
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([]);
+  expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('Check the cache');
+});
+
+it('drops the pending copy of a queued message that is removed', () => {
+  const queuedChat = { ...chat, status: 'running', queuedMessages: [{ id: 'q1', text: 'Check the cache', queuedAt: '2026-11-03T10:00:00Z' }] } as unknown as WorkbenchChat;
+  useWorkbenchStore.getState().addOutgoingMessage('chat-1', { text: 'Check the cache', settled: true });
+  useWorkbenchStore.getState().addOutgoingMessage('chat-1', { text: 'Something else', settled: true });
+  const ops = { ...sandboxOps(workbench), removeQueued: vi.fn() };
+  render(<Composer workbench={workbench} chat={queuedChat} ops={ops} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove the queued message' }));
+  expect(ops.removeQueued).toHaveBeenCalledWith('chat-1', 'q1');
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([expect.objectContaining({ text: 'Something else' })]);
 });

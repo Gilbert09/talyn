@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  useWorkbenchStore.setState({ outgoingMessages: {} });
+  useWorkbenchStore.setState({ outgoingMessages: {}, drafts: {} });
 });
 
 it('stages a prompt before its send request finishes', async () => {
@@ -51,7 +51,21 @@ it('stages a prompt before its send request finishes', async () => {
   expect(send).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Check the cache' }));
 
   await act(async () => finishSend({ queued: false }));
+  // The prompt stays in the transcript until its own event arrives.
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([
+    expect.objectContaining({ text: 'Check the cache', settledAt: expect.any(Number) }),
+  ]);
+});
+
+it('drops the staged prompt when its send fails', async () => {
+  jest.spyOn(api.workbenches, 'sendMessage').mockRejectedValue(new Error('Server error'));
+  render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Send the message' }));
+  });
   expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([]);
+  expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('Check the cache');
 });
 
 it('uploads a pasted sandbox image and shows its chip', async () => {
@@ -146,4 +160,15 @@ it('shows an ordinary queued message as a Queued chip', () => {
   expect(screen.getByText('Queued')).toBeInTheDocument();
   expect(screen.getByText('later')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
+});
+
+it('drops the pending copy of a queued message that is removed', () => {
+  const queuedChat = { ...chat, status: 'running', queuedMessages: [{ id: 'q1', text: 'Check the cache', queuedAt: '2026-11-03T10:00:00Z' }] } as unknown as WorkbenchChat;
+  useWorkbenchStore.getState().addOutgoingMessage('chat-1', { text: 'Check the cache', settled: true });
+  useWorkbenchStore.getState().addOutgoingMessage('chat-1', { text: 'Something else', settled: true });
+  const ops = { ...sandboxOps(workbench), removeQueued: jest.fn() };
+  render(<Composer workbench={workbench} chat={queuedChat} ops={ops} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove the queued message' }));
+  expect(ops.removeQueued).toHaveBeenCalledWith('chat-1', 'q1');
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([expect.objectContaining({ text: 'Something else' })]);
 });

@@ -4,6 +4,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
+import { PENDING_MESSAGE_GRACE_MS } from '../renderer/lib/workbenchFormat';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { toast } from '../renderer/stores/toast';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
@@ -13,7 +14,7 @@ jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false
 const chat = { id: 'c1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat;
 const ops = { unavailable: null } as unknown as WorkbenchOps;
 
-beforeEach(() => useWorkbenchStore.setState({ outgoingMessages: {} }));
+beforeEach(() => useWorkbenchStore.setState({ outgoingMessages: {}, chatEvents: {} }));
 
 const userEvent = (seq: number, turn: number): WorkbenchEvent => ({
   chatId: 'c1',
@@ -58,11 +59,7 @@ function setup(events: WorkbenchEvent[], o: OlderHistory) {
 }
 
 it('shows an outgoing prompt while its request is in flight', () => {
-  useWorkbenchStore.getState().addOutgoingMessage('c1', {
-    id: 'outgoing-1',
-    text: 'Check the cache',
-    attachments: [],
-  });
+  useWorkbenchStore.getState().addOutgoingMessage('c1', { text: 'Check the cache' });
   render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
   expect(screen.getByText('Check the cache')).toBeInTheDocument();
   expect(screen.getByText('Sending…')).toBeInTheDocument();
@@ -446,4 +443,78 @@ it('renders a Bash search command as a search row', () => {
 it('does not render a lone todo tool', () => {
   renderTurn(call('t1', 'TodoWrite', { todos: [{ content: 'x', status: 'pending' }] }));
   expect(screen.queryByText('todo')).not.toBeInTheDocument();
+});
+
+describe('pending prompts', () => {
+  const prompt = (seq: number): WorkbenchEvent => ({
+    chatId: 'c1',
+    seq,
+    turn: 1,
+    event: { seq, type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Check the cache' }] } } as AgentEvent,
+  });
+  const running = { ...chat, status: 'running', queuedMessages: [] } as unknown as WorkbenchChat;
+  const held = () => useWorkbenchStore.getState().outgoingMessages.c1 ?? [];
+  const send = (settled: boolean) =>
+    useWorkbenchStore.getState().addOutgoingMessage('c1', { text: 'Check the cache', settled });
+
+  it('shows a sent prompt while its turn starts, without "Sending…"', () => {
+    send(true);
+    render(<WorkbenchTranscript chat={running} events={[]} loading={false} error={null} ops={ops} />);
+    expect(screen.getByText('Check the cache')).toBeInTheDocument();
+    expect(screen.queryByText('Sending…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Send a message to start.')).not.toBeInTheDocument();
+    expect(screen.getByText('Working…')).toBeInTheDocument();
+  });
+
+  it('shows the prompt instead of the loading spinner', () => {
+    send(true);
+    render(<WorkbenchTranscript chat={running} events={[]} loading error={null} ops={ops} />);
+    expect(screen.getByText('Check the cache')).toBeInTheDocument();
+    expect(screen.queryByText('Loading the chat…')).not.toBeInTheDocument();
+  });
+
+  it('swaps the prompt for its own event and forgets it', async () => {
+    send(true);
+    const view = render(<WorkbenchTranscript chat={running} events={[]} loading={false} error={null} ops={ops} />);
+    view.rerender(<WorkbenchTranscript chat={running} events={[prompt(1)]} loading={false} error={null} ops={ops} />);
+    expect(screen.getAllByText('Check the cache')).toHaveLength(1);
+    await waitFor(() => expect(held()).toEqual([]));
+  });
+
+  it('leaves a queued prompt to the composer queue', () => {
+    send(true);
+    const queued = { ...running, status: 'idle', queuedMessages: [{ id: 'q1', text: 'Check the cache', queuedAt: '' }] } as unknown as WorkbenchChat;
+    render(<WorkbenchTranscript chat={queued} events={[]} loading={false} error={null} ops={ops} />);
+    expect(screen.queryByText('Check the cache')).not.toBeInTheDocument();
+    expect(held()).toHaveLength(1);
+  });
+
+  it('forgets a sent prompt that never ran, after the grace', async () => {
+    send(true);
+    useWorkbenchStore.setState({
+      outgoingMessages: { c1: held().map((m) => ({ ...m, settledAt: Date.now() - PENDING_MESSAGE_GRACE_MS - 1 })) },
+    });
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
+    expect(screen.queryByText('Check the cache')).not.toBeInTheDocument();
+    await waitFor(() => expect(held()).toEqual([]));
+  });
+
+  it('keeps a sent prompt through the grace, then forgets it', async () => {
+    send(true);
+    useWorkbenchStore.setState({
+      outgoingMessages: { c1: held().map((m) => ({ ...m, settledAt: Date.now() - PENDING_MESSAGE_GRACE_MS + 100 })) },
+    });
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
+    expect(screen.getByText('Check the cache')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Check the cache')).not.toBeInTheDocument());
+    expect(held()).toEqual([]);
+  });
+
+  it('only counts an echo that is newer than the prompt', () => {
+    useWorkbenchStore.getState().appendEvents('c1', [prompt(4)]);
+    send(true);
+    expect(held()[0].afterSeq).toBe(4);
+    render(<WorkbenchTranscript chat={running} events={[prompt(4)]} loading={false} error={null} ops={ops} />);
+    expect(screen.getAllByText('Check the cache')).toHaveLength(2);
+  });
 });

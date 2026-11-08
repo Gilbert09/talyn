@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trackEvent } from '../lib/analytics';
 import type {
   Workbench,
+  WorkbenchAttachment,
   WorkbenchChat,
   WorkbenchEvent,
   WorkbenchScriptFrame,
@@ -15,6 +16,12 @@ import {
   writeLayout,
   type GitPanelTab,
 } from '../lib/workbenchLayout';
+import type { PendingUserMessage } from '../lib/workbenchFormat';
+
+/** A prompt shown in the transcript until its own event arrives. See `pendingMessageState`. */
+export type OutgoingWorkbenchMessage = PendingUserMessage;
+
+let outgoingSequence = 0;
 
 /**
  * Workbenches: the list, each workbench's chats, each chat's transcript
@@ -209,6 +216,8 @@ interface WorkbenchState {
   terminalTab: WorkbenchTerminalTab;
   /** Composer drafts per chat (or per workbench before it has a chat). */
   drafts: Record<string, string>;
+  /** Prompts shown in the transcript before their own event arrives. */
+  outgoingMessages: Record<string, OutgoingWorkbenchMessage[]>;
   /** Chats that finished while nobody was looking. */
   unread: Record<string, true>;
   /**
@@ -255,6 +264,11 @@ interface WorkbenchState {
   setTerminalHeight: (height: number) => void;
   setTerminalTab: (tab: WorkbenchTerminalTab) => void;
   setDraft: (key: string, text: string) => void;
+  /** Show a sent prompt in the chat's transcript. Returns its id. `settled`: the send already finished. */
+  addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean }) => string;
+  /** The send request finished: the prompt stays until its event arrives or it stops being pending. */
+  settleOutgoingMessage: (chatId: string, messageId: string) => void;
+  removeOutgoingMessages: (chatId: string, messageIds: string[]) => void;
   /** Add text to the end of a draft, on its own paragraph. */
   appendDraft: (key: string, text: string) => void;
   markRead: (chatId: string) => void;
@@ -286,6 +300,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   terminalHeight: initialLayout.dockHeight,
   terminalTab: 'terminal',
   drafts: {},
+  outgoingMessages: {},
   unread: {},
   unseen: {},
   scriptOutput: {},
@@ -295,7 +310,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     set((s) =>
       s.workspaceId === workspaceId
         ? s
-        : { workspaceId, workbenches: {}, extraWorkbenchIds: {}, listLoaded: false, listError: null, selectedWorkbenchId: null }
+        : { workspaceId, workbenches: {}, extraWorkbenchIds: {}, listLoaded: false, listError: null, selectedWorkbenchId: null, outgoingMessages: {} }
     ),
 
   setWorkbenches: (workspaceId, list) =>
@@ -474,6 +489,47 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     writeLayout({ dockHeight: terminalHeight });
   },
   setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true, rightPanelOpen: true }),
+
+  addOutgoingMessage: (chatId, { text, attachments = [], settled = false }) => {
+    outgoingSequence += 1;
+    const id = `outgoing-${Date.now()}-${outgoingSequence}`;
+    set((s) => {
+      const held = s.chatEvents[chatId]?.events ?? [];
+      const message: OutgoingWorkbenchMessage = {
+        id,
+        text,
+        attachments,
+        afterSeq: held.length ? held[held.length - 1].seq : null,
+        ...(settled ? { settledAt: Date.now() } : {}),
+      };
+      return { outgoingMessages: { ...s.outgoingMessages, [chatId]: [...(s.outgoingMessages[chatId] ?? []), message] } };
+    });
+    return id;
+  },
+
+  settleOutgoingMessage: (chatId, messageId) =>
+    set((s) => {
+      const list = s.outgoingMessages[chatId];
+      if (!list?.some((message) => message.id === messageId)) return s;
+      return {
+        outgoingMessages: {
+          ...s.outgoingMessages,
+          [chatId]: list.map((message) => (message.id === messageId ? { ...message, settledAt: Date.now() } : message)),
+        },
+      };
+    }),
+
+  removeOutgoingMessages: (chatId, messageIds) =>
+    set((s) => {
+      const list = s.outgoingMessages[chatId];
+      if (!list?.some((message) => messageIds.includes(message.id))) return s;
+      return {
+        outgoingMessages: {
+          ...s.outgoingMessages,
+          [chatId]: list.filter((message) => !messageIds.includes(message.id)),
+        },
+      };
+    }),
 
   setDraft: (key, text) =>
     set((s) => {
