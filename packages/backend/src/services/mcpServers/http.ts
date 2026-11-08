@@ -3,7 +3,7 @@ import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { Agent } from 'undici';
 import { randomUUID } from 'node:crypto';
 import { getPrivateConnector, mapPrivateRoutesError, workspaceMayUsePrivateRoutes } from '../selfHosted/privateRoutes.js';
-import { dialError, evictPrivateConnections, McpTransportError, privateDispatcher } from './privateTcp.js';
+import { dialError, evictPrivateConnections, mcpFailureDiagnostics, McpTransportError, privateDispatcher } from './privateTcp.js';
 
 const blocked = new BlockList();
 for (const [address, prefix] of [
@@ -155,6 +155,7 @@ export async function mcpFetch(url: string, init: RequestInit = {}, context?: Mc
         workspaceId: context.workspaceId, connectorId: connectorId ?? null,
         destination: destination ? { host: destination.hostname, port: Number(destination.port || 443) } : null,
         transport, purpose: context.purpose, result, durationMs: Date.now() - started, requestId,
+        ...mcpFailureDiagnostics(error),
       });
     };
     try {

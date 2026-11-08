@@ -39,6 +39,10 @@ FLEET_PRIVATE_ROUTES_TOKEN=<same value as YASCTL_REPORT_TOKEN>
 
 The YAS HTTPS ingress must support HTTP/1.1 upgrades and long streams.
 
+Backend MCP connections use a standard WebSocket upgrade with the `yas-private-tcp-v1` subprotocol.
+Deploy the YAS WebSocket endpoint before the Talyn client.
+The exact handshake and TLS rules are in [the setup guide](SETUP.md#private-mcp-setup-through-yas).
+
 Talyn uses its existing gateway connection:
 
 ```text
