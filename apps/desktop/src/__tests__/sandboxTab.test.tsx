@@ -92,7 +92,7 @@ afterEach(() => {
 describe('Sandbox tab', () => {
   it('sits after Pull request for a sandbox session', () => {
     renderPanel();
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes', 'Pull request', 'Sandbox']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes', 'Pull request', 'Sandbox', 'Background']);
   });
 
   it('is absent for a local session, and a stored Sandbox tab falls back to Changes', () => {
