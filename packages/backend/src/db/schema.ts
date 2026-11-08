@@ -268,6 +268,7 @@ export const spaces = pgTable(
       .references(() => teams.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     color: text('color'),
+    image: text('image'),
     createdByUserId: text('created_by_user_id'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

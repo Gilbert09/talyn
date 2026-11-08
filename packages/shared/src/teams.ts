@@ -20,6 +20,14 @@ export const MAX_SPACE_NAME_LENGTH = 60;
 export const MAX_TEAM_NAME_LENGTH = 80;
 /** A space colour is a `#rrggbb` hex string. */
 export const SPACE_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+/**
+ * A space image is a downscaled raster `data:` URL, stored inline on the space
+ * row. Every `GET /teams` sends it to every member, so it stays small: the
+ * apps downscale an upload to `SPACE_IMAGE_MAX_DIMENSION` px before they send it.
+ */
+export const SPACE_IMAGE_PATTERN = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+export const MAX_SPACE_IMAGE_LENGTH = 256 * 1024;
+export const SPACE_IMAGE_MAX_DIMENSION = 128;
 
 export function isTeamRole(value: unknown): value is TeamRole {
   return typeof value === 'string' && (TEAM_ROLES as readonly string[]).includes(value);
@@ -35,6 +43,8 @@ export interface Space {
   teamId: string;
   name: string;
   color: string | null;
+  /** An uploaded image (`data:image/...`) shown in place of the colour tile. Null: none. */
+  image: string | null;
   createdByUserId: string | null;
   archivedAt: string | null;
   createdAt: string;
@@ -136,11 +146,14 @@ export interface CreateSpacesTeamRequest {
 export interface CreateSpaceRequest {
   name: string;
   color?: string | null;
+  image?: string | null;
 }
 
 export interface UpdateSpaceRequest {
   name?: string;
   color?: string | null;
+  /** Null removes the image. Absent leaves it as it is. */
+  image?: string | null;
 }
 
 export interface InviteTeamMemberRequest {

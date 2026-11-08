@@ -133,7 +133,7 @@ function SpaceSessionsGroup({ pick }: { pick: PickFn }) {
           value={`space session ${row.title ?? ''} ${row.name} ${row.repoFullName} ${row.creator.githubLogin ?? ''} ${row.id}`}
           onSelect={() => pick(() => void openSpaceSession(row.id))}
         >
-          <SpaceDot color={active.space.color} />
+          <SpaceDot color={active.space.color} image={active.space.image} />
           <span className="truncate">{row.title || row.name}</span>
           <span className="truncate font-mono text-[11px] text-muted-foreground">{row.repoFullName}</span>
           {row.creator.githubLogin && (
@@ -200,7 +200,7 @@ function ContextGroup({ pick }: { pick: PickFn }) {
                 value={`switch space ${team.name} ${space.name} ${space.id}`}
                 onSelect={() => pick(() => switchContext(context))}
               >
-                <SpaceDot color={space.color} />
+                <SpaceDot color={space.color} image={space.image} />
                 <span className="truncate">Switch to {space.name}</span>
                 <span className="truncate text-[11px] text-muted-foreground">{team.name}</span>
                 {isCurrent(context) && <Check className={ICON} aria-label="Current" />}
