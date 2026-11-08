@@ -376,6 +376,8 @@ export interface WorkbenchEvent {
   seq: number;
   turn: number;
   event: AgentEvent;
+  /** When the backend stored the event (ISO 8601). Absent on older servers and on unsent local events. */
+  createdAt?: string;
 }
 
 /** A hidden commit under `refs/talyn/checkpoints/<chatId>/<turn>`. See `workbenchGit.ts`. */
