@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Composer } from '../renderer/components/workbench/Composer';
 import { sandboxOps } from '../renderer/lib/workbenchOps';
-import { api } from '../renderer/lib/api';
+import { api, ApiError } from '../renderer/lib/api';
 import { downscaleImage } from '../renderer/lib/imageDownscale';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
@@ -57,8 +57,25 @@ it('stages a prompt before its send request finishes', async () => {
   ]);
 });
 
-it('drops the staged prompt when its send fails', async () => {
-  jest.spyOn(api.workbenches, 'sendMessage').mockRejectedValue(new Error('Server error'));
+it('keeps a failed prompt in the chat with its error, and empties the composer', async () => {
+  jest.spyOn(api.workbenches, 'sendMessage').mockRejectedValue(new Error('Failed to fetch'));
+  render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Send the message' }));
+  });
+  expect(useWorkbenchStore.getState().outgoingMessages['chat-1']).toEqual([
+    expect.objectContaining({
+      text: 'Check the cache',
+      settledAt: undefined,
+      failed: { error: 'Failed to fetch', input: expect.objectContaining({ text: 'Check the cache' }) },
+    }),
+  ]);
+  expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('');
+});
+
+it('drops the staged prompt and restores the draft when a plan limit refuses it', async () => {
+  jest.spyOn(api.workbenches, 'sendMessage').mockRejectedValue(new ApiError('Out of usage', 402, 'usage_exhausted'));
   render(<Composer workbench={workbench} chat={chat} ops={sandboxOps(workbench)} todos={null} contextUsage={null} slashCommands={null} />);
   fireEvent.change(screen.getByRole('textbox', { name: 'Message the agent' }), { target: { value: 'Check the cache' } });
   await act(async () => {

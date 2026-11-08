@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trackEvent } from '../lib/analytics';
 import type {
+  SendWorkbenchMessageInput,
   Workbench,
   WorkbenchAttachment,
   WorkbenchChat,
@@ -268,6 +269,10 @@ interface WorkbenchState {
   addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean }) => string;
   /** The send request finished: the prompt stays until its event arrives or it stops being pending. */
   settleOutgoingMessage: (chatId: string, messageId: string) => void;
+  /** The send request failed: the prompt stays, with the error, until it is sent again or discarded. */
+  failOutgoingMessage: (chatId: string, messageId: string, failure: { error: string; input: SendWorkbenchMessageInput }) => void;
+  /** A failed prompt is being sent again: it shows as in flight. */
+  resendOutgoingMessage: (chatId: string, messageId: string) => void;
   removeOutgoingMessages: (chatId: string, messageIds: string[]) => void;
   /** Add text to the end of a draft, on its own paragraph. */
   appendDraft: (key: string, text: string) => void;
@@ -280,6 +285,22 @@ interface WorkbenchState {
 }
 
 const initialLayout = readLayout();
+
+function patchOutgoing(
+  s: WorkbenchState,
+  chatId: string,
+  messageId: string,
+  patch: (message: OutgoingWorkbenchMessage) => OutgoingWorkbenchMessage,
+): WorkbenchState | Partial<WorkbenchState> {
+  const list = s.outgoingMessages[chatId];
+  if (!list?.some((message) => message.id === messageId)) return s;
+  return {
+    outgoingMessages: {
+      ...s.outgoingMessages,
+      [chatId]: list.map((message) => (message.id === messageId ? patch(message) : message)),
+    },
+  };
+}
 
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   workspaceId: null,
@@ -508,16 +529,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   },
 
   settleOutgoingMessage: (chatId, messageId) =>
-    set((s) => {
-      const list = s.outgoingMessages[chatId];
-      if (!list?.some((message) => message.id === messageId)) return s;
-      return {
-        outgoingMessages: {
-          ...s.outgoingMessages,
-          [chatId]: list.map((message) => (message.id === messageId ? { ...message, settledAt: Date.now() } : message)),
-        },
-      };
-    }),
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: Date.now(), failed: undefined }))),
+
+  failOutgoingMessage: (chatId, messageId, failed) =>
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed }))),
+
+  resendOutgoingMessage: (chatId, messageId) =>
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed: undefined }))),
 
   removeOutgoingMessages: (chatId, messageIds) =>
     set((s) => {

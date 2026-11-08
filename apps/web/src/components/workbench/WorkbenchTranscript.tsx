@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { History, Loader2, RotateCcw } from 'lucide-react';
+import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
 import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchQueuedMessage } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { renderMarkdownish } from '../../lib/markdown';
-import { chatTotals, compactCount, pendingMessageState, PENDING_MESSAGE_GRACE_MS, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
+import { chatTotals, compactCount, pendingMessageState, PENDING_MESSAGE_GRACE_MS, sendFailureText, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
 import { api } from '../../lib/api';
@@ -144,7 +145,8 @@ export function WorkbenchTranscript({
               attachments={message.attachments}
               ops={ops}
               canRevert={false}
-              sending={message.settledAt === undefined}
+              sending={message.settledAt === undefined && !message.failed}
+              footer={message.failed ? <FailedMessageFooter chat={chat} ops={ops} message={message} /> : null}
             />
           ))}
           {running && (
@@ -213,6 +215,50 @@ function usePendingMessages(chat: WorkbenchChat, events: WorkbenchEvent[]): Outg
   }, [expiry]);
 
   return useMemo(() => outgoing.filter((_, i) => states[i] === 'show'), [outgoing, states]);
+}
+
+/**
+ * Under a message whose send failed: the reason, and Retry and Discard. The
+ * message stays in the chat until one of them is used, so a short backend
+ * outage does not lose what the user typed.
+ */
+function FailedMessageFooter({ chat, ops, message }: { chat: WorkbenchChat; ops: WorkbenchOps; message: OutgoingWorkbenchMessage }) {
+  const failed = message.failed;
+  if (!failed) return null;
+
+  const retry = async () => {
+    const { input } = failed;
+    useWorkbenchStore.getState().resendOutgoingMessage(chat.id, message.id);
+    try {
+      await ops.send(chat, input);
+      useWorkbenchStore.getState().settleOutgoingMessage(chat.id, message.id);
+    } catch (err) {
+      captureWorkbenchFailure('retry_message', err, chat.workbenchId);
+      useWorkbenchStore.getState().failOutgoingMessage(chat.id, message.id, { error: sendFailureText(err), input });
+      maybeHandleBillingLimit(err, 'session_message_retry');
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-destructive" data-attr="failed-message" role="alert">
+      <AlertCircle className="h-3 w-3 shrink-0" />
+      <span className="[overflow-wrap:anywhere]">Not sent: {failed.error}</span>
+      <button
+        type="button"
+        onClick={() => void retry()}
+        className="inline-flex items-center gap-1 rounded px-1.5 text-foreground hover:bg-accent"
+      >
+        <RotateCcw className="h-3 w-3" /> Retry
+      </button>
+      <button
+        type="button"
+        onClick={() => useWorkbenchStore.getState().removeOutgoingMessages(chat.id, [message.id])}
+        className="rounded px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        Discard
+      </button>
+    </div>
+  );
 }
 
 /** How close to the top a scroll must come before the next older page loads. */
@@ -391,6 +437,7 @@ function UserMessage({
   ops,
   canRevert,
   sending = false,
+  footer = null,
 }: {
   chatId: string;
   turn: number;
@@ -399,6 +446,7 @@ function UserMessage({
   ops: WorkbenchOps;
   canRevert: boolean;
   sending?: boolean;
+  footer?: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -428,6 +476,7 @@ function UserMessage({
             <Loader2 className="h-3 w-3 animate-spin" /> Sending…
           </div>
         )}
+        {footer}
         {canRevert && (
           <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">
             {confirming ? (

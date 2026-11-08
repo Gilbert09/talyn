@@ -269,11 +269,16 @@ describe('useCreateWorkbench: the first prompt in the new chat', () => {
     expect(held()[0].settledAt).toEqual(expect.any(Number));
   });
 
-  it('drops a prompt with images when its send fails', async () => {
+  it('keeps a prompt with images, with its error, when its send fails', async () => {
     mockApi.create.mockResolvedValue(workbench());
     mockApi.sendMessage.mockRejectedValue(new Error('Server error'));
     await run(spec({ attachments: [image] }));
-    expect(held()).toEqual([]);
+    expect(held()).toEqual([
+      expect.objectContaining({
+        settledAt: undefined,
+        failed: { error: 'Server error', input: expect.objectContaining({ attachments: [image] }) },
+      }),
+    ]);
   });
 });
 

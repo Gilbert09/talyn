@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { DEFAULT_WORKBENCH_EFFORT, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
+import { DEFAULT_WORKBENCH_EFFORT, type SendWorkbenchMessageInput, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { createLocalWorkbench } from '../../../lib/localWorkbench';
 import { opsFor } from '../../../lib/workbenchOps';
@@ -10,6 +10,7 @@ import { useWorkbenchStore } from '../../../stores/workbenches';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { trackEvent } from '../../../lib/analytics';
 import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
+import { sendFailureText } from '../../../lib/workbenchFormat';
 
 export interface NewWorkbenchSpec {
   workspaceId: string;
@@ -78,20 +79,24 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
       if (spec.runtime === 'local') void startLocalChat(wb, spec, pending);
       else if (spec.attachments?.length) {
+        const firstInput: SendWorkbenchMessageInput = {
+          text: spec.prompt.trim(), attachments: spec.attachments,
+          model: spec.model, effort: spec.effort, planMode: spec.planMode,
+        };
         try {
           const chat = firstChat ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
-          const sent = await api.workbenches.sendMessage(chat.id, {
-            text: spec.prompt.trim(), attachments: spec.attachments,
-            model: spec.model, effort: spec.effort, planMode: spec.planMode,
-          });
+          const sent = await api.workbenches.sendMessage(chat.id, firstInput);
           if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
           trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length });
         } catch (err) {
-          if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);
           captureWorkbenchFailure('send_first_message', err, wb.id);
-          if (!maybeHandleBillingLimit(err, 'workbench_send')) {
-            toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
+          if (maybeHandleBillingLimit(err, 'workbench_send')) {
+            if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);
+            return wb;
           }
+          // The prompt stays in the new chat with the error and a Retry action.
+          if (pending) useWorkbenchStore.getState().failOutgoingMessage(pending.chatId, pending.id, { error: sendFailureText(err), input: firstInput });
+          toast.error('The first message did not start', err instanceof Error ? err.message : undefined);
         }
       }
       return wb;

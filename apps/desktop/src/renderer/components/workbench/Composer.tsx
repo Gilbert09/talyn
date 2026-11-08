@@ -4,6 +4,7 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   fleetModelForAgentSwitch,
   WORKBENCH_MOVING_MESSAGE,
+  type SendWorkbenchMessageInput,
   type Workbench,
   type WorkbenchAgent,
   type WorkbenchCapacityWait,
@@ -20,7 +21,7 @@ import { api } from '../../lib/api';
 import { wakeWorkbench } from '../../lib/wakeWorkbench';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
-import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
+import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, sendFailureText, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
@@ -197,6 +198,13 @@ export function Composer({
     setRefusal(null);
     let outgoingId: string | null = null;
     let outgoingChatId: string | null = null;
+    const input: SendWorkbenchMessageInput = {
+      text,
+      attachments: attachments.length ? attachments.slice() : undefined,
+      planMode,
+      model,
+      effort,
+    };
     try {
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
@@ -206,13 +214,7 @@ export function Composer({
       setAttachments([]);
       setImageNotReady(false);
       setTrigger(null);
-      const res = await ops.send(target, {
-        text,
-        attachments: attachments.length ? attachments : undefined,
-        planMode,
-        model,
-        effort,
-      });
+      const res = await ops.send(target, input);
       useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId);
       trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
       if (res.queued && workbench.status !== 'moving') {
@@ -223,14 +225,21 @@ export function Composer({
       }
     } catch (err) {
       captureWorkbenchFailure('send_message', err, workbench.id);
-      if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessages(outgoingChatId, [outgoingId]);
-      setDraft(draftKey, text);
+      // A box refusal (out of hours, every box busy) opens the plan modal with
+      // its own sentence and action, and a prompt refusal shows its reason:
+      // the text goes back to the composer.
       const refused = owner ? null : promptRefusal(err);
-      if (refused) {
-        setRefusal(refused);
-        return;
+      const limited = !refused && maybeHandleBillingLimit(err, 'workbench_send');
+      if (limited || refused || !outgoingId || !outgoingChatId) {
+        if (outgoingId && outgoingChatId) useWorkbenchStore.getState().removeOutgoingMessages(outgoingChatId, [outgoingId]);
+        setDraft(draftKey, text);
+        if (refused) setRefusal(refused);
+        if (limited || refused) return;
+      } else {
+        // Any other failure (the backend is down, the sandbox is not ready):
+        // the message stays in the chat with the error and a Retry action.
+        useWorkbenchStore.getState().failOutgoingMessage(outgoingChatId, outgoingId, { error: sendFailureText(err), input });
       }
-      if (maybeHandleBillingLimit(err, 'workbench_send')) return;
       // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {

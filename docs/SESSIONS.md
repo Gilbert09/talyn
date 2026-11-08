@@ -7382,3 +7382,11 @@ The sidebar session list has a "Sessions" header with an archive button. It arch
 
 The desktop and web sidebars now put active sessions in one group. Active sessions work now, need attention, contain unshipped changes, or have an open pull request.
 Inactive sessions remain grouped by repository. Settings → Sessions → Sidebar can restore repository-only grouping. The selected order stays on the device.
+
+### 2026-11-08 — Failed messages stay in the chat with Retry
+
+Before, a message whose send request failed disappeared from the chat. The text went back to the composer, where a user could easily miss it. A backend outage made this happen to every message.
+Now the message stays in the chat with the error and two actions: Retry and Discard. Retry sends the same request again, with the same model, effort, plan mode and attachments. The composer stays empty.
+This is client state only: `PendingUserMessage.failed` in `workbenchFormat.ts`, set by `failOutgoingMessage` in both stores. A failed message is shown until it is sent, discarded, or its own event arrives. A page reload or a workspace switch loses it.
+A plan limit or a prompt refusal does not use this path. Those still remove the message and restore the draft, because they need a different action from the user.
+The first message of a new session with images uses the same path.
