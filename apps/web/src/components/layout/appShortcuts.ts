@@ -10,7 +10,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { isActiveSessionState, sessionPr, sessionState } from '../../lib/sessionState';
 import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
-import { groupSidebarWorkbenches, isArchived } from '../workbench/workbenchSelectors';
+import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
 import { contextEntries, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
@@ -41,8 +41,12 @@ export function orderedLiveWorkbenches(): Workbench[] {
     );
     return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
   }).map((workbench) => workbench.id));
-  const activeFirst = useWorkspaceStore.getState().sidebarOrder === 'active_first';
-  return groupSidebarWorkbenches(all, activeIds, activeFirst).flatMap((group) => group.items);
+  const { sidebarOrder, collapsedSessionGroups } = useWorkspaceStore.getState();
+  const openId = currentWorkbench()?.id ?? null;
+  // Only the rows the sidebar shows: a collapsed group's sessions take no number.
+  return groupSidebarWorkbenches(all, activeIds, sidebarOrder === 'active_first').flatMap((group) =>
+    visibleGroupItems(group, collapsedSessionGroups, openId),
+  );
 }
 
 export function currentWorkbench(): Workbench | null {

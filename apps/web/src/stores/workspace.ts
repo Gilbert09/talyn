@@ -119,6 +119,19 @@ export type Theme = 'light' | 'dark' | 'system';
 export type SidebarOrder = 'active_first' | 'repository';
 
 const SIDEBAR_ORDER_KEY = 'talyn-sidebar-order';
+const SESSION_GROUPS_KEY = 'talyn-sidebar-collapsed-groups';
+
+/** The session groups a person folded in the sidebar, by group key. Kept on this machine. */
+function getInitialCollapsedSessionGroups(): Record<string, true> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SESSION_GROUPS_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return {};
+    return Object.fromEntries(parsed.filter((key): key is string => typeof key === 'string').map((key) => [key, true]));
+  } catch {
+    return {};
+  }
+}
 
 function getInitialSidebarOrder(): SidebarOrder {
   if (typeof window === 'undefined') return 'active_first';
@@ -278,6 +291,7 @@ interface WorkspaceState {
   // UI State
   sidebarCollapsed: boolean;
   sidebarOrder: SidebarOrder;
+  collapsedSessionGroups: Record<string, true>;
   activePanel: ActivePanel;
   selectedTaskId: string | null;
   theme: Theme;
@@ -423,6 +437,7 @@ interface WorkspaceState {
 
   toggleSidebar: () => void;
   setSidebarOrder: (order: SidebarOrder) => void;
+  toggleSessionGroup: (key: string) => void;
   setActivePanel: (panel: ActivePanel) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -441,6 +456,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   repositories: [],
   sidebarCollapsed: false,
   sidebarOrder: getInitialSidebarOrder(),
+  collapsedSessionGroups: getInitialCollapsedSessionGroups(),
   activePanel: 'my_prs',
   selectedTaskId: null,
   theme: getInitialTheme(),
@@ -666,6 +682,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     }
     set({ sidebarOrder });
   },
+
+  toggleSessionGroup: (key) =>
+    set((state) => {
+      const collapsedSessionGroups = { ...state.collapsedSessionGroups };
+      if (collapsedSessionGroups[key]) delete collapsedSessionGroups[key];
+      else collapsedSessionGroups[key] = true;
+      try {
+        localStorage.setItem(SESSION_GROUPS_KEY, JSON.stringify(Object.keys(collapsedSessionGroups)));
+      } catch {
+        // ignore quota / privacy-mode issues
+      }
+      return { collapsedSessionGroups };
+    }),
 
   setActivePanel: (panel) => {
     if (panelNavigator) panelNavigator.openPanel(panel);

@@ -146,7 +146,7 @@ describe('Sidebar threads', () => {
   it('keeps thread sessions under their repository, with a thread tag', () => {
     render(<AppSidebar />);
     const repo = screen.getByRole('group', { name: 'posthog/posthog' });
-    const rows = within(repo).getAllByRole('button');
+    const rows = within(repo).getAllByRole('button').filter((r) => r.getAttribute('data-attr') === 'sidebar-workbench-row');
     expect(rows.map((r) => r.textContent)).toEqual(['fix flaky insight test', 'solo']);
     expect(within(rows[0]).getByTitle('Part of the thread Slack integration')).toBeInTheDocument();
     // A thread is never a repository group of its own.
