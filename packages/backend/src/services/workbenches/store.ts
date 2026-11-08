@@ -558,13 +558,17 @@ export async function commitMove(
     settings?: Record<string, string>;
     /** The size the new box got. A resize waiting for exactly this size is done. */
     size?: string;
+    /** The restart request the move saw at its claim. The new box answers it, so it is done. */
+    restartRequestedAt?: string | null;
   },
 ): Promise<WorkbenchRow | null> {
   const added = { ...(to.fleetSandboxId ? { fleetSandboxId: to.fleetSandboxId } : {}), ...(to.settings ?? {}) };
   const current = sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb)`;
-  // Read in the same statement, so a resize asked for during the move stays.
-  const base = sql`CASE WHEN ${current} ->> 'resizeTo' = ${to.size ?? null}::text
+  // Read in the same statement, so a resize or a restart asked for during the move stays.
+  const resized = sql`CASE WHEN ${current} ->> 'resizeTo' = ${to.size ?? null}::text
     THEN ${current} - 'resizeTo' - 'resizeReason' ELSE ${current} END`;
+  const base = sql`CASE WHEN ${current} ->> 'restartRequestedAt' = ${to.restartRequestedAt ?? null}::text
+    THEN (${resized}) - 'restartRequestedAt' - 'restartReason' ELSE (${resized}) END`;
   const [row] = await db()
     .update(workbenchesTable)
     .set({
@@ -637,6 +641,29 @@ export async function clearPendingResize(id: string, size: string): Promise<Work
     .update(workbenchesTable)
     .set({ settings: sql`${workbenchesTable.settings} - 'resizeTo' - 'resizeReason'` })
     .where(and(eq(workbenchesTable.id, id), sql`${workbenchesTable.settings} ->> 'resizeTo' = ${size}::text`))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Ask for a restart on a fresh box at the next move. `reason` null removes an old reason. */
+export async function setPendingRestart(id: string, requestedAt: string, reason: string | null): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'restartReason')
+        || ${JSON.stringify({ restartRequestedAt: requestedAt, ...(reason ? { restartReason: reason } : {}) })}::jsonb`,
+    })
+    .where(eq(workbenchesTable.id, id))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Forget a waiting restart, only while it is still the request made at `requestedAt`: a newer one stays. */
+export async function clearPendingRestart(id: string, requestedAt: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`${workbenchesTable.settings} - 'restartRequestedAt' - 'restartReason'` })
+    .where(and(eq(workbenchesTable.id, id), sql`${workbenchesTable.settings} ->> 'restartRequestedAt' = ${requestedAt}::text`))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }
@@ -1644,14 +1671,15 @@ export async function appendEvents(
     INSERT INTO workbench_events (chat_id, seq, turn, event)
     SELECT ${chatId}, alloc.base + e.ord, (e.value ->> 'turn')::int, e.value -> 'event'
     FROM alloc, jsonb_array_elements(${payload}::jsonb) WITH ORDINALITY AS e(value, ord)
-    RETURNING seq, turn, event
+    RETURNING seq, turn, event, created_at
   `);
-  const rows = rowsOf<{ seq: number | string; turn: number; event: unknown }>(result);
+  const rows = rowsOf<{ seq: number | string; turn: number; event: unknown; created_at: Date | string | null }>(result);
   return rows
     .map((r) => {
       const seq = Number(r.seq);
       const event = (typeof r.event === 'string' ? JSON.parse(r.event) : r.event) as Record<string, unknown>;
-      return { chatId, seq, turn: Number(r.turn), event: { ...event, seq } as AgentEvent };
+      const createdAt = r.created_at ? new Date(r.created_at).toISOString() : undefined;
+      return { chatId, seq, turn: Number(r.turn), event: { ...event, seq } as AgentEvent, ...(createdAt ? { createdAt } : {}) };
     })
     .sort((a, b) => a.seq - b.seq);
 }
@@ -1680,7 +1708,7 @@ export async function storeNumberedEvents(chatId: string, events: WorkbenchEvent
 /** The forward transcript page. */
 export function listEventsQuery(chatId: string, after: number, limit: number) {
   return db()
-    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event, createdAt: eventsTable.createdAt })
     .from(eventsTable)
     .where(and(eq(eventsTable.chatId, chatId), gt(eventsTable.seq, after)))
     .orderBy(asc(eventsTable.seq))
@@ -1698,6 +1726,7 @@ export async function listEvents(
     seq: r.seq,
     turn: r.turn,
     event: { ...r.event, seq: r.seq } as AgentEvent,
+    createdAt: r.createdAt.toISOString(),
   }));
   return { events, cursor: events.length > 0 ? events[events.length - 1].seq : after };
 }
@@ -1705,7 +1734,7 @@ export async function listEvents(
 /** The backward mode's page body: `seq` in `[from, to]`, oldest first. With `listEventsQuery`, the only reads of `event`. */
 export function listEventRangeQuery(chatId: string, from: number, to: number, limit: number) {
   return db()
-    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event })
+    .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event, createdAt: eventsTable.createdAt })
     .from(eventsTable)
     .where(and(eq(eventsTable.chatId, chatId), gte(eventsTable.seq, from), lte(eventsTable.seq, to)))
     .orderBy(asc(eventsTable.seq))
@@ -1781,6 +1810,7 @@ export async function listOlderEvents(
     seq: r.seq,
     turn: r.turn,
     event: { ...r.event, seq: r.seq } as AgentEvent,
+    createdAt: r.createdAt.toISOString(),
   }));
   const oldestSeq = events.length ? events[0].seq : null;
   let hasOlder = false;

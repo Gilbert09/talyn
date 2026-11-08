@@ -4,6 +4,7 @@ import { getPoolDbClient } from '../../db/client.js';
 import { workbenches, pullRequests } from '../../db/schema.js';
 import {
   afterSignedPublishSteps,
+  checkedOutBranchStep,
   commitAllSteps,
   commitsAheadSteps,
   describePushFailure,
@@ -14,6 +15,7 @@ import {
   isValidBranchName,
   newBranchBaseSteps,
   nothingToOpenMessage,
+  parseCheckedOutBranch,
   parseCommitsAhead,
   parseHeadCommit,
   parsePrDetails,
@@ -44,7 +46,7 @@ import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
 import { notifyThreadOfLinkedPr } from './threads.js';
 import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps, withOwnerCredentials } from './sandboxRuntime.js';
-import { appendEvents, listChats, updateWorkbench, type WorkbenchRow } from './store.js';
+import { appendEvents, followChosenBranch, listChats, updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
  * Create PR: the chat's agent writes the words in a Create PR turn, and Talyn
@@ -103,6 +105,26 @@ export function normalisePullRequestInput(
     commitMessage: raw?.commitMessage ?? '',
     pushed: raw?.pushed === true,
   };
+}
+
+/**
+ * The push sends the branch the box has checked out, so the PR must open from
+ * that branch too. When the agent made and checked out its own branch, the
+ * session follows it. Otherwise GitHub refuses the PR with "head invalid",
+ * because the session's old branch was never pushed.
+ */
+async function followCheckedOutBranch(row: WorkbenchRow): Promise<WorkbenchRow> {
+  const probe = await runGitSteps(row, [checkedOutBranchStep()], { timeoutMs: GIT_TIMEOUT_MS });
+  const branch = parseCheckedOutBranch(probe.stdout);
+  if (!branch || branch === row.branch) return row;
+  if (!isValidBranchName(branch)) {
+    throw new WorkbenchError(`Talyn cannot open a pull request from the branch ${branch}.`, 409, 'bad_branch');
+  }
+  const moved = await followChosenBranch(row.id, row.branch, branch);
+  if (!moved) throw new WorkbenchError('The session changed while Talyn opened the pull request. Try again.', 409, 'row_changed');
+  recordWorkbenchEvent(row, 'branch_name', `followed the checked-out branch ${branch} from ${row.branch}`);
+  await emitWorkbenchUpdated(await publicWorkbench(moved));
+  return moved;
 }
 
 /**
@@ -254,6 +276,7 @@ export async function createWorkbenchPullRequest(
   } else {
     if (input.pushed) throw new WorkbenchError('Only a local session pushes for itself.', 400, 'sandbox_runtime');
     requireReadySandbox(row);
+    row = await followCheckedOutBranch(row);
     await commitAndPush(row, input);
     const { sha: head } = parseHeadCommit((await runGitSteps(row, headCommitSteps(), { timeoutMs: GIT_TIMEOUT_MS })).stdout);
     if (head) await getPoolDbClient().update(workbenches).set({

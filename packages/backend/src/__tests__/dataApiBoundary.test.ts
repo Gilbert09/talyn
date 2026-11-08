@@ -176,6 +176,8 @@ describe('Data API database boundary', () => {
       'slack_installations', 'slack_user_links', 'slack_events', 'slack_oauth_states',
       'slack_threads', 'slack_trigger_messages', 'slack_repo_memory', 'session_mcp_tokens',
       'repository_instructions', 'workspace_memories',
+      // Memory uses (0120): which session saved or read an entry.
+      'workspace_memory_uses',
       // Preview links (0098): the host router reads them before any auth.
       'workbench_preview_hosts', 'workbench_preview_tickets', 'workbench_preview_sessions',
       // Turn time reports and setup recipes (0099): written by the turn-end job.
@@ -190,7 +192,9 @@ describe('Data API database boundary', () => {
       'api_webhook_endpoints', 'api_webhook_deliveries', 'api_webhook_object_states',
       // Session background jobs and wake-ups (0119): read by a sweep with no request.
       'workbench_background_jobs', 'workbench_wakeups',
-      // Team invites by email (0120): email addresses and live link tokens.
+      // Box resource samples (0121): written by the usage sweep.
+      'workbench_resource_samples',
+      // Team invites by email (0123): email addresses and live link tokens.
       'team_invites',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });

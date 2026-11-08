@@ -31,7 +31,7 @@ export function useActiveSpace(): SpaceRef | null {
   return findSpace(teams, context.spaceId);
 }
 
-/** Every context in switcher order: my workspaces, then each team's spaces. ⌘⌥⇧1–9 counts in this order. */
+/** Every context in switcher order: my workspaces, then each team's spaces. ⌘⇧1–9 counts in this order. */
 export function contextEntries(workspaces: Workspace[], teams: SpacesTeam[] | null): AppContext[] {
   return [
     ...workspaces.map((w): AppContext => ({ kind: 'personal', workspaceId: w.id })),

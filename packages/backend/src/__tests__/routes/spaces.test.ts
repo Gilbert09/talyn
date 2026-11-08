@@ -58,6 +58,10 @@ const { GitHubApiError, githubService } = await import('../../services/github.js
 const { resetFeatureFlagsForTests } = await import('../../services/featureFlags.js');
 const { resetRepoReadCacheForTests } = await import('../../services/teams/access.js');
 const { spaceSessionsQuery, spaceTasksQuery } = await import('../../services/teams/spaces.js');
+const { SPACE_COLUMNS, SPACE_DETAIL_COLUMNS } = await import('../../services/teams/membership.js');
+const { MAX_SPACE_IMAGE_LENGTH } = await import('@talyn/shared');
+
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 const { settleArchivesForTests } = await import('../../services/workbenches/lifecycle.js');
 const { setWorkbenchFleetClientForTests } = await import('../../services/workbenches/sandboxRuntime.js');
 const { getWorkbench, insertChat, insertWorkbench } = await import('../../services/workbenches/store.js');
@@ -162,7 +166,8 @@ describe('space routes', () => {
     setWorkbenchFleetClientForTests(async () => fleet.asClient());
 
     const app = express();
-    app.use(express.json());
+    // The production limit (index.ts), so a too-large space image reaches the route's own check.
+    app.use(express.json({ limit: '2mb' }));
     app.use((req, _res, next) => {
       const id = req.headers['x-user'] as string;
       req.user = { id, email: `${id}@example.test`, isAdmin: false };
@@ -222,8 +227,76 @@ describe('space routes', () => {
     it.each([
       [{ name: '' }, 400],
       [{ name: 'Ok', color: 'red' }, 400],
+      [{ name: 'Ok', image: 42 }, 400],
+      [{ name: 'Ok', image: 'https://example.com/a.png' }, 400],
+      [{ name: 'Ok', image: 'data:image/svg+xml;base64,PHN2Zz4=' }, 400],
+      [{ name: 'Ok', image: 'data:text/html;base64,PGI+' }, 400],
+      [{ name: 'Ok', image: 'data:image/png,not-base64' }, 400],
+      [{ name: 'Ok', image: 'data:image/png;base64,!!!' }, 400],
     ])('refuses the space body %j', async (body, status) => {
       expect((await call('POST', '/teams/team-1/spaces', ANA, body)).status).toBe(status);
+    });
+
+    it('refuses a space image over the size cap', async () => {
+      const image = `data:image/png;base64,${'A'.repeat(MAX_SPACE_IMAGE_LENGTH)}`;
+      const res = await call('POST', '/teams/team-1/spaces', ANA, { name: 'Big', image });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/too large/);
+    });
+
+    it.each([
+      ['png', PNG],
+      ['jpeg', 'data:image/jpeg;base64,/9j/4AAQ'],
+      ['webp', 'data:image/webp;base64,UklGRg=='],
+      ['gif', 'data:image/gif;base64,R0lGODlh'],
+    ])('creates a space with a %s image and lists it', async (_kind, image) => {
+      const space = await call('POST', '/teams/team-1/spaces', ANA, { name: 'Pics', image });
+      expect(space.status).toBe(201);
+      expect(space.body.data).toMatchObject({ name: 'Pics', image });
+      const listed = (await call('GET', '/teams', BEN)).body.data[0].spaces;
+      expect(listed).toEqual(expect.arrayContaining([expect.objectContaining({ id: space.body.data.id, image })]));
+    });
+
+    it.each([
+      ['an absent image', undefined, null],
+      ['a null image', null, null],
+      ['an empty image', '', null],
+    ])('creates a space with no image for %s', async (_label, image, stored) => {
+      const space = await call('POST', '/teams/team-1/spaces', ANA, { name: 'Plain', ...(image === undefined ? {} : { image }) });
+      expect(space.status).toBe(201);
+      expect(space.body.data.image).toBe(stored);
+    });
+
+    it('sets, keeps and removes the image of a space', async () => {
+      const set = await call('PATCH', '/spaces/space-1', BEN, { image: PNG });
+      expect(set.status).toBe(200);
+      expect(set.body.data.image).toBe(PNG);
+
+      const renamed = await call('PATCH', '/spaces/space-1', BEN, { name: 'Renamed' });
+      expect(renamed.body.data).toMatchObject({ name: 'Renamed', image: PNG });
+
+      const removed = await call('PATCH', '/spaces/space-1', BEN, { image: null });
+      expect(removed.status).toBe(200);
+      expect(removed.body.data.image).toBeNull();
+      const [row] = await testDb.db.select({ image: spaces.image }).from(spaces).where(eq(spaces.id, 'space-1'));
+      expect(row!.image).toBeNull();
+    });
+
+    it('refuses a bad image on update and keeps the old one', async () => {
+      await testDb.db.update(spaces).set({ image: PNG }).where(eq(spaces.id, 'space-1'));
+      const res = await call('PATCH', '/spaces/space-1', BEN, { image: 'data:image/svg+xml;base64,PHN2Zz4=' });
+      expect(res.status).toBe(400);
+      const [row] = await testDb.db.select({ image: spaces.image }).from(spaces).where(eq(spaces.id, 'space-1'));
+      expect(row!.image).toBe(PNG);
+    });
+
+    it('refuses to set the image of a space for a stranger', async () => {
+      expect((await call('PATCH', '/spaces/space-1', CY, { image: PNG })).status).toBe(404);
+    });
+
+    it('keeps the inline image out of the access-check projection', () => {
+      expect(Object.keys(SPACE_COLUMNS)).not.toContain('image');
+      expect(Object.keys(SPACE_DETAIL_COLUMNS)).toContain('image');
     });
 
     it('invites a member through the caller GitHub account', async () => {

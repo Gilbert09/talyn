@@ -73,6 +73,7 @@ export function idleArchiveGuard(now: Date): SQL {
     AND ${w.settings} ->> 'archiveAfterTurn' IS NULL
     AND ${w.settings} ->> 'archiveOnIdle' IS NULL
     AND ${w.settings} -> 'resizeTo' IS NULL
+    AND ${w.settings} -> 'restartRequestedAt' IS NULL
     AND ${windowDays} IS NOT NULL
     AND ${lastActivity} < ${at} - ${windowDays} * interval '1 day'
     AND NOT EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${w.id}

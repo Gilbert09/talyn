@@ -36,6 +36,7 @@ import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { formatMib, SandboxUsageChart } from './SandboxUsageChart';
 
 /** The backend caches its fleet read for 10 s, so a faster poll gets the same answer. */
 const POLL_MS = 10_000;
@@ -116,6 +117,11 @@ const STATE_ICON: Record<SandboxStatusState, { icon: typeof Cloud; className: st
   archived: { icon: Archive, className: 'text-muted-foreground' },
   local: { icon: Laptop, className: 'text-muted-foreground' },
   unknown: { icon: CircleHelp, className: 'text-muted-foreground' },
+};
+
+const RESTART_OUTCOME: Record<'after_turn' | 'restarting', string> = {
+  after_turn: 'The restart starts when the current turn ends.',
+  restarting: 'Talyn is moving the session to a fresh box.',
 };
 
 const RESIZE_OUTCOME: Record<'unchanged' | 'after_turn' | 'moving', string> = {
@@ -555,6 +561,11 @@ export function SandboxStatusPanel({
         setNote(RESIZE_OUTCOME[res.outcome]);
         setPicking(false);
       }
+      else if (action.kind === 'restart') {
+        const res = await api.workbenches.restart(workbench.id);
+        trackEvent('session_moved', { workbench_id: workbench.id, reason: 'restart' });
+        setNote(RESTART_OUTCOME[res.outcome]);
+      }
       await onRefresh();
     } catch (err) {
       captureWorkbenchFailure(`sandbox_${action.kind}`, err, workbench.id);
@@ -625,6 +636,28 @@ export function SandboxStatusPanel({
             {status.host && <li>Host: <span className="font-mono">{status.host}</span></li>}
             {status.size && <li>Size: {status.size.label}</li>}
           </ul>
+        </Section>
+      )}
+
+      {(status.resources || status.usage) && (
+        <Section title="Resources">
+          {status.usage && <SandboxUsageChart usage={status.usage} checkedAt={status.checkedAt} />}
+          {status.resources && (
+            <ul className={cn('space-y-0.5 text-xs', status.usage && 'pt-1')} data-testid="sandbox-resources">
+              {status.usage ? null : status.resources.memoryUsedMib !== null ? (
+                <li>
+                  Memory: {formatMib(status.resources.memoryUsedMib)} used
+                  {status.resources.memoryLimitMib !== null && ` of ${formatMib(status.resources.memoryLimitMib)}`}
+                </li>
+              ) : status.resources.memoryLimitMib !== null ? (
+                <li>Memory limit: {formatMib(status.resources.memoryLimitMib)}</li>
+              ) : null}
+              {status.resources.vcpus !== null && (
+                <li>CPU: {status.resources.vcpus} vCPU{status.resources.vcpus === 1 ? '' : 's'} allocated</li>
+              )}
+              {status.resources.diskMib !== null && <li>Disk capacity: {formatMib(status.resources.diskMib)}</li>}
+            </ul>
+          )}
         </Section>
       )}
 

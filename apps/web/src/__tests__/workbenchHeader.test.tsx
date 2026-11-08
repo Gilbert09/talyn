@@ -20,6 +20,7 @@ const createChat = vi.fn();
 const unlinkPullRequest = vi.fn();
 const openPullRequests = vi.fn().mockResolvedValue([]);
 const update = vi.fn();
+const restart = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     pullRequests: {
@@ -33,6 +34,7 @@ vi.mock('../lib/api', () => ({
       openPullRequests: (...a: unknown[]) => openPullRequests(...a),
       createChat: (...a: unknown[]) => createChat(...a),
       update: (...a: unknown[]) => update(...a),
+      restart: (...a: unknown[]) => restart(...a),
     },
   },
 }));
@@ -291,7 +293,30 @@ describe('WorkbenchHeader action cycle', () => {
       key: 'Enter',
     });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['Rename session', 'Add to merge queue', 'MergeCtrl+Alt+M', 'ArchiveCtrl+Alt+A', 'Sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+    expect(items).toEqual(['Rename session', 'Add to merge queue', 'MergeCtrl+Alt+M', 'ArchiveCtrl+Alt+A', 'Sandbox', 'Restart sandbox', 'Unlink pull request', 'Copy branch name', 'Continue as thread']);
+  });
+
+  it('restarts the sandbox from the Actions menu after a confirmation', async () => {
+    restart.mockResolvedValue({ outcome: 'restarting', continued: false });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Restart sandbox' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent("current MCP servers");
+    expect(restart).not.toHaveBeenCalled();
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === 'Restart')!);
+    await waitFor(() => expect(restart).toHaveBeenCalledWith(WB.id));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Restarting the sandbox', expect.stringContaining('MCP servers')));
+  });
+
+  it.each([
+    ['a session that is still starting', { status: 'provisioning' }],
+    ['a session with no box', { sandboxId: null }],
+    ['a local session', { runtime: 'local' }],
+  ])('offers no restart for %s', (_name, patch) => {
+    render(<WorkbenchHeader workbench={{ ...WB, ...patch } as Workbench} pr={null} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    expect(screen.queryByRole('menuitem', { name: 'Restart sandbox' })).not.toBeInTheDocument();
   });
 
   it('has a Sandbox entry in the Actions menu that opens the Sandbox tab', () => {
@@ -322,6 +347,7 @@ describe('WorkbenchHeader action cycle', () => {
       'Fix checksCtrl+Alt+X',
       'ArchiveCtrl+Alt+A',
       'Sandbox',
+      'Restart sandbox',
       'Unlink pull request',
       'Copy branch name',
       'Continue as thread',
@@ -584,4 +610,31 @@ describe('WorkbenchHeader merge queue', () => {
       }
     }
   );
+});
+
+describe('WorkbenchHeader last message', () => {
+  afterEach(() => useWorkbenchStore.setState({ chatEvents: {} }));
+
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const held = (chatId: string, ...times: Array<string | undefined>) => ({
+    events: times.map((createdAt, i) => ({ chatId, seq: i + 1, turn: 1, event: { seq: i + 1, type: 'assistant' }, ...(createdAt ? { createdAt } : {}) })),
+  });
+
+  it('shows the newest event time across the session chats', () => {
+    const newest = minutesAgo(3);
+    useWorkbenchStore.setState({
+      chatEvents: { c1: held('c1', minutesAgo(20), minutesAgo(8)), c2: held('c2', newest, undefined) } as never,
+    });
+    const workbench = { ...WB, chats: [{ id: 'c1' }, { id: 'c2' }] } as typeof WB;
+    const { container } = render(<WorkbenchHeader workbench={workbench} pr={null} chat={chat} ops={ops()} />);
+    const label = screen.getByText('Last message 3 minutes ago');
+    expect(label).toHaveAttribute('datetime', newest);
+    expect(container.querySelector('[data-attr="workbench-header-meta-row"]')).toContainElement(label);
+  });
+
+  it('shows nothing when no held event has a time', () => {
+    useWorkbenchStore.setState({ chatEvents: { c1: held('c1', undefined) } as never });
+    render(<WorkbenchHeader workbench={WB} pr={null} chat={chat} ops={ops()} />);
+    expect(screen.queryByText(/^Last message/)).not.toBeInTheDocument();
+  });
 });

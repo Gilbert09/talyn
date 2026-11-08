@@ -404,6 +404,7 @@ describe('system lines', () => {
     ['talyn_imported', 'Imported from a Claude Code conversation in /a.', { kind: 'system', text: 'Imported from a Claude Code conversation in /a.' }],
     ['sandbox_moved', 'Talyn moved this session to a Large · 12 GB sandbox.', { kind: 'system', text: 'Talyn moved this session to a Large · 12 GB sandbox.' }],
     ['sandbox_resize_failed', 'Talyn did not move this session.', { kind: 'system', text: 'Talyn did not move this session.' }],
+    ['sandbox_restart_failed', 'Talyn did not restart this session.', { kind: 'system', text: 'Talyn did not restart this session.' }],
     ['sandbox_size_fallback', 'This session asks for more.', { kind: 'system', text: 'This session asks for more.' }],
     ['sandbox_low_disk', 'Less than 2 GB free.', { kind: 'system', text: 'Less than 2 GB free.' }],
     ['sandbox_processes_stopped', 'Start them again.', { kind: 'system', text: 'Start them again.' }],

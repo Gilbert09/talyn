@@ -118,6 +118,7 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'pr_merged_archive',
   'sandbox_moved',
   'sandbox_resize_failed',
+  'sandbox_restart_failed',
   'sandbox_size_fallback',
   'sandbox_low_disk',
   'sandbox_processes_stopped',

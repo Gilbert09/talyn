@@ -28,6 +28,7 @@ const sandboxStatus = jest.fn();
 const wake = jest.fn();
 const retry = jest.fn();
 const resize = jest.fn();
+const restart = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   api: {
     workbenches: {
@@ -35,6 +36,7 @@ jest.mock('../renderer/lib/api', () => ({
       wake: (...a: unknown[]) => wake(...a),
       retry: (...a: unknown[]) => retry(...a),
       resize: (...a: unknown[]) => resize(...a),
+      restart: (...a: unknown[]) => restart(...a),
     },
   },
 }));
@@ -177,6 +179,40 @@ describe('SandboxStatusPanel', () => {
     const resources = screen.getByTestId('sandbox-resources');
     expect(resources).toHaveTextContent('Memory limit: 4 GB');
     expect(resources).toHaveTextContent('CPU: 1 vCPU allocated');
+  });
+
+  it('charts CPU and memory over time and leaves the memory line out of the list', () => {
+    renderPanel(status({
+      resources: { memoryUsedMib: 2048, memoryLimitMib: 4096, vcpus: 4, diskMib: null },
+      usage: {
+        windowMinutes: 60,
+        stepSeconds: 60,
+        memoryLimitMib: 4096,
+        cpuReported: true,
+        points: [
+          { at: ago(2 * MIN), memoryUsedMib: 1024, cpuPercent: null },
+          { at: ago(MIN), memoryUsedMib: 1536, cpuPercent: 40 },
+          { at: ago(0), memoryUsedMib: 2048, cpuPercent: 12.5 },
+        ],
+      },
+    }));
+    expect(screen.getByTestId('sandbox-usage')).toBeInTheDocument();
+    expect(screen.getByTestId('sandbox-usage-cpu-value')).toHaveTextContent('13%');
+    expect(screen.getByTestId('sandbox-usage-memory-value')).toHaveTextContent('2 GB of 4 GB');
+    const resources = screen.getByTestId('sandbox-resources');
+    expect(resources).not.toHaveTextContent('Memory:');
+    expect(resources).toHaveTextContent('CPU: 4 vCPUs allocated');
+  });
+
+  it('shows the chart without resources, and no chart without usage', () => {
+    const point = { at: ago(0), memoryUsedMib: 512, cpuPercent: null };
+    renderPanel(status({ resources: null, usage: { windowMinutes: 60, stepSeconds: 60, memoryLimitMib: null, cpuReported: false, points: [point] } }));
+    expect(screen.getByTestId('sandbox-usage')).toBeInTheDocument();
+    expect(screen.queryByTestId('sandbox-resources')).not.toBeInTheDocument();
+    cleanup();
+    renderPanel(status({ resources: { memoryUsedMib: 512, memoryLimitMib: 4096, vcpus: 2, diskMib: null } }));
+    expect(screen.queryByTestId('sandbox-usage')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sandbox-resources')).toHaveTextContent('Memory: 512 MB used of 4 GB');
   });
 
   it('shows a loading line and then an error when there is no status', () => {
@@ -339,6 +375,28 @@ describe('SandboxStatusPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Medium · 8 GB/ }));
     expect(resize).not.toHaveBeenCalled();
     expect(screen.getByText('The box restarts.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['after_turn', 'The restart starts when the current turn ends.'],
+    ['restarting', 'Talyn is moving the session to a fresh box.'],
+  ])('restarts after the confirmation and says %s', async (outcome, text) => {
+    restart.mockResolvedValue({ outcome, continued: false });
+    const { onRefresh } = renderPanel(status({ actions: [action('restart', 'Restart sandbox', 'Running scripts and terminals stop.')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart sandbox' }));
+    expect(restart).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === 'Restart sandbox')!);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(restart).toHaveBeenCalledWith('wb1');
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it('does not restart when the confirmation is cancelled', () => {
+    renderPanel(status({ actions: [action('restart', 'Restart sandbox', 'Running scripts and terminals stop.')] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart sandbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it('opens the setup output tab and closes the panel', () => {

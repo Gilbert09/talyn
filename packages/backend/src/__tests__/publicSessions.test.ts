@@ -233,6 +233,20 @@ describe('/v1 sessions and chats', () => {
       expect(fleet.created).toEqual([]);
     });
 
+    it.each([
+      ['a session', { repository_id: 'repo-a' }, 'chore-data-warehouse-onboarding-friction-review-2026-11-08'],
+      ['a thread', { kind: 'thread' }, 'plan-onboarding'],
+    ])('adds a suffix when a live session already has the name, for %s', async (_label, extra, name) => {
+      const names: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const res = await call('POST', '/sessions', { workspace_id: 'ws-a', agent: 'claude', name, ...extra });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        names.push(res.body.name);
+        await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
+      }
+      expect(names).toEqual([name, `${name}-2`, `${name}-3`]);
+    });
+
     it('names an unknown field in param', async () => {
       const res = await call('POST', '/sessions', { workspaceId: 'ws-a', repository_id: 'repo-a', agent: 'claude' });
       expect(res.body.error).toMatchObject({ type: 'invalid_request_error', code: 'invalid_parameter', param: 'workspaceId' });

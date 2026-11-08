@@ -87,7 +87,7 @@ import { meterWorkbenchBoxGone } from './usageMeter.js';
  * GitHub, but a commit made after the export is not in the new box.
  */
 
-export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full' | 'resize';
+export type MoveReason = 'stale_golden' | 'low_disk' | 'disk_full' | 'resize' | 'restart';
 
 export type MoveResult =
   | { moved: true; row: WorkbenchRow }
@@ -113,6 +113,8 @@ export const MOVE_SETTINGS_KEYS = [
   'sandboxSize',
   'resizeTo',
   'resizeReason',
+  'restartRequestedAt',
+  'restartReason',
 ] as const;
 
 // ============================================================================
@@ -908,6 +910,7 @@ async function runMove(row: WorkbenchRow, reason: MoveReason, opts: MoveOptions)
       fleetSandboxId: made.fleetSandboxId,
       statusMessage: setupNote,
       size: made.size,
+      restartRequestedAt: claimed.settings?.restartRequestedAt ?? null,
       settings: {
         boxSize: made.size,
         ...(reason === 'low_disk' || reason === 'disk_full' ? { movedForDiskTo: made.sandboxId } : {}),
@@ -1043,13 +1046,14 @@ async function runSetup(claimed: WorkbenchRow, fresh: WorkbenchRow, timing: BoxT
   }
 }
 
-/** Report a resize, and otherwise only work that did not survive. */
+/** Report a resize or a restart, and otherwise only work that did not survive. */
 export function movedNote(input: {
   reason: MoveReason;
   conversation: 'carried' | 'missing' | 'none';
   stopped: boolean;
   manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>;
   resized?: { size: SandboxSize; why?: string | null };
+  restarted?: { why?: string | null };
 }): string | null {
   const parts: string[] = [];
   const skipped = skippedNote(input.manifest);
@@ -1058,9 +1062,16 @@ export function movedNote(input: {
   if (input.stopped) parts.push('running scripts and terminals were stopped; start them again');
   const text = parts.join('; ');
   const lost = parts.length ? text.charAt(0).toUpperCase() + text.slice(1) + '.' : null;
-  if (!input.resized) return lost;
-  const why = input.resized.why?.trim().replace(/[.\s]+$/, '');
-  const head = `Talyn moved this session to a ${SANDBOX_SIZES[input.resized.size].label} sandbox${why ? `: ${why}` : ''}.`;
+  let head: string;
+  if (input.resized) {
+    const why = input.resized.why?.trim().replace(/[.\s]+$/, '');
+    head = `Talyn moved this session to a ${SANDBOX_SIZES[input.resized.size].label} sandbox${why ? `: ${why}` : ''}.`;
+  } else if (input.restarted) {
+    const why = input.restarted.why?.trim().replace(/[.\s]+$/, '');
+    head = `Talyn restarted this session on a fresh sandbox${why ? `: ${why}` : ''}. It has the workspace's current MCP servers.`;
+  } else {
+    return lost;
+  }
   return lost ? `${head} ${lost}` : head;
 }
 
@@ -1069,6 +1080,12 @@ function appliedResize(old: WorkbenchRow, committed: WorkbenchRow): { size: Sand
   const asked = old.settings?.resizeTo;
   if (!isSandboxSize(asked) || committed.settings?.sandboxSize !== asked) return undefined;
   return { size: asked, why: old.settings?.resizeReason ?? null };
+}
+
+/** The restart this move answered: the request the row had at the claim. */
+function appliedRestart(old: WorkbenchRow): { why?: string | null } | undefined {
+  if (typeof old.settings?.restartRequestedAt !== 'string') return undefined;
+  return { why: old.settings.restartReason ?? null };
 }
 
 export function skippedNote(manifest: Pick<MoveManifest, 'skipped' | 'skippedCount' | 'skippedDirs'>): string | null {
@@ -1151,6 +1168,7 @@ async function afterCommit(
         stopped,
         manifest: manifest ?? { skipped: [], skippedCount: 0, skippedDirs: [] },
         resized: appliedResize(old, committed),
+        ...(appliedRestart(old) ? { restarted: appliedRestart(old) } : {}),
       });
       if (text) await note(current, 'sandbox_moved', text, manifest?.skipped.length ? { skippedFiles: manifest.skipped } : {});
     });
@@ -1220,7 +1238,8 @@ async function handleFailure(f: {
     return null;
   });
   // A resize is asked for once and never retried, so it needs no backoff.
-  if (f.reason !== 'resize') await recordMoveFailure(row.id).catch(() => null);
+  // A move somebody asked for is tried once and reported. The backoff is for the automatic ones.
+  if (f.reason !== 'resize' && f.reason !== 'restart') await recordMoveFailure(row.id).catch(() => null);
   if (!released) return { moved: false, reason: blocked ? 'blocked' : 'failed', message };
 
   await emitWorkbenchUpdated(await publicWorkbench(released)).catch(() => undefined);

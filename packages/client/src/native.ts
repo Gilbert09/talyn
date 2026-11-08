@@ -2344,6 +2344,9 @@ export const workbenches = {
   resize: (id: string, input: { size: import('@talyn/shared').SandboxSize; reason?: string; rememberForRepository?: boolean }) =>
     request<{ outcome: 'unchanged' | 'after_turn' | 'moving'; size: import('@talyn/shared').SandboxSize; rememberedForRepository: boolean; continued: boolean }>(
       'PUT', `/workbenches/${enc(id)}/sandbox-size`, input),
+  /** Restart the session on a fresh box of the same size, with the workspace's current MCP servers. The work moves with it; a running turn is never cut. */
+  restart: (id: string, input: { reason?: string } = {}) =>
+    request<{ outcome: 'after_turn' | 'restarting'; continued: boolean }>('POST', `/workbenches/${enc(id)}/restart`, input),
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
@@ -2370,6 +2373,7 @@ export const workbenches = {
       if (query.q) params.set('q', query.q);
       if (query.includeForgotten) params.set('includeForgotten', 'true');
       if (query.includeBody) params.set('includeBody', 'true');
+      if (query.usedBy) params.set('usedBy', query.usedBy);
       return request<Array<MemoryEntrySummary | MemoryEntry>>('GET', `/workbenches/memory?${params}`);
     },
     get: (id: string) => request<MemoryEntry>('GET', `/workbenches/memory/${enc(id)}`),

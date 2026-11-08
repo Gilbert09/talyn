@@ -26,12 +26,14 @@ Your defaults for new sessions are in **Settings > Sessions**: the agent, the mo
 
 ## The session screen
 
-The chat is in the middle. The panel on the right has four tabs:
+The chat is in the middle. Each message you send shows when you sent it, for example "5 minutes ago". Each finished agent reply shows when it ended. Hover over a time to see the full date and time. The session header shows **Last message** with the time of the newest message in the session.
+
+The panel on the right has four tabs:
 
 - **Changes**: the diff of the branch against its base branch.
 - **All files**: every file on the branch.
 - **Pull request**: the pull request's status, checks and reviews, once there is one.
-- **Sandbox**: what the sandbox is doing, and whether your work is saved.
+- **Sandbox**: what the sandbox is doing, its CPU and memory use over the last hour, and whether your work is saved.
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
 

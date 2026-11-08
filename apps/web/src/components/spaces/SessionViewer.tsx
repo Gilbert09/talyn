@@ -50,7 +50,7 @@ export function SessionSpaceChip({ spaceId }: { spaceId: string | null | undefin
       title={`${ref.space.name} · ${ref.team.name}`}
       data-attr="session-space-chip"
     >
-      <SpaceDot color={ref.space.color} className="h-2 w-2" />
+      <SpaceDot color={ref.space.color} image={ref.space.image} className="h-2 w-2" />
       {ref.space.name}
     </span>
   );

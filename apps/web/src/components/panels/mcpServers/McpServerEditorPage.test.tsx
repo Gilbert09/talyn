@@ -276,6 +276,41 @@ describe('guided MCP setup', () => {
     await screen.findByText('Tools');
   });
 
+  it.each([
+    ['https://mcp.polar.sh/mcp/polar-mcp?telemetry=false', /may not carry a query string/],
+    ['https://mcp.example.com/mcp#tools', /may not carry a #fragment/],
+    ['https://user:pass@mcp.example.com/mcp', /put the credential in the key field/],
+    ['ftp://mcp.example.com/mcp', /must be an https:\/\/ address/],
+  ])('says why %s cannot connect', async (address, reason) => {
+    setup(null, { name: '', url: '', authKind: 'bearer', enabled: true });
+    fireEvent.change(screen.getByPlaceholderText('https://mcp.linear.app/mcp'), {
+      target: { value: address },
+    });
+    expect((await screen.findByRole('alert')).textContent).toMatch(reason);
+    expect(screen.queryByText('Authentication')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull();
+    expect(mocks.discoverAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'htt', 'mcp.example.com'])('stays quiet while %j is typed', (address) => {
+    setup(null, { name: '', url: '', authKind: 'bearer', enabled: true });
+    fireEvent.change(screen.getByPlaceholderText('https://mcp.linear.app/mcp'), {
+      target: { value: address },
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('removes the reason when the address becomes valid', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });
+    setup(null, { name: '', url: '', authKind: 'bearer', enabled: true });
+    const field = screen.getByPlaceholderText('https://mcp.linear.app/mcp');
+    fireEvent.change(field, { target: { value: 'https://tools.example.org/mcp?x=1' } });
+    await screen.findByRole('alert');
+    fireEvent.change(field, { target: { value: 'https://tools.example.org/mcp' } });
+    await screen.findByText('No credential is needed for this connection.');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('keeps tools hidden when the connection check fails', async () => {
     mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
     onTest.mockResolvedValue({ ok: false, at: '', detail: 'The credential was refused.' });

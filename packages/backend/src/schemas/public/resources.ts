@@ -197,7 +197,7 @@ export const CreateSessionBody = z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
       .optional()
-      .openapi({ description: 'Lowercase letters, digits and hyphens. Default: made from the prompt.' }),
+      .openapi({ description: 'Lowercase letters, digits and hyphens. Default: made from the prompt. A name that a live session uses gets `-2`, `-3` and so on; read `name` in the response.' }),
     base_branch: z.string().min(1).max(250).optional(),
     branch: z.string().min(1).max(250).optional().openapi({ description: 'An existing branch to work on. Default: a new branch.' }),
     pull_request_id: Id.optional().openapi({ description: "Start from this pull request's head branch and link the session to it." }),

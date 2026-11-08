@@ -63,6 +63,7 @@ import { confirmLocalBranchName, reserveLocalBranchName } from '../services/work
 import { claimLocalWorkbench } from '../services/workbenches/localTakeover.js';
 import { setSessionAccount } from '../services/workbenches/sandboxRuntime.js';
 import type { ResizeInput, SessionResizeResult } from '../services/workbenches/resize.js';
+import type { RestartInput, SessionRestartResult } from '../services/workbenches/restart.js';
 import {
   closeChat,
   createSessionPreviewLink,
@@ -76,6 +77,7 @@ import {
   readSessionPreviewPatch,
   requireReadySandbox,
   resizeSession,
+  restartSession,
   startSessionScript,
   stopSessionScript,
   switchChatAgent,
@@ -120,6 +122,7 @@ import {
   forgetMemory,
   getMemory,
   listMemories,
+  listMemoriesUsedBy,
   memoryWorkspaceId,
   putMemory,
   restoreMemory,
@@ -620,6 +623,13 @@ export function workbenchRoutes(): Router {
       return bad(res, 400, `scope must be one of: ${MEMORY_SCOPES.join(', ')}`, 'bad_memory');
     }
     if (!(await gate(req, res, workspaceId))) return;
+    const usedBy = query('usedBy');
+    if (usedBy) {
+      return ok(res, await listMemoriesUsedBy(workspaceId, usedBy, {
+        includeForgotten: query('includeForgotten') === 'true',
+        includeBody: query('includeBody') === 'true',
+      }));
+    }
     ok(res, await listMemories(workspaceId, {
       scope: scope as MemoryScope | undefined,
       repositoryId: query('repositoryId'),
@@ -759,6 +769,27 @@ export function workbenchRoutes(): Router {
     const continueWith = typeof body.continueWith === 'string' ? body.continueWith.trim() : '';
     try {
       const data: SessionResizeResult = await resizeSession(row, body, continueWith);
+      ok(res, data);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * Restart the session on a fresh sandbox of the same size, after the
+   * running turn. The new box gets the workspace's current MCP servers. The
+   * work carries over; running processes stop.
+   */
+  router.post('/:id/restart', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const body = (req.body ?? {}) as RestartInput & { continueWith?: unknown };
+    if (body.continueWith !== undefined && body.continueWith !== null && typeof body.continueWith !== 'string') {
+      return bad(res, 400, 'continueWith must be a string.');
+    }
+    const continueWith = typeof body.continueWith === 'string' ? body.continueWith.trim() : '';
+    try {
+      const data: SessionRestartResult = await restartSession(row, body, continueWith);
       ok(res, data);
     } catch (err) {
       fail(res, err);

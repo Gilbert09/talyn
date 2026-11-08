@@ -35,6 +35,7 @@ import {
   reserveSessionCreate,
 } from '../../services/sessionMcpToken.js';
 import type { SessionResizeResult } from '../../services/workbenches/resize.js';
+import type { SessionRestartResult } from '../../services/workbenches/restart.js';
 import { announceThreadSession } from '../../services/workbenches/threads.js';
 import { callApi, McpApiError } from '../api.js';
 import {
@@ -199,6 +200,19 @@ function resizeText(sessionId: string, result: SessionResizeResult, self: boolea
     lines.push('If the fleet refuses the size, the session keeps its sandbox and its transcript says why.');
   }
   if (result.rememberedForRepository) lines.push('New sessions of this repository also get this size.');
+  return lines.join(' ');
+}
+
+function restartText(sessionId: string, result: SessionRestartResult, self: boolean): string {
+  const lines = [
+    result.outcome === 'restarting'
+      ? `Talyn is restarting session ${sessionId} on a fresh sandbox now.`
+      : `Talyn restarts session ${sessionId} on a fresh sandbox when its current turn ends, or at its next turn start.`,
+    "The new sandbox gets the workspace's current MCP servers. Their tools appear in the turn after the restart.",
+  ];
+  if (result.continued) lines.push('Talyn sends the continue_with message after the restart, so that turn starts on the new sandbox.');
+  if (self) lines.push('End your turn now. Do not start more long work on this sandbox.');
+  lines.push('If the restart fails, the session keeps its sandbox and its transcript says why.');
   return lines.join(' ');
 }
 
@@ -488,7 +502,7 @@ export const SESSIONS = [
       branch: { type: 'string', description: 'An existing branch to check out. Default: a new branch.' },
       base_branch: { type: 'string', description: "Default: the repository's default branch." },
       pull_request_id: { type: 'string', description: 'Start from this pull request’s branch.' },
-      name: { type: 'string', description: 'Lowercase letters, digits and hyphens.' },
+      name: { type: 'string', description: 'Lowercase letters, digits and hyphens. A name in use gets `-2`, `-3` and so on.' },
       internet_access: booleanSchema,
       auto_create_pr: booleanSchema,
     },
@@ -713,6 +727,41 @@ export const SESSIONS = [
           body
         );
         return resizeText(sessionId, result, sessionId === self);
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'restart_session',
+    "Restart a session on a fresh sandbox of the same size. Use it when an MCP server that the workspace connected after the sandbox started is missing from your tools: a sandbox gets its MCP servers only when it is created. It never stops a running turn: Talyn restarts the session when the current turn ends, or at its next turn start. Files, branches, uncommitted changes and the conversation carry over. Running processes and terminals stop.",
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session.' },
+      reason: { type: 'string', description: 'Why, in one sentence. The person sees it in the transcript.' },
+      continue_with: {
+        type: 'string',
+        description: 'A message Talyn sends to the session after this turn, so the work goes on in the new sandbox. The restart happens before that turn starts.',
+      },
+    },
+    [],
+    { idempotentHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        const self = ctx?.session?.workbenchId;
+        const sessionId = str(args.session_id) ?? self;
+        if (!sessionId) throw new Error('session_id is required');
+        if (self && sessionId !== self) {
+          const target = await loadSession(ownerId, sessionId);
+          if (target.threadId !== self) throw new Error('A session can restart itself, or a session in its thread.');
+        }
+        const body: Record<string, unknown> = {};
+        if (str(args.reason)) body.reason = str(args.reason);
+        if (str(args.continue_with)) body.continueWith = str(args.continue_with);
+        const result = await callApi<SessionRestartResult>(
+          ownerId,
+          'POST',
+          `/workbenches/${encodeURIComponent(sessionId)}/restart`,
+          body
+        );
+        return restartText(sessionId, result, sessionId === self);
       }),
     FEATURE
   ),

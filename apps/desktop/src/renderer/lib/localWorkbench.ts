@@ -235,7 +235,7 @@ export class LocalTurnController {
   /** Number one event, keep it, and queue it for upload. */
   record(chatId: string, turn: number, draft: AgentEventDraft): WorkbenchEvent {
     const seq = this.allocateSeq(chatId);
-    const event: WorkbenchEvent = { chatId, seq, turn, event: withSeq(draft, seq) };
+    const event: WorkbenchEvent = { chatId, seq, turn, event: withSeq(draft, seq), createdAt: new Date().toISOString() };
     useWorkbenchStore.getState().appendEvents(chatId, [event]);
     const list = this.pending.get(chatId);
     if (list) list.push(event);

@@ -166,6 +166,38 @@ describe('the state of the box', () => {
     expect(s.size).toBeNull();
     expect(s.resources).toEqual({ memoryUsedMib: 512, memoryLimitMib: 4096, vcpus: 2, diskMib: 16384 });
   });
+
+  const stored = (minutesAgo: number, cpuSeconds: number | null, memUsedMib = 1024) => ({
+    workbenchId: 'wb1', sandboxId: 'box', sampledAt: ago(minutesAgo * MIN), memUsedMib, memLimitMib: 4096, cpuSeconds, vcpus: 2,
+  });
+
+  it('charts the stored samples and the live read of an awake box', () => {
+    const s = describeSandboxStatus(input({
+      fleet: fleet({ status: 'busy', memUsedMib: 2048, cpuSeconds: 166, memMib: 4096, milliVcpu: 2000 }),
+      samples: [stored(2, 100), stored(1, 160)],
+    }));
+    expect(s.usage).toMatchObject({ windowMinutes: 60, memoryLimitMib: 4096, cpuReported: true });
+    expect(s.usage?.points.map((p) => [p.memoryUsedMib, p.cpuPercent])).toEqual([[1024, null], [1024, 50], [2048, 5]]);
+  });
+
+  it.each([
+    ['an asleep box adds no live point', { fleet: fleet({ status: 'suspended', memUsedMib: 2048 }), samples: [stored(5, 1)] }, 1],
+    ['a failed fleet read keeps the stored points', { fleet: { ok: false as const, error: 'x' }, samples: [stored(5, 1), stored(4, 2)] }, 2],
+    ['no samples and no figures', { fleet: fleet({ status: 'idle' }), samples: [] }, null],
+    ['samples not read', { fleet: fleet({ status: 'idle' }) }, null],
+  ])('usage: %s', (_label, given, points) => {
+    const s = describeSandboxStatus(input(given));
+    expect(s.usage?.points.length ?? null).toBe(points);
+  });
+
+  it.each([
+    ['a thread', { kind: 'thread' as const }],
+    ['an archived session', { archivedAt: ago(MIN) }],
+    ['a local session', { runtime: 'local' as const }],
+  ])('has no usage for %s', (_label, patch) => {
+    const s = describeSandboxStatus(input({ row: row(patch), fleet: fleet({ status: 'busy', memUsedMib: 1 }), samples: [stored(1, 1)] }));
+    expect(s.usage).toBeNull();
+  });
 });
 
 describe('what runs on the box', () => {
@@ -257,9 +289,9 @@ describe('the last problem', () => {
 describe('the actions', () => {
   const kinds = (given: Partial<SandboxStatusInput>) => describeSandboxStatus(input(given)).actions.map((a) => a.kind);
   it.each<[string, Partial<SandboxStatusInput>, string[]]>([
-    ['awake', {}, ['resize']],
-    ['asleep', { fleet: fleet({ status: 'suspended', suspendDir: '/x' }) }, ['wake', 'resize']],
-    ['hibernated', { fleet: fleet({ status: 'suspended', suspendUploaded: true }) }, ['wake', 'resize']],
+    ['awake', {}, ['resize', 'restart']],
+    ['asleep', { fleet: fleet({ status: 'suspended', suspendDir: '/x' }) }, ['wake', 'resize', 'restart']],
+    ['hibernated', { fleet: fleet({ status: 'suspended', suspendUploaded: true }) }, ['wake', 'resize', 'restart']],
     ['failed', { row: row({ status: 'error' }), fleet: null }, ['retry']],
     ['starting, recently', { row: row({ status: 'provisioning', updatedAt: ago(MIN) }), fleet: null }, []],
     ['starting, stuck', { row: row({ status: 'provisioning', updatedAt: ago(STUCK_START_MS + MIN) }), fleet: null }, ['retry']],
@@ -268,8 +300,8 @@ describe('the actions', () => {
     ['a thread', { row: row({ kind: 'thread' }) }, []],
     ['archived', { row: row({ archivedAt: ago(MIN) }) }, []],
     ['local', { row: row({ runtime: 'local' }) }, []],
-    ['a setup that failed', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 2, startedAt: null }] }, ['resize', 'show_setup_output']],
-    ['a setup that worked', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 0, startedAt: null }] }, ['resize']],
+    ['a setup that failed', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 2, startedAt: null }] }, ['resize', 'restart', 'show_setup_output']],
+    ['a setup that worked', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 0, startedAt: null }] }, ['resize', 'restart']],
   ])('%s', (_label, given, expected) => {
     expect(kinds(given)).toEqual(expected);
   });
@@ -279,7 +311,15 @@ describe('the actions', () => {
     expect(failed.confirm).toContain('Changes that are not pushed are lost.');
     const lost = describeSandboxStatus(input({ row: row({ status: 'provisioning', sandboxState: 'lost', updatedAt: ago(STUCK_START_MS + MIN) }), fleet: null })).actions[0];
     expect(lost).toEqual({ kind: 'retry', label: 'Retry', confirm: null });
-    for (const a of describeSandboxStatus(input({ fleet: fleet({ status: 'suspended' }) })).actions) expect(a.confirm).toBeNull();
+    const actions = describeSandboxStatus(input({ fleet: fleet({ status: 'suspended' }) })).actions;
+    for (const a of actions.filter((x) => x.kind !== 'restart')) expect(a.confirm).toBeNull();
+  });
+
+  it('asks before a restart, and says what carries over and what stops', () => {
+    const restart = describeSandboxStatus(input({})).actions.find((a) => a.kind === 'restart');
+    expect(restart?.label).toBe('Restart sandbox');
+    expect(restart?.confirm).toContain('current MCP servers');
+    expect(restart?.confirm).toContain('Running scripts and terminals stop.');
   });
 });
 
@@ -546,7 +586,7 @@ describe('GET /workbenches/:id/sandbox-status', () => {
       problem: { text: 'The sandbox was lost.' },
       activity: [{ kind: 'turn', text: 'The agent is working for 5 minutes.' }],
     });
-    expect((res.body.data!.actions as Array<{ kind: string }>).map((a) => a.kind)).toEqual(['resize', 'show_setup_output']);
+    expect((res.body.data!.actions as Array<{ kind: string }>).map((a) => a.kind)).toEqual(['resize', 'restart', 'show_setup_output']);
     expect(getSandbox).toHaveBeenCalledWith('box');
   });
 

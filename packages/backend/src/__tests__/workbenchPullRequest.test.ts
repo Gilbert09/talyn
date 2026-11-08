@@ -85,6 +85,8 @@ interface GitWorld {
   publish?: ExecReply;
   /** `git rev-parse HEAD` then `--abbrev-ref HEAD`. */
   head?: string;
+  /** `git symbolic-ref --short -q HEAD`: '' on a detached HEAD, and by default. */
+  checkedOut?: string;
 }
 
 const HEAD_SHA = 'a'.repeat(40);
@@ -213,6 +215,7 @@ describe('workbench Create PR', () => {
       if (script.includes('git commit --no-verify -m')) return world.commit ?? { exitCode: 0 };
       if (script.includes('rev-list --count')) return { stdout: world.ahead ?? '' };
       if (script.includes('git push -u origin HEAD')) return world.push ?? { exitCode: 0 };
+      if (script.includes('git symbolic-ref --short -q HEAD')) return { stdout: world.checkedOut ?? '' };
       if (script.includes('git ls-remote --heads origin refs/heads/')) return { stdout: world.remote ?? '' };
       if (script.includes('merge-base --is-ancestor')) return world.contained ?? { exitCode: 0 };
       if (script.includes('merge-base HEAD FETCH_HEAD')) return { stdout: world.mergeBase ?? `${BASE_SHA}\n` };
@@ -846,6 +849,56 @@ describe('workbench Create PR', () => {
       expect(res.body.error).toBe('There is nothing to open a pull request for: the branch has no commits ahead of develop.');
       expect(scriptsSinceMark().some((s) => !isAgentTurn(s) && s.includes('git push'))).toBe(false);
       expect(createPr).not.toHaveBeenCalled();
+    });
+
+    describe('when the agent checked out another branch', () => {
+      it('follows the branch the push sends, and opens the PR from it', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.checkedOut = 'tom/agent-made-branch\n';
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect(res.status).toBe(200);
+        const scripts = scriptsSinceMark();
+        const probe = scripts.findIndex((s) => s.includes('git symbolic-ref --short -q HEAD'));
+        const push = scripts.findIndex((s) => s.includes('git push -u origin HEAD'));
+        expect(probe).toBeGreaterThanOrEqual(0);
+        expect(probe).toBeLessThan(push);
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: 'tom/agent-made-branch' }));
+        expect(await getWorkbench(wb.id)).toMatchObject({ branch: 'tom/agent-made-branch', allocatedBranch: false, pullRequestId: 'pr-7' });
+        expect(emitted.some((e) => e.type === 'workbench:updated' && (e.payload as Loose).workbench.branch === 'tom/agent-made-branch')).toBe(true);
+      });
+
+      it('publishes the followed branch when the repository requires signed commits', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.checkedOut = 'tom/agent-made-branch\n';
+        world.push = { exitCode: 1, stderr: GH013 };
+        expect((await call('POST', `/workbenches/${wb.id}/pull-request`, input)).status).toBe(200);
+        expect(scriptsSinceMark().find((s) => s.includes('fleet-publish --branch'))).toContain('fleet-publish --branch tom/agent-made-branch ');
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: 'tom/agent-made-branch' }));
+      });
+
+      it.each([
+        ['the session branch', (branch: string) => `${branch}\n`],
+        ['a detached HEAD', () => ''],
+      ])('keeps the session branch on %s', async (_label, checkedOut) => {
+        const wb = await sandboxWorkbench();
+        world.checkedOut = checkedOut(wb.branch);
+        expect((await call('POST', `/workbenches/${wb.id}/pull-request`, input)).status).toBe(200);
+        expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.objectContaining({ head: wb.branch }));
+        expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
+      });
+
+      it('refuses a branch name Talyn cannot open a PR from, before pushing', async () => {
+        const wb = await sandboxWorkbench();
+        mark = fleet.scripts.length;
+        world.checkedOut = 'bad..name\n';
+        const res = await call('POST', `/workbenches/${wb.id}/pull-request`, input);
+        expect([res.status, res.body.code]).toEqual([409, 'bad_branch']);
+        expect(scriptsSinceMark().some((s) => !isAgentTurn(s) && s.includes('git push'))).toBe(false);
+        expect(createPr).not.toHaveBeenCalled();
+        expect((await getWorkbench(wb.id))?.branch).toBe(wb.branch);
+      });
     });
 
     it('says the GitHub App needs write access when the push gets a 403', async () => {
