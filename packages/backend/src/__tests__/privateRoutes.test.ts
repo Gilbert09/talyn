@@ -77,7 +77,7 @@ describe('private routes', () => {
       version: 2,
       privateRoutes: [{ connectorId: 'connector-1', host: 'db.corp', port: 5432 }],
     });
-    expect(composePrivateRoutesPolicy(policy, { ...connector, status: 'connecting' })).toBe(policy);
+    expect(composePrivateRoutesPolicy(policy, { ...connector, status: 'connecting' })).toEqual(composePrivateRoutesPolicy(policy, connector));
     expect(composePrivateRoutesPolicy(policy, null)).toBe(policy);
   });
 
@@ -90,7 +90,7 @@ describe('private routes', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('adds only routes from a connected workspace connector', async () => {
+  it('adds only routes from the owning workspace connector', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(connector), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -104,6 +104,25 @@ describe('private routes', () => {
       version: 2,
       privateRoutes: [{ connectorId: 'connector-1', host: 'db.corp', port: 5432 }],
     });
+  });
+
+  it.each(['connecting', 'unavailable', 'needs_login'] as const)(
+    'retains exact runtime grants for a %s connector', async (status) => {
+      vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...connector, status })));
+      const policy = await sandboxPolicyForWorkspace('workspace-1', { egress: { mode: 'open' } });
+      expect(policy.privateRoutes).toEqual([{ connectorId: 'connector-1', host: 'db.corp', port: 5432 }]);
+      expect(policy.egress).toEqual({ mode: 'open' });
+    },
+  );
+
+  it.each([403, 409, 503])('refuses runtime policy when route lookup returns %s', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'private_routes_unavailable' }, { status })));
+    await expect(sandboxPolicyForWorkspace('workspace-1', { egress: { mode: 'open' } })).rejects.toMatchObject({ status });
+  });
+
+  it('refuses runtime grants from another workspace', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...connector, workspaceId: 'other-workspace' })));
+    await expect(sandboxPolicyForWorkspace('workspace-1', {})).rejects.toMatchObject({ code: 'workspace_mismatch' });
   });
 
   it('builds sandbox bodies with connected routes and unchanged public internet', async () => {

@@ -840,7 +840,7 @@ export class FleetClient {
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...(init.headers ?? {}),
         },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         // @ts-expect-error `dispatcher` is undici's, not in the DOM fetch types
         dispatcher: fleetDispatcher(this.endpoint),
       });
@@ -1113,10 +1113,10 @@ export class FleetClient {
   }
 
   /** Read connector state. A missing connector returns a typed 404 error. */
-  async getPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
+  async getPrivateConnector(workspaceId: string, signal?: AbortSignal): Promise<PrivateConnector> {
     return this.request(
       `/v1/workspaces/${encodeURIComponent(workspaceId)}/private-connector`,
-      {},
+      { signal },
       { preserveNotFound: true },
     );
   }

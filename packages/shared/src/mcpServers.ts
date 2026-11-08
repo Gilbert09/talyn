@@ -1,3 +1,4 @@
+import type { PrivateRoute } from './privateRoutes.js';
 import { MCP_CATALOG_LOGOS } from './mcpCatalogLogos.js';
 
 // MCP servers — the vocabulary, the validator and the catalog.
@@ -214,7 +215,7 @@ function str(v: unknown): string {
  * the thrown string is what the route returns as its 400 and what the editor
  * shows under the field, so it has to read like a sentence somebody wrote.
  */
-export function validateMcpServer(raw: unknown): NormalizedMcpServer {
+export function validateMcpServer(raw: unknown, privateRoutes: readonly PrivateRoute[] = []): NormalizedMcpServer {
   if (typeof raw !== 'object' || raw === null) fail('an MCP server needs a body');
   const o = raw as Record<string, unknown>;
 
@@ -249,10 +250,13 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
     fail('put the credential in the key field rather than in the URL');
   }
   if (url.hash) fail('an MCP server URL may not carry a #fragment');
-  if (isPrivateHost(url.hostname)) {
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  const privateRoute = url.protocol === 'https:' && privateRoutes.some(
+    (route) => route.host === host && route.port === Number(url.port || 443)
+  );
+  if (isPrivateHost(url.hostname) && !privateRoute) {
     fail(
-      `a sandbox cannot reach ${url.hostname}: it has no route to your machine or to a private ` +
-        'network, only to the servers it is given through the credential proxy',
+      'Add an exact private route for this hostname and port in workspace settings.',
     );
   }
   // The query string is refused because the fleet splits the URL into an
@@ -355,9 +359,9 @@ function normaliseInjection(raw: unknown, kind: McpAuthKind): McpInjection | nul
  * disabled button and a server 400 cannot disagree — the mistake `loopInputProblem`
  * exists to avoid.
  */
-export function mcpServerInputProblem(input: McpServerInput): string | null {
+export function mcpServerInputProblem(input: McpServerInput, privateRoutes: readonly PrivateRoute[] = []): string | null {
   try {
-    validateMcpServer(input);
+    validateMcpServer(input, privateRoutes);
     return null;
   } catch (err) {
     return err instanceof Error ? err.message : 'this MCP server is not valid';

@@ -297,7 +297,7 @@ describe('MCP discovery network boundaries', () => {
     await mcpFetch(endpoint);
     expect(spy).toHaveBeenCalledWith(
       endpoint,
-      expect.objectContaining({ redirect: 'error', dispatcher: expect.anything() })
+      expect.objectContaining({ redirect: 'manual', dispatcher: expect.anything() })
     );
   });
   it('cancels oversized responses', async () => {
@@ -320,7 +320,7 @@ describe('MCP endpoint failures', () => {
       Object.assign(new Error('getaddrinfo ENOTFOUND mcp.example.com'), { code: 'ENOTFOUND' }),
       'the address cannot be resolved from Talyn’s servers',
     ],
-    ['a private address', new Error('The server address must be public.'), 'The server address must be public.'],
+    ['a private address', new Error('The server address must be public.'), 'Add an exact private route for this hostname and port, or use a public server address.'],
   ])('says why the server could not be reached after %s', async (_name, cause, reason) => {
     fetchFailed(cause);
     const failure = inspectMcpEndpoint(endpoint, new AbortController().signal);
