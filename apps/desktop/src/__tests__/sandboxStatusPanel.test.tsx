@@ -179,6 +179,40 @@ describe('SandboxStatusPanel', () => {
     expect(resources).toHaveTextContent('CPU: 1 vCPU allocated');
   });
 
+  it('charts CPU and memory over time and leaves the memory line out of the list', () => {
+    renderPanel(status({
+      resources: { memoryUsedMib: 2048, memoryLimitMib: 4096, vcpus: 4, diskMib: null },
+      usage: {
+        windowMinutes: 60,
+        stepSeconds: 60,
+        memoryLimitMib: 4096,
+        cpuReported: true,
+        points: [
+          { at: ago(2 * MIN), memoryUsedMib: 1024, cpuPercent: null },
+          { at: ago(MIN), memoryUsedMib: 1536, cpuPercent: 40 },
+          { at: ago(0), memoryUsedMib: 2048, cpuPercent: 12.5 },
+        ],
+      },
+    }));
+    expect(screen.getByTestId('sandbox-usage')).toBeInTheDocument();
+    expect(screen.getByTestId('sandbox-usage-cpu-value')).toHaveTextContent('13%');
+    expect(screen.getByTestId('sandbox-usage-memory-value')).toHaveTextContent('2 GB of 4 GB');
+    const resources = screen.getByTestId('sandbox-resources');
+    expect(resources).not.toHaveTextContent('Memory:');
+    expect(resources).toHaveTextContent('CPU: 4 vCPUs allocated');
+  });
+
+  it('shows the chart without resources, and no chart without usage', () => {
+    const point = { at: ago(0), memoryUsedMib: 512, cpuPercent: null };
+    renderPanel(status({ resources: null, usage: { windowMinutes: 60, stepSeconds: 60, memoryLimitMib: null, cpuReported: false, points: [point] } }));
+    expect(screen.getByTestId('sandbox-usage')).toBeInTheDocument();
+    expect(screen.queryByTestId('sandbox-resources')).not.toBeInTheDocument();
+    cleanup();
+    renderPanel(status({ resources: { memoryUsedMib: 512, memoryLimitMib: 4096, vcpus: 2, diskMib: null } }));
+    expect(screen.queryByTestId('sandbox-usage')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sandbox-resources')).toHaveTextContent('Memory: 512 MB used of 4 GB');
+  });
+
   it('shows a loading line and then an error when there is no status', () => {
     const { rerender } = render(<SandboxStatusPanel workbench={WB} status={null} error={null} onRefresh={jest.fn()} />);
     expect(screen.getByText('Reading the sandbox status')).toBeInTheDocument();

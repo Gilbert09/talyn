@@ -96,10 +96,30 @@ export interface SandboxResources {
   /** The VMM's current resident memory. Null when the sandbox is not running or the fleet is too old. */
   memoryUsedMib: number | null;
   memoryLimitMib: number | null;
-  /** CPU allocation. The fleet does not report live CPU utilization. */
+  /** CPU allocation. Live CPU use is in {@link SandboxUsageHistory}. */
   vcpus: number | null;
   /** Root filesystem capacity. The fleet does not report guest free space. */
   diskMib: number | null;
+}
+
+/** One sample of the box's resource use. */
+export interface SandboxUsagePoint {
+  at: string;
+  /** The VMM's resident memory. Null: not known at this time. */
+  memoryUsedMib: number | null;
+  /** CPU use since the sample before, as a percent of the box's vCPUs (0 to 100). Null: not known. */
+  cpuPercent: number | null;
+}
+
+/** The box's CPU and memory use over the recent past, oldest point first. */
+export interface SandboxUsageHistory {
+  windowMinutes: number;
+  /** The normal time between two points. A longer step is a gap in the line. */
+  stepSeconds: number;
+  memoryLimitMib: number | null;
+  /** False when the fleet sent no CPU counter for any point (an older fleet). */
+  cpuReported: boolean;
+  points: SandboxUsagePoint[];
 }
 
 /** The image a box booted: `SandboxImageLayer` in `setupLayers.ts`. */
@@ -237,6 +257,8 @@ export interface WorkbenchSandboxStatus {
   size: { key: SandboxSize | null; label: string; memMib: number | null; vcpus: number | null } | null;
   /** Current resource use and limits. Null when no resource fact is known. */
   resources?: SandboxResources | null;
+  /** CPU and memory use over time. Absent on an older backend; null when there are no samples. */
+  usage?: SandboxUsageHistory | null;
   /** What runs or waits now. Empty: nothing. */
   activity: SandboxActivity[];
   work: SandboxWorkSafety | null;
