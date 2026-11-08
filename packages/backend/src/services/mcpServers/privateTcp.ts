@@ -1,35 +1,75 @@
 import { createHash } from 'node:crypto';
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { connect as tlsConnect, checkServerIdentity } from 'node:tls';
 import type { Duplex } from 'node:stream';
 import { Agent } from 'undici';
+import WebSocket, { createWebSocketStream } from 'ws';
 import { fleetGatewayToken, fleetPinnedEndpoint } from '../selfHosted/credentials.js';
 
 const DIAL_TIMEOUT_MS = 5_000;
 
+interface GatewayFailure {
+  phase: 'gateway_response' | 'gateway_upgrade';
+  gatewayStatus: number;
+  gatewayCode?: string;
+}
+
+const gatewayCodes = new Set([
+  'unauthorized', 'bad_request', 'private_upgrade_required', 'standby_owner', 'connector_standby',
+  'private_routes_unavailable', 'private_tunnel_limit', 'connector_not_connected',
+  'private_route_denied', 'no_such_connector', 'account_deleting',
+]);
+const networkCodes = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+  'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET', 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'ERR_SSL_WRONG_VERSION_NUMBER', 'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION',
+]);
+
 export class McpTransportError extends Error {
-  constructor(readonly code: string, message: string, readonly connectorId?: string) {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly connectorId?: string,
+    readonly diagnostics?: GatewayFailure,
+  ) {
     super(message);
     this.name = 'McpTransportError';
   }
 }
 
-export function dialError(status: number, code?: string): McpTransportError {
+// Copy only known codes. Error messages and remote fields can contain secrets.
+export function mcpFailureDiagnostics(error: unknown): GatewayFailure | { networkCode: string } | undefined {
+  for (let depth = 0; error instanceof Error && depth < 5; depth++, error = error.cause) {
+    if (error instanceof McpTransportError && error.diagnostics) return error.diagnostics;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code && networkCodes.has(code)) return { networkCode: code };
+  }
+  return undefined;
+}
+
+export function dialError(status: number, code?: string, phase?: GatewayFailure['phase']): McpTransportError {
+  const diagnostics: GatewayFailure | undefined = phase && {
+    phase, gatewayStatus: status,
+    ...(code ? { gatewayCode: gatewayCodes.has(code) ? code : 'unrecognized' } : {}),
+  };
+  const failure = (result: string, message: string) => new McpTransportError(result, message, undefined, diagnostics);
   if (code === 'standby_owner' || code === 'connector_standby')
-    return new McpTransportError('standby_owner', 'The private connector owner is on standby. Try again shortly.');
+    return failure('standby_owner', 'The private connector owner is on standby. Try again shortly.');
   if (status === 403)
-    return new McpTransportError('destination_denied', 'YAS denied this private destination. Check its exact route.');
+    return failure('destination_denied', 'YAS denied this private destination. Check its exact route.');
   if (status === 404)
-    return new McpTransportError('route_missing', 'Add an exact private route for this hostname and port.');
+    return failure('route_missing', 'Add an exact private route for this hostname and port.');
   if (status === 503)
-    return new McpTransportError('private_routes_unavailable', 'The private route owner is unavailable or on standby. Try again shortly.');
+    return failure('private_routes_unavailable', 'The private route owner is unavailable or on standby. Try again shortly.');
   if (status === 429)
-    return new McpTransportError('private_tunnel_limit', 'Private connection capacity is full. Try again shortly.');
+    return failure('private_tunnel_limit', 'Private connection capacity is full. Try again shortly.');
   if (status === 409)
-    return new McpTransportError('connector_not_connected', 'The private connector is not connected. Check its status.');
-  return new McpTransportError('private_transport_unavailable', 'The private connection is unavailable. Try again shortly.');
+    return failure('connector_not_connected', 'The private connector is not connected. Check its status.');
+  return failure('private_transport_unavailable', 'The private connection is unavailable. Try again shortly.');
 }
 
 export function dialPrivateTcp(
@@ -42,55 +82,73 @@ export function dialPrivateTcp(
   signal: AbortSignal,
 ): Promise<Duplex> {
   return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const route = JSON.stringify({ connectorId, host, port });
+    if (Buffer.byteLength(route) > 8192)
+      throw new McpTransportError('invalid_private_route', 'The private route metadata is too large.');
     const target = new URL(`${endpoint}/v1/workspaces/${encodeURIComponent(workspaceId)}/private-routes/dial`);
-    const body = JSON.stringify({ connectorId, host, port });
-    const req = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, {
-      method: 'POST',
+    target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(target, 'yas-private-tcp-v1', {
       headers: {
         authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-        'content-length': Buffer.byteLength(body),
-        connection: 'Upgrade',
-        upgrade: 'yas-private-tcp',
+        'Yas-Private-Route': route,
       },
+      followRedirects: false,
+      perMessageDeflate: false,
+      maxPayload: 64 * 1024,
+      handshakeTimeout: DIAL_TIMEOUT_MS,
     });
-    const abort = () => req.destroy(signal.reason instanceof Error ? signal.reason : new Error('The request was cancelled.'));
+    let settled = false;
+    let upgraded = false;
     const detach = () => signal.removeEventListener('abort', abort);
-    signal.addEventListener('abort', abort, { once: true });
-    req.once('error', (error) => { detach(); reject(error); });
-    req.once('upgrade', (response, socket, head) => {
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
       detach();
-      if (response.statusCode !== 101 || response.headers.upgrade?.toLowerCase() !== 'yas-private-tcp') {
-        socket.destroy();
-        reject(new McpTransportError('invalid_upgrade', 'YAS refused the private TCP upgrade.'));
-        return;
-      }
-      if (head.length) socket.unshift(head);
-      resolve(socket);
-    });
-    req.once('response', (response) => {
+      reject(error);
+      socket.terminate();
+    };
+    const abort = () => fail(signal.reason instanceof Error ? signal.reason : new Error('The request was cancelled.'));
+    signal.addEventListener('abort', abort, { once: true });
+    socket.on('error', (error) => fail(upgraded
+      ? new McpTransportError('invalid_upgrade', 'YAS refused the private TCP upgrade.', undefined,
+        { phase: 'gateway_upgrade', gatewayStatus: 101 })
+      : error));
+    socket.once('upgrade', () => { upgraded = true; });
+    socket.once('unexpected-response', (_request, response) => {
       let bytes = 0;
       const chunks: Buffer[] = [];
+      const rejectResponse = (code?: string) => fail(dialError(response.statusCode ?? 0, code, 'gateway_response'));
       response.on('data', (chunk: Buffer) => {
         bytes += chunk.length;
         if (bytes > 8192) {
+          rejectResponse();
           response.destroy();
-          reject(dialError(response.statusCode ?? 0));
         } else chunks.push(chunk);
       });
-      response.once('error', () => reject(dialError(response.statusCode ?? 0)));
+      response.once('error', () => rejectResponse());
       response.once('end', () => {
-        detach();
         let code: string | undefined;
         try {
           const doc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          code = typeof doc.code === 'string' ? doc.code : doc.error;
+          code = typeof doc.code === 'string' ? doc.code : typeof doc.error === 'string' ? doc.error : undefined;
         } catch { /* Use the status when YAS has no error code. */ }
-        reject(dialError(response.statusCode ?? 0, code));
+        rejectResponse(code);
       });
     });
+    socket.once('open', () => {
+      if (settled) { socket.terminate(); return; }
+      detach();
+      settled = true;
+      socket.on('message', (_data, binary) => {
+        if (!binary) stream.destroy(new McpTransportError('invalid_frame', 'YAS sent an invalid private TCP frame.'));
+      });
+      const stream = createWebSocketStream(socket);
+      // The TLS socket takes over error handling after the promise resolves.
+      stream.on('error', () => {});
+      resolve(stream);
+    });
     if (signal.aborted) abort();
-    else req.end(body);
   });
 }
 

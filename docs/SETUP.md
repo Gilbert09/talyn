@@ -1237,20 +1237,33 @@ Metadata never creates routes.
 Setup does not require a sandbox.
 
 The backend uses the existing YAS gateway endpoint and tenant key.
-It sends `POST /v1/workspaces/{workspace}/private-routes/dial` with these upgrade headers:
+It sends `GET /v1/workspaces/{workspace}/private-routes/dial` with a standard WebSocket handshake:
 
 ```http
 Connection: Upgrade
-Upgrade: yas-private-tcp
-Content-Type: application/json
+Upgrade: websocket
+Sec-WebSocket-Protocol: yas-private-tcp-v1
+Yas-Private-Route: {"connectorId":"<connector>","host":"<hostname>","port":443}
 ```
 
-The JSON body contains only `connectorId`, the canonical `host`, and the effective `port`.
+The route header contains only `connectorId`, the canonical `host`, and the effective `port`.
+Its UTF-8 value must not exceed 8192 bytes.
 The request uses the existing tenant key as a bearer token.
-After `101 Switching Protocols`, Talyn starts TLS inside the opaque TCP stream.
+The request has no body, query, or browser origin.
+YAS checks authorization and the exact route before it returns `101 Switching Protocols`.
+Binary WebSocket messages then carry the opaque TCP stream.
+Compression is disabled. Each incoming message has a 64 KiB limit.
+Talyn starts TLS inside that stream after the handshake succeeds.
 TLS uses the destination hostname for SNI and certificate verification.
 MCP credentials and OAuth secrets travel only inside that TLS stream.
 Customer Tailscale policy does not change.
+
+Deploy the YAS WebSocket endpoint before this Talyn client.
+The legacy custom upgrade failed at production ingress with HTTP 400 before a destination dial.
+Production audits show that the combined JSON and HTTP/1.1 upgrade check failed.
+They do not identify which header or protocol detail changed.
+Talyn does not retry with that transport or follow gateway redirects.
+The existing `FLEET_PINNED_ENDPOINT` and `FLEET_GATEWAY_TOKEN` settings remain in use.
 
 Every outbound destination gets a fresh route decision under the owning workspace.
 This includes discovery, registration, code exchange, refresh, probes, tool lists, and account reads.
@@ -1278,6 +1291,8 @@ A connector from another workspace is refused.
 These rules also apply to tasks, session moves, and warm sandboxes.
 
 Transport audits include the workspace, connector, destination hostname and port, purpose, result, duration, and request ID.
+Failures can include the gateway status, handshake phase, and known gateway or network error codes.
+Unknown error codes become `unrecognized` or are omitted.
 They exclude URL paths, queries, headers, bodies, and credentials.
 New writes encrypt MCP injection settings and PKCE verifiers, in addition to existing token encryption.
 Existing records remain readable and become encrypted when saved.
@@ -1287,5 +1302,7 @@ The checked-in CIMD document is `apps/web/public/.well-known/oauth-client/talyn.
 It identifies `https://app.talyn.dev` and lists that origin's exact callback.
 A deployment with another `WEB_APP_URL` must publish a document with the matching identity and callback.
 
-Deploy [YAS #14](https://github.com/yetanothersandbox-dev/yas/pull/14) before this backend change.
-The related Talyn work is tracked in [Talyn #92](https://github.com/Gilbert09/talyn/pull/92).
+Deploy [YAS #15](https://github.com/yetanothersandbox-dev/yas/pull/15) before this backend change.
+Confirm that the YAS deployment is healthy before the Talyn client deploys.
+It adds WebSocket support to the tunnel from [YAS #14](https://github.com/yetanothersandbox-dev/yas/pull/14).
+This client updates the private MCP transport from [Talyn #114](https://github.com/Gilbert09/talyn/pull/114).
