@@ -7414,3 +7414,11 @@ The rail is `ContextRail.tsx` with `lib/contextRail.ts`, in both apps. On macOS 
 Before, a thread woke when a session finished a turn, opened a pull request or needed an answer. A merge did not wake it, so a thread that waited for a merge waited for the person.
 Now a merge writes a `pr_merged` card in the thread and queues a Talyn message, the same as `pr_opened`. `notifyThreadsOfMergedPr` (`services/workbenches/threads.ts`) runs after each write that sets a row to `merged`: `closeTrackedRow` (webhook and poll sweep), the merge queue's `recordMerged`, and `reconcileTerminalState`. It runs after the state write, so the no-progress fingerprint sees the new state.
 One merge can reach several of these paths. The `threadToldOfMerge` list in the session's `settings` holds the pull request ids it already reported, so each thread wakes one time per merge. The session must own the pull request (`eligiblePr`) and must have linked it before the merge (`linkedBeforeMerge`). The workspace's auto-archive setting does not change this.
+
+### 2026-11-08 — A space session stays out of Personal
+
+Before, a session created in a space also showed in the Personal sidebar. It runs in the creator's home workspace, and the Personal lists showed every session of that workspace. The Personal tile on the context rail also counted it.
+Now `inPersonalList` (`lib/spaces.ts`, both apps) keeps a session with a `spaceId` out of the Personal lists: the sidebar, threads, ⌘1–9, the command palette and recent sessions on the new-session page. `useWorkspaceWorkbenches` applies it; `orderedLiveWorkbenches` in `appShortcuts.ts` does the same.
+A space session shows in Personal again when the `spaces` flag is off or its space is not in my teams (archived, or I left the team), so it is never lost. While my teams load, it stays out, so it does not show and then go.
+History keeps archived space sessions (`useWorkspaceWorkbenches({ withSpaceSessions: true })`), because the space feed leaves archived sessions out.
+The store still holds space sessions, so opening one from the space feed needs no fetch. `countContextAttention` now counts a space session for its space only, not for its workspace. This replaces the rule in the context rail note above.
