@@ -147,7 +147,7 @@ describe('WorkPanel', () => {
     expect(rows[2]).toHaveTextContent('Archived');
     fireEvent.click(within(rows[1]).getByRole('button', { name: 'Open b' }));
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'b' });
-    await waitFor(() => expect(memoryList).toHaveBeenCalledWith({ workspaceId: 'ws1', threadId: 't1' }));
+    await waitFor(() => expect(memoryList).toHaveBeenCalledWith({ workspaceId: 'ws1', usedBy: 't1' }));
   });
 
   it('lists the repositories the sessions touch', async () => {
@@ -155,41 +155,73 @@ describe('WorkPanel', () => {
     render(<WorkPanel thread={THREAD} />);
     const repos = screen.getByRole('list', { name: 'Repositories of this thread' });
     expect(within(repos).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['acme/api', 'acme/web']);
-    await screen.findByText('Nothing saved yet.');
+    await screen.findByText('This thread has not saved or read memory yet.');
   });
 
-  it('shows the first memory entries, hides forgotten ones, and Open all goes to Memory', async () => {
+  it('lists every memory entry the thread used, with how it used it, and Open all goes to Memory', async () => {
+    const use = (wrote: boolean, read: boolean) => ({ wrote, read, lastUsedAt: '2026-10-31T00:00:00Z' });
     memoryList.mockResolvedValue([
-      memory('m1', 'thread'),
-      memory('m2', 'workspace'),
-      memory('gone', 'workspace', { forgottenAt: '2026-10-31T00:00:00Z' }),
-      memory('m3', 'workspace'),
-      memory('m4', 'workspace'),
-      memory('m5', 'workspace'),
-      memory('m6', 'workspace'),
-      memory('m7', 'workspace'),
+      memory('m1', 'thread', { use: use(true, false) }),
+      memory('m2', 'workspace', { use: use(false, true) }),
+      memory('gone', 'workspace', { forgottenAt: '2026-10-31T00:00:00Z', use: use(true, false) }),
+      memory('m3', 'workspace', { use: use(true, true) }),
+      memory('m4', 'thread', { use: use(false, false) }),
+      ...['m5', 'm6', 'm7', 'm8'].map((id) => memory(id, 'workspace', { use: use(false, true) })),
     ]);
     render(<WorkPanel thread={THREAD} />);
     const list = await screen.findByRole('list', { name: 'Memory of this thread' });
-    expect(within(list).getByText('Note m1')).toBeInTheDocument();
-    expect(within(list).getAllByText('Thread')).toHaveLength(1);
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(8);
     expect(within(list).queryByText('Note gone')).not.toBeInTheDocument();
-    expect(within(list).queryByText('Note m6')).not.toBeInTheDocument();
-    expect(within(list).getByText('2 more')).toBeInTheDocument();
+    expect(within(list).getByText('Note m8')).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent('Saved · Thread');
+    expect(rows[1]).toHaveTextContent('Read · Workspace');
+    expect(rows[2]).toHaveTextContent('Saved · Read · Workspace');
+    expect(rows[3]).toHaveTextContent('Note m4ThreadAbout m4');
+    expect(rows[3]).not.toHaveTextContent(/Saved|Read/);
     fireEvent.click(screen.getByRole('button', { name: 'Open all' }));
     expect(openSettings).toHaveBeenCalledWith('memory');
   });
 
-  it('shows a memory entry when it is clicked', async () => {
-    memoryList.mockResolvedValue([memory('m1', 'thread')]);
+  it('opens a memory entry in a modal when it is clicked', async () => {
+    memoryList.mockResolvedValue([
+      memory('m1', 'thread', { use: { wrote: false, read: true, lastUsedAt: '2026-10-31T00:00:00Z' } }),
+    ]);
     memoryGet.mockResolvedValue({ ...memory('m1', 'thread'), body: 'The full text of m1.' });
     render(<WorkPanel thread={THREAD} />);
     const list = await screen.findByRole('list', { name: 'Memory of this thread' });
     fireEvent.click(within(list).getByText('Note m1'));
-    expect(await within(list).findByText('The full text of m1.')).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: 'Note m1' });
+    expect(await within(dialog).findByText('The full text of m1.')).toBeInTheDocument();
+    expect(within(dialog).getByText('· Read by this thread')).toBeInTheDocument();
     expect(memoryGet).toHaveBeenCalledWith('m1');
-    fireEvent.click(within(list).getByText('Note m1'));
     expect(within(list).queryByText('The full text of m1.')).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes the memory modal with Escape, and Open in Memory goes to Memory', async () => {
+    memoryList.mockResolvedValue([memory('m1', 'thread')]);
+    memoryGet.mockResolvedValue({ ...memory('m1', 'thread'), body: 'Body' });
+    render(<WorkPanel thread={THREAD} />);
+    fireEvent.click(await screen.findByText('Note m1'));
+    await screen.findByRole('dialog');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Note m1'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open in Memory' }));
+    expect(openSettings).toHaveBeenCalledWith('memory');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('says so in the modal when the entry cannot load', async () => {
+    memoryList.mockResolvedValue([memory('m1', 'thread')]);
+    memoryGet.mockRejectedValue(new Error('boom'));
+    render(<WorkPanel thread={THREAD} />);
+    fireEvent.click(await screen.findByText('Note m1'));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Could not load this memory.')).toBeInTheDocument();
   });
 
   it('reloads memory when a session saves one in the middle of a turn', async () => {
@@ -213,7 +245,7 @@ describe('WorkPanel', () => {
     render(<WorkPanel thread={wb('t2', { kind: 'thread', repoFullName: '' })} />);
     expect(screen.getByText('No sessions yet. Ask the thread to start one.')).toBeInTheDocument();
     expect(screen.getByText('No repositories yet.')).toBeInTheDocument();
-    await screen.findByText('Nothing saved yet.');
+    await screen.findByText('This thread has not saved or read memory yet.');
   });
 });
 

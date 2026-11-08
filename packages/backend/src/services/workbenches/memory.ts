@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, asc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 import {
   MAX_LIVE_MEMORIES_PER_WORKSPACE,
   memoryLimitMessage,
@@ -16,7 +16,13 @@ import {
   type PutMemoryResult,
 } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { repositories, workbenches, workspaceMemories as table, workspaces } from '../../db/schema.js';
+import {
+  repositories,
+  workbenches,
+  workspaceMemories as table,
+  workspaceMemoryUses as uses,
+  workspaces,
+} from '../../db/schema.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
 import { appendEvents, getWorkbench, listChats } from './store.js';
@@ -160,6 +166,71 @@ export async function listMemories(
 ): Promise<Array<MemoryEntrySummary | MemoryEntry>> {
   const rows = await listMemoriesQuery(workspaceId, opts);
   return rows.map(({ body, ...row }) => (opts.includeBody ? { ...toSummary(row), body: body ?? '' } : toSummary(row)));
+}
+
+/**
+ * The entries a session or thread saved or read, and the entries of its own
+ * thread scope. The most recent use first. An entry with no recorded use (one
+ * saved before uses were recorded, or a thread entry that a child session
+ * saved) counts its last update as its use.
+ */
+export async function listMemoriesUsedBy(
+  workspaceId: string,
+  workbenchId: string,
+  opts: Pick<ListMemoryOptions, 'includeForgotten' | 'includeBody'> = {},
+): Promise<Array<MemoryEntrySummary | MemoryEntry>> {
+  const savedHere = sql<boolean>`(${table.source}->>'workbenchId') IS NOT DISTINCT FROM ${workbenchId}`;
+  const where: SQL[] = [
+    eq(table.workspaceId, workspaceId),
+    or(isNotNull(uses.memoryId), eq(table.threadId, workbenchId), savedHere)!,
+  ];
+  if (!opts.includeForgotten) where.push(isNull(table.forgottenAt));
+  const rows = await db()
+    .select({
+      ...SUMMARY_COLUMNS,
+      body: opts.includeBody ? table.body : sql<string | null>`null`,
+      useWrote: uses.wrote,
+      useRead: uses.read,
+      useLastUsedAt: uses.lastUsedAt,
+      savedHere,
+    })
+    .from(table)
+    .leftJoin(uses, and(eq(uses.memoryId, table.id), eq(uses.workbenchId, workbenchId)))
+    .where(and(...where))
+    .orderBy(desc(sql`coalesce(${uses.lastUsedAt}, ${table.updatedAt})`), asc(sql`lower(${table.name})`));
+  return rows.map(({ body, useWrote, useRead, useLastUsedAt, savedHere: saved, ...row }) => {
+    const summary: MemoryEntrySummary = {
+      ...toSummary(row),
+      use: {
+        wrote: Boolean(useWrote) || Boolean(saved),
+        read: Boolean(useRead),
+        lastUsedAt: (useLastUsedAt ?? row.updatedAt).toISOString(),
+      },
+    };
+    return opts.includeBody ? { ...summary, body: body ?? '' } : summary;
+  });
+}
+
+/**
+ * Note that a session or thread saved or read an entry. Best effort: a failure
+ * only drops the entry from the thread's work panel.
+ */
+export async function recordMemoryUse(memoryId: string, workbenchId: string, kind: 'wrote' | 'read'): Promise<void> {
+  try {
+    await db()
+      .insert(uses)
+      .values({ memoryId, workbenchId, wrote: kind === 'wrote', read: kind === 'read', lastUsedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [uses.memoryId, uses.workbenchId],
+        set: {
+          wrote: sql`${uses.wrote} OR excluded.wrote`,
+          read: sql`${uses.read} OR excluded.read`,
+          lastUsedAt: sql`excluded.last_used_at`,
+        },
+      });
+  } catch (err) {
+    console.warn('[memory] could not record a memory use:', err);
+  }
 }
 
 /** One entry with its body, forgotten or not. */

@@ -2,6 +2,7 @@ import type { Workbench } from '@talyn/shared';
 import {
   isThread,
   liveThreads,
+  memoryUseLabel,
   prCiLabel,
   runningSessionCount,
   sessionMentionValue,
@@ -235,5 +236,18 @@ describe('header actions for a thread', () => {
   ])('%j', (over, primary, available) => {
     expect(primaryWorkbenchAction(wb('x', over), null)).toBe(primary);
     expect(availableWorkbenchActions(wb('x', over), null)).toEqual(available);
+  });
+});
+
+describe('memoryUseLabel', () => {
+  const at = '2026-10-31T00:00:00Z';
+  it.each([
+    [undefined, null],
+    [{ wrote: false, read: false, lastUsedAt: at }, null],
+    [{ wrote: true, read: false, lastUsedAt: at }, 'Saved'],
+    [{ wrote: false, read: true, lastUsedAt: at }, 'Read'],
+    [{ wrote: true, read: true, lastUsedAt: at }, 'Saved · Read'],
+  ])('%j is %j', (use, label) => {
+    expect(memoryUseLabel(use)).toBe(label);
   });
 });
