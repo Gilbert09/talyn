@@ -519,3 +519,57 @@ describe('pending prompts', () => {
     expect(screen.getAllByText('Check the cache')).toHaveLength(2);
   });
 });
+
+describe('failed prompts', () => {
+  const input = { text: 'Check the cache', model: 'claude-opus-5-5' };
+  const held = () => useWorkbenchStore.getState().outgoingMessages.c1 ?? [];
+  const fail = (error = 'Failed to fetch') => {
+    const id = useWorkbenchStore.getState().addOutgoingMessage('c1', { text: 'Check the cache' });
+    useWorkbenchStore.getState().failOutgoingMessage('c1', id, { error, input });
+    return id;
+  };
+  const failedRow = () => document.querySelector('[data-attr="failed-message"]');
+
+  it('keeps a failed prompt with its error, Retry and Discard, long after', async () => {
+    fail();
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
+    expect(screen.getByText('Check the cache')).toBeInTheDocument();
+    expect(screen.getByText('Not sent: Failed to fetch')).toBeInTheDocument();
+    expect(screen.queryByText('Sending…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(held()).toHaveLength(1);
+  });
+
+  it('sends the same request again on Retry and shows it as sent', async () => {
+    let finish!: (value: { queued: boolean }) => void;
+    const send = vi.fn(() => new Promise<{ queued: boolean }>((resolve) => { finish = resolve; }));
+    fail();
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={{ ...ops, send }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(send).toHaveBeenCalledWith(chat, input);
+    expect(screen.getByText('Sending…')).toBeInTheDocument();
+    expect(failedRow()).not.toBeInTheDocument();
+    await act(async () => finish({ queued: false }));
+    expect(held()).toEqual([expect.objectContaining({ settledAt: expect.any(Number), failed: undefined })]);
+    expect(screen.queryByText('Sending…')).not.toBeInTheDocument();
+  });
+
+  it('shows the new error when Retry fails again', async () => {
+    const send = vi.fn().mockRejectedValue(new Error('Bad gateway'));
+    fail();
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={{ ...ops, send }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('Not sent: Bad gateway')).toBeInTheDocument());
+    expect(held()).toEqual([expect.objectContaining({ failed: { error: 'Bad gateway', input } })]);
+  });
+
+  it('removes the prompt on Discard', () => {
+    fail();
+    render(<WorkbenchTranscript chat={chat} events={[]} loading={false} error={null} ops={ops} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(held()).toEqual([]);
+    expect(screen.queryByText('Check the cache')).not.toBeInTheDocument();
+  });
+});

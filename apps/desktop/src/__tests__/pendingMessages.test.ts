@@ -17,6 +17,8 @@ const toolResult = (seq: number): WorkbenchEvent => ({
   event: { seq, type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'Fix the login' }] } } as AgentEvent,
 });
 
+const failed = { error: 'Failed to fetch', input: { text: 'Fix the login' } };
+
 const message = (over: Partial<PendingUserMessage> = {}): PendingUserMessage => ({
   id: 'outgoing-1',
   text: 'Fix the login',
@@ -43,6 +45,11 @@ describe('pendingMessageState', () => {
     ['sent, the chat not yet updated', { settledAt: NOW - 1_000 }, {}, 'show'],
     ['sent, at the end of the grace', { settledAt: NOW - PENDING_MESSAGE_GRACE_MS }, {}, 'done'],
     ['sent, the chat idle after the grace', { settledAt: NOW - 60_000 }, {}, 'done'],
+    ['failed, the chat idle long after', { failed }, { now: NOW + 60 * 60_000 }, 'show'],
+    ['failed, the chat running', { failed }, { running: true }, 'show'],
+    ['failed, the queue has the same text', { failed }, { queued: [{ text: 'Fix the login' }] }, 'show'],
+    ['failed, its event arrived after all', { failed }, { events: [userEvent(1, 'Fix the login')] }, 'done'],
+    ['failed, an older message has the same text', { afterSeq: 5, failed }, { events: [userEvent(5, 'Fix the login')] }, 'show'],
   ])('%s', (_name, over, ctx, expected) => {
     expect(
       pendingMessageState(message(over), {

@@ -3,6 +3,7 @@ import {
   nextWorkbenchAction,
   prSummaryToNextActionPr,
   type AgentEvent,
+  type SendWorkbenchMessageInput,
   type AgentEventDraft,
   type Workbench,
   type WorkbenchAttachment,
@@ -125,6 +126,12 @@ export interface PendingUserMessage {
   afterSeq: number | null;
   /** When the send request finished. Absent while it is in flight. */
   settledAt?: number;
+  /**
+   * The send request failed, for example because the backend was down. The
+   * message stays on screen with the error until the user sends it again or
+   * discards it. `input` is the request to send again.
+   */
+  failed?: { error: string; input: SendWorkbenchMessageInput };
 }
 
 /**
@@ -134,11 +141,19 @@ export interface PendingUserMessage {
  */
 export const PENDING_MESSAGE_GRACE_MS = 10_000;
 
+/** The reason a send failed, as the failed message shows it. */
+export function sendFailureText(err: unknown): string {
+  const message = err instanceof Error ? err.message.trim() : '';
+  return message || 'The message was not sent.';
+}
+
 /**
  * What the transcript does with a sent message:
  * - `show`: draw it as the user's bubble, until its own event arrives.
  * - `hide`: the composer queue shows it.
  * - `done`: its event arrived, or it will not run. Forget it.
+ *
+ * A message whose send failed stays shown, so the user can retry it.
  *
  * The backend writes the message's event only when its turn starts, and later
  * still when it has inline images. Without this, a new session showed an empty
@@ -153,7 +168,7 @@ export function pendingMessageState(
     (e) => (message.afterSeq === null || e.seq > message.afterSeq) && userMessageText(e.event)?.trim() === text,
   );
   if (echoed) return 'done';
-  if (message.settledAt === undefined) return 'show';
+  if (message.failed || message.settledAt === undefined) return 'show';
   if (ctx.queued.some((q) => q.text.trim() === text)) return 'hide';
   if (ctx.running || ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS) return 'show';
   return 'done';
