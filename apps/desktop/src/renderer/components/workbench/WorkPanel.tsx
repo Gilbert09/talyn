@@ -6,14 +6,14 @@ import { cn } from '../../lib/utils';
 import { clampPanelWidth } from '../../lib/workbenchLayout';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { useBackground } from '../../stores/sessionBackground';
-import { prCiLabel, threadRepositories, WORK_PANEL_MEMORY_LIMIT } from '../../lib/threads';
+import { memoryUseLabel, prCiLabel, threadRepositories } from '../../lib/threads';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
-import { memoryScopeLabel } from '../memory/MemoryEditor';
-import { MemoryBody } from '../memory/MemoryChangeCard';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
+import { MemoryTypeChip, memoryScopeLabel } from '../memory/MemoryEditor';
 import { useMemoryChanged } from '../../lib/memoryEvents';
 import { useTurnsEnded } from './useTurnsEnded';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
@@ -22,7 +22,7 @@ import { isArchived, useThreadChildren } from './workbenchSelectors';
 /**
  * A thread's right column, in place of the GitPanel: a thread has no
  * repository, so no files, changes or pull request. It shows the thread's
- * sessions, the memory the thread sees, and the repositories its sessions
+ * sessions, the memory the thread saved or read, and the repositories its sessions
  * work on.
  */
 export function WorkPanel({ thread }: { thread: Workbench }) {
@@ -163,34 +163,23 @@ function SessionRow({ session }: { session: Workbench }) {
 
 type MemoryState = { status: 'loading' } | { status: 'loaded'; entries: MemoryEntrySummary[] } | { status: 'error' };
 
-/** The memory the thread sees: its own entries and the workspace's. */
+/** The memory the thread saved or read, and its own thread entries. The most recent use first. */
 function MemorySection({ thread }: { thread: Workbench }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
   const chats = useWorkbenchStore((s) => s.chats[thread.id]);
-  // A turn can save memory, so the list reloads when a turn ends.
+  // A turn can save or read memory, so the list reloads when a turn ends.
   const turnsEnded = useTurnsEnded(chats);
   const [state, setState] = useState<MemoryState>({ status: 'loading' });
   // A session can save memory in the middle of a turn.
   const [changes, setChanges] = useState(0);
   useMemoryChanged(() => setChanges((n) => n + 1));
-  const [open, setOpen] = useState<{ id: string; entry: MemoryEntry | null; failed?: boolean } | null>(null);
-  const toggle = (id: string) => {
-    if (open?.id === id) {
-      setOpen(null);
-      return;
-    }
-    setOpen({ id, entry: null });
-    api.workbenches.memory
-      .get(id)
-      .then((entry) => setOpen((cur) => (cur?.id === id ? { id, entry } : cur)))
-      .catch(() => setOpen((cur) => (cur?.id === id ? { id, entry: null, failed: true } : cur)));
-  };
+  const [open, setOpen] = useState<MemoryEntrySummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     api.workbenches.memory
-      .list({ workspaceId: thread.workspaceId, threadId: thread.id })
+      .list({ workspaceId: thread.workspaceId, usedBy: thread.id })
       .then((entries) => {
         if (!cancelled) setState({ status: 'loaded', entries: entries.filter((e) => !e.forgottenAt) });
       })
@@ -221,45 +210,130 @@ function MemorySection({ thread }: { thread: Workbench }) {
       {state.status === 'loading' && <p className="px-3 text-xs text-muted-foreground">Loading…</p>}
       {state.status === 'error' && <p className="px-3 text-xs text-muted-foreground">Could not load memory.</p>}
       {state.status === 'loaded' && entries.length === 0 && (
-        <p className="px-3 text-xs text-muted-foreground">Nothing saved yet.</p>
+        <p className="px-3 text-xs text-muted-foreground">This thread has not saved or read memory yet.</p>
       )}
       {entries.length > 0 && (
-        <ul className="space-y-1 px-3" aria-label="Memory of this thread">
-          {entries.slice(0, WORK_PANEL_MEMORY_LIMIT).map((entry) => (
-            <li key={entry.id} className="min-w-0 text-xs">
-              <button
-                type="button"
-                onClick={() => toggle(entry.id)}
-                aria-expanded={open?.id === entry.id}
-                title={open?.id === entry.id ? 'Hide this memory' : 'Show this memory'}
-                className="block w-full min-w-0 rounded text-left hover:bg-accent/60"
-                data-attr="work-panel-memory-entry"
-              >
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <Brain className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  <span className="truncate font-medium">{entry.name}</span>
-                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{memoryScopeLabel(entry, repositories)}</span>
-                </div>
-                {entry.description && open?.id !== entry.id && (
-                  <p className="truncate pl-[18px] text-muted-foreground">{entry.description}</p>
-                )}
-              </button>
-              {open?.id === entry.id && (
-                <div className="mt-1 rounded border border-border bg-card">
-                  {open.entry ? (
-                    <MemoryBody entry={open.entry} />
-                  ) : (
-                    <p className="px-3 py-2 text-muted-foreground">{open.failed ? 'Could not load this memory.' : 'Loading…'}</p>
-                  )}
-                </div>
-              )}
-            </li>
-          ))}
-          {entries.length > WORK_PANEL_MEMORY_LIMIT && (
-            <li className="text-[11px] text-muted-foreground">{entries.length - WORK_PANEL_MEMORY_LIMIT} more</li>
-          )}
+        <ul className="space-y-0.5 px-1.5" aria-label="Memory of this thread">
+          {entries.map((entry) => {
+            const use = memoryUseLabel(entry.use);
+            return (
+              <li key={entry.id} className="min-w-0 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setOpen(entry)}
+                  aria-haspopup="dialog"
+                  title="Show this memory"
+                  className="block w-full min-w-0 rounded-md px-1.5 py-1 text-left hover:bg-accent/60"
+                  data-attr="work-panel-memory-entry"
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Brain className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate font-medium">{entry.name}</span>
+                    <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      {use ? `${use} · ` : ''}
+                      {memoryScopeLabel(entry, repositories)}
+                    </span>
+                  </div>
+                  {entry.description && <p className="truncate pl-[18px] text-muted-foreground">{entry.description}</p>}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
+      {open && (
+        <MemoryDialog
+          summary={open}
+          scope={memoryScopeLabel(open, repositories)}
+          onClose={() => setOpen(null)}
+          onOpenAll={() => {
+            setOpen(null);
+            openSettings('memory');
+          }}
+        />
+      )}
     </Section>
+  );
+}
+
+type EntryState = { status: 'loading' } | { status: 'loaded'; entry: MemoryEntry } | { status: 'error' };
+
+/** One memory entry in a modal: its name, type, scope, description and full text. */
+function MemoryDialog({
+  summary,
+  scope,
+  onClose,
+  onOpenAll,
+}: {
+  summary: MemoryEntrySummary;
+  scope: string;
+  onClose: () => void;
+  onOpenAll: () => void;
+}) {
+  const [state, setState] = useState<EntryState>({ status: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    api.workbenches.memory
+      .get(summary.id)
+      .then((entry) => {
+        if (!cancelled) setState({ status: 'loaded', entry });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: 'error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [summary.id]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const entry = state.status === 'loaded' ? state.entry : null;
+  const use = memoryUseLabel(summary.use);
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent
+        onClose={onClose}
+        className="max-w-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="work-panel-memory-title"
+        data-testid="work-panel-memory-dialog"
+      >
+        <DialogHeader className="pr-6">
+          <DialogTitle id="work-panel-memory-title" className="flex min-w-0 items-center gap-1.5">
+            <Brain className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{entry?.name ?? summary.name}</span>
+          </DialogTitle>
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <MemoryTypeChip type={entry?.type ?? summary.type} />
+            <span>{scope}</span>
+            {use && <span>· {use} by this thread</span>}
+          </div>
+        </DialogHeader>
+        {state.status === 'loading' && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {state.status === 'error' && <p className="text-xs text-muted-foreground">Could not load this memory.</p>}
+        {entry && (
+          <div className="space-y-2 text-xs" data-testid="memory-body">
+            {entry.description && <p className="text-muted-foreground">{entry.description}</p>}
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border bg-card p-3 font-sans text-xs text-foreground">
+              {entry.body}
+            </pre>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onOpenAll} data-attr="work-panel-memory-dialog-open-all">
+            Open in Memory
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

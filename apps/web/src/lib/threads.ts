@@ -1,4 +1,4 @@
-import type { ThreadSessionAction, ThreadSessionEvent, Workbench, WorkbenchChat } from '@talyn/shared';
+import type { MemoryEntrySummary, ThreadSessionAction, ThreadSessionEvent, Workbench, WorkbenchChat } from '@talyn/shared';
 
 /**
  * Threads: a workbench with `kind: 'thread'` and no repository. It starts
@@ -127,5 +127,11 @@ export function prCiLabel(ciStatus: string | undefined): string | null {
   }
 }
 
-/** How many memory entries the work panel shows before "Open all". */
-export const WORK_PANEL_MEMORY_LIMIT = 5;
+/** "Saved", "Read", or both, for a memory entry the thread used. Null for a thread entry it did not touch. */
+export function memoryUseLabel(use: MemoryEntrySummary['use']): string | null {
+  if (!use) return null;
+  if (use.wrote && use.read) return 'Saved · Read';
+  if (use.wrote) return 'Saved';
+  if (use.read) return 'Read';
+  return null;
+}
