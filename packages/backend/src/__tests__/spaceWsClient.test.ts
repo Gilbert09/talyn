@@ -21,8 +21,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   BrowserSocket.sockets = [];
   vi.stubGlobal('WebSocket', BrowserSocket);
-  vi.stubGlobal('window', { setInterval, setTimeout, addEventListener: vi.fn() });
-  vi.stubGlobal('document', { addEventListener: vi.fn() });
+  vi.stubGlobal('window', { setInterval, setTimeout, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   configureApiClient({ baseUrl: 'https://example.test', clientVersion: 'test', getAccessToken: async () => 'token', recoverSession: async () => false });
 });
 afterEach(() => {
