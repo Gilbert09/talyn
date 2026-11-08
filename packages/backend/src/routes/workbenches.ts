@@ -699,10 +699,9 @@ export function workbenchRoutes(): Router {
     if (!(await gate(req, res, workspaceId))) return;
     const user = assertUser(req);
     try {
-      // `source` and `namingText` are the service's own inputs, never a client's.
+      // `source` and `spaceId` are the service's own inputs, never a client's.
       const input: CreateWorkbenchServiceInput = { ...body, workspaceId };
       delete input.source;
-      delete input.namingText;
       delete input.spaceId;
       ok(res, await createWorkbench(input, { id: user.id, email: user.email }, sentAt));
     } catch (err) {

@@ -504,6 +504,14 @@ export interface CreateWorkbenchInput {
   name?: string;
   /** The first message of the first chat. */
   prompt?: string;
+  /**
+   * The text the session's name, branch and first chat title are made from,
+   * when it differs from `prompt`. The app sends it when the first message
+   * goes separately (with attachments), so the session is not named after a
+   * city. Slack sends it because its prompt starts with Talyn's own framing,
+   * which would name every branch the same.
+   */
+  namingText?: string;
   deviceId?: string;
   localPath?: string;
   /**

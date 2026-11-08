@@ -67,6 +67,7 @@ import {
   SANDBOX_WORK_ROOT,
 } from './sandboxRuntime.js';
 import { startScript, stopScript, stopAllScripts } from './scripts.js';
+import { startTitleFromQueue } from './title.js';
 import { checkpointWork, deleteSavedWork, promoteCheckpointToArchive, restoreWork, saveWork } from './workCheckpoint.js';
 import { archiveRestoreNote, archiveTooLargeMessage, recoveryWorkNote } from './workCheckpointScripts.js';
 import { talynMcpServerFor, unclaimedTalynMcpServer } from './talynMcp.js';
@@ -729,6 +730,9 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     await emitWorkbenchUpdated(await publicWorkbench(row));
     recordWorkbenchEvent(row, 'sandbox_created', `sandbox ${sandboxId}`);
     await meterWorkbenchAwake(row, { size: created.size });
+    // The box holds the agent's credentials now: the title need not wait for the clone and the setup.
+    const titled = row;
+    void startTitleFromQueue(titled).catch((err) => console.warn(`[workbench] early title for ${titled.id} failed:`, err));
 
     if (isWorkbenchDraining()) return;
     // A thread has no repository: no clone, setup, PR, diff or saved work.
