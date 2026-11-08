@@ -1027,6 +1027,25 @@ export function pickWorkbenchName(taken: Iterable<string>, random: () => number 
   }
 }
 
+/** Longest workbench name: the API's `^[a-z0-9][a-z0-9-]{0,62}$`. */
+export const WORKBENCH_NAME_MAX = 63;
+
+/**
+ * `name` when nobody in `taken` uses it, else the lowest free `name-2`,
+ * `name-3`, … The base is cut when the suffix would take the name past
+ * `WORKBENCH_NAME_MAX`.
+ */
+export function uniqueWorkbenchName(name: string, taken: Iterable<string>): string {
+  const used = new Set<string>();
+  for (const t of taken) used.add(t.trim().toLowerCase());
+  if (!used.has(name)) return name;
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}`;
+    const candidate = `${name.slice(0, WORKBENCH_NAME_MAX - suffix.length).replace(/-+$/, '')}${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 /** Longest name `workbenchNameFromTask` builds from the words, before a `-2` suffix. */
 export const WORKBENCH_TASK_NAME_MAX = 24;
 
@@ -1096,11 +1115,7 @@ export function workbenchNameFromTask(
     base = next;
   }
   if (!base) return pickWorkbenchName(used, random);
-  if (!used.has(base)) return base;
-  for (let n = 2; ; n++) {
-    const candidate = `${base}-${n}`;
-    if (!used.has(candidate)) return candidate;
-  }
+  return uniqueWorkbenchName(base, used);
 }
 
 /** Longest branch slug `workbenchBranchFromTask` builds, before the prefix and a `-2` suffix. */
