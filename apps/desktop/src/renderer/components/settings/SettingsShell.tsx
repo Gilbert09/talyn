@@ -73,7 +73,7 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
   shortcuts: 'keyboard hotkeys keys navigation',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
-  memory: 'notes session remember forget',
+  memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   skills: 'SKILL.md local repository workspace tools',
   mcpServers: 'model context protocol tools servers integrations',
   pullRequests: 'auto keep mergeable fix runs tasks defaults model notifications merge queue blocked labels human comments',

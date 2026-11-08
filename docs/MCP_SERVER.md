@@ -194,6 +194,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
 | `talyn_cancel_session_turn` | Stop the running turn of a chat. |
 | `talyn_resize_session` | Move a session to a sandbox of another `size` after its running turn. `continue_with` sends a message that starts the next turn on the new sandbox. `remember_for_repository` also sets the repository's size. From a session token: the session itself, or a session in its thread. |
+| `talyn_restart_session` | Restart a session on a fresh sandbox of the same size after its running turn. The new sandbox gets the workspace's current MCP servers, so a server connected after the session started becomes available. `continue_with` sends a message that starts the next turn on the new sandbox. From a session token: the session itself, or a session in its thread. |
 | `talyn_session_timing` | Show where a session's turns spent their time: tests, installs, builds, Docker and services, waits, git, file reads, other tool calls and model time. It also lists the slowest calls. Read-only. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_changes` | List changed files with line counts. |
 | `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. A sleeping sandbox answers from the copy that Talyn stored, or from GitHub when all the work is pushed. Pass `live` to wake the sandbox and read it now. |
@@ -213,6 +214,13 @@ From a thread, an entry applies to the thread unless `scope` is `workspace`.
 A session sees workspace entries, its repository's entries and its thread's entries.
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
+
+A memory review thread (source `memory_review`) sees every entry of its workspace.
+It writes a repository entry with `repository_id` and a thread entry with `thread_id`.
+Talyn starts this thread on the cadence in `settings.memoryReview` (`daily`, `weekly` or `monthly`), or when a person clicks "Review now".
+The thread merges entries that overlap and settles entries that disagree.
+The cadence is off by default. The sweep skips a period when fewer than two entries are live or no entry changed since the last review.
+The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 | Tool | What it does |
 | --- | --- |
@@ -313,9 +321,9 @@ is refused, because it undoes what a person chose to watch.
   the request waits (`settings.archiveAfterTurn`).
 - `talyn_cancel_session_turn`, `talyn_send_session_message`,
   `talyn_restore_session` and `talyn_retry_session` on itself are refused.
-- `talyn_set_session_account`, `talyn_resize_session`, `talyn_session_timing`
-  and `talyn_session_sandbox_status` work on the session itself, or on a session
-  in its thread.
+- `talyn_set_session_account`, `talyn_resize_session`, `talyn_restart_session`,
+  `talyn_session_timing` and `talyn_session_sandbox_status` work on the session
+  itself, or on a session in its thread.
 - The background job and wake-up tools work on the session itself only.
 - `talyn_close_pull_request` refuses the session's own pull request, and any
   pull request outside the session's repository. A thread has no repository,

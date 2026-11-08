@@ -558,13 +558,17 @@ export async function commitMove(
     settings?: Record<string, string>;
     /** The size the new box got. A resize waiting for exactly this size is done. */
     size?: string;
+    /** The restart request the move saw at its claim. The new box answers it, so it is done. */
+    restartRequestedAt?: string | null;
   },
 ): Promise<WorkbenchRow | null> {
   const added = { ...(to.fleetSandboxId ? { fleetSandboxId: to.fleetSandboxId } : {}), ...(to.settings ?? {}) };
   const current = sql`COALESCE(${workbenchesTable.settings}, '{}'::jsonb)`;
-  // Read in the same statement, so a resize asked for during the move stays.
-  const base = sql`CASE WHEN ${current} ->> 'resizeTo' = ${to.size ?? null}::text
+  // Read in the same statement, so a resize or a restart asked for during the move stays.
+  const resized = sql`CASE WHEN ${current} ->> 'resizeTo' = ${to.size ?? null}::text
     THEN ${current} - 'resizeTo' - 'resizeReason' ELSE ${current} END`;
+  const base = sql`CASE WHEN ${current} ->> 'restartRequestedAt' = ${to.restartRequestedAt ?? null}::text
+    THEN (${resized}) - 'restartRequestedAt' - 'restartReason' ELSE (${resized}) END`;
   const [row] = await db()
     .update(workbenchesTable)
     .set({
@@ -637,6 +641,29 @@ export async function clearPendingResize(id: string, size: string): Promise<Work
     .update(workbenchesTable)
     .set({ settings: sql`${workbenchesTable.settings} - 'resizeTo' - 'resizeReason'` })
     .where(and(eq(workbenchesTable.id, id), sql`${workbenchesTable.settings} ->> 'resizeTo' = ${size}::text`))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Ask for a restart on a fresh box at the next move. `reason` null removes an old reason. */
+export async function setPendingRestart(id: string, requestedAt: string, reason: string | null): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({
+      settings: sql`(COALESCE(${workbenchesTable.settings}, '{}'::jsonb) - 'restartReason')
+        || ${JSON.stringify({ restartRequestedAt: requestedAt, ...(reason ? { restartReason: reason } : {}) })}::jsonb`,
+    })
+    .where(eq(workbenchesTable.id, id))
+    .returning(WORKBENCH_COLUMNS);
+  return row ?? null;
+}
+
+/** Forget a waiting restart, only while it is still the request made at `requestedAt`: a newer one stays. */
+export async function clearPendingRestart(id: string, requestedAt: string): Promise<WorkbenchRow | null> {
+  const [row] = await db()
+    .update(workbenchesTable)
+    .set({ settings: sql`${workbenchesTable.settings} - 'restartRequestedAt' - 'restartReason'` })
+    .where(and(eq(workbenchesTable.id, id), sql`${workbenchesTable.settings} ->> 'restartRequestedAt' = ${requestedAt}::text`))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;
 }

@@ -46,6 +46,8 @@ import {
   codeReviewReviewersProblem,
   codeReviewSettingsPatch,
   normaliseBranchPrefix,
+  isMemoryReviewCadence,
+  MEMORY_REVIEW_CADENCES,
   normaliseAutoArchiveIdleDays,
   normaliseFleetSwitchAtPercent,
   resolveCodeReviewSettings,
@@ -512,6 +514,12 @@ export function workspaceRoutes(): Router {
       }
       if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
+      }
+      if (body.settings.memoryReview !== undefined && !isMemoryReviewCadence(body.settings.memoryReview)) {
+        return res.status(400).json({
+          success: false,
+          error: `settings.memoryReview must be one of: ${MEMORY_REVIEW_CADENCES.join(', ')}`,
+        });
       }
       if (body.settings.autoResumeOnLimit !== undefined && typeof body.settings.autoResumeOnLimit !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.autoResumeOnLimit must be true or false' });

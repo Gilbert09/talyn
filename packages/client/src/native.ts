@@ -171,6 +171,8 @@ import type {
   ListMemoryQuery,
   MemoryEntry,
   MemoryEntrySummary,
+  MemoryReviewRun,
+  MemoryReviewState,
   PutMemoryInput,
   PutMemoryResult,
   UpdateMemoryInput,
@@ -2339,6 +2341,9 @@ export const workbenches = {
   resize: (id: string, input: { size: import('@talyn/shared').SandboxSize; reason?: string; rememberForRepository?: boolean }) =>
     request<{ outcome: 'unchanged' | 'after_turn' | 'moving'; size: import('@talyn/shared').SandboxSize; rememberedForRepository: boolean; continued: boolean }>(
       'PUT', `/workbenches/${enc(id)}/sandbox-size`, input),
+  /** Restart the session on a fresh box of the same size, with the workspace's current MCP servers. The work moves with it; a running turn is never cut. */
+  restart: (id: string, input: { reason?: string } = {}) =>
+    request<{ outcome: 'after_turn' | 'restarting'; continued: boolean }>('POST', `/workbenches/${enc(id)}/restart`, input),
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
@@ -2376,6 +2381,12 @@ export const workbenches = {
     /** A soft delete. `restore` brings the entry back. */
     forget: (id: string) => request<MemoryEntrySummary>('DELETE', `/workbenches/memory/${enc(id)}`),
     restore: (id: string) => request<MemoryEntry>('POST', `/workbenches/memory/${enc(id)}/restore`),
+    /** Memory review: the cadence and the recent review threads. */
+    reviews: (workspaceId: string) =>
+      request<MemoryReviewState>('GET', `/workbenches/memory/reviews?workspaceId=${enc(workspaceId)}`),
+    /** "Review now": start a memory review thread at once. */
+    startReview: (workspaceId: string) =>
+      request<MemoryReviewRun>('POST', '/workbenches/memory/reviews', { workspaceId }),
   },
 
   // ---- Chats ----

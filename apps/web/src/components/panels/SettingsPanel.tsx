@@ -139,7 +139,7 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   slack: 'workspace bot emoji invite sessions channel',
   skills: 'SKILL.md local repository workspace tools',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
-  memory: 'notes session remember forget',
+  memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
   account: 'email sign out privacy analytics usage data session replays',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',

@@ -17,6 +17,10 @@ import type { McpCallContext } from './index.js';
  * repository; from a thread, to the thread. Every write or forget shows as a
  * card in the caller's transcript, so a person sees what the agent saved for
  * later sessions.
+ *
+ * A memory review thread (source `memory_review`) sees every entry of its
+ * workspace, and writes an entry in any scope when it names the target with
+ * `repository_id` or `thread_id`.
  */
 
 const FEATURE = 'workbenches' as const;
@@ -35,6 +39,8 @@ interface MemoryContext {
   threadId: string | null;
   /** The caller is a thread: its writes default to thread scope. */
   isThread: boolean;
+  /** The caller is a memory review thread: it sees every entry of the workspace. */
+  reviewer: boolean;
 }
 
 async function resolveContext(
@@ -51,15 +57,28 @@ async function resolveContext(
       throw new Error("From a session, memory is the session's own workspace.");
     }
     const repositoryId = str(args.repository_id);
-    if (repositoryId && repositoryId !== wb.repositoryId) throw new Error(SESSION_REPOSITORY_ONLY);
     const isThread = wb.kind === 'thread';
-    context = {
-      workspaceId: wb.workspaceId,
-      repositoryId: wb.repositoryId,
-      workbenchId: wb.id,
-      threadId: isThread ? wb.id : wb.threadId,
-      isThread,
-    };
+    if (isThread && wb.source?.kind === 'memory_review') {
+      // The target of a write. The memory route checks that it is in the workspace.
+      context = {
+        workspaceId: wb.workspaceId,
+        repositoryId: repositoryId ?? null,
+        workbenchId: wb.id,
+        threadId: str(args.thread_id) ?? null,
+        isThread,
+        reviewer: true,
+      };
+    } else {
+      if (repositoryId && repositoryId !== wb.repositoryId) throw new Error(SESSION_REPOSITORY_ONLY);
+      context = {
+        workspaceId: wb.workspaceId,
+        repositoryId: wb.repositoryId,
+        workbenchId: wb.id,
+        threadId: isThread ? wb.id : wb.threadId,
+        isThread,
+        reviewer: false,
+      };
+    }
   } else {
     context = {
       workspaceId: await resolveWorkspace(ownerId, args),
@@ -67,6 +86,7 @@ async function resolveContext(
       workbenchId: null,
       threadId: null,
       isThread: false,
+      reviewer: false,
     };
   }
   if (!(await sessionMemoryEnabled(context.workspaceId, ownerId))) throw new Error(OFF_MESSAGE);
@@ -76,7 +96,7 @@ async function resolveContext(
 /** Whether the calling session may see this entry: the workspace's, its repository's or its own thread's. */
 function visibleTo(context: MemoryContext, entry: MemoryEntrySummary): boolean {
   if (entry.workspaceId !== context.workspaceId) return false;
-  if (!context.workbenchId) return true;
+  if (!context.workbenchId || context.reviewer) return true;
   if (entry.scope === 'workspace') return true;
   if (entry.scope === 'repository') return entry.repositoryId === context.repositoryId;
   return Boolean(context.threadId) && entry.threadId === context.threadId;
@@ -94,6 +114,8 @@ const entryLine = (entry: MemoryEntrySummary) =>
 /** The list route's query for what this caller can see. */
 function listQuery(context: MemoryContext, extra: Record<string, string>): string {
   const params = new URLSearchParams({ workspaceId: context.workspaceId, ...extra });
+  // A reviewer's repository and thread are write targets, not a filter: it sees every entry.
+  if (context.reviewer) return params.toString();
   if (context.repositoryId) params.set('repositoryId', context.repositoryId);
   if (context.threadId) params.set('threadId', context.threadId);
   return params.toString();
@@ -160,6 +182,13 @@ async function resolveEntry(
 
 function readScope(args: Record<string, unknown>, context: MemoryContext): MemoryScope {
   const scope = str(args.scope);
+  if (context.reviewer) {
+    if (scope === undefined || scope === 'workspace') return 'workspace';
+    if (scope === 'repository' && !context.repositoryId) throw new Error('A repository entry needs repository_id.');
+    if (scope === 'thread' && !context.threadId) throw new Error('A thread entry needs thread_id.');
+    if (scope !== 'repository' && scope !== 'thread') throw new Error('scope must be "workspace", "repository" or "thread"');
+    return scope;
+  }
   if (scope === undefined) return context.isThread ? 'thread' : context.repositoryId ? 'repository' : 'workspace';
   if (scope !== 'workspace' && scope !== 'repository' && scope !== 'thread') {
     throw new Error('scope must be "workspace", "repository" or "thread"');
@@ -180,7 +209,15 @@ const memoryIdSchema = {
 const repositorySchema = {
   repository_id: {
     type: 'string',
-    description: "A user token: the repository to use. A session always uses its own repository.",
+    description:
+      'A user token: the repository to use. A session always uses its own repository. ' +
+      'A memory review thread: the repository of a repository entry it writes.',
+  },
+};
+const threadSchema = {
+  thread_id: {
+    type: 'string',
+    description: 'A memory review thread only: the thread of a thread entry it writes.',
   },
 };
 
@@ -191,6 +228,7 @@ export const MEMORY = [
     {
       ...workspaceSchema,
       ...repositorySchema,
+      ...threadSchema,
       name: { type: 'string', description: 'A short label, at most 64 characters. Unique in its scope.' },
       description: {
         type: 'string',
