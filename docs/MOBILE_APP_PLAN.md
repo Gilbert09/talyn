@@ -81,6 +81,51 @@ Keep new adapter defaults compatible with web, admin, desktop, and CLI.
 Add package subpath exports only if Metro evaluation proves they are needed.
 Do not solve mobile compatibility by copying REST methods into `apps/mobile`.
 
+### 2.1.1 Resolved transport adapters
+
+The native host imports `@talyn/client/native`.
+This subpath shares the REST methods and socket implementation with the existing package entry.
+Both entries have CJS and ESM exports.
+The native entry has no runtime import from `@talyn/shared`.
+This avoids evaluating its `croner` dependency.
+
+The existing `@talyn/client` entry keeps browser lifecycle events and browser helpers.
+The native entry excludes Blob uploads, attachment Blob downloads, admin response streaming, IndexedDB archives, and DOM Storage helpers.
+Native file and streaming adapters remain future work.
+
+`configureApiClient` accepts an optional `runtime` object:
+
+| Adapter | Resolved interface |
+| --- | --- |
+| Lifecycle and reachability | `lifecycle.getSnapshot()` returns `{ activity, reachability }`. Activity is `active` or `suspended`. Reachability is `online`, `offline`, or `unknown`. |
+| Host events | `lifecycle.subscribe(listener)` returns a disposal function. Emit `{ type: 'state', state }` for state changes. Emit `{ type: 'wake' }` for an explicit liveness check. |
+| Scheduling | `scheduler.now()` returns milliseconds. `scheduler.timeout(callback, delayMs)` and `scheduler.interval(callback, delayMs)` each return a cancellation function. |
+| Networking | `fetch` accepts the standard fetch arguments. `createWebSocket(url)` returns the narrow `ClientSocket` interface. Both default to host globals. |
+| Reconnect jitter | `reconnectJitter` is an optional fraction from zero to one. `random()` supplies a testable sample. Jitter only increases delays, within the 30-second cap. The default is zero. |
+
+The native host owns AppState and reachability subscriptions.
+Keep its snapshot current before emitting an event.
+Unknown reachability permits recovery; offline reachability blocks socket retries.
+Suspension closes the socket, cancels timers, and invalidates pending work.
+One transition back to a runnable state starts one recovery path.
+Repeated state events do not start duplicate recovery paths.
+A canceled REST retry rejects with `ClientInactiveError`; resume does not replay that request.
+
+Configure the client before binding account listeners or subscriptions.
+Configure it again when the account or backend changes, even if the token callback stays the same.
+Configuration changes cancel old recovery and clear socket subscriptions, presence, capabilities, filters, and event handlers.
+Bind the next account after configuration, then call `connect()`.
+`wsClient.reset()` clears socket state when configuration does not change.
+`disconnect()` stops transport work and removes host listeners; it retains subscriptions and event handlers for existing consumers.
+Use `dispose()` when discarding an additional `WebSocketClient` instance.
+
+`ApiNetworkError.reachability` is the authoritative network state.
+Its legacy boolean `online` stays source-compatible: true means that the network is not known to be offline.
+
+These adapters need no Expo shell changes.
+The shell PR and transport PR can land independently.
+Hermes networking and device lifecycle checks remain part of the mobile application validation.
+
 ### 2.2 Safe sharing boundary
 
 **Recommendation:** share TypeScript models, endpoint signatures, event parsers, and pure domain selectors.

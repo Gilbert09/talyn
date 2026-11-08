@@ -6,6 +6,7 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useWorkbenchStore } from '../../../stores/workbenches';
 import { SessionStateIcon } from '../WorkbenchBadges';
 import { sessionPr, sessionState } from '../../../lib/sessionState';
+import { useBackground } from '../../../stores/sessionBackground';
 import { isArchived } from '../workbenchSelectors';
 import { workbenchPlaceLabel } from '../../../lib/threads';
 
@@ -69,7 +70,8 @@ function RecentRow({ workbench, onOpen }: { workbench: Workbench; onOpen: () => 
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr));
+  const background = useBackground(workbench.id);
+  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr), false, background);
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   return (
     <button

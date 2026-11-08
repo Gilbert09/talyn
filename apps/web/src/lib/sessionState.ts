@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from './api';
 import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
@@ -23,8 +23,9 @@ export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | nu
 /**
  * One answer to "what is this session doing, and does it need me?", for the
  * sidebar row. In priority order: a failure, then live work, then a reply
- * that waits for you, then the pull request's state. A new pull request that
- * is the only unseen news (`prOnlyUnseen`) shows the PR mark, not the dot.
+ * that waits for you, then a running background job, then the pull request's
+ * state, then a scheduled wake-up. A new pull request that is the only unseen
+ * news (`prOnlyUnseen`) shows the PR mark, not the dot.
  *
  * The PR part reuses the header's next action, so the row and the header
  * always agree: conflicts and failing checks need you, a green PR is ready to
@@ -35,6 +36,7 @@ export type SessionStateKind =
   | 'starting'
   | 'working'
   | 'needs_reply'
+  | 'background_job'
   | 'pr_opened'
   | 'pr_attention'
   | 'ready_to_merge'
@@ -43,6 +45,7 @@ export type SessionStateKind =
   | 'merged'
   | 'closed'
   | 'unshipped'
+  | 'wakeup'
   | 'idle';
 
 export interface SessionState {
@@ -61,7 +64,8 @@ export function sessionState(
   chats: (Pick<WorkbenchChat, 'id' | 'status'> & { queuedMessages?: WorkbenchChat['queuedMessages'] })[],
   unread: Record<string, true>,
   pr: SessionPr | null,
-  prOnlyUnseen = false
+  prOnlyUnseen = false,
+  background?: Pick<WorkbenchBackground, 'jobs' | 'wakeups'> | null
 ): SessionState {
   if (workbench.status === 'error' || workbench.sandboxState === 'error') {
     return { kind: 'failed', label: 'Failed to start' };
@@ -82,6 +86,9 @@ export function sessionState(
     }
     return { kind: 'needs_reply', label: 'New reply' };
   }
+  if (background?.jobs.some((job) => job.status === 'running')) {
+    return { kind: 'background_job', label: 'Background job running' };
+  }
 
   if (pr) {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };
@@ -93,6 +100,9 @@ export function sessionState(
     if (next === 'fix_checks') return { kind: 'pr_waiting', label: `#${pr.number} open, checks are failing` };
     if (next === 'merge') return { kind: 'ready_to_merge', label: `#${pr.number} is ready to merge` };
     return { kind: 'pr_waiting', label: `#${pr.number} open, waiting on checks or review` };
+  }
+  if (background?.wakeups.some((wakeup) => wakeup.status === 'scheduled')) {
+    return { kind: 'wakeup', label: 'Wake-up scheduled' };
   }
   if ((workbench.diffStat?.files ?? 0) > 0 || (workbench.committedStats?.files ?? 0) > 0) {
     return { kind: 'unshipped', label: 'Changes with no pull request yet' };

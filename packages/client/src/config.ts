@@ -12,7 +12,11 @@
  * web app reads Vite `define` values and uses `localStorage`. Both inject
  * that here instead of this package importing either.
  */
+import { resolveRuntime, type ClientRuntime } from './runtime.js';
+
 export interface ApiClientConfig {
+  /** Optional host adapters. Native hosts must supply lifecycle and reachability. */
+  runtime?: ClientRuntime;
   /** Backend origin, e.g. `https://prod.talyn.dev`. No trailing slash. */
   baseUrl: string;
   /**
@@ -42,6 +46,16 @@ export interface ApiClientConfig {
 }
 
 let config: ApiClientConfig | null = null;
+const listeners = new Set<() => void>();
+
+export function onConfigChange(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function getRuntime() {
+  return resolveRuntime(getConfig().runtime);
+}
 
 /**
  * Must be called once, before any request. Both front ends do it at module
@@ -50,6 +64,7 @@ let config: ApiClientConfig | null = null;
  */
 export function configureApiClient(next: ApiClientConfig): void {
   config = { ...next, baseUrl: next.baseUrl.replace(/\/+$/, '') };
+  for (const listener of listeners) listener();
 }
 
 export function getConfig(): ApiClientConfig {

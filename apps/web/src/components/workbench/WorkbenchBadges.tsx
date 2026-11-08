@@ -7,6 +7,7 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Loader2,
+  Timer,
 } from 'lucide-react';
 import type { WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -61,8 +62,9 @@ export function PrPill({ number, state, draft }: { number: number; state: string
 /**
  * The sidebar row's state mark. Each state has its own shape as well as its
  * own colour, so the states are clear at a glance and without colour vision:
- * a spinner is work, a solid blue dot or an amber triangle needs you, a green
- * PR mark is open, a green tick is ready, a purple merge mark is done and a
+ * a spinner is work, a green timer is a background job that runs, a grey
+ * timer is a scheduled wake-up, a solid blue dot or an amber triangle needs
+ * you, a green PR mark is open, a green tick is ready, a purple merge mark is done and a
  * red closed mark was not merged. The PR marks follow GitHub's colours.
  */
 export function SessionStateIcon({ state }: { state: SessionState }) {
@@ -78,6 +80,8 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
       return <Loader2 className={cn(icon, 'animate-spin text-warning')} aria-label={label} />;
     case 'needs_reply':
       return <span className={cn(dot, 'bg-info')} aria-label={label} />;
+    case 'background_job':
+      return <Timer className={cn(icon, 'text-success')} aria-label={label} data-attr="session-state-background-job" />;
     case 'pr_opened':
       return <GitPullRequest className={cn(icon, 'text-success')} aria-label={label} data-attr="sidebar-workbench-pr-opened" />;
     case 'pr_attention':
@@ -94,6 +98,8 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
       return <GitPullRequestClosed className={cn(icon, 'text-destructive')} aria-label={label} />;
     case 'unshipped':
       return <span className={cn(dot, 'border-[1.5px] border-dashed border-muted-foreground')} aria-label={label} />;
+    case 'wakeup':
+      return <Timer className={cn(icon, 'text-muted-foreground')} aria-label={label} data-attr="session-state-wakeup" />;
     case 'idle':
     default:
       return <span className={cn(dot, 'bg-muted-foreground/50')} aria-label={label} />;
