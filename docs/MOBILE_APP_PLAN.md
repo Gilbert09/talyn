@@ -1,8 +1,46 @@
 # Native mobile client plan
 
-Status: approved plan; phases 1, 2, and 3 have implementation evidence below. Research date: **2026-11-08**.
+Status: approved plan; phases 1 through 4 have implementation evidence below. Research date: **2026-11-08**.
 Scope: production planning for iOS and Android in `Gilbert09/talyn`.
 The original research is preserved below. Implementation evidence records the current mobile foundation.
+
+## Phase 4 implementation evidence
+
+This phase adds durable mobile push delivery through Expo Push Service.
+It stacks on [#128](https://github.com/Gilbert09/talyn/pull/128), which must merge first.
+Earlier work is [#116](https://github.com/Gilbert09/talyn/pull/116),
+[#119](https://github.com/Gilbert09/talyn/pull/119), [#121](https://github.com/Gilbert09/talyn/pull/121),
+and [#126](https://github.com/Gilbert09/talyn/pull/126).
+
+- Shared version 1 contracts define installations, preferences, categories, quiet hours, receipts, and internal destinations.
+  Native client methods use the existing authenticated transport. Existing exports remain available.
+- Backend storage holds encrypted device tokens, fingerprints, preferences, an outbox, and audit events.
+  Several devices can belong to one account. Active token identities cannot move between accounts through registration.
+  Authenticated routes enforce ownership and current workspace access. Responses contain no provider token.
+- A durable transition journal records approved changes to authoritative session and PR state.
+  A bounded reconciliation worker converts journal entries into outbox events with deduplication.
+  This path covers webhook and poll updates without one notification for each unchanged poll or transcript token.
+- Dispatch checks current access, preferences, quiet hours, expiry, and installation status.
+  Leases allow crash recovery. Temporary failures use bounded retries.
+  Expo tickets and receipts have separate processing. A ticket does not prove delivery.
+  Permanent token errors disable the installation.
+- Alerts contain generic text. Data contains only the schema version, opaque event ID, category, and internal destination.
+  Sensitive previews remain reserved. Enabling that preference does not add private text.
+  Logs, audit events, and metric labels contain no tokens or private content.
+- Settings explains notification value before the operating system prompt.
+  Permission requests require an explicit action. Denial leaves product workflows available.
+  Settings includes category, quiet hour, timezone, and preview controls.
+  Registration requires authentication, a validated workspace, opt-in, and a physical device token.
+- Tap handling waits for authentication and workspace validation.
+  It resolves the event through the backend and fetches authoritative entity state before navigation.
+  Duplicate taps are deduplicated in memory. Payloads are not persisted.
+  Notification taps do not execute product mutations.
+
+See [mobile operations](MOBILE_PUSH_NOTIFICATIONS.md) for configuration, retention, schedules, and processor approval gates.
+See the [mobile README](../apps/mobile/README.md) for checks and physical-device procedures.
+Mocks and exports cannot prove operating system delivery, signed native permissions, or store acceptance.
+Expo processor approval, Apple privacy disclosures, and Google Data safety review remain activation gates.
+Release automation, beta operations, signing, and store submission remain **phase 5**.
 
 ## Phase 3 implementation evidence
 

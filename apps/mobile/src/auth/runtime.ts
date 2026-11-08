@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { createClient } from '@supabase/supabase-js';
-import { configureApiClient, users, workspaces, wsClient } from '@talyn/client/native';
+import { configureApiClient, mobileNotifications, pullRequests, users, workbenches, workspaces, wsClient } from '@talyn/client/native';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
@@ -12,6 +12,8 @@ import { createNativeLifecycle } from '../native/lifecycle';
 import { WorkspaceController } from '../workspaces/controller';
 import { clearIntent } from '../navigation/intents';
 import { WorkflowStore } from '../workflow/store';
+import { NotificationController } from '../notifications/controller';
+import { bindNativeNotifications, installationKey, notificationDevice } from '../notifications/native';
 import { AccountActions } from './account';
 import { installAuthCrypto } from './crypto';
 import { AuthController } from './controller';
@@ -46,6 +48,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     const oldUser = raw ? (JSON.parse(raw) as { user?: { id?: string } }).user?.id : null;
     wsClient.reset();
     await oldStorage.clearAuth();
+    if (oldUser) await SecureStore.deleteItemAsync(installationKey(previous, oldUser));
     if (oldUser) await AsyncStorage.removeItem(`talyn.workspace.${previous}.${encodeURIComponent(oldUser)}`);
   }
   assertCurrent();
@@ -84,10 +87,22 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     if (priorUser) clearIntent();
     wsClient.reset();
     bindClient();
-    return workspace.clear(priorUser);
+    return Promise.all([workspace.clear(priorUser), notifications?.clearLocal(priorUser)]).then(() => {});
   });
   rejectRefresh = () => { void auth.signOut(); };
   bindClient();
+  const notifications = new NotificationController(mobileNotifications, notificationDevice(config, namespace),
+    () => lifecycle.getSnapshot().reachability !== 'offline', async (destination) => {
+      if (destination.kind === 'pull_request') {
+        const item = await pullRequests.get(destination.entityId);
+        if (item.row.workspaceId !== destination.workspaceId) throw { status: 403 };
+      } else {
+        const item = await workbenches.get(destination.entityId);
+        if (item.workspaceId !== destination.workspaceId ||
+          (destination.kind === 'thread') !== (item.kind === 'thread')) throw { status: 403 };
+      }
+    });
+  const unbindNotifications = bindNativeNotifications(notifications);
   const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
     auth.authEvent(event, session);
   });
@@ -96,20 +111,35 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     auth.setActive(state.activity === 'active' && state.reachability !== 'offline');
   };
   const unbind = lifecycle.subscribe(active);
+  let pushActive = false;
+  const unbindPushLifecycle = lifecycle.subscribe(() => {
+    const state = lifecycle.getSnapshot();
+    const next = state.activity === 'active' && state.reachability !== 'offline';
+    if (next && !pushActive) { void notifications.refresh(); notifications.retryTap(); }
+    pushActive = next;
+  });
   active();
   const bindWorkflow = () => {
     const account = auth.getSnapshot();
     const selected = workspace.getSnapshot();
     workflow.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
       ? { environment: namespace, user: account.user.id, workspace: selected.selected } : null);
+    notifications.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+      ? { user: account.user.id, workspace: selected.selected } : null);
   };
   const unbindAuth = auth.subscribe(bindWorkflow);
   const unbindWorkspace = workspace.subscribe(bindWorkflow);
+  let signingOut: Promise<void> | null = null;
   return {
-    auth, workspace, lifecycle, workflow, account: new AccountActions(auth, users.wipeMe),
+    auth, workspace, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
+    signOut() {
+      signingOut ??= notifications.logout().finally(() => auth.signOut()).finally(() => { signingOut = null; });
+      return signingOut;
+    },
     async start() { await auth.restore(); active(); },
     dispose() {
       workflow.dispose(); unbindAuth(); unbindWorkspace();
+      notifications.dispose(); unbindNotifications(); unbindPushLifecycle();
       previousStorageDrain = storage.seal();
       auth.dispose();
       subscription.subscription.unsubscribe();

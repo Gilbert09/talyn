@@ -848,6 +848,20 @@
       "when": 1790900000041,
       "tag": "0121_workbench_resource_samples",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1790900000042,
+      "tag": "0120_mobile_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1790900000043,
+      "tag": "0121_mobile_notification_events",
+      "breakpoints": true
     }
   ]
 }

@@ -150,6 +150,7 @@ export * from './workbenchMemory.js';
 export * from './workbenchThread.js';
 export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';
+export * from './mobileNotifications.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
