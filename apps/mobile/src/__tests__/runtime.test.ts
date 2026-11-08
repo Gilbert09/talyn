@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { waitFor } from '@testing-library/react-native';
 import { createClient } from '@supabase/supabase-js';
-import { configureApiClient, wsClient } from '@talyn/client/native';
+import { configureApiClient, workspaces, wsClient } from '@talyn/client/native';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, type AppStateStatus } from 'react-native';
 
@@ -52,7 +52,8 @@ jest.mock('expo-crypto', () => {
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn(), dismissAuthSession: jest.fn() }));
 jest.mock('@supabase/supabase-js', () => ({ createClient: jest.fn(() => ({ auth: mockAuth })) }));
 jest.mock('@talyn/client/native', () => ({
-  configureApiClient: jest.fn(), wsClient: { reset: jest.fn() },
+  configureApiClient: jest.fn(), wsClient: { reset: jest.fn(), connect: jest.fn(async () => {}), on: jest.fn(() => () => {}),
+    subscribe: jest.fn(), unsubscribe: jest.fn(), setCapabilities: jest.fn() },
   users: { wipeMe: jest.fn() }, workspaces: { list: jest.fn(async () => [{ id: 'one', name: 'One' }]) },
 }));
 const config: MobileConfig = {
@@ -100,6 +101,20 @@ describe('mobile runtime binding', () => {
     mockNetworkListener({ isConnected: true, isInternetReachable: true });
     mockNetworkListener({ isConnected: true, isInternetReachable: true });
     await waitFor(() => expect(mockAuth.startAutoRefresh).toHaveBeenCalledTimes(1)); runtime.dispose();
+  });
+  it('binds workflow scope and clears drafts on workspace and auth changes', async () => {
+    const restored = { access_token: 'access', refresh_token: 'refresh', expires_in: 3600, token_type: 'bearer',
+      user: { id: 'alice', aud: 'authenticated', created_at: '', app_metadata: {}, user_metadata: {} } };
+    jest.mocked(mockAuth.getSession).mockResolvedValueOnce({ data: { session: restored }, error: null } as unknown as Awaited<ReturnType<typeof mockAuth.getSession>>);
+    jest.mocked(workspaces.list).mockResolvedValueOnce([{ id: 'one', name: 'One' }, { id: 'two', name: 'Two' }] as Awaited<ReturnType<typeof workspaces.list>>);
+    const runtime = await createMobileRuntime(config); await runtime.start(); await runtime.workspace.load('alice');
+    await runtime.workspace.select('one');
+    expect(runtime.workflow.getScope()).toMatchObject({ user: 'alice', workspace: 'one' });
+    runtime.workflow.updateLocal('chat-one', { draft: 'Private draft' });
+    await runtime.workspace.select('two'); expect(runtime.workflow.local('chat-one').draft).toBe('');
+    runtime.workflow.updateLocal('chat-two', { draft: 'Another draft' });
+    await runtime.auth.signOut(); expect(runtime.workflow.getScope()).toBeNull();
+    expect(runtime.workflow.local('chat-two').draft).toBe(''); runtime.dispose();
   });
   it('does not bind a runtime after setup was cancelled', async () => {
     const abort = new AbortController(); abort.abort();

@@ -1,6 +1,11 @@
 import { act, fireEvent, renderRouter, screen, testRouter } from 'expo-router/testing-library';
 
+import { router } from 'expo-router';
 import { Alert } from 'react-native';
+import { fixture } from './workflowFixtures';
+import { clearIntent, rememberIntent } from '../navigation/intents';
+
+let mockWorkflow = fixture();
 
 import type { AuthSnapshot } from '../auth/controller';
 import RootLayout from '../../app/_layout';
@@ -29,21 +34,30 @@ let mockNetwork = 'online';
 const mockSignIn = jest.fn();
 const mockSignOut = jest.fn();
 const mockDelete = jest.fn(async () => 'blocked');
-const mockWorkspace = { status: 'ready', choices: [{ id: 'one', name: 'One' }], selected: 'one' };
+const mockWorkspace: { status: string; choices: { id: string; name: string }[]; selected: string | null } = {
+  status: 'ready', choices: [{ id: 'one', name: 'One' }], selected: 'one',
+};
+const mockSelectWorkspace = jest.fn(async (id: string) => { mockWorkspace.selected = id; });
 jest.mock('../auth/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
   useAuth: () => mockAuth,
   useNetwork: () => mockNetwork,
   useWorkspace: () => mockWorkspace,
   useMobileRuntime: () => ({
+    workflow: mockWorkflow.store,
     auth: { signIn: mockSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
-    account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: jest.fn(async () => {}) },
+    account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: mockSelectWorkspace },
   }),
 }));
 beforeEach(() => {
+  clearIntent();
+  mockWorkflow.store.dispose(); mockWorkflow = fixture();
   mockAuth = { status: 'signedIn', user: { id: 'alice', email: 'alice@example.com' }, issue: null };
   mockNetwork = 'online';
+  mockWorkspace.selected = 'one';
 });
+
+afterEach(() => { mockWorkflow.store.dispose(); });
 
 const routes = {
   _layout: RootLayout,
@@ -82,17 +96,45 @@ describe('native shell', () => {
   });
 
   it.each([
-    ['/sessions', 'Sessions', 'Open example session', '/sessions/example-session', 'Example session'],
-    ['/threads', 'Threads', 'Open example thread', '/threads/example-thread', 'Example thread'],
-    ['/attention', 'Attention', 'Open example pull request', '/attention/example-pr', 'Example pull request'],
+    ['/sessions', 'Sessions', 'Current work', '/sessions/session-one', 'Current work'],
+    ['/threads', 'Threads', 'Planning work', '/threads/thread-one', 'Planning work'],
+    ['/attention', 'Attention', 'Review current work', '/attention/pr-one', 'Review current work'],
   ])('opens a detail from %s', async (url, heading, label, destination, detailHeading) => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen.getByRole('header', { name: heading })).toBeVisible();
-    await fireEvent.press(screen.getByRole('link', { name: label }));
+    await fireEvent.press(await screen.findByRole('link', { name: new RegExp(label) }));
     expect(screen).toHavePathname(destination);
-    expect(screen.getByRole('header', { name: detailHeading })).toBeVisible();
+    expect(await screen.findByRole('header', { name: detailHeading })).toBeVisible();
     await testRouter.back(url);
     expect(screen.getByRole('header', { name: heading })).toBeVisible();
+  });
+
+  it('restores a cold session link after authentication', async () => {
+    rememberIntent('/sessions/session-one');
+    mockAuth = { status: 'signedOut', user: null, issue: null };
+    await renderRouter(routes, { initialUrl: '/sessions/session-one' });
+    expect(screen.getByRole('header', { name: 'Sign in to Talyn' })).toBeVisible();
+    mockAuth = { status: 'signedIn', user: { id: 'alice' }, issue: null };
+    await act(async () => router.replace('/'));
+    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    expect(screen).toHavePathname('/sessions/session-one');
+  });
+
+  it('fetches current authorized state for a warm pull request link', async () => {
+    await renderRouter(routes, { initialUrl: '/sessions' });
+    await act(async () => router.push('/attention/pr-one'));
+    expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible();
+    expect(mockWorkflow.api.pullRequests.get).toHaveBeenCalledWith('pr-one');
+  });
+
+  it('waits for workspace selection before it fetches a pending detail', async () => {
+    mockWorkspace.selected = null;
+    await renderRouter(routes, { initialUrl: '/sessions/session-one' });
+    expect(screen.getByRole('header', { name: 'Choose a workspace' })).toBeVisible();
+    expect(mockWorkflow.api.workbenches.get).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Select workspace One' }));
+    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    expect(screen).toHavePathname('/sessions/session-one');
   });
 
   it('shows account details and accessible account actions', async () => {
@@ -104,13 +146,13 @@ describe('native shell', () => {
   });
 
   it.each([
-    ['/sessions/linked-session', 'Session: linked-session'],
-    ['/threads/linked-thread', 'Thread: linked-thread'],
-    ['/attention/linked-pr', 'Pull request: linked-pr'],
+    ['/sessions/linked-session', 'Current work'],
+    ['/threads/linked-thread', 'Planning work'],
+    ['/attention/linked-pr', 'Review current work'],
   ])('opens the detail URL %s', async (url, label) => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen).toHavePathname(url);
-    expect(screen.getByText(label)).toBeVisible();
+    expect(await screen.findByRole('header', { name: label })).toBeVisible();
   });
 });
 

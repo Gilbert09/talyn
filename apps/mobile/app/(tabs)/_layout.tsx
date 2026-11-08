@@ -1,15 +1,19 @@
 import { Redirect, usePathname } from 'expo-router';
+import { NativeTabs } from 'expo-router/native-tabs';
 
+import { rememberIntent } from '../../src/navigation/intents';
 import { useWorkspace } from '../../src/auth/AuthProvider';
 
-import { NativeTabs } from 'expo-router/native-tabs';
 
 export default function TabsLayout() {
   const workspace = useWorkspace();
   const pathname = usePathname();
-  if (!pathname.startsWith('/settings') && !workspace.selected) return <Redirect href="/workspaces" />;
+  if (!pathname.startsWith('/settings') && !workspace.selected) {
+    rememberIntent(pathname);
+    return <Redirect href="/workspaces" />;
+  }
   return (
-    <NativeTabs>
+    <NativeTabs key={workspace.selected}>
       <NativeTabs.Trigger name="sessions" accessibilityLabel="Sessions">
         <NativeTabs.Trigger.Label>Sessions</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="terminal" md="terminal" />

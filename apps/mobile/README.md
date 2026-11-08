@@ -1,9 +1,10 @@
-# Talyn mobile foundation
+# Talyn mobile MVP
 
-This workspace adds native GitHub sign-in, workspace selection, and account settings for iOS and Android.
-Sessions, Threads, and Attention still show examples. Product workflows and push notifications will follow in later phases.
+The app supports GitHub sign-in, workspace selection, conversations, and pull request status on iOS and Android.
+Sessions, Threads, and Attention use the authenticated native client. Push notifications remain phase 4.
 See [the mobile plan](../../docs/MOBILE_APP_PLAN.md), [#116](https://github.com/Gilbert09/talyn/pull/116),
-[#119](https://github.com/Gilbert09/talyn/pull/119), and [#121](https://github.com/Gilbert09/talyn/pull/121).
+[#119](https://github.com/Gilbert09/talyn/pull/119), [#121](https://github.com/Gilbert09/talyn/pull/121),
+and [#126](https://github.com/Gilbert09/talyn/pull/126).
 
 ## Local setup
 
@@ -195,3 +196,149 @@ Existing web and desktop auth tests must also pass before review.
 
 No physical device, simulator, emulator, live OAuth account, universal-link association, signed archive, or store review was tested in this sandbox.
 Use the native preview to inspect sign-in, workspace selection, and Settings after test configuration is supplied.
+
+## Implemented workflow
+
+The native tabs remain Sessions, Threads, Attention, and Settings.
+Lists show the selected workspace. Pull-to-refresh uses authoritative REST snapshots.
+Session and thread lists show scope, status, latest activity, and supplied text response gates.
+The contract supplies no shared unread marker. The app does not invent one.
+Thread details show the conversation, child sessions, and supplied pull request links.
+Session details show chat selection, readiness, status, transcript history, and related work.
+Model, effort, and plan mode are shown as current values.
+The app does not offer capability choices without a contract that validates available choices for that session.
+
+Attention filters existing PR rows for review requests, human gates, and authored failures.
+The list can also show all open pull requests.
+PR details show review, CI, mergeability, stack, session relation, and queue history.
+Missing provider details remain explicit. Unknown values remain Unknown within their status domain.
+The queue and timeline are read only.
+External websites require confirmation. Only HTTP and HTTPS URLs without credentials are allowed.
+Rich reviews use the external website.
+
+The composer sends text to existing chats. It sends no attachments or unsupported gate actions.
+It requires a confirmed connection and current authorized session state.
+Sending, Queued on server, Sent, Failed, and Delivery unknown have separate labels.
+An acknowledgement records the server response. It does not prove that the agent completed the message.
+A queued acknowledgement cannot later be correlated without a server message identifier.
+The app shows the current server queue separately.
+
+A send has a 30-second local deadline. A timeout or transport failure makes delivery unknown.
+The underlying request can still reach the server after this deadline.
+The app refreshes transcript history and the server queue before it offers manual resend.
+Successful reconciliation does not change unknown delivery to Sent.
+Manual resend requires confirmation because the server can receive a duplicate.
+Transcript text is never used to infer delivery. Offline messages are never queued on the device.
+
+## Memory and recovery
+
+`src/workflow/store.ts` is the narrow server-state owner. No extra cache library or persistence adapter is needed.
+It coalesces reads, tracks visible resources, and rejects late responses after a scope change or deletion.
+Every cache key includes schema version, environment namespace, authenticated user, workspace, entity, and identifier.
+The namespace includes the configured origins and callback.
+Auth and workspace changes clear snapshots, delivery state, selection, reading positions, and drafts.
+Account deletion uses the same boundary cleanup.
+Navigation and background resume retain drafts within the same account and workspace.
+Process restarts discard all workflow content.
+Only phase 2 auth values and the workspace identifier use persistent storage.
+
+The cache retains at most 32 inactive or active resources under normal navigation.
+Active resources and pending requests are protected from eviction.
+Lists use full endpoint snapshots because the current list methods expose no paging cursor.
+The app does not simulate pagination by slicing those responses.
+FlatList virtualizes sessions, PRs, child sessions, queue rows, and transcripts.
+A transcript retains at most 1200 events and approximately 2 MB of serialized UTF-16 content.
+Each displayed text block is limited to 16000 characters. Code uses selectable chunks of at most 4000 characters.
+A partial history window has explicit labels and controls for older and latest history.
+Titles and list data still have the size of the server snapshot. Measure large accounts before release.
+
+REST establishes transcript cursors. Socket events are deduplicated by chat and sequence.
+Missing ranges are recovered with forward REST history. Older history uses the supported backward cursor.
+Each recovery reads at most four forward pages of 200 events after its initial page.
+A larger backlog remains stale until another refresh. Recovery never loops without a bound.
+The shared transport retains its existing single GET transport retry and 401 recovery.
+The workflow adds no automatic read retry loop or message retry.
+Socket invalidations are coalesced over 250 milliseconds.
+Only watched resources with pending invalidation need recovery.
+Suspension or loss of connectivity marks visible snapshots stale.
+Foreground resume and socket restoration share that recovery batch.
+The shared client alone reconnects and restores subscriptions, including the threads capability.
+Non-replayable socket notifications are not treated as durable history.
+
+Detail routes fetch current authorized state before they render cached product content.
+Cold destinations survive sign-in and workspace selection in memory.
+Warm destinations use the same authorization path. Wrong-workspace, missing, and inaccessible items show recovery actions.
+The app does not automatically select a workspace from an untrusted entity link.
+
+## Workflow checks
+
+Run these commands from the repository root:
+
+```sh
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts
+npm run mobile:build:packages
+npm run mobile:check:graph
+npm run mobile:expo:check
+npm run mobile:doctor
+npm run mobile:lint
+npm run mobile:typecheck
+npm run mobile:test
+npm test -w @talyn/client
+npx vitest run packages/shared/tests/transcriptInterruptions.test.ts packages/shared/tests/transcriptPullRequest.test.ts
+npm run lint
+npm run typecheck
+npm run mobile:export:smoke
+git diff --check
+```
+
+The Expo export command creates separate iOS and Android Hermes bundles.
+Run the existing browser regressions:
+
+```sh
+npm test -w @talyn/web -- src/__tests__/wsConnectRace.test.ts src/__tests__/wsHeartbeat.test.ts src/__tests__/wsRejectionBackoff.test.ts src/__tests__/terminalDockSocket.test.tsx src/__tests__/posthogAuthMethod.test.tsx src/__tests__/workbenchTranscript.test.tsx
+```
+
+Run the existing desktop transport, auth, and transcript regressions:
+
+```sh
+npm test -w @talyn/desktop -- --runInBand src/__tests__/api401Recovery.test.ts src/__tests__/apiNetworkError.test.ts src/__tests__/authStorage.test.ts src/__tests__/authStorageAdapter.test.ts src/__tests__/posthogAuthMethod.test.tsx src/__tests__/presenceHeartbeat.test.tsx src/__tests__/workbenchTranscript.test.tsx
+```
+
+Desktop and web use the shared socket implementation. The client suite covers that implementation and its browser lifecycle.
+These selected tests need no database or Docker stack.
+The mobile fixtures include 10000 sessions and 10000 transcript events.
+Component tests assert that fewer than 50 list or transcript rows render from those fixtures.
+They establish a rendering bound in the test host. They do not measure device frame rate or memory.
+
+## Physical-device and performance checks
+
+No physical-device or live-backend workflow result is claimed.
+Use the native preview with configured test services to inspect all four tabs and detail views.
+Complete these checks on signed iOS and Android development builds before beta.
+Use the minimum supported OS versions, a small phone, and a tablet or large Android window.
+Use authorized test accounts supplied through the normal sign-in flow. Do not add credentials to fixtures.
+
+| Check | Procedure and evidence to record |
+| --- | --- |
+| Cold start | Force-stop the app. Record launch-to-interactive time for ten starts. Include auth restoration and workspace validation. |
+| List load | Record request start to first readable row. Use small and large workspaces. Record median and p95. |
+| Scroll | Record platform frame traces during a 60-second list and transcript scroll. Include streaming output and rotation. |
+| Memory | Record native resident memory before and after ten detail visits, transcript paging, resume, and workspace changes. Check retained views. |
+| Message latency | Record send press, server acknowledgement, queue entry, and first response separately. Test network loss after send. |
+| Recovery | Suspend during streaming. Drop socket events. Resume online and offline. Check cursors, stale labels, queue state, and one reconnect. |
+| Account boundaries | Switch workspace and account during reads and sends. Revoke access. Delete an item. Check data and draft cleanup. |
+| Accessibility | Use VoiceOver and TalkBack on tabs, lists, transcript, composer, links, errors, stale labels, and refresh controls. |
+| Adaptation | Test 200 percent text, RTL, dark mode, increased contrast, reduced motion, external keyboards, safe areas, and keyboard insets. |
+| Reading position | Rotate and resize while reading older history. Switch chats and tabs. Check the reading anchor and draft. |
+| Deep links | Test cold and warm session, thread, and PR links through sign-in and workspace selection. Test wrong-workspace and deleted targets. |
+
+New controls have 48-point minimum targets. Native text retains platform scaling and selectable code.
+Status uses words. Streaming rows have no live announcements. Delivery changes use a polite live region.
+Navigation and scroll updates use no custom animation.
+The transcript follows new output only near its end. Jump to latest restores that mode.
+Device tests must confirm screen-reader focus and reading position during streamed updates.
+The test host cannot prove native accessibility, keyboard behavior, universal links, performance, or app store acceptance.
+
+Push notifications, device registration, notification preferences, and workers remain phase 4.
+Signed release archives, universal-link association, privacy disclosures, store operations, and review remain release gates.
+The phase 2 Apple login and deletion-completion gates remain open.

@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { Button, View } from 'react-native';
 
+import { consumeIntent } from '../src/navigation/intents';
 import { useAuth, useMobileRuntime, useNetwork, useWorkspace } from '../src/auth/AuthProvider';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, ShellText } from '../src/components/ShellScreen';
@@ -19,7 +20,7 @@ export default function WorkspacesScreen() {
     {state.status === 'ready' && !state.choices.length ? <ShellText>No workspaces are available. Open Talyn on the web to set up a workspace.</ShellText> : null}
     {state.choices.map((choice) => <View key={choice.id}><Button title={choice.name} accessibilityLabel={`Select workspace ${choice.name}`}
       disabled={offline} onPress={() => { void workspace.select(choice.id).then(() => {
-        if (workspace.getSnapshot().selected === choice.id) router.replace('/sessions');
+        if (workspace.getSnapshot().selected === choice.id) router.replace(consumeIntent() ?? '/sessions');
       }); }} /></View>)}
     <Button title="Account settings" onPress={() => router.push('/settings')} />
     <Button title="Sign out" onPress={() => { void controller.signOut(); }} />

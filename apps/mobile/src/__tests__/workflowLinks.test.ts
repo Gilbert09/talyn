@@ -1,0 +1,33 @@
+import { redirectSystemPath } from '../../app/+native-intent';
+import { clearIntent, completeIntent, consumeIntent, peekIntent, productPath, rememberIntent } from '../navigation/intents';
+
+afterEach(clearIntent);
+describe('product deep links in memory', () => {
+  it.each([
+    ['/sessions/session-one', '/sessions/session-one'],
+    ['talyn-mobile-development://threads/thread-one', '/threads/thread-one'],
+    ['https://mobile.example.test/attention/pr-one', '/attention/pr-one'],
+  ])('normalizes %s without retaining query data', (url, expected) => {
+    expect(productPath(`${url}?ignored=private`)).toBe(expected);
+    expect(redirectSystemPath({ path: url, initial: true })).toBe(expected);
+  });
+  it.each(['/sessions', '/sessions/id/extra', '/sessions/a%2fb', '/threads/a%5cb', '/settings/admin', 'not a link'])('rejects unsupported product path %s', (path) => {
+    expect(productPath(path)).toBeNull();
+  });
+  it('retains one cold intent across authentication and workspace selection', () => {
+    rememberIntent('/sessions/session-one'); expect(peekIntent()).toBe('/sessions/session-one');
+    expect(consumeIntent()).toBe('/sessions/session-one'); expect(consumeIntent()).toBeNull();
+  });
+  it('replaces a pending warm intent and clears it at an account boundary', () => {
+    rememberIntent('/threads/thread-one'); rememberIntent('/attention/pr-one');
+    expect(peekIntent()).toBe('/attention/pr-one'); clearIntent(); expect(consumeIntent()).toBeNull();
+  });
+  it('clears a warm destination only after its authorized detail opens', () => {
+    rememberIntent('/sessions/session-one'); completeIntent('/threads/thread-one');
+    expect(peekIntent()).toBe('/sessions/session-one'); completeIntent('/sessions/session-one'); expect(peekIntent()).toBeNull();
+  });
+  it('does not store authentication parameters as a product intent', () => {
+    redirectSystemPath({ path: 'talyn-mobile-development://auth/callback?code=test-code', initial: false });
+    expect(peekIntent()).toBeNull();
+  });
+});

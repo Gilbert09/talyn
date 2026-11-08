@@ -4,6 +4,7 @@ import { Button, Linking } from 'react-native';
 
 import { ShellScreen } from '../components/ShellScreen';
 import { Status } from '../components/AuthControls';
+import { rememberIntent } from '../navigation/intents';
 import type { MobileConfig } from '../config';
 import { listenForCallbacks, receiveCallback } from './callback';
 import { createMobileRuntime, type MobileRuntime } from './runtime';
@@ -40,6 +41,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const initial = await Linking.getInitialURL();
       if (disposed) return;
       if (initial && isAuthLink(initial)) receiveCallback(initial);
+      else if (initial) rememberIntent(initial);
       setRuntime(created);
     }).catch(() => {
       current?.dispose();
