@@ -4,6 +4,7 @@ import { mcpServersOffered, privateRoutesOffered, workbenchDisplayName, workbenc
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
+import { useBackground } from '../stores/sessionBackground';
 import { api } from '../lib/api';
 import { archivedAtOf, relativeTime } from '../pages/HistoryView';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
@@ -240,7 +241,8 @@ function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onS
   const pr = usePullRequestStore((s) =>
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
-  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr));
+  const background = useBackground(workbench.id);
+  const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr), false, background);
 
   return (
     <CommandItem

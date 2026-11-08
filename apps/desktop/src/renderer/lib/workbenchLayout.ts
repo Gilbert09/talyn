@@ -6,9 +6,9 @@
  * instead of drawing a 0px panel.
  */
 
-export type GitPanelTab = 'files' | 'changes' | 'pr' | 'sandbox';
+export type GitPanelTab = 'files' | 'changes' | 'pr' | 'sandbox' | 'background';
 
-export const GIT_PANEL_TABS: readonly GitPanelTab[] = ['files', 'changes', 'pr', 'sandbox'];
+export const GIT_PANEL_TABS: readonly GitPanelTab[] = ['files', 'changes', 'pr', 'sandbox', 'background'];
 
 export const GIT_PANEL_MIN_WIDTH = 280;
 export const GIT_PANEL_MAX_WIDTH = 720;

@@ -14,18 +14,28 @@ import {
   type WorkbenchQueuedMessage,
   type WorkbenchTodo,
   workbenchQueuesMessages,
+  messageTriggerText,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { wakeWorkbench } from '../../lib/wakeWorkbench';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
-import { CLAUDE_HEADLESS_SLASH_COMMANDS, fuzzyMatchPaths, sendFailureText, slashCommandsFrom } from '../../lib/workbenchFormat';
+import {
+  CLAUDE_HEADLESS_SLASH_COMMANDS,
+  fuzzyMatchPaths,
+  knownSlashCommandDescription,
+  sendFailureText,
+  slashCommandFiles,
+} from '../../lib/workbenchFormat';
+import { composerSettingsLinks, matchComposerLinks } from '../../lib/composerLinks';
+import { useNavigationStore } from '../../stores/navigation';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createChatTab } from './ChatTabs';
+import { useSlashCommandFileDescriptions } from './useSlashCommandFileDescriptions';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
 import { isThread, threadMentions } from '../../lib/threads';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -35,6 +45,8 @@ import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './us
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { SessionUsageNotice } from './SessionUsageNotice';
 import { promptRefusal, useIsWorkbenchOwner } from '../../lib/spaces';
+import { BackgroundChips } from './BackgroundChips';
+import { WakeLaterPopover } from './WakeLaterPopover';
 
 export function Composer({
   workbench,
@@ -67,6 +79,8 @@ export function Composer({
   const thread = isThread(workbench);
   const repositories = useWorkspaceStore((s) => s.repositories);
   const threadSessions = useThreadChildren(workbench.id);
+  const features = useWorkspaceStore((s) => s.features);
+  const navigate = useNavigationStore((s) => s.navigate);
 
   const agent = chat?.agent ?? workbench.agent;
   const model = chat?.model ?? defaultModelFor(agent);
@@ -130,11 +144,14 @@ export function Composer({
     [mentionOptions],
   );
 
+  const commandFiles = useMemo(() => slashCommandFiles(paths ?? []), [paths]);
+  const fileDescriptions = useSlashCommandFileDescriptions(ops, workbench.id, commandFiles, trigger?.kind === 'slash');
+
   const items = useMemo(() => {
     if (!trigger) return [];
     if (mentionOptions) return mentionOptions.map((m) => m.value);
     if (trigger.kind === 'mention') return fuzzyMatchPaths(trigger.query, paths ?? []);
-    const fileCommands = slashCommandsFrom(paths ?? []);
+    const fileCommands = Object.keys(commandFiles).sort();
     const commands =
       agent === 'codex'
         ? fileCommands
@@ -144,7 +161,23 @@ export function Composer({
       .filter((c) => c.toLowerCase().includes(q))
       .sort((a, b) => Number(b.toLowerCase().startsWith(q)) - Number(a.toLowerCase().startsWith(q)))
       .slice(0, 20);
-  }, [trigger, paths, slashCommands, agent, mentionOptions]);
+  }, [trigger, commandFiles, slashCommands, agent, mentionOptions]);
+
+  const descriptions = useMemo(() => {
+    if (trigger?.kind !== 'slash') return undefined;
+    const out: Record<string, string> = {};
+    for (const item of items) {
+      const description = fileDescriptions[item] ?? knownSlashCommandDescription(item);
+      if (description) out[item] = description;
+    }
+    return out;
+  }, [trigger, items, fileDescriptions]);
+
+  const links = useMemo(
+    () => (trigger?.kind === 'slash' ? matchComposerLinks(composerSettingsLinks(features), trigger.query) : []),
+    [trigger, features],
+  );
+  const optionCount = items.length + links.length;
 
   const updateTrigger = (text: string, caret: number) => {
     const next = findTrigger(text, caret);
@@ -165,6 +198,15 @@ export function Composer({
         el.setSelectionRange(caret, caret);
       }
     });
+  };
+
+  const pickLink = (id: string) => {
+    const link = links.find((l) => l.id === id);
+    if (!trigger || !link) return;
+    setDraft(draftKey, draft.slice(0, trigger.start) + draft.slice(trigger.end));
+    setTrigger(null);
+    trackEvent('composer_settings_link_opened', { link: id });
+    navigate(link.route);
   };
 
   const patchChat = async (patch: { agent?: WorkbenchAgent; model?: string; effort?: WorkbenchEffort | null; planMode?: boolean }) => {
@@ -260,20 +302,21 @@ export function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (trigger && (items.length > 0 || e.key === 'Escape')) {
+    if (trigger && (optionCount > 0 || e.key === 'Escape')) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActive((i) => (i + 1) % Math.max(1, items.length));
+        setActive((i) => (i + 1) % Math.max(1, optionCount));
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setActive((i) => (i - 1 + items.length) % Math.max(1, items.length));
+        setActive((i) => (i - 1 + optionCount) % Math.max(1, optionCount));
         return;
       }
-      if ((e.key === 'Enter' || e.key === 'Tab') && items[active]) {
+      if ((e.key === 'Enter' || e.key === 'Tab') && active < optionCount) {
         e.preventDefault();
-        pick(items[active]);
+        if (active < items.length) pick(items[active]);
+        else pickLink(links[active - items.length].id);
         return;
       }
       if (e.key === 'Escape') {
@@ -299,6 +342,7 @@ export function Composer({
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
+      <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (
@@ -313,10 +357,10 @@ export function Composer({
               <span className="shrink-0 text-[10px] uppercase tracking-wide">{m.origin === 'talyn' ? 'From Talyn' : index === 0 && waitText ? 'Waiting' : 'Queued'}</span>
               {index === 0 && waitText ? (
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{m.text}</span>
+                  <span className="block truncate">{m.trigger ? messageTriggerText(m.trigger) : m.text}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">{waitText}</span>
                 </span>
-              ) : <span className="min-w-0 flex-1 truncate">{m.text}</span>}
+              ) : <span className="min-w-0 flex-1 truncate">{m.trigger ? messageTriggerText(m.trigger) : m.text}</span>}
               {ops.canRemoveQueued && chat && (
                 <button
                   type="button"
@@ -358,6 +402,9 @@ export function Composer({
             onPick={pick}
             onHover={setActive}
             mentions={mentionSource}
+            descriptions={descriptions}
+            links={links}
+            onPickLink={pickLink}
           />
         )}
         <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
@@ -410,6 +457,7 @@ export function Composer({
             disabled={!owner || !chat || Boolean(ops.unavailable)}
           />
           <TodoChip todos={todos} />
+          {owner && chat && <WakeLaterPopover workbenchId={workbench.id} chatId={chat.id} />}
           <div className="flex-1" />
           <ContextMeter usage={contextUsage} />
           {running && owner ? (

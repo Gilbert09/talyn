@@ -2,7 +2,7 @@
 
 List endpoints use cursors. Two kinds of list exist:
 
-- Object lists: workspaces, repositories and sessions. They use `limit` and `cursor`.
+- Object lists, for example workspaces, repositories and sessions. They use `limit` and `cursor`.
 - The event list for a chat. It uses `after`, `before` and `limit`. See [Event pages](#event-pages).
 
 ## Object lists
@@ -11,7 +11,15 @@ These endpoints return an object list:
 
 - `GET /workspaces`
 - `GET /repositories`
+- `GET /teams`
+- `GET /spaces`
+- `GET /spaces/{id}/sessions`
 - `GET /sessions`
+- `GET /sessions/{id}/sessions`
+- `GET /pull-requests`
+- `GET /memories`
+- `GET /webhooks`
+- `GET /webhooks/{id}/deliveries`
 
 The list has this shape.
 
@@ -29,6 +37,14 @@ The list has this shape.
 | `data` | The items of this page. |
 | `has_more` | `true` if more items exist. |
 | `next_cursor` | Pass this value as `cursor` to get the next page. `null` on the last page. |
+
+`GET /spaces/{id}/sessions` also has `hidden_count`. It counts the sessions on this page that you cannot see.
+
+### Lists with one page
+
+Some lists are never paged. They take no `limit` or `cursor`. `has_more` is `false` and `next_cursor` is `null`. Examples are `GET /merge-queue`, `GET /pull-requests/{id}/code-reviews`, `GET /webhook-event-types`, `GET /sessions/{id}/scripts`, `GET /sessions/{id}/previews`, `GET /chats/{id}/queue` and `GET /chats/{id}/checkpoints`.
+
+The history lists `GET /pull-requests/{id}/merge-queue/events` and `GET /code-reviews/{id}/events` have only `object` and `data`. They give the newest events first: at most 100 merge-queue events, or 200 code review events.
 
 ### Order
 

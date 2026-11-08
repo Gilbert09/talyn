@@ -55,6 +55,8 @@ New codes can appear in `v1`. Handle a code that you do not know by its `type` o
 | 403 | `insufficient_scope` | The token lacks a scope. The body has `required_scope`. | Create a token with that scope. |
 | 403 | `public_api_unavailable` | The API is not on for the account during early access. | Ask Talyn for access. |
 | 403 | `workbenches_unavailable` | Sessions are not on for the account. | Ask Talyn for access. |
+| 403 | `spaces_unavailable` | The `spaces` feature is not on for the account. Team and space endpoints need it. | Ask Talyn for access. |
+| 403 | `fleet_not_allowed` | The workspace cannot use Talyn Fleet, so a sandbox cannot start. | Read `GET /workspaces/{id}/readiness`. |
 
 ### Bad requests
 
@@ -70,6 +72,9 @@ New codes can appear in `v1`. Handle a code that you do not know by its `type` o
 | 413 | `memory_too_large` | The memory body is more than 8 KiB. | Make the note shorter. |
 | 413 | `repository_instructions_too_large` | The instructions are more than 64 KiB. | Make the text shorter. |
 | 415 | `unsupported_encoding` | The body encoding is not supported. | Send plain UTF-8 JSON. |
+| 400 | `bad_path` | A file path is not inside the repository, for example it has `..` or a leading `/`. | Use a path relative to the repository root. |
+| 400 | `bad_memory` | A memory field is not valid. | Fix the value. |
+| 400 | `invalid_steps`, `invalid_step`, `duplicate_step`, `unknown_step`, `too_many_steps`, `learned_command`, `setup_step_refused`, `invalid_hosts`, `invalid_run_on_box`, `invalid_body`, `invalid_dotfiles` | A Setup list or a sandbox setup write is not valid. The message names the field. Talyn changes nothing. | Fix the field, then send it again. |
 | 400 | `invalid_webhook_url` | The webhook URL is not allowed: not https, has a user name, or points to a private, loopback or reserved address. `param` is `url`. | Use a public https URL. See [webhooks](webhooks.md#which-urls-are-allowed). |
 
 Request bodies are strict. A field that the API does not know gives `400` `invalid_parameter`. The `param` field names the unknown field.
@@ -79,9 +84,12 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | Status | Code | Meaning |
 | --- | --- | --- |
 | 404 | `workspace_not_found` | The workspace does not exist, or the token cannot reach it. |
+| 404 | `team_not_found` | You are not a member of the team, or the token cannot reach it. |
+| 404 | `space_not_found` | The space does not exist, you are not a member, or the token cannot reach it. |
 | 404 | `session_not_found` | The session does not exist, or the token cannot reach it. |
 | 404 | `chat_not_found` | The chat does not exist, or the token cannot reach it. |
 | 404 | `pull_request_not_found` | The pull request does not exist, Talyn does not track it, or the token cannot reach it. |
+| 404 | `pr_missing` | A code review was asked for a pull request that Talyn does not track any more. |
 | 404 | `code_review_not_found` | The code review does not exist, or the token cannot reach it. |
 | 404 | `finding_not_found` | The finding is not in this code review. |
 | 404 | `webhook_endpoint_not_found` | The webhook endpoint does not exist, or the token cannot reach it. |
@@ -96,6 +104,7 @@ Request bodies are strict. A field that the API does not know gives `400` `inval
 | 404 | `script_not_found` | The session config defines no script with this name. |
 | 404 | `preview_links_unavailable` | This deployment has no preview domain, so it cannot make preview links. |
 | 404 | `route_not_found` | The method and path match no endpoint. |
+| 404 | `not_found` | A resource that the request needs does not exist, or the token cannot reach it. |
 
 A resource that the token cannot reach gives the same `404` as a resource that does not exist.
 
@@ -136,6 +145,11 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `memory_forgotten` | The memory entry is forgotten. | Restore it first. |
 | 409 | `memory_name_taken` | A live entry in the same scope has the name. | Choose another name, or forget the other entry. |
 | 409 | `memory_limit_reached` | The workspace has 500 live memory entries. | Forget some entries. |
+| 409 | `not_learned` | A dismiss was sent for your own setup step. | Remove the step from the list with `PUT /repositories/{id}/setup`. |
+| 409 | `space_unavailable` | The space cannot take a new session now. The message has the reason. This code can also come with `403`. | Read the message. |
+| 409 | `sandbox_gone` | The sandbox of the session does not exist any more. | Retry. Talyn starts a new sandbox. |
+| 409 | `agent_not_connected` | No subscription for the agent is connected to the workspace. | Connect it in the app, in Settings, Talyn Fleet. |
+| 409 | `agent_reauth_required` | The sign-in of the agent subscription for the workspace has expired. | Reconnect it in the app, in Settings, Talyn Fleet. |
 
 ### Plan limits
 
@@ -179,6 +193,9 @@ Other plan codes can appear. Match on `type` for a general rule.
 | 500 | `internal_error` | A fault on the Talyn side. The message never has internal details. | Retry. If it continues, send the `request_id` to Talyn. |
 | 502 | `code_review_post_github_failed` | GitHub refused the review. The message has the answer from GitHub. | Read the message. Fix the cause, then retry. |
 | 503 | `github_rate_limited` | GitHub limits your account. | Wait `Retry-After` seconds. |
+| 503 | `fleet_unavailable` | The sandbox fleet has no capacity now, or it did not answer. | Retry after a delay. |
+| 503 | `sandbox_waking` | The sandbox is waking up. | Retry after some seconds. |
+| 503 | `fleet_not_deployed`, `fleet_disabled` | This deployment cannot run sandboxes now. | Retry later. If it continues, contact Talyn. |
 | 503 | varies | A service that the request needs is not available. | Retry after a delay. |
 
 ## Handle errors

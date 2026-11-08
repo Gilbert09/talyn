@@ -19,6 +19,7 @@
 import type { AgentEvent } from './index.js';
 import { adoptedPullRequestMessage, parseAutoPrDetails } from './workbenchPullRequest.js';
 import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
+import { messageTrigger, type WorkbenchMessageTrigger } from './workbenchBackground.js';
 import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
 
 const INTERRUPTED_MESSAGES = new Set([
@@ -93,6 +94,8 @@ export type Block =
       thread?: ThreadSessionEvent;
       /** Set for an ok `subtype: 'talyn_pr'`, so a card can show the PR. `title` is the agent's own, when its reply had one. */
       pullRequest?: { number: number; title?: string; existing: boolean; adopted: boolean };
+      /** Set for `subtype: 'talyn_message'` when a wake-up or a job exit started the turn. `text` is then the full message body. */
+      trigger?: WorkbenchMessageTrigger;
     }
   | {
       kind: 'result';
@@ -268,7 +271,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           .filter((part) => part.type === 'text' && typeof part.text === 'string')
           .map((part) => part.text as string)
           .join('\n');
-        blocks.push({ kind: 'system', key: seqKey, subtype: 'talyn_message', text });
+        const trigger = messageTrigger((event as { talyn?: unknown }).talyn);
+        blocks.push({ kind: 'system', key: seqKey, subtype: 'talyn_message', text, ...(trigger ? { trigger } : {}) });
         interruptionOpen = false;
         continue;
       }

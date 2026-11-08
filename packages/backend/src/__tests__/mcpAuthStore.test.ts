@@ -8,9 +8,10 @@ import {
   getMcpServer,
   listMcpServers,
   mcpOAuthStore,
+  mcpServersForDispatch,
   updateMcpServer,
 } from '../services/mcpServers/store.js';
-import { encryptString } from '../services/tokenCrypto.js';
+import { encryptString, decryptString, isEncryptedEnvelope } from '../services/tokenCrypto.js';
 import type { Database } from '../db/client.js';
 
 let db: Database;
@@ -60,6 +61,23 @@ describe('stored MCP authentication', () => {
         expect(json).not.toContain(field);
     }
     expect(single?.oauth).toEqual({ status: 'connected', clientId: 'public-client-id' });
+  });
+
+  it('encrypts PKCE verifiers and header values in storage', async () => {
+    const [flow] = await db.select().from(mcpServers).where(eq(mcpServers.id, id));
+    expect(JSON.stringify(flow.oauth)).not.toContain('private-verifier');
+    const stored = await mcpOAuthStore.read(id);
+    expect(stored?.flow?.verifier).toBeUndefined();
+    expect(decryptString(stored!.flow!.verifierEnc!)).toBe('private-verifier');
+    const headerInput = validateMcpServer({ ...input, inject: { extra: { 'X-Private-Key': 'header-test-value' } } });
+    await updateMcpServer(id, headerInput);
+    const [row] = await db.select().from(mcpServers).where(eq(mcpServers.id, id));
+    expect(isEncryptedEnvelope(row.inject)).toBe(true);
+    expect(JSON.stringify(row.inject)).not.toContain('header-test-value');
+    const [dispatch] = await mcpServersForDispatch('ws-1', [id]);
+    expect(dispatch.inject?.extra).toEqual({ 'X-Private-Key': 'header-test-value' });
+    await updateMcpServer(id, { ...headerInput, name: 'renamed' });
+    expect((await getMcpServer(id))?.inject?.extra).toEqual({ 'X-Private-Key': 'header-test-value' });
   });
 
   it('preserves credentials when only the name changes', async () => {

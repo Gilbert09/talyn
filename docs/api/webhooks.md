@@ -6,6 +6,8 @@ Each request is signed with the [Standard Webhooks](https://www.standardwebhooks
 
 You need the `webhooks:write` scope to create endpoints. The `webhooks:read` scope lets you read endpoints and their deliveries.
 
+The token form in the app does not offer the `webhooks` scopes yet.
+
 ## Create an endpoint
 
 ```bash
@@ -50,6 +52,7 @@ Send `POST /webhooks/{id}/test` to send a `ping` event now. Then read the delive
 ## Which URLs are allowed
 
 - The URL must use `https`.
+- The URL can have 2048 characters at most.
 - The URL must not contain a user name, a password or a fragment (`#`).
 - The host must be on the public internet. Talyn refuses private, loopback, link-local, CGNAT and cloud metadata addresses, in IPv4 and IPv6. This includes IPv4 addresses inside IPv6 addresses.
 - Talyn checks the URL when you create or change the endpoint. Talyn also checks the address again before each delivery, because DNS can change.

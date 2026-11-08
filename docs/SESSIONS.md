@@ -4,7 +4,7 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 ## Session background jobs and wake-ups: backend (2026-11-08)
 
-An agent can now start a command that outlives its turn, and ask Talyn to start a new turn later. Behind the `session-background` PostHog flag (fallback OFF, gated, `SESSION_BACKGROUND_ENABLED`). The UI is separate work.
+An agent can start a command that outlives its turn. It can ask Talyn to start a new turn later. These features are released to every account (decision 2026-11-08). The UI is separate work.
 - Tables `workbench_background_jobs` and `workbench_wakeups` (migration `0119`), backend-pool-only. Service in `services/workbenches/background.ts`, sweep in `backgroundSweep.ts`, routes in `routes/workbenchBackground.ts`, MCP tools in `mcp/tools/background.ts`.
 - A job runs under the durable supervisor (`durableExec.ts`) with segmented logs. One `node` probe reads the exit marker, the process group and the log tail in one exec.
 - The sweep runs every 30 s. It checks a job only while its keep-awake is in the future, or while a turn runs in the session. Every check is a request, so checking an idle box after keep-awake would keep it awake for ever. A sleeping box with keep-awake still on is woken through the box gate as unattended work; a refusal ends the keep-awake and notes why.
@@ -7402,3 +7402,23 @@ Now the message stays in the chat with the error and two actions: Retry and Disc
 This is client state only: `PendingUserMessage.failed` in `workbenchFormat.ts`, set by `failOutgoingMessage` in both stores. A failed message is shown until it is sent, discarded, or its own event arrives. A page reload or a workspace switch loses it.
 A plan limit or a prompt refusal does not use this path. Those still remove the message and restore the draft, because they need a different action from the user.
 The first message of a new session with images uses the same path.
+
+### 2026-11-08 — Context rail for workspaces and spaces
+
+Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⌥⇧1–9 counts the same tiles. The open context gets a pill and a ring. Each other context gets a red count of the items that need the person.
+The count comes from `GET /workspaces/attention` (`services/workbenches/attention.ts`). The rule is `sessionNeedsAttention` in `packages/shared/src/contextAttention.ts`: a live session or thread that failed, that asks a question, or whose open pull request has conflicts. A running turn or a queued message wins, as in the sidebar. An unread reply is not counted: read state is kept only in the open app. A session in a space counts for its workspace and for its space, because both sidebars show it. The rail asks every 30 seconds while the window shows, on window focus, and on a context switch. The two reads are narrow; `contextAttention.test.ts` pins that.
+The rail is `ContextRail.tsx` with `lib/contextRail.ts`, in both apps. On macOS desktop, the top strip of the rail is a drag area under the traffic lights.
+
+### 2026-11-08 — A thread hears when a session's pull request merges
+
+Before, a thread woke when a session finished a turn, opened a pull request or needed an answer. A merge did not wake it, so a thread that waited for a merge waited for the person.
+Now a merge writes a `pr_merged` card in the thread and queues a Talyn message, the same as `pr_opened`. `notifyThreadsOfMergedPr` (`services/workbenches/threads.ts`) runs after each write that sets a row to `merged`: `closeTrackedRow` (webhook and poll sweep), the merge queue's `recordMerged`, and `reconcileTerminalState`. It runs after the state write, so the no-progress fingerprint sees the new state.
+One merge can reach several of these paths. The `threadToldOfMerge` list in the session's `settings` holds the pull request ids it already reported, so each thread wakes one time per merge. The session must own the pull request (`eligiblePr`) and must have linked it before the merge (`linkedBeforeMerge`). The workspace's auto-archive setting does not change this.
+
+### 2026-11-08 — A space session stays out of Personal
+
+Before, a session created in a space also showed in the Personal sidebar. It runs in the creator's home workspace, and the Personal lists showed every session of that workspace. The Personal tile on the context rail also counted it.
+Now `inPersonalList` (`lib/spaces.ts`, both apps) keeps a session with a `spaceId` out of the Personal lists: the sidebar, threads, ⌘1–9, the command palette and recent sessions on the new-session page. `useWorkspaceWorkbenches` applies it; `orderedLiveWorkbenches` in `appShortcuts.ts` does the same.
+A space session shows in Personal again when the `spaces` flag is off or its space is not in my teams (archived, or I left the team), so it is never lost. While my teams load, it stays out, so it does not show and then go.
+History keeps archived space sessions (`useWorkspaceWorkbenches({ withSpaceSessions: true })`), because the space feed leaves archived sessions out.
+The store still holds space sessions, so opening one from the space feed needs no fetch. `countContextAttention` now counts a space session for its space only, not for its workspace. This replaces the rule in the context rail note above.

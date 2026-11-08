@@ -23,6 +23,7 @@ import {
   type VisualReviewSettings,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
+import { notifyThreadsOfMergedPr } from '../workbenches/threads.js';
 import {
   mergeQueueEntries,
   mergeQueueEvents,
@@ -1965,6 +1966,7 @@ async function recordMerged(entry: EntrySnapshot, pr: PrEvalRow): Promise<void> 
     .update(pullRequestsTable)
     .set({ state: 'merged', mergedAt: new Date(), ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })
     .where(eq(pullRequestsTable.id, pr.id));
+  await notifyThreadsOfMergedPr(pr.id);
   await db
     .update(mergeQueueEntries)
     .set({ status: 'merged', updatedAt: new Date() })

@@ -12,7 +12,7 @@ import {
   HISTORY_STATUS_PARAM,
   HISTORY_TASK_STATUSES,
 } from '../stores/workspace';
-import type { BillingStatus, Task, UsageAlertEvent, UsageExhaustedEvent } from '@talyn/shared';
+import type { BillingStatus, Task, TaskStatus, UsageAlertEvent, UsageExhaustedEvent } from '@talyn/shared';
 import { maybeHandleBillingLimit, useBillingStore } from '../stores/billing';
 import { hasUsageBilling } from '../lib/usageBilling';
 
@@ -36,6 +36,7 @@ import { toast } from '../stores/toast';
 import { notifyMergeQueueReviewWait } from '../lib/mergeQueueReviewWait';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore, wellFormedEvents } from '../stores/workbenches';
+import { useSessionBackgroundStore } from '../stores/sessionBackground';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { handleSlackNotice, loadSlackPending } from '../lib/slackNotices';
@@ -500,6 +501,7 @@ export function useApiConnection() {
       wsClient.on<WorkbenchWsPayloads['workbench:deleted']>('workbench:deleted', (payload) => {
         stopCoderPreview(payload.id);
         useWorkbenchStore.getState().removeWorkbench(payload.id);
+        useSessionBackgroundStore.getState().clear(payload.id);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:chat']>('workbench:chat', (payload) => {
         useWorkbenchStore.getState().upsertChat(payload.chat);
@@ -516,6 +518,9 @@ export function useApiConnection() {
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:script']>('workbench:script', (payload) => {
         useWorkbenchStore.getState().appendScriptFrame(payload);
+      }),
+      wsClient.on<WorkbenchWsPayloads['workbench:background']>('workbench:background', (payload) => {
+        useSessionBackgroundStore.getState().applyBackground(payload);
       })
     );
     unsubscribers.push(installWorkbenchNotifications());
@@ -728,9 +733,9 @@ export function useTaskActions() {
   );
 
   const updateTaskStatus = useCallback(
-    async (taskId: string, status: string) => {
+    async (taskId: string, status: TaskStatus) => {
       try {
-        const task = await api.tasks.update(taskId, { status: status as any });
+        const task = await api.tasks.update(taskId, { status });
         updateTask(taskId, task);
         return task;
       } catch (err) {
@@ -743,7 +748,7 @@ export function useTaskActions() {
 
   const cancelTask = useCallback(
     async (taskId: string) => {
-      const task = await api.tasks.update(taskId, { status: 'cancelled' as any });
+      const task = await api.tasks.update(taskId, { status: 'cancelled' });
       trackEvent('task_cancelled', { task_type: task.type });
       updateTask(taskId, task);
       return task;

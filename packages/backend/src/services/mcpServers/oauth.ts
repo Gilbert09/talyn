@@ -1,4 +1,4 @@
-import { mcpFetch, readMcpBody } from './http.js';
+import { mcpFetch, readMcpBody, fetchFailureReason, type McpRequestContext } from './http.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { McpOAuthGrant, McpServerDefinition } from '@talyn/shared';
 import { encryptString, decryptString, type EncryptedEnvelope } from '../tokenCrypto.js';
@@ -118,7 +118,8 @@ export interface StoredMcpOAuth {
     /** Hashed, never stored raw: the flow row is not a place a code verifier
      *  should be readable from. */
     stateHash: string;
-    verifier: string;
+    verifier?: string;
+    verifierEnc?: EncryptedEnvelope;
     expiresAt: string;
   };
 }
@@ -174,7 +175,8 @@ function sha256(s: string): Buffer {
  */
 async function registerClient(
   server: AuthServerMetadata,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<{ clientId: string; clientSecret?: string }> {
   if (!server.registrationEndpoint) {
     throw new McpDiscoveryError(
@@ -196,11 +198,12 @@ async function registerClient(
       // Named so a native-client rule does not apply to a hosted redirect.
       application_type: 'web',
     }),
-  });
+  }, context).catch((error) => { throw new McpDiscoveryError(fetchFailureReason(error)); });
   if (!resp.ok) {
+    await resp.body?.cancel();
     throw new McpDiscoveryError(`the server refused to set up sign-in (${resp.status})`);
   }
-  const doc = (await resp.json()) as { client_id?: unknown; client_secret?: unknown };
+  const doc = await readJsonResponse(resp) as { client_id?: unknown; client_secret?: unknown };
   if (typeof doc.client_id !== 'string' || !doc.client_id) {
     throw new McpDiscoveryError('the server set up sign-in but did not say who we are');
   }
@@ -231,12 +234,12 @@ export interface StartedFlow {
  * server as disconnected.
  */
 export async function startMcpOAuth(
-  server: Pick<McpServerDefinition, 'id' | 'url'>,
+  server: Pick<McpServerDefinition, 'id' | 'url' | 'workspaceId'>,
   existing: StoredMcpOAuth | null,
   now: Date
 ): Promise<StartedFlow> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXCHANGE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
   try {
     const redirectUri = mcpRedirectUri();
     const localCallback = new URL(redirectUri).hostname === 'localhost';
@@ -258,7 +261,7 @@ export async function startMcpOAuth(
         clientIdMetadataDocumentSupported: existing.clientSource === 'cimd',
       };
     } else {
-      const found = await discover(server.url);
+      const found = await discover(server.url, { workspaceId: server.workspaceId, purpose: 'discovery' }, controller.signal);
       meta = found.server;
       resource = found.resource.resource ?? server.url;
       scopes = found.resource.scope ? found.resource.scope.split(/\s+/).filter(Boolean) : [];
@@ -279,7 +282,7 @@ export async function startMcpOAuth(
         clientId = mcpClientMetadataUrl();
         clientSource = 'cimd';
       } else {
-        const registered = await registerClient(meta, controller.signal);
+        const registered = await registerClient(meta, controller.signal, { workspaceId: server.workspaceId, purpose: 'registration' });
         clientId = registered.clientId;
         clientSecret = registered.clientSecret;
         clientSource = 'dcr';
@@ -325,7 +328,7 @@ export async function startMcpOAuth(
         ...(clientSource ? { clientSource } : {}),
         scopes,
         resource,
-        flow: { id: flowId, stateHash: base64url(sha256(state)), verifier, expiresAt },
+        flow: { id: flowId, stateHash: base64url(sha256(state)), verifierEnc: encryptString(verifier), expiresAt },
       },
       authorizeUrl: authorize.toString(),
       flowId,
@@ -335,6 +338,15 @@ export async function startMcpOAuth(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  const text = await readMcpBody(response, 512 * 1024);
+  try {
+    const doc: unknown = JSON.parse(text);
+    if (doc && typeof doc === 'object' && !Array.isArray(doc)) return doc as Record<string, unknown>;
+  } catch { /* A response can contain credentials. Keep it out of errors. */ }
+  throw new McpDiscoveryError('The sign-in endpoint returned an invalid JSON response.');
 }
 
 interface TokenResponse {
@@ -349,7 +361,8 @@ interface TokenResponse {
 async function postToken(
   stored: StoredMcpOAuth,
   body: URLSearchParams,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: McpRequestContext
 ): Promise<TokenResponse> {
   if (!stored.tokenEndpoint) throw new McpDiscoveryError('no token endpoint is known');
   if (stored.clientSecretEnc) {
@@ -360,13 +373,10 @@ async function postToken(
     signal,
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body,
-  });
-  const doc = (await resp.json().catch(() => ({}))) as TokenResponse;
+  }, context).catch((error) => { throw new McpDiscoveryError(fetchFailureReason(error)); });
+  const doc = await readJsonResponse(resp) as TokenResponse;
   if (!resp.ok || typeof doc.access_token !== 'string') {
-    const reason =
-      (typeof doc.error_description === 'string' && doc.error_description) ||
-      (typeof doc.error === 'string' && doc.error) ||
-      `the server answered ${resp.status}`;
+    const reason = doc.error === 'invalid_grant' ? 'The sign-in expired or was revoked. Sign in again.' : `The token request failed (${resp.status}).`;
     const err = new Error(reason);
     // `invalid_grant` is terminal: the refresh token is spent or revoked and no
     // retry can change that. Distinguished so the caller stops rather than
@@ -425,12 +435,13 @@ export async function completeMcpOAuth(
   stored: StoredMcpOAuth,
   state: string,
   code: string,
-  now: Date
+  now: Date,
+  context: McpRequestContext
 ): Promise<StoredMcpOAuth> {
   const flow = validateMcpOAuthState(stored, state, now);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXCHANGE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
   try {
     const doc = await postToken(
       stored,
@@ -439,10 +450,11 @@ export async function completeMcpOAuth(
         code,
         redirect_uri: mcpRedirectUri(),
         client_id: stored.clientId ?? '',
-        code_verifier: flow.verifier,
+        code_verifier: flow.verifierEnc ? decryptString(flow.verifierEnc) : flow.verifier ?? '',
         resource: stored.resource ?? '',
       }),
-      controller.signal
+      controller.signal,
+      context
     );
     return applyTokens(stored, doc, now);
   } finally {
@@ -472,7 +484,8 @@ export interface McpOAuthStore {
 export async function resolveMcpAccessToken(
   serverId: string,
   store: McpOAuthStore,
-  now: Date = new Date()
+  now: Date,
+  context: McpRequestContext
 ): Promise<string | null> {
   const stored = await store.read(serverId);
   if (!stored || stored.status === 'needs_reauth') return null;
@@ -502,7 +515,7 @@ export async function resolveMcpAccessToken(
     if (!fresh.refreshTokenEnc) return null;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), EXCHANGE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
     try {
       const doc = await postToken(
         fresh,
@@ -512,7 +525,8 @@ export async function resolveMcpAccessToken(
           client_id: fresh.clientId ?? '',
           resource: fresh.resource ?? '',
         }),
-        controller.signal
+        controller.signal,
+        context
       );
       const next = applyTokens(fresh, doc, now);
       await store.write(serverId, next);
@@ -534,10 +548,7 @@ export async function resolveMcpAccessToken(
       }
       // Transient. The grant is left alone and the next dispatch tries again;
       // clearing it here would turn a vendor's bad minute into a reconnect.
-      console.warn(
-        `[mcp] could not refresh the sign-in for server ${serverId.slice(0, 8)}: ` +
-          `${err instanceof Error ? err.message : String(err)}`
-      );
+      console.warn('[mcp] token refresh failed', { serverId, workspaceId: context.workspaceId });
       return null;
     } finally {
       clearTimeout(timer);
@@ -546,13 +557,13 @@ export async function resolveMcpAccessToken(
 }
 
 /** Read optional account details from the issuer's advertised profile endpoint. */
-export async function readMcpAccount(serverId: string, store: McpOAuthStore): Promise<{ name?: string; email?: string; workspace?: string } | null> {
+export async function readMcpAccount(serverId: string, store: McpOAuthStore, context: McpRequestContext): Promise<{ name?: string; email?: string; workspace?: string } | null> {
   const stored = await store.read(serverId);
   if (stored?.status !== 'connected' || !stored.issuer) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), 5000);
   try {
-    const token = await resolveMcpAccessToken(serverId, store);
+    const token = await resolveMcpAccessToken(serverId, store, new Date(), { ...context, purpose: 'refresh' });
     if (!token) return null;
     if (stored.issuer === 'https://mcp.slack.com' &&
         stored.tokenEndpoint === 'https://slack.com/api/oauth.v2.user.access') {
@@ -561,7 +572,7 @@ export async function readMcpAccount(serverId: string, store: McpOAuthStore): Pr
         signal: controller.signal,
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(),
-      });
+      }, context);
       if (!response.ok) { await response.body?.cancel(); return null; }
       const profile = JSON.parse(await readMcpBody(response, 32 * 1024));
       if (!profile || profile.ok !== true) return null;
@@ -569,12 +580,12 @@ export async function readMcpAccount(serverId: string, store: McpOAuthStore): Pr
       const workspace = typeof profile.team === 'string' ? profile.team.slice(0, 200) : undefined;
       return name || workspace ? { name, workspace } : null;
     }
-    const metadata = await discoverAuthServer(stored.issuer, controller.signal);
+    const metadata = await discoverAuthServer(stored.issuer, controller.signal, context);
     if (!metadata.userInfoEndpoint) return null;
     const response = await mcpFetch(metadata.userInfoEndpoint, {
       signal: controller.signal,
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-    });
+    }, context);
     if (!response.ok) { await response.body?.cancel(); return null; }
     const profile = JSON.parse(await readMcpBody(response, 32 * 1024));
     if (!profile || typeof profile !== 'object') return null;

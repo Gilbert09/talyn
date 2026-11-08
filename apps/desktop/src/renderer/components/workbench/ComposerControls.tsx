@@ -62,19 +62,30 @@ export function AgentPicker({
   );
 }
 
+const AGENT_NAME: Record<WorkbenchAgent, string> = { claude: 'Claude', codex: 'Codex' };
+
 export function ModelPicker({
   agent,
   value,
   onChange,
   disabled,
+  unconnected = [],
 }: {
   agent: WorkbenchAgent;
   value: string;
   onChange: (model: string) => void;
   disabled?: boolean;
+  /** Agents the workspace has not connected. Their models show, but cannot be picked. */
+  unconnected?: WorkbenchAgent[];
 }) {
   const models = modelsForAgent(agent);
   const known = models.some((m) => m.id === value);
+  const locked = unconnected.filter((a) => a !== agent);
+  const options = models.map((m) => (
+    <option key={m.id} value={m.id}>
+      {m.label}
+    </option>
+  ));
   return (
     <PickerSelect
       value={value}
@@ -84,11 +95,22 @@ export function ModelPicker({
       aria-label="Model"
     >
       {!known && <option value={value}>{value}</option>}
-      {models.map((m) => (
-        <option key={m.id} value={m.id}>
-          {m.label}
-        </option>
-      ))}
+      {locked.length === 0 ? (
+        options
+      ) : (
+        <>
+          <optgroup label={AGENT_NAME[agent]}>{options}</optgroup>
+          {locked.map((a) => (
+            <optgroup key={a} label={`${AGENT_NAME[a]}: not connected`}>
+              {modelsForAgent(a).map((m) => (
+                <option key={m.id} value={m.id} disabled>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </>
+      )}
     </PickerSelect>
   );
 }

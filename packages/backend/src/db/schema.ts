@@ -1757,7 +1757,7 @@ export const mcpServers = pgTable(
     /** `McpAuthKind` — none | bearer | header | basic | query. The fleet's own vocabulary. */
     authKind: text('auth_kind').notNull().default('none'),
     /** `McpInjection` — the header/param details when `authKind` needs them. */
-    inject: jsonb('inject').$type<McpInjection | null>(),
+    inject: jsonb('inject').$type<McpInjection | EncryptedEnvelope | null>(),
     /** AES-256-GCM envelope. Never leaves the backend except on a dispatch. */
     secretEnc: jsonb('secret_enc').$type<EncryptedEnvelope | null>(),
     /** The grant, for a server connected by signing in. Absent means a pasted key. */

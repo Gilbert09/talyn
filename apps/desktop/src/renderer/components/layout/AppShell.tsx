@@ -7,6 +7,7 @@ import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
 import { MoveToSpaceDialog } from '../spaces/MoveToSpace';
 import { SpaceHomePage } from '../spaces/SpaceHomePage';
 import { AppSidebar } from './AppSidebar';
+import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { SettingsPanel } from '../panels/SettingsPanel';
@@ -38,7 +39,7 @@ import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 
 /**
- * The signed-in, onboarded app: `[AppSidebar | main column]`, with the
+ * The signed-in, onboarded app: `[ContextRail | AppSidebar | main column]`, with the
  * system banner over the routed view. It also mounts the app-wide hooks and
  * modals, the command palette, and the one keyboard listener.
  */
@@ -74,6 +75,7 @@ export function AppShell() {
   return (
     <div className="flex h-screen flex-col bg-background">
       <div className="flex min-h-0 flex-1 overflow-hidden">
+        <ContextRail />
         <AppSidebar />
         {/* The banner sits in the main column, so the sidebar reaches the window top where the traffic lights are. */}
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">

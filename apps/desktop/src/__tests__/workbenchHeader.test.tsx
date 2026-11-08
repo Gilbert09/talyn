@@ -341,7 +341,18 @@ describe('WorkbenchHeader action cycle', () => {
     fireEvent.click(screen.getByTestId('workbench-primary-action'));
     expect(merge).not.toHaveBeenCalled();
     expect(screen.getByText('Merge #42?')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).pop()!);
+    const confirmButton = screen.getAllByRole('button', { name: 'Merge' }).pop()!;
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+    expect(confirmButton).toHaveFocus();
+    fireEvent.keyDown(confirmButton, { key: 'ArrowLeft' });
+    expect(cancelButton).toHaveFocus();
+    fireEvent.keyDown(cancelButton, { key: 'ArrowDown' });
+    expect(confirmButton).toHaveFocus();
+    fireEvent.keyDown(confirmButton, { key: 'ArrowUp' });
+    expect(cancelButton).toHaveFocus();
+    fireEvent.keyDown(cancelButton, { key: 'ArrowRight' });
+    expect(confirmButton).toHaveFocus();
+    fireEvent.keyDown(confirmButton, { key: 'Enter' });
     await waitFor(() => expect(merge).toHaveBeenCalledWith('pr1'));
   });
 

@@ -21,9 +21,11 @@ import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { isStarting, StartingHint } from './WorkbenchStarting';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 import { maybeHandleBillingLimit } from '../../stores/billing';
+import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
+  useWorkbenchBackgroundLoad(workbench.id);
   const ops = useWorkbenchOps(workbench);
   const chat = useSelectedChat(workbench.id);
   const pr = useWorkbenchPr(workbench);

@@ -47,7 +47,7 @@ import {
 } from './backgroundStore.js';
 
 /**
- * Session background jobs and wake-ups (`sessionBackground` flag).
+ * Session background jobs and wake-ups.
  *
  * A job runs under the durable supervisor (`durableExec.ts`), in its own
  * process group, so it outlives the agent CLI that started it. Its log, start

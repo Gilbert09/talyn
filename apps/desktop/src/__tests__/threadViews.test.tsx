@@ -226,6 +226,7 @@ describe('thread transcript cards', () => {
     ['session_finished', {}, 'Session finished its turn'],
     ['session_finished', { status: 'error' }, 'Session stopped with an error'],
     ['pr_opened', { prUrl: 'https://github.com/acme/web/pull/12' }, 'Pull request opened'],
+    ['pr_merged', { prUrl: 'https://github.com/acme/web/pull/12' }, 'Pull request merged'],
     ['needs_input', { status: 'awaiting_input' }, 'Session needs an answer'],
   ])('%s %j', (action, extra, title) => {
     render(<AgentBlocks events={[threadEvent(1, action, extra)]} />);

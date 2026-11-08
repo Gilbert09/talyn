@@ -57,6 +57,19 @@ export const TALYN_SKILL_PACK = [
 
 export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 
+/** One line per built-in skill, for the composer's `/` list. The SKILL.md text is for the agent. */
+export const TALYN_SKILL_SUMMARIES: Record<TalynSkillName, string> = {
+  'talyn-multi-repo': 'Make a change in another repository through a new session',
+  'talyn-delegate': 'Split large work into child sessions that run in parallel',
+  'talyn-ci-triage': 'Find why CI fails, re-run flaky jobs and fix real failures',
+  'talyn-ship-pr': 'Open or update the pull request for this session',
+  'talyn-review-loop': 'Fix review comments and bot findings on the pull request',
+  'talyn-wrap-up': 'Summarise the work and archive the session when it is done',
+  'talyn-memory': 'Save a durable fact or feedback to workspace memory',
+  'talyn-thread': 'Plan work across repositories and start sessions from a thread',
+  'talyn-speed': 'Make slow setups, builds and tests faster',
+};
+
 /** Added to {@link TALYN_TOOLS_NOTE} when the box has the skill pack. */
 export const TALYN_SKILLS_NOTE =
   'Talyn installed the skills `talyn-multi-repo`, `talyn-delegate`, `talyn-ci-triage`, `talyn-ship-pr`, ' +

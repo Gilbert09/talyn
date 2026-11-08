@@ -83,6 +83,23 @@ const CODEX_ONLY: WorkbenchReadiness = {
   },
 };
 
+const CLAUDE_EXPIRED: WorkbenchReadiness = {
+  sandbox: {
+    ok: true,
+    reasons: [],
+    agents: {
+      claude: {
+        ok: false,
+        reason: {
+          code: 'agent_reauth_required',
+          message: 'The Claude sign-in for this workspace has expired.',
+        },
+      },
+      codex: { ok: true },
+    },
+  },
+};
+
 const REPOS = [
   {
     id: 'r1',
@@ -379,6 +396,73 @@ describe('NewWorkbenchPage', () => {
     mockReadiness.mockResolvedValue(CODEX_ONLY);
     await renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex'));
+  });
+
+  describe('an agent the workspace has not connected', () => {
+    const realOpenSettings = useWorkspaceStore.getState().openSettings;
+    afterEach(() => {
+      cleanup();
+      useWorkspaceStore.setState({ openSettings: realOpenSettings });
+    });
+
+    const modelOption = (label: string) =>
+      Array.from(screen.getByRole('combobox', { name: 'Model' }).querySelectorAll('option')).find(
+        (o) => o.textContent === label,
+      );
+
+    it.each([
+      [CODEX_ONLY, 'Claude is not connected to this workspace, so Claude models cannot run.', 'Connect Claude'],
+      [CLAUDE_EXPIRED, 'The Claude sign-in for this workspace has expired, so Claude models cannot run.', 'Sign in to Claude again'],
+    ])('says so under the composer and links to Settings (%#)', async (readiness, text, action) => {
+      const openSettings = vi.fn();
+      useWorkspaceStore.setState({ openSettings });
+      mockReadiness.mockResolvedValue(readiness);
+      await renderPage();
+      const notice = await screen.findByText(new RegExp(text.replace(/\./g, '\\.')));
+      expect(notice).toHaveTextContent(action);
+      fireEvent.click(screen.getByRole('button', { name: action }));
+      expect(openSettings).toHaveBeenCalledWith('integrations');
+    });
+
+    it('lists its models, such as Opus 5.5, as not selectable', async () => {
+      mockReadiness.mockResolvedValue(CODEX_ONLY);
+      await renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex'));
+      const opus = modelOption('Opus 5.5');
+      expect(opus).toBeDefined();
+      expect(opus).toBeDisabled();
+      expect(opus?.parentElement).toHaveAttribute('label', 'Claude: not connected');
+      expect(modelOption('GPT-6.1 Terra')).not.toBeDisabled();
+    });
+
+    it('makes the agent picker row a link to connect it', async () => {
+      const openSettings = vi.fn();
+      useWorkspaceStore.setState({ openSettings });
+      mockReadiness.mockResolvedValue(CODEX_ONLY);
+      await renderPage();
+      fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+      const row = await screen.findByRole('option', { name: /Claude Code/ });
+      const button = row.querySelector('button')!;
+      expect(button).not.toBeDisabled();
+      expect(button).toHaveTextContent('Connect');
+      fireEvent.click(button);
+      expect(openSettings).toHaveBeenCalledWith('integrations');
+      expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex');
+    });
+
+    it('shows nothing when every agent is connected', async () => {
+      await renderPage();
+      expect(screen.queryByText(/is not connected to this workspace/)).toBeNull();
+      expect(modelOption('GPT-6.1 Terra')).toBeUndefined();
+      expect(screen.getByRole('combobox', { name: 'Model' }).querySelector('optgroup')).toBeNull();
+    });
+
+    it('leaves it to "Sandbox unavailable" when no agent can run', async () => {
+      mockReadiness.mockResolvedValue(NOT_DEPLOYED);
+      await renderPage();
+      expect(screen.getByText(/Sandbox unavailable:/)).toBeInTheDocument();
+      expect(screen.queryByText(/is not connected to this workspace/)).toBeNull();
+    });
   });
 
   it('Enter creates on the chosen repository with the text as the first prompt', async () => {

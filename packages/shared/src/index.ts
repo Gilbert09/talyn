@@ -119,11 +119,13 @@ export * from './publicApi.js';
 // a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
 // parsers and repository config; pure, so both runtimes share them.
 export * from './workbench.js';
-// Session background jobs and wake-ups (`sessionBackground` flag).
+// Session background jobs and wake-ups.
 export * from './workbenchBackground.js';
 
 // Teams and Spaces: the multiplayer contract of `/teams` and `/spaces`.
 export * from './teams.js';
+// The context rail's badges: what waits on me in each workspace and space.
+export * from './contextAttention.js';
 // Insights: per-workspace usage analytics (compute, tokens, output, speed).
 export * from './insights.js';
 export * from './workbenchTitle.js';

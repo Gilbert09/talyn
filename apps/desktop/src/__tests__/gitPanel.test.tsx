@@ -137,9 +137,9 @@ afterEach(() => {
 });
 
 describe('GitPanel', () => {
-  it('labels its tabs All files, Changes, Pull request, Sandbox', () => {
+  it('labels its tabs All files, Changes, Pull request, Sandbox, Background', () => {
     render(<GitPanel workbench={WB} chat={chat} ops={makeOps()} pr={null} />);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes2', 'Pull request', 'Sandbox']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes2', 'Pull request', 'Sandbox', 'Background']);
   });
 
   it('a tab click is remembered across restarts', () => {

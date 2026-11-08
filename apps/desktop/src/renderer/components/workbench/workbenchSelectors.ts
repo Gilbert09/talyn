@@ -6,6 +6,9 @@ import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
+import { inPersonalList, spacesOffered } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
+import { useWorkspaceStore } from '../../stores/workspace';
 
 export interface RepoGroup {
   repo: string;
@@ -61,11 +64,21 @@ export function isArchived(wb: Workbench): boolean {
   return wb.status === 'archived' || Boolean(wb.archivedAt);
 }
 
-/** The workbenches of the current workspace, archived included. Viewed-only extras are left out. */
-export function useWorkspaceWorkbenches(): Workbench[] {
+/**
+ * The workbenches of the current workspace, archived included. Viewed-only
+ * extras are left out. Sessions in a space are left out too (see
+ * `inPersonalList`), unless `withSpaceSessions` is set.
+ */
+export function useWorkspaceWorkbenches(opts: { withSpaceSessions?: boolean } = {}): Workbench[] {
   const map = useWorkbenchStore((s) => s.workbenches);
   const extra = useWorkbenchStore((s) => s.extraWorkbenchIds);
-  return useMemo(() => Object.values(map).filter((wb) => !extra[wb.id]), [map, extra]);
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  const teams = useSpacesStore((s) => s.teams);
+  const withSpaceSessions = Boolean(opts.withSpaceSessions);
+  return useMemo(
+    () => Object.values(map).filter((wb) => !extra[wb.id] && (withSpaceSessions || inPersonalList(wb, teams, offered))),
+    [map, extra, teams, offered, withSpaceSessions],
+  );
 }
 
 /** Live workbenches in sidebar order — the order ⌘1–9 counts in. */

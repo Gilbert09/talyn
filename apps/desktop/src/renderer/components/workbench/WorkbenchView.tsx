@@ -26,9 +26,11 @@ import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSel
 import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
+import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
+  useWorkbenchBackgroundLoad(workbench.id);
   const ops = useWorkbenchOps(workbench);
   const repoPaths = useRepoPaths();
   const foreign = workbench.runtime === 'local' && Boolean(workbench.deviceId) && workbench.deviceId !== getDeviceId();

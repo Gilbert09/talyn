@@ -10,6 +10,7 @@ import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { Button } from '../ui/button';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
+import { TriggerRow } from './TriggerRow';
 import type { AgentEvent, EditDiff, GroupedBlock, ToolGroupChild } from '@talyn/shared';
 import {
   buildBlocks,
@@ -140,6 +141,7 @@ function BlockViewImpl({
         return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
       if (block.subtype === 'talyn_memory' && block.memory) return <MemoryChangeCard change={block.memory} />;
       if (block.subtype === 'talyn_thread' && block.thread) return <ThreadSessionCard event={block.thread} />;
+      if (block.subtype === 'talyn_message' && block.trigger) return <TriggerRow trigger={block.trigger} text={block.text} />;
       if (block.subtype === 'talyn_message') return <TalynMessageCard text={block.text} />;
       return <SystemBlock text={block.text} subtype={block.subtype} />;
     case 'result':

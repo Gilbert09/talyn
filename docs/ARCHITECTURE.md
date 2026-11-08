@@ -2,6 +2,8 @@
 
 Architectural decisions, core concept deep-dives, and resolved questions. Updated when a decision is revisited. For active work see [`ROADMAP.md`](./ROADMAP.md); for the provider abstraction see [`CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
+For the proposed native mobile client, see [`MOBILE_APP_PLAN.md`](./MOBILE_APP_PLAN.md).
+
 ## System Diagram
 
 ```

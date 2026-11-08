@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -29,6 +30,28 @@ function fileIcons(): Plugin {
       }
     },
   };
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * The full commit SHA for Settings → Developer. The same env vars as the short
+ * SHA below, then `git rev-parse HEAD` for a local build. '' when none answer.
+ */
+function resolveBuildCommit(candidates: (string | undefined)[]): string {
+  for (const value of candidates) {
+    const sha = (value ?? '').trim().toLowerCase();
+    if (FULL_SHA.test(sha)) return sha;
+  }
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return FULL_SHA.test(sha) ? sha : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -61,15 +84,15 @@ export default defineConfig(({ mode, command }) => {
   // `vercel build --prebuilt` runs after our own checkout, so Vercel injects
   // VERCEL_GIT_COMMIT_SHA with no value — and `??` only falls through on
   // null/undefined, so the version shipped as "web/" with no SHA at all.
+  const shaCandidates = [
+    process.env.VITE_TALYN_BUILD_SHA,
+    process.env.VERCEL_GIT_COMMIT_SHA,
+    process.env.GITHUB_SHA,
+    env.VITE_TALYN_BUILD_SHA,
+  ];
   const sha =
-    [
-      process.env.VITE_TALYN_BUILD_SHA,
-      process.env.VERCEL_GIT_COMMIT_SHA,
-      process.env.GITHUB_SHA,
-      env.VITE_TALYN_BUILD_SHA,
-    ]
-      .find((v) => typeof v === 'string' && v.trim() !== '')
-      ?.slice(0, 7) ?? 'dev';
+    shaCandidates.find((v) => typeof v === 'string' && v.trim() !== '')?.slice(0, 7) ?? 'dev';
+  const commit = resolveBuildCommit(shaCandidates);
 
   return {
     plugins: [react(), fileIcons()],
@@ -78,6 +101,8 @@ export default defineConfig(({ mode, command }) => {
       // paywall gate. `web/<sha>` can never parse as an old desktop semver,
       // so the fail-closed gate always enforces for this client.
       'import.meta.env.VITE_TALYN_BUILD_SHA': JSON.stringify(sha),
+      // Full SHA for the GitHub commit link in Settings → Developer.
+      'import.meta.env.VITE_TALYN_BUILD_COMMIT': JSON.stringify(commit),
     },
     build: {
       outDir: 'dist',

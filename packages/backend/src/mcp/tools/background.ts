@@ -12,10 +12,8 @@ import { bool, defineTool, linesOrNone, requireId, str } from './helpers.js';
 import type { McpCallContext } from './index.js';
 
 /**
- * Session background jobs and wake-ups. Hidden when the `sessionBackground`
- * flag is off for the account; the routes answer 404 then too.
+ * Session background jobs and wake-ups.
  */
-const FEATURE = 'sessionBackground' as const;
 
 const sessionSchema = {
   session_id: { type: 'string', description: 'The session. Default: the calling session.' },
@@ -96,8 +94,7 @@ export const BACKGROUND = [
           ? 'Talyn starts a new turn in this chat when it exits. End your turn now unless you have other work.'
           : 'Talyn does not tell you when it exits. Check it with talyn_list_background or talyn_background_logs.',
       ].join(' ');
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'list_background',
@@ -108,8 +105,7 @@ export const BACKGROUND = [
     async (ownerId, args, ctx) => {
       const state = await callApi<WorkbenchBackground>(ownerId, 'GET', `${base(targetSession(args, ctx))}/background`);
       return linesOrNone(state.jobs, jobLine);
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'background_logs',
@@ -131,8 +127,7 @@ export const BACKGROUND = [
       );
       const head = `Job ${logs.jobId}: ${logs.status}${logs.exitCode !== null ? ` (exit ${logs.exitCode})` : ''}.`;
       return logs.lines.length ? `${head}\n${logs.lines.join('\n')}` : `${head} No output to show.`;
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'stop_background',
@@ -146,8 +141,7 @@ export const BACKGROUND = [
         `${base(targetSession(args, ctx))}/background/jobs/${encodeURIComponent(requireId(args, 'id'))}/stop`
       );
       return `Job ${job.id} is ${job.status}${job.exitCode !== null ? ` (exit ${job.exitCode})` : ''}.`;
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'schedule_wakeup',
@@ -170,8 +164,7 @@ export const BACKGROUND = [
       if (str(args.chat_id)) body.chatId = str(args.chat_id);
       const wakeup = await callApi<WorkbenchWakeup>(ownerId, 'POST', `${base(sessionId)}/wakeups`, body);
       return `Scheduled wake-up ${wakeup.id} for ${wakeup.wakeAt}. Cancel it with talyn_cancel_wakeup.`;
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'list_wakeups',
@@ -182,8 +175,7 @@ export const BACKGROUND = [
     async (ownerId, args, ctx) => {
       const state = await callApi<WorkbenchBackground>(ownerId, 'GET', `${base(targetSession(args, ctx))}/background`);
       return linesOrNone(state.wakeups, wakeupLine);
-    },
-    FEATURE
+    }
   ),
   defineTool(
     'cancel_wakeup',
@@ -197,7 +189,6 @@ export const BACKGROUND = [
         `${base(targetSession(args, ctx))}/wakeups/${encodeURIComponent(requireId(args, 'id'))}`
       );
       return `Wake-up ${wakeup.id} is ${wakeup.status}.`;
-    },
-    FEATURE
+    }
   ),
 ];

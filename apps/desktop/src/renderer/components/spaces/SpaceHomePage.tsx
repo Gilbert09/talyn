@@ -18,7 +18,13 @@ import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
 import { emptySpaceList, loadSpaceSessions, useSpacesStore, type SpaceRef } from '../../stores/spaces';
 import { TooltipProvider } from '../ui/tooltip';
 import { ModelPicker } from '../workbench/ComposerControls';
-import { AgentPicker, ControlChip, RepoPicker } from '../workbench/new/NewWorkbenchControls';
+import {
+  AgentPicker,
+  ConnectAgentNotice,
+  ControlChip,
+  RepoPicker,
+  unconnectedAgents,
+} from '../workbench/new/NewWorkbenchControls';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
 import { MemberAvatar, PresenceAvatars, SpaceDot } from './SpaceAvatars';
 
@@ -65,6 +71,8 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
   const repos = useSpacesStore((s) => s.repositories[space.id]);
   const openDialog = useSpacesStore((s) => s.openDialog);
   const homeWorkspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === team.homeWorkspaceId) ?? null);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const readiness = useReadiness(team.homeWorkspaceId);
   const [defaults] = useState(readSessionDefaults);
   const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
@@ -129,6 +137,10 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
           ? agentOk.reason
           : null;
   const canCreate = !blockedReason && !busy;
+  const missingAgents = readiness.sandbox !== null && sandbox.available ? unconnectedAgents(agent, choiceFor) : [];
+  // Settings shows the current workspace, so it can only fix the home workspace's agents when they are the same one.
+  const connectAgent =
+    team.homeWorkspaceId && team.homeWorkspaceId === currentWorkspaceId ? () => openSettings('agents') : undefined;
 
   const submit = async () => {
     const text = prompt.trim();
@@ -190,8 +202,8 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
             <Globe2 className="h-3.5 w-3.5" />
             <span>Internet {internetAccess ? 'on' : 'off'}</span>
           </ControlChip>
-          <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
-          <ModelPicker agent={agent} value={model} onChange={setModel} />
+          <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
+          <ModelPicker agent={agent} value={model} onChange={setModel} unconnected={missingAgents.map((m) => m.agent)} />
           <div className="ml-auto">
             <button
               type="button"
@@ -226,6 +238,7 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
           </p>
         )}
         {blockedReason && blockedReason !== 'Choose a repository.' && <p className="text-muted-foreground">{blockedReason}</p>}
+        {connectAgent && <ConnectAgentNotice agents={missingAgents} onConnect={connectAgent} />}
         {error && (
           <p role="alert" className="text-destructive">
             {error}

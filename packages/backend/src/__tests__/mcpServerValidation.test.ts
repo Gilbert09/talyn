@@ -93,7 +93,7 @@ describe('validateMcpServer', () => {
     'http://169.254.169.254/mcp',
     'http://something.local/mcp',
   ])('refuses %s, which a sandbox cannot reach', (url) => {
-    expect(() => validateMcpServer(input({ url }))).toThrow(/cannot reach/);
+    expect(() => validateMcpServer(input({ url }))).toThrow(/exact private route/);
   });
 
   describe('the tool allow-list', () => {

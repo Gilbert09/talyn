@@ -1,6 +1,6 @@
 # Session work
 
-This guide shows how to read and change the work inside a session: the changed files, the diff, the files, the scripts and the previews. It also shows the pull request actions, threads, chat extras, workspace memory and repository settings.
+This guide shows how to read and change the work inside a session: the changed files, the diff, the files, the scripts and the previews. It also shows the pull request actions, threads, timing, resize, chat extras, workspace memory, repository settings and setup.
 
 All examples use `$TALYN_TOKEN` and `$SESSION_ID` from the [quickstart](../PUBLIC_API.md#quickstart).
 
@@ -10,16 +10,18 @@ A session's sandbox sleeps when nobody uses it. A request that needs the sandbox
 
 These endpoints never wake the sandbox:
 
-- `GET /sessions/{id}/changes` without `live=true`
+- `GET /sessions/{id}/changes`, `diff`, `files` and `files/content` without `live=true`
 - `GET /sessions/{id}/scripts` without `live=true`
 - `GET /sessions/{id}/scripts/{name}/output`
 - `GET /sessions/{id}/previews`
 - `GET /sessions/{id}/timing`
 - The chat queue and checkpoint lists
 
-These endpoints wake the sandbox when it sleeps: `diff`, `files`, `files/content`, `changes?live=true`, `scripts?live=true`, starting or stopping a script, opening a pull request and restoring a checkpoint.
+These requests wake the sandbox when it sleeps: a read with `live=true`, starting or stopping a script, opening a pull request and restoring a checkpoint.
 
-While a session moves to a new sandbox (`status: "moving"`), a request that needs the sandbox waits for the move. It waits up to 3 minutes. An archived session answers `409` `not_ready`. Restore it first.
+Without `live=true`, a read of a sleeping sandbox answers from the copy that Talyn stored. If Talyn has no copy, the answer is `409` `snapshot_unavailable`. Then send `live=true`.
+
+While a session moves to a new sandbox (`status: "moving"`), a request that needs the sandbox waits for the move. It waits up to 3 minutes. An archived session has no sandbox. A read of an archived session answers from the stored copy, if there is one. Each other request answers `409` `not_ready`. Restore the session first.
 
 ## Changed files
 
@@ -55,11 +57,13 @@ Send `live=true` to read the sandbox now. If the sandbox sleeps and Talyn has no
 
 | Request | Answer |
 | --- | --- |
-| `GET /sessions/{id}/diff` | The whole diff as one unified patch. |
+| `GET /sessions/{id}/diff` | The whole diff as one unified patch. A sleeping sandbox answers from the stored copy, or from GitHub when all the work is pushed. |
 | `GET /sessions/{id}/diff?path=src/a.ts` | The diff of one file. |
 | `GET /sessions/{id}/diff?scope=uncommitted` | Only the changes that are not committed. `committed` gives only the commits. The default is `combined`. |
-| `GET /sessions/{id}/files` | Every path in the checkout. Files that git ignores are not in the list. |
-| `GET /sessions/{id}/files/content?path=src/a.ts` | One file. `encoding` is `utf8` for text and `base64` for a binary file. |
+| `GET /sessions/{id}/files` | Every path in the checkout, tracked and untracked. Files that git ignores are not in the list. |
+| `GET /sessions/{id}/files/content?path=src/a.ts` | One file. `encoding` is `utf8` for text and `base64` for a binary file. A sleeping sandbox answers a changed file from the stored copy, and a file without changes from GitHub at the merge base. |
+
+Each of these answers has `source` and `snapshot_at`. `source` is `live` (read from the sandbox now), `stored` (the copy that Talyn stored) or `github`. `snapshot_at` is `null` on a live read. Send `live=true` to read the sandbox now.
 
 A path must stay inside the repository. A path with `..` or a leading `/` answers `400` `bad_path`. A file over 4 MiB answers `413` `file_too_large`.
 
@@ -140,11 +144,16 @@ The port must be 1024 to 65535. A deployment with no preview domain answers `404
 | `POST /sessions/{id}/pull_request` | Commits the changes that are not committed, pushes the branch and opens a pull request. Body: `title` (required), `body`, `base`, `draft`, `commit_message`. |
 | `POST /sessions/{id}/fix_checks` | Sends the agent a prompt with the failing checks of the linked pull request. |
 | `POST /sessions/{id}/resolve_conflicts` | Sends the agent a prompt to merge the base branch and resolve the conflicts. |
+| `POST /sessions/{id}/address_review` | Sends the agent a prompt to read and address the unresolved review comments of the linked pull request. |
 | `POST /sessions/{id}/merge` | Merges the linked pull request with its merge method. The default is squash. |
 
 `pull_request` answers `201` with the new pull request. When the branch has an open pull request already, Talyn links the session to it and answers `200` with `existing: true`.
 
-`fix_checks` and `resolve_conflicts` answer `202`. The prompt goes to the chat that you name in `chat_id`, else to the latest chat. The message waits behind a running turn. Follow the reply on the events endpoints.
+`fix_checks`, `resolve_conflicts` and `address_review` answer `202` with an `action_receipt`. The prompt goes to the chat that you name in `chat_id`. Else it goes to the latest chat, or to a new chat. The receipt has the `chat_id`. The message waits behind a running turn. Follow the reply on the events endpoints. A cloud task that works on the same pull request answers `409` `task_active`.
+
+`merge` answers `200` with an `action_receipt`. A session with no linked pull request answers `409` `no_pull_request`. When GitHub refuses the merge, the answer is `409` `merge_failed`.
+
+A thread has no repository. Each of these actions on a thread answers `409` `thread_no_repository`.
 
 `pull_request` and `merge` use the GitHub rate limit of the token owner. Talyn opens and merges the pull request from the owner's GitHub account.
 
@@ -207,7 +216,9 @@ curl -s https://api.talyn.dev/v1/memories \
 
 `DELETE /memories/{id}` forgets the entry. Sessions stop seeing it, but it stays with `forgotten_at` set. `POST /memories/{id}/restore` brings it back. A workspace holds at most 500 live entries.
 
-Lists are newest first and use [cursors](pagination.md). Bodies are in a list only with `include_body=true`.
+Lists are newest first and use [cursors](pagination.md). Bodies are in a list only with `include_body=true`. Forgotten entries are in a list only with `include_forgotten=true`. Use `q` to search the name, the description and the body.
+
+The memory endpoints need the `memory:read` or `memory:write` scope. They also need sessions to be on for your account.
 
 ## Repository settings
 
@@ -218,12 +229,46 @@ Lists are newest first and use [cursors](pagination.md). Bodies are in a list on
 | `GET /repositories/{id}/instructions` | The instructions written in Talyn. Every turn of every session on the repository gets them. |
 | `PUT /repositories/{id}/instructions` | Replaces the instructions. Body: `body` (Markdown, at most 64 KiB) and `agents` (`claude`, `codex` or `both`). |
 | `DELETE /repositories/{id}/instructions` | Deletes the instructions. Answers `204`. |
-| `GET /repositories/{id}/setup_recipe` | The setup steps Talyn learned from sessions. New sandboxes run them. |
-| `POST /repositories/{id}/setup_recipe/steps/{step_id}/revert` | Stops a step. Talyn does not learn it again. |
+| `GET /repositories/{id}/setup_recipe` | Deprecated. Use `GET /repositories/{id}/setup`. The setup steps that Talyn learned, in the old shape. |
+| `POST /repositories/{id}/setup_recipe/steps/{step_id}/revert` | Deprecated. Use the `dismiss` endpoint below. It dismisses the step. |
 
 A settings read does not ask GitHub. The `detected` values are what Talyn read from the repository last time. `sandbox_size: "auto"` goes back to the detected size.
 
-These endpoints also need sessions to be on for your account. If they are not, the answer is `403` `workbenches_unavailable`. `GET /repositories/{id}` does not need sessions.
+## Setup
+
+The Setup list is the repository's own setup command, then one ordered list of setup steps. Each step has `run_on`:
+
+- `image`: the step goes into the repository's image.
+- `box`: the step runs on each new sandbox.
+- `both`: the step goes into the image and runs again on each sandbox.
+
+A step has `origin` `user` (a person wrote it), `learned` (Talyn learned it from a session) or `agent` (an agent recorded it). Its `status` is `active`, `suggested`, `dismissed` or `disabled`. A learned step is `suggested` until a person or the frequency rule accepts it.
+
+| Request | What it does |
+| --- | --- |
+| `GET /repositories/{id}/setup` | The Setup list. |
+| `PUT /repositories/{id}/setup` | Changes `steps`, `run_on_box`, `hosts` or `learning`. Send only the fields to change. |
+| `POST /repositories/{id}/setup/steps/{step_id}/accept` | Accepts a suggested or dismissed learned step. Talyn never removes a step that a person accepted. |
+| `POST /repositories/{id}/setup/steps/{step_id}/dismiss` | Dismisses a learned step. It stops and stays in the list, so Talyn does not suggest it again. |
+| `POST /repositories/{id}/setup/steps/{step_id}/retry` | Runs a disabled step again, or puts a step that failed in the image build back into the image. |
+| `GET /workspaces/{id}/sandbox_setup` | The dotfiles and setup steps of the workspace. They go into the image of each repository of the workspace, before the repository's steps. |
+| `PUT /workspaces/{id}/sandbox_setup` | Replaces each field that you send: `dotfiles`, `hosts` or `steps`. |
+| `POST /workspaces/{id}/sandbox_setup/steps/{step_id}/retry` | Runs a disabled workspace step again, or puts it back into the image. |
+
+In `PUT /repositories/{id}/setup`, `steps` is the whole list in its new order. A step with no `id` is a new step of your own. Talyn deletes your own step when it is not in the list. A learned step that is not in the list keeps its status and goes last. To remove a learned step, dismiss it.
+
+The rules for a write:
+
+- A step that reads a secret runs only on the sandbox.
+- A command that holds a literal token answers `400` `setup_step_refused`.
+- The command of a learned step cannot change. A change answers `400` `learned_command`.
+- A dismiss of your own step answers `409` `not_learned`. Remove it from the list instead.
+- The dotfiles install command cannot read a secret, because the image build has no secrets.
+- A refused write changes nothing.
+
+The workspace sandbox setup changes the sandboxes of each repository of the workspace. Thus `PUT` needs `repositories:write`.
+
+The repository settings and setup endpoints also need sessions to be on for your account. If they are not, the answer is `403` `workbenches_unavailable`. `GET /repositories/{id}` does not need sessions.
 
 ## A TypeScript example
 

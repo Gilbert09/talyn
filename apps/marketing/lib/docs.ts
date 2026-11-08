@@ -48,7 +48,7 @@ export const DOCS_NAV: DocsNavSection[] = [
   },
   {
     title: "API",
-    slugs: ["api", "api-reference", "mcp"],
+    slugs: ["api", "api-reference", "webhooks", "mcp"],
   },
   {
     title: "Reference",

@@ -1,3 +1,4 @@
+import { evictPrivateConnections } from '../mcpServers/privateTcp.js';
 import { isIP } from 'node:net';
 import type { PrivateConnector, PrivatePeer, PrivateRoute } from '@talyn/shared';
 import { workspaceHasFeature } from '../featureFlags.js';
@@ -45,15 +46,16 @@ export async function workspaceMayUsePrivateRoutes(workspaceId: string): Promise
 
 export async function startPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
   try {
+    evictPrivateConnections(workspaceId);
     return await client().startPrivateConnector(workspaceId);
   } catch (error) {
     throw mapPrivateRoutesError(error);
   }
 }
 
-export async function getPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
+export async function getPrivateConnector(workspaceId: string, signal?: AbortSignal): Promise<PrivateConnector> {
   try {
-    return await client().getPrivateConnector(workspaceId);
+    return await client().getPrivateConnector(workspaceId, signal);
   } catch (error) {
     throw mapPrivateRoutesError(error);
   }
@@ -99,6 +101,7 @@ export async function replacePrivateRoutes(
   routes: PrivateRoute[],
 ): Promise<PrivateConnector> {
   try {
+    evictPrivateConnections(workspaceId);
     return await client().replacePrivateRoutes(workspaceId, routes);
   } catch (error) {
     throw mapPrivateRoutesError(error);
@@ -107,6 +110,7 @@ export async function replacePrivateRoutes(
 
 export async function deletePrivateConnector(workspaceId: string): Promise<void> {
   try {
+    evictPrivateConnections(workspaceId);
     await client().deletePrivateConnector(workspaceId);
   } catch (error) {
     throw mapPrivateRoutesError(error);
@@ -175,12 +179,12 @@ function validHost(host: string): boolean {
   return labels.length > 0 && labels.every((label) => HOST_LABEL.test(label));
 }
 
-/** Add connected private routes while preserving credentials and public egress. */
+/** Keep exact grants so a disconnected private route cannot select public transport. */
 export function composePrivateRoutesPolicy(
   policy: FleetSandboxPolicy,
   connector: PrivateConnector | null,
 ): FleetSandboxPolicy {
-  if (connector?.status !== 'connected' || connector.routes.length === 0) return policy;
+  if (!connector || connector.routes.length === 0) return policy;
   return {
     ...policy,
     version: 2,
@@ -195,17 +199,15 @@ export async function sandboxPolicyForWorkspace(
 ): Promise<FleetSandboxPolicy> {
   if (!(await workspaceMayUsePrivateRoutes(workspaceId))) return policy;
   try {
-    return composePrivateRoutesPolicy(policy, await getPrivateConnector(workspaceId));
+    const connector = await getPrivateConnector(workspaceId);
+    if (connector.workspaceId !== workspaceId) {
+      throw new PrivateRoutesServiceError('The private connector belongs to another workspace.', 503, 'workspace_mismatch');
+    }
+    return composePrivateRoutesPolicy(policy, connector);
   } catch (error) {
     const mapped = mapPrivateRoutesError(error);
-    if (mapped.status !== 404) {
-      console.warn('[private-routes] sandbox policy omitted because connector state is unavailable', {
-        workspaceId,
-        status: mapped.status,
-        code: mapped.code,
-      });
-    }
-    return policy;
+    if (mapped.status === 404) return policy;
+    throw mapped;
   }
 }
 

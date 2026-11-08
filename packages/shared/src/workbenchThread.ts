@@ -5,11 +5,12 @@
  * for most changes a short Talyn message that gives the thread's agent a turn.
  */
 
-export type ThreadSessionAction = 'session_started' | 'session_finished' | 'pr_opened' | 'needs_input' | 'paused';
+export type ThreadSessionAction = 'session_started' | 'session_finished' | 'pr_opened' | 'pr_merged' | 'needs_input' | 'paused';
 export const THREAD_SESSION_ACTIONS: readonly ThreadSessionAction[] = [
   'session_started',
   'session_finished',
   'pr_opened',
+  'pr_merged',
   'needs_input',
   'paused',
 ];
@@ -51,6 +52,8 @@ export function threadSessionEventText(event: ThreadSessionEvent): string {
       return `${who} started`;
     case 'pr_opened':
       return `${who} opened a pull request`;
+    case 'pr_merged':
+      return `${who}: pull request merged`;
     case 'needs_input':
       return `${who} needs an answer`;
     case 'session_finished':

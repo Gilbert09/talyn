@@ -6,7 +6,6 @@ import type {
   WorkbenchWakeupCreatedBy,
 } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { isFeatureEnabled } from '../services/featureFlags.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import {
   backgroundOf,
@@ -22,13 +21,12 @@ import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { getWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
 
 /**
- * Session background jobs and wake-ups, behind the `sessionBackground` flag.
+ * Session background jobs and wake-ups.
  * The contract is `api.workbenches.background*` in `@talyn/client`.
  *
  * Owner only: every handler authorises the session's workspace, then the
- * `workbenches` flag, then this flag for the caller. With the flag off, every
- * route answers 404, as if it did not exist. Talyn's MCP tools reach these
- * routes as the owner. Space teammates get nothing here yet.
+ * `workbenches` flag for the caller. Talyn's MCP tools reach these routes as
+ * the owner. Space teammates get nothing here yet.
  *
  * Mounted pre-`ownerScope` with the other workbench routers: the tables are
  * backend-pool-only, and a stop or a log read waits on the fleet.
@@ -71,10 +69,6 @@ export function workbenchBackgroundRoutes(): Router {
     const subject = { distinctId: user.id, email: user.email };
     if (!(await userMayUseWorkbenches(subject))) {
       bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
-      return null;
-    }
-    if (!(await isFeatureEnabled('sessionBackground', subject))) {
-      bad(res, 404, 'Not found', 'not_found');
       return null;
     }
     return row;

@@ -53,6 +53,20 @@ export function switchContext(context: AppContext): void {
   useNavigationStore.getState().navigate({ view: 'home' });
 }
 
+/**
+ * A session in a space shows in that space, not in Personal. It shows in
+ * Personal when Spaces is off or its space is gone, so it is never lost.
+ * While my teams load, it stays out, so it does not show and then go.
+ */
+export function inPersonalList(
+  workbench: Pick<Workbench, 'spaceId'>,
+  teams: SpacesTeam[] | null,
+  offered: boolean,
+): boolean {
+  if (!workbench.spaceId || !offered) return true;
+  return teams !== null && !findSpace(teams, workbench.spaceId);
+}
+
 export function isWorkbenchOwner(workbench: Pick<Workbench, 'workspaceId'>, workspaces: Workspace[], currentWorkspaceId: string | null): boolean {
   return workbench.workspaceId === currentWorkspaceId || workspaces.some((w) => w.id === workbench.workspaceId);
 }

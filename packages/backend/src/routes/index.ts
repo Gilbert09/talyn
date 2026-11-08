@@ -257,7 +257,7 @@ export function setupRoutes(app: Express): void {
   // The PR routes that are not in routes/workbenches.ts. Same prefix and gate, mounted first.
   app.use(`${api}/workbenches`, mount(workbenchPullRequestRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchAttachmentRoutes()));
-  // Background jobs and wake-ups: same prefix, gated on the sessionBackground flag.
+  // Background jobs and wake-ups use the same prefix as other session routes.
   app.use(`${api}/workbenches`, mount(workbenchBackgroundRoutes()));
   app.use(`${api}/workbenches`, mount(workbenchRoutes()));
 

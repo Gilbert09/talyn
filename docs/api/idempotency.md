@@ -13,6 +13,7 @@ Send the header on these endpoints:
 - `POST /sessions/{id}/pull_request`
 - `POST /sessions/{id}/fix_checks`
 - `POST /sessions/{id}/resolve_conflicts`
+- `POST /sessions/{id}/address_review`
 - `POST /sessions/{id}/merge`
 - `POST /sessions/{id}/resize`
 - `POST /sessions/{id}/previews`
@@ -133,5 +134,6 @@ async function createSession(body: Record<string, unknown>) {
 ## Notes
 
 - A replayed answer has the data from the first answer. The session can have changed since then. Read `GET /sessions/{id}` for the current state.
+- Talyn does not store a webhook secret with the key. A replay of `POST /webhooks` or `POST /webhooks/{id}/rotate-secret` shows the current secret of the endpoint.
 - A send of `POST /chats/{id}/messages` with a key sends the message one time. Without a key, a retry can send it twice.
 - Do not reuse a key for a different request, even after an error. Use a new key for a new request.

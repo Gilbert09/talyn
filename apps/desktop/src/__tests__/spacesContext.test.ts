@@ -19,6 +19,7 @@ import {
   contextEntries,
   contextsEqual,
   groupSpaceSessions,
+  inPersonalList,
   isWorkbenchOwner,
   presenceSentence,
   promptRefusal,
@@ -229,6 +230,23 @@ describe('isWorkbenchOwner', () => {
     ["a teammate's workspace", 'ws-ana', 'ws1', false],
   ])('%s', (_name, workspaceId, current, expected) => {
     expect(isWorkbenchOwner({ workspaceId }, [workspace('ws1'), workspace('ws2')], current)).toBe(expected);
+  });
+});
+
+describe('inPersonalList', () => {
+  const teams = [team('t1', ['s1', 's2'])];
+  it.each<[string, string | null | undefined, SpacesTeam[] | null, boolean, boolean]>([
+    ['a Personal session', null, teams, true, true],
+    ['a session with no space field', undefined, teams, true, true],
+    ['a session in one of my spaces', 's1', teams, true, false],
+    ['a session in my other space', 's2', teams, true, false],
+    ['a space session while my teams load', 's1', null, true, false],
+    ['a session in a space that is gone', 's-gone', teams, true, true],
+    ['a space session when I have no teams', 's1', [], true, true],
+    ['a space session when Spaces is off', 's1', teams, false, true],
+    ['a Personal session when Spaces is off', null, null, false, true],
+  ])('%s', (_name, spaceId, list, offered, expected) => {
+    expect(inPersonalList({ spaceId }, list, offered)).toBe(expected);
   });
 });
 

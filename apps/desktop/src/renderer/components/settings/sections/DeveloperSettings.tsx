@@ -5,6 +5,7 @@ import { getSupabase, isSupabaseConfigured } from '../../../lib/supabase';
 import { setLogoutReason } from '../../../lib/logoutReason';
 import { useIsDevBuild } from '../../../hooks/useIsDevBuild';
 import { DeveloperInternals } from '../../panels/DeveloperInternals';
+import { BuildInfo } from './BuildInfo';
 import { Button } from '../../ui/button';
 import { SettingRow, SettingsPage, SettingsSection } from '../../ui/settings';
 
@@ -36,7 +37,9 @@ export function DeveloperSettings() {
   }
 
   return (
-    <SettingsPage title="Developer" description="Your account's GitHub rate limits, agents and recent activity">
+    <SettingsPage title="Developer" description="This build, and your account's GitHub rate limits, agents and recent activity">
+      <BuildInfo />
+
       <DeveloperInternals />
 
       {isDevBuild && (

@@ -31,6 +31,9 @@ export const NEW_BRANCH: NewWorkbenchSource = { kind: 'new' };
 
 export const AGENT_LABEL: Record<WorkbenchAgent, string> = { claude: 'Claude Code', codex: 'Codex' };
 
+/** The vendor's short name, for a sentence. */
+const AGENT_NAME: Record<WorkbenchAgent, string> = { claude: 'Claude', codex: 'Codex' };
+
 const chipClass =
   'inline-flex h-7 max-w-[16rem] items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50';
 
@@ -44,6 +47,9 @@ ControlChip.displayName = 'ControlChip';
 /** The repository picker's value for a thread: no one repository, so the work can cross several. */
 export const ANY_REPOSITORY = 'any-repository';
 
+/** The `owner/name` shape the backend accepts. */
+const REPO_FULL_NAME = /^[\w.-]+\/[\w.-]+$/;
+
 export function RepoPicker({
   repositories,
   value,
@@ -52,6 +58,10 @@ export function RepoPicker({
   allowAnyRepository = false,
   extraAction,
   emptyText = 'No watched repository matches.',
+  allowCustom = false,
+  composerShortcut = true,
+  placeholder = 'Choose a repository',
+  className,
 }: {
   repositories: WatchedRepo[];
   value: string;
@@ -62,34 +72,91 @@ export function RepoPicker({
   /** One more item under the list, like "Add repository to space…". */
   extraAction?: { label: string; onSelect: () => void };
   emptyText?: string;
+  /** Offer a typed `owner/name` that is not in the list. `onChange` then gets the name, not an id. */
+  allowCustom?: boolean;
+  /** The composer's picker: opens on `/` and gives focus back to the composer when it closes. */
+  composerShortcut?: boolean;
+  placeholder?: string;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (disabled) return undefined;
+    if (disabled || !composerShortcut) return undefined;
     const show = () => setOpen(true);
     window.addEventListener(OPEN_REPOSITORY_PICKER_EVENT, show);
     return () => window.removeEventListener(OPEN_REPOSITORY_PICKER_EVENT, show);
-  }, [disabled]);
+  }, [disabled, composerShortcut]);
   const current = repositories.find((r) => r.id === value);
   const anyRepository = allowAnyRepository && value === ANY_REPOSITORY;
+  const label = anyRepository ? 'Any repository' : current?.fullName ?? (allowCustom && value ? value : placeholder);
+  const typed = search.trim();
+  const customName =
+    allowCustom &&
+    REPO_FULL_NAME.test(typed) &&
+    !repositories.some((r) => r.fullName.toLowerCase() === typed.toLowerCase())
+      ? typed
+      : null;
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    if (!next) setSearch('');
+  };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
-        <ControlChip aria-label="Repository" data-attr="new-workbench-repo" disabled={disabled}>
+        <ControlChip
+          aria-label="Repository"
+          data-attr={composerShortcut ? 'new-workbench-repo' : 'repo-picker'}
+          disabled={disabled}
+          className={className}
+        >
           {anyRepository ? <Layers className="h-3.5 w-3.5 shrink-0" /> : <FolderGit2 className="h-3.5 w-3.5 shrink-0" />}
-          <span className="truncate font-medium text-foreground">
-            {anyRepository ? 'Any repository' : current?.fullName ?? 'Choose a repository'}
-          </span>
-          <ChevronDown className="h-3 w-3 shrink-0" />
-          <Kbd keys="/" />
+          <span className="truncate font-medium text-foreground">{label}</span>
+          <ChevronDown className="ml-auto h-3 w-3 shrink-0" />
+          {composerShortcut && <Kbd keys="/" />}
         </ControlChip>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0" onOpenAutoFocus={(event: Event) => { event.preventDefault(); searchRef.current?.focus(); }} onCloseAutoFocus={(event: Event) => { event.preventDefault(); document.querySelector<HTMLTextAreaElement>('[data-new-workbench-composer]')?.focus(); }}>
+      <PopoverContent
+        align="start"
+        className="w-72 p-0"
+        onOpenAutoFocus={(event: Event) => {
+          event.preventDefault();
+          searchRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event: Event) => {
+          if (!composerShortcut) return;
+          event.preventDefault();
+          document.querySelector<HTMLTextAreaElement>('[data-new-workbench-composer]')?.focus();
+        }}
+      >
         <Command>
-          <CommandInput ref={searchRef} placeholder="Find a repository…" />
+          <CommandInput
+            ref={searchRef}
+            value={search}
+            onValueChange={setSearch}
+            placeholder={allowCustom ? 'Find a repository, or type owner/name…' : 'Find a repository…'}
+          />
           <CommandList>
-            <CommandEmpty>{emptyText}</CommandEmpty>
+            {!customName && <CommandEmpty>{emptyText}</CommandEmpty>}
+            {customName && (
+              <CommandGroup forceMount>
+                <CommandItem
+                  forceMount
+                  value={`__custom ${customName}`}
+                  data-attr="repo-picker-custom"
+                  onSelect={() => {
+                    onChange(customName);
+                    changeOpen(false);
+                  }}
+                >
+                  <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    Use <span className="font-medium">{customName}</span>
+                  </span>
+                </CommandItem>
+              </CommandGroup>
+            )}
             {allowAnyRepository && (
               <CommandGroup>
                 <CommandItem
@@ -97,7 +164,7 @@ export function RepoPicker({
                   data-attr="new-workbench-any-repository"
                   onSelect={() => {
                     onChange(ANY_REPOSITORY);
-                    setOpen(false);
+                    changeOpen(false);
                   }}
                 >
                   <Layers className="h-3.5 w-3.5 shrink-0" />
@@ -118,7 +185,7 @@ export function RepoPicker({
                   value={r.fullName}
                   onSelect={() => {
                     onChange(r.id);
-                    setOpen(false);
+                    changeOpen(false);
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate">{r.fullName}</span>
@@ -132,7 +199,7 @@ export function RepoPicker({
                   value={`__action ${extraAction.label}`}
                   data-attr="repo-picker-extra-action"
                   onSelect={() => {
-                    setOpen(false);
+                    changeOpen(false);
                     extraAction.onSelect();
                   }}
                 >
@@ -440,10 +507,13 @@ export function AgentPicker({
   value,
   onChange,
   choiceFor,
+  onConnect,
 }: {
   value: WorkbenchAgent | null;
   onChange: (agent: WorkbenchAgent) => void;
   choiceFor: (agent: WorkbenchAgent) => Choice;
+  /** Opens the place to connect an agent. Without it, an unconnected agent is only disabled. */
+  onConnect?: (agent: WorkbenchAgent) => void;
 }) {
   const [open, setOpen] = useState(false);
   const agents = useMemo(() => (['claude', 'codex'] as const).map((a) => ({ agent: a, choice: choiceFor(a) })), [choiceFor]);
@@ -458,30 +528,88 @@ export function AgentPicker({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-1">
         <ul role="listbox" aria-label="Agent">
-          {agents.map(({ agent, choice }) => (
-            <li key={agent} role="option" aria-selected={agent === value} aria-disabled={!choice.available}>
-              <button
-                type="button"
-                disabled={!choice.available}
-                onClick={() => {
-                  onChange(agent);
-                  setOpen(false);
-                }}
-                className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              >
-                <FleetAgentMark agent={agent} className={cn('mt-0.5 h-4 w-4', !choice.available && 'opacity-50')} />
-                <span className="min-w-0 flex-1">
-                  <span className={cn('block', !choice.available && 'text-muted-foreground')}>{AGENT_LABEL[agent]}</span>
-                  {(choice.reason || choice.warning) && (
-                    <span className="block text-[11px] text-muted-foreground">{choice.reason ?? choice.warning}</span>
+          {agents.map(({ agent, choice }) => {
+            // An agent the workspace has not connected is a link to connect it, not a dead row.
+            const connect = !choice.available && choice.connect && onConnect ? onConnect : null;
+            return (
+              <li key={agent} role="option" aria-selected={agent === value} aria-disabled={!choice.available}>
+                <button
+                  type="button"
+                  disabled={!choice.available && !connect}
+                  onClick={() => {
+                    if (connect) connect(agent);
+                    else onChange(agent);
+                    setOpen(false);
+                  }}
+                  data-attr={connect ? `new-workbench-connect-${agent}` : undefined}
+                  className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <FleetAgentMark agent={agent} className={cn('mt-0.5 h-4 w-4', !choice.available && 'opacity-50')} />
+                  <span className="min-w-0 flex-1">
+                    <span className={cn('block', !choice.available && 'text-muted-foreground')}>{AGENT_LABEL[agent]}</span>
+                    {(choice.reason || choice.warning) && (
+                      <span className="block text-[11px] text-muted-foreground">{choice.reason ?? choice.warning}</span>
+                    )}
+                  </span>
+                  {connect && (
+                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-primary">
+                      {choice.connect === 'reauth' ? 'Sign in' : 'Connect'}
+                    </span>
                   )}
-                </span>
-                {agent === value && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
-              </button>
-            </li>
-          ))}
+                  {agent === value && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The agents, other than `current`, that the workspace must connect before they can run. */
+export function unconnectedAgents(
+  current: WorkbenchAgent,
+  choiceFor: (agent: WorkbenchAgent) => Choice,
+): Array<{ agent: WorkbenchAgent; fix: NonNullable<Choice['connect']> }> {
+  return (['claude', 'codex'] as const).flatMap((agent) => {
+    const fix = agent === current ? undefined : choiceFor(agent).connect;
+    return fix ? [{ agent, fix }] : [];
+  });
+}
+
+/**
+ * "Claude is not connected …" under a new-session composer. Without it, a
+ * workspace with only Codex quietly starts every session on Codex, and the
+ * Claude models look missing rather than locked.
+ */
+export function ConnectAgentNotice({
+  agents,
+  onConnect,
+}: {
+  agents: ReturnType<typeof unconnectedAgents>;
+  onConnect: (agent: WorkbenchAgent) => void;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <>
+      {agents.map(({ agent, fix }) => {
+        const name = AGENT_NAME[agent];
+        return (
+          <p key={agent} className="text-muted-foreground" data-attr={`new-workbench-${agent}-not-connected`}>
+            {fix === 'reauth'
+              ? `The ${name} sign-in for this workspace has expired, so ${name} models cannot run.`
+              : `${name} is not connected to this workspace, so ${name} models cannot run.`}{' '}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-foreground"
+              onClick={() => onConnect(agent)}
+            >
+              {fix === 'reauth' ? `Sign in to ${name} again` : `Connect ${name}`}
+            </button>
+          </p>
+        );
+      })}
+    </>
   );
 }

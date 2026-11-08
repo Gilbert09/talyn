@@ -24,8 +24,8 @@ The steps use `curl`. A TypeScript version of the whole flow follows the steps. 
 ### Before you start
 
 1. Open the Talyn app.
-2. Go to Settings, then Developer, then API tokens.
-3. Create a token with the scopes `workspaces:read`, `repositories:read` and `sessions:write`.
+2. Go to Settings, then API tokens.
+3. Create a token with the scopes `workspaces:read`, `repositories:read` and `sessions:write`. The "Full access" preset gives these scopes.
 4. Copy the token. The app shows it one time.
 5. Save the token in your shell.
 
@@ -277,6 +277,7 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | POST | `/sessions/{id}/pull_request` | `sessions:write` | Commit, push and open a pull request |
 | POST | `/sessions/{id}/fix_checks` | `sessions:write` | Ask the agent to fix failing checks |
 | POST | `/sessions/{id}/resolve_conflicts` | `sessions:write` | Ask the agent to resolve conflicts |
+| POST | `/sessions/{id}/address_review` | `sessions:write` | Ask the agent to address review comments |
 | POST | `/sessions/{id}/merge` | `sessions:write` | Merge the linked pull request |
 | GET | `/sessions/{id}/sessions` | `sessions:read` | List the sessions of a thread |
 | POST | `/sessions/{id}/thread` | `sessions:write` | Continue a session as a thread |
@@ -302,8 +303,16 @@ Paths are relative to the base URL. A write scope includes its read scope.
 | GET | `/repositories/{id}/instructions` | `repositories:read` | Get repository instructions |
 | PUT | `/repositories/{id}/instructions` | `repositories:write` | Write repository instructions |
 | DELETE | `/repositories/{id}/instructions` | `repositories:write` | Delete repository instructions |
-| GET | `/repositories/{id}/setup_recipe` | `repositories:read` | Get the learned setup recipe |
-| POST | `/repositories/{id}/setup_recipe/steps/{step_id}/revert` | `repositories:write` | Revert a setup step |
+| GET | `/repositories/{id}/setup` | `repositories:read` | Get the Setup list |
+| PUT | `/repositories/{id}/setup` | `repositories:write` | Write the Setup list |
+| POST | `/repositories/{id}/setup/steps/{step_id}/accept` | `repositories:write` | Accept a learned setup step |
+| POST | `/repositories/{id}/setup/steps/{step_id}/dismiss` | `repositories:write` | Dismiss a learned setup step |
+| POST | `/repositories/{id}/setup/steps/{step_id}/retry` | `repositories:write` | Retry a setup step |
+| GET | `/workspaces/{id}/sandbox_setup` | `repositories:read` | Get the dotfiles and setup steps of a workspace |
+| PUT | `/workspaces/{id}/sandbox_setup` | `repositories:write` | Write the dotfiles and setup steps of a workspace |
+| POST | `/workspaces/{id}/sandbox_setup/steps/{step_id}/retry` | `repositories:write` | Retry a workspace setup step |
+| GET | `/repositories/{id}/setup_recipe` | `repositories:read` | Deprecated. Use `GET /repositories/{id}/setup` |
+| POST | `/repositories/{id}/setup_recipe/steps/{step_id}/revert` | `repositories:write` | Deprecated. Use the `dismiss` endpoint |
 | GET | `/openapi.json` | none | Get the OpenAPI document |
 
 ## Sessions in spaces
@@ -313,6 +322,7 @@ To start a session in a space, set `space_id` on `POST /sessions`. The token als
 Send `repository_id` from one of your workspaces, or send `repository_full_name` as `owner/name`.
 Talyn uses your home workspace for the team. Talyn adds the repository there when needed.
 If you send `workspace_id`, it must be that home workspace.
+With `space_id`, you cannot send `kind: "thread"`, `thread_id`, `pull_request_id` or `auto_create_pr`. Each answers `400` `invalid_parameter`.
 
 A teammate can read a space session and its transcript when their GitHub account can read its repository.
 Only the session owner can change it.
@@ -343,7 +353,7 @@ A box that you start through the API counts against your plan in the same way as
 - [Rate limits](api/rate-limits.md): limits, headers and retry.
 - [Pull requests](api/pull-requests.md): pull requests, the merge queue and code reviews.
 - [Webhooks](api/webhooks.md): events, signatures, retries and delivery logs.
-- [Session work](api/session-work.md): changes, files, scripts, previews, pull requests, threads, memory and repository settings.
+- [Session work](api/session-work.md): changes, files, scripts, previews, pull request actions, threads, timing, resize, chats, memory, repository settings and setup.
 
 ## What is not in v1 yet
 

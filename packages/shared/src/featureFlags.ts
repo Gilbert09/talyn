@@ -385,21 +385,6 @@ export const FEATURE_FLAGS = {
    * every account. Evaluated against the TOKEN OWNER on every `/v1` request
    * and when a token is minted; listing and revoking tokens are never gated.
    */
-  /**
-   * Session background jobs and wake-ups: an agent starts a command that
-   * outlives its turn, and Talyn sends a new turn into the chat later. Fails
-   * CLOSED: a job can keep a box awake, and a wake-up wakes one, so both spend
-   * box-hours with nobody watching.
-   */
-  sessionBackground: {
-    posthogKey: 'session-background',
-    envOverride: 'SESSION_BACKGROUND_ENABLED',
-    fallback: false,
-    description: 'Session background jobs and scheduled wake-ups',
-    availability: 'gated',
-    releaseScopes: ['session-background'],
-  },
-
   publicApi: {
     posthogKey: 'public-api',
     envOverride: 'PUBLIC_API_ENABLED',
@@ -535,7 +520,6 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'trunkMergeEta',
   'privateRoutes',
   'publicApi',
-  'sessionBackground',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

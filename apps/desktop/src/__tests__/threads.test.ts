@@ -134,6 +134,7 @@ describe('threadCardTitle', () => {
     [{ action: 'session_finished', status: 'idle' }, 'Session finished its turn'],
     [{ action: 'session_finished', status: 'error' }, 'Session stopped with an error'],
     [{ action: 'pr_opened', status: 'idle' }, 'Pull request opened'],
+    [{ action: 'pr_merged', status: 'idle' }, 'Pull request merged'],
     [{ action: 'needs_input', status: 'awaiting_input' }, 'Session needs an answer'],
     [{ action: 'paused', status: '' }, 'Paused'],
   ])('%j', (event, title) => {

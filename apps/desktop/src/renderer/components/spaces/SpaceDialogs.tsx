@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
+import { RepoPicker } from '../workbench/new/NewWorkbenchControls';
 
 export const SPACE_COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#64748b'];
 
@@ -26,7 +27,7 @@ function NameDialog({
   submitLabel,
   onSubmit,
   children,
-  suggestions,
+  renderField,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -38,7 +39,8 @@ function NameDialog({
   submitLabel: string;
   onSubmit: (value: string) => Promise<void>;
   children?: React.ReactNode;
-  suggestions?: string[];
+  /** Replaces the text input, for a field like the repository picker. */
+  renderField?: (value: string, setValue: (value: string) => void) => React.ReactNode;
 }) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -78,27 +80,26 @@ function NameDialog({
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         <div className="space-y-3 py-2">
-          <label className="block text-sm font-medium">
-            {label}
-            <Input
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={placeholder}
-              maxLength={maxLength}
-              autoFocus
-              list={suggestions?.length ? 'name-dialog-suggestions' : undefined}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submit();
-              }}
-              className="mt-1"
-            />
-          </label>
-          {suggestions && suggestions.length > 0 && (
-            <datalist id="name-dialog-suggestions">
-              {suggestions.map((s) => (
-                <option key={s} value={s} />
-              ))}
-            </datalist>
+          {renderField ? (
+            <div className="space-y-1">
+              <p className="text-sm font-medium">{label}</p>
+              {renderField(value, setValue)}
+            </div>
+          ) : (
+            <label className="block text-sm font-medium">
+              {label}
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={placeholder}
+                maxLength={maxLength}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submit();
+                }}
+                className="mt-1"
+              />
+            </label>
           )}
           {children}
           {error && (
@@ -201,7 +202,10 @@ export function AddSpaceRepositoryDialog({
   const repositories = useWorkspaceStore((s) => s.repositories);
   const existing = useSpacesStore((s) => (spaceId ? s.repositories[spaceId] : undefined));
   const taken = new Set((existing ?? []).map((r) => r.repoFullName.toLowerCase()));
-  const suggestions = repositories.map((r) => r.fullName).filter((name) => !taken.has(name.toLowerCase()));
+  // Keyed by full name, so the picker hands back `owner/name` for a listed or a typed repository.
+  const choices = repositories
+    .filter((r) => !taken.has(r.fullName.toLowerCase()))
+    .map((r) => ({ ...r, id: r.fullName }));
   return (
     <NameDialog
       open={spaceId !== null}
@@ -209,9 +213,18 @@ export function AddSpaceRepositoryDialog({
       title="Add a repository to the space"
       description="Your GitHub account must be able to read it."
       label="Repository"
-      placeholder="owner/name"
       submitLabel="Add repository"
-      suggestions={suggestions}
+      renderField={(value, setValue) => (
+        <RepoPicker
+          repositories={choices}
+          value={value}
+          onChange={setValue}
+          allowCustom
+          composerShortcut={false}
+          emptyText="No watched repository matches. Type owner/name to add any repository."
+          className="h-9 w-full max-w-none border border-input px-3 text-sm"
+        />
+      )}
       onSubmit={async (name) => {
         if (!spaceId) return;
         const repo = await api.spaces.addRepository(spaceId, name);

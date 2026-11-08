@@ -27,12 +27,14 @@ import {
   AgentPicker,
   ANY_REPOSITORY,
   BaseBranchField,
+  ConnectAgentNotice,
   ControlChip,
   CreateFromPopover,
   NEW_BRANCH,
   RepoPicker,
   RuntimeToggle,
   SourceChip,
+  unconnectedAgents,
   type NewWorkbenchSource,
 } from '../components/workbench/new/NewWorkbenchControls';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
@@ -48,12 +50,6 @@ import { defaultRepositoryId, writeLastRepository } from '../components/workbenc
 const PLACEHOLDER = 'Describe a task. @ references files. Enter creates and starts the session. ⇧Enter adds a line.';
 const THREAD_PLACEHOLDER = 'What do you want to get done? A thread can work across repositories.';
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
-
-interface LaunchingWorkbench {
-  kind: 'session' | 'thread';
-  prompt: string;
-  target: string;
-}
 
 /** A repository's local checkout, matched case-insensitively: a remote's case need not match GitHub's. */
 export function localPathFor(paths: Record<string, string>, repoFullName: string | undefined): string | null {
@@ -105,7 +101,6 @@ export function NewWorkbenchPage() {
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
   const autoCreatePr = defaults.autoCreatePr;
   const [pathError, setPathError] = useState<string | null>(null);
-  const [launching, setLaunching] = useState<LaunchingWorkbench | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
   const [active, setActive] = useState(0);
@@ -290,11 +285,6 @@ export function NewWorkbenchPage() {
   const submit = async (text: string) => {
     if (!canCreate || !workspaceId || (mode === 'session' && !repo)) return;
     setPathError(null);
-    setLaunching({
-      kind: mode,
-      prompt: text.trim(),
-      target: mode === 'thread' ? 'Any repository' : repo!.fullName,
-    });
     const wb = await create({
       workspaceId,
       ...(mode === 'thread' ? { kind: 'thread' as const } : { repositoryId: repo!.id, repoFullName: repo!.fullName }),
@@ -317,8 +307,6 @@ export function NewWorkbenchPage() {
       setPrompt('');
       images.clear();
       setSource(NEW_BRANCH);
-    } else {
-      setLaunching(null);
     }
   };
 
@@ -386,28 +374,10 @@ export function NewWorkbenchPage() {
   const unavailable = readinessKnown
     ? (mode === 'thread' ? ['sandbox'] as const : ['sandbox', 'local'] as const).filter((r) => !runtimes[r].available)
     : [];
-
-  if (launching) {
-    const label = launching.kind === 'thread' ? 'thread' : 'session';
-    return (
-      <TooltipProvider delayDuration={300}>
-        <div className="h-full overflow-y-auto" data-attr="new-workbench-launching">
-          <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center gap-6 px-6 py-16">
-            <h1 className="text-center font-display text-2xl font-semibold tracking-tight">Starting your {label}…</h1>
-            <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
-                {launching.prompt}
-              </div>
-            </div>
-            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground" aria-live="polite">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Creating the {label} in {launching.target}…
-            </div>
-          </div>
-        </div>
-      </TooltipProvider>
-    );
-  }
+  // Only when a sandbox session can start at all: otherwise "Sandbox unavailable" already says why.
+  const missingAgents =
+    readinessKnown && effectiveRuntime === 'sandbox' && runtimes.sandbox.available ? unconnectedAgents(agent, choiceFor) : [];
+  const connectAgent = () => openSettings('agents');
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -541,8 +511,8 @@ export function NewWorkbenchPage() {
                   <span className="truncate font-mono">{repoPath ? shortPath(repoPath) : 'Choose folder…'}</span>
                 </ControlChip>
               )}
-              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
-              <ModelPicker agent={agent} value={model} onChange={setModel} />
+              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
+              <ModelPicker agent={agent} value={model} onChange={setModel} unconnected={missingAgents.map((m) => m.agent)} />
               <EffortPicker value={effort} onChange={setEffort} />
               {showImport && (
                 <ControlChip
@@ -556,7 +526,7 @@ export function NewWorkbenchPage() {
               )}
             </div>
 
-            {(error || unavailable.length > 0 || agentOk.warning) && (
+            {(error || unavailable.length > 0 || agentOk.warning || missingAgents.length > 0) && (
               <div className="space-y-0.5 px-2 text-xs" aria-live="polite">
                 {error && (
                   <p role="alert" className="text-destructive">
@@ -593,6 +563,7 @@ export function NewWorkbenchPage() {
                   </p>
                 ))}
                 {agentOk.available && agentOk.warning && <p className="text-muted-foreground">{agentOk.warning}</p>}
+                <ConnectAgentNotice agents={missingAgents} onConnect={connectAgent} />
               </div>
             )}
 
