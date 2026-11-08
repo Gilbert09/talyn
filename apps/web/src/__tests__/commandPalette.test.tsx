@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
-import { buildAppShortcuts } from '../components/layout/appShortcuts';
+import { buildAppShortcuts, orderedLiveWorkbenches } from '../components/layout/appShortcuts';
 import { FOCUS_COMPOSER_EVENT, clearShortcuts, dispatchKeydown, formatKeys, registerShortcuts } from '../lib/shortcuts';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
@@ -402,5 +402,120 @@ describe('Tab focuses the chat input', () => {
     const e = tab({ shiftKey: true });
     expect(dispatchKeydown(e, opts)).toBe(false);
     expect(onFocus).not.toHaveBeenCalled();
+  });
+});
+
+describe('session arrows', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let composer: HTMLTextAreaElement;
+  const route = () => useNavigationStore.getState().route;
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+  });
+
+  afterEach(() => {
+    composer.remove();
+    document.querySelectorAll('[role="menu"]').forEach((el) => el.remove());
+  });
+
+  function press(key: 'ArrowUp' | 'ArrowDown', target: EventTarget = document.body, init: KeyboardEventInit = {}): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true, metaKey: true, ...init });
+    Object.defineProperty(e, 'target', { value: target });
+    act(() => {
+      dispatchKeydown(e, opts);
+    });
+    return e;
+  }
+
+  const ids = () => orderedLiveWorkbenches().map((w) => w.id);
+
+  it('lists ⌘↑ and ⌘↓ and keeps ⌘⌥↑ and ⌘⌥↓ as hidden aliases', () => {
+    const shortcuts = buildAppShortcuts();
+    expect(shortcuts.filter((s) => s.id.startsWith('workbench.previous') || s.id.startsWith('workbench.next')).map((s) => [s.id, s.keys, s.hidden, s.alias])).toEqual([
+      ['workbench.previous', 'mod+up', undefined, undefined],
+      ['workbench.next', 'mod+down', undefined, undefined],
+      ['workbench.previous.alt', 'mod+alt+up', true, true],
+      ['workbench.next.alt', 'mod+alt+down', true, true],
+    ]);
+  });
+
+  it.each([
+    ['ArrowDown', {}, 0],
+    ['ArrowUp', {}, -1],
+    ['ArrowDown', { altKey: true }, 0],
+    ['ArrowUp', { altKey: true }, -1],
+  ] as const)('outside a session, %s %p opens the session at %i', (key, init, index) => {
+    const e = press(key, document.body, init);
+    expect(e.defaultPrevented).toBe(true);
+    expect(route()).toEqual({ view: 'workbench', id: ids().at(index) });
+  });
+
+  it.each([
+    ['ArrowDown', {}, 1],
+    ['ArrowUp', {}, -1],
+    ['ArrowDown', { altKey: true }, 1],
+    ['ArrowUp', { altKey: true }, -1],
+  ] as const)('in the first session, %s %p wraps to the session at %i', (key, init, index) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: ids()[0] }));
+    press(key, document.body, init);
+    expect(route()).toEqual({ view: 'workbench', id: ids().at(index) });
+  });
+
+  it.each(['ArrowDown', 'ArrowUp'] as const)('%s steps from an empty composer', (key) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: ids()[0] }));
+    const e = press(key, composer);
+    expect(e.defaultPrevented).toBe(true);
+    expect(route()).not.toEqual({ view: 'workbench', id: ids()[0] });
+  });
+
+  it.each(['ArrowDown', 'ArrowUp'] as const)('%s moves the caret in a composer with text', (key) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: ids()[0] }));
+    composer.value = 'line one\nline two';
+    const e = press(key, composer);
+    expect(e.defaultPrevented).toBe(false);
+    expect(route()).toEqual({ view: 'workbench', id: ids()[0] });
+  });
+
+  it.each(['ArrowDown', 'ArrowUp'] as const)('⌥%s still steps from a composer with text', (key) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: ids()[0] }));
+    composer.value = 'draft';
+    const e = press(key, composer, { altKey: true });
+    expect(e.defaultPrevented).toBe(true);
+    expect(route()).not.toEqual({ view: 'workbench', id: ids()[0] });
+  });
+
+  it.each([
+    ['an input', () => document.createElement('input')],
+    ['a plain textarea', () => document.createElement('textarea')],
+  ])('⌘↓ is left alone in %s', (_, make) => {
+    const field = make();
+    document.body.appendChild(field);
+    const e = press('ArrowDown', field);
+    expect(e.defaultPrevented).toBe(false);
+    expect(route()).toEqual({ view: 'home' });
+    field.remove();
+  });
+
+  it('⌘↓ is left alone while focus is in a menu', () => {
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    const item = document.createElement('button');
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    item.focus();
+    const e = press('ArrowDown', item);
+    expect(e.defaultPrevented).toBe(false);
+    expect(route()).toEqual({ view: 'home' });
+  });
+
+  it('does nothing when sessions are off', () => {
+    useWorkspaceStore.setState({ features: { workbenches: false } as Features });
+    const e = press('ArrowDown');
+    expect(e.defaultPrevented).toBe(false);
+    expect(route()).toEqual({ view: 'home' });
   });
 });

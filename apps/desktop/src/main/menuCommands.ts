@@ -55,11 +55,12 @@ export const MENU_COMMANDS: MenuCommand[] = [
   {
     id: 'workbench.previous',
     label: 'Previous Session',
-    keys: 'mod+alt+up',
+    keys: 'mod+up',
     section: 'workbench',
     separatorBefore: true,
+    rendererOnly: true,
   },
-  { id: 'workbench.next', label: 'Next Session', keys: 'mod+alt+down', section: 'workbench' },
+  { id: 'workbench.next', label: 'Next Session', keys: 'mod+down', section: 'workbench', rendererOnly: true },
   ...JUMP_COMMANDS,
 ];
 
@@ -87,6 +88,6 @@ export function toAccelerator(keys: string): string {
 
 export function menuPresentation(cmd: MenuCommand, mac: boolean): { label: string; accelerator?: string } {
   if (!cmd.rendererOnly) return { label: cmd.label, accelerator: toAccelerator(cmd.keys) };
-  const keys = cmd.keys.replace('mod+', mac ? '⌘' : 'Ctrl+').replace('left', '←').replace('right', '→');
+  const keys = cmd.keys.replace('mod+', mac ? '⌘' : 'Ctrl+').replace('left', '←').replace('right', '→').replace('up', '↑').replace('down', '↓');
   return { label: `${cmd.label} (${keys})` };
 }

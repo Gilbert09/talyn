@@ -16,7 +16,7 @@
  * - Every session action is ⌘⌥ plus the desktop letter (P, X, M, A).
  * - Focus composer is ⌘⇧L.
  * - Back and forward use the arrow keys when the page receives them.
- * - Chords a page can catch (⌘K, ⌘B, ⌘J, ⌘,, ⌘⇧D, ⌘⌥B, ⌘⌥↑/↓) stay as on desktop.
+ * - Chords a page can catch (⌘K, ⌘B, ⌘J, ⌘,, ⌘⇧D, ⌘⌥B, ⌘↑/↓) stay as on desktop.
  * On Windows and Linux `mod` is Ctrl; `shortcuts.ts` ignores Ctrl+Alt when
  * it is really AltGr.
  */
@@ -62,10 +62,10 @@ export const MENU_COMMANDS: MenuCommand[] = [
   {
     id: 'workbench.previous',
     label: 'Previous Session',
-    keys: 'mod+alt+up',
+    keys: 'mod+up',
     section: 'workbench',
     separatorBefore: true,
   },
-  { id: 'workbench.next', label: 'Next Session', keys: 'mod+alt+down', section: 'workbench' },
+  { id: 'workbench.next', label: 'Next Session', keys: 'mod+down', section: 'workbench' },
   ...JUMP_COMMANDS,
 ];
