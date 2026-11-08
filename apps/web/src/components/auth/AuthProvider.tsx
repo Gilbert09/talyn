@@ -108,6 +108,11 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
+/** The auth state, or null outside <AuthProvider> (a surface that also renders without sign-in). */
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext);
+}
+
 /**
  * True exactly once, on the first identify after a sign-in this tab started.
  * A restored session returns false, so `logged_in` counts logins rather than

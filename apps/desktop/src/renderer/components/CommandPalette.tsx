@@ -16,6 +16,7 @@ import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelect
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
+import { PaletteAppCommands } from './PaletteAppCommands';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
 import { slackSourceOf } from '../lib/slackSession';
 import { workbenchPlaceLabel } from '../lib/threads';
@@ -175,7 +176,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <CommandDialog open onOpenChange={(next) => !next && onClose()}>
-      <CommandInput placeholder="Search sessions, pages and actions…" value={query} onValueChange={setQuery} autoFocus />
+      <CommandInput placeholder="Search sessions, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         {workbenches.length > 0 && (
@@ -249,6 +250,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             );
           })}
         </CommandGroup>
+        <PaletteAppCommands pick={pick} />
         {actions.length > 0 && (
           <CommandGroup heading="Actions">
             {actions.map((s) => (
