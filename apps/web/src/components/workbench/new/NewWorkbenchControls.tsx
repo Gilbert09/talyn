@@ -33,6 +33,9 @@ export const AGENT_LABEL: Record<WorkbenchAgent, string> = {
   codex: 'Codex',
 };
 
+/** The vendor's short name, for a sentence. */
+const AGENT_NAME: Record<WorkbenchAgent, string> = { claude: 'Claude', codex: 'Codex' };
+
 const chipClass =
   'inline-flex h-7 max-w-[16rem] items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50';
 
@@ -398,10 +401,13 @@ export function AgentPicker({
   value,
   onChange,
   choiceFor,
+  onConnect,
 }: {
   value: WorkbenchAgent | null;
   onChange: (agent: WorkbenchAgent) => void;
   choiceFor: (agent: WorkbenchAgent) => Choice;
+  /** Opens the place to connect an agent. Without it, an unconnected agent is only disabled. */
+  onConnect?: (agent: WorkbenchAgent) => void;
 }) {
   const [open, setOpen] = useState(false);
   const agents = useMemo(
@@ -423,32 +429,88 @@ export function AgentPicker({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-1">
         <ul role="listbox" aria-label="Agent">
-          {agents.map(({ agent, choice }) => (
-            <li key={agent} role="option" aria-selected={agent === value} aria-disabled={!choice.available}>
-              <button
-                type="button"
-                disabled={!choice.available}
-                onClick={() => {
-                  onChange(agent);
-                  setOpen(false);
-                }}
-                className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              >
-                <FleetAgentMark agent={agent} className={cn('mt-0.5 h-4 w-4', !choice.available && 'opacity-50')} />
-                <span className="min-w-0 flex-1">
-                  <span className={cn('block', !choice.available && 'text-muted-foreground')}>
-                    {AGENT_LABEL[agent]}
+          {agents.map(({ agent, choice }) => {
+            // An agent the workspace has not connected is a link to connect it, not a dead row.
+            const connect = !choice.available && choice.connect && onConnect ? onConnect : null;
+            return (
+              <li key={agent} role="option" aria-selected={agent === value} aria-disabled={!choice.available}>
+                <button
+                  type="button"
+                  disabled={!choice.available && !connect}
+                  onClick={() => {
+                    if (connect) connect(agent);
+                    else onChange(agent);
+                    setOpen(false);
+                  }}
+                  data-attr={connect ? `new-workbench-connect-${agent}` : undefined}
+                  className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <FleetAgentMark agent={agent} className={cn('mt-0.5 h-4 w-4', !choice.available && 'opacity-50')} />
+                  <span className="min-w-0 flex-1">
+                    <span className={cn('block', !choice.available && 'text-muted-foreground')}>{AGENT_LABEL[agent]}</span>
+                    {(choice.reason || choice.warning) && (
+                      <span className="block text-[11px] text-muted-foreground">{choice.reason ?? choice.warning}</span>
+                    )}
                   </span>
-                  {(choice.reason || choice.warning) && (
-                    <span className="block text-[11px] text-muted-foreground">{choice.reason ?? choice.warning}</span>
+                  {connect && (
+                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-primary">
+                      {choice.connect === 'reauth' ? 'Sign in' : 'Connect'}
+                    </span>
                   )}
-                </span>
-                {agent === value && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
-              </button>
-            </li>
-          ))}
+                  {agent === value && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The agents, other than `current`, that the workspace must connect before they can run. */
+export function unconnectedAgents(
+  current: WorkbenchAgent,
+  choiceFor: (agent: WorkbenchAgent) => Choice,
+): Array<{ agent: WorkbenchAgent; fix: NonNullable<Choice['connect']> }> {
+  return (['claude', 'codex'] as const).flatMap((agent) => {
+    const fix = agent === current ? undefined : choiceFor(agent).connect;
+    return fix ? [{ agent, fix }] : [];
+  });
+}
+
+/**
+ * "Claude is not connected …" under a new-session composer. Without it, a
+ * workspace with only Codex quietly starts every session on Codex, and the
+ * Claude models look missing rather than locked.
+ */
+export function ConnectAgentNotice({
+  agents,
+  onConnect,
+}: {
+  agents: ReturnType<typeof unconnectedAgents>;
+  onConnect: (agent: WorkbenchAgent) => void;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <>
+      {agents.map(({ agent, fix }) => {
+        const name = AGENT_NAME[agent];
+        return (
+          <p key={agent} className="text-muted-foreground" data-attr={`new-workbench-${agent}-not-connected`}>
+            {fix === 'reauth'
+              ? `The ${name} sign-in for this workspace has expired, so ${name} models cannot run.`
+              : `${name} is not connected to this workspace, so ${name} models cannot run.`}{' '}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-foreground"
+              onClick={() => onConnect(agent)}
+            >
+              {fix === 'reauth' ? `Sign in to ${name} again` : `Connect ${name}`}
+            </button>
+          </p>
+        );
+      })}
+    </>
   );
 }

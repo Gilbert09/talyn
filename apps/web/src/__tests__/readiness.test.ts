@@ -31,6 +31,23 @@ describe('agentChoice', () => {
     expect(agentChoice({ sandbox }, 'codex').reason).toBe('Connect Codex');
     expect(agentChoice({ sandbox }, 'claude').available).toBe(true);
   });
+  it.each([
+    ['agent_not_connected', 'connect'],
+    ['agent_reauth_required', 'reauth'],
+    ['flag_off', undefined],
+    ['fleet_not_allowed', undefined],
+  ])('marks %s as fixed in Settings: %s', (code, connect) => {
+    const sandbox = {
+      ...okSandbox,
+      agents: { ...okSandbox.agents, claude: { ok: false, reason: { code, message: 'Blocked' } } },
+    };
+    expect(agentChoice({ sandbox }, 'claude').connect).toBe(connect);
+    expect(agentChoice({ sandbox }, 'codex').connect).toBeUndefined();
+  });
+  it('does not mark an agent with no reason as fixed in Settings', () => {
+    const sandbox = { ...okSandbox, agents: { ...okSandbox.agents, codex: { ok: false } } };
+    expect(agentChoice({ sandbox }, 'codex').connect).toBeUndefined();
+  });
   it('names the agent when its reason has no message', () => {
     const sandbox = { ...okSandbox, agents: { ...okSandbox.agents, codex: { ok: false } } };
     expect(agentChoice({ sandbox }, 'codex').reason).toBe('Codex is not connected');
