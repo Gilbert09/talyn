@@ -13,6 +13,43 @@ personal token.
 
 ## Install
 
+### One click (desktop app)
+
+**Settings → MCP server → Connect this computer** connects Claude Code and
+Codex on the person's own machine. The renderer mints a token named
+`Claude Code and Codex on <host>`. The main process
+(`apps/desktop/src/main/localAgentKit.ts`) then writes:
+
+- `mcpServers.talyn` at the top level (user scope) of `~/.claude.json`;
+- a `[mcp_servers.talyn]` table with a static `http_headers` Authorization in
+  `~/.codex/config.toml`. Only that table is edited. Every other line stays byte
+  for byte;
+- the local skill pack (`apps/desktop/src/main/localSkillPack.ts`) in
+  `~/.claude/skills` and `~/.codex/skills`.
+
+The rules:
+
+- Each skill directory gets a `.talyn-local-skill` stamp. A directory without
+  the stamp is the person's own. Talyn never writes or removes it.
+- Both config files are written atomically with mode 0600, through a symlink
+  when the file is one.
+- A `~/.claude.json` that does not parse is refused, not replaced. The other
+  agent still connects.
+- The token goes from the renderer to main once. Status reports only its
+  16-character prefix.
+- **Reconnect** mints a new token and revokes the token it replaced.
+  **Disconnect** removes the server and the stamped skills, and revokes the
+  token. Only tokens with the flow's name are revoked. A token pasted by hand
+  can be in use elsewhere.
+- On app start, stamped skills are updated to the version in the build.
+
+The local pack is not the sandbox pack (`skillPack/`). Those skills are for an
+agent inside a session. The local skills are for an agent on the person's
+machine: start a session, follow it, bring its branch local, and look after
+pull requests. When a tool that a local skill names changes, update the skill too.
+
+### By hand
+
 1. Open the Talyn desktop app → **Settings → MCP server**.
 2. Click **Generate** to mint a personal token (90-day, revocable). Copy the
    token — it's shown once.
@@ -186,7 +223,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_list_wakeups` | List the session's wake-ups: scheduled, then recent fired, cancelled or failed ones. Read-only. |
 | `talyn_cancel_wakeup` | Cancel a scheduled wake-up. |
 | `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
-| `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. With `space_id`, the session starts in a team space, and Talyn refuses `pull_request_id` and `auto_create_pr`. Spaces are not yet available to all accounts. |
+| `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. With `space_id`, the session starts in a team space, and Talyn refuses `pull_request_id` and `auto_create_pr`. From a session in a space, with no `space_id`, the new session starts in the same space. Talyn uses Personal and says why when `pull_request_id` is given, `workspace_id` is not the home workspace of the team, the repository is not in the space, or the space is archived or the owner left its team. In an inherited space, `auto_create_pr: true` is accepted (it is the default there), and `auto_create_pr: false` is refused. `space_id: "personal"` starts in Personal. Spaces are not yet available to all accounts. |
 | `talyn_list_thread_sessions` | List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, `thread_id` is the thread itself by default. Read-only. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. |
 | `talyn_list_accounts` | List the workspace's Claude and Codex subscriptions, in the order Talyn tries them: label, usage, and if the account is usable now. It also shows the account of a session, or of each session in a thread. It never shows secrets. Read-only. |
@@ -214,6 +251,13 @@ From a thread, an entry applies to the thread unless `scope` is `workspace`.
 A session sees workspace entries, its repository's entries and its thread's entries.
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
+
+A memory review thread (source `memory_review`) sees every entry of its workspace.
+It writes a repository entry with `repository_id` and a thread entry with `thread_id`.
+Talyn starts this thread on the cadence in `settings.memoryReview` (`daily`, `weekly` or `monthly`), or when a person clicks "Review now".
+The thread merges entries that overlap and settles entries that disagree.
+The cadence is off by default. The sweep skips a period when fewer than two entries are live or no entry changed since the last review.
+The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 | Tool | What it does |
 | --- | --- |
@@ -353,4 +397,4 @@ Backend, under `packages/backend/src/`:
   `mcp/sessionScope.ts` — the session sandbox's own token, how it reaches the
   box, and its tool allowlist.
 
-Desktop: `components/panels/SettingsPanel.tsx` → `MCPServerSettings`.
+Desktop: `components/settings/sections/McpSettings.tsx` → `MCPServerSettings` and `LocalAgentsCard`; `main/localAgentKit.ts` and `main/localSkillPack.ts` for the one-click install.

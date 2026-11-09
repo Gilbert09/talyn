@@ -1,5 +1,11 @@
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
-import { includedWeightedSeconds, type PlanTier, type UsageAlertThreshold, type UsagePeriod } from '@talyn/shared';
+import {
+  includedAfterTierChange,
+  includedWeightedSeconds,
+  type PlanTier,
+  type UsageAlertThreshold,
+  type UsagePeriod,
+} from '@talyn/shared';
 import { getPoolDbClient } from '../../../db/client.js';
 import { usagePeriods } from '../../../db/schema.js';
 import { domainEvents } from '../../events.js';
@@ -26,18 +32,40 @@ const db = () => getPoolDbClient();
 /**
  * Create the period row on first use. No cron: the first charge or read of a
  * new period creates it. A tier change inside a period moves the included
- * amount to the new tier's (an upgrade takes effect at once).
+ * amount to the new tier's; an upgrade between paid tiers adds only the
+ * share of the extra hours left in the period (`includedAfterTierChange`).
+ *
+ * The common case (the row exists on this tier) is one read. A change is a
+ * compare-and-set on the old tier, so two meters that see the change at once
+ * add the prorated hours one time only.
  */
-export async function ensurePeriod(ownerId: string, tier: PlanTier, period: UsagePeriod): Promise<void> {
-  const includedWsec = includedWeightedSeconds(tier);
-  await db()
-    .insert(usagePeriods)
-    .values({ ownerId, periodStart: period.start, periodEnd: period.end, tier, includedWsec })
-    .onConflictDoUpdate({
-      target: [usagePeriods.ownerId, usagePeriods.periodStart],
-      set: { tier, includedWsec, updatedAt: sql`now()` },
-      setWhere: sql`${usagePeriods.tier} <> ${tier}`,
+export async function ensurePeriod(ownerId: string, tier: PlanTier, period: UsagePeriod, now = new Date()): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const row = await readPeriod(ownerId, period.start);
+    if (!row) {
+      await db()
+        .insert(usagePeriods)
+        .values({ ownerId, periodStart: period.start, periodEnd: period.end, tier, includedWsec: includedWeightedSeconds(tier) })
+        .onConflictDoNothing({ target: [usagePeriods.ownerId, usagePeriods.periodStart] });
+      continue;
+    }
+    if (row.tier === tier) return;
+    const includedWsec = includedAfterTierChange({
+      from: row.tier,
+      to: tier,
+      currentIncludedWsec: Number(row.includedWsec),
+      period,
+      now,
     });
+    const moved = await db()
+      .update(usagePeriods)
+      .set({ tier, includedWsec, updatedAt: sql`now()` })
+      .where(
+        and(eq(usagePeriods.ownerId, ownerId), eq(usagePeriods.periodStart, period.start), eq(usagePeriods.tier, row.tier)),
+      )
+      .returning({ tier: usagePeriods.tier });
+    if (moved.length) return;
+  }
 }
 
 export function readPeriodQuery(ownerId: string, periodStart: Date) {

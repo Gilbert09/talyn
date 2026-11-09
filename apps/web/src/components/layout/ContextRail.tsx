@@ -50,7 +50,7 @@ export function ContextRail() {
               <RailTile
                 entry={entry}
                 active={isActive}
-                badge={isActive ? null : attentionBadgeLabel(count)}
+                badge={attentionBadgeLabel(count)}
                 count={count}
                 keys={spacesOn && i < 9 ? CONTEXT_JUMP_KEYS(i + 1) : undefined}
                 onClick={() => select(entry)}

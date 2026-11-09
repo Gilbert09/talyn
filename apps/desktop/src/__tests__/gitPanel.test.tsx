@@ -142,6 +142,14 @@ describe('GitPanel', () => {
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes2', 'Pull request', 'Sandbox', 'Background']);
   });
 
+  it('warns about uncommitted files when a pull request is open', () => {
+    render(<GitPanel workbench={WB} chat={chat} ops={makeOps()} pr={PR} />);
+    expect(screen.getByRole('tab', { name: 'Changes 2 uncommitted' })).toHaveAttribute(
+      'title',
+      '2 uncommitted files are not in the open pull request'
+    );
+  });
+
   it('a tab click is remembered across restarts', () => {
     render(<GitPanel workbench={WB} chat={chat} ops={makeOps()} pr={null} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Pull request' }));
@@ -515,6 +523,33 @@ describe('Changes tab', () => {
     expect(row).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(screen.getByRole('button', { name: /b\.ts/ }));
     expect(screen.getByRole('button', { name: /b\.ts/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('gives the file list the full panel until a file opens', async () => {
+    render(
+      <ChangesTab
+        workbench={WB}
+        chat={chat}
+        ops={makeOps()}
+        visible
+        turnsEnded={0}
+        comments={[]}
+        setComments={jest.fn()}
+      />
+    );
+    const row = await screen.findByRole('button', { name: /a\.ts/ });
+    const list = screen.getByTestId('changes-file-list');
+    expect(list).toHaveClass('flex-1');
+    expect(screen.queryByTestId('changes-file-diff')).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    await screen.findByTestId('changes-file-diff');
+    expect(list).toHaveClass('max-h-[40%]');
+    expect(list).not.toHaveClass('flex-1');
+
+    fireEvent.click(row);
+    expect(screen.queryByTestId('changes-file-diff')).not.toBeInTheDocument();
+    expect(list).toHaveClass('flex-1');
   });
 
   it('"N comments ready to send" sends them to the agent as one message', async () => {

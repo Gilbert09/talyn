@@ -35,6 +35,7 @@ import { makeUserMessageEvent } from './workbenchFormat';
 import { adoptLocalPullRequest, openLocalPullRequest } from './localPullRequest';
 import { toast } from '../stores/toast';
 import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
+import { useWorkspaceStore } from '../stores/workspace';
 
 /**
  * The local runtime, driven from the renderer.
@@ -65,6 +66,8 @@ export interface LocalControllerDeps {
    * apply, undefined when they could not be read (the files are then left alone).
    */
   repositoryInstructions?: (repositoryId: string, agent: WorkbenchAgent) => Promise<string | null | undefined>;
+  /** The workspace override for Claude's commit co-author trailer. */
+  claudeCoAuthoredBy?: (workspaceId: string) => boolean | undefined;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
   /** Overrides {@link LOCAL_BRANCH_NAMING_DEADLINE_MS}, for tests. */
@@ -353,6 +356,9 @@ export class LocalTurnController {
     const repositoryInstructions = workbench.repositoryId
       ? await this.deps.repositoryInstructions?.(workbench.repositoryId, chat.agent)
       : undefined;
+    const claudeCoAuthoredBy = chat.agent === 'claude'
+      ? this.deps.claudeCoAuthoredBy?.(workbench.workspaceId)
+      : undefined;
     try {
       await this.deps.bridge.startTurn({
         workbenchId: workbench.id,
@@ -366,6 +372,7 @@ export class LocalTurnController {
         planMode,
         resumeSessionId: chat.agentSessionId ?? undefined,
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
+        ...(claudeCoAuthoredBy !== undefined ? { claudeCoAuthoredBy } : {}),
         attachments: input.attachments,
         ...(repositoryInstructions !== undefined ? { repositoryInstructions } : {}),
       });
@@ -733,6 +740,8 @@ export function getLocalController(): LocalTurnController | null {
         return undefined;
       }
     },
+    claudeCoAuthoredBy: (workspaceId) =>
+      useWorkspaceStore.getState().workspaces.find((workspace) => workspace.id === workspaceId)?.settings?.claudeCoAuthoredBy !== false,
   });
   controller.start();
   return controller;

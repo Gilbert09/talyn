@@ -448,7 +448,7 @@ describe('routes/workspaces', () => {
       });
     });
 
-    describe.each(['sessionSkillPack', 'sessionMemory', 'fleetUseFullQuotaWhenAllOver'])('settings.%s', (key) => {
+    describe.each(['sessionSkillPack', 'sessionMemory', 'fleetUseFullQuotaWhenAllOver', 'claudeCoAuthoredBy'])('settings.%s', (key) => {
       it.each([[true], [false]])('stores %j', async (sent) => {
         await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
         const res = await fetch(`${serverUrl}/workspaces/p`, {
@@ -469,6 +469,30 @@ describe('routes/workspaces', () => {
         });
         expect(res.status).toBe(400);
         expect((await res.json()).error).toMatch(new RegExp(key));
+      });
+    });
+
+    describe('settings.memoryReview', () => {
+      it.each([['off'], ['daily'], ['weekly'], ['monthly']])('stores %j', async (sent) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { memoryReview: sent } }),
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).data.settings.memoryReview).toBe(sent);
+      });
+
+      it.each([['hourly'], ['Weekly'], [true], [7], [null], [{}]])('rejects %j with a 400', async (sent) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { memoryReview: sent } }),
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toMatch(/memoryReview/);
       });
     });
 

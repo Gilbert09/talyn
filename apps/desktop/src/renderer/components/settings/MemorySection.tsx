@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   MAX_LIVE_MEMORIES_PER_WORKSPACE,
+  MEMORY_REVIEW_CADENCES,
+  MEMORY_REVIEW_CADENCE_LABELS,
   memoryLimitMessage,
+  memoryReviewCadenceOf,
+  type MemoryReviewCadence,
+  type MemoryReviewRun,
   type MemoryEntry,
   type MemoryEntrySummary,
   type Workspace,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
+import { useNavigationStore } from '../../stores/navigation';
 import { toast } from '../../stores/toast';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { MemoryEditor, MemorySourceLabel, MemoryTypeChip, memoryScopeLabel } from '../memory/MemoryEditor';
@@ -98,6 +104,115 @@ function SessionMemorySwitch({ workspaceId }: { workspaceId: string }) {
     >
       <Switch checked={enabled} disabled={saving} label="Session memory" onChange={(v) => void onChange(v)} />
     </SettingRow>
+  );
+}
+
+function runLine(run: MemoryReviewRun | undefined, openThread: (id: string) => void): React.ReactNode {
+  if (!run) return null;
+  if (run.status === 'failed') return `Last review failed: ${run.error ?? 'unknown error'}`;
+  if (run.status === 'starting') return 'A review is starting';
+  return (
+    <>
+      Last review: <span title={new Date(run.createdAt).toLocaleString()}>{ago(run.createdAt)}</span>
+      {run.workbenchId ? (
+        <>
+          {' · '}
+          <button
+            type="button"
+            className="underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => openThread(run.workbenchId!)}
+          >
+            Open thread
+          </button>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/** `settings.memoryReview`: how often Talyn reviews the notes. */
+function MemoryReviewRow({ workspaceId }: { workspaceId: string }) {
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const [saving, setSaving] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [runs, setRuns] = useState<MemoryReviewRun[]>([]);
+  const settings = workspaces.find((w) => w.id === workspaceId)?.settings;
+  const cadence = memoryReviewCadenceOf(settings);
+  const memoryOff = settings?.sessionMemory === false;
+
+  const refresh = useCallback(async () => {
+    try {
+      setRuns((await api.workbenches.memory.reviews(workspaceId)).runs);
+    } catch {
+      setRuns([]);
+    }
+  }, [workspaceId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onChange = async (value: MemoryReviewCadence) => {
+    setSaving(true);
+    try {
+      await api.workspaces.update(workspaceId, { settings: { memoryReview: value } as Workspace['settings'] });
+      setWorkspaces(
+        useWorkspaceStore
+          .getState()
+          .workspaces.map((w) =>
+            w.id === workspaceId ? { ...w, settings: { ...w.settings, memoryReview: value } as Workspace['settings'] } : w,
+          ),
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save this setting');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reviewNow = async () => {
+    setStarting(true);
+    try {
+      await api.workbenches.memory.startReview(workspaceId);
+      toast.success('Memory review started');
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not start a memory review');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const line = runLine(runs[0], (id) => useNavigationStore.getState().navigate({ view: 'workbench', id }));
+
+  return (
+    <>
+      <SettingRow
+        label="Memory review"
+        description="Talyn starts a thread that merges notes that overlap and settles notes that disagree. Each review uses your agent subscription. Talyn skips a review when no note changed."
+      >
+        <div className="flex items-center gap-2">
+          <select
+            aria-label="Memory review"
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm disabled:opacity-60"
+            value={cadence}
+            disabled={saving}
+            onChange={(e) => void onChange(e.target.value as MemoryReviewCadence)}
+          >
+            {MEMORY_REVIEW_CADENCES.map((c) => (
+              <option key={c} value={c}>
+                {MEMORY_REVIEW_CADENCE_LABELS[c]}
+              </option>
+            ))}
+          </select>
+          <Button variant="outline" size="sm" disabled={starting || memoryOff} onClick={() => void reviewNow()}>
+            Review now
+          </Button>
+        </div>
+      </SettingRow>
+      {line ? <p className="px-3 pb-2 text-xs text-muted-foreground">{line}</p> : null}
+    </>
   );
 }
 
@@ -327,6 +442,7 @@ export function MemorySection() {
       }
     >
       <SessionMemorySwitch workspaceId={workspaceId} />
+      <MemoryReviewRow workspaceId={workspaceId} />
       <div className="flex flex-wrap items-center gap-3 px-3 py-2">
         <input
           type="search"

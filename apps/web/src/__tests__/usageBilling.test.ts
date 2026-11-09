@@ -11,6 +11,8 @@ import {
   gaugeSummary,
   gaugeTone,
   leftPercent,
+  MAX_INCLUDED_TEXT,
+  maxPricesOf,
   refusalSentence,
   refusalTitle,
   upgradeReasonForCode,
@@ -83,6 +85,9 @@ describe('gaugeAction', () => {
     ['pro', 190, false, null],
     ['pro', 191, false, 'add_credits'],
     ['pro', 200, true, 'add_credits'],
+    ['max', 500, false, null],
+    ['max', 951, false, 'add_credits'],
+    ['max', 1000, true, 'add_credits'],
     ['legacy_pro', 40, false, 'upgrade'],
     ['legacy_pro', 48, false, 'add_credits'],
     ['legacy_pro', 50, true, 'add_credits'],
@@ -274,4 +279,20 @@ describe('sizeOptionLabel', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('maxPricesOf', () => {
+  it.each([
+    ['no status', null, null],
+    ['no pricing', { pricing: undefined }, null],
+    ['pricing without Max', usageStatus('pro'), null],
+    ['pricing with Max', usageStatus('pro', { maxOffered: true }), { monthlyMicros: 100_000_000, annualMicros: null }],
+    ['a Max holder', usageStatus('max'), { monthlyMicros: 100_000_000, annualMicros: null }],
+  ] as const)('%s', (_label, status, prices) => {
+    expect(maxPricesOf(status)).toEqual(prices);
+  });
+
+  it('formats the Max hours with a separator', () => {
+    expect(MAX_INCLUDED_TEXT).toBe('1,000 box-hours');
+  });
 });

@@ -202,6 +202,40 @@ function BranchPrefixRow() {
   );
 }
 
+function ClaudeCoAuthorshipSection() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const [saving, setSaving] = useState(false);
+
+  const save = async (value: boolean) => {
+    if (!currentWorkspaceId) return;
+    setSaving(true);
+    try {
+      await api.workspaces.update(currentWorkspaceId, { settings: { claudeCoAuthoredBy: value } });
+      setWorkspaces(workspaces.map((w) => w.id === currentWorkspaceId
+        ? { ...w, settings: { ...w.settings, claudeCoAuthoredBy: value } } : w));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save the co-author setting');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingsSection title="Commits">
+      <SettingToggle
+        label="Add Claude as a co-author"
+        description="Add Claude as a co-author to commits that it creates."
+        checked={workspace?.settings?.claudeCoAuthoredBy !== false}
+        disabled={saving || !workspace}
+        onChange={(value) => void save(value)}
+      />
+    </SettingsSection>
+  );
+}
+
 /**
  * The model for the default agent, so the list holds only that agent's models.
  * A workspace setting, filed under the agent in `fleetModels`: the new-session
@@ -320,6 +354,7 @@ export function SessionsSettings() {
       <SettingsSection title="Branches">
         <BranchPrefixRow />
       </SettingsSection>
+      <ClaudeCoAuthorshipSection />
       <LimitResumeSection />
       <AutoArchiveSection />
       <SettingsSection title="Notifications">

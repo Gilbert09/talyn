@@ -147,13 +147,16 @@ export * from './workbenchPullRequest.js';
 export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
 export * from './workbenchMemory.js';
+export * from './memoryReview.js';
 export * from './workbenchThread.js';
 export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';
+export * from './mobileNotifications.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
+import type { MemoryReviewCadence } from './memoryReview.js';
 import type { GithubHealth } from './githubHealth.js';
 import type {
   AutoTopupConfig,
@@ -163,6 +166,7 @@ import type {
   CreditPackId,
   CreditSummary,
   PlanTier,
+  SellableTier,
   SizePrice,
   UsageSummary,
 } from './pricing.js';
@@ -645,6 +649,8 @@ export interface WorkspaceSettings {
   /** Unset means sessions archive when their pull request merges. */
   autoArchiveOnMerge?: boolean;
   autoResumeOnLimit?: boolean;
+  /** Whether Claude adds its co-author trailer to commits. Unset means true. */
+  claudeCoAuthoredBy?: boolean;
   continuousBuild?: ContinuousBuildSettings;
   /**
    * The usage level, in percent, at which a fleet account counts as spent and
@@ -700,6 +706,11 @@ export interface WorkspaceSettings {
    * tools refuse. People can still edit entries in the app.
    */
   sessionMemory?: boolean;
+  /**
+   * How often Talyn starts a memory review thread that merges overlapping
+   * entries and settles contradicting ones (`memoryReview.ts`). Unset: off.
+   */
+  memoryReview?: MemoryReviewCadence;
   /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and
@@ -1996,7 +2007,7 @@ export interface BillingStatus {
 export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
   /** The product to buy. Absent means the backend's default (Pro on usage billing). */
-  plan?: 'pro';
+  plan?: SellableTier;
 }
 
 /** `POST /billing/credits/checkout`. */
@@ -2006,7 +2017,8 @@ export interface CreditCheckoutRequest {
 
 /** `POST /billing/change-plan`: move a Legacy Pro subscription to Pro. */
 export interface ChangePlanRequest {
-  to: 'pro';
+  /** An upgrade only. A move to a smaller plan goes through the billing portal. */
+  to: SellableTier;
   period: 'monthly' | 'annual';
 }
 

@@ -112,6 +112,13 @@ export function McpServerEditorPage({
   const [probing, setProbing] = useState(false);
 
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
+  // Select the store's own array and filter outside the selector. A selector
+  // that returns a new array on each call makes zustand v5 re-render forever.
+  const allRepositories = useWorkspaceStore((state) => state.repositories);
+  const repositories = useMemo(
+    () => (allRepositories ?? []).filter((repository) => repository.workspaceId === workspaceId),
+    [allRepositories, workspaceId]
+  );
   const [routeState, setRouteState] = useState<{ workspaceId: string; routes: PrivateRoute[] } | null>(null);
   const privateRoutes = useMemo(() => routeState?.workspaceId === workspaceId ? routeState.routes : [], [routeState, workspaceId]);
   useEffect(() => {
@@ -347,6 +354,7 @@ export function McpServerEditorPage({
   }, [editing?.id, editing?.oauth?.status, oauthConnected, onTest, probe]);
 
   const allowed = input.tools;
+  const allowedRepositories = input.repositoryIds ?? null;
   const offered = probe?.toolNames ?? [];
 
   return (
@@ -625,6 +633,27 @@ export function McpServerEditorPage({
             </>
           )}
 
+          {(editing || connected) && (
+            <Section
+              title="Repository access"
+              description="Allow this server in every repository, or limit it to selected repositories."
+            >
+              <RepositoryPicker
+                repositories={repositories}
+                allowed={allowedRepositories}
+                onChange={(repositoryIds) => {
+                  trackEvent('mcp_repository_scope_changed', {
+                    mcp_server_host: analyticsHost(input.url),
+                    scope: repositoryIds === null ? 'all' : repositoryIds.length === 0 ? 'none' : 'subset',
+                    allowed_count: repositoryIds === null ? null : repositoryIds.length,
+                    repository_count: repositories.length,
+                  });
+                  edit({ repositoryIds });
+                }}
+              />
+            </Section>
+          )}
+
           {connected && (
             <Section
               title="Tools"
@@ -667,6 +696,76 @@ export function McpServerEditorPage({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RepositoryPicker({
+  repositories,
+  allowed,
+  onChange,
+}: {
+  repositories: { id: string; fullName: string }[];
+  allowed: string[] | null;
+  onChange: (next: string[] | null) => void;
+}) {
+  const selected = new Set(allowed ?? []);
+  return (
+    <div className="space-y-3">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="radio"
+          name="mcp-repository-access"
+          checked={allowed === null}
+          onChange={() => onChange(null)}
+        />
+        <span>
+          All repositories
+          <span className="block text-xs text-muted-foreground">
+            This includes repositories that you add later.
+          </span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="radio"
+          name="mcp-repository-access"
+          checked={allowed !== null}
+          onChange={() => onChange(repositories.map((repository) => repository.id))}
+        />
+        <span>Only selected repositories</span>
+      </label>
+
+      {allowed !== null && (
+        repositories.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            This workspace has no repositories.
+          </p>
+        ) : (
+          <div className="divide-y divide-border rounded-lg border border-border">
+            {repositories.map((repository) => (
+              <label key={repository.id} className="flex items-center gap-3 px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selected.has(repository.id)}
+                  onChange={(event) => onChange(
+                    event.target.checked
+                      ? [...allowed, repository.id]
+                      : allowed.filter((id) => id !== repository.id)
+                  )}
+                />
+                <span className="min-w-0 truncate">{repository.fullName}</span>
+              </label>
+            ))}
+          </div>
+        )
+      )}
+
+      {allowed !== null && allowed.length === 0 && (
+        <p className="text-xs text-amber-600">
+          No repository can access this server.
+        </p>
+      )}
     </div>
   );
 }

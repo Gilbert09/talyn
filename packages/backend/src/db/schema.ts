@@ -260,7 +260,7 @@ export const teamMembers = pgTable(
 );
 
 /**
- * Team invites by email (migration 0123). The row waits for the person to
+ * Team invites by email (migration 0125). The row waits for the person to
  * open the emailed link and accept with their GitHub sign-in; accepting adds
  * their `team_members` row. Only a hash of the link token is stored.
  */
@@ -1770,6 +1770,12 @@ export const mcpServers = pgTable(
      * "allow everything" is the worst available guess.
      */
     tools: jsonb('tools').$type<string[] | null>(),
+    /**
+     * The repository allow-list. Null means every repository, including ones
+     * added later. An empty list means no repository. Repository-free threads
+     * can use only servers with a null list.
+     */
+    repositoryIds: jsonb('repository_ids').$type<string[] | null>(),
     enabled: boolean('enabled').notNull().default(true),
     /** The last initialize/tools-list probe. Never a credential. */
     lastProbe: jsonb('last_probe').$type<McpProbeResult | null>(),
@@ -3284,3 +3290,116 @@ export const workbenchResourceSamples = pgTable(
     sampledIdx: index('idx_workbench_resource_samples_sampled').on(t.sampledAt),
   })
 );
+
+/**
+ * Memory review runs (migration 0123): one row per review thread that Talyn
+ * started, or failed to start. `periodStart` is the scheduled key; see
+ * `services/workbenches/memoryReview.ts`.
+ */
+export const memoryReviewRuns = pgTable(
+  'memory_review_runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+    /** `MemoryReviewTrigger`. */
+    trigger: text('trigger').notNull(),
+    /** `MemoryReviewStatus`. */
+    status: text('status').notNull(),
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    periodUq: uniqueIndex('uq_memory_review_runs_period').on(t.workspaceId, t.periodStart),
+    recentIdx: index('idx_memory_review_runs_recent').on(t.workspaceId, t.createdAt),
+  })
+);
+
+// Mobile push data is backend-only. No direct Data API grants or RLS policies.
+export const mobileInstallations = pgTable('mobile_installations', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  tokenEnvelope: jsonb('token_envelope').$type<EncryptedEnvelope>().notNull(),
+  tokenFingerprint: text('token_fingerprint').notNull(),
+  platform: text('platform').notNull(),
+  environment: text('environment').notNull(),
+  appIdentity: text('app_identity').notNull(),
+  appVersion: text('app_version').notNull(),
+  locale: text('locale').notNull(),
+  timezone: text('timezone').notNull(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  failureState: text('failure_state'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  tokenUq: uniqueIndex('uq_mobile_installations_active_token').on(t.provider, t.tokenFingerprint).where(sql`${t.disabledAt} IS NULL`),
+  ownerIdx: index('idx_mobile_installations_owner').on(t.ownerId),
+  fingerprintIdx: index('idx_mobile_installations_fingerprint').on(t.tokenFingerprint),
+  lastSeenIdx: index('idx_mobile_installations_last_seen').on(t.lastSeenAt),
+}));
+
+export const mobileNotificationPreferences = pgTable('mobile_notification_preferences', {
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  preferences: jsonb('preferences').$type<import('@talyn/shared').MobileNotificationPreferences>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ pk: primaryKey({ columns: [t.ownerId, t.workspaceId] }) }));
+
+export const mobileNotificationOutbox = pgTable('mobile_notification_outbox', {
+  id: text('id').primaryKey(),
+  eventId: text('event_id').notNull(),
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  installationId: text('installation_id').notNull().references(() => mobileInstallations.id, { onDelete: 'cascade' }),
+  tokenFingerprint: text('token_fingerprint').notNull(),
+  category: text('category').$type<import('@talyn/shared').MobileNotificationCategory>().notNull(),
+  destination: jsonb('destination').$type<import('@talyn/shared').MobileNotificationDestination>().notNull(),
+  deduplicationKey: text('deduplication_key').notNull(),
+  notBefore: timestamp('not_before', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  state: text('state').notNull().default('pending'),
+  leaseId: text('lease_id'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  providerTicketId: text('provider_ticket_id'),
+  receiptState: text('receipt_state').notNull().default('none'),
+  receiptAttempts: integer('receipt_attempts').notNull().default(0),
+  receiptAfter: timestamp('receipt_after', { withTimezone: true }),
+  lastErrorClass: text('last_error_class'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  dedupUq: uniqueIndex('uq_mobile_notification_outbox_dedup').on(t.ownerId, t.installationId, t.deduplicationKey),
+  claimIdx: index('idx_mobile_notification_outbox_claim').on(t.state, t.notBefore, t.leaseUntil),
+  expiryIdx: index('idx_mobile_notification_outbox_expiry').on(t.expiresAt),
+  receiptIdx: index('idx_mobile_notification_outbox_receipts').on(t.receiptState, t.receiptAfter),
+  ownerIdx: index('idx_mobile_notification_outbox_owner').on(t.ownerId, t.eventId),
+}));
+
+export const mobileNotificationAudit = pgTable('mobile_notification_audit', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  action: text('action').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ ownerIdx: index('idx_mobile_notification_audit_owner').on(t.ownerId, t.createdAt) }));
+
+// This journal records only category and opaque destination identifiers.
+export const mobileNotificationSourceEvents = pgTable('mobile_notification_source_events', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  category: text('category').notNull().$type<import('@talyn/shared').MobileNotificationCategory>(),
+  destinationKind: text('destination_kind').notNull().$type<import('@talyn/shared').MobileNotificationDestination['kind']>(),
+  entityId: text('entity_id').notNull(),
+  deduplicationKey: text('deduplication_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  claim: index('idx_mobile_notification_source_events_claim').on(t.createdAt, t.id),
+  owner: index('idx_mobile_notification_source_events_owner').on(t.ownerId, t.workspaceId),
+  dedup: uniqueIndex('uq_mobile_notification_source_events_dedup').on(t.ownerId, t.deduplicationKey),
+}));

@@ -176,6 +176,8 @@ import type {
   ListMemoryQuery,
   MemoryEntry,
   MemoryEntrySummary,
+  MemoryReviewRun,
+  MemoryReviewState,
   PutMemoryInput,
   PutMemoryResult,
   UpdateMemoryInput,
@@ -201,8 +203,10 @@ import type {
   WorkbenchReadiness,
 } from '@talyn/shared';
 import { getAuthToken, request, rawRequest } from './http.js';
+import { mobileNotifications } from './mobileNotifications.js';
 import { wsClient } from './socket.js';
 export { ApiError, ApiNetworkError, ClientInactiveError } from './http.js';
+export { mobileNotifications };
 export { WebSocketClient, wsClient } from './socket.js';
 export type * from './runtime.js';
 
@@ -1602,10 +1606,10 @@ export const insights = {
 // the old view", never as an error to show.
 export const billing = {
   status: () => request<BillingStatus>('GET', '/billing/status'),
-  /** Pro checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. */
+  /** Pro or Max checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. 403 `max_plan_unavailable` when Max is not offered. */
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
-  /** Legacy Pro → Pro on the live subscription. 409 `no_subscription` when there is none. */
+  /** An upgrade on the live subscription (Legacy Pro → Pro, Pro → Max). 409 `no_subscription` when there is none, `downgrade_via_portal` for a smaller plan. */
   changePlan: (data: ChangePlanRequest) =>
     request<{ ok: true }>('POST', '/billing/change-plan', data),
   /** Box-hours per UTC day and the recent intervals. `from`/`to` are ISO; default the last 30 days. */
@@ -2384,6 +2388,12 @@ export const workbenches = {
     /** A soft delete. `restore` brings the entry back. */
     forget: (id: string) => request<MemoryEntrySummary>('DELETE', `/workbenches/memory/${enc(id)}`),
     restore: (id: string) => request<MemoryEntry>('POST', `/workbenches/memory/${enc(id)}/restore`),
+    /** Memory review: the cadence and the recent review threads. */
+    reviews: (workspaceId: string) =>
+      request<MemoryReviewState>('GET', `/workbenches/memory/reviews?workspaceId=${enc(workspaceId)}`),
+    /** "Review now": start a memory review thread at once. */
+    startReview: (workspaceId: string) =>
+      request<MemoryReviewRun>('POST', '/workbenches/memory/reviews', { workspaceId }),
   },
 
   // ---- Chats ----
@@ -2647,6 +2657,7 @@ export const spaces = {
 // ============================================================================
 
 export const api = {
+  mobileNotifications,
   workspaces,
   environments,
   tasks,

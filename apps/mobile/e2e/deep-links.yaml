@@ -1,0 +1,12 @@
+appId: ${APP_ID}
+name: Cold and warm authorized product links
+---
+- stopApp
+- openLink: ${SESSION_LINK}
+- extendedWaitUntil:
+    visible: "Conversation transcript"
+    timeout: 30000
+- openLink: ${THREAD_LINK}
+- assertVisible: "Conversation transcript"
+- openLink: ${PR_LINK}
+- assertVisible: "Pull request and merge queue timeline"

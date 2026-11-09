@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { type Href, usePathname, useRouter } from 'expo-router';
 import { createContext, type PropsWithChildren, useContext, useEffect, useState, useSyncExternalStore } from 'react';
 import { Button, Linking } from 'react-native';
 
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     <Button title="Try again" onPress={() => setRetry((value) => value + 1)} />
   </ShellScreen>;
   if (!runtime) return <ShellScreen title="Opening Talyn" description="Restoring your account securely."><Status message="Restoring sign-in" loading /></ShellScreen>;
-  return <RuntimeContext.Provider value={runtime}><WorkspaceBinding />{children}</RuntimeContext.Provider>;
+  return <RuntimeContext.Provider value={runtime}><WorkspaceBinding /><NotificationBinding />{children}</RuntimeContext.Provider>;
 }
 
 export function useMobileRuntime() {
@@ -80,4 +81,15 @@ function WorkspaceBinding() {
   const user = useAuth().user?.id;
   useEffect(() => { if (user) void workspace.load(user); }, [user, workspace]);
   return null;
+}
+function NotificationBinding() {
+  const { notifications } = useMobileRuntime();
+  const router = useRouter();
+  const pathname = usePathname();
+  const state = useSyncExternalStore(notifications.subscribe, notifications.getSnapshot, notifications.getSnapshot);
+  useEffect(() => { notifications.setNavigation((path) => router.push(path as Href), pathname); }, [notifications, router, pathname]);
+  if (!state.tapIssue) return null;
+  return <><Status message={state.tapIssue} />
+    <Button title="Try notification again" onPress={notifications.retryTap} />
+    <Button title="Dismiss notification message" onPress={notifications.clearTapIssue} /></>;
 }

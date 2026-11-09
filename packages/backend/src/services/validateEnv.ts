@@ -105,11 +105,17 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
       errors.push(`${label} is configured (${set.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`);
     }
   }
+  // Max is one optional product (sold monthly only), so it has no pair.
+  const maxVar = 'POLAR_PRODUCT_ID_MAX_MONTHLY';
+  if (env[maxVar] && setPolarVars.length === 0) {
+    errors.push(`The Max product is configured (${maxVar}) but Polar billing is not — set ${polarVars.join(', ')}`);
+  }
   // Every product id routes a webhook: an id configured twice would grant a
   // credit pack for a subscription, or the wrong tier.
   const productVars = [
     ...polarVars.filter((name) => name.startsWith('POLAR_PRODUCT_ID_')),
     ...optionalPairs.flatMap((pair) => pair.vars),
+    maxVar,
   ];
   const byId = new Map<string, string[]>();
   for (const name of productVars) {

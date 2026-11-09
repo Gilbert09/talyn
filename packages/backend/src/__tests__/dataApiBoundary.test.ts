@@ -194,7 +194,9 @@ describe('Data API database boundary', () => {
       'workbench_background_jobs', 'workbench_wakeups',
       // Box resource samples (0121): written by the usage sweep.
       'workbench_resource_samples',
-      // Team invites by email (0123): email addresses and live link tokens.
+      // Memory review runs (0123): read by a sweep with no request.
+      'memory_review_runs',
+      // Team invites by email (0125): email addresses and live link tokens.
       'team_invites',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });

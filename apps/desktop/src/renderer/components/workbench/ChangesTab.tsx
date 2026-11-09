@@ -199,7 +199,13 @@ export function ChangesTab({
         <StoredBanner changes={changes} stale={changes.stale} what="changes" onRefresh={() => void refresh(true)} />
       )}
       {changes && (
-        <div className="max-h-[40%] shrink-0 overflow-y-auto border-b">
+        <div
+          className={cn(
+            'overflow-y-auto border-b',
+            selected ? 'max-h-[40%] shrink-0' : 'min-h-0 flex-1',
+          )}
+          data-testid="changes-file-list"
+        >
           {groups.map((group) => (
             <section key={group.scope} aria-label={group.label}>
               <button
@@ -235,8 +241,8 @@ export function ChangesTab({
           ))}
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        {selected && selection && (
+      {selected && selection && (
+        <div className="min-h-0 flex-1 overflow-auto" data-testid="changes-file-diff">
           <FileDiffView
             key={`${selection?.scope}:${selected.path}:${changes?.headSha ?? ''}`}
             file={selected}
@@ -246,8 +252,8 @@ export function ChangesTab({
             tooLarge={Boolean(stored && changes?.patch?.tooLarge)}
             onComment={(c) => setComments([...comments, c])}
           />
-        )}
-      </div>
+        </div>
+      )}
       <CommentBar workbench={workbench} chat={chat} ops={ops} comments={comments} setComments={setComments} />
     </div>
   );

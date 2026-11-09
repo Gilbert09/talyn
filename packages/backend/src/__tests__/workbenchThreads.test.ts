@@ -51,7 +51,7 @@ const { setWorkbenchFleetClientForTests } = await import('../services/workbenche
 const { getChat, getWorkbench, listChats, listEvents } = await import('../services/workbenches/store.js');
 const { capabilityFor } = await import('../services/websocket.js');
 const { continueAsThreadMessage } = await import('../services/workbenches/create.js');
-const { announceThreadSession, notifyThread, notifyThreadsOfMergedPr, threadWakeText } = await import('../services/workbenches/threads.js');
+const { announceSessionSpawn, announceThreadSession, notifyThread, notifyThreadsOfMergedPr, threadWakeText } = await import('../services/workbenches/threads.js');
 const { prMonitorService } = await import('../services/prMonitor.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -490,6 +490,25 @@ describe('threads', () => {
       expect(await talynMessages(chatId)).toHaveLength(0);
       expect((await getChat(chatId))?.turnCount).toBe(0);
       expect(emitted.some((e) => e.type === 'workbench:event' && (e.payload as Loose).chatId === chatId)).toBe(true);
+    });
+
+    it('writes a linked start card when a session starts another session', async () => {
+      const parent = await createSession();
+      const parentChatId = await threadChat(parent.id);
+      const child = await createSession();
+
+      await announceSessionSpawn(parent.id, child.id);
+
+      expect(await cards(parentChatId)).toEqual([
+        expect.objectContaining({
+          action: 'session_started',
+          sessionId: child.id,
+          name: child.name,
+          repo: 'acme/app',
+        }),
+      ]);
+      expect(await talynMessages(parentChatId)).toHaveLength(0);
+      expect(emitted.some((e) => e.type === 'workbench:event' && (e.payload as Loose).chatId === parentChatId)).toBe(true);
     });
 
     it('keeps one waiting wake when several sessions change during a thread turn', async () => {

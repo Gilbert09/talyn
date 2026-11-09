@@ -348,7 +348,9 @@ export type UpgradeReason =
    * action button on a usage alert. The modal reads the tier and the notice.
    */
   | UsageUpgradeReason
-  | 'usage_alert';
+  | 'usage_alert'
+  /** Nothing was refused: a Pro subscriber asked for Max from the plan page. */
+  | 'upgrade';
 
 function reasonFor(code: string): UpgradeReason {
   const usage = usageReasonForCode(code);

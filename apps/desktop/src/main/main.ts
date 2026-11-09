@@ -25,6 +25,14 @@ import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
 import { signInToCodex } from './codexAuth';
 import { scanLocalMcpServers } from './localMcp';
+import {
+  installLocalAgentKit,
+  readLocalAgentKit,
+  refreshLocalSkills,
+  removeLocalAgentKit,
+  type InstallLocalAgentKitRequest,
+  type LocalAgent,
+} from './localAgentKit';
 import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
 import { registerReviewRankingExport } from './reviewRankingExport';
 import { drainMainErrors, markRendererUnavailable, reportMainFailure, setMainErrorSender } from './mainErrorBridge';
@@ -307,6 +315,17 @@ ipcMain.handle('skills:list-local', async () => {
 // reason rather than dropped. See main/localMcp.ts for why no key is read.
 ipcMain.handle('mcp:scan-local', () => scanLocalMcpServers());
 
+// Connect Claude Code and Codex on this computer to Talyn: the `talyn` MCP
+// server and the local skill pack. See main/localAgentKit.ts. The token
+// arrives here once and is never sent back to the renderer.
+ipcMain.handle('local-agents:status', () => readLocalAgentKit());
+ipcMain.handle('local-agents:install', (_event, req: InstallLocalAgentKitRequest) =>
+  installLocalAgentKit(req)
+);
+ipcMain.handle('local-agents:remove', (_event, agents: LocalAgent[]) =>
+  removeLocalAgentKit(agents)
+);
+
 registerDeepLinkProtocol();
 
 if (process.env.NODE_ENV === 'production') {
@@ -503,6 +522,8 @@ app
     // Registers updater IPC handlers + background checks once for the app.
     // Reads the live window lazily so events reach whatever window exists.
     initAutoUpdater(() => mainWindow);
+    // Bring installed local skills up to this build's version.
+    refreshLocalSkills().catch((e) => console.warn('local skills refresh failed', e));
     app.on('activate', () => {
       // On macOS it's common to re-create a window in the app when the
       // dock icon is clicked and there are no other windows open.

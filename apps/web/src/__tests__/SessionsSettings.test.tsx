@@ -70,6 +70,16 @@ describe('SessionsSettings', () => {
     }));
   });
 
+  it('turns Claude commit co-authorship off', async () => {
+    render(<SessionsSettings />);
+    const toggle = screen.getByRole('checkbox', { name: /^Add Claude as a co-author/ }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(update).toHaveBeenCalledWith('ws1', {
+      settings: { claudeCoAuthoredBy: false },
+    }));
+  });
+
   it('saves internet access for new sessions', () => {
     render(<SessionsSettings />);
     fireEvent.click(screen.getByRole('checkbox', { name: /^Internet access/ }));

@@ -35,6 +35,7 @@ describe('validateMcpServer', () => {
     expect(got.description).toBe('Issue tracker');
     // Unrestricted by default: null, not [].
     expect(got.tools).toBeNull();
+    expect(got.repositoryIds).toBeNull();
   });
 
   it.each([
@@ -110,6 +111,23 @@ describe('validateMcpServer', () => {
     it('refuses a name no tool could ever have', () => {
       expect(() => validateMcpServer(input({ tools: ['create issue'] }))).toThrow(/is not a tool name/);
       expect(() => validateMcpServer(input({ tools: [''] }))).toThrow(/is not a tool name/);
+    });
+  });
+
+  describe('the repository allow-list', () => {
+    it('keeps all repositories as the default', () => {
+      expect(validateMcpServer(input()).repositoryIds).toBeNull();
+      expect(validateMcpServer(input({ repositoryIds: [] })).repositoryIds).toEqual([]);
+    });
+
+    it('deduplicates repository ids', () => {
+      expect(validateMcpServer(input({ repositoryIds: ['repo-a', 'repo-b', 'repo-a'] })).repositoryIds)
+        .toEqual(['repo-a', 'repo-b']);
+    });
+
+    it('refuses invalid repository access values', () => {
+      expect(() => validateMcpServer(input({ repositoryIds: ['repo-a', ''] }))).toThrow(/needs an id/);
+      expect(() => validateMcpServer({ ...input(), repositoryIds: 'repo-a' })).toThrow(/must be a list/);
     });
   });
 

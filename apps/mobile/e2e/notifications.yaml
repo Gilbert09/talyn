@@ -1,0 +1,12 @@
+appId: ${APP_ID}
+name: Inspect notification choices without prompting on launch
+---
+- launchApp
+- tapOn: "Settings"
+- assertVisible: "Notifications"
+- assertVisible: "Enable notifications on this device"
+- tapOn: "Enable notifications on this device"
+# The tester selects Allow or Deny. Record each result on both platforms.
+- extendedWaitUntil:
+    visible: "Notifications"
+    timeout: 60000

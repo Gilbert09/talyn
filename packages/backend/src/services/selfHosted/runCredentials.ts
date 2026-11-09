@@ -85,6 +85,7 @@ const LIVE_TASK_STATUSES = ACTIVE_TASK_STATUSES;
 const RUN_CREDENTIAL_COLUMNS = {
   id: tasksTable.id,
   workspaceId: tasksTable.workspaceId,
+  repositoryId: tasksTable.repositoryId,
   status: tasksTable.status,
   metadata: tasksTable.metadata,
 } as const;
@@ -197,6 +198,7 @@ export async function resolveRunCredentials(
   const integrations = await mcpIntegrationSecrets({
     workspaceId: row.workspaceId,
     metadata: row.metadata as Task['metadata'],
+    repositoryId: row.repositoryId,
   });
 
   return {

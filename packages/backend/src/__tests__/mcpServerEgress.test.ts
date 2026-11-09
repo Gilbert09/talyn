@@ -31,6 +31,7 @@ const PUBLIC_COLUMNS = {
   name: mcpServersTable.name,
   url: mcpServersTable.url,
   tools: mcpServersTable.tools,
+  repositoryIds: mcpServersTable.repositoryIds,
   enabled: mcpServersTable.enabled,
 } as const;
 
@@ -40,6 +41,7 @@ describe('mcp server projection egress', () => {
     expect(sql).not.toContain('secret_enc');
     expect(sql).toContain('"url"');
     expect(sql).toContain('"tools"');
+    expect(sql).toContain('"repository_ids"');
   });
 
   // Guards the test itself: if a bare select stopped shipping the column, the

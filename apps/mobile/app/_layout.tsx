@@ -11,12 +11,12 @@ function AuthenticatedRoutes() {
   const auth = useAuth();
   const pathname = usePathname();
   if (auth.status !== 'signedIn') rememberIntent(pathname);
-  const { auth: controller } = useMobileRuntime();
+  const { auth: controller, signOut } = useMobileRuntime();
   const colors = useShellColors();
   if (auth.status === 'restoring' || auth.status === 'locked') return <ShellScreen title="Opening Talyn" description="Your account stays protected while sign-in is checked.">
     <Status message={auth.status === 'locked' ? 'Sign-in could not be restored. Check your connection and unlock this device.' : 'Restoring sign-in'} loading={auth.status === 'restoring'} />
     {auth.status === 'locked' ? <><Button title="Try again" onPress={() => { void controller.restore(); }} />
-      <Button title="Clear sign-in on this device" onPress={() => { void controller.signOut(); }} /></> : null}
+      <Button title="Clear sign-in on this device" onPress={() => { void (signOut ? signOut() : controller.signOut()); }} /></> : null}
   </ShellScreen>;
   const signedIn = auth.status === 'signedIn';
   return <Stack screenOptions={{ headerShown: false, animation: 'none', headerStyle: { backgroundColor: colors.background },

@@ -860,7 +860,35 @@
       "idx": 123,
       "version": "7",
       "when": 1790900000043,
-      "tag": "0123_team_email_invites",
+      "tag": "0123_memory_review_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1790900000044,
+      "tag": "0124_mcp_server_repository_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1790900000045,
+      "tag": "0120_mobile_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1790900000046,
+      "tag": "0121_mobile_notification_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1790900000047,
+      "tag": "0125_team_email_invites",
       "breakpoints": true
     }
   ]

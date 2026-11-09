@@ -1257,7 +1257,9 @@ export async function sandboxCredentialSet(
     );
   }
   const credentials = await workbenchAgentCredentials(row, { ...opts, payer });
-  const integrations = payer ? await payerIntegrationSecrets(payer.workspaceId) : await workbenchIntegrationSecrets(row);
+  const integrations = payer
+    ? await payerIntegrationSecrets(payer.workspaceId, row.kind === 'thread' ? null : row.repositoryId)
+    : await workbenchIntegrationSecrets(row);
   const creds: FleetSandboxCredentials = {
     githubToken,
     ...(credentials.claude?.token ? { anthropicKey: credentials.claude.token } : {}),

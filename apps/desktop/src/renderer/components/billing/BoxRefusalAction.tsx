@@ -1,7 +1,9 @@
 import {
   CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  PLAN_LIMITS,
   SIZE_REQUIRES_PRO_ERROR_CODE,
   USAGE_EXHAUSTED_ERROR_CODE,
+  isPlanTier,
   type PlanTier,
 } from '@talyn/shared';
 import { usageReasonForCode, type BoxNotice } from '../../lib/usageBilling';
@@ -32,7 +34,7 @@ export function refusalCode(codeOrReason: string | null | undefined): string | n
  */
 export function refusalActionLabel(code: string | null, tier: PlanTier | null | undefined): string | null {
   if (!code) return null;
-  const paid = tier === 'pro' || tier === 'legacy_pro';
+  const paid = isPlanTier(tier) && PLAN_LIMITS[tier].creditsAllowed;
   if (code === USAGE_EXHAUSTED_ERROR_CODE) return paid ? 'Add credits' : 'Upgrade';
   if (code === CONCURRENT_BOX_LIMIT_ERROR_CODE) return paid ? null : 'Upgrade';
   if (code === SIZE_REQUIRES_PRO_ERROR_CODE) return paid ? null : 'Upgrade';

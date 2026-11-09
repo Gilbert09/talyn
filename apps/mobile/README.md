@@ -1,10 +1,101 @@
 # Talyn mobile MVP
 
 The app supports GitHub sign-in, workspace selection, conversations, and pull request status on iOS and Android.
-Sessions, Threads, and Attention use the authenticated native client. Push notifications remain phase 4.
+Sessions, Threads, Attention, and notifications use the authenticated native client.
 See [the mobile plan](../../docs/MOBILE_APP_PLAN.md), [#116](https://github.com/Gilbert09/talyn/pull/116),
 [#119](https://github.com/Gilbert09/talyn/pull/119), [#121](https://github.com/Gilbert09/talyn/pull/121),
-and [#126](https://github.com/Gilbert09/talyn/pull/126).
+[#126](https://github.com/Gilbert09/talyn/pull/126), [#128](https://github.com/Gilbert09/talyn/pull/128),
+and [#129](https://github.com/Gilbert09/talyn/pull/129).
+
+## Beta and store release
+
+Use [the release runbook](../../docs/MOBILE_RELEASE.md) for exact configuration, secrets, signing, updates, and submission steps.
+Use [the release checklist](../../docs/MOBILE_RELEASE_CHECKLIST.md), [store asset inventory](../../docs/MOBILE_STORE_ASSETS.md),
+and [Maestro device flows](e2e/README.md) before beta and each store candidate.
+Merge #128, then #129, then this release change. Do not queue this stacked change before its parents.
+
+Development and preview remain useful without production secrets.
+Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
+The mobile package supplies the version. Both stores use `MOBILE_BUILD_NUMBER` with local EAS version management.
+Every profile uses a fingerprint runtime. Updates remain disabled until signed-update configuration is supplied.
+Local plans have no side effects. Execution requires the protected manual workflow on main.
+
+```sh
+npm run mobile:release:check
+npm run mobile:test:release
+npm run mobile:native:check
+npm run mobile:release:plan -- build preview android --dry-run
+```
+
+Native checks generate all four profiles with inert fixtures. Remove only disposable generated native directories before running them.
+No hosted EAS build, signed artifact, upload, production update, store review, or device result is supplied by these checks.
+Complete the documented account, policy, domain, privacy, signing, and physical-device gates before release.
+
+## Notifications
+
+See [push operations](../../docs/MOBILE_PUSH_NOTIFICATIONS.md) for backend configuration, worker limits, retention, and activation gates.
+
+Open Settings after sign-in and workspace selection. Read the explanation, then select **Enable notifications on this device**.
+The app requests operating system permission only after that action.
+Permission denial does not block any workflow. Settings shows denied, disabled, failed, and unavailable states.
+Global and category choices apply to the selected workspace. Quiet hours use the saved IANA timezone.
+The sensitive preview choice is reserved. Every current alert uses generic text.
+
+Push needs a physical device, a development build, and an approved public EAS project ID.
+Set `EXPO_PUBLIC_EAS_PROJECT_ID` before generating native projects.
+The public configuration exposes it as `extra.eas.projectId`. Production rejects a missing or invalid ID.
+No provider credential belongs in public configuration or this repository.
+The protected release workflow owns signing and submission operations. Credentials remain in EAS or approved secret custody.
+
+The device stores only the installation ID in SecureStore with `WHEN_UNLOCKED_THIS_DEVICE_ONLY`.
+Expo tokens stay in memory during registration. They never enter AsyncStorage, route state, logs, or crash fields.
+Each account and environment has a separate installation key.
+Registration requires authentication, a validated workspace, workspace opt-in, device opt-in, and a real token.
+Resume and token rotation renew registration without another permission prompt.
+Reinstall creates a new installation when secure storage is empty. iOS Keychain can retain an ID after uninstall.
+The server enforces ownership and active token identity in either case.
+
+Sign-out removes the current installation before it clears local authentication when the server is reachable.
+Offline removal and remote failures do not block local sign-out. Local credentials and installation identity are cleared.
+The server keeps token ownership and expires stale installations. It does not let another account take an active token.
+Account deletion removes all installations on the server. Workspace access is checked again before dispatch.
+Environment changes clear the previous local installation identity. Old server registrations expire if removal is unavailable.
+
+Notification taps retain one pending event in memory while authentication and workspace validation finish.
+The app checks the event through the authenticated API, then fetches the current authorized entity before navigation.
+Expired events, deleted entities, and wrong accounts show a generic recovery message.
+Wrong-workspace events wait for an authorized workspace selection. Duplicate event IDs do not navigate twice.
+Taps only open Sessions, Threads, or Attention. They do not execute mutations.
+Foreground alerts stay quiet when their target is visible. Notifications can arrive late, twice, or never.
+Normal snapshots and foreground recovery remain authoritative. No payload is persisted by the app.
+
+### Native configuration review
+
+`npx expo config --type introspect --json` checks the generated plugin results.
+The notification plugin adds the iOS `aps-environment` entitlement.
+Its mode is `development` for development clients and `production` for preview and store profiles.
+It does not add `UIBackgroundModes=remote-notification`. No background task is registered.
+Android's notification library declares `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED`.
+The app blocks `RECEIVE_BOOT_COMPLETED` because it does not schedule local notifications.
+Five Android channels use private lock-screen visibility: session updates, PR reviews, CI failures, merge readiness, and human input.
+The OS still controls lock-screen visibility and permission presentation.
+Introspection does not replace review of the final merged Android manifest and signed iOS entitlements.
+
+### Release and privacy gates
+
+Privacy owners must approve Expo Push Service as a processor before enabling production dispatch.
+Review its retention, subprocessors, service region, deletion behavior, and contractual terms.
+Update Apple App Privacy and Google Play Data safety disclosures for device identifiers and notification delivery.
+Confirm those disclosures match token retention and provider processing in the deployed backend.
+No ATT prompt, advertising identifier, analytics, or tracking is added.
+Do not approve sensitive previews without another payload and privacy review.
+
+Physical iOS and Android checks remain required. Test foreground, background, terminated, cold-start, and delayed notifications.
+Test denial, OS settings changes, token rotation, reinstall, several devices, account switching, and offline sign-out.
+Test workspace revocation, deleted targets, duplicate taps, and expired events against a live backend.
+Test Android channels and iOS notification settings with VoiceOver, TalkBack, and large text.
+Verify final entitlements, manifest permissions, native provider credentials, and delivery receipts with signed device builds.
+Exports and mocked tests do not prove physical delivery or store acceptance.
 
 ## Local setup
 
@@ -24,7 +115,8 @@ Supabase 2.103.3 matches the existing apps. Pin updates until callback and clean
 
 With no configuration, development and preview builds show a setup screen.
 No production credentials are required for exports or tests.
-To test sign-in, supply all four public values below for an approved test environment.
+To test sign-in, supply the four sign-in values below for an approved test environment.
+Push also needs the public EAS project ID.
 Use your own account. Do not put private test accounts in the repository.
 
 ## Public configuration
@@ -39,6 +131,7 @@ Use a Supabase publishable key or legacy anon key. Never use a secret key or ser
 | `EXPO_PUBLIC_SUPABASE_URL` | Supabase project origin without a path or query. |
 | `EXPO_PUBLIC_SUPABASE_KEY` | Public publishable key or legacy anon key. |
 | `EXPO_PUBLIC_AUTH_CALLBACK_URL` | Exact callback URL for this environment, ending in `/callback`. |
+| `EXPO_PUBLIC_EAS_PROJECT_ID` | Public EAS project UUID. Required for push and every production build. |
 
 Set `APP_ENV` to `development`, `preview`, or `production`. Development is the default.
 Production configuration fails if any public value is missing. Production requires HTTPS for all three URLs.
@@ -49,7 +142,7 @@ Callbacks permit no credentials, explicit non-default port, query parameters, or
 | --- | --- | --- | --- |
 | Development | `dev.talyn.mobile.development` | `talyn-mobile-development` | `talyn-mobile-development://auth/callback` |
 | Preview | `dev.talyn.mobile.preview` | `talyn-mobile-preview` | `talyn-mobile-preview://auth/callback` |
-| Production | `dev.talyn.mobile` | `talyn-mobile` | An explicitly approved HTTPS host with `/callback`. |
+| Production | Explicit approved identifiers are required. | An explicit approved scheme is required. | An explicitly approved HTTPS host with `/callback`. |
 
 These identifiers are candidates. Store availability and organization ownership remain unverified.
 `TALYN_MOBILE_IOS_BUNDLE_ID`, `TALYN_MOBILE_ANDROID_PACKAGE`, and `TALYN_MOBILE_SCHEME` replace the complete identity values.
@@ -150,7 +243,7 @@ npm run mobile:ios
 
 These commands generate native projects and install a development build.
 Generated `ios/`, `android/`, `.expo/`, and export output stay out of git.
-EAS profiles preserve separate development, preview, and production identities.
+EAS profiles preserve separate development and preview identities. Internal beta and production share the approved store identities.
 Confirm organization ownership and link an approved EAS project before an EAS build.
 This change supplies no signing credentials, EAS tokens, store uploads, or OTA updates.
 
@@ -339,6 +432,6 @@ The transcript follows new output only near its end. Jump to latest restores tha
 Device tests must confirm screen-reader focus and reading position during streamed updates.
 The test host cannot prove native accessibility, keyboard behavior, universal links, performance, or app store acceptance.
 
-Push notifications, device registration, notification preferences, and workers remain phase 4.
+Phase 4 adds notifications, registration, preferences, and a durable worker. Physical delivery still needs device evidence.
 Signed release archives, universal-link association, privacy disclosures, store operations, and review remain release gates.
 The phase 2 Apple login and deletion-completion gates remain open.
