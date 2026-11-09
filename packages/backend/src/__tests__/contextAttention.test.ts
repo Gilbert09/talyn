@@ -56,7 +56,7 @@ describe('sessionNeedsAttention', () => {
 });
 
 describe('countContextAttention', () => {
-  it('counts a space session for its space only, not for its workspace', () => {
+  it('adds space sessions to their workspace and space counts', () => {
     expect(
       countContextAttention([
         { workspaceId: 'ws1', spaceId: null },
@@ -64,7 +64,7 @@ describe('countContextAttention', () => {
         { workspaceId: 'ws2', spaceId: 'sp1' },
         { workspaceId: 'ws2', spaceId: 'sp2' },
       ]),
-    ).toEqual({ workspaces: { ws1: 1 }, spaces: { sp1: 2, sp2: 1 } });
+    ).toEqual({ workspaces: { ws1: 2, ws2: 2 }, spaces: { sp1: 2, sp2: 1 } });
   });
 
   it('answers empty maps for no sessions', () => {
@@ -181,7 +181,7 @@ describe('contextAttention (pglite)', () => {
     await session('theirs', { workspaceId: 'ws-other', chats: [{ status: 'awaiting_input' }] });
 
     expect(await contextAttention(db, OWNER)).toEqual({
-      workspaces: { ws1: 3, ws2: 1 },
+      workspaces: { ws1: 4, ws2: 1 },
       spaces: { sp1: 1 },
     });
   });
@@ -189,7 +189,7 @@ describe('contextAttention (pglite)', () => {
   it('never counts another owner’s sessions', async () => {
     await session('theirs', { workspaceId: 'ws-other', spaceId: 'sp1', chats: [{ status: 'error' }] });
     expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
-    expect(await contextAttention(db, OTHER)).toEqual({ workspaces: {}, spaces: { sp1: 1 } });
+    expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 } });
   });
 
   it('answers empty maps for an owner with no sessions', async () => {
