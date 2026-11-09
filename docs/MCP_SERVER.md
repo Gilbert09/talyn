@@ -13,6 +13,43 @@ personal token.
 
 ## Install
 
+### One click (desktop app)
+
+**Settings → MCP server → Connect this computer** connects Claude Code and
+Codex on the person's own machine. The renderer mints a token named
+`Claude Code and Codex on <host>`. The main process
+(`apps/desktop/src/main/localAgentKit.ts`) then writes:
+
+- `mcpServers.talyn` at the top level (user scope) of `~/.claude.json`;
+- a `[mcp_servers.talyn]` table with a static `http_headers` Authorization in
+  `~/.codex/config.toml`. Only that table is edited. Every other line stays byte
+  for byte;
+- the local skill pack (`apps/desktop/src/main/localSkillPack.ts`) in
+  `~/.claude/skills` and `~/.codex/skills`.
+
+The rules:
+
+- Each skill directory gets a `.talyn-local-skill` stamp. A directory without
+  the stamp is the person's own. Talyn never writes or removes it.
+- Both config files are written atomically with mode 0600, through a symlink
+  when the file is one.
+- A `~/.claude.json` that does not parse is refused, not replaced. The other
+  agent still connects.
+- The token goes from the renderer to main once. Status reports only its
+  16-character prefix.
+- **Reconnect** mints a new token and revokes the token it replaced.
+  **Disconnect** removes the server and the stamped skills, and revokes the
+  token. Only tokens with the flow's name are revoked. A token pasted by hand
+  can be in use elsewhere.
+- On app start, stamped skills are updated to the version in the build.
+
+The local pack is not the sandbox pack (`skillPack/`). Those skills are for an
+agent inside a session. The local skills are for an agent on the person's
+machine: start a session, follow it, bring its branch local, and look after
+pull requests. When a tool that a local skill names changes, update the skill too.
+
+### By hand
+
 1. Open the Talyn desktop app → **Settings → MCP server**.
 2. Click **Generate** to mint a personal token (90-day, revocable). Copy the
    token — it's shown once.
@@ -360,4 +397,4 @@ Backend, under `packages/backend/src/`:
   `mcp/sessionScope.ts` — the session sandbox's own token, how it reaches the
   box, and its tool allowlist.
 
-Desktop: `components/panels/SettingsPanel.tsx` → `MCPServerSettings`.
+Desktop: `components/settings/sections/McpSettings.tsx` → `MCPServerSettings` and `LocalAgentsCard`; `main/localAgentKit.ts` and `main/localSkillPack.ts` for the one-click install.

@@ -1,7 +1,7 @@
 ---
 title: Talyn MCP server
 navLabel: MCP server
-description: Connect Claude Code, Claude Desktop, Cursor or another MCP client to your Talyn account, and manage pull requests, sessions and reviews from your editor.
+description: Connect Claude Code, Codex, Claude Desktop, Cursor or another MCP client to your Talyn account, and manage pull requests, sessions and reviews from your editor.
 ---
 
 Talyn runs a hosted MCP server. Connect an MCP client to it and your agent can list your pull requests, start a fix or a code review, queue a merge, or start a session, without you opening Talyn.
@@ -13,6 +13,30 @@ This page is about using Talyn from your own MCP client. To give Talyn's agents 
 | URL | `https://prod.talyn.dev/api/v1/mcp` |
 | Transport | Streamable HTTP |
 | Auth | `Authorization: Bearer talyn_mcp_...` |
+
+## Connect Claude Code and Codex in one click
+
+The Talyn desktop app can connect Claude Code and Codex on your computer for you.
+
+1. In the desktop app, open **Settings**.
+2. Select **Talyn MCP server**.
+3. Under **Connect this computer**, select **Connect Claude Code and Codex**.
+4. Restart open Claude Code and Codex sessions.
+
+Talyn creates a token and adds the `talyn` server to `~/.claude.json` and `~/.codex/config.toml`. It keeps all other settings in those files. It also adds these skills to `~/.claude/skills` and `~/.codex/skills`:
+
+| Skill | What it does |
+| --- | --- |
+| `talyn-remote-session` | Hands work to a Talyn cloud session with a complete brief. |
+| `talyn-follow-sessions` | Reads the status, transcript and diff of a session, and sends follow-up messages. |
+| `talyn-pull-session` | Brings the branch of a session to your computer, so you can run and test it. |
+| `talyn-pull-requests` | Shows what blocks your pull requests, starts cloud fixes and reviews, and uses the merge queue. |
+
+Talyn does not replace a skill of your own with the same name. When the desktop app updates, it updates the skills it installed.
+
+**Reconnect** creates a new token and revokes the token that it replaces. Do this when the token expires. **Disconnect** removes the server and the skills, and revokes the token.
+
+The web app cannot write files on your computer. Use the steps below to connect from there.
 
 ## Create a token
 
@@ -35,6 +59,16 @@ claude mcp add --transport http talyn https://prod.talyn.dev/api/v1/mcp --header
 ```
 
 Then ask Claude Code something like "which of my pull requests need attention?".
+
+## Codex
+
+Add the server to `~/.codex/config.toml`, with your token in place of `<token>`:
+
+```toml
+[mcp_servers.talyn]
+url = "https://prod.talyn.dev/api/v1/mcp"
+http_headers = { Authorization = "Bearer <token>" }
+```
 
 ## Cursor
 

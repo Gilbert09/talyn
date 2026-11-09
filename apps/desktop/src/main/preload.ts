@@ -5,6 +5,11 @@ import type { DesktopWorkbenchBridge } from '../workbenchBridgeTypes';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
 import type { ReviewRankingExportResult } from './reviewRankingExport';
+import type {
+  InstallLocalAgentKitRequest,
+  LocalAgent,
+  LocalAgentKitStatus,
+} from './localAgentKit';
 import { MENU_COMMAND_CHANNEL } from './menuCommands';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
@@ -268,6 +273,24 @@ const electronHandler = {
      */
     scanLocal(): Promise<LocalMcpFinding[]> {
       return ipcRenderer.invoke('mcp:scan-local');
+    },
+  },
+  localAgents: {
+    /**
+     * Whether Claude Code and Codex on this computer are connected to Talyn:
+     * the configured `talyn` server, the display prefix of its token (never
+     * the token) and the installed skills.
+     */
+    status(): Promise<LocalAgentKitStatus> {
+      return ipcRenderer.invoke('local-agents:status');
+    },
+    /** Write the `talyn` MCP server and the local skill pack for each agent. */
+    install(req: InstallLocalAgentKitRequest): Promise<LocalAgentKitStatus> {
+      return ipcRenderer.invoke('local-agents:install', req);
+    },
+    /** Remove the `talyn` server and Talyn's skills. The person's own skills stay. */
+    remove(agents: LocalAgent[]): Promise<LocalAgentKitStatus> {
+      return ipcRenderer.invoke('local-agents:remove', agents);
     },
   },
 };
