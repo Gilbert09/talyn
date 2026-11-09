@@ -11,8 +11,10 @@ import { Button } from '../ui/button';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu';
 import { MemberAvatar, PresenceAvatars } from '../spaces/SpaceAvatars';
 import { moveToSpace } from '../spaces/MoveToSpace';
+import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
+import { spaceSessionState } from '../../lib/sessionState';
 
 export function SpaceSidebar({ active }: { active: SpaceRef }) {
   const spaceId = active.space.id;
@@ -81,6 +83,7 @@ export function SpaceSessionItem({ row, selected, spaceId }: { row: SpaceSession
   const owner = useWorkspaceStore((s) => isWorkbenchOwner(row, s.workspaces, s.currentWorkspaceId));
   const viewers = viewersOf(presence, row.id, selfUserId);
   const name = row.title || row.name;
+  const state = spaceSessionState(row);
   const open = () => void openSpaceSession(row.id);
   const move = (to: 'personal' | 'pick') => {
     if (to === 'personal') {
@@ -103,20 +106,17 @@ export function SpaceSessionItem({ row, selected, spaceId }: { row: SpaceSession
       }}
       data-attr="space-session-row"
       aria-current={selected ? 'page' : undefined}
-      title={`${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}`}
+      title={`${state.label}\n${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}`}
       className={cn(
         'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
       )}
     >
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-        {row.running ? (
-          <Loader2 className="h-3 w-3 animate-spin text-primary" aria-label="Running" />
-        ) : (
-          <MemberAvatar member={row.creator} size={14} />
-        )}
+        <SessionStateIcon state={state} />
       </span>
       <span className="min-w-0 flex-1 truncate">{name}</span>
+      <MemberAvatar member={row.creator} size={14} />
       <PresenceAvatars members={viewers} max={2} size={14} />
     </div>
   );

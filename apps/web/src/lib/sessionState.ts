@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import type { SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from './api';
 import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
@@ -52,6 +52,41 @@ export interface SessionState {
   kind: SessionStateKind;
   /** Plain words for the tooltip and for assistive tech. */
   label: string;
+}
+
+/** Derive the best state available in the compact space-session payload. */
+export function spaceSessionState(
+  workbench: Pick<SpaceSessionRow, 'id' | 'status' | 'sandboxState' | 'running' | 'pullRequest' | 'archivedAt'>,
+): SessionState {
+  const chats = workbench.running ? [{ id: workbench.id, status: 'running' as const }] : [];
+  const pullRequest = workbench.pullRequest
+    ? {
+        number: workbench.pullRequest.number,
+        state:
+          workbench.pullRequest.state === 'merged'
+            ? ('merged' as const)
+            : workbench.pullRequest.state === 'closed'
+              ? ('closed' as const)
+              : ('open' as const),
+        summary: {
+          url: workbench.pullRequest.url,
+          mergeable: 'UNKNOWN' as const,
+          ciStatus: 'none' as const,
+        },
+      }
+    : null;
+  return sessionState(
+    {
+      status: workbench.status,
+      sandboxState: workbench.sandboxState,
+      diffStat: null,
+      committedStats: null,
+      archivedAt: workbench.archivedAt,
+    },
+    chats,
+    {},
+    pullRequest,
+  );
 }
 
 /** True when a session belongs in the sidebar's active group. */

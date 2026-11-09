@@ -35,6 +35,7 @@ const row = (id: string, patch: Partial<SpaceSessionRow> = {}) =>
     name: id,
     title: null,
     status: 'ready',
+    sandboxState: 'running',
     running: false,
     repoFullName: 'acme/app',
     creator: { userId: 'ana', githubLogin: 'ana', avatarUrl: null },
@@ -122,8 +123,12 @@ describe('SpaceSidebar', () => {
     render(<SpaceSidebar active={active} />);
     const activeNow = screen.getByRole('group', { name: 'Active now' });
     expect(within(activeNow).getAllByText(/busy|watched/)).toHaveLength(2);
+    expect(within(activeNow).getByLabelText('Working')).toBeInTheDocument();
     expect(within(activeNow).getAllByTitle('ben is here').length).toBeGreaterThan(0);
-    expect(within(screen.getByRole('group', { name: 'Recent' })).getByText('quiet')).toBeInTheDocument();
+    const recent = screen.getByRole('group', { name: 'Recent' });
+    expect(within(recent).getByText('quiet')).toBeInTheDocument();
+    expect(within(recent).getByLabelText('Idle')).toBeInTheDocument();
+    expect(within(recent).getByTitle('ana')).toBeInTheDocument();
     expect(screen.getByText("2 items you can't see")).toBeInTheDocument();
   });
 
