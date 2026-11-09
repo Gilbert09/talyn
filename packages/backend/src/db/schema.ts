@@ -2358,6 +2358,12 @@ export const workbenches = pgTable(
     lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
     /** The space this session is in (migration 0116). Null: Personal. */
     spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
+    /**
+     * The `sessionAttentionKey` the owner saw when they last opened the session
+     * (migration 0126). The context rail does not count the session while its
+     * key is the same. Null: never seen.
+     */
+    attentionAck: text('attention_ack'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -7475,3 +7475,10 @@ A session that a thread starts goes in the space of the thread when the caller g
 `PUT /workbenches/:id/space` now moves a thread. It also moves the live sessions of the thread (`thread_id`, same workspace) to the same target, and sends `workbench:updated` for each. Archived sessions of the thread stay where they are.
 "Continue as thread" from a session in a space puts the new thread in the same space (`createThread` reads the `spaceId` of `fromSessionId`).
 The space list (`spaceSessionsQuery`) now returns sessions and threads, with `kind` and `threadId`. A thread has no repository, so `createViewer` shows it to its owner only. For a teammate it counts in `hiddenCount`. Space events and teammate reads use the same rule. A teammate can see a session of the thread when they can read its repository.
+
+### 2026-11-09 — Opening a session clears its context rail badge
+
+Before, a session that needed me kept its red count on the context rail until the alert itself went away. A pull request with conflicts kept the badge after I opened the session and saw it.
+Now opening a session marks its current alert as seen. `sessionAttentionKey` (`packages/shared/src/contextAttention.ts`) names the alert: `error`, `chat_error:<chat>@<turn>`, `reply:<chat>@<turn>` or `conflict:<pr>:<headSha>`. `POST /workbenches/:id/attention/seen` stores the current key in `workbenches.attention_ack` (migration 0126), and `contextAttention` does not count a session whose key equals it. A new alert has a new key, so it counts again: a question in a later turn, a failure in a later turn, or conflicts on a new head.
+The route is owner-only through `attentionSessionsQuery`, so a teammate who opens a space session does not clear the owner's badge.
+In both apps, `useAttentionSeen` (`lib/contextRail.ts`) runs in `WorkbenchView` when the session opens, when its alert changes while it is open, and on window focus with an alert showing. It then asks the rail again (`refreshContextAttention`), so the badge clears at once.

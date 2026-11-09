@@ -1,10 +1,17 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ContextAttentionCounts, SpacesTeam, Workspace } from '@talyn/shared';
 import { ContextRail } from '../renderer/components/layout/ContextRail';
 import { api } from '../renderer/lib/api';
-import { ATTENTION_POLL_MS, railEntries, railEntryAttention, railInitials } from '../renderer/lib/contextRail';
+import {
+  ATTENTION_POLL_MS,
+  clientAttentionKey,
+  railEntries,
+  railEntryAttention,
+  railInitials,
+  useAttentionSeen,
+} from '../renderer/lib/contextRail';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useSpacesStore } from '../renderer/stores/spaces';
 import { useNavigationStore } from '../renderer/stores/navigation';
@@ -198,5 +205,66 @@ describe('ContextRail', () => {
       await Promise.resolve();
     });
     expect(screen.getByRole('button', { name: 'Side, 4 items need you' })).toBeInTheDocument();
+  });
+});
+
+describe('clientAttentionKey', () => {
+  const wb = { kind: 'session' as const, status: 'ready' as const, sandboxState: 'running' as const, archivedAt: null };
+  const chat = (id: string, status: string) => ({ id, status, queuedMessages: [] }) as never;
+
+  it.each<[string, Parameters<typeof clientAttentionKey>, string | null]>([
+    ['an idle session', [wb, [chat('c1', 'idle')], null], null],
+    ['a question', [wb, [chat('c1', 'awaiting_input')], null], 'reply:c1@0'],
+    ['a failed chat', [wb, [chat('c1', 'error')], null], 'chat_error:c1@0'],
+    ['a failed start', [{ ...wb, status: 'error' as const }, [], null], 'error'],
+    ['a conflicting PR', [wb, [], { state: 'open', summary: { mergeable: 'CONFLICTING' } }], 'conflict::'],
+    ['a mergeable PR', [wb, [], { state: 'open', summary: { mergeable: 'MERGEABLE' } }], null],
+    ['a thread with no kind set', [{ ...wb, kind: undefined }, [chat('c1', 'awaiting_input')], null], 'reply:c1@0'],
+  ])('%s', (_label, args, expected) => {
+    expect(clientAttentionKey(...args)).toBe(expected);
+  });
+});
+
+describe('useAttentionSeen', () => {
+  let seen: jest.SpyInstance;
+
+  beforeEach(() => {
+    seen = jest.spyOn(api.workbenches, 'attentionSeen').mockResolvedValue({ acknowledged: true });
+  });
+
+  it('marks the session seen on open and asks the rail again, so its badge clears', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
+    attention.mockResolvedValue({ workspaces: {}, spaces: {} });
+
+    renderHook(() => useAttentionSeen('wb1', 'conflict::'));
+
+    await waitFor(() => expect(seen).toHaveBeenCalledWith('wb1'));
+    expect(await screen.findByRole('button', { name: 'Mine' })).toBeInTheDocument();
+    expect(attention).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks again when the alert changes while the session is open, not on a plain re-render', async () => {
+    const { rerender } = renderHook(({ key }) => useAttentionSeen('wb1', key), {
+      initialProps: { key: null as string | null },
+    });
+    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    rerender({ key: null });
+    rerender({ key: 'reply:c1@0' });
+    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
+  });
+
+  it('marks again when the window comes back with an alert showing', async () => {
+    renderHook(() => useAttentionSeen('wb1', 'error'));
+    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    window.dispatchEvent(new Event('focus'));
+    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps quiet about a failed mark', async () => {
+    seen.mockRejectedValue(new Error('forbidden'));
+    renderHook(() => useAttentionSeen('wb1', 'error'));
+    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
   });
 });

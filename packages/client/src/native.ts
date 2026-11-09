@@ -2329,6 +2329,9 @@ export const workbenches = {
     request<Workbench>('PATCH', `/workbenches/${enc(id)}`, patch),
   archive: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/archive`),
   restore: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/restore`),
+  /** I opened the session: its current alert stops counting on the context rail. */
+  attentionSeen: (id: string) =>
+    request<{ acknowledged: boolean }>('POST', `/workbenches/${enc(id)}/attention/seen`),
   /** Start waking the session's box before the first turn. Never waits for the box. */
   wake: (id: string) =>
     request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' }>('POST', `/workbenches/${enc(id)}/wake`),
