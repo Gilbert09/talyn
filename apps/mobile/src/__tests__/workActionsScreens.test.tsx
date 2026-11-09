@@ -170,11 +170,12 @@ describe('pull request actions', () => {
 });
 
 describe('start new work', () => {
+  const sendButton = (name = 'Start session') => screen.getByRole('button', { name });
   it('starts a session and opens it', async () => {
     await render(<NewWorkScreen />);
     await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled());
-    await fireEvent.press(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', prompt: 'Fix the flaky test' })));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
@@ -182,10 +183,60 @@ describe('start new work', () => {
   it('starts a thread without a repository', async () => {
     await render(<NewWorkScreen initialMode="thread" />);
     await fireEvent.changeText(await screen.findByLabelText('What to get done'), 'Plan the release');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start thread' })).toBeEnabled());
-    await fireEvent.press(screen.getByRole('button', { name: 'Start thread' }));
+    await waitFor(() => expect(sendButton('Start thread')).toBeEnabled());
+    expect(screen.queryByRole('button', { name: /^Repository/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Base branch/ })).toBeNull();
+    await fireEvent.press(sendButton('Start thread'));
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ kind: 'thread' })));
-    expect(screen.queryByText('Repository')).toBeNull();
+  });
+  it('switches from a session to a thread in the mode sheet', async () => {
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Start a session. Change what to start' }));
+    expect(screen.getByRole('header', { name: 'Start' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Thread' }));
+    expect(await screen.findByLabelText('What to get done')).toBeVisible();
+    expect(screen.queryByRole('header', { name: 'Start' })).toBeNull();
+  });
+  it('opens the model sheet and a Codex model switches the agent', async () => {
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: /^Model: .*, Claude\. Change model$/ }));
+    expect(screen.getByRole('header', { name: 'Model' })).toBeVisible();
+    expect(screen.getByRole('header', { name: 'Codex' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'GPT-6 Luna' }));
+    expect(await screen.findByRole('button', { name: 'Model: GPT-6 Luna, Codex. Change model' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Use Codex');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex', model: 'gpt-6-luna' })));
+  });
+  it('picks the base branch in its sheet', async () => {
+    await render(<NewWorkScreen />);
+    const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change base branch$/ });
+    await fireEvent.press(chip);
+    await fireEvent.changeText(screen.getByLabelText('Base branch'), 'develop');
+    await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change base branch' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'On develop');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ baseBranch: 'develop' })));
+  });
+  it('toggles internet access from its chip', async () => {
+    await render(<NewWorkScreen />);
+    const chip = await screen.findByRole('switch', { name: 'Internet access' });
+    expect(chip.props.accessibilityState).toMatchObject({ checked: true });
+    await fireEvent.press(chip);
+    expect(await screen.findByText('Internet access off. The agent can reach the repository only.')).toBeVisible();
+    expect(screen.getByRole('switch', { name: 'Internet access' }).props.accessibilityState).toMatchObject({ checked: false });
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Offline work');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ internetAccess: false })));
+  });
+  it('explains a disabled send in its hint', async () => {
+    await render(<NewWorkScreen />);
+    await waitFor(() => expect(sendButton().props.accessibilityHint).toBe('Describe a task.'));
+    expect(sendButton()).toBeDisabled();
   });
   it('shows web copy when no agent can run', async () => {
     mockActive.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: true, reasons: [], agents: {
@@ -194,15 +245,16 @@ describe('start new work', () => {
     await render(<NewWorkScreen />);
     expect(await screen.findByText(/Sandbox unavailable: Connect Claude in Settings/)).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Task'), 'Something');
-    expect(screen.getByRole('button', { name: /^Start session\./ })).toBeDisabled();
+    expect(sendButton()).toBeDisabled();
+    expect(sendButton().props.accessibilityHint).toBe('Connect Claude in Settings');
   });
   it('keeps the draft and shows a box refusal', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockActive.api.workbenches.create.mockRejectedValueOnce({ status: 402, code: 'concurrent_box_limit_reached', message: 'Two boxes already run.' });
     await render(<NewWorkScreen />);
     await fireEvent.changeText(await screen.findByLabelText('Task'), 'Keep me');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled());
-    await fireEvent.press(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
     expect(await screen.findByText('Two boxes already run.')).toBeVisible();
     expect(alert.mock.calls[0][0]).toBe('All your boxes are busy');
     expect(screen.getByDisplayValue('Keep me')).toBeVisible();
@@ -211,7 +263,7 @@ describe('start new work', () => {
     mockNetwork = 'offline';
     await render(<NewWorkScreen />);
     await fireEvent.changeText(await screen.findByLabelText('Task'), 'Later');
-    expect(screen.getByRole('button', { name: /^Start session\./ })).toBeDisabled();
+    expect(sendButton()).toBeDisabled();
   });
   it('says when sessions are not offered', async () => {
     mockActive.api.features.get.mockResolvedValue({ workbenches: false });

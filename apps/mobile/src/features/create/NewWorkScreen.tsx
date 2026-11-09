@@ -1,47 +1,61 @@
-import type { WatchedRepo } from '@talyn/client/native';
+import type { PRRow, WatchedRepo } from '@talyn/client/native';
 import type { WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
+import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { AppText, Banner, BottomBar, Button, EmptyState, Field, Group, Input, Row, Segmented, Spinner, Toggle, useActionSheet } from '../../components/UI';
-import { Heading, openExternal, workflowStyles as styles } from '../../components/Workflow';
+import { AppText, Banner, Button, EmptyState, Spinner, useToast, type Symbol } from '../../components/UI';
+import { openExternal } from '../../components/Workflow';
 import { boxRefusal, errorMessage, showBoxRefusal } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
 import { useKeyboardInset } from '../../lib/keyboard';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
-import { useTheme } from '../../theme/tokens';
+import { display, mono, radius, sans, type, useTheme } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import { WEB_APP_URL } from '../settings/about';
-import { AGENT_NAMES, AGENTS, agentChoice, blockedReason, createInput, defaultRepositoryId, modelFor, modelLabel, modelsFor,
-  rememberRepository, sandboxChoice, usableAgent, type NewWorkForm, type NewWorkMode } from './model';
+import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
+  effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
+  rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
 
-const MODES = [{ value: 'session', label: 'Session' }, { value: 'thread', label: 'Thread' }] as const;
-const PLACEHOLDER: Record<NewWorkMode, string> = {
-  session: 'Describe a task. The agent works on a new branch and can open a pull request.',
-  thread: 'What do you want to get done? A thread can work across repositories.',
+type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
+
+const MODE_ICON: Record<NewWorkMode, Symbol> = {
+  session: { ios: 'chevron.left.forwardslash.chevron.right', android: 'code' },
+  thread: { ios: 'square.stack.3d.up', android: 'layers' },
 };
+const CHIP_ICON: Record<Exclude<ComposerChip, 'mode'>, Symbol> = {
+  repository: { ios: 'folder', android: 'folder' },
+  branch: { ios: 'arrow.triangle.branch', android: 'call_split' },
+  internet: { ios: 'globe', android: 'language' },
+  model: { ios: 'sparkles', android: 'auto_awesome' },
+};
+// About eight lines of body text, then the field scrolls.
+const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
 
 /**
- * Start a session or a thread, like web `NewWorkbenchPage`. Works as the home
- * screen (`presentation="home"`) and as a pushed route. After a start it opens
- * the new work: a route replaces itself, the home screen pushes.
+ * Start a session or a thread, like web `NewWorkbenchPage`: a calm page with
+ * one composer at the bottom. Repository, branch and internet sit in a row
+ * above it, and the mode and model sit inside it. Each opens a sheet. Works as
+ * the home screen (`presentation="home"`) and as a pushed route. After a start
+ * a route replaces itself and home pushes.
  */
 export function NewWorkScreen({ initialMode = 'session', presentation = 'route' }: { initialMode?: NewWorkMode; presentation?: 'home' | 'route' }) {
   const { workflow } = useMobileRuntime();
   const router = useRouter();
-  const colors = useTheme();
+  const c = useTheme();
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
   const offered = featureOffered(features, 'workbenches');
   const repositories = useResource<WatchedRepo[]>('repositories', '', offered);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', offered);
   const workspace = useResource<Workspace>('workspace', '', offered);
-  const sheet = useActionSheet();
   const keyboard = useKeyboardInset();
+  const toast = useToast();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const android = Platform.OS === 'android';
   const workspaceId = workflow.getScope()?.workspace ?? '';
@@ -56,7 +70,12 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const [internetAccess, setInternetAccess] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [sheet, setSheet] = useState<SheetKind | null>(null);
+  const [repoQuery, setRepoQuery] = useState('');
   useEffect(() => { setMode(initialMode); }, [initialMode]);
+  // Open pull requests give the branch sheet its suggestions, so they load only while it is open.
+  const openPrs = useResource<PRRow[]>('attention', '', offered && sheet === 'branch');
 
   const repos = useMemo(() => repositories.data ?? [], [repositories.data]);
   useEffect(() => {
@@ -71,13 +90,18 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(workspace.data?.settings, agent);
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess };
   const blocked = blockedReason(form, sandbox, offline);
+  const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const agentOk = agentChoice(sandbox, agent);
   const connect = !sandboxOk.available ? sandboxOk.connect : !agentOk.available ? agentOk.connect : undefined;
   const unreachable = sandbox?.reasons[0]?.code === 'unreachable';
+  const branch = effectiveBranch(baseBranch, repository);
+  const chipState: ChipState = { mode, repository, repositoriesLoading: repositories.status !== 'ready' && !repos.length,
+    branch, internetAccess, agent, model };
+  const chips = composerChips(mode, repository);
 
   const start = async () => {
-    if (blocked || busy || !workspaceId) return;
+    if (!send.enabled) return;
     setBusy(true); setError(null);
     try {
       const item = await workflow.createWorkbench(createInput(form, workspaceId));
@@ -93,74 +117,185 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
     } finally { setBusy(false); }
   };
 
-  const chooseRepository = () => sheet.open({ title: 'Repository', actions: repos.map((repo) => ({
-    label: repo.fullName, selected: repo.id === repositoryId, onPress: () => { setRepositoryId(repo.id); setBaseBranch(''); },
-  })) });
-  const chooseAgent = () => sheet.open({ title: 'Agent', actions: AGENTS.map((value) => {
-    const choice = agentChoice(sandbox, value);
-    return { label: AGENT_NAMES[value], selected: value === agent, disabled: !choice.available, detail: choice.available ? undefined : choice.reason,
-      onPress: () => { setWantedAgent(value); setPickedModel(null); } };
-  }) });
-  const chooseModel = () => sheet.open({ title: 'Model', actions: modelsFor(agent).map((item) => ({
-    label: item.label, detail: item.blurb, selected: item.id === model, onPress: () => setPickedModel(item.id),
-  })) });
+  const openSheet = (kind: SheetKind) => { Keyboard.dismiss(); setSheet(kind); };
+  const closeSheet = () => { setSheet(null); setRepoQuery(''); };
+  const toggleInternet = () => {
+    const next = !internetAccess;
+    setInternetAccess(next);
+    toast.show(internetMessage(next));
+  };
 
-  if (features === null) return <ScreenContainer topInset={presentation === 'home'}><View style={local.center}><Spinner /></View></ScreenContainer>;
+  if (features === null) return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
   </ScreenContainer>;
 
   const noRepositories = mode === 'session' && repositories.status === 'ready' && !repos.length;
+  const notices = <>
+    {error ? <Banner tone="destructive" message={error} /> : null}
+    {!sandboxOk.available && sandbox ? <Banner tone="warning" message={`Sandbox unavailable: ${sandboxOk.reason ?? 'Cloud sessions are unavailable'}`}
+      action={unreachable ? (offline ? undefined : 'Retry') : 'Open web'}
+      onAction={unreachable ? () => { void readiness.refresh(); } : () => openExternal(WEB_APP_URL)} />
+      : connect ? <Banner tone="information" message={`${agentOk.reason ?? 'This agent is not connected'}. Connect your Claude or ChatGPT subscription in Talyn on the web, in Settings, Integrations.`}
+        action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
+    {noRepositories ? <Banner tone="information" message="Add a repository in Talyn on the web to start a session. A thread needs no repository."
+      action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
+  </>;
+
+  const chip = (kind: ComposerChip) => {
+    const label = chipLabel(kind, chipState);
+    if (kind === 'internet') return <ContextChip key={kind} icon={CHIP_ICON.internet} label={label.text} accessibilityLabel={label.accessibilityLabel}
+      active={internetAccess} role="switch" checked={internetAccess} disabled={busy} onPress={toggleInternet} />;
+    if (kind === 'mode') return <Chip key={kind} icon={MODE_ICON[mode]} label={label.text} accessibilityLabel={label.accessibilityLabel}
+      disabled={busy} onPress={() => openSheet('mode')} />;
+    if (kind === 'repository') return <ContextChip key={kind} icon={CHIP_ICON.repository} label={label.text} accessibilityLabel={label.accessibilityLabel}
+      maxWidth={200} disabled={busy || (repositories.status !== 'ready' && !repos.length)} onPress={() => openSheet('repository')} />;
+    if (kind === 'branch') return <ContextChip key={kind} icon={CHIP_ICON.branch} label={label.text} accessibilityLabel={label.accessibilityLabel}
+      maxWidth={140} mono disabled={busy} onPress={() => openSheet('branch')} />;
+    return <Chip key={kind} icon={CHIP_ICON.model} label={label.text} accessibilityLabel={label.accessibilityLabel} chevron
+      disabled={busy} onPress={() => openSheet('model')} />;
+  };
+
   return <ScreenContainer topInset={presentation === 'home'}>
-    <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]} 
+    <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]}
       behavior={android ? undefined : 'padding'} keyboardVerticalOffset={presentation === 'route' ? headerHeight : 0}>
-      <ScrollView contentContainerStyle={[styles.content, local.content]} keyboardShouldPersistTaps="handled">
-        {presentation === 'home' ? <Heading>What do you want to build?</Heading> : null}
-        <Segmented<NewWorkMode> options={MODES} value={mode} onChange={(value) => { setMode(value); setError(null); }} accessibilityLabel="What to start" />
-        <Input accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
-          placeholder={PLACEHOLDER[mode]} style={local.prompt}
-          onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }} />
-        {noRepositories ? <Banner tone="information" message="Add a repository in Talyn on the web to start a session. A thread needs no repository."
-          action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
-        <Group>
-          {mode === 'session' ? <Row title="Repository" onPress={repos.length ? chooseRepository : undefined} chevron={repos.length > 1}
-            trailing={<AppText variant="meta" tone="muted" numberOfLines={1} style={local.value}>
-              {repository?.fullName ?? (repositories.status === 'ready' ? 'None' : 'Loading')}</AppText>}
-            accessibilityLabel={`Repository: ${repository?.fullName ?? 'none'}`} /> : null}
-          <Row title="Agent" onPress={chooseAgent} chevron accessibilityLabel={`Agent: ${AGENT_NAMES[agent]}`}
-            trailing={<AppText variant="meta" tone="muted" style={local.value}>{AGENT_NAMES[agent]}</AppText>} />
-          <Row title="Model" onPress={chooseModel} chevron accessibilityLabel={`Model: ${modelLabel(model)}`}
-            trailing={<AppText variant="meta" tone="muted" style={local.value}>{modelLabel(model)}</AppText>} />
-          <Row title="Internet access" divider={false} subtitle={internetAccess ? 'The agent can reach the internet.' : 'Repository only.'}
-            trailing={<Toggle accessibilityLabel="Internet access" value={internetAccess} onValueChange={setInternetAccess}
-              trackColor={{ true: colors.primaryAction, false: colors.surface }} />} />
-        </Group>
-        {mode === 'session' && repository ? <Field label="Base branch">
-          <Input accessibilityLabel="Base branch" value={baseBranch} onChangeText={setBaseBranch} autoCapitalize="none" autoCorrect={false}
-            placeholder={(repository as WatchedRepo).defaultBranch || 'main'} />
-        </Field> : null}
-        {error ? <Banner tone="destructive" message={error} /> : null}
-        {!sandboxOk.available && sandbox ? <Banner tone="warning" message={`Sandbox unavailable: ${sandboxOk.reason ?? 'Cloud sessions are unavailable'}`}
-          action={unreachable ? (offline ? undefined : 'Retry') : 'Open web'}
-          onAction={unreachable ? () => { void readiness.refresh(); } : () => openExternal(WEB_APP_URL)} />
-          : connect ? <Banner tone="information" message={`${agentOk.reason ?? 'This agent is not connected'}. Connect your Claude or ChatGPT subscription in Talyn on the web, in Settings, Integrations.`}
-            action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
-      </ScrollView>
-      <BottomBar>
-        <View style={{ flex: 1 }}>
-          <Button title={mode === 'thread' ? 'Start thread' : 'Start session'} icon={{ ios: 'arrow.up', android: 'arrow_upward' }}
-            loading={busy} disabled={Boolean(blocked) || busy} onPress={() => { void start(); }}
-            accessibilityLabel={blocked ? `${mode === 'thread' ? 'Start thread' : 'Start session'}. ${blocked}` : undefined} />
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
+        <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
+        {toast.element}
+      </Pressable>
+      <View style={styles.dock}>
+        {notices}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+          style={styles.contextScroll} contentContainerStyle={styles.contextRow}>
+          {chips.context.map(chip)}
+        </ScrollView>
+        <View style={[styles.card, { backgroundColor: c.elevated, borderColor: focused ? c.primary : c.border, opacity: busy ? 0.85 : 1 }]}>
+          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
+            placeholder={PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
+            onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+            onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
+            style={[styles.prompt, { color: c.text }]} />
+          <View style={styles.controls}>
+            {chip('mode')}
+            <View style={styles.spacer} />
+            {chip('model')}
+            <SendButton enabled={send.enabled} busy={busy} hint={send.hint} label={mode === 'thread' ? 'Start thread' : 'Start session'}
+              onPress={() => { void start(); }} />
+          </View>
         </View>
-      </BottomBar>
+      </View>
     </KeyboardAvoidingView>
-    {sheet.sheet}
+
+    <PickerSheet visible={sheet === 'mode'} title="Start" onClose={closeSheet}
+      sections={[{ key: 'modes', items: MODES.map((option) => ({ key: option.value, label: option.label, detail: option.detail,
+        icon: MODE_ICON[option.value], selected: option.value === mode, onPress: () => { setMode(option.value); setError(null); } })) }]} />
+
+    <PickerSheet visible={sheet === 'repository'} title="Repository" onClose={closeSheet}
+      search={repos.length > 6 ? { value: repoQuery, onChange: setRepoQuery, placeholder: 'Find a repository' } : undefined}
+      sections={[{ key: 'repositories', items: filterRepositories(repos, repoQuery).map((repo) => ({ key: repo.id, label: repo.fullName,
+        selected: repo.id === repositoryId, onPress: () => { setRepositoryId(repo.id); setBaseBranch(''); } })) }]}
+      empty={repos.length ? <EmptyState title="No repository matches." />
+        : <EmptyState title="No repositories yet." detail="Add repositories in Talyn on the web.">
+          <Button variant="quiet" size="sm" title="Open web" onPress={() => openExternal(WEB_APP_URL)} />
+        </EmptyState>} />
+
+    <BranchSheet visible={sheet === 'branch'} onClose={closeSheet} repository={repository} value={baseBranch} onChange={setBaseBranch}
+      rows={openPrs.data} />
+
+    <PickerSheet visible={sheet === 'model'} title="Model" onClose={closeSheet} sections={modelSections(sandbox, agent).map((section): PickerSection => ({
+      key: section.agent, title: section.title, note: section.note,
+      action: section.connect ? { label: section.connect === 'reauth' ? 'Sign in on the web' : 'Connect on the web', onPress: () => openExternal(WEB_APP_URL) } : undefined,
+      items: section.models.map((item) => ({ key: item.id, label: item.label, detail: item.blurb,
+        selected: section.agent === agent && item.id === model,
+        onPress: () => { setWantedAgent(agentForModel(item.id) ?? section.agent); setPickedModel(item.id); } })),
+    }))} />
   </ScreenContainer>;
 }
 
-const local = StyleSheet.create({
-  content: { gap: 14 },
-  prompt: { minHeight: 120, maxHeight: 260 },
-  value: { maxWidth: 200, textAlign: 'right' },
+function BranchSheet({ visible, onClose, repository, value, onChange, rows }: {
+  visible: boolean; onClose(): void; repository: WatchedRepo | null; value: string; onChange(value: string): void; rows?: PRRow[];
+}) {
+  const c = useTheme();
+  const current = effectiveBranch(value, repository);
+  const suggestions = filterBranches(branchSuggestions(repository, rows), value);
+  const pick = (branch: string) => onChange(branch === repository?.defaultBranch ? '' : branch);
+  return <PickerSheet visible={visible} title="Base branch" onClose={onClose}
+    header={<View style={styles.branchField}>
+      <TextInput accessibilityLabel="Base branch" value={value} onChangeText={onChange} placeholder={repository?.defaultBranch || 'main'}
+        placeholderTextColor={c.muted} selectionColor={c.primary} autoCapitalize="none" autoCorrect={false} spellCheck={false}
+        returnKeyType="done" onSubmitEditing={onClose}
+        style={[styles.branchInput, { color: c.text, backgroundColor: c.surface }]} />
+      <AppText variant="meta" tone="muted">The session starts a new branch from this one.</AppText>
+    </View>}
+    sections={[{ key: 'branches', title: suggestions.length ? 'Branches' : undefined, items: suggestions.map((branch) => ({
+      key: branch, label: branch, mono: true, selected: branch === current,
+      detail: branch === repository?.defaultBranch ? 'Default branch' : undefined, onPress: () => pick(branch) })) }]} />;
+}
+
+/** A control inside the composer card. */
+function Chip({ icon, label, accessibilityLabel, onPress, disabled = false, chevron = false }: {
+  icon: Symbol; label: string; accessibilityLabel: string; onPress(): void; disabled?: boolean; chevron?: boolean;
+}) {
+  const c = useTheme();
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }}
+    disabled={disabled} onPress={onPress} hitSlop={{ top: 6, bottom: 6 }}
+    style={({ pressed }) => [styles.chip, { backgroundColor: pressed ? c.surface : 'transparent', borderColor: c.border, opacity: disabled ? 0.5 : 1 }]}>
+    <SymbolView name={icon} size={14} tintColor={c.muted} />
+    <Text numberOfLines={1} style={[styles.chipText, { color: c.text }]}>{label}</Text>
+    {chevron ? <SymbolView name={{ ios: 'chevron.down', android: 'expand_more' }} size={12} tintColor={c.muted} /> : null}
+  </Pressable>;
+}
+
+/** A small muted text control in the row above the composer. */
+function ContextChip({ icon, label, accessibilityLabel, onPress, disabled = false, active = false, mono: code = false, maxWidth,
+  role = 'button', checked }: {
+  icon: Symbol; label: string; accessibilityLabel: string; onPress(): void; disabled?: boolean; active?: boolean; mono?: boolean;
+  maxWidth?: number; role?: 'button' | 'switch'; checked?: boolean;
+}) {
+  const c = useTheme();
+  const color = active ? c.primaryAction : c.muted;
+  return <Pressable accessibilityRole={role} accessibilityLabel={accessibilityLabel}
+    accessibilityState={{ disabled, ...(role === 'switch' ? { checked } : {}) }} disabled={disabled} onPress={onPress}
+    hitSlop={{ top: 8, bottom: 8 }}
+    style={({ pressed }) => [styles.contextChip, { maxWidth, backgroundColor: pressed ? c.surface : 'transparent', opacity: disabled ? 0.5 : 1 }]}>
+    <SymbolView name={icon} size={13} tintColor={color} />
+    <Text numberOfLines={1} ellipsizeMode="tail" style={[code ? styles.contextMono : styles.contextText, { color }]}>{label}</Text>
+  </Pressable>;
+}
+
+function SendButton({ enabled, busy, hint, label, onPress }: { enabled: boolean; busy: boolean; hint?: string; label: string; onPress(): void }) {
+  const c = useTheme();
+  const background = enabled || busy ? c.primaryAction : c.surface;
+  const foreground = enabled || busy ? c.primaryText : c.muted;
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint={hint}
+    accessibilityState={{ disabled: !enabled, busy }} disabled={!enabled} onPress={onPress} hitSlop={4}
+    style={({ pressed }) => [styles.send, { backgroundColor: background, opacity: pressed ? 0.8 : 1 }]}>
+    {busy ? <ActivityIndicator size="small" color={foreground} />
+      : <SymbolView name={{ ios: 'arrow.up', android: 'arrow_upward' }} size={18} tintColor={foreground} />}
+  </Pressable>;
+}
+
+const styles = StyleSheet.create({
+  page: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  greeting: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
+  heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
+  dock: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, gap: 8, width: '100%', maxWidth: 760, alignSelf: 'center' },
+  card: { borderRadius: 16, borderWidth: 1 },
+  // Two lines tall from the start, so the first typed line does not resize the field.
+  prompt: { ...type.body, minHeight: 64, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
+    textAlignVertical: 'top' },
+  controls: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 },
+  spacer: { flex: 1 },
+  contextScroll: { flexGrow: 0 },
+  contextRow: { alignItems: 'center', gap: 2, paddingHorizontal: 2 },
+  contextChip: { height: 28, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, borderRadius: radius.sm },
+  contextText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },
+  contextMono: { fontSize: 12, lineHeight: 18, ...mono(400), flexShrink: 1 },
+  chip: { height: 32, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth, maxWidth: 170, flexShrink: 1 },
+  chipText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },
+  send: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  branchField: { paddingHorizontal: 16, paddingBottom: 8, gap: 6 },
+  branchInput: { minHeight: 44, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, ...mono(400) },
 });

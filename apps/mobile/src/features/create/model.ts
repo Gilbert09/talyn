@@ -2,6 +2,8 @@ import type { WatchedRepo } from '@talyn/client/native';
 import { defaultFleetModelForAgent, FLEET_MODELS, storedFleetModelForAgent, type CreateWorkbenchInput, type WorkbenchAgent,
   type WorkbenchReadiness, type WorkspaceSettings } from '@talyn/shared';
 
+import { modelLabel as labelForModel } from '../../lib/models';
+
 export type NewWorkMode = 'session' | 'thread';
 export const AGENTS: readonly WorkbenchAgent[] = ['claude', 'codex'];
 export const AGENT_NAMES: Record<WorkbenchAgent, string> = { claude: 'Claude Code', codex: 'Codex' };
@@ -46,9 +48,6 @@ export function modelFor(settings: WorkspaceSettings | null | undefined, agent: 
 }
 export function modelsFor(agent: WorkbenchAgent) {
   return FLEET_MODELS.filter((model) => model.provider === (agent === 'codex' ? 'openai' : 'anthropic'));
-}
-export function modelLabel(id: string): string {
-  return FLEET_MODELS.find((model) => model.id === id)?.label ?? id;
 }
 
 // The last repository chosen per workspace, for this app run.
@@ -96,4 +95,138 @@ export function createInput(form: NewWorkForm, workspaceId: string): CreateWorkb
   if (!form.repository) throw new Error('Choose a repository.');
   return { workspaceId, repositoryId: form.repository.id, runtime: 'sandbox', agent: form.agent, model: form.model,
     baseBranch: form.baseBranch.trim() || undefined, prompt, internetAccess: form.internetAccess, autoCreatePr: true };
+}
+
+// ---------------------------------------------------------------------------
+// Composer controls
+// ---------------------------------------------------------------------------
+
+export const MODES: ReadonlyArray<{ value: NewWorkMode; label: string; detail: string }> = [
+  { value: 'session', label: 'Session', detail: 'Works on one repository on a new branch, and can open a pull request.' },
+  { value: 'thread', label: 'Thread', detail: 'Starts a thread. It can work across repositories.' },
+];
+export const PLACEHOLDER: Record<NewWorkMode, string> = {
+  session: 'Describe a task',
+  thread: 'What do you want to get done?',
+};
+const MODE_LABEL: Record<NewWorkMode, string> = { session: 'Session', thread: 'Thread' };
+const AGENT_SHORT: Record<WorkbenchAgent, string> = { claude: 'Claude', codex: 'Codex' };
+
+/** The branch the session starts from: the typed one, else the repository's default. */
+export function effectiveBranch(baseBranch: string, repository: Pick<WatchedRepo, 'defaultBranch'> | null | undefined): string {
+  return baseBranch.trim() || repository?.defaultBranch || 'main';
+}
+
+export type ComposerChip = 'mode' | 'repository' | 'branch' | 'internet' | 'model';
+
+/**
+ * The context row above the composer, and the controls inside it. A thread
+ * has no repository, so its context row keeps only internet access.
+ */
+export function composerChips(mode: NewWorkMode, repository: unknown): { context: ComposerChip[]; card: ComposerChip[] } {
+  const context: ComposerChip[] = mode === 'thread' ? ['internet'] : repository ? ['repository', 'branch', 'internet'] : ['repository', 'internet'];
+  return { context, card: ['mode', 'model'] };
+}
+
+export interface ChipState {
+  mode: NewWorkMode;
+  repository: Pick<WatchedRepo, 'fullName'> | null;
+  /** True while the repository list is still loading. */
+  repositoriesLoading?: boolean;
+  branch: string;
+  internetAccess: boolean;
+  agent: WorkbenchAgent;
+  model: string;
+}
+
+/** What a chip shows, and what a screen reader says for it. */
+export function chipLabel(chip: ComposerChip, state: ChipState): { text: string; accessibilityLabel: string } {
+  switch (chip) {
+    case 'mode': return { text: MODE_LABEL[state.mode], accessibilityLabel: `Start a ${state.mode}. Change what to start` };
+    case 'repository': {
+      if (state.repository) return { text: state.repository.fullName,
+        accessibilityLabel: `Repository: ${state.repository.fullName}. Change repository` };
+      const text = state.repositoriesLoading ? 'Loading' : 'Repository';
+      return { text, accessibilityLabel: state.repositoriesLoading ? 'Repositories are loading' : 'Repository: none. Choose a repository' };
+    }
+    case 'branch': return { text: state.branch, accessibilityLabel: `Base branch: ${state.branch}. Change base branch` };
+    case 'internet': return { text: state.internetAccess ? 'Internet on' : 'Internet off', accessibilityLabel: 'Internet access' };
+    case 'model': {
+      const label = labelForModel(state.model, state.agent);
+      return { text: label, accessibilityLabel: `Model: ${label}, ${AGENT_SHORT[state.agent]}. Change model` };
+    }
+  }
+}
+
+/** The announcement after the internet chip is pressed. */
+export function internetMessage(on: boolean): string {
+  return on ? 'Internet access on.' : 'Internet access off. The agent can reach the repository only.';
+}
+
+/** Whether Send works, and the hint a screen reader gives when it does not. */
+export function sendState(blocked: string | null, busy: boolean, workspaceId: string): { enabled: boolean; hint?: string } {
+  if (busy) return { enabled: false, hint: 'Starting.' };
+  if (!workspaceId) return { enabled: false, hint: 'Choose a workspace.' };
+  if (blocked) return { enabled: false, hint: blocked };
+  return { enabled: true };
+}
+
+/** The agent whose models include `modelId`, or null for an id outside the catalogue. */
+export function agentForModel(modelId: string): WorkbenchAgent | null {
+  const model = FLEET_MODELS.find((item) => item.id === modelId);
+  if (!model) return null;
+  return model.provider === 'openai' ? 'codex' : 'claude';
+}
+
+export interface ModelSection {
+  agent: WorkbenchAgent;
+  title: string;
+  models: ReturnType<typeof modelsFor>;
+  /** Why the agent cannot run, in web's words. Its models are not offered then. */
+  note?: string;
+  connect?: Choice['connect'];
+}
+
+/**
+ * The model sheet: one section per agent that can run, plus the current one.
+ * An agent that needs a sign-in gets web's "not connected" sentence instead of
+ * its models, so its models look locked rather than missing.
+ */
+export function modelSections(sandbox: Sandbox | null | undefined, current: WorkbenchAgent): ModelSection[] {
+  return AGENTS.flatMap((agent): ModelSection[] => {
+    const choice = agentChoice(sandbox, agent);
+    const name = AGENT_SHORT[agent];
+    if (choice.available || agent === current) return [{ agent, title: AGENT_NAMES[agent], models: modelsFor(agent) }];
+    if (!choice.connect) return [];
+    const note = choice.connect === 'reauth'
+      ? `The ${name} sign-in for this workspace has expired, so ${name} models cannot run.`
+      : `${name} is not connected to this workspace, so ${name} models cannot run.`;
+    return [{ agent, title: AGENT_NAMES[agent], models: [], note, connect: choice.connect }];
+  });
+}
+
+/** Repositories whose name contains the query, in the workspace's order. */
+export function filterRepositories<T extends Pick<WatchedRepo, 'fullName'>>(repositories: readonly T[], query: string): T[] {
+  const needle = query.trim().toLowerCase();
+  return needle ? repositories.filter((repo) => repo.fullName.toLowerCase().includes(needle)) : [...repositories];
+}
+
+interface BranchRow { state: string; repositoryId: string; authored?: boolean; number: number; summary: { baseBranch?: string } }
+
+/**
+ * Branches to offer, like web: the default branch, then the base branches of
+ * the repository's open pull requests, own pull requests first.
+ */
+export function branchSuggestions(repository: Pick<WatchedRepo, 'id' | 'defaultBranch'> | null, rows: readonly BranchRow[] = []): string[] {
+  if (!repository) return [];
+  const prs = rows.filter((row) => row.state === 'open' && row.repositoryId === repository.id)
+    .sort((a, b) => Number(Boolean(b.authored)) - Number(Boolean(a.authored)) || b.number - a.number);
+  return [...new Set([repository.defaultBranch, ...prs.map((row) => row.summary.baseBranch ?? '')].filter(Boolean))];
+}
+
+/** Suggestions that contain what is typed. Typing the default name shows them all. */
+export function filterBranches(suggestions: readonly string[], typed: string): string[] {
+  const needle = typed.trim().toLowerCase();
+  if (!needle) return [...suggestions];
+  return suggestions.filter((branch) => branch.toLowerCase().includes(needle));
 }
