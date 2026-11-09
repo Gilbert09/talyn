@@ -58,6 +58,8 @@ export function GitPanel({
   const turnsEnded = useTurnsEnded(chats);
   const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox);
   const sandboxAttention = hasSandbox ? sandboxStatusNeedsAttention(sandbox.status) : null;
+  const uncommittedFiles = workbench.uncommittedStats?.files ?? workbench.diffStat?.files ?? 0;
+  const openPrHasUncommitted = (pr?.state ?? workbench.pr?.state) === 'open' && uncommittedFiles > 0;
 
   useEffect(() => setComments([]), [workbench.id]);
   useEffect(() => setMounted((m) => (m[tab] ? m : { ...m, [tab]: true })), [tab]);
@@ -110,7 +112,9 @@ export function GitPanel({
             role="tab"
             aria-selected={tab === t.id}
             onClick={() => setTab(t.id)}
-            title={t.hint}
+            title={t.id === 'changes' && openPrHasUncommitted
+              ? `${uncommittedFiles} uncommitted ${uncommittedFiles === 1 ? 'file is' : 'files are'} not in the open pull request`
+              : t.hint}
             className={cn(
               'shrink-0 rounded px-2 py-1 text-xs font-medium',
               tab === t.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
@@ -118,9 +122,13 @@ export function GitPanel({
           >
             {t.label}
             {t.id === 'background' && runningJobs > 0 && <span className="ml-1 rounded bg-emerald-500/15 px-1 text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">{runningJobs}</span>}
-            {t.id === 'changes' && workbench.diffStat && workbench.diffStat.files > 0 && (
-              <span className="ml-1 tabular-nums text-muted-foreground">{workbench.diffStat.files}</span>
-            )}
+            {t.id === 'changes' && uncommittedFiles > 0 && (openPrHasUncommitted ? (
+              <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] tabular-nums text-amber-700 dark:text-amber-400">
+                {uncommittedFiles} uncommitted
+              </span>
+            ) : (
+              <span className="ml-1 tabular-nums text-muted-foreground">{uncommittedFiles}</span>
+            ))}
             {t.id === 'changes' && comments.length > 0 && (
               <span className="ml-1 rounded bg-info/15 px-1 text-[10px] text-info">{comments.length}</span>
             )}
