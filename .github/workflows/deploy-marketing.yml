@@ -84,6 +84,8 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to production
-        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+        # One archive, not one upload per file: the free plan allows 5,000 file
+        # uploads a day, and on 2026-11-09 a busy day of pushes used them up.
+        run: vercel deploy --prebuilt --prod --archive=tgz --token="$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}

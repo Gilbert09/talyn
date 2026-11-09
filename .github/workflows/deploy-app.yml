@@ -124,4 +124,6 @@ jobs:
 
       - name: Deploy
         if: steps.gate.outputs.configured == 'true'
-        run: vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+        # One archive, not one upload per file: the free plan allows 5,000 file
+        # uploads a day, and on 2026-11-09 a busy day of pushes used them up.
+        run: vercel deploy --prebuilt --prod --archive=tgz --token="${{ secrets.VERCEL_TOKEN }}"
