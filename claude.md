@@ -38,6 +38,7 @@ after every edit is most of the loop spent waiting. Run what covers the change:
   when a change spans related suites; `-t "<name>"` for a single `describe`/`it`.
 - **Desktop** (`apps/desktop`, Jest): `npx jest <pattern>`.
 - **Web** (`apps/web`, Vitest): `npx vitest run <pattern>`.
+- **Mobile** (`apps/mobile`, Jest): `cd apps/mobile && npx jest --runInBand <pattern>`; typecheck with `npm run typecheck -w @talyn/mobile` (it regenerates typed routes first).
 
 Pick by what the change can plausibly break, not by habit — and this holds for a
 cross-cutting edit too. Touching `packages/shared`, a widely-imported helper or a
@@ -97,7 +98,7 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 
 - **Public API** (`packages/backend/src/routes/public/`) → run `npm run openapi:generate -w @talyn/backend` and commit `docs/api/openapi.json`. Then update `docs/api/*.md`, the scopes and overview in `apps/marketing/content/docs/api.md`, and the endpoint in `apps/marketing/content/docs/api-reference.md`. Every endpoint in `openapi.json` must have an entry in `api-reference.md`.
 - **MCP tools** (`packages/backend/src/mcp/tools/`) → update the tool table in `docs/MCP_SERVER.md` and the areas in `apps/marketing/content/docs/mcp.md`. If a sandbox skill in `packages/backend/src/services/workbenches/skillPack/`, a local skill in `apps/desktop/src/main/localSkillPack.ts` or the briefing in `packages/shared/src/talynBriefing.ts` names the tool, update it too.
-- **Other user-facing behaviour** → update the matching page in `apps/marketing/content/docs/`. A new page also needs an entry in `DOCS_NAV` in `apps/marketing/lib/docs.ts`.
+- **Other user-facing behaviour** → update the matching page in `apps/marketing/content/docs/`. The same change updates `apps/mobile` (see **Mobile client — keep it in step**). A new page also needs an entry in `DOCS_NAV` in `apps/marketing/lib/docs.ts`.
 
 ## Core Concepts (at a glance)
 
@@ -236,6 +237,19 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 
 **Recent work**: see [`docs/SESSIONS.md`](./docs/SESSIONS.md), newest first — one note per session, with the reasoning and the things that turned out not to work.
 
+## Mobile client — keep it in step
+
+**`apps/mobile` is the third front end, and every change that users see lands there too.** Web and desktop are the reference; mobile follows them. A new feature, a changed behaviour, new copy or a bug fix in `apps/web`/`apps/desktop` updates `apps/mobile` in the same change, unless it is on the web-only list below. When a mobile change is not practical in the same change, say so in the commit and add it to `docs/ROADMAP.md`. A backend change that alters a response, a WS event or a 402/409 code is a mobile change as well: check `apps/mobile` uses it the same way the web does.
+
+- **Web only** (do not port): the terminal, file editing, sandbox setup and dotfiles, private routes, MCP server, API token and Slack configuration, skills/instructions/memory editing, workflow and loop editors, PostHog Code and Trunk keys. Mobile links to the web for these.
+- **Mirror, do not reinvent.** Read the web component first and port its data flow, rules and copy. The mirrors to keep in step: `src/lib/status.ts` (web `SessionStateIcon`, `PRStatusPill`, `PRReviewPill`), `src/theme/tokens.ts` (web `app.css` tokens), `src/lib/models.ts` (shared model catalog), `src/features/prs/lists.ts` + `counts.ts` (web PR tabs and badges), `src/features/spaces/` (web space context and `inPersonalList`), `src/features/billing/model.ts` (web `BillingActions` rules and refusal copy).
+- **Gate like web.** Every flagged surface reads `useFeatures()` (`src/lib/features.ts`, backed by `GET /features`). A new flag in `featureFlags.ts` needs the same gate on mobile.
+- **Live data goes through the store.** `src/workflow/store.ts` patches rows from WS events by id (`prPatch.ts` for PRs). A new WS event or a new field on a broadcast row needs a patch there, or mobile shows stale data. Never invalidate a whole entity kind on an event; that is what kept every screen marked stale before.
+- **Native modules need a new development build.** Add them with `npx expo install`, add any config plugin to `app.config.ts`, then rebuild with `npx expo run:android` / `ios`. After adding reanimated or worklets, restart Metro with `--clear`, or the app fails with a worklets version mismatch.
+- **Android traps that are already solved; keep the fixes.** The WS sends an empty `Origin` (`src/native/socket.ts`; the server also accepts its own host). Screens pad from the JS safe-area provider (`ScreenContainer`), not the native `SafeAreaView`. Edge-to-edge Android does not resize for the keyboard: the inset comes from the keyboard's `screenY` (`src/lib/keyboard.ts`), and `KeyboardAvoidingView` gets no `behavior` on Android.
+- **Browser flows return to the app** through `returnTo` (exact-match `MOBILE_RETURN_SCHEMES` allowlist, `services/mobileReturn.ts`). A new OAuth, install or checkout flow that mobile starts needs the same return target. Purchases sit behind `purchaseMode` (`EXPO_PUBLIC_PURCHASE_MODE`), because store rules decide where in-app buying is allowed.
+- **Docs and release.** A new public build variable goes in `apps/mobile/release/policy.cjs`, or the build refuses it. User-facing mobile behaviour belongs in `apps/marketing/content/docs/` with the web behaviour.
+
 ## File Structure
 
 ```
@@ -246,7 +260,8 @@ fastowl/
 │   │       ├── main/             # main + preload
 │   │       └── renderer/         # React frontend (components, hooks, stores, lib)
 │   ├── web/                      # @talyn/web — browser app (app.talyn.dev), Vite + React 19
-│   └── admin/                    # @talyn/admin — operator console (admin.talyn.dev), Vite + React 19
+│   ├── admin/                    # @talyn/admin — operator console (admin.talyn.dev), Vite + React 19
+│   └── mobile/                   # @talyn/mobile — iOS + Android app, Expo + React Native (expo-router)
 ├── packages/
 │   ├── backend/                  # Express + WS server, DB, services
 │   ├── cli/                      # @talyn/cli — `fastowl` binary
