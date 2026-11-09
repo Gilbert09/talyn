@@ -42,6 +42,8 @@ function MoveToSpaceBinding({ openSheet, onMoved, onChange }: {
   return null;
 }
 
+/** Session actions listed before the detail screen's PR actions. */
+const URGENT = new Set<SessionActionKind>(['stop', 'retry', 'wake']);
 /** Actions that need the server. Offline they show but cannot be chosen. */
 const NEEDS_NETWORK = new Set<SessionActionKind>(['stop', 'wake', 'retry', 'rename', 'archive', 'restore']);
 
@@ -67,25 +69,25 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
   const attempt = async (title: string, action: () => Promise<unknown>) => {
     try { await action(); } catch (error) { showActionError(title, error); }
   };
-  const perform = (kind: SessionActionKind, item: Workbench, selectedChat: string | null) => {
+  /** Runs one action. The promise settles when the request does, so a caller can show progress. */
+  const perform = (kind: SessionActionKind, item: Workbench, selectedChat: string | null): Promise<void> => {
     const noun = workbenchKind(item) === 'thread' ? 'thread' : 'session';
     switch (kind) {
       case 'stop': {
         const chat = runningChat(item, selectedChat);
-        if (chat) void attempt('Could not stop the agent', () => workflow.stopChat(item.id, chat.id));
-        return;
+        return chat ? attempt('Could not stop the agent', () => workflow.stopChat(item.id, chat.id)) : Promise.resolve();
       }
-      case 'wake': void attempt('Could not wake the sandbox', async () => {
+      case 'wake': return attempt('Could not wake the sandbox', async () => {
         const answer = await workflow.wakeWorkbench(item.id) as { status?: string; code?: unknown; notice?: unknown };
         const refusal = answer?.status === 'exhausted' || answer?.status === 'box_limit'
           ? boxRefusal({ code: answer.code ?? (answer.notice as { code?: unknown } | undefined)?.code, details: { notice: answer.notice } }) : null;
         if (refusal) showBoxRefusal(refusal);
-      }); return;
-      case 'retry': void attempt('Could not retry', () => workflow.retryWorkbench(item.id)); return;
-      case 'rename': setRenaming(item); return;
-      case 'open_pr': if (item.pr?.url) openExternal(item.pr.url); return;
-      case 'share': void Share.share({ message: webLink(item.id), url: webLink(item.id) }).catch(() => {}); return;
-      case 'parent': if (item.threadId) router.push(threadRoute(item.threadId)); return;
+      });
+      case 'retry': return attempt('Could not retry', () => workflow.retryWorkbench(item.id));
+      case 'rename': setRenaming(item); break;
+      case 'open_pr': if (item.pr?.url) openExternal(item.pr.url); break;
+      case 'share': void Share.share({ message: webLink(item.id), url: webLink(item.id) }).catch(() => {}); break;
+      case 'parent': if (item.threadId) router.push(threadRoute(item.threadId)); break;
       case 'archive': {
         const copy = archiveCopy(item);
         Alert.alert(copy.title, copy.message, [
@@ -95,24 +97,34 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
             onArchived?.(item);
           }) },
         ]);
-        return;
+        break;
       }
-      case 'restore': void attempt(`Could not restore the ${noun}`, () => workflow.restoreWorkbench(item.id));
+      case 'restore': return attempt(`Could not restore the ${noun}`, () => workflow.restoreWorkbench(item.id));
     }
+    return Promise.resolve();
   };
-  const open = (item: Workbench) => {
+  /**
+   * Opens the menu. The detail screen adds `views` (Changes, Jobs, Details)
+   * first and `extra` actions (the PR cycle and the queue) after Stop, Retry
+   * and Wake.
+   */
+  const open = (item: Workbench, more: { views?: SheetAction[]; extra?: SheetAction[] } = {}) => {
     const selectedChat = workflow.local(`selected:${item.id}`).selectedChat;
-    const actions: SheetAction[] = sessionActions(item, { selectedChat, onThreadScreen }).map((kind) => ({
+    const entry = (kind: SessionActionKind): SheetAction => ({
       label: SESSION_ACTION_LABEL[kind], icon: ICONS[kind], destructive: kind === 'archive' || kind === 'stop',
       disabled: offline && NEEDS_NETWORK.has(kind),
       detail: offline && NEEDS_NETWORK.has(kind) ? 'You are offline.' : undefined,
-      onPress: () => perform(kind, item, selectedChat),
-    }));
+      onPress: () => { void perform(kind, item, selectedChat); },
+    });
+    const kinds = sessionActions(item, { selectedChat, onThreadScreen });
+    const urgent = kinds.filter((kind) => URGENT.has(kind));
+    const actions: SheetAction[] = [...(more.views ?? []), ...urgent.map(entry), ...(more.extra ?? []),
+      ...kinds.filter((kind) => !URGENT.has(kind)).map(entry)];
     // Archive or Restore stays last, after the copy entries and the move.
     const last = actions.pop();
     for (const kind of copyActions(item)) {
-      const entry = copyEntry(kind, item);
-      actions.push({ label: entry.label, icon: COPY_ICON, onPress: () => copyText(entry.text, entry.done) });
+      const copy = copyEntry(kind, item);
+      actions.push({ label: copy.label, icon: COPY_ICON, onPress: () => copyText(copy.text, copy.done) });
     }
     const move = moveBuilder?.build(item);
     if (move) actions.push({ label: move.label, icon: move.icon, disabled: move.disabled, detail: move.detail, onPress: move.run });
@@ -131,5 +143,6 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
         if (item) void attempt(`Could not rename the ${workbenchKind(item) === 'thread' ? 'thread' : 'session'}`, () => workflow.renameWorkbench(item.id, title));
       }} />
   </>;
-  return { open, elements, toast: toast.show, openSheet: sheet.open };
+  const run = (kind: SessionActionKind, item: Workbench) => perform(kind, item, workflow.local(`selected:${item.id}`).selectedChat);
+  return { open, run, elements, toast: toast.show, openSheet: sheet.open };
 }

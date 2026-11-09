@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { CREATE_PR_MESSAGE, type Workbench } from '@talyn/shared';
+import type { Workbench } from '@talyn/shared';
 import { useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -13,7 +13,8 @@ import { pullRequestRoute } from '../../navigation/routes';
 import { useTheme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { checksLine, mergeLine } from '../prs/actions';
-import { canCreatePullRequest, createPrSentText, sessionUnavailable } from './model';
+import { canCreatePullRequest, sessionUnavailable } from './model';
+import { sendCreatePullRequest } from './sessionPrActions';
 
 type PrDetail = { row: PRRow };
 
@@ -68,13 +69,7 @@ function NoPullRequest({ item, openSheet, onSent }: { item: Workbench; openSheet
   const create = async () => {
     setBusy('create');
     try {
-      const selected = workflow.local(`selected:${item.id}`).selectedChat;
-      const chats = item.chats ?? [];
-      const chatId = chats.find((chat) => chat.id === selected)?.id ?? chats[0]?.id ?? (await workflow.api.workbenches.createChat(item.id)).id;
-      const ack = await workflow.api.workbenches.sendMessage(chatId, { text: CREATE_PR_MESSAGE, intent: 'create_pr', planMode: false });
-      workflow.refresh('workbench', item.id);
-      workflow.refresh('transcript', chatId);
-      onSent(createPrSentText(ack.queued, item));
+      onSent(await sendCreatePullRequest(workflow, item));
     } catch (error) {
       showActionError('Could not create the pull request', error);
     } finally {
@@ -138,8 +133,8 @@ function NoPullRequest({ item, openSheet, onSent }: { item: Workbench; openSheet
 }
 
 /**
- * The PR tab: the linked pull request's status, review and checks, opening
- * the full PR screen; or, with none yet, Create PR and Link like web.
+ * The pull request view: the linked pull request's status, review and checks,
+ * opening the full PR screen; or, with none yet, Create PR and Link like web.
  */
 export function PullRequestTab({ item, openSheet, onSent }: {
   item: Workbench; openSheet(request: SheetRequest): void;

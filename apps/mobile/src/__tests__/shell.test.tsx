@@ -81,6 +81,15 @@ const routes = {
   'attention/[id]': PullRequestScreen,
 };
 
+/**
+ * A session or thread title sits in the native header, which Jest does not
+ * draw. The composer under it shows the detail screen opened.
+ */
+async function expectOpened(label: string) {
+  if (label === 'Review current work') expect(await screen.findByRole('header', { name: label })).toBeVisible();
+  else expect(await screen.findByLabelText('Message')).toBeVisible();
+}
+
 describe('native shell', () => {
   it('opens home at startup', async () => {
     await renderRouter(routes, { initialUrl: '/' });
@@ -106,7 +115,7 @@ describe('native shell', () => {
     expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
     await fireEvent.press(await screen.findByRole('link', { name: new RegExp(label) }));
     expect(screen).toHavePathname(destination);
-    expect(await screen.findByRole('header', { name: label })).toBeVisible();
+    await expectOpened(label);
     // Leaving home closed the drawer, so Back shows home itself.
     await testRouter.back('/home');
     expect(screen.queryByTestId('navigation-drawer')).toBeNull();
@@ -206,7 +215,7 @@ describe('native shell', () => {
     expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     mockAuth = { status: 'signedIn', user: { id: 'alice' }, issue: null };
     await act(async () => router.replace('/'));
-    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    await expectOpened('Current work');
     expect(screen).toHavePathname('/sessions/session-one');
   });
 
@@ -224,7 +233,7 @@ describe('native shell', () => {
     expect(mockWorkflow.api.workbenches.get).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Select workspace One', selected: false })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Select workspace One' }));
-    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    await expectOpened('Current work');
     expect(screen).toHavePathname('/sessions/session-one');
   });
 
@@ -248,7 +257,7 @@ describe('native shell', () => {
   ])('opens the detail URL %s', async (url, label) => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen).toHavePathname(url);
-    expect(await screen.findByRole('header', { name: label })).toBeVisible();
+    await expectOpened(label);
   });
 });
 

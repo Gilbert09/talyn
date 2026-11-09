@@ -21,7 +21,10 @@ jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
   Redirect: ({ href }: { href: string }) => { const { Text } = jest.requireActual('react-native'); return <Text>{`Redirect ${href}`}</Text>; },
   useRouter: () => mockRouter,
-  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
+  Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
+    const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
+    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+  } },
 }));
 const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
 const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
@@ -56,18 +59,18 @@ describe('session controls', () => {
     expect(mockActive.api.workbenches.archive).toHaveBeenCalledWith('session-one');
     expect(mockRouter.back).toHaveBeenCalled();
   });
-  it('shrinks the header to one line while the keyboard is open', async () => {
+  it('hides the quick actions while the keyboard is open and keeps the title', async () => {
     const listeners = new Map<string, (event: { endCoordinates: { height: number } }) => void>();
     jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, listener: (event: { endCoordinates: { height: number } }) => void) => {
       listeners.set(name, listener); return { remove: jest.fn() };
     }) as never);
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Add to merge queue' })).toBeVisible();
     await act(async () => listeners.get('keyboardWillShow')?.({ endCoordinates: { height: 300 } }));
-    expect(screen.getByRole('header', { name: 'Current work' })).toBeVisible();
-    expect(screen.queryByRole('link', { name: 'Open related pull request' })).toBeNull();
+    expect(screen.getByRole('header', { name: /^Current work\./ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
     await act(async () => listeners.get('keyboardWillHide')?.({ endCoordinates: { height: 0 } }));
-    expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add to merge queue' })).toBeVisible();
   });
   it('renames through the prompt sheet', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
@@ -89,8 +92,9 @@ describe('session controls', () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ status: 'error', error: 'The sandbox did not start.' }));
     mockActive.api.workbenches.retry.mockRejectedValueOnce({ status: 402, code: 'usage_exhausted', details: { notice: { message: 'No box-hours left.' } } });
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByText('The sandbox did not start.')).toBeVisible();
-    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(retry.props.accessibilityHint).toBe('The sandbox did not start.');
+    await fireEvent.press(retry);
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
   });
   it('disables network actions offline', async () => {

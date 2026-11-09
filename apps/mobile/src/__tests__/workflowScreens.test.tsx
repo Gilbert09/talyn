@@ -6,6 +6,7 @@ import { AttentionScreen } from '../features/prs/AttentionScreen';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { WorkbenchListScreen } from '../features/sessions/WorkbenchListScreen';
+import type { Transcript } from '../workflow/model';
 import { chat, deferred, event, fixture, pr, session } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -18,7 +19,10 @@ jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }),
   // The header's right button renders in place, so tests can press it.
-  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
+  Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
+    const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
+    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+  } },
 }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => mockNetwork,
@@ -87,11 +91,12 @@ describe('detail and composer accessibility', () => {
   it('shows the transcript, state, and related PR without a readiness line when ready', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByText('Agent response 1')).toBeVisible();
-    expect(screen.getByRole('header', { name: 'Current work' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(screen.getByRole('header', { name: /^Current work\./ })).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^Pull request 42\b.*Open the pull request\.$/ })).toBeVisible();
     expect(screen.queryByText(/Readiness/)).toBeNull(); expect(screen.getByLabelText('Message')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
-    expect(screen.getByText('Codex · GPT-6.1 Terra · High effort')).toBeVisible();
+    // The model line lives in the header's Details sheet. The chat starts with the transcript.
+    expect(screen.queryByText('Codex · GPT-6.1 Terra · High effort')).toBeNull();
     expect(screen.queryByText(/Model:|Time unavailable/)).toBeNull();
   });
   it.each([
@@ -144,7 +149,7 @@ describe('detail and composer accessibility', () => {
     await fireEvent.press(await screen.findByRole('button', { name: 'Related sessions (1)' }));
     expect(mockActive.store.local('thread-chat').following).toBe(false);
     expect(await screen.findByRole('link', { name: /^Current work\./ })).toBeVisible();
-    expect(screen.getByRole('header', { name: 'Planning work' })).toBeVisible();
+    expect(screen.getByRole('header', { name: /^Planning work\./ })).toBeVisible();
     expect(await screen.findByLabelText('Message')).toBeVisible();
   });
   it('retains chat selection and drafts across detail navigation', async () => {
@@ -189,10 +194,13 @@ describe('detail and composer accessibility', () => {
     expect(mockActive.api.workbenches.sendMessage).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('Sent')).toBeVisible();
   });
-  it('renders only a bounded number of transcript rows', async () => {
+  it('holds a whole long session but renders only a bounded number of rows', async () => {
     mockActive.api.workbenches.events.mockResolvedValueOnce({ events: Array.from({ length: 10000 }, (_, index) => event(index + 1)), cursor: 10000, oldestSeq: 1, hasOlder: false });
-    await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText(/History is limited/);
+    await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 10000');
     expect(screen.getAllByText(/^Agent response /).length).toBeLessThan(50);
+    // Every event fits in the window, so nothing says history is limited.
+    expect(mockActive.store.read<Transcript>('transcript', 'chat-one').data?.events).toHaveLength(10000);
+    expect(screen.queryByText(/History is limited/)).toBeNull();
   });
 });
 

@@ -5,7 +5,7 @@ import { Alert } from 'react-native';
 
 import { HistoryScreen } from '../features/history/HistoryScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
-import { fixture, pr, session, thread } from './workflowFixtures';
+import { chat, fixture, pr, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
 
@@ -20,7 +20,10 @@ jest.mock('expo-router', () => ({
   usePathname: () => '/sessions/session-one',
   Link: ({ children }: { children: React.ReactNode }) => children,
   useRouter: () => mockRouter,
-  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
+  Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
+    const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
+    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+  } },
 }));
 jest.mock('@talyn/client/native', () => ({
   ...jest.requireActual('@talyn/client/native'),
@@ -66,32 +69,134 @@ beforeEach(() => {
 });
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
 
-const tab = (name: string | RegExp) => screen.findByRole('tab', { name });
+/** Opens one of the views from the session menu. */
+async function openView(label: string) {
+  await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
+  await fireEvent.press(screen.getByRole('button', { name: label }));
+}
+const withRow = (rowPatch: Parameters<typeof pr>[0]) => mockActive.api.pullRequests.get.mockResolvedValue({ row: pr(rowPatch), fresh: null });
+const summary = (summaryPatch: Partial<ReturnType<typeof pr>['summary']>) => ({ summary: { ...pr().summary, ...summaryPatch } });
 
-describe('session detail tabs', () => {
-  it('shows Chat, Changes and PR for a session with a linked PR', async () => {
+describe('compact session header', () => {
+  it('puts the title and the PR number in the header, with no tabs and no status line', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
-    await tab('Chat');
-    expect(screen.getAllByRole('tab').map((item) => item.props.accessibilityLabel)).toEqual(['Chat', 'Changes', 'PR']);
-    expect(screen.getByRole('tab', { name: 'Chat' })).toBeSelected();
+    expect(await screen.findByRole('header', { name: 'Current work. #42 open, waiting on checks or review.' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^Pull request 42\. .*Open the pull request\.$/ })).toBeVisible();
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(screen.queryByText(/Updated /)).toBeNull();
+    expect(screen.queryByText('example/project')).toBeNull();
   });
-  it('keeps a thread on its conversation, with no tabs', async () => {
+  it('opens the pull request from its number', async () => {
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: /^Pull request 42\./ }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one' } });
+  });
+  it('shows the +/- count and opens Changes from it', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ diffStat: { added: 12, removed: 3, files: 2 } }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Changes: 2 files, 12 added, 3 removed' }));
+    expect(await screen.findByRole('button', { name: 'Modified: src/app.ts. 2 added, 1 removed.' })).toBeVisible();
+  });
+  it('keeps a thread to its title and menu, with no PR marks or actions', async () => {
     mockParams = { id: 'thread-one' };
     await render(<WorkbenchDetailScreen kind="thread" />);
-    await screen.findByRole('button', { name: 'Thread actions' });
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(await screen.findByRole('header', { name: /^Planning work\./ })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Thread actions' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Pull request|^Changes:/ })).toBeNull();
+    expect(screen.queryByLabelText('Quick actions')).toBeNull();
   });
-  it('adds Jobs with the running count when the session has background jobs', async () => {
-    api().background.mockResolvedValue(background([job()]));
+  it('hides the action row when there is nothing to do', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(noPr({ diffStat: null }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await tab('Jobs · 1')).toBeVisible();
+    await screen.findByRole('header', { name: /^Current work\./ });
+    expect(screen.queryByLabelText('Quick actions')).toBeNull();
+  });
+  it('shows the full details in a sheet from the title', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ agent: 'claude', model: 'claude-opus-5-5', effort: 'high' })], threadId: 'thread-one' }));
+    withRow(summary({ blockingReason: 'merge_conflicts' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('header', { name: /^Current work\./ }));
+    expect(await screen.findByRole('header', { name: 'Session details' })).toBeVisible();
+    expect(screen.getByLabelText('Repository: example/project')).toBeVisible();
+    expect(screen.getByLabelText('Branch: tom/example → main')).toBeVisible();
+    expect(screen.getByLabelText('Agent: Claude · Opus 5.5 · High effort')).toBeVisible();
+    expect(screen.getByLabelText(/^Updated: /)).toBeVisible();
+    expect(screen.getByRole('button', { name: /Pull request 42: Review current work\. Conflicts\./ })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open parent thread' }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/threads/[id]', params: { id: 'thread-one' } });
+  });
+});
+
+describe('quick actions', () => {
+  const chips = () => screen.getByLabelText('Quick actions');
+  it('adds the pull request to the merge queue through the client', async () => {
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Add to merge queue' }));
+    await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true));
+    expect(await screen.findByText('Added #42 to the merge queue.')).toBeVisible();
+  });
+  it('shows the queue state once queued and opens the PR from it', async () => {
+    withRow({ mergeQueued: true, mergeQueue: { position: 2, status: 'queued' } as never });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Queued #2' }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one' } });
+    expect(mockActive.api.pullRequests.setMergeQueue).not.toHaveBeenCalled();
+  });
+  it('merges only after a confirmation', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing', blockingReason: 'mergeable' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Merge' }));
+    expect(alert.mock.calls[0][0]).toBe('Merge #42?');
+    expect(mockActive.api.pullRequests.merge).not.toHaveBeenCalled();
+    const buttons = alert.mock.calls[0][2] as Array<{ text: string; onPress?(): void }>;
+    await act(async () => buttons.find((button) => button.text === 'Merge')?.onPress?.());
+    expect(mockActive.api.pullRequests.merge).toHaveBeenCalledWith('pr-one');
+    expect(await screen.findByText('Merged #42.')).toBeVisible();
+  });
+  it.each([
+    ['Resolve conflicts', 'resolve_conflicts', { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }],
+    ['Fix checks', 'fix_checks', { mergeable: 'MERGEABLE', ciStatus: 'failing_required', blockingReason: 'checks_failed' }],
+  ] as const)('%s sends the action to the session chat', async (label, action, summaryPatch) => {
+    withRow(summary(summaryPatch as never));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(mockActive.api.workbenches.action).toHaveBeenCalledWith('session-one', action, 'chat-one'));
+    expect(await screen.findByText('Sent to the agent.')).toBeVisible();
+  });
+  it('stops a running turn from the row', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running' })] }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(mockActive.api.workbenches.cancel).toHaveBeenCalledWith('chat-one'));
+  });
+  it('disables every action offline and says why', async () => {
+    mockNetwork = 'offline';
+    await mockActive.store.load('workbench', 'session-one');
+    await mockActive.store.load('pr', 'pr-one');
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const queue = await screen.findByRole('button', { name: 'Add to merge queue' });
+    expect(queue).toBeDisabled();
+    expect(queue.props.accessibilityHint).toBe('You are offline.');
+    expect(chips()).toBeVisible();
+  });
+  it('lists the PR cycle and the queue in the menu', async () => {
+    withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing', blockingReason: 'mergeable' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await screen.findByRole('button', { name: 'Merge' });
+    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    const labels = screen.getAllByRole('button').map((item) => item.props.accessibilityLabel);
+    expect(labels).toEqual(expect.arrayContaining(['Details', 'Changes', 'Pull request', 'Merge', 'Add to merge queue', 'Rename']));
+    // The chip comes first in the tree; the menu's own entry is the last one.
+    expect(labels.indexOf('Details')).toBeLessThan(labels.lastIndexOf('Merge'));
+    expect(labels.lastIndexOf('Merge')).toBeLessThan(labels.indexOf('Rename'));
   });
 });
 
 describe('changes', () => {
   it('lists the changed files and opens a diff with numbered, read-only lines', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     const row = await screen.findByRole('button', { name: 'Modified: src/app.ts. 2 added, 1 removed.' });
     expect(screen.getByRole('button', { name: 'Added: README.md. 4 added, 0 removed.' })).toBeVisible();
     expect(api().changes).toHaveBeenCalledWith('session-one', {});
@@ -109,7 +214,7 @@ describe('changes', () => {
       throw Object.assign(new Error('asleep'), { status: 409, code: 'snapshot_unavailable' });
     });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     expect(await screen.findByText('Sandbox is asleep. Talyn has no stored copy of its changes yet.')).toBeVisible();
     expect(api().changes).toHaveBeenCalledTimes(1);
     await fireEvent.press(screen.getByRole('button', { name: 'Wake the sandbox' }));
@@ -119,7 +224,7 @@ describe('changes', () => {
   it('says the list is a stored copy and refreshes from the sandbox on request', async () => {
     api().changes.mockResolvedValue({ ...changes, snapshotAt: new Date(Date.now() - 5 * 60_000).toISOString(), source: 'stored', storedReason: 'asleep' });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     expect(await screen.findByText('Sandbox is asleep. Showing changes from 5 minutes ago.')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Refresh from the sandbox' }));
     await waitFor(() => expect(api().changes).toHaveBeenLastCalledWith('session-one', { live: true }));
@@ -130,7 +235,7 @@ describe('changes', () => {
       throw Object.assign(new Error('asleep'), { status: 409, code: 'snapshot_unavailable' });
     });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     await fireEvent.press(await screen.findByRole('button', { name: /src\/app\.ts/ }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Wake the sandbox to see it' }));
     expect(await screen.findByLabelText('Added line 3: second')).toBeVisible();
@@ -139,7 +244,7 @@ describe('changes', () => {
   it('shows a merged PR first and the branch diff only on request', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ pr: { number: 42, state: 'merged', url: 'https://github.com/example/project/pull/42' } as never }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     expect(await screen.findByText('PR #42 merged. Its changes are in main.')).toBeVisible();
     expect(api().changes).not.toHaveBeenCalled();
     await fireEvent.press(screen.getByRole('button', { name: 'Show the branch diff anyway' }));
@@ -148,46 +253,46 @@ describe('changes', () => {
   it('explains a local session instead of reading it', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ runtime: 'local' }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Changes'));
+    await openView('Changes');
     expect(await screen.findByText('This session runs on a computer with the Talyn desktop app. Open it there.')).toBeVisible();
     expect(api().changes).not.toHaveBeenCalled();
   });
 });
 
-describe('pull request tab', () => {
-  it('summarises the linked PR and links to its screen', async () => {
-    mockActive.api.pullRequests.get.mockResolvedValue({ row: pr({ summary: { ...pr().summary, blockingReason: 'merge_conflicts',
-      checks: { total: 4, passed: 3, failed: 1, inProgress: 0, skipped: 0 } } }), fresh: null });
+describe('pull request view', () => {
+  it('opens the PR screen from the menu when one is linked', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('PR'));
-    const card = await screen.findByRole('link', { name: /Pull request 42: Review current work\. Conflicts\./ });
-    expect(card).toBeVisible();
-    expect(screen.getByText('4 checks: 3 passed, 1 failing')).toBeVisible();
-    expect(screen.getByLabelText('Review: Needs approval')).toBeVisible();
+    await openView('Pull request');
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one' } });
   });
-  it('creates a PR through the chat, like web, and returns to the chat', async () => {
+  it('creates a PR through the chat from the row, like web', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(noPr());
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('PR'));
-    await fireEvent.press(await screen.findByRole('button', { name: 'Create pull request' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Create PR' }));
     await waitFor(() => expect(mockActive.api.workbenches.sendMessage).toHaveBeenCalledWith('chat-one',
       { text: 'Create a pull request', intent: 'create_pr', planMode: false }));
     expect(await screen.findByText('Sent to the agent. It opens the pull request when its turn ends.')).toBeVisible();
-    expect(screen.getByRole('tab', { name: 'Chat' })).toBeSelected();
   });
   it('shows the plan alert when the box gate refuses Create PR', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockActive.api.workbenches.get.mockResolvedValue(noPr());
     mockActive.api.workbenches.sendMessage.mockRejectedValueOnce({ status: 402, code: 'usage_exhausted', details: { notice: { message: 'No box-hours left.' } } });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('PR'));
-    await fireEvent.press(await screen.findByRole('button', { name: 'Create pull request' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Create PR' }));
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
+  });
+  it('creates a PR from the pull request sheet and closes it', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(noPr());
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Pull request');
+    await fireEvent.press(await screen.findByRole('button', { name: 'Create pull request' }));
+    expect(await screen.findByText('Sent to the agent. It opens the pull request when its turn ends.')).toBeVisible();
+    expect(screen.queryByRole('header', { name: 'Pull request' })).toBeNull();
   });
   it('links an existing PR from the open ones', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(noPr());
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('PR'));
+    await openView('Pull request');
     await fireEvent.press(await screen.findByRole('button', { name: 'Link an existing pull request' }));
     await fireEvent.press(await screen.findByRole('button', { name: '#7 Earlier work' }));
     await waitFor(() => expect(api().linkPullRequest).toHaveBeenCalledWith('session-one', 7));
@@ -197,7 +302,7 @@ describe('pull request tab', () => {
     mockActive.api.workbenches.get.mockResolvedValue(noPr());
     api().linkPullRequest.mockResolvedValue({ workbench: session(), needsCheckout: { branch: 'x', remoteRef: 'refs/heads/x' } });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('PR'));
+    await openView('Pull request');
     await fireEvent.press(await screen.findByRole('button', { name: 'Link an existing pull request' }));
     await fireEvent.press(await screen.findByRole('button', { name: '#7 Earlier work' }));
     await waitFor(() => expect(api().unlinkPullRequest).toHaveBeenCalledWith('session-one'));
@@ -205,12 +310,12 @@ describe('pull request tab', () => {
   });
 });
 
-describe('jobs tab', () => {
+describe('jobs view', () => {
   it('stops a running job after a confirmation and shows its output', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     api().background.mockResolvedValue(background([job()]));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await tab('Jobs · 1'));
+    await openView('Background jobs');
     await fireEvent.press(await screen.findByRole('button', { name: 'dev server. Running. npm run dev' }));
     expect(await screen.findByText('ready on :3000')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Stop' }));
@@ -229,9 +334,13 @@ describe('jobs tab', () => {
       return () => {};
     }) as never);
     await render(<WorkbenchDetailScreen kind="session" />);
-    await tab('Jobs · 1');
+    await screen.findByRole('header', { name: /^Current work\./ });
+    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Background jobs' }).props.accessibilityHint).toBe('1 running'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }));
     await act(async () => handlers.forEach((handler) => handler(background([job({ status: 'exited', exitCode: 0 })]))));
-    expect(await tab('Jobs')).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    expect(screen.getByRole('button', { name: 'Background jobs' }).props.accessibilityHint).toBeUndefined();
   });
 });
 

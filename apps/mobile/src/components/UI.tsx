@@ -1,9 +1,10 @@
 import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
   type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { mono, radius, sans, type, useTheme, withAlpha, type Theme, type TypeVariant } from '../theme/tokens';
 
@@ -458,3 +459,57 @@ export function Toggle(props: ComponentProps<typeof Switch>) {
   const c = useTheme();
   return <Switch trackColor={{ false: c.border, true: c.primaryAction }} thumbColor={c.elevated} ios_backgroundColor={c.border} {...props} />;
 }
+
+/**
+ * A compact action chip for a quick-action row: icon, short label, and a
+ * spinner while it runs. `hint` explains it, or why it is disabled.
+ */
+export function ChipButton({ label, onPress, icon, variant = 'secondary', loading = false, disabled = false, hint, accessibilityLabel }: {
+  label: string; onPress(): void; icon?: Symbol; variant?: 'primary' | 'secondary'; loading?: boolean; disabled?: boolean;
+  hint?: string; accessibilityLabel?: string;
+}) {
+  const c = useTheme();
+  const primary = variant === 'primary';
+  const foreground = primary ? c.primaryText : c.text;
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityHint={hint}
+    accessibilityState={{ disabled: disabled || loading, busy: loading }} disabled={disabled || loading} onPress={onPress} hitSlop={4}
+    style={({ pressed }) => [chipStyles.chip, { backgroundColor: primary ? c.primaryAction : c.surface,
+      opacity: disabled ? 0.45 : pressed ? 0.75 : 1 }]}>
+    {loading ? <ActivityIndicator size={12} color={foreground} /> : icon ? <SymbolView name={icon} size={14} tintColor={foreground} /> : null}
+    <Text numberOfLines={1} style={[chipStyles.label, { color: foreground }]}>{label}</Text>
+  </Pressable>;
+}
+
+/**
+ * Content in a sheet that slides up over the screen, with a title and a close
+ * button. `full` makes it nearly full height, for a list or a diff. Render
+ * any action sheet the content opens inside `children`, so it draws on top.
+ */
+export function SheetModal({ visible, title, onClose, full = false, children }: PropsWithChildren<{
+  visible: boolean; title: string; onClose(): void; full?: boolean;
+}>) {
+  const c = useTheme();
+  const insets = useContext(SafeAreaInsetsContext) ?? { top: 0, bottom: 0, left: 0, right: 0 };
+  return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+    <View style={chipStyles.backdrop}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={StyleSheet.absoluteFill} />
+      <View accessibilityViewIsModal style={[chipStyles.sheet, full ? { height: '92%' } : { maxHeight: '85%' },
+        { backgroundColor: c.background, borderColor: c.border, paddingBottom: insets.bottom }]}>
+        <View style={chipStyles.sheetHeader}>
+          <AppText accessibilityRole="header" variant="rowTitle" numberOfLines={1} style={{ flex: 1 }}>{title}</AppText>
+          <IconButton label="Close" symbol={{ ios: 'xmark', android: 'close' }} size={18} onPress={onClose} />
+        </View>
+        <View style={full ? { flex: 1 } : { flexShrink: 1 }}>{children}</View>
+      </View>
+    </View>
+  </Modal>;
+}
+
+const chipStyles = StyleSheet.create({
+  chip: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, borderRadius: radius.round, flexShrink: 1 },
+  label: { fontSize: 13, lineHeight: 18, ...sans(600), flexShrink: 1 },
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' },
+  sheet: { width: '100%', maxWidth: 760, alignSelf: 'center', borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 8, paddingTop: 8, minHeight: 52 },
+});
