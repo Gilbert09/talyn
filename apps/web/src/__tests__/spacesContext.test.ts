@@ -18,7 +18,9 @@ import { useNavigationStore } from '../stores/navigation';
 import {
   activeSpace,
   contextEntries,
+  contextForSession,
   contextsEqual,
+  followSessionContext,
   groupSpaceSessions,
   inPersonalList,
   isWorkbenchOwner,
@@ -251,6 +253,58 @@ describe('inPersonalList', () => {
     ['a Personal session when Spaces is off', null, null, false, true],
   ])('%s', (_name, spaceId, list, offered, expected) => {
     expect(inPersonalList({ spaceId }, list, offered)).toBe(expected);
+  });
+});
+
+describe('contextForSession', () => {
+  const teams = [team('t1', ['s1', 's2'])];
+  const mine = [workspace('ws1'), workspace('ws2')];
+  it.each<[string, { workspaceId: string; spaceId?: string | null }, SpacesTeam[] | null, AppContext | null]>([
+    ['my session in one of my spaces', { workspaceId: 'ws1', spaceId: 's2' }, teams, { kind: 'space', spaceId: 's2' }],
+    ["a teammate's session in one of my spaces", { workspaceId: 'ws-ana', spaceId: 's1' }, teams, { kind: 'space', spaceId: 's1' }],
+    ['my Personal session', { workspaceId: 'ws1', spaceId: null }, teams, { kind: 'personal', workspaceId: 'ws1' }],
+    ['my session in another workspace', { workspaceId: 'ws2' }, teams, { kind: 'personal', workspaceId: 'ws2' }],
+    ['my session in a space that is gone', { workspaceId: 'ws2', spaceId: 's-gone' }, teams, { kind: 'personal', workspaceId: 'ws2' }],
+    ["a teammate's session outside my spaces", { workspaceId: 'ws-ana', spaceId: 's-gone' }, teams, null],
+    ["a teammate's Personal session", { workspaceId: 'ws-ana', spaceId: null }, teams, null],
+    ['any session while my teams load', { workspaceId: 'ws1', spaceId: 's1' }, null, null],
+  ])('%s', (_name, session, list, expected) => {
+    expect(contextForSession(session, list, mine, 'ws1')).toEqual(expected);
+  });
+});
+
+describe('followSessionContext', () => {
+  it.each<[string, AppContext, { workspaceId: string; spaceId?: string | null }, AppContext]>([
+    ['Personal to the space of the session', { kind: 'personal', workspaceId: 'ws1' }, { workspaceId: 'ws-ana', spaceId: 's3' }, { kind: 'space', spaceId: 's3' }],
+    ['one space to another', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws1', spaceId: 's2' }, { kind: 'space', spaceId: 's2' }],
+    ['a space to Personal', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws1', spaceId: null }, { kind: 'personal', workspaceId: 'ws1' }],
+    ['a space to my other workspace', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws2', spaceId: null }, { kind: 'personal', workspaceId: 'ws2' }],
+    ['stays in the space of the session', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws-ana', spaceId: 's1' }, { kind: 'space', spaceId: 's1' }],
+    ['stays for a session it cannot place', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws-ana', spaceId: 's-gone' }, { kind: 'space', spaceId: 's1' }],
+  ])('%s', (_name, from, session, expected) => {
+    useWorkspaceStore.setState({ currentContext: from });
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'linked' });
+    expect(followSessionContext(session)).toBe(true);
+    expect(useWorkspaceStore.getState().currentContext).toEqual(expected);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'linked' });
+  });
+
+  it('keeps Personal with no stored workspace when the session is in the current one', () => {
+    useWorkspaceStore.setState({ currentContext: { kind: 'personal', workspaceId: null } });
+    const setContext = vi.spyOn(useWorkspaceStore.getState(), 'setContext');
+    expect(followSessionContext({ workspaceId: 'ws1', spaceId: null })).toBe(true);
+    expect(setContext).not.toHaveBeenCalled();
+    setContext.mockRestore();
+  });
+
+  it.each<[string, () => void, boolean]>([
+    ['the features have not loaded', () => useWorkspaceStore.setState({ features: null }), false],
+    ['my teams have not loaded', () => useSpacesStore.setState({ teams: null }), false],
+    ['Spaces is off', () => useWorkspaceStore.setState({ features: { spaces: false } as never }), true],
+  ])('does not move while %s', (_name, arrange, settled) => {
+    arrange();
+    expect(followSessionContext({ workspaceId: 'ws-ana', spaceId: 's3' })).toBe(settled);
+    expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'personal', workspaceId: 'ws1' });
   });
 });
 
