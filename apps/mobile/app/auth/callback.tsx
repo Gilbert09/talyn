@@ -7,5 +7,5 @@ import { ShellScreen } from '../../src/components/ShellScreen';
 export default function CallbackScreen() {
   const router = useRouter();
   useEffect(() => { router.replace('/'); }, [router]);
-  return <ShellScreen title="Completing sign-in" description="Checking your sign-in securely."><Status message="Completing sign-in" loading /></ShellScreen>;
+  return <ShellScreen topInset centered title="Completing sign-in" description="Checking your sign-in securely."><Status message="Completing sign-in" loading /></ShellScreen>;
 }
