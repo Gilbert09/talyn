@@ -127,7 +127,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         ],
       }] } : {}),
     },
-    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-notifications', {
+    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-image-picker', { photosPermission: 'Talyn uses your photos when you attach an image to a message.', cameraPermission: 'Talyn uses the camera when you take a photo to attach to a message.', microphonePermission: false }], ['expo-notifications', {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },
