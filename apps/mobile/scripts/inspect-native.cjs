@@ -29,7 +29,12 @@ async function inspect() {
   assert.equal(info.CFBundleShortVersionString, exp.version);
   assert.equal(info.CFBundleVersion, exp.ios.buildNumber);
   assert.notEqual(info.NSAppTransportSecurity?.NSAllowsArbitraryLoads, true);
-  for (const key of Object.keys(info)) assert(!/^NS(Camera|Microphone|Contacts|Location|PhotoLibrary|UserTracking).*UsageDescription$/.test(key), `Review unexpected iOS usage description: ${key}`);
+  // Image attachments ask for the camera and the photo library. Every other sensitive description needs review.
+  const reviewedUsage = ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription'];
+  for (const key of Object.keys(info)) {
+    if (reviewedUsage.includes(key)) continue;
+    assert(!/^NS(Camera|Microphone|Contacts|Location|PhotoLibrary|UserTracking).*UsageDescription$/.test(key), `Review unexpected iOS usage description: ${key}`);
+  }
   const entitlementsFile = fs.readdirSync(path.join(iosRoot, project)).find((name) => name.endsWith('.entitlements'));
   assert(entitlementsFile, 'Missing iOS entitlements.');
   const entitlements = parse(entitlementsFile);
