@@ -36,6 +36,7 @@ const PUBLIC_COLUMNS = {
   inject: mcpServersTable.inject,
   oauth: mcpServersTable.oauth,
   tools: mcpServersTable.tools,
+  repositoryIds: mcpServersTable.repositoryIds,
   enabled: mcpServersTable.enabled,
   lastProbe: mcpServersTable.lastProbe,
   createdAt: mcpServersTable.createdAt,
@@ -81,6 +82,7 @@ function rowToDefinition(row: PublicRow, hasSecret: boolean): McpServerDefinitio
     hasSecret,
     oauth: grantStatus(row.oauth as StoredMcpOAuth | null),
     tools: row.tools,
+    repositoryIds: row.repositoryIds,
     enabled: row.enabled,
     lastProbe: row.lastProbe,
     createdAt: row.createdAt.toISOString(),
@@ -128,6 +130,7 @@ export async function createMcpServer(
       // rule, so "leave it alone" and "remove it" stay distinct gestures.
       secretEnc: input.secret ? encryptString(input.secret) : null,
       tools: input.tools,
+      repositoryIds: input.repositoryIds,
       enabled: input.enabled,
     });
   const created = await getMcpServer(id);
@@ -170,6 +173,7 @@ export async function updateMcpServer(
             and ${mcpServersTable.inject} is not distinct from ${previous.inject === null ? null : JSON.stringify(previous.inject)}::jsonb
         then ${mcpServersTable.oauth} else null end`,
       tools: input.tools,
+      repositoryIds: input.repositoryIds,
       enabled: input.enabled,
       updatedAt: new Date(),
     })
@@ -235,6 +239,13 @@ export interface McpServerWithSecret {
   secret: string | null;
 }
 
+export interface McpDispatchScope {
+  /** The repository this run can change. Null is a repository-free thread. */
+  repositoryId?: string | null;
+  /** Probes test a saved server without granting it to a run. */
+  ignoreRepositoryAccess?: boolean;
+}
+
 /**
  * The enabled servers for a workspace, decrypted, for one dispatch.
  *
@@ -250,7 +261,8 @@ export interface McpServerWithSecret {
  */
 export async function mcpServersForDispatch(
   workspaceId: string,
-  only?: string[] | null
+  only?: string[] | null,
+  scope: McpDispatchScope = {},
 ): Promise<McpServerWithSecret[]> {
   const rows = await getDbClient()
     .select({
@@ -261,6 +273,7 @@ export async function mcpServersForDispatch(
       authKind: mcpServersTable.authKind,
       inject: mcpServersTable.inject,
       tools: mcpServersTable.tools,
+      repositoryIds: mcpServersTable.repositoryIds,
       secretEnc: mcpServersTable.secretEnc,
       oauth: mcpServersTable.oauth,
     })
@@ -276,6 +289,11 @@ export async function mcpServersForDispatch(
   const out: McpServerWithSecret[] = [];
   for (const row of rows) {
     if (wanted && !wanted.has(row.id)) continue;
+    if (
+      !scope.ignoreRepositoryAccess &&
+      row.repositoryIds !== null &&
+      (!scope.repositoryId || !row.repositoryIds.includes(scope.repositoryId))
+    ) continue;
     let secret: string | null = null;
     // A SIGNED-IN server's token wins over any pasted key, and is refreshed
     // here if it is close to expiry. Handing a sandbox a stale token would fail

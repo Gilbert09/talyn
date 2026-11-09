@@ -85,6 +85,27 @@ describe('mcpServersForDispatch', () => {
     expect(await mcpServersForDispatch('ws-1', ['other'])).toEqual([]);
   });
 
+  it('allows all repositories by default and enforces a repository allow-list', async () => {
+    await seed(null);
+    expect(await mcpServersForDispatch('ws-1', null, { repositoryId: 'repo-a' })).toHaveLength(1);
+
+    await db
+      .update(mcpServers)
+      .set({ repositoryIds: ['repo-a'] })
+      .where(eq(mcpServers.id, 'srv-1'));
+
+    expect(await mcpServersForDispatch('ws-1', null, { repositoryId: 'repo-a' })).toHaveLength(1);
+    expect(await mcpServersForDispatch('ws-1', null, { repositoryId: 'repo-b' })).toEqual([]);
+    expect(await mcpServersForDispatch('ws-1', null)).toEqual([]);
+    expect(await mcpServersForDispatch('ws-1', null, { ignoreRepositoryAccess: true })).toHaveLength(1);
+
+    await db
+      .update(mcpServers)
+      .set({ repositoryIds: [] })
+      .where(eq(mcpServers.id, 'srv-1'));
+    expect(await mcpServersForDispatch('ws-1', null, { repositoryId: 'repo-a' })).toEqual([]);
+  });
+
   // A key that will not open costs its own server and nothing else. The task is
   // still worth doing; a PR that never got fixed because a key rotated is a
   // much worse outcome than a run missing one MCP server.
@@ -131,6 +152,21 @@ describe('mcpIntegrationSecrets', () => {
     expect(await mcpIntegrationSecrets({ workspaceId: 'ws-1', metadata: null })).toEqual({
       linear: 'lin_api_x',
     });
+  });
+
+  it('does not re-supply a restricted credential to another repository', async () => {
+    await seed(null);
+    await db
+      .update(mcpServers)
+      .set({ repositoryIds: ['repo-a'] })
+      .where(eq(mcpServers.id, 'srv-1'));
+
+    expect(await mcpIntegrationSecrets({
+      workspaceId: 'ws-1', metadata: null, repositoryId: 'repo-a',
+    })).toEqual({ linear: 'lin_api_x' });
+    expect(await mcpIntegrationSecrets({
+      workspaceId: 'ws-1', metadata: null, repositoryId: 'repo-b',
+    })).toEqual({});
   });
 
   // A server with no credential still has a route and still works; an empty

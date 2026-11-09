@@ -862,6 +862,13 @@
       "when": 1790900000043,
       "tag": "0123_memory_review_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1790900000044,
+      "tag": "0124_mcp_server_repository_access",
+      "breakpoints": true
     }
   ]
 }

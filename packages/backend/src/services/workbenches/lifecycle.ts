@@ -511,6 +511,7 @@ export async function createWorkbenchSandbox(
     creds: { claudeToken: credentials.claude?.token, openaiKey: credentials.codex?.token },
     githubToken: resolved.githubToken,
     mcpServerIds: null,
+    repositoryId: isThread(row) ? null : repositoryId,
     extraMcpServers: talynServer ? [talynServer] : [],
     internetAccess: row.settings?.internetAccess !== false,
     gitAuthor: await gitAuthorFor(row.workspaceId),

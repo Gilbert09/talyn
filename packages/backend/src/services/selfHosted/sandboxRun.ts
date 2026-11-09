@@ -281,6 +281,8 @@ export interface SandboxCreateBodySpec {
   internetAccess?: boolean;
   /** Tri-state, never collapsed: null = every enabled server, [] = none, a list = exactly those. */
   mcpServerIds: string[] | null;
+  /** Repository access scope for workspace MCP servers. Null means no repository. */
+  repositoryId?: string | null;
   /**
    * Servers Talyn adds itself, outside the workspace's set and its flag: a
    * session box's `talyn` server. A workspace server with the same name is
@@ -344,7 +346,7 @@ export async function buildSandboxCreateBody(
   // not open costs a log line here instead of an exception halfway through.
   const extra = spec.extraMcpServers ?? [];
   const mcpServers = [
-    ...(await mcpServersFor(spec.workspaceId, spec.mcpServerIds)).filter(
+    ...(await mcpServersFor(spec.workspaceId, spec.mcpServerIds, spec.repositoryId ?? null)).filter(
       (s) => !extra.some((e) => e.name === s.name)
     ),
     ...extra,
@@ -591,6 +593,7 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       githubToken,
       internetAccess: spec.internetAccess,
       mcpServerIds: spec.mcpServerIds ?? null,
+      repositoryId: spec.repositoryId,
       // Ephemeral is what a run was: the host stops and retires the sandbox
       // the moment its initial task reaches a terminal state.
       ephemeral: true,
@@ -793,9 +796,10 @@ export async function createSandboxRetryingUncertain(
 async function mcpServersFor(
   workspaceId: string,
   ids: string[] | null,
+  repositoryId: string | null,
 ): Promise<FleetMcpServerInline[]> {
   if (!(await workspaceMayUseMcpServers(workspaceId))) return [];
-  const servers = await mcpServersForDispatch(workspaceId, ids);
+  const servers = await mcpServersForDispatch(workspaceId, ids, { repositoryId });
   return servers.map((s) => ({
     name: s.name,
     url: s.url,

@@ -1,6 +1,6 @@
 ---
 title: MCP servers
-description: Connect Linear, Sentry, Stripe or your own MCP server, and every agent run gets its tools. The keys stay with Talyn and never enter the sandbox.
+description: Connect Linear, Sentry, Stripe or your own MCP server. Allow all repositories or only selected ones. The keys stay with Talyn and never enter the sandbox.
 ---
 
 Connect an MCP server, and the agents in your sessions, fix runs, reviews and loops get its tools. For example, connect Linear and the agent can read the issue it is working on. Connect Sentry and it can read the stack trace.
@@ -14,8 +14,9 @@ This page is about giving Talyn's agents more tools. To use Talyn itself from Cl
 3. Pick a server from the catalog, or paste the address of any other server.
 4. Sign in or paste a key. See below.
 5. Select **Connect**.
-6. Choose the tools your agents can use.
-7. Select **Save**.
+6. Choose whether all repositories or only selected repositories can use it.
+7. Choose the tools your agents can use.
+8. Select **Save**.
 
 The catalog includes Linear, Sentry, Notion, Jira and Confluence, Asana, Stripe, Supabase, Neon, PostHog, Vercel, Netlify, Cloudflare, Figma, Slack, Context7, Hugging Face and more. For a server that is not in the catalog, paste its address. Talyn checks the address and finds how it signs in.
 
@@ -41,6 +42,12 @@ After Talyn connects, it lists the server's tools. Choose which ones your agents
 - **All tools (including any this server adds later)**.
 - Only the tools you tick.
 - None. The server stays connected, with no tools.
+
+## Choose repositories
+
+Each server is available to all repositories by default. This default also includes repositories that you add later.
+
+Select **Only selected repositories** to limit access. Then select each repository that can use the server. Repository-free threads cannot use a limited server.
 
 ## Turn a server on or off
 
