@@ -50,8 +50,6 @@ const POLAR_KEYS = [
   'POLAR_PRODUCT_ID_MONTHLY',
   'POLAR_PRODUCT_ID_ANNUAL',
   'POLAR_PRODUCT_ID_MAX_MONTHLY',
-  'POLAR_PRODUCT_ID_MAX_ANNUAL',
-  'MAX_PLAN_ENABLED',
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -191,35 +189,27 @@ describe('GET /billing/status', () => {
 });
 
 describe('GET /billing/status: the Max plan', () => {
-  function setMax(flag: 'true' | 'false' | null, products = true) {
+  function setMax(product = true) {
     setPolarEnv();
-    if (products) {
-      process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'prod-max-m';
-      process.env.POLAR_PRODUCT_ID_MAX_ANNUAL = 'prod-max-a';
-    }
-    if (flag) process.env.MAX_PLAN_ENABLED = flag;
+    if (product) process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'prod-max-m';
   }
 
-  it('sends the Max prices when Max is offered', async () => {
-    setMax('true');
+  it('sends the Max price to every account when the Max product is set', async () => {
+    setMax();
     const status = await getStatus();
-    expect(status.pricing).toMatchObject({ maxMonthlyMicros: 100_000_000, maxAnnualMicros: 1_000_000_000 });
+    expect(status.pricing).toMatchObject({ maxMonthlyMicros: 100_000_000 });
+    expect(status.pricing).not.toHaveProperty('maxAnnualMicros');
   });
 
-  it.each([
-    ['the flag is off', 'false', true],
-    ['the flag has no answer', null, true],
-    ['the Max products are unset', 'true', false],
-  ] as const)('leaves the Max prices out when %s', async (_name, flag, products) => {
-    setMax(flag, products);
+  it('leaves the Max price out when the Max product is unset', async () => {
+    setMax(false);
     const status = await getStatus();
     expect(status.pricing).toBeDefined();
     expect(status.pricing?.maxMonthlyMicros).toBeUndefined();
-    expect(status.pricing?.maxAnnualMicros).toBeUndefined();
   });
 
-  it('a Max subscriber reads Max, 1,000 hours and its prices even with the flag off', async () => {
-    setMax('false');
+  it('a Max subscriber reads Max, 1,000 hours and its price', async () => {
+    setMax();
     await db
       .update(usersTable)
       .set({ plan: 'unlimited', subscriptionStatus: 'active', polarProductId: 'prod-max-m', currentPeriodEnd: new Date('2099-01-01T00:00:00.000Z') })

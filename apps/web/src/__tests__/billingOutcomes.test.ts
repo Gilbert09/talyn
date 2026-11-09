@@ -57,7 +57,7 @@ describe('billing outcomes', () => {
   it.each([
     ['legacy_pro', 'pro', 'annual'],
     ['pro', 'max', 'monthly'],
-    ['legacy_pro', 'max', 'annual'],
+    ['legacy_pro', 'max', 'monthly'],
   ] as const)('captures plan_changed once after a started %s to %s change lands', (from, to, period) => {
     useBillingStore.getState().setStatus(usageStatus(from, { maxOffered: true }));
     useBillingStore.getState().markPlanChangeStarted(period);

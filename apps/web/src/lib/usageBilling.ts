@@ -229,8 +229,24 @@ export const MAX_INCLUDED_TEXT = `${PLAN_LIMITS.max.includedBoxHours.toLocaleStr
  */
 export function maxPricesOf(
   status: Pick<BillingStatus, 'pricing'> | null | undefined
-): { monthlyMicros: number; annualMicros: number } | null {
+): { monthlyMicros: number; annualMicros: number | null } | null {
   return status?.pricing ? sellableTierPrices('max', status.pricing) : null;
+}
+
+/**
+ * True for a Pro annual subscriber who may buy Max. Max is monthly only, so
+ * that move is annual to monthly: the backend refuses it in place and the
+ * billing portal does it instead.
+ */
+export function maxNeedsPortal(
+  status: Pick<BillingStatus, 'tier' | 'planSource' | 'period' | 'pricing'> | null | undefined
+): boolean {
+  return (
+    status?.tier === 'pro' &&
+    status.planSource === 'subscription' &&
+    status.period === 'annual' &&
+    maxPricesOf(status) != null
+  );
 }
 
 /**

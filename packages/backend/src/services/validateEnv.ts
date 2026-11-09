@@ -87,10 +87,7 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   //    resolve to Legacy Pro through these ids, so keep them while any exist.
   //  - The team products: the Pro team product ($40 a seat) is what new teams
   //    buy; the old team product stays recognised, its teams on Legacy Pro.
-  //  - The Max products: optional so a deployment can run without them; Max
-  //    is offered only once both are set.
   const optionalPairs: Array<{ label: string; vars: [string, string] }> = [
-    { label: 'The Max products', vars: ['POLAR_PRODUCT_ID_MAX_MONTHLY', 'POLAR_PRODUCT_ID_MAX_ANNUAL'] },
     { label: 'The old Unlimited products (Legacy Pro)', vars: ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] },
     { label: 'The Polar team plan', vars: ['POLAR_PRODUCT_ID_TEAM_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'] },
     {
@@ -108,11 +105,17 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
       errors.push(`${label} is configured (${set.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`);
     }
   }
+  // Max is one optional product (sold monthly only), so it has no pair.
+  const maxVar = 'POLAR_PRODUCT_ID_MAX_MONTHLY';
+  if (env[maxVar] && setPolarVars.length === 0) {
+    errors.push(`The Max product is configured (${maxVar}) but Polar billing is not — set ${polarVars.join(', ')}`);
+  }
   // Every product id routes a webhook: an id configured twice would grant a
   // credit pack for a subscription, or the wrong tier.
   const productVars = [
     ...polarVars.filter((name) => name.startsWith('POLAR_PRODUCT_ID_')),
     ...optionalPairs.flatMap((pair) => pair.vars),
+    maxVar,
   ];
   const byId = new Map<string, string[]>();
   for (const name of productVars) {

@@ -25,7 +25,7 @@ import { resolveUsageTier } from '../services/billing/usage/tier.js';
 
 const IDS: TierProductIds = {
   pro: ['prod-pro-monthly', 'prod-pro-annual'],
-  max: ['prod-max-monthly', 'prod-max-annual'],
+  max: ['prod-max-monthly'],
   legacy: ['prod-unlimited-monthly', 'prod-unlimited-annual'],
 };
 
@@ -34,7 +34,6 @@ const PRODUCTS = {
   'pro monthly': 'prod-pro-monthly',
   'pro annual': 'prod-pro-annual',
   'max monthly': 'prod-max-monthly',
-  'max annual': 'prod-max-annual',
   'old unlimited monthly': 'prod-unlimited-monthly',
   'old unlimited annual': 'prod-unlimited-annual',
   'unknown product': 'prod-something-else',
@@ -74,7 +73,7 @@ function expected(
   const subscribed = plan === 'unlimited' || plan === 'pro' || plan === 'legacy_pro';
   if (subscribed) {
     const isPro = product === 'pro monthly' || product === 'pro annual';
-    const isMax = product === 'max monthly' || product === 'max annual';
+    const isMax = product === 'max monthly';
     return { tier: isPro ? 'pro' : isMax ? 'max' : 'legacy_pro', source: 'subscription' };
   }
   const paid = team !== null && (team.planOverride === 'team' || (team.planOverride !== 'none' && team.plan === 'team'));
@@ -110,7 +109,7 @@ describe('deriveTierResolution: named cases from the spec', () => {
     ['old Unlimited subscriber, no stored product → Legacy Pro on their own period', { plan: 'unlimited', planOverride: null, polarProductId: null, currentPeriodEnd: end }, null, 'legacy_pro', 'subscription', end],
     ['old Unlimited product id → Legacy Pro', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-unlimited-annual', currentPeriodEnd: end }, null, 'legacy_pro', 'subscription', end],
     ['new Pro product → Pro on their own period', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-pro-monthly', currentPeriodEnd: end }, null, 'pro', 'subscription', end],
-    ['new Max product → Max on their own period', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-max-annual', currentPeriodEnd: end }, null, 'max', 'subscription', end],
+    ['new Max product → Max on their own period', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-max-monthly', currentPeriodEnd: end }, null, 'max', 'subscription', end],
     ['max override on a free user → Max on the calendar month', { plan: 'free', planOverride: 'max' }, null, 'max', 'override', null],
     ['own Max subscription wins over a pro seat', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-max-monthly', currentPeriodEnd: end }, TEAMS['paid pro team']!, 'max', 'subscription', end],
     ['webhook writes the tier as the plan', { plan: 'pro', planOverride: null, polarProductId: 'prod-pro-annual', currentPeriodEnd: end }, null, 'pro', 'subscription', end],
@@ -135,7 +134,6 @@ describe('subscriptionTier', () => {
     ['pro monthly', 'pro'],
     ['pro annual', 'pro'],
     ['max monthly', 'max'],
-    ['max annual', 'max'],
     ['old unlimited monthly', 'legacy_pro'],
     ['old unlimited annual', 'legacy_pro'],
     ['unknown product', 'legacy_pro'],
@@ -177,20 +175,19 @@ describe('tierProductIds', () => {
     }
   });
 
-  it('reads the six product env vars at call time', () => {
+  it('reads the five product env vars at call time', () => {
     process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = 'pm';
     process.env.POLAR_PRODUCT_ID_PRO_ANNUAL = ' pa ';
     process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'mm';
-    process.env.POLAR_PRODUCT_ID_MAX_ANNUAL = 'ma';
     process.env.POLAR_PRODUCT_ID_MONTHLY = 'um';
     process.env.POLAR_PRODUCT_ID_ANNUAL = 'ua';
-    expect(tierProductIds()).toEqual({ pro: ['pm', 'pa'], max: ['mm', 'ma'], legacy: ['um', 'ua'] });
+    expect(tierProductIds()).toEqual({ pro: ['pm', 'pa'], max: ['mm'], legacy: ['um', 'ua'] });
   });
 
   it('drops unset and blank values', () => {
     for (const n of names) delete process.env[n];
     process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = '   ';
-    process.env.POLAR_PRODUCT_ID_MAX_ANNUAL = '  ';
+    process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = '  ';
     expect(tierProductIds()).toEqual({ pro: [], max: [], legacy: [] });
   });
 

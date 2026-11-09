@@ -34,6 +34,7 @@ import {
   gaugeTone,
   includedHoursText,
   leftPercent,
+  maxNeedsPortal,
   maxPricesOf,
   pricingOf,
   type UsageBillingStatus,
@@ -160,13 +161,17 @@ function PlanCard({
   const pastDue = status.subscriptionStatus === 'past_due';
   const canManage = tier !== 'free' && !comped && !teamPaid;
   const canMove = tier === 'legacy_pro' && !teamPaid;
-  const canUpgradeToMax = tier === 'pro' && status.planSource === 'subscription' && maxPricesOf(status) != null;
+  const maxViaPortal = maxNeedsPortal(status);
+  const canUpgradeToMax =
+    tier === 'pro' && status.planSource === 'subscription' && maxPricesOf(status) != null && !maxViaPortal;
   const prices = isSellableTier(tier) ? sellableTierPrices(tier, pricing) : null;
   const price =
     tier === 'legacy_pro'
       ? `${formatUsd(pricing.legacyProMonthlyMicros, 0)}/month`
       : prices
-        ? `${formatUsd(prices.monthlyMicros, 0)}/month or ${formatUsd(prices.annualMicros, 0)}/year`
+        ? prices.annualMicros != null
+          ? `${formatUsd(prices.monthlyMicros, 0)}/month or ${formatUsd(prices.annualMicros, 0)}/year`
+          : `${formatUsd(prices.monthlyMicros, 0)}/month`
         : null;
 
   const periodLine = formatPlanPeriodLine(tier, status.period, pricing);
@@ -191,6 +196,11 @@ function PlanCard({
         {tier === 'max' && canManage && (
           <p className="mt-1 text-xs text-muted-foreground" data-testid="max-to-pro-hint">
             To move to Pro, use Manage billing. The change starts at your next renewal.
+          </p>
+        )}
+        {maxViaPortal && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="max-via-portal-hint">
+            Max is monthly only. To move from annual Pro to Max, use Manage billing.
           </p>
         )}
         {comped && <p className="mt-1 text-xs text-muted-foreground">Complimentary plan. Nothing to pay.</p>}

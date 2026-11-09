@@ -187,13 +187,12 @@ export function UsageUpgradeModal({
                   : plan === 'max'
                     ? maxPrices?.monthlyMicros ?? PLAN_PRICES.max.monthlyMicros
                     : pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros;
-              const annual = plan === 'free'
+              // Max is sold monthly only.
+              const annual = plan === 'free' || plan === 'max'
                 ? null
                 : plan === 'legacy_pro'
                   ? PLAN_PRICES.legacy_pro.annualMicros
-                  : plan === 'max'
-                    ? maxPrices?.annualMicros ?? PLAN_PRICES.max.annualMicros
-                    : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
+                  : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
               return (
                 <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-sm">
                   <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>

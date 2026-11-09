@@ -216,19 +216,32 @@ describe('UpgradeModal with usage billing', () => {
       expect(screen.queryByTestId('compare-plan-max')).toBeNull();
     });
 
-    it('lets Free pick Max and check out at the chosen period', async () => {
+    it('lets Free pick Max and check out monthly, with no annual option', async () => {
       checkout.mockResolvedValue({ url: 'https://polar.test/max' });
       open(usageStatus('free', { maxOffered: true }));
       const picker = screen.getByTestId('plan-picker');
       expect(picker).toHaveTextContent('1,000 box-hours a month');
       expect(screen.getByRole('button', { name: 'Upgrade to Pro: $40/mo' })).toBeInTheDocument();
+      // Annual chosen for Pro does not carry over to Max.
+      fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
+      expect(within(picker).getByRole('button', { name: /^Max/ })).toHaveTextContent('$100/mo');
       fireEvent.click(within(picker).getByRole('button', { name: /^Max/ }));
       // The picker's hint and the first line of the feature list.
       expect(screen.getAllByText(/^\s*1,000 box-hours a month\s*$/)).toHaveLength(2);
-      fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $1,000/yr' }));
-      await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'max' }));
+      expect(screen.queryByRole('button', { name: /Annual|Monthly/ })).toBeNull();
+      expect(screen.queryByText(/\$1,000/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+      await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'max' }));
       expect(openExternal).toHaveBeenCalledWith('https://polar.test/max');
+      expect(trackEvent).toHaveBeenCalledWith('checkout_started', { period: 'monthly', plan: 'max', reason: null });
+    });
+
+    it('keeps the annual option for Pro next to Max', async () => {
+      checkout.mockResolvedValue({ url: 'u' });
+      open(usageStatus('free', { maxOffered: true }));
+      fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
+      await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' }));
     });
 
     it('moves Pro to Max in place, with what changes', async () => {
@@ -239,18 +252,23 @@ describe('UpgradeModal with usage billing', () => {
       expect(changes).toHaveTextContent('200 box-hours a month becomes 1,000 box-hours');
       expect(changes).toHaveTextContent('$40 a month becomes $100 a month');
       expect(screen.queryByTestId('credit-packs')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Annual|Monthly/ })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
       await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
       expect(checkout).not.toHaveBeenCalled();
     });
 
-    it('keeps an annual Pro subscriber on annual when moving to Max', async () => {
-      changePlan.mockResolvedValue({ ok: true });
+    it('sends an annual Pro subscriber to Manage billing for Max', async () => {
+      portal.mockResolvedValue({ url: 'https://polar.test/portal' });
       open(usageStatus('pro', { maxOffered: true, overrides: { period: 'annual' } }), 'upgrade');
-      expect(screen.getByRole('button', { name: /Monthly/ })).toBeDisabled();
-      expect(screen.getByTestId('max-changes')).toHaveTextContent('$400 a year becomes $1,000 a year');
-      fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $1,000/yr' }));
-      await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'annual' }));
+      expect(screen.getByTestId('max-via-portal')).toHaveTextContent(
+        'Max is monthly only. To move from annual Pro to Max, use Manage billing.'
+      );
+      expect(screen.queryByTestId('max-changes')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Upgrade to Max|Annual|Monthly/ })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Manage billing' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://polar.test/portal'));
+      expect(changePlan).not.toHaveBeenCalled();
     });
 
     it('does not sell Max to a Pro team seat', () => {
@@ -276,17 +294,36 @@ describe('UpgradeModal with usage billing', () => {
       open(usageStatus('free', { maxOffered: true }), 'compare_plans');
       const card = screen.getByTestId('compare-plan-max');
       expect(card).toHaveTextContent('$100/mo');
-      expect(card).toHaveTextContent('$1,000/yr · Save $200/yr');
+      expect(card).not.toHaveTextContent(/\/yr|Save/);
       expect(card).toHaveTextContent('1,000 box-hours per month');
       fireEvent.click(within(card).getByRole('button', { name: 'Upgrade to Max' }));
       await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'max' }));
     });
 
-    it('compares plans for Pro with the Max upgrade', async () => {
+    it('compares plans for monthly Pro with the Max upgrade', async () => {
       changePlan.mockResolvedValue({ ok: true });
       open(usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } }), 'compare_plans');
+      expect(screen.queryByRole('button', { name: /Annual|Monthly/ })).toBeNull();
       fireEvent.click(within(screen.getByTestId('compare-plan-max')).getByRole('button', { name: 'Upgrade to Max' }));
       await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
+    });
+
+    it('compares plans for annual Pro with Max through Manage billing', async () => {
+      portal.mockResolvedValue({ url: 'https://polar.test/portal' });
+      open(usageStatus('pro', { maxOffered: true, overrides: { period: 'annual' } }), 'compare_plans');
+      const card = screen.getByTestId('compare-plan-max');
+      expect(within(card).getByTestId('max-via-portal')).toBeInTheDocument();
+      expect(within(card).queryByRole('button', { name: 'Upgrade to Max' })).toBeNull();
+      fireEvent.click(within(card).getByRole('button', { name: 'Manage billing' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://polar.test/portal'));
+      expect(changePlan).not.toHaveBeenCalled();
+    });
+
+    it('offers a monthly Max subscriber no annual switch', () => {
+      open(usageStatus('max', { overrides: { period: 'monthly' } }), 'compare_plans');
+      const card = screen.getByTestId('compare-plan-max');
+      expect(within(card).queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+      expect(card).not.toHaveTextContent(/\/yr/);
     });
 
     it('marks Max as current and sends a move to Pro to the portal', async () => {

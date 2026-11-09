@@ -94,7 +94,7 @@ export function usageStatus(
       proAnnualMicros: 400_000_000,
       legacyProMonthlyMicros: 15_000_000,
       boxHourMicros: 220_000,
-      ...(opts.maxOffered || tier === 'max' ? { maxMonthlyMicros: 100_000_000, maxAnnualMicros: 1_000_000_000 } : {}),
+      ...(opts.maxOffered || tier === 'max' ? { maxMonthlyMicros: 100_000_000 } : {}),
     },
     ...opts.overrides,
   });

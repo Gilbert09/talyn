@@ -766,18 +766,20 @@ then keeps the old build serving, so nothing breaks, but nothing deploys.
    Legacy Pro. Keep the old team products and their two env vars; their teams
    stay on Legacy Pro terms. New teams buy the Pro team product as soon as its
    two vars are set.
-5. **Max products (optional).** Create two recurring products:
-   - "Talyn Max (monthly)": fixed price, $100, every month.
-   - "Talyn Max (annual)": fixed price, $1,000, every year.
-
-   Copy the two ids to `POLAR_PRODUCT_ID_MAX_MONTHLY` and
-   `POLAR_PRODUCT_ID_MAX_ANNUAL`. Max is offered only when both are set and
-   the `max-plan` PostHog flag is on for the account. Talyn sends only
+5. **Max product (optional).** Create one recurring product, "Talyn Max
+   (monthly)": fixed price, $100, every month. Max is sold monthly only, so
+   there is no annual Max product. Copy the id to
+   `POLAR_PRODUCT_ID_MAX_MONTHLY`. Setting it offers Max to every account
+   at once (there is no feature flag), so make the portal change below
+   first. Talyn sends only
    upgrades through its own plan change. Max → Pro goes through the Polar
-   customer portal, so set the org's portal plan changes to take effect at
-   the next renewal, with no credit for the unused part of the period.
-   Otherwise a customer can use all 1,000 hours and then get most of the
-   $100 back as a downgrade credit.
+   customer portal, which uses the org's default proration (Settings →
+   Subscriptions). Keep it at "Prorate on next invoice" (`prorate`): the
+   change applies at once and the unused part is credited on the next
+   invoice. Do not use "Schedule for next cycle" (`next_period`): portal
+   upgrades would then wait for renewal too. The cost is a bounded abuse
+   (use the Max hours, then downgrade for the credit), accepted on
+   2026-11-09.
 6. **Off-session charges (auto top-up).** Ask Polar to enable the
    off-session charges preview on the org (it is the
    `off_session_charges_enabled` feature on Polar's side, on a paid Polar
@@ -1098,8 +1100,7 @@ POSTHOG_HOST=https://us.i.posthog.com
 # POLAR_SUCCESS_URL=https://www.talyn.dev/checkout-success   # optional
 #
 # Optional pairs on top of the core group (both or neither):
-# POLAR_PRODUCT_ID_MAX_MONTHLY=<uuid of Max, $100/month>
-# POLAR_PRODUCT_ID_MAX_ANNUAL=<uuid of Max, $1,000/year>
+# POLAR_PRODUCT_ID_MAX_MONTHLY=<uuid of Max, $100/month; Max has no annual product>
 # POLAR_PRODUCT_ID_MONTHLY=<uuid of the OLD $15/mo Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_ANNUAL=<uuid of the OLD $150/yr Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY=<uuid of the $40/seat monthly team product>

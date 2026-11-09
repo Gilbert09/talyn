@@ -31,6 +31,7 @@ import {
   formatShortDate,
   gaugeTone,
   leftPercent,
+  maxNeedsPortal,
   maxPricesOf,
   usageBillingOf,
   type UsageBillingView,
@@ -58,7 +59,7 @@ function tierPrice(tier: PlanTier, view: UsageBillingView): string {
   if (tier === 'free') return '$0';
   if (tier === 'legacy_pro') return `${legacyMonthlyPrice(view.status.pricing)}/month`;
   const prices = planPrices(tier, view.status.pricing) ?? proPrices(undefined);
-  return `${prices.monthly}/month or ${prices.annual}/year`;
+  return prices.annual ? `${prices.monthly}/month or ${prices.annual}/year` : `${prices.monthly}/month`;
 }
 
 export function PlanAndUsage({ view }: { view: UsageBillingView }) {
@@ -78,7 +79,8 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   const subscribed = status.planSource === 'subscription';
   const pastDue = status.subscriptionStatus === 'past_due';
   const canMoveToPro = tier === 'legacy_pro' && subscribed;
-  const canUpgradeToMax = tier === 'pro' && subscribed && maxPricesOf(status) != null;
+  const maxViaPortal = maxNeedsPortal(status);
+  const canUpgradeToMax = tier === 'pro' && subscribed && maxPricesOf(status) != null && !maxViaPortal;
 
   return (
     <div className="space-y-6" data-attr="plan-and-usage">
@@ -100,7 +102,6 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
                       proAnnualMicros: status.pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros ?? 0,
                       legacyProMonthlyMicros: status.pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros,
                       maxMonthlyMicros: status.pricing?.maxMonthlyMicros,
-                      maxAnnualMicros: status.pricing?.maxAnnualMicros,
                     }) ?? `Plan prices: ${tierPrice(tier, view)}`}
                     .{' '}
                   </span>
@@ -115,6 +116,11 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
               {tier === 'max' && subscribed && (
                 <p className="mt-1 text-sm text-muted-foreground" data-testid="max-to-pro-hint">
                   To move to Pro, use Manage billing. The change starts at your next renewal.
+                </p>
+              )}
+              {maxViaPortal && (
+                <p className="mt-1 text-sm text-muted-foreground" data-testid="max-via-portal-hint">
+                  Max is monthly only. To move from annual Pro to Max, use Manage billing.
                 </p>
               )}
               {comped && <p className="mt-1 text-sm text-muted-foreground">Complimentary plan. Nothing to pay.</p>}

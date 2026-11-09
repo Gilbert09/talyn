@@ -7,6 +7,7 @@ import {
   PLAN_PRICES,
   PLAN_TIER_LABELS,
   formatUsd,
+  tierSoldAnnually,
   type BillingPricing,
   type CreditPackId,
   type SellableTier,
@@ -14,7 +15,7 @@ import {
 import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { trackBillingFailure } from '../../stores/billing';
-import { goToHostedPage, maxPricesOf } from '../../lib/usageBilling';
+import { goToHostedPage, maxNeedsPortal, maxPricesOf } from '../../lib/usageBilling';
 import { useBillingStore } from '../../stores/billing';
 import { toast } from '../../stores/toast';
 import { cn } from '../../lib/utils';
@@ -30,11 +31,17 @@ export function proPrices(pricing: BillingPricing | undefined): { monthly: strin
   };
 }
 
-/** A sellable plan's list prices, or null for Max when this account may not buy it. */
-export function planPrices(plan: SellableTier, pricing: BillingPricing | undefined): { monthly: string; annual: string } | null {
+/**
+ * A sellable plan's list prices, or null for Max when this account may not buy
+ * it. `annual` is null for Max, which is sold monthly only.
+ */
+export function planPrices(
+  plan: SellableTier,
+  pricing: BillingPricing | undefined
+): { monthly: string; annual: string | null } | null {
   if (plan === 'pro') return proPrices(pricing);
   const max = maxPricesOf({ pricing });
-  return max ? { monthly: formatUsd(max.monthlyMicros, 0), annual: formatUsd(max.annualMicros, 0) } : null;
+  return max ? { monthly: formatUsd(max.monthlyMicros, 0), annual: null } : null;
 }
 
 export function legacyMonthlyPrice(pricing: BillingPricing | undefined): string {
@@ -132,13 +139,13 @@ function PeriodOption({
 }
 
 /**
- * Pick monthly or annual Pro or Max, then buy it (Free) or move to it (a paid
- * subscription).
+ * Pick monthly or annual Pro, or monthly Max, then buy it (Free) or move to it
+ * (a paid subscription).
  *
  * `mode: 'checkout'` sends the browser to Polar. `mode: 'change'` changes the
  * live subscription in place, with no checkout. Only upgrades go through
- * here: a smaller plan goes through the billing portal. Renders nothing for
- * Max when this account may not buy it.
+ * here: a smaller plan goes through the billing portal, and so does Pro
+ * annual to Max. Renders nothing for Max when this account may not buy it.
  */
 export function PlanForm({
   plan = 'pro',
@@ -153,13 +160,21 @@ export function PlanForm({
 }) {
   const status = useBillingStore((s) => s.status);
   const prices = planPrices(plan, status?.pricing);
-  // A paid annual plan cannot change to monthly here; the backend refuses it.
-  const annualOnly = mode === 'change' && status?.period === 'annual' && status.tier !== 'legacy_pro';
-  const [period, setPeriod] = useState<Period>(annualOnly ? 'annual' : 'monthly');
+  const [chosenPeriod, setPeriod] = useState<Period>('monthly');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!prices) return null;
+  if (plan === 'max' && mode === 'change' && maxNeedsPortal(status)) {
+    return (
+      <div className="space-y-2" data-testid="max-via-portal">
+        <p className="text-xs text-muted-foreground">Max is monthly only. To move from annual Pro to Max, use Manage billing.</p>
+        <PortalButton secondary />
+      </div>
+    );
+  }
   const planLabel = PLAN_TIER_LABELS[plan];
+  // Max is sold monthly only.
+  const period: Period = tierSoldAnnually(plan) ? chosenPeriod : 'monthly';
 
   const submit = async () => {
     setBusy(true);
@@ -195,6 +210,8 @@ export function PlanForm({
         setError('Max is not available for this account.');
       } else if (code === 'downgrade_via_portal') {
         setError('To move to a smaller plan, use Manage billing.');
+      } else if (code === 'annual_to_monthly_via_portal') {
+        setError('To move from an annual plan to a monthly plan, use Manage billing.');
       } else {
         setError(errorText(err, mode === 'checkout' ? 'Could not start the checkout.' : 'Could not change the plan.'));
       }
@@ -205,27 +222,28 @@ export function PlanForm({
   const label = plan === 'max' ? 'Upgrade to Max' : mode === 'checkout' ? 'Upgrade to Pro' : 'Move to Pro';
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        <PeriodOption
-          label="Monthly"
-          price={`${prices.monthly}/mo`}
-          hint={annualOnly ? 'Not for an annual plan' : undefined}
-          selected={period === 'monthly'}
-          onSelect={() => setPeriod('monthly')}
-          disabled={busy || annualOnly}
-        />
-        <PeriodOption
-          label="Annual"
-          price={`${prices.annual}/yr`}
-          hint="2 months free"
-          selected={period === 'annual'}
-          onSelect={() => setPeriod('annual')}
-          disabled={busy}
-        />
-      </div>
+      {prices.annual != null && (
+        <div className="grid grid-cols-2 gap-2">
+          <PeriodOption
+            label="Monthly"
+            price={`${prices.monthly}/mo`}
+            selected={period === 'monthly'}
+            onSelect={() => setPeriod('monthly')}
+            disabled={busy}
+          />
+          <PeriodOption
+            label="Annual"
+            price={`${prices.annual}/yr`}
+            hint="2 months free"
+            selected={period === 'annual'}
+            onSelect={() => setPeriod('annual')}
+            disabled={busy}
+          />
+        </div>
+      )}
       <Button onClick={() => void submit()} disabled={busy} className="w-full gap-2" data-attr={`${plan}-${mode}`}>
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {label}: {period === 'annual' ? `${prices.annual}/yr` : `${prices.monthly}/mo`}
+        {label}: {period === 'annual' && prices.annual != null ? `${prices.annual}/yr` : `${prices.monthly}/mo`}
       </Button>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>

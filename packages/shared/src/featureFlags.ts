@@ -325,26 +325,6 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * Max plan — $100 a month for 1,000 box-hours, sold beside Pro.
-   *
-   * Fallback OFF and gated while it rolls out: this surface takes money, so a
-   * PostHog outage must not offer a checkout nobody chose. It gates OFFERING
-   * Max only (the checkout, the upgrade and the price in the billing status).
-   * A Max subscription already paid for does NOT depend on it: the tier comes
-   * from the subscription's product id. Max also needs both
-   * `POLAR_PRODUCT_ID_MAX_*` ids; without them nothing offers it whatever
-   * this says.
-   */
-  maxPlan: {
-    posthogKey: 'max-plan',
-    envOverride: 'MAX_PLAN_ENABLED',
-    fallback: false,
-    description: 'Max plan — 1,000 box-hours a month for $100',
-    availability: 'gated',
-    releaseScopes: ['max-plan'],
-  },
-
-  /**
    * Teams and Spaces: a team's members see and open each other's sessions and
    * tasks in a shared space. Each item still runs in its creator's own
    * workspace; nothing shares a workspace or a credential.

@@ -135,8 +135,22 @@ export function pricingOf(status: BillingStatus | null | undefined): BillingPric
 }
 
 /** Max's prices, or null when this account may not buy Max (the status carries no Max prices). */
-export function maxPricesOf(status: BillingStatus | null | undefined): { monthlyMicros: number; annualMicros: number } | null {
+export function maxPricesOf(status: BillingStatus | null | undefined): { monthlyMicros: number; annualMicros: number | null } | null {
   return sellableTierPrices('max', pricingOf(status));
+}
+
+/**
+ * True for a Pro annual subscriber who may buy Max. Max is monthly only, so
+ * that move is annual to monthly: the backend refuses it in place and the
+ * billing portal does it instead.
+ */
+export function maxNeedsPortal(status: BillingStatus | null | undefined): boolean {
+  return (
+    status?.tier === 'pro' &&
+    status.planSource === 'subscription' &&
+    status.period === 'annual' &&
+    maxPricesOf(status) != null
+  );
 }
 
 /** "1,000 box-hours": a tier's included hours, with a thousands separator. */

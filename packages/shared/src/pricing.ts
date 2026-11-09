@@ -88,6 +88,7 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
   /**
    * Max: five times Pro's hours for two and a half times its price, so a
    * box-hour costs $0.10 here against Pro's $0.20 and the $0.22 credit price.
+   * Sold monthly only.
    * The margin holds while a fleet box-hour costs less than about $0.09 after
    * Polar's fees, with every included hour used. See {@link breakEvenBoxHourMicros}.
    */
@@ -117,7 +118,8 @@ export interface PlanPrice {
 export const PLAN_PRICES: Record<PlanTier, PlanPrice> = {
   free: { monthlyMicros: 0, annualMicros: null },
   pro: { monthlyMicros: 40 * MICROS_PER_DOLLAR, annualMicros: 400 * MICROS_PER_DOLLAR },
-  max: { monthlyMicros: 100 * MICROS_PER_DOLLAR, annualMicros: 1000 * MICROS_PER_DOLLAR },
+  // Monthly only (Tom, 2026-11-08). There is no annual Max product.
+  max: { monthlyMicros: 100 * MICROS_PER_DOLLAR, annualMicros: null },
   legacy_pro: { monthlyMicros: 15 * MICROS_PER_DOLLAR, annualMicros: 150 * MICROS_PER_DOLLAR },
 };
 
@@ -155,26 +157,21 @@ export function netOfPaymentFees(micros: Micros): Micros {
  * A cautious estimate of what one `standard` box-hour costs us on the fleet,
  * for margin checks only. Nothing bills with it.
  *
- * Derivation (2026-11): the fleet runs on rented bare metal. The YAS price
- * notes put a 256 GiB host at about $105 a month and a GiB of sold pool at
- * about $1 a month, so a 4 GiB box held all month costs about $4, or
- * $0.0055 an hour, on memory. CPU binds first: a 24-thread host at about
- * $300 a month with one busy `standard` box per thread costs $0.017 a
- * box-hour. Half that packing, plus suspension storage and the control
- * plane, gives this figure of $0.04. Raise it if the hardware bill says so;
- * the pricing tests then show which tier stops paying for itself.
+ * Derivation (2026-11): the main fleet host is a Scaleway Elastic Metal
+ * EM-B520E-NVMe (EPYC 7272, 24 threads, 256 GiB), billed monthly at a
+ * listed €189.99, about $205 or $0.28 a host-hour. CPU binds before memory
+ * (the host caps at 96 boxes, four a thread). One busy `standard` box per
+ * thread (24 at once) costs $0.012 a box-hour; 12 at once costs $0.023.
+ * This figure, $0.04, is the 12-box case at a host price near €330 (one
+ * listing shows that price, and Scaleway raised other Elastic Metal prices
+ * in 2026), plus suspension storage and the control plane. Raise it if the
+ * hardware bill says so; the pricing tests then show which tier stops
+ * paying for itself.
  */
 export const FLEET_BOX_HOUR_COST_ESTIMATE_MICROS: Micros = 40_000;
 
 /** The gross margin every paid tier must keep with all its included hours used. */
 export const MIN_FULL_USE_MARGIN_PERCENT = 50;
-
-/**
- * The same floor for an annual price. Lower on purpose: the annual discount
- * (two months free) buys a year of cash at once and less churn. Max annual
- * keeps about 49% at the cost estimate with every hour used.
- */
-export const MIN_ANNUAL_FULL_USE_MARGIN_PERCENT = 45;
 
 /**
  * The fleet cost of one box-hour at which a tier's monthly price, net of
@@ -692,12 +689,12 @@ export interface BillingPricing {
   legacyProMonthlyMicros: Micros;
   boxHourMicros: Micros;
   /**
-   * Max prices. Sent only when this account may buy Max (the `max-plan` flag
-   * and both Max products are set) or already holds it. Absent means "do not
-   * offer Max", which is also how a client reads an older backend.
+   * Max's price. Max is sold monthly only. Sent only when this deployment
+   * sells Max (the Max product is set) or the account already holds it.
+   * Absent means "do not offer Max", which is also how a client reads an
+   * older backend.
    */
   maxMonthlyMicros?: Micros;
-  maxAnnualMicros?: Micros;
 }
 
 /** One metered box interval, as `GET /billing/usage` lists it. */
@@ -801,14 +798,22 @@ export function annualSavingsMicros(pricing: Pick<BillingPricing, 'proMonthlyMic
   return Math.max(0, pricing.proMonthlyMicros * 12 - pricing.proAnnualMicros);
 }
 
-/** The monthly and annual price of a sellable tier, or null when the pricing does not offer it. */
+/**
+ * The prices of a sellable tier, or null when the pricing does not offer it.
+ * `annualMicros` is null for a tier sold monthly only (Max).
+ */
 export function sellableTierPrices(
   tier: SellableTier,
   pricing: BillingPricing,
-): { monthlyMicros: Micros; annualMicros: Micros } | null {
+): { monthlyMicros: Micros; annualMicros: Micros | null } | null {
   if (tier === 'pro') return { monthlyMicros: pricing.proMonthlyMicros, annualMicros: pricing.proAnnualMicros };
-  if (pricing.maxMonthlyMicros == null || pricing.maxAnnualMicros == null) return null;
-  return { monthlyMicros: pricing.maxMonthlyMicros, annualMicros: pricing.maxAnnualMicros };
+  if (pricing.maxMonthlyMicros == null) return null;
+  return { monthlyMicros: pricing.maxMonthlyMicros, annualMicros: null };
+}
+
+/** Whether a sellable tier can be bought annually. */
+export function tierSoldAnnually(tier: SellableTier): boolean {
+  return PLAN_PRICES[tier].annualMicros != null;
 }
 
 export const BILLING_PERIOD_LABELS = { monthly: 'Monthly', annual: 'Annual' } as const;
@@ -821,7 +826,7 @@ export const BILLING_PERIOD_LABELS = { monthly: 'Monthly', annual: 'Annual' } as
 export function formatPlanPeriodLine(
   tier: PlanTier,
   period: 'monthly' | 'annual' | null | undefined,
-  pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros' | 'legacyProMonthlyMicros' | 'maxMonthlyMicros' | 'maxAnnualMicros'>
+  pricing: Pick<BillingPricing, 'proMonthlyMicros' | 'proAnnualMicros' | 'legacyProMonthlyMicros' | 'maxMonthlyMicros'>
 ): string | null {
   if (tier === 'free' || !period) return null;
   const micros =
@@ -832,7 +837,7 @@ export function formatPlanPeriodLine(
       : tier === 'max'
         ? period === 'monthly'
           ? (pricing.maxMonthlyMicros ?? PLAN_PRICES.max.monthlyMicros)
-          : (pricing.maxAnnualMicros ?? PLAN_PRICES.max.annualMicros)
+          : PLAN_PRICES.max.annualMicros
         : period === 'monthly'
           ? pricing.proMonthlyMicros
           : pricing.proAnnualMicros;

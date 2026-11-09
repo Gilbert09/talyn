@@ -21,7 +21,6 @@ export const BILLING_PRICING_FOR_TESTS: BillingPricing = {
 export const BILLING_PRICING_WITH_MAX: BillingPricing = {
   ...BILLING_PRICING_FOR_TESTS,
   maxMonthlyMicros: PLAN_PRICES.max.monthlyMicros,
-  maxAnnualMicros: PLAN_PRICES.max.annualMicros ?? 0,
 };
 
 /** The old backend's status: no usage fields at all. */

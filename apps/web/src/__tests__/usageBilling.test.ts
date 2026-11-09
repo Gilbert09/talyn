@@ -286,8 +286,8 @@ describe('maxPricesOf', () => {
     ['no status', null, null],
     ['no pricing', { pricing: undefined }, null],
     ['pricing without Max', usageStatus('pro'), null],
-    ['pricing with Max', usageStatus('pro', { maxOffered: true }), { monthlyMicros: 100_000_000, annualMicros: 1_000_000_000 }],
-    ['a Max holder', usageStatus('max'), { monthlyMicros: 100_000_000, annualMicros: 1_000_000_000 }],
+    ['pricing with Max', usageStatus('pro', { maxOffered: true }), { monthlyMicros: 100_000_000, annualMicros: null }],
+    ['a Max holder', usageStatus('max'), { monthlyMicros: 100_000_000, annualMicros: null }],
   ] as const)('%s', (_label, status, prices) => {
     expect(maxPricesOf(status)).toEqual(prices);
   });

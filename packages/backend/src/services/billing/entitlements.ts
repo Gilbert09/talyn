@@ -59,7 +59,6 @@ import {
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { advisoryLockKey } from '../advisoryLock.js';
-import { isFeatureEnabled, type FlagSubject } from '../featureFlags.js';
 import { readBudget, type UsageBudget } from './usage/charge.js';
 import { liveLots } from './usage/credits.js';
 import { getBudget } from './usage/index.js';
@@ -130,13 +129,14 @@ export interface TierProductIds {
 }
 
 export const PRO_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_PRO_ANNUAL'] as const;
-export const MAX_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MAX_MONTHLY', 'POLAR_PRODUCT_ID_MAX_ANNUAL'] as const;
+/** Max is sold monthly only. */
+export const MAX_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MAX_MONTHLY'] as const;
 export const LEGACY_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] as const;
 
 const PERIOD_PRODUCT_ENV_VARS: Record<'personal' | 'team', Record<'monthly' | 'annual', readonly string[]>> = {
   personal: {
     monthly: ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_MAX_MONTHLY', 'POLAR_PRODUCT_ID_MONTHLY'],
-    annual: ['POLAR_PRODUCT_ID_PRO_ANNUAL', 'POLAR_PRODUCT_ID_MAX_ANNUAL', 'POLAR_PRODUCT_ID_ANNUAL'],
+    annual: ['POLAR_PRODUCT_ID_PRO_ANNUAL', 'POLAR_PRODUCT_ID_ANNUAL'],
   },
   team: {
     monthly: ['POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_MONTHLY'],
@@ -164,18 +164,17 @@ function productIdsFromEnv(names: readonly string[]): string[] {
   return names.map((name) => process.env[name]?.trim()).filter((id): id is string => Boolean(id));
 }
 
-/** Both Max products are set, so this deployment can sell Max. */
+/** The Max product is set, so this deployment can sell Max. */
 export function maxProductsConfigured(): boolean {
   return productIdsFromEnv(MAX_PRODUCT_ENV_VARS).length === MAX_PRODUCT_ENV_VARS.length;
 }
 
 /**
- * Whether this person may BUY Max: billing on, both Max products set and the
- * `max-plan` flag on for them. Holding Max never depends on this.
+ * Whether this deployment sells Max: billing on and the Max product set.
+ * Holding Max never depends on this.
  */
-export async function maxPlanOffered(subject: FlagSubject): Promise<boolean> {
-  if (!billingEnabled() || !maxProductsConfigured()) return false;
-  return isFeatureEnabled('maxPlan', subject);
+export function maxPlanOffered(): boolean {
+  return billingEnabled() && maxProductsConfigured();
 }
 
 /** Read at call time, so a test or a redeploy with new env takes effect at once. */
@@ -905,15 +904,15 @@ export const BILLING_PRICING: BillingPricing = {
 };
 
 /**
- * The prices one account sees. Max's prices are sent when the account may buy
- * Max or already holds it, so a client offers Max exactly when they are there.
+ * The prices one account sees. Max's price is sent when this deployment sells
+ * Max or the account already holds it, so a client offers Max exactly when it
+ * is there.
  */
 export function billingPricingFor(input: { tier: PlanTier; maxOffered: boolean }): BillingPricing {
   if (!input.maxOffered && input.tier !== 'max') return BILLING_PRICING;
   return {
     ...BILLING_PRICING,
     maxMonthlyMicros: PLAN_PRICES.max.monthlyMicros,
-    maxAnnualMicros: PLAN_PRICES.max.annualMicros ?? 0,
   };
 }
 
@@ -1027,7 +1026,6 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
 
   const rows = await getDbClient()
     .select({
-      email: usersTable.email,
       plan: usersTable.plan,
       planOverride: usersTable.planOverride,
       polarProductId: usersTable.polarProductId,
@@ -1051,12 +1049,11 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     : undefined;
 
   const now = new Date();
-  const [budget, credits, autoTopup, maxOffered] = await runWithoutScope(() =>
+  const [budget, credits, autoTopup] = await runWithoutScope(() =>
     Promise.all([
       readBudget(ownerId, now, { tier, periodAnchor: resolution.periodAnchor }),
       limits.creditsAllowed ? readCreditSummary(ownerId, now) : Promise.resolve(undefined),
       limits.creditsAllowed ? readAutoTopupSettings(ownerId, now) : Promise.resolve(undefined),
-      maxPlanOffered({ distinctId: ownerId, email: row?.email ?? null }),
     ])
   );
 
@@ -1078,7 +1075,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     ...(autoTopup ? { autoTopup } : {}),
     sizePrices: sizePriceTable(tier),
     concurrentBoxes: { used: boxesInUse, limit: limits.concurrentBoxes },
-    pricing: billingPricingFor({ tier, maxOffered }),
+    pricing: billingPricingFor({ tier, maxOffered: maxPlanOffered() }),
   };
 }
 

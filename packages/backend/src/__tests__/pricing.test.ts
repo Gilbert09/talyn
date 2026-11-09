@@ -11,10 +11,10 @@ import {
   includedAfterTierChange,
   isSellableTier,
   isTierUpgrade,
-  MIN_ANNUAL_FULL_USE_MARGIN_PERCENT,
   MIN_FULL_USE_MARGIN_PERCENT,
   netOfPaymentFees,
   sellableTierPrices,
+  tierSoldAnnually,
   type BillingPricing,
   burnCreditLots,
   centsToMicros,
@@ -89,7 +89,7 @@ describe('plan tiers', () => {
   it.each<[PlanTier, number, number | null]>([
     ['free', 0, null],
     ['pro', 40_000_000, 400_000_000],
-    ['max', 100_000_000, 1_000_000_000],
+    ['max', 100_000_000, null],
     ['legacy_pro', 15_000_000, 150_000_000],
   ])('%s price', (tier, monthly, annual) => {
     expect(PLAN_PRICES[tier]).toEqual({ monthlyMicros: monthly, annualMicros: annual });
@@ -202,15 +202,25 @@ describe('Max and plan changes', () => {
   it('sellableTierPrices offers Max only when the backend sent its prices', () => {
     expect(sellableTierPrices('pro', base)).toEqual({ monthlyMicros: 40_000_000, annualMicros: 400_000_000 });
     expect(sellableTierPrices('max', base)).toBeNull();
-    expect(sellableTierPrices('max', { ...base, maxMonthlyMicros: 100_000_000, maxAnnualMicros: 1_000_000_000 })).toEqual({
+    expect(sellableTierPrices('max', { ...base, maxMonthlyMicros: 100_000_000 })).toEqual({
       monthlyMicros: 100_000_000,
-      annualMicros: 1_000_000_000,
+      annualMicros: null,
     });
+  });
+
+  it.each([
+    ['pro', true],
+    ['max', false],
+  ] as const)('tierSoldAnnually(%s) = %s', (tier, expected) => {
+    expect(tierSoldAnnually(tier)).toBe(expected);
+  });
+
+  it('formatPlanPeriodLine has no annual Max line', () => {
+    expect(formatPlanPeriodLine('max', 'annual', base)).toBeNull();
   });
 
   it.each<['monthly' | 'annual', string]>([
     ['monthly', 'Max · Monthly · $100/month'],
-    ['annual', 'Max · Annual · $1,000/year'],
   ])('formatPlanPeriodLine(max, %s)', (billingPeriod, expected) => {
     expect(formatPlanPeriodLine('max', billingPeriod, base)).toBe(expected);
   });
@@ -244,13 +254,14 @@ describe('margins', () => {
     expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
   });
 
-  it('the annual price keeps the margin over twelve full months', () => {
-    for (const tier of ['pro', 'max'] as const) {
+  it.each(PLAN_TIERS.filter((tier) => PLAN_PRICES[tier].annualMicros != null))(
+    '%s annual keeps the minimum margin over twelve full months',
+    (tier) => {
       const net = netOfPaymentFees(PLAN_PRICES[tier].annualMicros!);
       const cost = 12 * PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
-      expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_ANNUAL_FULL_USE_MARGIN_PERCENT);
+      expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
     }
-  });
+  );
 
   it('credits, after the biggest pack bonus, keep the margin too', () => {
     const effective = Math.floor(BOX_HOUR_PRICE_MICROS / (CREDIT_PACKS['500'].creditMicros / CREDIT_PACKS['500'].priceMicros));

@@ -8,6 +8,7 @@ import {
   isTierUpgrade,
   PLAN_LIMITS,
   PLAN_TIER_LABELS,
+  tierSoldAnnually,
   validateAutoTopupConfig,
   type ApiResponse,
   type AutoTopupSettings,
@@ -20,6 +21,7 @@ import {
   type CreditCheckoutRequest,
   type CreditSummary,
   type SandboxSize,
+  type SellableTier,
   type UpdateAutoTopupRequest,
   type UsageDay,
   type UsageIntervalPublic,
@@ -59,13 +61,25 @@ export const NO_SUBSCRIPTION_CODE = 'no_subscription';
 export const ANNUAL_TO_MONTHLY_CODE = 'annual_to_monthly_via_portal';
 /**
  * 409 code on change-plan when the move is not an upgrade (Max → Pro). It goes
- * through the portal, where a downgrade takes effect at renewal. An immediate,
- * credited downgrade would let somebody use a whole Max allowance and then get
- * most of its price back.
+ * through the portal, which follows the org's default proration (`prorate`:
+ * the change applies at once and the unused part is credited on the next
+ * invoice). Tom accepted the abuse this allows (2026-11-09): use the Max hours,
+ * then downgrade for the credit. It is bounded by the box concurrency cap and
+ * by the prorated hours a mid-period upgrade gets.
  */
 export const DOWNGRADE_VIA_PORTAL_CODE = 'downgrade_via_portal';
-/** 403 code when the account may not buy Max (flag off or the Max products unset). */
+/** 403 code when this deployment does not sell Max (the Max product is unset). */
 export const MAX_PLAN_UNAVAILABLE_CODE = 'max_plan_unavailable';
+/** 400 code when a plan sold monthly only (Max) is asked for annually. */
+export const MONTHLY_ONLY_CODE = 'monthly_only';
+
+function monthlyOnly(res: Response, plan: SellableTier) {
+  return res.status(400).json({
+    success: false,
+    code: MONTHLY_ONLY_CODE,
+    error: `${PLAN_TIER_LABELS[plan]} is sold monthly only.`,
+  });
+}
 
 /** Subscription statuses that keep paid access (the webhook's GRANTING_STATUSES). */
 const GRANTING_STATUSES = new Set(['active', 'trialing', 'past_due']);
@@ -236,11 +250,10 @@ export function billingRoutes(): Router {
       return res.status(400).json({ success: false, error: "plan must be 'pro' or 'max'." });
     }
     const plan = body.plan ?? 'pro';
-    const user = assertUser(req);
-    if (plan === 'max' && !(await maxPlanOffered({ distinctId: user.id, email: user.email }))) {
+    if (plan === 'max' && !maxPlanOffered()) {
       return res.status(403).json({ success: false, code: MAX_PLAN_UNAVAILABLE_CODE, error: 'The Max plan is not available.' });
     }
-    const userId = user.id;
+    const userId = assertUser(req).id;
     const [row] = await subscriptionQuery(userId);
     if (hasGrantingSubscription(row)) {
       return res.status(409).json({
@@ -249,14 +262,17 @@ export function billingRoutes(): Router {
         error: 'You already have a subscription. Change its plan instead of buying a second one.',
       });
     }
-    // Annual is the default plan everywhere; monthly is the opt-out.
-    const period = body.period === 'monthly' ? 'monthly' : 'annual';
+    // Annual is the default where a plan has it; monthly is the opt-out.
+    // A monthly-only plan (Max) defaults to monthly and refuses annual.
+    if (body.period === 'annual' && !tierSoldAnnually(plan)) return monthlyOnly(res, plan);
+    const period = body.period === 'monthly' || !tierSoldAnnually(plan) ? 'monthly' : 'annual';
     const url = await createCheckoutUrl(userId, period, plan);
     res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
   });
 
   // An upgrade on the live subscription (Legacy Pro → Pro, Legacy Pro or Pro
-  // → Max, or monthly → annual on one plan), prorated and invoiced now. The
+  // monthly → Max, or Pro monthly → annual), prorated and invoiced now. Max
+  // is monthly only, so Pro annual → Max is annual → monthly: the portal. The
   // `subscription.updated` webhook writes the new product and the tier follows.
   router.post('/change-plan', async (req, res) => {
     if (!billingEnabled()) return notConfigured(res);
@@ -265,11 +281,11 @@ export function billingRoutes(): Router {
       return res.status(400).json({ success: false, error: "Send { to: 'pro' | 'max', period: 'monthly' | 'annual' }." });
     }
     const to = body.to;
-    const user = assertUser(req);
-    if (to === 'max' && !(await maxPlanOffered({ distinctId: user.id, email: user.email }))) {
+    if (body.period === 'annual' && !tierSoldAnnually(to)) return monthlyOnly(res, to);
+    if (to === 'max' && !maxPlanOffered()) {
       return res.status(403).json({ success: false, code: MAX_PLAN_UNAVAILABLE_CODE, error: 'The Max plan is not available.' });
     }
-    const userId = user.id;
+    const userId = assertUser(req).id;
     const [row] = await subscriptionQuery(userId);
     if (!hasGrantingSubscription(row)) {
       return res.status(409).json({
@@ -290,7 +306,7 @@ export function billingRoutes(): Router {
       return res.status(409).json({
         success: false,
         code: DOWNGRADE_VIA_PORTAL_CODE,
-        error: `Move from ${PLAN_TIER_LABELS[currentTier]} to ${PLAN_TIER_LABELS[to]} in the billing portal. The change starts at your next renewal.`,
+        error: `Move from ${PLAN_TIER_LABELS[currentTier]} to ${PLAN_TIER_LABELS[to]} in the billing portal.`,
       });
     }
     const fromPaidAnnual = subscriptionPeriod(row.polarProductId) === 'annual' && currentTier !== 'legacy_pro';
