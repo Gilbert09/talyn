@@ -100,6 +100,7 @@ import type {
   CheckoutSessionResponse,
   CreateCheckoutRequest,
   CreditCheckoutRequest,
+  PortalSessionRequest,
   CreditSummary,
   UpdateAutoTopupRequest,
   AssignTeamSeatsRequest,
@@ -448,11 +449,16 @@ export const github = {
   // another org or add repos once connected). Open one in the browser; GitHub
   // redirects back through /github/app/callback, which records the installation
   // + user token (and re-discovers every install).
-  installViaApp: (workspaceId: string) =>
+  /**
+   * `returnTo` is the mobile app's URL base (`talyn-mobile://`): the callback
+   * then 302s to `${returnTo}github/callback?github=connected|error`. 400
+   * `invalid_return_to` when the backend's allowlist does not hold it.
+   */
+  installViaApp: (workspaceId: string, opts: { returnTo?: string } = {}) =>
     request<{ installUrl: string; manageUrl: string; state: string }>(
       'POST',
       '/github/app/install-url',
-      { workspaceId }
+      { workspaceId, ...(opts.returnTo ? { returnTo: opts.returnTo } : {}) }
     ),
   disconnect: (workspaceId: string) =>
     request<void>('POST', '/github/disconnect', { workspaceId }),
@@ -1601,7 +1607,7 @@ export const insights = {
 // the old view", never as an error to show.
 export const billing = {
   status: () => request<BillingStatus>('GET', '/billing/status'),
-  /** Pro or Max checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. 403 `max_plan_unavailable` when Max is not offered. */
+  /** Pro or Max checkout. 409 `already_subscribed` when a subscription exists: use `changePlan`. 403 `max_plan_unavailable` when Max is not offered. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=checkout&result=…`; 400 `invalid_return_to` when not allowed. */
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
   /** An upgrade on the live subscription (Legacy Pro → Pro, Pro → Max). 409 `no_subscription` when there is none, `downgrade_via_portal` for a smaller plan. */
@@ -1617,7 +1623,7 @@ export const billing = {
   },
   /** Live credit lots, balance and what expires within 30 days. */
   credits: () => request<CreditSummary>('GET', '/billing/credits'),
-  /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. */
+  /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=credits&result=…`. */
   creditCheckout: (data: CreditCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/credits/checkout', data),
   autoTopup: {
@@ -1626,7 +1632,9 @@ export const billing = {
     update: (data: UpdateAutoTopupRequest) =>
       request<AutoTopupSettings>('PUT', '/billing/auto-topup', data),
   },
-  portal: () => request<CheckoutSessionResponse>('POST', '/billing/portal'),
+  /** `returnTo` (mobile) gives the portal a back button to `${returnTo}billing/return?kind=portal&result=success`. */
+  portal: (data: PortalSessionRequest = {}) =>
+    request<CheckoutSessionResponse>('POST', '/billing/portal', data),
   orders: () => request<BillingOrder[]>('GET', '/billing/orders'),
   invoice: (orderId: string) =>
     request<CheckoutSessionResponse>('POST', `/billing/orders/${orderId}/invoice`),

@@ -26,7 +26,7 @@ import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
 import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
-import { billingRoutes } from './billing.js';
+import { billingPublicRoutes, billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { apiTokenRoutes } from './apiTokens.js';
@@ -72,6 +72,12 @@ export function setupRoutes(app: Express): void {
   // redirect, not by our authenticated desktop client, so it must stay
   // unauth'd. State-token validation inside the handler prevents CSRF.
   app.use(`${api}/github`, mount(githubPublicRoutes()));
+
+  // Polar's checkout and portal redirects for the mobile app land here (Polar
+  // accepts only http(s) URLs) and 302 on to the app's allowlisted scheme.
+  // A browser hop with no Authorization header, so it mounts before
+  // requireAuth. It reads and writes nothing. See routes/billing.ts.
+  app.use(`${api}/billing`, mount(billingPublicRoutes()));
 
   // PostHog's OAuth redirect lands here at the end of the connect flow — a
   // browser hop with no Authorization header, so it mounts alongside the GitHub
