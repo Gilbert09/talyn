@@ -24,6 +24,8 @@ Other options in the composer:
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access, a branch prefix such as `yourname/`, and a notification when an agent finishes.
 
+Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
+
 ## The session screen
 
 The chat is in the middle. Each message you send shows when you sent it, for example "5 minutes ago". Each finished agent reply shows when it ended. Hover over a time to see the full date and time. The session header shows **Last message** with the time of the newest message in the session.

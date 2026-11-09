@@ -515,6 +515,9 @@ export function workspaceRoutes(): Router {
       if (body.settings.sessionMemory !== undefined && typeof body.settings.sessionMemory !== 'boolean') {
         return res.status(400).json({ success: false, error: 'settings.sessionMemory must be true or false' });
       }
+      if (body.settings.claudeCoAuthoredBy !== undefined && typeof body.settings.claudeCoAuthoredBy !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'settings.claudeCoAuthoredBy must be true or false' });
+      }
       if (body.settings.memoryReview !== undefined && !isMemoryReviewCadence(body.settings.memoryReview)) {
         return res.status(400).json({
           success: false,

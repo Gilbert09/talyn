@@ -649,6 +649,8 @@ export interface WorkspaceSettings {
   /** Unset means sessions archive when their pull request merges. */
   autoArchiveOnMerge?: boolean;
   autoResumeOnLimit?: boolean;
+  /** Whether Claude adds its co-author trailer to commits. Unset means true. */
+  claudeCoAuthoredBy?: boolean;
   continuousBuild?: ContinuousBuildSettings;
   /**
    * The usage level, in percent, at which a fleet account counts as spent and

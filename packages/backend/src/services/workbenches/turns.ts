@@ -65,6 +65,7 @@ import { codexProviderPrelude } from './codexProvider.js';
 import { syncInstructionFiles } from './instructions.js';
 import { observeSessionFiles, sessionFileProbe } from './sessionFileSync.js';
 import { syncSkillPack } from './skillPack.js';
+import { claudeCoAuthoredBySetting } from './claudeCoAuthorship.js';
 import { notifyThread } from './threads.js';
 import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
@@ -847,8 +848,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         }
         return attached;
       }),
+      agent === 'claude'
+        ? claudeCoAuthoredBySetting(payer?.workspaceId ?? wb.workspaceId)
+        : Promise.resolve(undefined),
     ] as const;
-    const [refreshed, , { talynTools, talynSkills, memory }, attached] = await Promise.all(jobs).catch(async (err: unknown) => {
+    const [refreshed, , { talynTools, talynSkills, memory }, attached, claudeCoAuthoredBy] = await Promise.all(jobs).catch(async (err: unknown) => {
       // Finish every write before recovery, a retry, or another turn can start.
       await Promise.allSettled(jobs);
       if (needsUserMessage) {
@@ -898,7 +902,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
             // be available inside it, and the box has nothing else to protect.
             sandboxMode: planMode ? 'read-only' : 'danger-full-access',
           })
-        : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
+        : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt, claudeCoAuthoredBy });
     };
     let argv = buildArgv();
     const env = {
