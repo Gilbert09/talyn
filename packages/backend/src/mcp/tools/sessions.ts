@@ -28,6 +28,8 @@ import {
   type WorkbenchEvent,
   type Workspace,
   type CreateSpaceSessionResponse,
+  type SpaceRepository,
+  type SpacesTeam,
 } from '@talyn/shared';
 import {
   chatWorkbenchId,
@@ -463,6 +465,98 @@ function capped(text: string, hint: string): string {
   return `${text.slice(0, MAX_OUTPUT_CHARS)}\n\nOutput cut at ${MAX_OUTPUT_CHARS} of ${text.length} characters. ${hint}`;
 }
 
+/** The `space_id` value that starts a session in Personal, with no space inherited. */
+const PERSONAL_SPACE = 'personal';
+
+/**
+ * The repository full name for a space session, from `repository_id` (looked
+ * up in the caller's workspaces) or `repository_full_name`.
+ */
+async function spaceRepoFullName(ownerId: string, args: Record<string, unknown>): Promise<string | undefined> {
+  const repoFullName = str(args.repository_full_name);
+  const repositoryId = str(args.repository_id);
+  if (!repositoryId) return repoFullName;
+  const workspaces = await callApi<Workspace[]>(ownerId, 'GET', '/workspaces');
+  const found = workspaces.flatMap((workspace) => workspace.repos).find((repo) => repo.id === repositoryId);
+  if (!found) throw new Error('repository_id was not found in your workspaces.');
+  if (repoFullName && repoFullName.toLowerCase() !== found.name.toLowerCase()) {
+    throw new Error('repository_id and repository_full_name must name the same repository.');
+  }
+  return found.name;
+}
+
+async function createInSpace(
+  ownerId: string,
+  spaceId: string,
+  repoFullName: string,
+  agent: 'claude' | 'codex',
+  args: Record<string, unknown>,
+  ctx: McpCallContext | undefined
+): Promise<string> {
+  const created = await callApi<CreateSpaceSessionResponse>(ownerId, 'POST', `/spaces/${encodeURIComponent(spaceId)}/sessions`, {
+    repoFullName, agent,
+    ...(str(args.model) ? { model: str(args.model) } : {}),
+    ...(str(args.prompt) ? { prompt: str(args.prompt) } : {}),
+    ...(str(args.name) ? { name: str(args.name) } : {}),
+    ...(str(args.base_branch) ? { baseBranch: str(args.base_branch) } : {}),
+    ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+    ...(args.internet_access !== undefined ? { internetAccess: bool(args, 'internet_access') } : {}),
+  });
+  if (ctx?.session) await recordSessionSpawn(created.workbench.id, ctx.session);
+  return sessionDetail(created.workbench);
+}
+
+/**
+ * Decide if a session that a session in `spaceId` starts can go in that space.
+ * Returns the repository to use, or why the child goes to Personal. Throws
+ * only for `auto_create_pr: false`: the space cannot honour it, and a silent
+ * move to Personal would lose the space.
+ */
+async function inheritSpace(
+  ownerId: string,
+  spaceId: string,
+  args: Record<string, unknown>
+): Promise<{ repoFullName: string; spaceName: string } | { reason: string }> {
+  if (args.auto_create_pr !== undefined && !bool(args, 'auto_create_pr')) {
+    throw new Error(
+      'This session is in a team space, so the new session starts in the same space. ' +
+        'A session in a space always opens its pull request, so auto_create_pr false is not supported there. ' +
+        'Leave out auto_create_pr to start in the space, or pass space_id "personal" to start in Personal.'
+    );
+  }
+  if (str(args.pull_request_id)) return { reason: 'pull_request_id is not supported in a space.' };
+  // `GET /teams` lists only live spaces of teams the caller is a member of.
+  const teams = await spacesApi(() => callApi<SpacesTeam[]>(ownerId, 'GET', '/teams'));
+  if ('reason' in teams) return teams;
+  const team = teams.value.find((item) => item.spaces.some((space) => space.id === spaceId));
+  const space = team?.spaces.find((item) => item.id === spaceId);
+  if (!team || !space) return { reason: 'the space is archived, or you are no longer a member of its team.' };
+  if (!team.homeWorkspaceId) return { reason: 'you have no home workspace for the team of the space.' };
+  const requestedWorkspace = str(args.workspace_id);
+  if (requestedWorkspace && requestedWorkspace !== team.homeWorkspaceId) {
+    return { reason: 'workspace_id is not your home workspace for the team of the space.' };
+  }
+  const repoFullName = await spaceRepoFullName(ownerId, args);
+  if (!repoFullName) return { reason: 'repository_id or repository_full_name is required.' };
+  const repos = await spacesApi(() =>
+    callApi<SpaceRepository[]>(ownerId, 'GET', `/spaces/${encodeURIComponent(spaceId)}/repositories`)
+  );
+  if ('reason' in repos) return repos;
+  const match = repos.value.find((repo) => repo.repoFullName.toLowerCase() === repoFullName.toLowerCase());
+  if (!match) return { reason: `${repoFullName} is not a repository of the space.` };
+  return { repoFullName: match.repoFullName, spaceName: space.name };
+}
+
+/** A spaces API read. A refusal (for example, spaces turned off) becomes a fallback reason. */
+async function spacesApi<T>(read: () => Promise<T>): Promise<{ value: T } | { reason: string }> {
+  try {
+    return { value: await read() };
+  } catch (err) {
+    if (err instanceof McpApiError) return { reason: `the team space is not available (${err.message}).` };
+    throw err;
+  }
+}
+
 export const SESSIONS = [
   defineTool(
     'list_sessions',
@@ -490,11 +584,19 @@ export const SESSIONS = [
   ),
   defineTool(
     'create_session',
-    'Start a cloud session on a repository. It runs in a sandbox and works on a new branch, an existing branch, or the head of a pull request. An optional prompt becomes the first message.',
+    'Start a cloud session on a repository. It runs in a sandbox and works on a new branch, an existing branch, or the head of a pull request. An optional prompt becomes the first message. ' +
+      "A session in a team space that starts a session puts it in the same space by default (see space_id). The result says which space the new session is in.",
     {
       ...workspaceSchema,
       repository_id: textSchema,
-      space_id: { type: 'string', description: 'Start in this team space and use your home workspace.' },
+      space_id: {
+        type: 'string',
+        description:
+          'Start in this team space and use your home workspace. Pass "personal" to start in Personal. ' +
+          "Default from a session in a space: that space, when the repository is in the space. Talyn falls back to Personal, and says why, " +
+          'when pull_request_id is given, workspace_id is not your home workspace for the team, the repository is not in the space, or the space is archived or you left its team. ' +
+          'In a space a session always opens its pull request when it is done: auto_create_pr true is accepted, and auto_create_pr false is refused.',
+      },
       repository_full_name: { type: 'string', description: 'Repository owner/name in the space. Use when it is not in one of your workspaces.' },
       agent: { type: 'string', enum: ['claude', 'codex'], description: 'Fixed for the life of the session.' },
       model: textSchema,
@@ -511,45 +613,42 @@ export const SESSIONS = [
     async (ownerId, args, ctx) => {
       const agent = str(args.agent);
       if (agent !== 'claude' && agent !== 'codex') throw new Error('agent must be "claude" or "codex"');
-      const spaceId = str(args.space_id);
-      if (spaceId) {
-        let repoFullName = str(args.repository_full_name);
-        const repositoryId = str(args.repository_id);
-        if (repositoryId) {
-          const workspaces = await callApi<Workspace[]>(ownerId, 'GET', '/workspaces');
-          const found = workspaces.flatMap((workspace) => workspace.repos).find((repo) => repo.id === repositoryId);
-          if (!found) throw new Error('repository_id was not found in your workspaces.');
-          if (repoFullName && repoFullName.toLowerCase() !== found.name.toLowerCase()) {
-            throw new Error('repository_id and repository_full_name must name the same repository.');
-          }
-          repoFullName = found.name;
-        }
-        if (!repoFullName) throw new Error('repository_id or repository_full_name is required.');
+      const requestedSpace = str(args.space_id);
+      const personal = requestedSpace?.toLowerCase() === PERSONAL_SPACE;
+      // A session starting sessions: limited in depth, and the
+      // child records its parent so its own token knows its depth. A session
+      // a thread starts belongs to that thread.
+      const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;
+      if (requestedSpace && !personal) {
         if (str(args.pull_request_id) || args.auto_create_pr !== undefined) {
           throw new Error('pull_request_id and auto_create_pr are not supported in a space.');
         }
+        const repoFullName = await spaceRepoFullName(ownerId, args);
+        if (!repoFullName) throw new Error('repository_id or repository_full_name is required.');
         const requestedWorkspace = str(args.workspace_id);
         if (requestedWorkspace) {
-          const teams = await callApi<Array<{ homeWorkspaceId: string | null; spaces: Array<{ id: string }> }>>(ownerId, 'GET', '/teams');
-          const team = teams.find((item) => item.spaces.some((space) => space.id === spaceId));
+          const team = (await callApi<SpacesTeam[]>(ownerId, 'GET', '/teams')).find((item) =>
+            item.spaces.some((space) => space.id === requestedSpace)
+          );
           if (team && requestedWorkspace !== team.homeWorkspaceId) {
             throw new Error('workspace_id must be your home workspace for this team.');
           }
         }
-        const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;
         if (reserved?.threadId) throw new Error('A thread cannot start a session in a space.');
-        const created = await callApi<CreateSpaceSessionResponse>(ownerId, 'POST', `/spaces/${encodeURIComponent(spaceId)}/sessions`, {
-          repoFullName, agent,
-          ...(str(args.model) ? { model: str(args.model) } : {}),
-          ...(str(args.prompt) ? { prompt: str(args.prompt) } : {}),
-          ...(str(args.name) ? { name: str(args.name) } : {}),
-          ...(str(args.base_branch) ? { baseBranch: str(args.base_branch) } : {}),
-          ...(str(args.branch) ? { branch: str(args.branch) } : {}),
-          ...(args.internet_access !== undefined ? { internetAccess: bool(args, 'internet_access') } : {}),
-        });
-        if (ctx?.session) await recordSessionSpawn(created.workbench.id, ctx.session);
-        return sessionDetail(created.workbench);
+        return createInSpace(ownerId, requestedSpace, repoFullName, agent, args, ctx);
       }
+
+      let fallback: string | null = null;
+      if (!requestedSpace && reserved?.spaceId && !reserved.threadId) {
+        const inherited = await inheritSpace(ownerId, reserved.spaceId, args);
+        if ('repoFullName' in inherited) {
+          const text = await createInSpace(ownerId, reserved.spaceId, inherited.repoFullName, agent, args, ctx);
+          return `Started in this session's team space "${inherited.spaceName}" (${reserved.spaceId}).\n${text}`;
+        }
+        fallback = `Started in Personal, not in this session's team space: ${inherited.reason}`;
+      }
+
+      if (fallback && !str(args.repository_id)) throw new Error(`${fallback} Pass repository_id to start in Personal.`);
       const body: Record<string, unknown> = {
         workspaceId: await resolveWorkspace(ownerId, args),
         repositoryId: requireId(args, 'repository_id'),
@@ -568,15 +667,11 @@ export const SESSIONS = [
       }
       if (args.internet_access !== undefined) body.internetAccess = bool(args, 'internet_access');
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
-      // A session starting sessions: limited in depth, and the
-      // child records its parent so its own token knows its depth. A session
-      // a thread starts belongs to that thread.
-      const reserved = ctx?.session ? await reserveSessionCreate(ctx.session) : null;
       if (reserved?.threadId) body.threadId = reserved.threadId;
       const created = await callApi<Workbench>(ownerId, 'POST', '/workbenches', body);
       if (ctx?.session) await recordSessionSpawn(created.id, ctx.session);
       if (reserved?.threadId) await announceThreadSession(created.id);
-      return sessionDetail(created);
+      return fallback ? `${fallback}\n${sessionDetail(created)}` : sessionDetail(created);
     },
     FEATURE
   ),

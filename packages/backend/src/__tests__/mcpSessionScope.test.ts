@@ -36,6 +36,11 @@ const features: Features = {
   reviewPriorityMode: true,
 };
 
+/** A route result that the mock answers as a refusal with this status. */
+class ApiRefusal {
+  constructor(readonly status: number, readonly message: string) {}
+}
+
 type Route = (url: URL, body: unknown) => unknown;
 function mockApi(routes: Record<string, Route>) {
   const calls: { method: string; url: URL; body: unknown }[] = [];
@@ -48,7 +53,11 @@ function mockApi(routes: Record<string, Route>) {
       calls.push({ method, url, body });
       const route = routes[`${method} ${url.pathname}`];
       if (!route) throw new Error(`Unexpected request: ${method} ${url.pathname}`);
-      return { ok: true, status: 200, json: async () => ({ success: true, data: route(url, body) ?? null }) } as Response;
+      const out = route(url, body);
+      if (out instanceof ApiRefusal) {
+        return { ok: false, status: out.status, json: async () => ({ success: false, error: out.message }) } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: out ?? null }) } as Response;
     })
   );
   return { calls };
@@ -343,5 +352,146 @@ describe('sessions started by a session', () => {
     await tool('create_session').handler(OWNER, args);
     expect(reserveSessionCreate).not.toHaveBeenCalled();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessions started by a session in a space', () => {
+  const SPACE = 'space-1';
+  const team = (overrides: Record<string, unknown> = {}) => ({
+    id: 'team-1', name: 'Acme', role: 'member', homeWorkspaceId: 'ws1',
+    spaces: [{ id: SPACE, name: 'Warehouse' }], ...overrides,
+  });
+  const spaceRoutes = (overrides: Record<string, Route> = {}) => ({
+    'GET /api/v1/teams': () => [team()],
+    'GET /api/v1/workspaces': () => [{ id: 'ws1', repos: [{ id: 'r1', name: 'acme/web' }, { id: 'r2', name: 'acme/other' }] }],
+    [`GET /api/v1/spaces/${SPACE}/repositories`]: () => [{ spaceId: SPACE, repoFullName: 'Acme/Web', githubRepoId: 1 }],
+    [`POST /api/v1/spaces/${SPACE}/sessions`]: () => ({ workbench: session({ id: 'child' }), workspaceId: 'ws1', addedRepository: false }),
+    'POST /api/v1/workbenches': () => session({ id: 'child' }),
+    ...overrides,
+  });
+  const created = (calls: { method: string; url: URL; body: unknown }[]) =>
+    calls.filter((call) => call.method === 'POST').map((call) => ({ path: call.url.pathname, body: call.body }));
+
+  it('starts the child in the parent session space', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    const result = await tool('create_session').handler(OWNER, {
+      repository_id: 'r1', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internet_access: true,
+    }, SELF);
+    expect(created(calls)).toEqual([{
+      path: `/api/v1/spaces/${SPACE}/sessions`,
+      body: { repoFullName: 'Acme/Web', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internetAccess: true },
+    }]);
+    expect(result).toContain(`team space "Warehouse" (${SPACE})`);
+    expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
+  });
+
+  it.each([
+    ['repository_full_name', { repository_full_name: 'acme/web' }],
+    ['auto_create_pr true, which is already the default in a space', { repository_id: 'r1', auto_create_pr: true }],
+    ['the home workspace as workspace_id', { repository_id: 'r1', workspace_id: 'ws1' }],
+  ])('inherits the space with %s', async (_name, extra) => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    await tool('create_session').handler(OWNER, { agent: 'claude', ...extra }, SELF);
+    expect(created(calls)).toEqual([{ path: `/api/v1/spaces/${SPACE}/sessions`, body: { repoFullName: 'Acme/Web', agent: 'claude' } }]);
+  });
+
+  it('lets an explicit space_id win over the parent space', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi({
+      'POST /api/v1/spaces/space-2/sessions': () => ({ workbench: session({ id: 'child' }), workspaceId: 'ws1', addedRepository: false }),
+    });
+    await tool('create_session').handler(OWNER, { space_id: 'space-2', repository_full_name: 'acme/web', agent: 'claude' }, SELF);
+    expect(created(calls)).toEqual([{ path: '/api/v1/spaces/space-2/sessions', body: { repoFullName: 'acme/web', agent: 'claude' } }]);
+  });
+
+  it('starts in Personal when space_id is "personal"', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    const result = await tool('create_session').handler(OWNER, {
+      space_id: 'Personal', workspace_id: 'ws1', repository_id: 'r1', agent: 'claude', auto_create_pr: false,
+    }, SELF);
+    expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual(['POST /api/v1/workbenches']);
+    expect(calls[0].body).toMatchObject({ repositoryId: 'r1', autoCreatePr: false });
+    expect(result).not.toContain('team space');
+  });
+
+  it.each([
+    ['the parent has no space', { threadId: null, spaceId: null }],
+    ['the parent is a thread', { threadId: 's1', spaceId: null }],
+  ])('does not inherit when %s', async (_name, reserved) => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue(reserved);
+    const { calls } = mockApi(spaceRoutes());
+    const result = await tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude' }, SELF);
+    expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual(['POST /api/v1/workbenches']);
+    expect(result).not.toContain('team space');
+  });
+
+  it('does not look for a space for a user token', async () => {
+    const { calls } = mockApi(spaceRoutes());
+    await tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude' });
+    expect(reserveSessionCreate).not.toHaveBeenCalled();
+    expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual(['POST /api/v1/workbenches']);
+  });
+
+  it.each([
+    ['pull_request_id is given', { pull_request_id: 'pr1' }, {}, 'pull_request_id is not supported in a space.'],
+    ['workspace_id is not the home workspace of the team', { workspace_id: 'ws2' }, {}, 'workspace_id is not your home workspace'],
+    ['the repository is not in the space', {}, { 'GET /api/v1/workspaces': () => [{ id: 'ws1', repos: [{ id: 'r1', name: 'acme/other' }] }] }, 'acme/other is not a repository of the space.'],
+    ['the space is archived or the owner left the team', {}, { 'GET /api/v1/teams': () => [team({ spaces: [] })] }, 'the space is archived, or you are no longer a member of its team.'],
+    ['the owner has no team any more', {}, { 'GET /api/v1/teams': () => [] }, 'the space is archived, or you are no longer a member of its team.'],
+    ['the owner has no home workspace', {}, { 'GET /api/v1/teams': () => [team({ homeWorkspaceId: null })] }, 'you have no home workspace'],
+    ['the spaces API refuses', {}, { 'GET /api/v1/teams': () => new ApiRefusal(403, 'Spaces are off') }, 'the team space is not available (Spaces are off).'],
+  ])('falls back to Personal when %s', async (_name, extra, routes, reason) => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes(routes));
+    const args = { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude', ...extra };
+    const result = await tool('create_session').handler(OWNER, args, SELF);
+    expect(created(calls)).toEqual([{ path: '/api/v1/workbenches', body: expect.objectContaining({ repositoryId: 'r1', workspaceId: args.workspace_id }) }]);
+    expect(result).toContain("Started in Personal, not in this session's team space:");
+    expect(result).toContain(reason);
+    expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
+  });
+
+  it('keeps pull_request_id on the Personal fallback', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    await tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude', pull_request_id: 'pr1' }, SELF);
+    expect(created(calls)[0].body).toMatchObject({ fromPullRequestId: 'pr1' });
+  });
+
+  it('refuses a fallback that has no repository_id for Personal', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    await expect(
+      tool('create_session').handler(OWNER, { repository_full_name: 'acme/missing', agent: 'claude' }, SELF)
+    ).rejects.toThrow('acme/missing is not a repository of the space. Pass repository_id to start in Personal.');
+    expect(created(calls)).toEqual([]);
+  });
+
+  it('refuses auto_create_pr false and creates nothing, so the space is not lost', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes());
+    await expect(
+      tool('create_session').handler(OWNER, { repository_id: 'r1', agent: 'claude', auto_create_pr: false }, SELF)
+    ).rejects.toThrow('auto_create_pr false is not supported there');
+    expect(calls).toHaveLength(0);
+    expect(recordSessionSpawn).not.toHaveBeenCalled();
+  });
+
+  it('reports a failure of the space route and does not start a Personal session', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
+    const { calls } = mockApi(spaceRoutes({ [`POST /api/v1/spaces/${SPACE}/sessions`]: () => new ApiRefusal(409, 'No sandbox') }));
+    await expect(tool('create_session').handler(OWNER, { repository_id: 'r1', agent: 'claude' }, SELF)).rejects.toThrow('No sandbox');
+    expect(created(calls).map((call) => call.path)).toEqual([`/api/v1/spaces/${SPACE}/sessions`]);
+  });
+
+  it('says in the tool description that the space is inherited', () => {
+    const t = tool('create_session');
+    expect(t.description).toContain('puts it in the same space by default');
+    const spaceArg = (t.inputSchema.properties as Record<string, { description: string }>).space_id;
+    expect(spaceArg.description).toContain('Pass "personal" to start in Personal');
+    expect(spaceArg.description).toContain('Default from a session in a space: that space');
   });
 });
