@@ -99,7 +99,10 @@ export function fixture() {
       fullName: 'example/project', defaultBranch: 'main' }]) },
     cloudProviders: { list: jest.fn(async () => [{ type: 'selfhosted', displayName: 'Talyn Fleet', connected: true, connectedAgents: ['claude'] },
       { type: 'posthog_code', displayName: 'PostHog Code', connected: true }]) },
-    workspaces: { get: jest.fn(async () => ({ id: 'one', name: 'Test workspace', settings: {} as Record<string, unknown>, repos: [] })) },
+    // An onboarded workspace: GitHub is connected, so home opens without the setup steps.
+    workspaces: { get: jest.fn(async (): Promise<{ id: string; name: string; settings: Record<string, unknown>; repos: unknown[];
+      integrations?: Record<string, unknown> }> => ({ id: 'one', name: 'Test workspace', settings: {}, repos: [],
+      integrations: { github: { enabled: true, watchedRepos: [] } } })) },
     environments: { list: jest.fn(async () => [{ id: 'env-fleet', type: 'selfhosted' }, { id: 'env-posthog', type: 'posthog_code' }]) },
     tasks: {
       get: jest.fn(async (_id?: string) => ({ id: 'task-one', status: 'completed' })),

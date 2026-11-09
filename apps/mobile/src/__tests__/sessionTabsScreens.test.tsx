@@ -182,7 +182,7 @@ describe('pull request tab', () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await tab('PR'));
     await fireEvent.press(await screen.findByRole('button', { name: 'Create pull request' }));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left. Manage your plan in Talyn on the web.', expect.any(Array)));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
   });
   it('links an existing PR from the open ones', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(noPr());
@@ -305,7 +305,7 @@ describe('history', () => {
     await render(<HistoryScreen />);
     await fireEvent(await screen.findByRole('link', { name: /^Fix login\./ }), 'longPress');
     await fireEvent.press(screen.getByRole('button', { name: 'Restore' }));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left. Manage your plan in Talyn on the web.', expect.any(Array)));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
   it('says when nothing is archived', async () => {

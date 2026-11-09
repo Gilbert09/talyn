@@ -115,12 +115,15 @@ describe('composer controls', () => {
     ['claude-opus-5-5', 'claude'], ['gpt-6-luna', 'codex'], ['gpt-6.1-terra', 'codex'], ['not-a-model', null],
   ])('the agent for %s is %s', (model, expected) => expect(agentForModel(model)).toBe(expected));
 
+  // Counts come from the shared catalog, so adding a model does not break these cases.
+  const CLAUDE_MODELS = modelsFor('claude').length;
+  const CODEX_MODELS = modelsFor('codex').length;
   it.each<[string, WorkbenchReadiness['sandbox'] | null, 'claude' | 'codex', Array<[string, number, string | undefined]>]>([
-    ['both agents ready', ready, 'claude', [['claude', 8, undefined], ['codex', 4, undefined]]],
-    ['Codex not connected', codexOff, 'claude', [['claude', 8, undefined], ['codex', 0, 'Codex is not connected to this workspace, so Codex models cannot run.']]],
-    ['Claude needs a sign-in', claudeReauth, 'codex', [['claude', 0, 'The Claude sign-in for this workspace has expired, so Claude models cannot run.'], ['codex', 4, undefined]]],
-    ['the sandbox down', down, 'claude', [['claude', 8, undefined]]],
-    ['readiness loading', null, 'codex', [['codex', 4, undefined]]],
+    ['both agents ready', ready, 'claude', [['claude', CLAUDE_MODELS, undefined], ['codex', CODEX_MODELS, undefined]]],
+    ['Codex not connected', codexOff, 'claude', [['claude', CLAUDE_MODELS, undefined], ['codex', 0, 'Codex is not connected to this workspace, so Codex models cannot run.']]],
+    ['Claude needs a sign-in', claudeReauth, 'codex', [['claude', 0, 'The Claude sign-in for this workspace has expired, so Claude models cannot run.'], ['codex', CODEX_MODELS, undefined]]],
+    ['the sandbox down', down, 'claude', [['claude', CLAUDE_MODELS, undefined]]],
+    ['readiness loading', null, 'codex', [['codex', CODEX_MODELS, undefined]]],
   ])('model sections with %s', (_name, sandbox, current, expected) => {
     expect(modelSections(sandbox, current).map((section) => [section.agent, section.models.length, section.note])).toEqual(expected);
   });

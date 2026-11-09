@@ -1,9 +1,7 @@
 import { CONCURRENT_BOX_LIMIT_ERROR_CODE, SIZE_REQUIRES_PRO_ERROR_CODE, USAGE_BILLING_ERROR_CODES, USAGE_EXHAUSTED_ERROR_CODE,
   type UsageBillingErrorCode } from '@talyn/shared';
-import { Alert } from 'react-native';
-
-import { openExternal } from '../components/Workflow';
-import { WEB_APP_URL } from '../features/settings/about';
+import { router, type Href } from 'expo-router';
+import { Alert, type AlertButton } from 'react-native';
 
 export interface BoxRefusal { code: UsageBillingErrorCode; title: string; message: string }
 
@@ -41,12 +39,36 @@ export function errorMessage(error: unknown, fallback: string): string {
   return typeof message === 'string' && message.trim() ? message : fallback;
 }
 
-/** Plans and credits are managed on the web, so a refusal points there. */
+/** Plan and credits. Read-only when the build sells nothing. */
+export const BILLING_ROUTE = '/billing' as Href;
+/** Home with the drawer open, where running sessions can be stopped or archived. */
+export const SESSIONS_DRAWER_ROUTE = '/sessions' satisfies Href;
+export const REPOSITORIES_ROUTE = '/repositories' satisfies Href;
+
+export interface RefusalAction { label: string; href: Href }
+
+/**
+ * Where each refusal sends the person. Out of hours and a size the plan cannot
+ * start go to Plan and credits. A size refusal also offers the repository's
+ * size setting, since a smaller size is the other fix. All boxes busy opens
+ * the drawer, where a session can be stopped or archived.
+ */
+export function refusalActions(code: UsageBillingErrorCode): RefusalAction[] {
+  switch (code) {
+    case USAGE_EXHAUSTED_ERROR_CODE: return [{ label: 'Plan and credits', href: BILLING_ROUTE }];
+    case SIZE_REQUIRES_PRO_ERROR_CODE: return [
+      { label: 'Change the box size', href: REPOSITORIES_ROUTE },
+      { label: 'Plan and credits', href: { pathname: BILLING_ROUTE as string, params: { note: SIZE_REQUIRES_PRO_ERROR_CODE } } as Href },
+    ];
+    case CONCURRENT_BOX_LIMIT_ERROR_CODE: return [{ label: 'Show sessions', href: SESSIONS_DRAWER_ROUTE }];
+  }
+}
+
+/** The refusal with the server's own message, and a button for each way out. */
 export function showBoxRefusal(refusal: BoxRefusal) {
-  Alert.alert(refusal.title, `${refusal.message} Manage your plan in Talyn on the web.`, [
-    { text: 'Close', style: 'cancel' },
-    { text: 'Open Talyn on the web', onPress: () => openExternal(WEB_APP_URL) },
-  ]);
+  const buttons: AlertButton[] = [{ text: 'Close', style: 'cancel' },
+    ...refusalActions(refusal.code).map((action) => ({ text: action.label, onPress: () => router.navigate(action.href) }))];
+  Alert.alert(refusal.title, refusal.message, buttons);
 }
 
 /** Show why an action failed. A box refusal gets its own message. */

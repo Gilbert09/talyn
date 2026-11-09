@@ -52,12 +52,19 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="automations/index" options={detail('Automations')} />
       <Stack.Screen name="automations/[id]" options={detail('Automation')} />
       <Stack.Screen name="usage" options={detail('Usage')} />
+      <Stack.Screen name="billing/index" options={detail('Plan and billing')} />
+      <Stack.Screen name="billing/return" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="agents" options={detail('Agents')} />
       <Stack.Screen name="insights" options={detail('Insights')} />
       <Stack.Screen name="history" options={detail('History')} />
       {/* The screen draws its own "Settings" heading. */}
       <Stack.Screen name="settings" options={{ ...detail('Settings'), headerTitle: '' }} />
       <Stack.Screen name="workspaces" options={detail('Workspace')} />
+      <Stack.Screen name="repositories" options={detail('Repositories')} />
+      {/* Setup draws its own heading and steps, with no navigation header. */}
+      <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade', gestureEnabled: false }} />
+      {/* The GitHub install flow's return link. It steps back at once. */}
+      <Stack.Screen name="github/callback" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="new" options={{ ...detail('New'), animation: 'slide_from_bottom' }} />
     </Stack.Protected>
   </Stack>;

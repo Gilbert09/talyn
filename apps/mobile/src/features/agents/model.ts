@@ -1,4 +1,5 @@
-import { cloudProviderStatus, type FleetAccountView, type WorkspaceSettings } from '@talyn/shared';
+import { cloudProviderStatus, defaultFleetModelForAgent, fleetAgentForModel, isStoredFleetModelId, storedFleetModelForAgent,
+  type FleetAccountView, type FleetAgent, type WorkspaceSettings } from '@talyn/shared';
 import type { CloudProviderInfo } from '@talyn/client/native';
 
 import type { Tone } from '../../components/UI';
@@ -91,4 +92,43 @@ export function defaultFleetModel(settings: Pick<WorkspaceSettings, 'fleetModel'
 /** Accounts of one agent, in their failover order. */
 export function accountsFor(accounts: readonly FleetAccountView[], agent: string): FleetAccountView[] {
   return accounts.filter((account) => account.agent === agent).sort((a, b) => a.priority - b.priority);
+}
+
+export interface DefaultOption { value: string; label: string }
+
+/**
+ * Where new work can go, like web `CloudProviderDefaultSelector`: automatic,
+ * one entry per connected agent of Talyn Fleet, every other connected
+ * provider, and "Ask every time".
+ */
+export function defaultOptions(providers: readonly Pick<CloudProviderInfo, 'type' | 'displayName' | 'connected' | 'connectedAgents'>[]): DefaultOption[] {
+  const connected = providers.filter((provider) => provider.connected).flatMap((provider): DefaultOption[] => {
+    if (provider.type !== 'selfhosted') return [{ value: provider.type, label: provider.displayName }];
+    return (provider.connectedAgents ?? []).filter((agent): agent is FleetAgent => agent === 'claude' || agent === 'codex')
+      .map((agent) => ({ value: `selfhosted:${agent}`, label: `${provider.displayName} · ${agent === 'codex' ? 'Codex' : 'Claude'}` }));
+  });
+  return [{ value: '', label: 'Automatic' }, ...connected, { value: 'ask', label: 'Ask every time' }];
+}
+
+/** The stored default as an option value. A fleet default reads back as the agent its model belongs to. */
+export function defaultValue(settings: Pick<WorkspaceSettings, 'defaultCloudProvider' | 'fleetModel'> | null | undefined): string {
+  const provider = settings?.defaultCloudProvider ?? '';
+  return provider === 'selfhosted' ? `selfhosted:${fleetAgentForModel(settings?.fleetModel)}` : provider;
+}
+
+/**
+ * The settings change for a new default, like web. The model changes only
+ * when the choice crosses vendors, and the model being left is remembered.
+ * Automatic is sent as null, because the server merges and an absent key
+ * would leave the old default in place.
+ */
+export function defaultPatch(value: string, settings: Pick<WorkspaceSettings, 'fleetModel' | 'fleetModels'> | null | undefined): Record<string, unknown> {
+  const [type, agent] = value.split(':') as [string, FleetAgent | undefined];
+  const patch: Record<string, unknown> = { defaultCloudProvider: type || null };
+  if (agent !== 'claude' && agent !== 'codex') return patch;
+  const leaving = fleetAgentForModel(settings?.fleetModel);
+  if (leaving === agent) return patch;
+  patch.fleetModels = { ...(settings?.fleetModels ?? {}), ...(isStoredFleetModelId(settings?.fleetModel) ? { [leaving]: settings?.fleetModel } : {}) };
+  patch.fleetModel = storedFleetModelForAgent(settings as WorkspaceSettings, agent) ?? defaultFleetModelForAgent(agent);
+  return patch;
 }
