@@ -424,3 +424,78 @@ it('shows the account and compact tool controls after connection', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tools: ['read'] })));
 });
+
+describe('MCP server name', () => {
+  const connectedServer = {
+    ...server,
+    hasSecret: true,
+    lastProbe: { ok: true, at: '', toolNames: ['read_documents'] },
+  };
+
+  function renderEditing(existingNames: string[] = []) {
+    return render(
+      <McpServerEditorPage
+        editing={connectedServer}
+        existingNames={existingNames}
+        onCancel={vi.fn()}
+        onSave={onSave}
+        onTest={onTest}
+      />
+    );
+  }
+
+  it('saves a new display name and identifier', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    renderEditing();
+    const displayName = screen.getByRole('textbox', { name: 'Display name' }) as HTMLInputElement;
+    expect(displayName.placeholder).toBe('mcp.example.com');
+    fireEvent.change(displayName, { target: { value: 'Example (work)' } });
+    expect(screen.getByRole('heading', { name: 'Example (work)' })).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Identifier' }), {
+      target: { value: 'Example Work' },
+    });
+    expect((screen.getByRole('textbox', { name: 'Identifier' }) as HTMLInputElement).value).toBe(
+      'example-work'
+    );
+    expect(screen.getByText(/keep the old identifier/)).toBeTruthy();
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ displayName: 'Example (work)', name: 'example-work' })
+      )
+    );
+  });
+
+  it('does not save an identifier that another server uses', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    renderEditing(['linear']);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Identifier' }), {
+      target: { value: 'linear' },
+    });
+    expect((await screen.findByRole('alert')).textContent).toMatch(/already uses "linear"/);
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.getAllByText(/already uses "linear"/)).toHaveLength(2));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('says why an identifier is not valid', () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    renderEditing();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Identifier' }), {
+      target: { value: 'example-' },
+    });
+    expect(screen.getByRole('alert').textContent).toMatch(/cannot end with a hyphen/);
+  });
+
+  it('does not ask for a name before a new server connects', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    setup();
+    await screen.findByPlaceholderText('Paste the key');
+    expect(screen.queryByRole('textbox', { name: 'Display name' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Identifier' })).toBeNull();
+  });
+});

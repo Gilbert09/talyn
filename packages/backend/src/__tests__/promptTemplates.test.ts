@@ -189,6 +189,18 @@ describe('buildMergeablePrompt with a workspace template', () => {
     }
   );
 
+  it.each(['posthog_code', 'selfhosted'] as const)(
+    'tells a %s fix run to keep local checks cheap, also under an override that keeps loopRules',
+    (provider) => {
+      for (const template of [undefined, '{{pr.url}}\n{{loopRules}}']) {
+        const prompt = buildMergeablePrompt({ ...mergeableInput, provider, template });
+        expect(prompt).toContain('LOCAL CHECKS: keep them cheap');
+        expect(prompt).toContain('Do NOT install databases');
+        expect(prompt).not.toContain('where feasible');
+      }
+    }
+  );
+
   it('an override without a variable simply omits that block', () => {
     const prompt = buildMergeablePrompt({ ...mergeableInput, provider: 'posthog_code', template: '{{pr.url}}\n{{gitRules}}' });
     expect(prompt).not.toContain('COMMENT FOOTER');

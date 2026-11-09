@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
+import { isPrOnlyUnseen, useWorkbenchStore, visibleChats, type UnseenUpdates } from '../../stores/workbenches';
+import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -10,15 +11,18 @@ import { inPersonalList, spacesOffered } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
 
-export interface RepoGroup {
+/** What the sidebar groups need from a session: a workbench, or a space's session row. */
+export type SidebarItem = Pick<Workbench, 'id' | 'kind' | 'repoFullName' | 'createdAt'>;
+
+export interface RepoGroup<T extends SidebarItem = Workbench> {
   repo: string;
-  items: Workbench[];
+  items: T[];
   active?: boolean;
 }
 
 /** Live sessions grouped by repository, with the newest session first. The order does not change as sessions work. */
-export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
-  const map = new Map<string, Workbench[]>();
+export function groupByRepository<T extends SidebarItem>(workbenches: T[]): RepoGroup<T>[] {
+  const map = new Map<string, T[]>();
   for (const wb of workbenches) {
     if (isThread(wb)) continue;
     const list = map.get(wb.repoFullName);
@@ -31,33 +35,80 @@ export function groupByRepository(workbenches: Workbench[]): RepoGroup[] {
 }
 
 /** Active sessions first in one group, then inactive sessions by repository. */
-export function groupSidebarWorkbenches(
-  workbenches: Workbench[],
+export function groupSidebarWorkbenches<T extends SidebarItem>(
+  workbenches: T[],
   activeIds: ReadonlySet<string>,
   activeFirst: boolean,
-): RepoGroup[] {
+): RepoGroup<T>[] {
   if (!activeFirst) return groupByRepository(workbenches);
   const active = newestSessions(workbenches.filter((workbench) => activeIds.has(workbench.id) && !isThread(workbench)));
   const inactive = groupByRepository(workbenches.filter((workbench) => !activeIds.has(workbench.id)));
   return active.length > 0 ? [{ repo: 'Active', items: active, active: true }, ...inactive] : inactive;
 }
 
-/** The key a group's collapsed state is saved under. A repository name always holds a slash, so 'active' cannot clash. */
-export function sessionGroupKey(group: RepoGroup): string {
-  return group.active ? 'active' : group.repo;
+/**
+ * The key a group's collapsed state is saved under. A repository name always
+ * holds a slash, so 'active' cannot clash. A space passes its own prefix, so
+ * it does not share collapsed groups with Personal.
+ */
+export function sessionGroupKey(group: Pick<RepoGroup<SidebarItem>, 'repo' | 'active'>, prefix = ''): string {
+  return `${prefix}${group.active ? 'active' : group.repo}`;
+}
+
+export function spaceGroupKeyPrefix(spaceId: string): string {
+  return `space:${spaceId}:`;
 }
 
 /**
  * The rows a group shows. A collapsed group hides its sessions, but it keeps
  * the open one so the sidebar still shows where you are.
  */
-export function visibleGroupItems(
-  group: RepoGroup,
+export function visibleGroupItems<T extends SidebarItem>(
+  group: RepoGroup<T>,
   collapsed: Readonly<Record<string, true>>,
   openId: string | null,
-): Workbench[] {
-  if (!collapsed[sessionGroupKey(group)]) return group.items;
+  prefix = '',
+): T[] {
+  if (!collapsed[sessionGroupKey(group, prefix)]) return group.items;
   return group.items.filter((workbench) => workbench.id === openId);
+}
+
+/** What the sidebar reads to say what a session is doing. */
+export interface SidebarStateSources {
+  prRows: readonly PRRow[];
+  chats: Record<string, WorkbenchChat[] | undefined>;
+  unread: Record<string, true>;
+  unseen: Record<string, UnseenUpdates | undefined>;
+  backgrounds: Record<string, WorkbenchBackground | undefined>;
+}
+
+/**
+ * Each session's sidebar state, and the ones that count as active: work now,
+ * need you, or have an open pull request. A linked PR the store has not
+ * loaded yet counts as open, so the row does not jump when it loads.
+ */
+export function sidebarSessionStates(
+  workbenches: Workbench[],
+  sources: SidebarStateSources,
+): { activeIds: Set<string>; states: Map<string, SessionState> } {
+  const rowById = new Map(sources.prRows.map((row) => [row.id, row]));
+  const states = new Map<string, SessionState>();
+  const activeIds = new Set<string>();
+  for (const workbench of workbenches) {
+    const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
+    const resolvedPr = sessionPr(workbench, pr);
+    const state = sessionState(
+      workbench,
+      sources.chats[workbench.id] ?? workbench.chats ?? [],
+      sources.unread,
+      resolvedPr,
+      isPrOnlyUnseen(sources.unseen[workbench.id]),
+      sources.backgrounds[workbench.id],
+    );
+    states.set(workbench.id, state);
+    if (isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId))) activeIds.add(workbench.id);
+  }
+  return { activeIds, states };
 }
 
 export function isArchived(wb: Workbench): boolean {

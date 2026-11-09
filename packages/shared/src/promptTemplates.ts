@@ -163,7 +163,7 @@ export const PROMPT_VARIABLES: PromptVariableSpec[] = [
     group: 'talyn',
     shape: 'block',
     description:
-      'How long to keep going: PostHog Code loops until the PR is clean; Claude Code is metered, so it batches fixes and stops after about two cycles.',
+      'How long to keep going and how much to check locally: the agent loops until the PR is clean, and keeps local checks cheap because CI runs the full set on every publish.',
     kinds: ['mergeable'],
   },
 ];

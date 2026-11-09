@@ -25,6 +25,7 @@ import { emptySpaceList, useSpacesStore } from '../stores/spaces';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type AppContext, type SidebarOrder, type Theme } from '../stores/workspace';
+import { workbenchPlaceLabel } from '../lib/threads';
 import { SpaceDot } from './spaces/SpaceAvatars';
 import { WorkspaceLogo } from './widgets/WorkspaceLogo';
 import { CommandGroup, CommandItem, CommandShortcut } from './ui/command';
@@ -135,7 +136,7 @@ function SpaceSessionsGroup({ pick }: { pick: PickFn }) {
         >
           <SpaceDot color={active.space.color} image={active.space.image} />
           <span className="truncate">{row.title || row.name}</span>
-          <span className="truncate font-mono text-[11px] text-muted-foreground">{row.repoFullName}</span>
+          <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(row)}</span>
           {row.creator.githubLogin && (
             <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">@{row.creator.githubLogin}</span>
           )}

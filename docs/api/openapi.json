@@ -1091,7 +1091,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "Start in this space. Requires spaces:write and uses your home workspace."
+            "description": "Start in this space. Requires spaces:write and uses your home workspace. A session or a thread can start in a space."
           },
           "repository_full_name": {
             "type": "string",
@@ -1157,7 +1157,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "Put the new session in this thread."
+            "description": "Put the new session in this thread. The session goes in the space of the thread."
           },
           "internet_access": {
             "type": "boolean"
@@ -7398,7 +7398,7 @@
       "post": {
         "operationId": "createSession",
         "summary": "Start a session",
-        "description": "Creates a sandbox session on a repository (or a thread, with `kind: \"thread\"`) and starts provisioning. With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app.\n\nScope: `sessions:write`.",
+        "description": "Creates a sandbox session on a repository (or a thread, with `kind: \"thread\"`) and starts provisioning. With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app. With `space_id`, a session or a thread starts in that space; `thread_id`, `pull_request_id` and `auto_create_pr` are not supported there. A session started with `thread_id` goes in the space of its thread.\n\nScope: `sessions:write`.",
         "tags": [
           "Sessions"
         ],

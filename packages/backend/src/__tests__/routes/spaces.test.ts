@@ -57,7 +57,7 @@ const { wrapAsyncRoutes } = await import('../../middleware/asyncHandler.js');
 const { GitHubApiError, githubService } = await import('../../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../../services/featureFlags.js');
 const { resetRepoReadCacheForTests } = await import('../../services/teams/access.js');
-const { spaceSessionsQuery, spaceTasksQuery } = await import('../../services/teams/spaces.js');
+const { SPACE_SESSION_COLUMNS, spaceSessionsQuery, spaceTasksQuery } = await import('../../services/teams/spaces.js');
 const { SPACE_COLUMNS, SPACE_DETAIL_COLUMNS } = await import('../../services/teams/membership.js');
 const { MAX_SPACE_IMAGE_LENGTH } = await import('@talyn/shared');
 
@@ -65,6 +65,8 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 const { settleArchivesForTests } = await import('../../services/workbenches/lifecycle.js');
 const { setWorkbenchFleetClientForTests } = await import('../../services/workbenches/sandboxRuntime.js');
 const { getWorkbench, insertChat, insertWorkbench } = await import('../../services/workbenches/store.js');
+const { createWorkbench } = await import('../../services/workbenches/create.js');
+const { onWorkbenchEmit } = await import('../../services/workbenches/emit.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -111,6 +113,26 @@ describe('space routes', () => {
     });
     const chat = await insertChat({ id: `chat-${id}`, workbenchId: id, workspaceId: 'ws-a', title: 'Chat', agent: 'claude' });
     await testDb.db.insert(workbenchEvents).values({ chatId: chat.id, seq: 1, turn: 1, event: { type: 'user', text: 'hello' } });
+  }
+
+  async function seedThread(id: string, extra: Partial<typeof workbenches.$inferInsert> = {}) {
+    await insertWorkbench({
+      id,
+      workspaceId: 'ws-a',
+      kind: 'thread',
+      repositoryId: null,
+      repoFullName: '',
+      name: id,
+      branch: '',
+      baseBranch: '',
+      runtime: 'sandbox',
+      agent: 'claude',
+      sandboxId: `sbx-${id}`,
+      status: 'ready',
+      spaceId: 'space-1',
+      ...extra,
+    });
+    await insertChat({ id: `chat-${id}`, workbenchId: id, workspaceId: 'ws-a', title: 'Thread', agent: 'claude' });
   }
 
   beforeEach(async () => {
@@ -422,6 +444,38 @@ describe('space routes', () => {
       expect(asAna.body.data.items).toHaveLength(3);
     });
 
+    it('shows a thread and its sessions to the owner, and counts the thread as hidden for a teammate', async () => {
+      await seedThread('th-1');
+      await seedSession('wb-child', 'acme/app', { threadId: 'th-1' });
+      await seedSession('wb-secret-child', 'acme/secret', { threadId: 'th-1' });
+
+      const asBen = await call('GET', '/spaces/space-1/sessions', BEN);
+      expect(asBen.status).toBe(200);
+      expect(asBen.body.data.items.map((r: Loose) => [r.id, r.kind, r.threadId])).toEqual([['wb-child', 'session', 'th-1']]);
+      expect(asBen.body.data.hiddenCount).toBe(2);
+
+      const asAna = await call('GET', '/spaces/space-1/sessions', ANA);
+      expect(asAna.body.data.hiddenCount).toBe(0);
+      const rows = new Map(asAna.body.data.items.map((r: Loose) => [r.id, r]));
+      expect(rows.get('th-1')).toMatchObject({ kind: 'thread', threadId: null, repoFullName: '', spaceId: 'space-1' });
+      expect(rows.get('wb-child')).toMatchObject({ kind: 'session', threadId: 'th-1' });
+      expect(rows.get('wb-secret-child')).toMatchObject({ kind: 'session', threadId: 'th-1' });
+    });
+
+    it.each([
+      ['a live thread', {}],
+      ['an archived thread', { archivedAt: new Date() }],
+    ])('keeps %s owner-only for every teammate', async (_name, extra) => {
+      await seedThread('th-1', extra);
+      const canRead = vi.spyOn(githubService, 'canAccessRepository').mockResolvedValue(true);
+      const asBen = await call('GET', '/spaces/space-1/sessions', BEN);
+      expect(asBen.body.data).toEqual({ items: [], hiddenCount: 1 });
+      expect(canRead).not.toHaveBeenCalled();
+      expect((await call('GET', '/workbenches/th-1', BEN)).status).toBe(404);
+      expect((await call('GET', '/workbenches/chats/chat-th-1/events', BEN)).status).toBe(404);
+      expect((await call('GET', '/spaces/space-1/sessions', ANA)).body.data.items.map((r: Loose) => r.id)).toEqual(['th-1']);
+    });
+
     it.each([
       [CY, 'space-1'],
       [BEN, 'space-2'],
@@ -452,6 +506,9 @@ describe('space routes', () => {
       for (const column of ['sandbox_id', 'sandbox_generation', 'device_id', 'local_path', '"settings"', 'fleet_host', '"source"', 'work_save_error', 'config']) {
         expect(sessionSql).not.toContain(column);
       }
+      expect(Object.keys(SPACE_SESSION_COLUMNS)).toEqual(expect.arrayContaining(['kind', 'threadId']));
+      expect(sessionSql).toContain('"thread_id"');
+      expect(spaceSessionsQuery('space-1', true).toSQL().params).toEqual(expect.arrayContaining(['session', 'thread']));
       const taskSql = spaceTasksQuery('space-1').toSQL().sql;
       for (const column of ['transcript', '"metadata"', '"result"', '"prompt"', '"description"', 'last_summary']) {
         expect(taskSql).not.toContain(column);
@@ -536,6 +593,131 @@ describe('space routes', () => {
       ['a stranger', 'space-1', CY, { repoFullName: 'acme/app', agent: 'claude' }, 404],
     ])('refuses %s', async (_name, spaceId, user, body, status) => {
       expect((await call('POST', `/spaces/${spaceId}/sessions`, user, body)).status).toBe(status);
+    });
+
+    it('starts a thread in the member home workspace, with no repository', async () => {
+      const res = await call('POST', '/spaces/space-1/sessions', BEN, { kind: 'thread', agent: 'claude', prompt: 'Plan the release', name: 'release-plan' });
+      expect(res.status, res.body.error).toBe(200);
+      expect(res.body.data).toMatchObject({ workspaceId: 'ws-b', addedRepository: false });
+      expect(res.body.data.workbench).toMatchObject({
+        kind: 'thread', workspaceId: 'ws-b', spaceId: 'space-1', repositoryId: null, repoFullName: '', branch: '', name: 'release-plan',
+      });
+      const id = res.body.data.workbench.id;
+      await vi.waitFor(async () => expect((await getWorkbench(id))?.status).toBe('ready'), { timeout: 5000 });
+      expect(await getWorkbench(id)).toMatchObject({ kind: 'thread', spaceId: 'space-1', repositoryId: null });
+      expect(await testDb.db.select({ id: repositories.id }).from(repositories).where(eq(repositories.workspaceId, 'ws-b'))).toEqual([]);
+
+      const asBen = await call('GET', '/spaces/space-1/sessions', BEN);
+      expect(asBen.body.data.items.map((r: Loose) => [r.id, r.kind])).toEqual([[id, 'thread']]);
+      const asAna = await call('GET', '/spaces/space-1/sessions', ANA);
+      expect(asAna.body.data).toEqual({ items: [], hiddenCount: 1 });
+    });
+
+    it.each([
+      ['a repository', { repoFullName: 'acme/app' }],
+      ['a branch', { branch: 'feature' }],
+      ['a base branch', { baseBranch: 'main' }],
+      ['an empty repository', { repoFullName: '' }],
+    ])('refuses a thread with %s', async (_name, extra) => {
+      const res = await call('POST', '/spaces/space-1/sessions', BEN, { kind: 'thread', agent: 'claude', ...extra });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('A thread takes no repository, branch or base branch.');
+      expect(await testDb.db.select({ id: workbenches.id }).from(workbenches)).toEqual([]);
+    });
+
+    it.each([
+      ['an unknown kind', 'space-1', BEN, { kind: 'folder', agent: 'claude' }, 400],
+      ['a bad agent', 'space-1', BEN, { kind: 'thread', agent: 'gpt' }, 400],
+      ['an archived space', 'space-old', BEN, { kind: 'thread', agent: 'claude' }, 409],
+      ['a stranger', 'space-1', CY, { kind: 'thread', agent: 'claude' }, 404],
+    ])('refuses a thread for %s', async (_name, spaceId, user, body, status) => {
+      expect((await call('POST', `/spaces/${spaceId}/sessions`, user, body)).status).toBe(status);
+    });
+
+    it('puts a session that a thread starts in the space of the thread', async () => {
+      await seedThread('th-1');
+      const res = await call('POST', '/workbenches', ANA, {
+        workspaceId: 'ws-a', repositoryId: 'repo-a-app', runtime: 'sandbox', agent: 'claude', threadId: 'th-1',
+      });
+      expect(res.status, res.body.error).toBe(200);
+      expect(res.body.data).toMatchObject({ threadId: 'th-1', spaceId: 'space-1' });
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.data.id))?.status).toBe('ready'), { timeout: 5000 });
+      expect((await getWorkbench(res.body.data.id))?.spaceId).toBe('space-1');
+    });
+
+    it.each([
+      ['inherits the thread space when none is given', 'space-1', undefined, 'space-1'],
+      ['stays in Personal when the thread is in Personal', null, undefined, null],
+      ['keeps an explicit space over the thread space', 'space-1', 'space-3', 'space-3'],
+      ['keeps an explicit Personal over the thread space', 'space-1', null, null],
+      ['keeps an explicit space when the thread is in Personal', null, 'space-3', 'space-3'],
+    ])('a session in a thread %s', async (_name, threadSpace, explicit, expected) => {
+      await testDb.db.insert(spaces).values({ id: 'space-3', teamId: 'team-1', name: 'API' });
+      await seedThread('th-1', { spaceId: threadSpace });
+      const created = await createWorkbench(
+        {
+          workspaceId: 'ws-a', repositoryId: 'repo-a-app', runtime: 'sandbox', agent: 'claude', threadId: 'th-1',
+          ...(explicit === undefined ? {} : { spaceId: explicit }),
+        },
+        { id: ANA, email: 'ana@x.test' }
+      );
+      expect(created).toMatchObject({ threadId: 'th-1', spaceId: expected });
+      await vi.waitFor(async () => expect((await getWorkbench(created.id))?.status).toBe('ready'), { timeout: 5000 });
+    });
+
+    it.each([
+      ['keeps the space of a session in a space', 'space-1'],
+      ['stays in Personal for a session in Personal', null],
+    ])('continue as thread %s', async (_name, sessionSpace) => {
+      await seedSession('wb-c', 'acme/app', { spaceId: sessionSpace });
+      const res = await call('POST', '/workbenches/wb-c/thread', ANA, {});
+      expect(res.status, res.body.error).toBe(200);
+      expect(res.body.data).toMatchObject({ kind: 'thread', spaceId: sessionSpace });
+      expect((await getWorkbench(res.body.data.id))?.spaceId ?? null).toBe(sessionSpace);
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.data.id))?.status).toBe('ready'), { timeout: 5000 });
+    });
+
+    it('moves a thread with its live sessions, leaves archived ones, and moves them back to Personal', async () => {
+      await seedThread('th-1', { spaceId: null });
+      await seedSession('wb-live', 'acme/app', { spaceId: null, threadId: 'th-1' });
+      await seedSession('wb-live-2', 'acme/secret', { spaceId: 'space-1', threadId: 'th-1' });
+      await seedSession('wb-archived', 'acme/app', { spaceId: null, threadId: 'th-1', archivedAt: new Date() });
+      await seedSession('wb-other', 'acme/app', { spaceId: null });
+      const emitted: Array<[string, string | null]> = [];
+      const stop = onWorkbenchEmit({ workbench: (wb) => emitted.push([wb.id, wb.spaceId ?? null]) });
+      try {
+        expect((await call('PUT', '/workbenches/th-1/space', BEN, { spaceId: 'space-1' })).status).toBe(404);
+        expect((await call('PUT', '/workbenches/th-1/space', ANA, { spaceId: 'space-2' })).status).toBe(404);
+        expect(emitted).toEqual([]);
+
+        const moved = await call('PUT', '/workbenches/th-1/space', ANA, { spaceId: 'space-1' });
+        expect(moved.status).toBe(200);
+        expect(moved.body.data).toMatchObject({ id: 'th-1', kind: 'thread', spaceId: 'space-1' });
+        const spaceOf = async (id: string) => (await getWorkbench(id))?.spaceId ?? null;
+        expect(await Promise.all(['th-1', 'wb-live', 'wb-live-2', 'wb-archived', 'wb-other'].map(spaceOf))).toEqual([
+          'space-1', 'space-1', 'space-1', null, null,
+        ]);
+        expect([...emitted].sort()).toEqual([['th-1', 'space-1'], ['wb-live', 'space-1'], ['wb-live-2', 'space-1']]);
+
+        emitted.length = 0;
+        const back = await call('PUT', '/workbenches/th-1/space', ANA, { spaceId: null });
+        expect(back.body.data.spaceId).toBeNull();
+        expect(await Promise.all(['th-1', 'wb-live', 'wb-live-2', 'wb-archived', 'wb-other'].map(spaceOf))).toEqual([
+          null, null, null, null, null,
+        ]);
+        expect([...emitted].sort()).toEqual([['th-1', null], ['wb-live', null], ['wb-live-2', null]]);
+      } finally {
+        stop();
+      }
+    });
+
+    it('moves only the session itself when a session moves', async () => {
+      await seedThread('th-1', { spaceId: null });
+      await seedSession('wb-live', 'acme/app', { spaceId: null, threadId: 'th-1' });
+      await seedSession('wb-sibling', 'acme/app', { spaceId: null, threadId: 'th-1' });
+      expect((await call('PUT', '/workbenches/wb-live/space', ANA, { spaceId: 'space-1' })).status).toBe(200);
+      expect((await getWorkbench('th-1'))?.spaceId).toBeNull();
+      expect((await getWorkbench('wb-sibling'))?.spaceId).toBeNull();
     });
 
     it('lets only the owner move a session, and only into a space of their team', async () => {

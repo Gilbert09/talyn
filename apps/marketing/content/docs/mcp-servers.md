@@ -35,6 +35,15 @@ Talyn stores keys encrypted. The sandbox never receives them: the agent calls th
 
 For Stripe, use a restricted key, so that the agent can do only what you allow.
 
+## Name a server
+
+Talyn names a new server from the catalog or from its address. To change the name, open the server and go to **Name**:
+
+- **Display name** is the name that you see in Talyn. It can contain spaces and capital letters, for example "Linear (work)".
+- **Identifier** is the name that agents use to reach the server. Use lowercase letters, digits and hyphens. Each server in a workspace must have a different identifier.
+
+Select **Save** to keep the change. A session that is running keeps the old identifier until its sandbox restarts.
+
 ## Choose the tools
 
 After Talyn connects, it lists the server's tools. Choose which ones your agents can use:

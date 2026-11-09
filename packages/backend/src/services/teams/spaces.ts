@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import {
   canManageTeam,
@@ -20,6 +20,7 @@ import {
   type TaskType,
   type Workbench,
   type WorkbenchAgent,
+  type WorkbenchKind,
   type WorkbenchSandboxState,
   type WorkbenchStatus,
 } from '@talyn/shared';
@@ -260,13 +261,16 @@ async function spaceRepoName(spaceId: string, repoFullName: string): Promise<str
 // ---------- Listings ----------
 
 /**
- * What the space sidebar reads for a session. Deliberately no sandbox id,
- * fleet host, device, local path, settings, source or work-save column.
+ * What the space sidebar reads for a session or a thread. Deliberately no
+ * sandbox id, fleet host, device, local path, settings, source or work-save
+ * column.
  */
 export const SPACE_SESSION_COLUMNS = {
   id: workbenchesTable.id,
   spaceId: workbenchesTable.spaceId,
   workspaceId: workbenchesTable.workspaceId,
+  kind: workbenchesTable.kind,
+  threadId: workbenchesTable.threadId,
   name: workbenchesTable.name,
   title: workbenchesTable.title,
   status: workbenchesTable.status,
@@ -290,7 +294,11 @@ export const SPACE_SESSION_COLUMNS = {
   creatorGithubId: usersTable.githubUserId,
 } as const;
 
-/** The query behind a space's session list: live ones, or the recent archived ones. */
+/**
+ * The query behind a space's session list: live sessions and threads, or the
+ * recent archived ones. A thread has no repository, so `filterViewable` shows
+ * it to its owner only.
+ */
 export function spaceSessionsQuery(spaceId: string, archived: boolean) {
   return getPoolDbClient()
     .select(SPACE_SESSION_COLUMNS)
@@ -301,7 +309,7 @@ export function spaceSessionsQuery(spaceId: string, archived: boolean) {
     .where(
       and(
         eq(workbenchesTable.spaceId, spaceId),
-        eq(workbenchesTable.kind, 'session'),
+        inArray(workbenchesTable.kind, ['session', 'thread']),
         archived ? isNotNull(workbenchesTable.archivedAt) : isNull(workbenchesTable.archivedAt)
       )
     )
@@ -372,6 +380,8 @@ function toSessionRow(row: SessionQueryRow): SpaceSessionRow {
     id: row.id,
     spaceId: row.spaceId!,
     workspaceId: row.workspaceId,
+    kind: row.kind as WorkbenchKind,
+    threadId: row.threadId,
     name: row.name,
     title: row.title,
     status: (row.archivedAt ? 'archived' : row.status) as WorkbenchStatus,
@@ -444,11 +454,24 @@ async function workspaceRepositoryId(workspaceId: string, fullName: string): Pro
   return row?.id ?? null;
 }
 
+/** The caller's home workspace for the space's team, or a refusal. */
+async function homeWorkspaceFor(teamId: string, userId: string, expectedWorkspaceId?: string): Promise<string> {
+  const workspaceId = await resolveHomeWorkspace(teamId, userId);
+  if (!workspaceId) {
+    throw new TeamError(409, 'You need a workspace of your own to start a session in a space.');
+  }
+  if (expectedWorkspaceId && expectedWorkspaceId !== workspaceId) {
+    throw new TeamError(400, 'workspace_id must be your home workspace for this team.');
+  }
+  return workspaceId;
+}
+
 /**
- * Start a session in a space as the caller. It runs in the caller's home
- * workspace for the team, on their subscription, GitHub and billing. When that
- * workspace does not watch the repository yet, Talyn adds it first, by the
- * same path as "Add repository".
+ * Start a session or a thread in a space as the caller. It runs in the
+ * caller's home workspace for the team, on their subscription, GitHub and
+ * billing. When that workspace does not watch a session's repository yet,
+ * Talyn adds it first, by the same path as "Add repository". A thread has no
+ * repository.
  */
 export async function createSessionInSpace(
   spaceId: string,
@@ -458,17 +481,36 @@ export async function createSessionInSpace(
   expectedWorkspaceId?: string
 ): Promise<CreateSpaceSessionResponse> {
   const space = liveSpace(await assertSpaceMember(actor.id, spaceId));
+  if (body.kind !== undefined && body.kind !== 'session' && body.kind !== 'thread') {
+    throw new TeamError(400, 'kind must be "session" or "thread".');
+  }
+  if (body.kind === 'thread') {
+    if (body.repoFullName !== undefined || body.branch !== undefined || body.baseBranch !== undefined) {
+      throw new TeamError(400, 'A thread takes no repository, branch or base branch.');
+    }
+    const workspaceId = await homeWorkspaceFor(space.teamId, actor.id, expectedWorkspaceId);
+    const workbench = await createWorkbench(
+      {
+        workspaceId,
+        kind: 'thread',
+        runtime: 'sandbox',
+        agent: body.agent as WorkbenchAgent,
+        ...(body.model !== undefined ? { model: body.model } : {}),
+        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.internetAccess !== undefined ? { internetAccess: body.internetAccess } : {}),
+        spaceId,
+      },
+      actor,
+      sentAt
+    );
+    return { workbench, workspaceId, addedRepository: false };
+  }
   const requested = typeof body.repoFullName === 'string' ? body.repoFullName.trim() : '';
   if (!REPO_FULL_NAME.test(requested)) throw new TeamError(400, 'repoFullName must be "owner/name".');
   const repoFullName = await spaceRepoName(spaceId, requested);
   if (!repoFullName) throw new TeamError(400, `${requested} is not a repository of this space.`);
-  const workspaceId = await resolveHomeWorkspace(space.teamId, actor.id);
-  if (!workspaceId) {
-    throw new TeamError(409, 'You need a workspace of your own to start a session in a space.');
-  }
-  if (expectedWorkspaceId && expectedWorkspaceId !== workspaceId) {
-    throw new TeamError(400, 'workspace_id must be your home workspace for this team.');
-  }
+  const workspaceId = await homeWorkspaceFor(space.teamId, actor.id, expectedWorkspaceId);
 
   let repositoryId = await workspaceRepositoryId(workspaceId, repoFullName);
   let addedRepository = false;
@@ -508,16 +550,35 @@ async function moveTarget(userId: string, spaceId: unknown): Promise<string | nu
   return spaceId;
 }
 
-/** Move a session into a space, or back to Personal. Only its owner can. */
+/**
+ * Move a session or a thread into a space, or back to Personal. Only its owner
+ * can. A thread takes its live sessions with it; archived ones stay.
+ */
 export async function moveWorkbenchToSpace(userId: string, workbenchId: string, spaceId: unknown): Promise<Workbench> {
   const row = await getWorkbench(workbenchId);
   if (!row || !(await ownsWorkspace(userId, row.workspaceId))) throw new TeamError(404, 'Session not found');
-  if (isThread(row)) throw new TeamError(400, 'A thread cannot move to a space.');
   const target = await moveTarget(userId, spaceId);
   const updated = await updateWorkbench(row.id, { spaceId: target });
   if (!updated) throw new TeamError(404, 'Session not found');
   const data = await publicWorkbench(updated);
   await emitWorkbenchUpdated(data);
+  if (isThread(row)) {
+    const children = await getPoolDbClient()
+      .update(workbenchesTable)
+      .set({ spaceId: target, updatedAt: new Date() })
+      .where(
+        and(
+          eq(workbenchesTable.threadId, row.id),
+          eq(workbenchesTable.workspaceId, row.workspaceId),
+          isNull(workbenchesTable.archivedAt)
+        )
+      )
+      .returning({ id: workbenchesTable.id });
+    for (const child of children) {
+      const moved = await getWorkbench(child.id);
+      if (moved) await emitWorkbenchUpdated(await publicWorkbench(moved));
+    }
+  }
   return data;
 }
 

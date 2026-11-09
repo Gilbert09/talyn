@@ -675,7 +675,7 @@ export function queueFailureRule(input: {
   - ${input.provider} took this PR into its merge queue, tested it MERGED WITH ${input.baseBranch}, and that merged result failed. The PR's own checks are green — do not take that as "nothing to fix", because the failure is not on the branch as it stands.
   - What ${input.provider} reported: "${input.evidence}"${named}
   - START THERE, not with the PR's check list. Find the queue's failure output — the provider's comments on the PR, its check runs, and any linked CI job it names — and read what actually broke.
-  - REPRODUCE IT the way the queue did: merge the latest ${input.baseBranch} into this branch (or rebase onto it) and run the failing tests against that combination. A failure that only appears merged is usually a semantic conflict — two changes that are each fine alone and contradict together.
+  - REPRODUCE IT the way the queue did: merge the latest ${input.baseBranch} into this branch (or rebase onto it) and run the failing tests against that combination, when the LOCAL CHECKS rule below allows it. When it does not, read the failure from the queue's own log instead. A failure that only appears merged is usually a semantic conflict — two changes that are each fine alone and contradict together.
   - If you genuinely cannot find any failure after merging ${input.baseBranch} and running the relevant tests, say so plainly in your summary rather than pushing a speculative change. A no-op run that explains itself is worth more than a guess.
   - If the queue's failure was not about the code at all (its own infrastructure, or GitHub errors), say so in your summary and stop WITHOUT the TALYN_NEEDS_HUMAN line: re-submitting the PR to ${input.provider} is Talyn's job, not a person's.`;
 }
@@ -759,7 +759,7 @@ ${baseUpdateWhenRule(baseBranch)}
        b. Compare with the "before" list you saved. The two MUST be identical. A clean base update adds NOTHING to the PR's own diff — files that already live on ${baseBranch} must never appear as PR changes. Any file in "after" that wasn't in "before" is a leak (usually a conflict resolved by re-adding base-only content, or a file deleted on one side wrongly kept).
        c. For every file still in the diff, eyeball it: \`git diff origin/${baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${baseBranch} is a leak.
    - If you find ANY leaked file or hunk after a rebase, do not publish. \`git rebase --abort\` (or restart from the remote branch state — the remote is untouched until \`git_signed_rewrite\`) and redo the rebase, taking the base side for files this PR never meant to touch.
-   - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and publish (\`git_signed_rewrite\` for a rebase; a server-side \`git_signed_merge\` needs no publish step). Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
+   - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Then run the local checks that the LOCAL CHECKS rule below allows, and publish (\`git_signed_rewrite\` for a rebase; a server-side \`git_signed_merge\` needs no publish step). Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
 }
 
 /**
@@ -796,11 +796,31 @@ ${baseUpdateWhenRule(baseBranch)}
        b. Compare with the "before" list you saved. The two MUST be identical. A clean base update adds NOTHING to the PR's own diff — files that already live on ${baseBranch} must never appear as PR changes. Any file in "after" that wasn't in "before" is a leak.
        c. For every file still in the diff, eyeball it: \`git diff origin/${baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${baseBranch} is a leak.
    - If you find ANY leaked file or hunk, do not push. \`git merge --abort\` (or reset to the remote branch state — the remote is untouched until you push) and redo the update, taking the base side for files this PR never meant to touch.
-   - Do not push until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and push. A server-side update (rung 1 or 2) needs no push. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
+   - Do not push until the "before" and "after" file sets match and every remaining hunk is intentional. Then run the local checks that the LOCAL CHECKS rule below allows, and push. A server-side update (rung 1 or 2) needs no push. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.`;
+}
+
+/**
+ * Fix runs were spending most of their time on local checks CI runs anyway. On
+ * PostHog/posthog (2026-11-09) one run installed Postgres and Redis with apt,
+ * built the Django test database three times to run one test file, then ran a
+ * cold mypy. CI runs every one of those and its log is already in the run's
+ * hands, so the local copy only delayed the push that starts the real check.
+ *
+ * It rides in `loopRules` rather than the template, so a workspace that has
+ * overridden the template still gets it.
+ */
+export function localChecksRule(): string {
+  return `LOCAL CHECKS: keep them cheap. CI is the real test, and it runs on every publish.
+  - Run a local check only when it is fast and needs nothing new: a unit test, a linter or a type check that runs with what the sandbox already has, in a few minutes.
+  - Do NOT install databases, caches or other services (no \`apt-get install postgresql\` or \`redis-server\`, no \`docker compose up\`), and do NOT build a test database to run one test. When a test needs a service the sandbox does not have, read the failure in the CI log, fix the cause, publish, and let CI run the test.
+  - Do NOT run a whole test suite, a full build, or a type checker over a large repository when CI already runs it.
+  - Run each local check at most once per change. A local check that fails for a reason that is not your change (a missing service, a missing environment variable) tells you nothing: stop running it and rely on CI.`;
 }
 
 export function postHogCodeLoopRules(ref: string): string {
-  return `Loop discipline:
+  return `${localChecksRule()}
+
+Loop discipline:
   - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability — conflicts, or GitHub's own \`BEHIND\`; NOT how many commits the base has gained since.
   - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
   - When they are, STOP — even if the base branch has moved on while CI ran. Updating a green branch only to chase the base restarts CI and starts the loop again.

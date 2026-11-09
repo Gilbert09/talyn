@@ -7440,3 +7440,12 @@ The usage sweep (`billing/usage/sweep.ts`) already reads every running box each 
 `getSandboxStatus` returns the samples as `usage` and adds the live fleet read as the newest point. `resourceSamples.ts` calculates CPU % from the change in the fleet's cumulative `cpuSeconds` between two samples of the same box. It gives no figure across a gap longer than three minutes, a different box or a lower counter (a new VMM).
 `cpuSeconds` comes from yetanothersandbox-dev/yas#16. A host that runs an older fleetd sends no counter, and the CPU chart then says that the fleet does not report CPU use yet. Through a gateway, only the per-id read carries the usage figures, not the list; the sweep already reads gateway boxes by id.
 The web Sandbox panel also gets the Resources section that only the desktop panel had.
+
+### 2026-11-09 — Threads in spaces
+
+Before, the backend refused a thread in a space. A space held sessions only.
+Now `POST /spaces/:id/sessions` takes `kind: "thread"`. A thread runs in the caller's home workspace for the team, like a space session. It takes no `repoFullName`, `branch` or `baseBranch`, and Talyn adds no repository. The public API takes `kind: "thread"` with `space_id` too. It still refuses `thread_id`, `pull_request_id` and `auto_create_pr` with `space_id`.
+A session that a thread starts goes in the space of the thread when the caller gives no `spaceId` (`requireThread` in `services/workbenches/create.ts`). This covers `talyn_create_session` from a thread agent, which sends `threadId` to `POST /workbenches`. An explicit `spaceId`, null included, wins.
+`PUT /workbenches/:id/space` now moves a thread. It also moves the live sessions of the thread (`thread_id`, same workspace) to the same target, and sends `workbench:updated` for each. Archived sessions of the thread stay where they are.
+"Continue as thread" from a session in a space puts the new thread in the same space (`createThread` reads the `spaceId` of `fromSessionId`).
+The space list (`spaceSessionsQuery`) now returns sessions and threads, with `kind` and `threadId`. A thread has no repository, so `createViewer` shows it to its owner only. For a teammate it counts in `hiddenCount`. Space events and teammate reads use the same rule. A teammate can see a session of the thread when they can read its repository.

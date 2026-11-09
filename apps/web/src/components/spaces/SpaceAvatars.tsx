@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import type { SpaceItemCreator, SpacePresenceMember } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { memberName, presenceSentence } from '../../lib/spaces';
+import { memberName, presenceSentence, viewersOf } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
 import { railInitials } from '../../lib/contextRail';
 
 export function MemberAvatar({
@@ -60,6 +62,14 @@ export function PresenceAvatars({
       {showText && <span className="truncate text-xs text-muted-foreground">{sentence}</span>}
     </span>
   );
+}
+
+/** The teammates who have this session of a space open now, me left out. */
+export function SessionViewers({ spaceId, sessionId, size = 14 }: { spaceId: string; sessionId: string; size?: number }) {
+  const presence = useSpacesStore((s) => s.presence[spaceId]);
+  const selfUserId = useSpacesStore((s) => s.selfUserId);
+  const viewers = useMemo(() => viewersOf(presence, sessionId, selfUserId), [presence, sessionId, selfUserId]);
+  return <PresenceAvatars members={viewers} max={2} size={size} />;
 }
 
 /** A space's small marker: its image when it has one, else its colour dot. */

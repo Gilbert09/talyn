@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import { eq } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
 import { repositories as reposTable } from '../../db/schema.js';
-import type { WorkbenchAgent, WorkbenchEffort } from '@talyn/shared';
+import type { CreateSpaceSessionRequest, WorkbenchAgent, WorkbenchEffort } from '@talyn/shared';
 import {
   Chat,
   CreateChatBody,
@@ -84,7 +84,9 @@ export const sessionRoutes: PublicRoute[] = [
     summary: 'Start a session',
     description:
       'Creates a sandbox session on a repository (or a thread, with `kind: "thread"`) and starts provisioning. ' +
-      'With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app.',
+      'With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app. ' +
+      'With `space_id`, a session or a thread starts in that space; `thread_id`, `pull_request_id` and `auto_create_pr` are not supported there. ' +
+      'A session started with `thread_id` goes in the space of its thread.',
     tag: 'Sessions',
     scope: 'sessions:write',
     sessions: true,
@@ -109,9 +111,33 @@ export const sessionRoutes: PublicRoute[] = [
     },
     async handler({ body, token }) {
       const sentAt = new Date().toISOString();
+      const createInSpace = async (spaceId: string, extra: Partial<CreateSpaceSessionRequest>) => {
+        try {
+          const created = await createSessionInSpace(spaceId, { id: token.ownerId, email: token.email }, {
+            agent: body.agent, model: body.model, prompt: body.prompt, name: body.name,
+            baseBranch: body.base_branch, branch: body.branch, internetAccess: body.internet_access, ...extra,
+          }, sentAt, body.workspace_id);
+          return await sessionWithChats(created.workbench.id);
+        } catch (err) {
+          if (err instanceof TeamError) {
+            if (err.status === 404) throw notFound('space');
+            throw new PublicApiError(err.status, err.status === 400 ? 'invalid_parameter' : 'space_unavailable', err.message,
+              err.status === 400 && body.workspace_id ? { param: 'workspace_id' } : {});
+          }
+          throw err;
+        }
+      };
       if (body.space_id) {
-        if (body.kind === 'thread' || body.thread_id || body.pull_request_id || body.auto_create_pr !== undefined) {
+        if (body.thread_id || body.pull_request_id || body.auto_create_pr !== undefined) {
           throw new PublicApiError(400, 'invalid_parameter', 'This option is not supported when space_id is set.', { param: 'space_id' });
+        }
+        if (body.kind === 'thread') {
+          if (body.repository_id || body.repository_full_name) {
+            throw new PublicApiError(400, 'invalid_parameter', 'A thread takes no repository.', {
+              param: body.repository_id ? 'repository_id' : 'repository_full_name',
+            });
+          }
+          return { status: 201, body: await createInSpace(body.space_id, { kind: 'thread' }) };
         }
         let repoFullName = body.repository_full_name;
         if (body.repository_id) {
@@ -125,20 +151,7 @@ export const sessionRoutes: PublicRoute[] = [
           repoFullName = repo.name;
         }
         if (!repoFullName) throw new PublicApiError(400, 'missing_parameter', 'repository_id or repository_full_name is required.', { param: 'repository_id' });
-        try {
-          const created = await createSessionInSpace(body.space_id, { id: token.ownerId, email: token.email }, {
-            repoFullName, agent: body.agent, model: body.model, prompt: body.prompt, name: body.name,
-            baseBranch: body.base_branch, branch: body.branch, internetAccess: body.internet_access,
-          }, sentAt, body.workspace_id);
-          return { status: 201, body: await sessionWithChats(created.workbench.id) };
-        } catch (err) {
-          if (err instanceof TeamError) {
-            if (err.status === 404) throw notFound('space');
-            throw new PublicApiError(err.status, err.status === 400 ? 'invalid_parameter' : 'space_unavailable', err.message,
-              err.status === 400 && body.workspace_id ? { param: 'workspace_id' } : {});
-          }
-          throw err;
-        }
+        return { status: 201, body: await createInSpace(body.space_id, { repoFullName }) };
       }
       if (body.repository_full_name) throw new PublicApiError(400, 'invalid_parameter', 'repository_full_name needs space_id.', { param: 'repository_full_name' });
       const workspaceId = await resolveWorkspaceId(token, body.workspace_id);

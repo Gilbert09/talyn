@@ -238,6 +238,8 @@ function patchSessionRow(row: SpaceSessionRow, wb: Workbench): SpaceSessionRow {
   const running = wb.chats ? wb.chats.some((c) => c.status === 'running') : row.running;
   return {
     ...row,
+    kind: wb.kind ?? row.kind,
+    threadId: wb.threadId === undefined ? row.threadId : wb.threadId,
     name: wb.name,
     title: wb.title ?? null,
     status: wb.status,

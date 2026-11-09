@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Archive, ChevronDown, ChevronRight, Copy, ExternalLink, Timer } from 'lucide-react';
 import { workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -22,18 +22,21 @@ import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { ThreadTag } from '../threads/ThreadChip';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
-import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
 import {
   groupSidebarWorkbenches,
   isArchived,
   sessionGroupKey,
+  sidebarSessionStates,
   visibleGroupItems,
   type RepoGroup,
+  type SidebarItem,
 } from '../workbench/workbenchSelectors';
 import { useRenameSession } from '../workbench/useRenameSession';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
 import { spacesOffered } from '../../lib/spaces';
+import { moveToSpace } from '../spaces/MoveToSpace';
 import { isActiveBackground } from '../../lib/sessionBackground';
 import { useBackground, useSessionBackgroundStore } from '../../stores/sessionBackground';
 
@@ -42,34 +45,16 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
   const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
-  const collapsed = useWorkspaceStore((s) => s.collapsedSessionGroups);
-  const toggleGroup = useWorkspaceStore((s) => s.toggleSessionGroup);
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
   const unread = useWorkbenchStore((s) => s.unread);
   const unseen = useWorkbenchStore((s) => s.unseen);
   const backgrounds = useSessionBackgroundStore((s) => s.byWorkbench);
   const live = useMemo(() => workbenches.filter((workbench) => !isArchived(workbench)), [workbenches]);
-  const { activeIds, states } = useMemo(() => {
-    const rowById = new Map(rows.map((row) => [row.id, row]));
-    const byId = new Map<string, SessionState>();
-    const active = new Set<string>();
-    for (const workbench of live) {
-      const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
-      const resolvedPr = sessionPr(workbench, pr);
-      const state = sessionState(
-        workbench,
-        chats[workbench.id] ?? workbench.chats ?? [],
-        unread,
-        resolvedPr,
-        isPrOnlyUnseen(unseen[workbench.id]),
-        backgrounds[workbench.id],
-      );
-      byId.set(workbench.id, state);
-      if (isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId))) active.add(workbench.id);
-    }
-    return { activeIds: active, states: byId };
-  }, [live, rows, chats, unread, unseen, backgrounds]);
+  const { activeIds, states } = useMemo(
+    () => sidebarSessionStates(live, { prRows: rows, chats, unread, unseen, backgrounds }),
+    [live, rows, chats, unread, unseen, backgrounds],
+  );
   const groups = useMemo(
     () => groupSidebarWorkbenches(live, activeIds, sidebarOrder === 'active_first'),
     [live, activeIds, sidebarOrder],
@@ -86,12 +71,51 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
     );
   }
 
-  let index = 0;
   return (
     <div className="space-y-1" data-attr="sidebar-workbenches">
+      <SidebarSessionGroups
+        groups={groups}
+        states={states}
+        openId={openId}
+        renderItem={(wb, shortcut) => (
+          <WorkbenchRow
+            key={wb.id}
+            workbench={wb}
+            shortcut={shortcut}
+            selected={wb.id === openId}
+            onSelect={() => navigate({ view: 'workbench', id: wb.id })}
+          />
+        )}
+      />
+    </div>
+  );
+}
+
+/**
+ * Session groups with collapsible headers, numbered in the order ⌘⌥1–9
+ * counts. A space passes `keyPrefix` so its collapsed groups are its own.
+ */
+export function SidebarSessionGroups<T extends SidebarItem>({
+  groups,
+  states,
+  openId,
+  keyPrefix = '',
+  renderItem,
+}: {
+  groups: RepoGroup<T>[];
+  states: ReadonlyMap<string, SessionState>;
+  openId: string | null;
+  keyPrefix?: string;
+  renderItem: (item: T, shortcut: number | null) => ReactNode;
+}) {
+  const collapsed = useWorkspaceStore((s) => s.collapsedSessionGroups);
+  const toggleGroup = useWorkspaceStore((s) => s.toggleSessionGroup);
+  let index = 0;
+  return (
+    <>
       {groups.map((group) => {
-        const key = sessionGroupKey(group);
-        const items = visibleGroupItems(group, collapsed, openId);
+        const key = sessionGroupKey(group, keyPrefix);
+        const items = visibleGroupItems(group, collapsed, openId, keyPrefix);
         return (
           <div key={key} role="group" aria-label={group.repo}>
             <GroupHeader
@@ -103,23 +127,15 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
               onToggle={() => toggleGroup(key)}
             />
             <div id={`sidebar-group-${key}`}>
-              {items.map((wb) => {
+              {items.map((item) => {
                 index += 1;
-                return (
-                  <WorkbenchRow
-                    key={wb.id}
-                    workbench={wb}
-                    shortcut={index <= 9 ? index : null}
-                    selected={wb.id === openId}
-                    onSelect={() => navigate({ view: 'workbench', id: wb.id })}
-                  />
-                );
+                return renderItem(item, index <= 9 ? index : null);
               })}
             </div>
           </div>
         );
       })}
-    </div>
+    </>
   );
 }
 
@@ -132,10 +148,10 @@ function GroupHeader({
   states,
   onToggle,
 }: {
-  group: RepoGroup;
+  group: Pick<RepoGroup<SidebarItem>, 'repo'>;
   groupKey: string;
   expanded: boolean;
-  hidden: Workbench[];
+  hidden: { id: string }[];
   states: ReadonlyMap<string, SessionState>;
   onToggle: () => void;
 }) {
@@ -172,16 +188,19 @@ function GroupHeader({
   );
 }
 
-function WorkbenchRow({
+/** A session row with its live state and the owner's menu. A space adds the creator and who has it open (`trailing`). */
+export function WorkbenchRow({
   workbench,
   selected,
   shortcut,
   onSelect,
+  trailing,
 }: {
   workbench: Workbench;
   selected: boolean;
   shortcut: number | null;
   onSelect: () => void;
+  trailing?: ReactNode;
 }) {
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const unread = useWorkbenchStore((s) => s.unread);
@@ -275,6 +294,7 @@ function WorkbenchRow({
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
             {showBackgroundMark && <span title={backgroundTitle} aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
+            {trailing}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">
@@ -306,6 +326,14 @@ function WorkbenchRow({
               }
             >
               Move to space…
+            </ContextMenuItem>
+          )}
+          {spacesOn && workbench.spaceId && (
+            <ContextMenuItem
+              data-attr="sidebar-move-to-personal"
+              onSelect={() => void moveToSpace('session', workbench.id, workbench.spaceId ?? null, null)}
+            >
+              Move to Personal
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />

@@ -214,6 +214,43 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
+/** The longest display name kept. Longer input is cut, not refused. */
+export const MCP_DISPLAY_NAME_MAX = 120;
+
+function normaliseMcpServerName(raw: unknown): string {
+  const name = str(raw).toLowerCase();
+  if (!name) fail('an MCP server needs a name');
+  if (!NAME_RE.test(name)) {
+    fail(
+      `"${name}" cannot be an MCP server name: it becomes a hostname inside the sandbox, so it ` +
+        'may use only lowercase letters, digits and hyphens, and must start with a letter or digit',
+    );
+  }
+  if (name.endsWith('-')) fail(`"${name}" cannot end with a hyphen`);
+  if (RESERVED_NAMES.has(name)) {
+    fail(`"${name}" is reserved: that name is the sandbox's own GitHub API, and taking it would remove it`);
+  }
+  return name;
+}
+
+/**
+ * Why `name` cannot identify a server in this workspace, or null.
+ *
+ * `existingNames` are the OTHER servers' names. The route repeats the
+ * duplicate check, so this is only for the editor to say it early.
+ */
+export function mcpServerNameProblem(name: string, existingNames: readonly string[] = []): string | null {
+  let normalised: string;
+  try {
+    normalised = normaliseMcpServerName(name);
+  } catch (err) {
+    return err instanceof Error ? err.message : 'this name is not valid';
+  }
+  return existingNames.includes(normalised)
+    ? `another MCP server in this workspace already uses "${normalised}"`
+    : null;
+}
+
 /**
  * Validate and normalise one server, throwing a message a person can act on.
  *
@@ -228,18 +265,7 @@ export function validateMcpServer(raw: unknown, privateRoutes: readonly PrivateR
   // Lower-cased rather than refused. The name is a DNS label, so lowercase is
   // the only legal form and "Linear" has exactly one sensible reading; the
   // human spelling survives on `displayName`, which is what the UI shows.
-  const name = str(o.name).toLowerCase();
-  if (!name) fail('an MCP server needs a name');
-  if (!NAME_RE.test(name)) {
-    fail(
-      `"${name}" cannot be an MCP server name: it becomes a hostname inside the sandbox, so it ` +
-        'may use only lowercase letters, digits and hyphens, and must start with a letter or digit',
-    );
-  }
-  if (name.endsWith('-')) fail(`"${name}" cannot end with a hyphen`);
-  if (RESERVED_NAMES.has(name)) {
-    fail(`"${name}" is reserved: that name is the sandbox's own GitHub API, and taking it would remove it`);
-  }
+  const name = normaliseMcpServerName(o.name);
 
   const rawUrl = str(o.url);
   if (!rawUrl) fail('an MCP server needs a URL');
@@ -321,7 +347,7 @@ export function validateMcpServer(raw: unknown, privateRoutes: readonly PrivateR
 
   return {
     name,
-    displayName: str(o.displayName).slice(0, 120) || null,
+    displayName: str(o.displayName).slice(0, MCP_DISPLAY_NAME_MAX) || null,
     // NORMALISED, not echoed, and the trailing slash is load-bearing.
     //
     // The fleet refuses a URL with no path at all — a paste that lost its

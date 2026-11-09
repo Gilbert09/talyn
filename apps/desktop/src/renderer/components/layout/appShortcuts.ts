@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
-import { activeSpace, contextEntries, groupSpaceSessions, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
+import { activeSpace, contextEntries, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 import { MENU_COMMANDS } from '../../../main/menuCommands';
@@ -17,13 +17,13 @@ import {
 } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
-import { isPrOnlyUnseen, useWorkbenchStore, visibleChats } from '../../stores/workbenches';
+import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { isActiveSessionState, sessionPr, sessionState } from '../../lib/sessionState';
 import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
-import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workbench/workbenchSelectors';
+import { groupSidebarWorkbenches, isArchived, sidebarSessionStates, visibleGroupItems } from '../workbench/workbenchSelectors';
+import { currentSpaceSidebarModel, spaceSidebarSessionIds } from './spaceSidebarModel';
 import { buildGoToShortcuts } from './goToShortcuts';
 
 // Keep the same context shortcut as the web app.
@@ -40,21 +40,13 @@ export function orderedLiveWorkbenches(): Workbench[] {
   const all = Object.values(workbenches).filter(
     (w) => !isArchived(w) && !extraWorkbenchIds[w.id] && inPersonalList(w, teams, offered),
   );
-  const rowById = new Map(usePullRequestStore.getState().rows.map((row) => [row.id, row]));
-  const backgrounds = useSessionBackgroundStore.getState().byWorkbench;
-  const activeIds = new Set(all.filter((workbench) => {
-    const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
-    const resolvedPr = sessionPr(workbench, pr);
-    const state = sessionState(
-      workbench,
-      chats[workbench.id] ?? workbench.chats ?? [],
-      unread,
-      resolvedPr,
-      isPrOnlyUnseen(unseen[workbench.id]),
-      backgrounds[workbench.id],
-    );
-    return isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId));
-  }).map((workbench) => workbench.id));
+  const { activeIds } = sidebarSessionStates(all, {
+    prRows: usePullRequestStore.getState().rows,
+    chats,
+    unread,
+    unseen,
+    backgrounds: useSessionBackgroundStore.getState().byWorkbench,
+  });
   const { sidebarOrder, collapsedSessionGroups } = useWorkspaceStore.getState();
   const openId = currentWorkbench()?.id ?? null;
   // Only the rows the sidebar shows: a collapsed group's sessions take no number.
@@ -78,16 +70,20 @@ function currentChat(wb: Workbench): WorkbenchChat | null {
 
 /**
  * The session ids the sidebar shows, in its order. In a space these are the
- * space's rows ("Active now", then "Recent"), teammates' sessions included.
+ * space's session groups, teammates' sessions included.
  */
 export function orderedSidebarSessionIds(): string[] {
   const space = activeSpace();
   if (!space) return orderedLiveWorkbenches().map((w) => w.id);
-  const { sessions, presence, selfUserId } = useSpacesStore.getState();
-  const list = sessions[space.space.id];
-  if (!list?.loaded) return [];
-  const { active, recent } = groupSpaceSessions(list.items, presence[space.space.id], selfUserId);
-  return [...active, ...recent].map((row) => row.id);
+  const spaceId = space.space.id;
+  if (!useSpacesStore.getState().sessions[spaceId]?.loaded) return [];
+  const { route } = useNavigationStore.getState();
+  return spaceSidebarSessionIds(
+    currentSpaceSidebarModel(spaceId),
+    spaceId,
+    useWorkspaceStore.getState().collapsedSessionGroups,
+    route.view === 'workbench' ? route.id : null,
+  );
 }
 
 function openSidebarSession(id: string | undefined): void {
