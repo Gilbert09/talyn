@@ -142,6 +142,14 @@ describe('GitPanel', () => {
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['All files', 'Changes2', 'Pull request', 'Sandbox', 'Background']);
   });
 
+  it('warns about uncommitted files when a pull request is open', () => {
+    render(<GitPanel workbench={WB} chat={chat} ops={makeOps()} pr={PR} />);
+    expect(screen.getByRole('tab', { name: 'Changes 2 uncommitted' })).toHaveAttribute(
+      'title',
+      '2 uncommitted files are not in the open pull request'
+    );
+  });
+
   it('a tab click is remembered across restarts', () => {
     render(<GitPanel workbench={WB} chat={chat} ops={makeOps()} pr={null} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Pull request' }));
