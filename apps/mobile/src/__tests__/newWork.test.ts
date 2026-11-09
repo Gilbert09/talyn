@@ -1,7 +1,8 @@
 import type { WorkbenchReadiness } from '@talyn/shared';
 
-import { agentChoice, blockedReason, createInput, defaultRepositoryId, modelFor, modelsFor, rememberRepository, sandboxChoice, usableAgent,
-  type NewWorkForm } from '../features/create/model';
+import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
+  effectiveBranch, filterBranches, filterRepositories, internetMessage, modelFor, modelSections, modelsFor, rememberRepository,
+  sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm } from '../features/create/model';
 
 type Sandbox = WorkbenchReadiness['sandbox'];
 const ready: Sandbox = { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } };
@@ -63,4 +64,87 @@ describe('start validation', () => {
     expect(defaultRepositoryId('ws-default', [{ id: 'a' }])).toBe('a');
     expect(defaultRepositoryId('ws-default', [])).toBe('');
   });
+});
+
+describe('composer controls', () => {
+  const chipState = (patch: Partial<ChipState> = {}): ChipState => ({ mode: 'session', repository: { fullName: 'PostHog/posthog' },
+    branch: 'master', internetAccess: true, agent: 'claude', model: 'claude-opus-5-5', ...patch });
+
+  it.each<[string, Parameters<typeof composerChips>, ComposerChip[]]>([
+    ['a session with a repository', ['session', { id: 'a' }], ['repository', 'branch', 'internet']],
+    ['a session without a repository', ['session', null], ['repository', 'internet']],
+    ['a thread', ['thread', { id: 'a' }], ['internet']],
+    ['a thread without a repository', ['thread', null], ['internet']],
+  ])('shows the context chips for %s', (_name, args, expected) => {
+    expect(composerChips(...args)).toEqual({ context: expected, card: ['mode', 'model'] });
+  });
+
+  it.each<[ComposerChip, Partial<ChipState>, string, string]>([
+    ['mode', {}, 'Session', 'Start a session. Change what to start'],
+    ['mode', { mode: 'thread' }, 'Thread', 'Start a thread. Change what to start'],
+    ['repository', {}, 'PostHog/posthog', 'Repository: PostHog/posthog. Change repository'],
+    ['repository', { repository: null }, 'Repository', 'Repository: none. Choose a repository'],
+    ['repository', { repository: null, repositoriesLoading: true }, 'Loading', 'Repositories are loading'],
+    ['branch', {}, 'master', 'Base branch: master. Change base branch'],
+    ['internet', {}, 'Internet on', 'Internet access'],
+    ['internet', { internetAccess: false }, 'Internet off', 'Internet access'],
+    ['model', {}, 'Opus 5.5', 'Model: Opus 5.5, Claude. Change model'],
+    ['model', { agent: 'codex', model: 'gpt-6-luna' }, 'GPT-6 Luna', 'Model: GPT-6 Luna, Codex. Change model'],
+  ])('labels the %s chip with %j', (chip, patch, text, accessibilityLabel) =>
+    expect(chipLabel(chip, chipState(patch))).toEqual({ text, accessibilityLabel }));
+
+  it.each<[string, { defaultBranch: string } | null, string]>([
+    [' develop ', { defaultBranch: 'master' }, 'develop'],
+    ['', { defaultBranch: 'master' }, 'master'],
+    ['  ', { defaultBranch: '' }, 'main'],
+    ['', null, 'main'],
+  ])('uses %j on %j as %s', (typed, repository, expected) => expect(effectiveBranch(typed, repository)).toBe(expected));
+
+  it.each<[string, string | null, boolean, string, { enabled: boolean; hint?: string }]>([
+    ['ready', null, false, 'one', { enabled: true }],
+    ['starting', null, true, 'one', { enabled: false, hint: 'Starting.' }],
+    ['no workspace', null, false, '', { enabled: false, hint: 'Choose a workspace.' }],
+    ['blocked', 'Describe a task.', false, 'one', { enabled: false, hint: 'Describe a task.' }],
+    ['blocked while starting', 'Describe a task.', true, 'one', { enabled: false, hint: 'Starting.' }],
+  ])('send is %s', (_name, blocked, busy, workspaceId, expected) => expect(sendState(blocked, busy, workspaceId)).toEqual(expected));
+
+  it.each([[true, 'Internet access on.'], [false, 'Internet access off. The agent can reach the repository only.']])(
+    'announces internet %s', (on, expected) => expect(internetMessage(on)).toBe(expected));
+
+  it.each([
+    ['claude-opus-5-5', 'claude'], ['gpt-6-luna', 'codex'], ['gpt-6.1-terra', 'codex'], ['not-a-model', null],
+  ])('the agent for %s is %s', (model, expected) => expect(agentForModel(model)).toBe(expected));
+
+  it.each<[string, WorkbenchReadiness['sandbox'] | null, 'claude' | 'codex', Array<[string, number, string | undefined]>]>([
+    ['both agents ready', ready, 'claude', [['claude', 8, undefined], ['codex', 4, undefined]]],
+    ['Codex not connected', codexOff, 'claude', [['claude', 8, undefined], ['codex', 0, 'Codex is not connected to this workspace, so Codex models cannot run.']]],
+    ['Claude needs a sign-in', claudeReauth, 'codex', [['claude', 0, 'The Claude sign-in for this workspace has expired, so Claude models cannot run.'], ['codex', 4, undefined]]],
+    ['the sandbox down', down, 'claude', [['claude', 8, undefined]]],
+    ['readiness loading', null, 'codex', [['codex', 4, undefined]]],
+  ])('model sections with %s', (_name, sandbox, current, expected) => {
+    expect(modelSections(sandbox, current).map((section) => [section.agent, section.models.length, section.note])).toEqual(expected);
+  });
+
+  it.each<[string, string, string[]]>([
+    ['nothing typed', '', ['PostHog/posthog', 'PostHog/charts', 'Other/tool']],
+    ['part of a name', 'post', ['PostHog/posthog', 'PostHog/charts']],
+    ['the owner, in any case', 'OTHER', ['Other/tool']],
+    ['no match', 'zzz', []],
+  ])('filters repositories by %s', (_name, query, expected) => {
+    const repos = [{ fullName: 'PostHog/posthog' }, { fullName: 'PostHog/charts' }, { fullName: 'Other/tool' }];
+    expect(filterRepositories(repos, query).map((repo) => repo.fullName)).toEqual(expected);
+  });
+
+  it('suggests the default branch, then open pull request bases with own ones first', () => {
+    const row = (number: number, baseBranch: string, patch: object = {}) => ({ state: 'open', repositoryId: 'r', number, authored: false, summary: { baseBranch }, ...patch });
+    const rows = [row(1, 'release'), row(5, 'staging'), row(2, 'hotfix', { authored: true }), row(9, 'other', { repositoryId: 'x' }),
+      row(7, 'closed', { state: 'closed' }), row(3, 'master')];
+    expect(branchSuggestions({ id: 'r', defaultBranch: 'master' }, rows)).toEqual(['master', 'hotfix', 'staging', 'release']);
+    expect(branchSuggestions({ id: 'r', defaultBranch: 'master' })).toEqual(['master']);
+    expect(branchSuggestions(null, rows)).toEqual([]);
+  });
+
+  it.each([
+    ['', ['master', 'staging', 'release']], ['sta', ['staging']], ['MAS', ['master']], ['new-branch', []],
+  ])('filters branch suggestions by %j', (typed, expected) => expect(filterBranches(['master', 'staging', 'release'], typed)).toEqual(expected));
 });
