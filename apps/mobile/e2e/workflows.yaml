@@ -1,0 +1,14 @@
+appId: ${APP_ID}
+name: Read work in an authorized workspace
+---
+- tapOn: "Select workspace ${WORKSPACE_NAME}"
+- assertVisible: "Sessions"
+- tapOn: ${SESSION_LABEL}
+- assertVisible: "Conversation transcript"
+- tapOn: "Threads"
+- tapOn: ${THREAD_LABEL}
+- assertVisible: "Conversation transcript"
+- tapOn: "Attention"
+- tapOn: ${PR_LABEL}
+- assertVisible: "Pull request and merge queue timeline"
+- assertNotVisible: "Merge pull request"

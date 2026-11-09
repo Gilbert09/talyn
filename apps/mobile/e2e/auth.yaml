@@ -1,0 +1,11 @@
+appId: ${APP_ID}
+name: Sign in through the system browser
+---
+- launchApp
+- assertVisible: "Sign in to Talyn"
+- tapOn: "Continue with GitHub"
+# The tester completes GitHub sign-in. No credential enters this flow.
+- extendedWaitUntil:
+    visible: "Choose a workspace"
+    timeout: 180000
+- assertVisible: "Select workspace ${WORKSPACE_NAME}"

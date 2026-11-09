@@ -35,6 +35,8 @@ jobs:
         run: npm run mobile:build:packages
       - name: Check the dependency graph
         run: npm run mobile:check:graph
+      - name: Validate release profiles, privacy inventory, metadata, and secrets
+        run: npm run mobile:release:check
       - name: Check mobile dependencies
         run: npm run mobile:expo:check
       - name: Run Expo doctor
@@ -45,5 +47,9 @@ jobs:
         run: npm run mobile:typecheck
       - name: Test mobile
         run: npm run mobile:test
+      - name: Inspect generated native configuration for all profiles
+        run: npm run mobile:native:check
+      - name: Test Android alignment inspection
+        run: python3 -m unittest discover -s apps/mobile/scripts -p '*_test.py'
       - name: Export iOS and Android bundles
         run: npm run mobile:export:smoke
