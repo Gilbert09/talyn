@@ -1,4 +1,6 @@
 import { Stack, usePathname } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -12,6 +14,9 @@ import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
 import { useAppFonts } from '../src/theme/fonts';
 import { sans } from '../src/theme/tokens';
+
+// The native splash stays up until the fonts load, so the first drawn frame is the boot screen.
+void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function AuthenticatedRoutes() {
   const auth = useAuth();
@@ -61,6 +66,7 @@ function AuthenticatedRoutes() {
 export default function RootLayout() {
   const fonts = useAppFonts();
   const colors = useShellColors();
+  useEffect(() => { if (fonts) void SplashScreen.hideAsync().catch(() => {}); }, [fonts]);
   // The root paints the app background, so the area under a transparent status bar never shows grey.
   return <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.background }]}>
     {/* Boot state 1 of 3: the bundled fonts load, which takes about one frame. */}

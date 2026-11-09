@@ -200,7 +200,7 @@ describe('native shell', () => {
     rememberIntent('/sessions/session-one');
     mockAuth = { status: 'signedOut', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/sessions/session-one' });
-    expect(screen.getByRole('header', { name: 'Sign in to Talyn' })).toBeVisible();
+    expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     mockAuth = { status: 'signedIn', user: { id: 'alice' }, issue: null };
     await act(async () => router.replace('/'));
     expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
@@ -253,15 +253,15 @@ describe('auth route gates and accessible states', () => {
   it('gates private deep links while signed out', async () => {
     mockAuth = { status: 'signedOut', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/settings' });
-    expect(screen.getByRole('header', { name: 'Sign in to Talyn' })).toBeVisible();
+    expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     expect(screen.queryByText('alice@example.com')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Continue with GitHub' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign in with GitHub' }));
     expect(mockSignIn).toHaveBeenCalledTimes(1);
   });
   it('gates the shell until restoration finishes', async () => {
     mockAuth = { status: 'restoring', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/home' });
-    expect(screen.getByRole('alert', { name: 'Restoring sign-in' })).toBeVisible();
+    expect(screen.getByRole('progressbar', { name: 'Restoring sign-in' })).toBeVisible();
     expect(screen.queryByText('What do you want to build?')).toBeNull();
   });
   it('shows offline and retry states without exposing diagnostic errors', async () => {
@@ -274,7 +274,7 @@ describe('auth route gates and accessible states', () => {
     mockAuth = { status: 'signingIn', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/sign-in' });
     expect(screen.getByRole('alert', { name: 'Waiting for GitHub sign-in' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Continue with GitHub' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Opening browser…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel sign-in' })).toBeVisible();
   });
   it('uses a native destructive confirmation with Cancel preferred', async () => {

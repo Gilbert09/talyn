@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, ui } from '../components/UI';
 import { ShellScreen, useShellColors } from '../components/ShellScreen';
+import { BootScreen } from '../components/BootScreen';
 import { Status } from '../components/AuthControls';
 import { rememberIntent } from '../navigation/intents';
 import type { MobileConfig } from '../config';
@@ -46,7 +47,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (initial && isAuthLink(initial)) receiveCallback(initial);
       else if (initial) rememberIntent(initial);
       setRuntime(created);
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (__DEV__) console.warn('Talyn could not start', error);
       current?.dispose();
       if (!disposed) setFailed(true);
     });
@@ -57,7 +59,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   if (failed) return <ShellScreen topInset centered title="Unlock this device" description="Secure sign-in is not available. Unlock this device and try again.">
     <Button title="Try again" onPress={() => setRetry((value) => value + 1)} />
   </ShellScreen>;
-  if (!runtime) return <ShellScreen topInset centered title="Opening Talyn" description="Restoring your account securely."><Status message="Restoring sign-in" loading /></ShellScreen>;
+  if (!runtime) return <BootScreen label="Restoring sign-in" />;
   return <RuntimeContext.Provider value={runtime}><WorkspaceBinding /><NotificationBinding />{children}</RuntimeContext.Provider>;
 }
 

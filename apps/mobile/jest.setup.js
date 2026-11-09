@@ -15,3 +15,4 @@ jest.mock('react-native-drawer-layout', () => {
   }
   return { Drawer, DrawerProgressContext, useDrawerProgress: () => ({ value: 0 }) };
 });
+jest.mock('expo-splash-screen', () => ({ preventAutoHideAsync: jest.fn(() => Promise.resolve(true)), hideAsync: jest.fn(() => Promise.resolve(true)) }));

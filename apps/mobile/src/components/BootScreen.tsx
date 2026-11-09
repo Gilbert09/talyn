@@ -21,6 +21,16 @@ const styles = StyleSheet.create({
   logText: { fontFamily: fonts.mono[400], fontSize: 12 },
 });
 
+/** The ASCII owl mascot, blinking. Used on the boot and sign-in screens, as on web. */
+export function BlinkingOwl({ still = false }: { still?: boolean }) {
+  const colors = useTheme();
+  const blinking = useOwlBlink(!still);
+  return <Text accessible={false} style={[styles.owl, {
+    color: colors.primary,
+    textShadowColor: withAlpha(colors.primary, 0.35),
+  }]}>{owlArt(blinking ? '-   -' : 'O   O')}</Text>;
+}
+
 export function BootScreen({ label }: { label?: string }) {
   const colors = useTheme();
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -28,7 +38,6 @@ export function BootScreen({ label }: { label?: string }) {
   const [dots, setDots] = useState(0);
   const [caretVisible, setCaretVisible] = useState(true);
   const scanX = useRef(new Animated.Value(SCAN_START)).current;
-  const blinking = useOwlBlink(!reduceMotion);
 
   useEffect(() => {
     let active = true;
@@ -75,10 +84,7 @@ export function BootScreen({ label }: { label?: string }) {
     <View style={[styles.screen, { backgroundColor: colors.background }]}
       accessible accessibilityRole="progressbar" accessibilityLabel={label ?? 'Starting Talyn'}>
       <View style={styles.content} accessible={false}>
-        <Text accessible={false} style={[styles.owl, {
-          color: colors.primary,
-          textShadowColor: withAlpha(colors.primary, 0.35),
-        }]}>{owlArt(blinking ? '-   -' : 'O   O')}</Text>
+        <BlinkingOwl still={reduceMotion} />
         <View accessible={false} style={[styles.scanTrack, { backgroundColor: withAlpha(colors.border, 0.6) }]}>
           <Animated.View style={[styles.scanSegment, {
             experimental_backgroundImage: `linear-gradient(to right, transparent, ${colors.primary}, transparent)`,
