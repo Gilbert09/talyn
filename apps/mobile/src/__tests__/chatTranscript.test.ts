@@ -173,7 +173,7 @@ describe('transcript rows', () => {
   });
 
   it.each([
-    [{ key: 'a', timestamp: null, kind: 'user', text: 'Hi', attachments: 0 }, 'You said: Hi'],
+    [{ key: 'a', timestamp: null, kind: 'user', text: 'Hi', attachments: 0, files: [] }, 'You said: Hi'],
     [{ key: 'a', timestamp: null, kind: 'text', text: 'Hello', streaming: false }, 'Agent said: Hello'],
     [{ key: 'a', timestamp: null, kind: 'failed', text: 'Crashed' }, 'Turn failed. Crashed'],
   ] as const)('labels a row for screen readers %#', (row, label) => expect(rowLabel(row as TranscriptRow)).toBe(label));

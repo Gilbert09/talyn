@@ -10,7 +10,7 @@ export interface PlanControls { busy: boolean; disabled: boolean; approve(): voi
 /** One conversation row. No author badges and no full timestamps: the shape says who wrote it. */
 export const TranscriptRow = memo(function TranscriptRow({ row, now, workbench, plan }: { row: Row; now: number; workbench: Workbench; plan: PlanControls }) {
   switch (row.kind) {
-    case 'user': return <UserBubble text={row.text} timestamp={row.timestamp} attachments={row.attachments} now={now} />;
+    case 'user': return <UserBubble text={row.text} timestamp={row.timestamp} attachments={row.attachments} files={row.files} workbenchId={workbench.id} now={now} />;
     case 'text': return <AgentText text={row.text} streaming={row.streaming} />;
     case 'thinking': return <ThinkingRow text={row.text} />;
     case 'tool': return <ToolRow tool={row.tool} />;

@@ -5,13 +5,14 @@ import {
 } from '@talyn/shared';
 
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
+import { eventAttachments, type MessageImage } from './attachments';
 
 type SystemBlock = Extract<GroupedBlock, { kind: 'system' }>;
 export type PlanState = 'open' | 'approved' | 'past';
 interface Base { key: string; timestamp: string | null }
 /** One row of the conversation list. Rows are oldest first. */
 export type TranscriptRow = Base & (
-  | { kind: 'user'; text: string; attachments: number }
+  | { kind: 'user'; text: string; attachments: number; files: MessageImage[] }
   | { kind: 'text'; text: string; streaming: boolean }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolBlock }
@@ -44,17 +45,16 @@ export function userMessageText(event: AgentEvent): string | null {
   }
   return texts.length ? texts.join('\n') : null;
 }
-function attachmentCount(event: AgentEvent): number {
+function eventFiles(event: AgentEvent): MessageImage[] {
   const talyn = event.talyn as { attachments?: unknown } | undefined;
-  const raw = talyn?.attachments ?? event.talyn_attachments;
-  return Array.isArray(raw) ? raw.length : 0;
+  return eventAttachments(talyn?.attachments ?? event.talyn_attachments);
 }
 const timeOf = (entry: WorkbenchEvent) => {
   const raw = entry.createdAt ?? entry.event.timestamp;
   return typeof raw === 'string' && Number.isFinite(Date.parse(raw)) ? raw : null;
 };
 
-interface Turn { turn: number; user: { text: string; seq: number; at: string | null; attachments: number } | null; events: AgentEvent[]; times: Map<number, string | null> }
+interface Turn { turn: number; user: { text: string; seq: number; at: string | null; files: MessageImage[] } | null; events: AgentEvent[]; times: Map<number, string | null> }
 /** Split events into turns, each led by the user's message, like web `splitTurns`. */
 function splitTurns(events: WorkbenchEvent[]): Turn[] {
   const turns: Turn[] = [];
@@ -72,7 +72,7 @@ function splitTurns(events: WorkbenchEvent[]): Turn[] {
       turns.push(current);
     }
     if (text !== null && current.user === null && current.events.length === 0) {
-      current.user = { text, seq: entry.seq, at: timeOf(entry), attachments: attachmentCount(entry.event) };
+      current.user = { text, seq: entry.seq, at: timeOf(entry), files: eventFiles(entry.event) };
     } else {
       current.events.push(event);
       current.times.set(entry.seq, timeOf(entry));
@@ -99,7 +99,7 @@ export function transcriptRows(chatId: string, events: WorkbenchEvent[]): Transc
   };
   const turns = splitTurns(events);
   turns.forEach((turn, index) => {
-    if (turn.user) push({ key: `${chatId}:${turn.user.seq}.user`, kind: 'user', text: clip(turn.user.text), timestamp: turn.user.at, attachments: turn.user.attachments });
+    if (turn.user) push({ key: `${chatId}:${turn.user.seq}.user`, kind: 'user', text: clip(turn.user.text), timestamp: turn.user.at, attachments: turn.user.files.length, files: turn.user.files });
     if (!turn.events.length) return;
     const cancelled = turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled');
     for (const block of groupToolRuns(mergeToolBlocks(buildBlocks(turn.events)))) {
