@@ -6,6 +6,8 @@ import {
   isCreditPackId,
   isSellableTier,
   isTierUpgrade,
+  MOBILE_BILLING_RETURN_KINDS,
+  MOBILE_BILLING_RETURN_RESULTS,
   PLAN_LIMITS,
   PLAN_TIER_LABELS,
   tierSoldAnnually,
@@ -20,6 +22,9 @@ import {
   type CreateCheckoutRequest,
   type CreditCheckoutRequest,
   type CreditSummary,
+  type MobileBillingReturnKind,
+  type MobileBillingReturnResult,
+  type PortalSessionRequest,
   type SandboxSize,
   type SellableTier,
   type UpdateAutoTopupRequest,
@@ -49,6 +54,12 @@ import {
   planProductId,
 } from '../services/billing/polar.js';
 import { liveLots, resolveUsageTier } from '../services/billing/usage/index.js';
+import {
+  invalidReturnToBody,
+  mobileBillingReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
 import { teamRoutes } from './teams.js';
 
 /** 402 code when a plan that cannot hold credits asks for credits or auto top-up. */
@@ -221,6 +232,37 @@ export function parseUsageRange(
 }
 
 /**
+ * The hop Polar's redirects take back to the mobile app. Polar accepts only
+ * http(s) success and return URLs, so a mobile checkout or portal session
+ * points them here (`mobileBillingBounceUrl`) and this 302s to
+ * `${to}billing/return?kind=…&result=…`.
+ *
+ * Unauthenticated (a browser redirect carries no token) and it reads nothing
+ * and writes nothing. It is not an open redirect: `to` must be EXACTLY one
+ * allowlisted app scheme (`MOBILE_RETURN_SCHEMES`), and `kind` and `result`
+ * are fixed vocabularies. Anything else is a 400 that redirects nowhere.
+ */
+export function billingPublicRoutes(): Router {
+  const router = Router();
+  router.get('/mobile-return', (req, res) => {
+    const to = validMobileReturn(req.query.to);
+    const kind = req.query.kind;
+    const result = req.query.result;
+    const kindOk = typeof kind === 'string' && (MOBILE_BILLING_RETURN_KINDS as readonly string[]).includes(kind);
+    const resultOk =
+      typeof result === 'string' && (MOBILE_BILLING_RETURN_RESULTS as readonly string[]).includes(result);
+    if (!to || !kindOk || !resultOk) {
+      return res.status(400).type('text/plain').send('This return link is not valid.');
+    }
+    return res.redirect(
+      302,
+      mobileBillingReturnUrl(to, kind as MobileBillingReturnKind, result as MobileBillingReturnResult)
+    );
+  });
+  return router;
+}
+
+/**
  * Billing surface for the calling user. Mounted BEFORE the owner-scope
  * middleware (like /users): checkout/portal calls block on Polar's API, and
  * holding an owner-scoped transaction (= one pooled connection) open across
@@ -246,6 +288,8 @@ export function billingRoutes(): Router {
   router.post('/checkout', async (req, res) => {
     if (!billingEnabled()) return notConfigured(res);
     const body = (req.body ?? {}) as Partial<CreateCheckoutRequest>;
+    const returnTo = parseReturnTo(body.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (body.plan !== undefined && !isSellableTier(body.plan)) {
       return res.status(400).json({ success: false, error: "plan must be 'pro' or 'max'." });
     }
@@ -266,7 +310,7 @@ export function billingRoutes(): Router {
     // A monthly-only plan (Max) defaults to monthly and refuses annual.
     if (body.period === 'annual' && !tierSoldAnnually(plan)) return monthlyOnly(res, plan);
     const period = body.period === 'monthly' || !tierSoldAnnually(plan) ? 'monthly' : 'annual';
-    const url = await createCheckoutUrl(userId, period, plan);
+    const url = await createCheckoutUrl(userId, period, plan, returnTo.returnTo);
     res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
   });
 
@@ -366,6 +410,8 @@ export function billingRoutes(): Router {
   router.post('/credits/checkout', async (req, res) => {
     if (!billingEnabled()) return notConfigured(res);
     const body = (req.body ?? {}) as Partial<CreditCheckoutRequest>;
+    const returnTo = parseReturnTo(body.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!isCreditPackId(body.pack)) {
       return res.status(400).json({ success: false, error: 'pack must be one of 25, 100, 500.' });
     }
@@ -378,7 +424,7 @@ export function billingRoutes(): Router {
         error: 'Credits come with Pro. Upgrade to buy credits.',
       });
     }
-    const url = await createCreditCheckoutUrl(userId, body.pack);
+    const url = await createCreditCheckoutUrl(userId, body.pack, returnTo.returnTo);
     res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
   });
 
@@ -441,8 +487,10 @@ export function billingRoutes(): Router {
   // Authenticated customer-portal session (manage / cancel / invoices).
   router.post('/portal', async (req, res) => {
     if (!billingEnabled()) return notConfigured(res);
+    const returnTo = parseReturnTo(((req.body ?? {}) as PortalSessionRequest).returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     try {
-      const url = await createPortalUrl(assertUser(req).id);
+      const url = await createPortalUrl(assertUser(req).id, returnTo.returnTo);
       res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
     } catch {
       // Polar has no customer for this user (never checked out) — nothing to

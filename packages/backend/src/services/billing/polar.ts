@@ -14,6 +14,7 @@ import {
 } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { webAppUrl } from '../webApp.js';
+import { mobileBillingBounceUrl } from '../mobileReturn.js';
 import { billingEnabled } from './entitlements.js';
 
 /**
@@ -157,8 +158,24 @@ export const BILLING_PAGE_PATH = '/settings/billing';
  * env) wins; otherwise the web app's billing page, built with `webAppUrl()`
  * so the target is fixed by env and never by a request. Both keys are left
  * out when no web app is deployed: Polar then shows its own receipt page.
+ *
+ * `returnTo` is the mobile app's URL base, already checked against
+ * `MOBILE_RETURN_SCHEMES` by the route. It wins over both: success and the
+ * back button go through our bounce route (Polar accepts only http(s)) to
+ * `${returnTo}billing/return?kind=…&result=success|cancel`. When the backend
+ * cannot name its own public origin, the web redirects stay.
  */
-export function checkoutRedirects(kind: 'plan' | 'credits'): { successUrl?: string; returnUrl?: string } {
+export function checkoutRedirects(
+  kind: 'plan' | 'credits',
+  returnTo?: string | null
+): { successUrl?: string; returnUrl?: string } {
+  if (returnTo) {
+    const returnKind = kind === 'plan' ? 'checkout' : 'credits';
+    const successUrl = mobileBillingBounceUrl(returnTo, returnKind, 'success');
+    const returnUrl = mobileBillingBounceUrl(returnTo, returnKind, 'cancel');
+    if (successUrl && returnUrl) return { successUrl, returnUrl };
+    console.warn('[billing] mobile returnTo ignored: set TALYN_PUBLIC_API_URL so Polar can return to the app.');
+  }
   const success = process.env.POLAR_SUCCESS_URL?.trim() || webAppUrl(BILLING_PAGE_PATH, { checkout: 'success', kind });
   const back = webAppUrl(BILLING_PAGE_PATH);
   return {
@@ -228,7 +245,12 @@ async function timed<T>(method: string, label: string, fn: () => Promise<T>): Pr
  * The old Unlimited products are never sold again. Their subscribers move to
  * Pro through {@link changeSubscriptionProduct}, not a second checkout.
  */
-export async function createCheckoutUrl(userId: string, period: BillingPeriod, plan: SellableTier = 'pro'): Promise<string> {
+export async function createCheckoutUrl(
+  userId: string,
+  period: BillingPeriod,
+  plan: SellableTier = 'pro',
+  returnTo: string | null = null
+): Promise<string> {
   const productId = planProductId(plan, period);
   if (!productId) throw new Error(`Polar ${PLAN_TIER_LABELS[plan]} product id for ${period} is not set`);
 
@@ -237,7 +259,7 @@ export async function createCheckoutUrl(userId: string, period: BillingPeriod, p
       products: [productId],
       externalCustomerId: userId,
       metadata: { kind: 'plan', plan },
-      ...checkoutRedirects('plan'),
+      ...checkoutRedirects('plan', returnTo),
     })
   );
   return checkout.url;
@@ -249,7 +271,11 @@ export async function createCheckoutUrl(userId: string, period: BillingPeriod, p
  * the metadata is a label for the Polar dashboard, never an input. Discount
  * codes are off: the pack grants a fixed amount of credit whatever was paid.
  */
-export async function createCreditCheckoutUrl(userId: string, pack: CreditPackId): Promise<string> {
+export async function createCreditCheckoutUrl(
+  userId: string,
+  pack: CreditPackId,
+  returnTo: string | null = null
+): Promise<string> {
   const productId = creditPackProductId(pack);
   if (!productId) throw new Error(`Polar product id for the ${pack} credit pack is not set`);
   const checkout = await timed('POST', 'checkouts.create', () =>
@@ -258,7 +284,7 @@ export async function createCreditCheckoutUrl(userId: string, pack: CreditPackId
       externalCustomerId: userId,
       allowDiscountCodes: false,
       metadata: { kind: 'credit_pack', pack },
-      ...checkoutRedirects('credits'),
+      ...checkoutRedirects('credits', returnTo),
     })
   );
   return checkout.url;
@@ -350,9 +376,14 @@ export function polarErrorName(err: unknown): string | null {
  * external-customer form, so it works without storing the Polar customer id.
  * Throws if Polar has no customer for this user yet (never checked out).
  */
-export async function createPortalUrl(userId: string): Promise<string> {
+export async function createPortalUrl(userId: string, returnTo: string | null = null): Promise<string> {
+  // A mobile portal session gets a back button to the app; the web keeps none.
+  const returnUrl = returnTo ? mobileBillingBounceUrl(returnTo, 'portal', 'success') : null;
   const session = await timed('POST', 'customerSessions.create', () =>
-    getPolarClient().customerSessions.create({ externalCustomerId: userId })
+    getPolarClient().customerSessions.create({
+      externalCustomerId: userId,
+      ...(returnUrl ? { returnUrl } : {}),
+    })
   );
   return session.customerPortalUrl;
 }

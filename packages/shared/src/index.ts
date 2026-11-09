@@ -24,6 +24,10 @@ export * from './trunkMergeEta.js';
 // merge queue's stack drain and both front ends' indented PR lists.
 export * from './stacks.js';
 
+// Mobile return targets — the allowlisted `returnTo` contract for GitHub
+// connect and Polar checkout/portal flows opened from the mobile app.
+export * from './mobileReturn.js';
+
 // Agent skills (SKILL.md) + the run-skill-on-PR prompt builder.
 export * from './skills.js';
 export * from './skillPrompt.js';
@@ -2010,11 +2014,15 @@ export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
   /** The product to buy. Absent means the backend's default (Pro on usage billing). */
   plan?: SellableTier;
+  /** The mobile app's URL base (`talyn-mobile://`). Absent: return to the web app. */
+  returnTo?: string;
 }
 
 /** `POST /billing/credits/checkout`. */
 export interface CreditCheckoutRequest {
   pack: CreditPackId;
+  /** The mobile app's URL base (`talyn-mobile://`). Absent: return to the web app. */
+  returnTo?: string;
 }
 
 /** `POST /billing/change-plan`: move a Legacy Pro subscription to Pro. */

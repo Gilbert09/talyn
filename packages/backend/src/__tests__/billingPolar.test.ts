@@ -8,6 +8,7 @@ const sdk = vi.hoisted(() => ({
   ordersCreate: vi.fn(async (_req: unknown, _opts?: unknown) => ({ id: 'ord-1', status: 'draft' })),
   ordersFinalize: vi.fn(async (req: { id: string }) => ({ id: req.id, status: 'paid', paid: true })),
   customersGetExternal: vi.fn(async (_req: unknown): Promise<{ id: string }> => ({ id: 'cust-1' })),
+  customerSessionsCreate: vi.fn(async (_req: unknown) => ({ customerPortalUrl: 'https://polar.test/portal' })),
 }));
 vi.mock('@polar-sh/sdk', () => ({
   Polar: class {
@@ -15,6 +16,7 @@ vi.mock('@polar-sh/sdk', () => ({
     subscriptions = { update: sdk.subscriptionsUpdate };
     orders = { create: sdk.ordersCreate, finalize: sdk.ordersFinalize };
     customers = { getExternal: sdk.customersGetExternal };
+    customerSessions = { create: sdk.customerSessionsCreate };
   },
 }));
 
@@ -36,7 +38,14 @@ const ENV = {
   POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'prod-team-pro-m',
   POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'prod-team-pro-a',
 } as const;
-const TOUCHED = [...Object.keys(ENV), 'POLAR_SUCCESS_URL', 'WEB_APP_URL'];
+const TOUCHED = [
+  ...Object.keys(ENV),
+  'POLAR_SUCCESS_URL',
+  'WEB_APP_URL',
+  'TALYN_PUBLIC_API_URL',
+  'POSTHOG_OAUTH_REDIRECT_URI',
+  'SLACK_OAUTH_REDIRECT_URI',
+];
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -173,6 +182,95 @@ describe('checkout redirects', () => {
     process.env.WEB_APP_URL = 'https://app.talyn.dev';
     process.env.POLAR_SUCCESS_URL = 'https://talyn.dev/thanks';
     expect(polar.checkoutRedirects('plan')).toMatchObject({ successUrl: 'https://talyn.dev/thanks' });
+  });
+});
+
+describe('checkout redirects — mobile returnTo', () => {
+  const API = 'https://prod.talyn.dev';
+  function bounce(kind: string, result: string, to = 'talyn-mobile://') {
+    return `${API}/api/v1/billing/mobile-return?${new URLSearchParams({ to, kind, result })}`;
+  }
+
+  it.each([
+    ['plan', 'checkout'],
+    ['credits', 'credits'],
+  ] as const)('%s: success and back both go through the bounce as kind=%s', (kind, returnKind) => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    expect(polar.checkoutRedirects(kind, 'talyn-mobile://')).toEqual({
+      successUrl: bounce(returnKind, 'success'),
+      returnUrl: bounce(returnKind, 'cancel'),
+    });
+  });
+
+  it('wins over the web app and POLAR_SUCCESS_URL', () => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    process.env.WEB_APP_URL = 'https://app.talyn.dev';
+    process.env.POLAR_SUCCESS_URL = 'https://talyn.dev/thanks';
+    expect(polar.checkoutRedirects('plan', 'talyn-mobile-preview://')).toEqual({
+      successUrl: bounce('checkout', 'success', 'talyn-mobile-preview://'),
+      returnUrl: bounce('checkout', 'cancel', 'talyn-mobile-preview://'),
+    });
+  });
+
+  it('every URL handed to Polar is https, never the app scheme', () => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    for (const url of Object.values(polar.checkoutRedirects('credits', 'talyn-mobile://'))) {
+      expect(new URL(url!).protocol).toBe('https:');
+    }
+  });
+
+  it('keeps the web redirects when the backend cannot name its public origin', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.WEB_APP_URL = 'https://app.talyn.dev';
+    expect(polar.checkoutRedirects('credits', 'talyn-mobile://')).toEqual({
+      successUrl: 'https://app.talyn.dev/settings/billing?checkout=success&kind=credits',
+      returnUrl: 'https://app.talyn.dev/settings/billing',
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('TALYN_PUBLIC_API_URL'));
+    warn.mockRestore();
+  });
+
+  it.each([null, undefined, ''])('no returnTo (%o): unchanged', (returnTo) => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    process.env.WEB_APP_URL = 'https://app.talyn.dev';
+    expect(polar.checkoutRedirects('plan', returnTo)).toEqual({
+      successUrl: 'https://app.talyn.dev/settings/billing?checkout=success&kind=plan',
+      returnUrl: 'https://app.talyn.dev/settings/billing',
+    });
+  });
+
+  it('plan checkout passes the mobile redirects to Polar', async () => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    await polar.createCheckoutUrl('user-1', 'monthly', 'pro', 'talyn-mobile://');
+    expect(sdk.checkoutsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ successUrl: bounce('checkout', 'success'), returnUrl: bounce('checkout', 'cancel') })
+    );
+  });
+
+  it('credit checkout passes the mobile redirects to Polar', async () => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    await polar.createCreditCheckoutUrl('user-1', '25', 'talyn-mobile://');
+    expect(sdk.checkoutsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ successUrl: bounce('credits', 'success'), returnUrl: bounce('credits', 'cancel') })
+    );
+  });
+
+  it('portal: a mobile session gets a back button to the app', async () => {
+    process.env.TALYN_PUBLIC_API_URL = API;
+    expect(await polar.createPortalUrl('user-1', 'talyn-mobile://')).toBe('https://polar.test/portal');
+    expect(sdk.customerSessionsCreate).toHaveBeenCalledWith({
+      externalCustomerId: 'user-1',
+      returnUrl: bounce('portal', 'success'),
+    });
+  });
+
+  it.each([
+    ['no returnTo', null, true],
+    ['returnTo but no public origin', 'talyn-mobile://', false],
+  ] as const)('portal with %s: no returnUrl (unchanged)', async (_label, returnTo, withOrigin) => {
+    if (withOrigin) process.env.TALYN_PUBLIC_API_URL = API;
+    await polar.createPortalUrl('user-1', returnTo);
+    expect(sdk.customerSessionsCreate).toHaveBeenCalledWith({ externalCustomerId: 'user-1' });
   });
 });
 
