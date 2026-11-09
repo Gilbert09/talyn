@@ -192,9 +192,12 @@ export async function validateSessionMcpToken(
 }
 
 /**
- * Check spawn depth and return the thread link for a thread caller.
+ * Check spawn depth. Return the thread link for a thread caller, and the
+ * space of a session caller so that its children can start in that space.
  */
-export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<{ threadId: string | null }> {
+export async function reserveSessionCreate(
+  binding: SessionMcpBinding
+): Promise<{ threadId: string | null; spaceId: string | null }> {
   if (binding.depth + 1 > MAX_SESSION_SPAWN_DEPTH) {
     throw new SessionSpawnRefusedError(
       `This session was itself started by another session ${binding.depth} level(s) down, and ` +
@@ -204,11 +207,15 @@ export async function reserveSessionCreate(binding: SessionMcpBinding): Promise<
     );
   }
   const [caller] = await getPoolDbClient()
-    .select({ kind: workbenches.kind })
+    .select({ kind: workbenches.kind, spaceId: workbenches.spaceId })
     .from(workbenches)
     .where(eq(workbenches.id, binding.workbenchId))
     .limit(1);
-  return { threadId: caller?.kind === 'thread' ? binding.workbenchId : null };
+  const isThread = caller?.kind === 'thread';
+  return {
+    threadId: isThread ? binding.workbenchId : null,
+    spaceId: isThread ? null : (caller?.spaceId ?? null),
+  };
 }
 
 /**

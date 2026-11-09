@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Request, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
-import { repositories, sessionMcpTokens, workbenches, workspaces } from '../db/schema.js';
+import { repositories, sessionMcpTokens, spaces, teams, workbenches, workspaces } from '../db/schema.js';
 import { createToken } from '../services/mcpToken.js';
 import {
   chatWorkbenchId,
@@ -158,7 +158,7 @@ describe('session MCP tokens', () => {
     };
 
     it.each([0, 1])('lets a session at depth %i start one', async (depth) => {
-      await expect(reserveSessionCreate(await binding(depth))).resolves.toEqual({ threadId: null });
+      await expect(reserveSessionCreate(await binding(depth))).resolves.toEqual({ threadId: null, spaceId: null });
     });
 
     it.each([MAX_SESSION_SPAWN_DEPTH, MAX_SESSION_SPAWN_DEPTH + 1])('refuses a session at depth %i', async (depth) => {
@@ -171,7 +171,7 @@ describe('session MCP tokens', () => {
 
     it('allows many creates without writing the old count columns', async () => {
       const b = await binding();
-      for (let i = 0; i < 20; i++) await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: null });
+      for (let i = 0; i < 20; i++) await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: null, spaceId: null });
       expect((await rowFor('wb')).createsInWindow).toBe(0);
       expect((await rowFor('wb')).createsWindowStartedAt).toBeNull();
     });
@@ -188,8 +188,21 @@ describe('session MCP tokens', () => {
       await testDb.db.update(workbenches).set({ kind: 'thread' }).where(eq(workbenches.id, 'wb'));
       const b = await binding();
       for (let i = 0; i < 20; i++) {
-        await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: 'wb' });
+        await expect(reserveSessionCreate(b)).resolves.toEqual({ threadId: 'wb', spaceId: null });
       }
+    });
+
+    it.each([
+      ['session', 'space-1'],
+      ['thread', null],
+    ] as const)('returns the space of a %s caller as %s', async (kind, expected) => {
+      await testDb.db.insert(teams).values({ id: 'team-1', name: 'Acme' });
+      await testDb.db.insert(spaces).values({ id: 'space-1', teamId: 'team-1', name: 'Web' });
+      await testDb.db.update(workbenches).set({ kind, spaceId: 'space-1' }).where(eq(workbenches.id, 'wb'));
+      await expect(reserveSessionCreate(await binding())).resolves.toEqual({
+        threadId: kind === 'thread' ? 'wb' : null,
+        spaceId: expected,
+      });
     });
 
     it('allows another session to create children', async () => {
@@ -198,7 +211,7 @@ describe('session MCP tokens', () => {
       for (let i = 0; i < 20; i++) await reserveSessionCreate(first);
       await ensureSessionMcpToken({ id: 'wb2', workspaceId: 'ws' });
       const second = (await validateSessionMcpToken((await readSessionMcpToken('wb2'))!))!.session;
-      await expect(reserveSessionCreate(second)).resolves.toEqual({ threadId: null });
+      await expect(reserveSessionCreate(second)).resolves.toEqual({ threadId: null, spaceId: null });
     });
 
     it.each([0, 1])('records the parent and depth %i + 1 on the child', async (depth) => {
