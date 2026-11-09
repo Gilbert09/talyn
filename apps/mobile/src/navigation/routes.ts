@@ -1,5 +1,8 @@
 import type { Href } from 'expo-router';
 
+/** Home: the new-work composer under the navigation drawer. */
+export const HOME = '/home' satisfies Href;
+
 export const sessionRoute = (id: string) => ({
   pathname: '/sessions/[id]', params: { id },
 }) satisfies Href;

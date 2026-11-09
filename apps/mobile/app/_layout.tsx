@@ -1,9 +1,11 @@
 import { Stack, usePathname } from 'expo-router';
-import { View } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Button } from '../src/components/UI';
 import { SystemChrome } from '../src/components/SystemChrome';
+import { AppLoading } from '../src/navigation/AppLoading';
 import { rememberIntent } from '../src/navigation/intents';
 import { AuthProvider, useAuth, useMobileRuntime } from '../src/auth/AuthProvider';
 import { Status } from '../src/components/AuthControls';
@@ -17,10 +19,12 @@ function AuthenticatedRoutes() {
   if (auth.status !== 'signedIn') rememberIntent(pathname);
   const { auth: controller, signOut } = useMobileRuntime();
   const colors = useShellColors();
-  if (auth.status === 'restoring' || auth.status === 'locked') return <ShellScreen topInset centered title="Opening Talyn" description="Your account stays protected while sign-in is checked.">
-    <Status message={auth.status === 'locked' ? 'Sign-in could not be restored. Check your connection and unlock this device.' : 'Restoring sign-in'} loading={auth.status === 'restoring'} />
-    {auth.status === 'locked' ? <><Button title="Try again" onPress={() => { void controller.restore(); }} />
-      <Button variant="quiet" title="Clear sign-in on this device" onPress={() => { void (signOut ? signOut() : controller.signOut()); }} /></> : null}
+  // Boot state 2 of 3: sign-in is restored. The workspace wait is in `(drawer)/_layout` and `DetailRoute`.
+  if (auth.status === 'restoring') return <AppLoading phase="auth" />;
+  if (auth.status === 'locked') return <ShellScreen topInset centered title="Opening Talyn" description="Your account stays protected while sign-in is checked.">
+    <Status message="Sign-in could not be restored. Check your connection and unlock this device." />
+    <Button title="Try again" onPress={() => { void controller.restore(); }} />
+    <Button variant="quiet" title="Clear sign-in on this device" onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
   </ShellScreen>;
   const signedIn = auth.status === 'signedIn';
   const detail = (title: string) => ({ headerShown: true, title, animation: 'default' as const, headerBackTitle: 'Back' });
@@ -32,20 +36,38 @@ function AuthenticatedRoutes() {
     <Stack.Screen name="+not-found" options={{ headerShown: false }} />
     <Stack.Protected guard={!signedIn}><Stack.Screen name="(auth)" /></Stack.Protected>
     <Stack.Protected guard={signedIn}>
-      <Stack.Screen name="(tabs)" />
-      {/* Details sit above the tabs, so the tab bar is hidden and the header has a back button. */}
+      {/* Home and its drawer. Every other page pushes above it with a native header and a back button. */}
+      <Stack.Screen name="(drawer)" />
       <Stack.Screen name="sessions/[id]" options={detail('Session')} />
       <Stack.Screen name="threads/[id]" options={detail('Thread')} />
       <Stack.Screen name="attention/[id]" options={detail('Pull request')} />
+      <Stack.Screen name="pulls/index" options={detail('Pull requests')} />
+      <Stack.Screen name="spaces/index" options={detail('Spaces')} />
+      <Stack.Screen name="spaces/[id]" options={detail('Space')} />
+      <Stack.Screen name="automations/index" options={detail('Automations')} />
+      <Stack.Screen name="automations/[id]" options={detail('Automation')} />
+      <Stack.Screen name="usage" options={detail('Usage')} />
+      <Stack.Screen name="agents" options={detail('Agents')} />
+      <Stack.Screen name="insights" options={detail('Insights')} />
+      <Stack.Screen name="history" options={detail('History')} />
+      {/* The screen draws its own "Settings" heading. */}
+      <Stack.Screen name="settings" options={{ ...detail('Settings'), headerTitle: '' }} />
       <Stack.Screen name="workspaces" options={detail('Workspace')} />
       <Stack.Screen name="new" options={{ ...detail('New'), animation: 'slide_from_bottom' }} />
     </Stack.Protected>
   </Stack>;
 }
+
 export default function RootLayout() {
   const fonts = useAppFonts();
   const colors = useShellColors();
-  // The fonts are bundled, so this is one frame of the app background.
-  if (!fonts) return <View style={{ flex: 1, backgroundColor: colors.background }} />;
-  return <SafeAreaProvider><SystemChrome /><AuthProvider><AuthenticatedRoutes /></AuthProvider></SafeAreaProvider>;
+  // The root paints the app background, so the area under a transparent status bar never shows grey.
+  return <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.background }]}>
+    {/* Boot state 1 of 3: the bundled fonts load, which takes about one frame. */}
+    {!fonts ? <AppLoading phase="fonts" /> : <SafeAreaProvider style={{ backgroundColor: colors.background }}>
+      <SystemChrome /><AuthProvider><AuthenticatedRoutes /></AuthProvider>
+    </SafeAreaProvider>}
+  </GestureHandlerRootView>;
 }
+
+const styles = StyleSheet.create({ root: { flex: 1 } });

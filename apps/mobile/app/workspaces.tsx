@@ -3,6 +3,7 @@ import { SymbolView } from 'expo-symbols';
 
 import { Button, EmptyState, Group, Row } from '../src/components/UI';
 import { consumeIntent } from '../src/navigation/intents';
+import { HOME } from '../src/navigation/routes';
 import { useAuth, useMobileRuntime, useNetwork, useWorkspace } from '../src/auth/AuthProvider';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
@@ -26,7 +27,7 @@ export default function WorkspacesScreen() {
         trailing={state.selected === choice.id ? <SymbolView name={{ ios: 'checkmark', android: 'check' }} size={16} tintColor={colors.primaryAction} /> : undefined}
         accessibilityLabel={`Select workspace ${choice.name}`}
         disabled={offline} onPress={() => { void workspace.select(choice.id).then(() => {
-          if (workspace.getSnapshot().selected === choice.id) router.replace(consumeIntent() ?? '/sessions');
+          if (workspace.getSnapshot().selected === choice.id) router.replace(consumeIntent() ?? HOME);
         }); }} />)}
     </Group> : null}
     <Group title="Account">

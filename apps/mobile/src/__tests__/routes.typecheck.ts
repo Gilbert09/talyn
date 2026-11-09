@@ -1,11 +1,16 @@
 import type { Href } from 'expo-router';
 
-import { newWorkRoute, pullRequestRoute, sessionRoute, threadRoute } from '../navigation/routes';
+import { pullsRoute } from '../features/prs/lists';
+import { HOME, newWorkRoute, pullRequestRoute, sessionRoute, threadRoute } from '../navigation/routes';
 
 export const validRoutes: Href[] = [
-  '/sessions', '/threads', '/attention', '/settings',
+  HOME, '/settings', '/workspaces',
+  // Old list links, kept for deep links and notification fallbacks.
+  '/sessions', '/threads', '/attention',
   sessionRoute('session-id'), threadRoute('thread-id'), pullRequestRoute('pr-id'),
+  pullsRoute('mine'), pullsRoute('reviews'), pullsRoute('queue'),
   newWorkRoute('session'), newWorkRoute('thread'), '/new',
+  '/spaces', '/automations', '/usage', '/agents', '/insights',
 ];
 
 // @ts-expect-error The route does not exist.

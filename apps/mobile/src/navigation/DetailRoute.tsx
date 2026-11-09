@@ -1,24 +1,23 @@
 import { Redirect, Stack, usePathname, useRouter, type Href } from 'expo-router';
 import type { PropsWithChildren } from 'react';
-import { View } from 'react-native';
 
 import { useWorkspace } from '../auth/AuthProvider';
-import { IconButton, Spinner } from '../components/UI';
+import { IconButton } from '../components/UI';
+import { AppLoading } from './AppLoading';
 import { rememberIntent } from './intents';
 import { workspaceGate } from './workspaceGate';
 
 export function WorkspaceWait() {
-  return <View accessibilityState={{ busy: true }} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Spinner /></View>;
+  return <AppLoading phase="workspace" />;
 }
 
 /**
- * Wraps a detail screen that sits on the root stack, above the tabs. It waits for
- * a workspace like the tabs do, and gives a cold deep link a way back to its list.
+ * Wraps a screen that sits on the root stack, above the drawer. It waits for
+ * a workspace like home does, and gives a cold deep link a way back to `list`.
  */
 export function DetailRoute({ list, children }: PropsWithChildren<{ list: Href }>) {
   const workspace = useWorkspace();
   const pathname = usePathname();
-  const router = useRouter();
   const gate = workspaceGate(workspace);
   if (gate === 'wait') return <WorkspaceWait />;
   if (gate === 'choose') {
@@ -26,9 +25,16 @@ export function DetailRoute({ list, children }: PropsWithChildren<{ list: Href }
     return <Redirect href="/workspaces" />;
   }
   return <>
-    {router.canGoBack() ? null : <Stack.Screen options={{
-      headerLeft: () => <IconButton label="Back" symbol={{ ios: 'chevron.left', android: 'arrow_back' }} onPress={() => router.replace(list)} />,
-    }} />}
+    <ColdBack list={list} />
     {children}
   </>;
+}
+
+/** A back button for a screen opened with nothing under it, such as a cold deep link. */
+export function ColdBack({ list }: { list: Href }) {
+  const router = useRouter();
+  if (router.canGoBack()) return null;
+  return <Stack.Screen options={{
+    headerLeft: () => <IconButton label="Back" symbol={{ ios: 'chevron.left', android: 'arrow_back' }} onPress={() => router.replace(list)} />,
+  }} />;
 }
