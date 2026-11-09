@@ -7,7 +7,7 @@ import { Status } from '../../components/AuthControls';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { useWorkspaceName } from '../../components/ScreenHeader';
 import { AppText, Button, Group, Row, Segmented, useActionSheet } from '../../components/UI';
-import { Heading, openExternal } from '../../components/Workflow';
+import { openExternal } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
 import { NotificationSettings } from '../../notifications/Settings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
@@ -50,9 +50,8 @@ export function SettingsScreen() {
       } },
     ]);
   const webLinks = webSettingsLinks(features);
-  return <ScreenContainer topInset>
+  return <ScreenContainer>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Heading>Settings</Heading>
       <Group title="Account">
         <Row title={auth.user?.email ?? 'GitHub account'} subtitle="Signed in with GitHub" />
         <Row title={showId ? 'Hide account ID' : 'Show account ID'} onPress={() => setShowId(!showId)}>

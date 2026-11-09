@@ -135,7 +135,7 @@ describe('native shell', () => {
     await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
     await fireEvent.press(screen.getByRole('button', { name: 'Settings' }));
     expect(screen).toHavePathname('/settings');
-    expect(await screen.findByRole('header', { name: 'Settings' })).toBeVisible();
+    expect(await screen.findByText('Signed in with GitHub')).toBeVisible();
   });
 
   it('closes the open drawer with Android back, and back from a page returns home', async () => {
@@ -230,7 +230,7 @@ describe('native shell', () => {
 
   it('shows account details and accessible account actions', async () => {
     await renderRouter(routes, { initialUrl: '/settings' });
-    expect(screen.getByRole('header', { name: 'Settings' })).toBeVisible();
+    expect(screen.getByText('Signed in with GitHub')).toBeVisible();
     expect(screen.getByText('alice@example.com')).toBeVisible();
     expect(screen.queryByText('Account ID: alice')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Show account ID' }));

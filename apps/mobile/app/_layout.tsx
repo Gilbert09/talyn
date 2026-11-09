@@ -59,7 +59,7 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="insights" options={detail('Insights')} />
       <Stack.Screen name="history" options={detail('History')} />
       {/* The screen draws its own "Settings" heading. */}
-      <Stack.Screen name="settings" options={{ ...detail('Settings'), headerTitle: '' }} />
+      <Stack.Screen name="settings" options={detail('Settings')} />
       <Stack.Screen name="workspaces" options={detail('Workspace')} />
       <Stack.Screen name="repositories" options={detail('Repositories')} />
       {/* Setup draws its own heading and steps, with no navigation header. */}
