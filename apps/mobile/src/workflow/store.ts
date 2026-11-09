@@ -1,11 +1,12 @@
 import { cloudProviders, environments, features, pullRequests, repositories, tasks, workbenches, workspaces, wsClient,
-  type ClientLifecycle, type PRRow } from '@talyn/client/native';
+  type ClientLifecycle, type CodeReviewDismissReason, type CodeReviewFinding, type CodeReviewPreset, type CodeReviewPublic,
+  type PRRow } from '@talyn/client/native';
 import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
   failureState, mergeEvents, PAGE_SIZE, sameScope, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
   type Delivery, type Entity, type Resource, type Scope, type Transcript } from './model';
-import { applyPrUpdate, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
+import { applyPrUpdate, jsonEqual, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
 
 export const workflowApi = { workbenches, pullRequests, features, repositories, cloudProviders, workspaces, environments, tasks };
 export type WorkflowApi = typeof workflowApi;
@@ -27,6 +28,8 @@ export const RECOVERY_DEBOUNCE = 250;
 export const EVENT_REFETCH_INTERVAL = 2_000;
 type PrDetail = { row: PRRow; fresh: unknown };
 type MergeQueueFields = Pick<PRRow, 'mergeQueued' | 'mergeQueue'>;
+/** `GET /pull-requests/:id/code-review`: the review and its findings. */
+export type CodeReviewData = Awaited<ReturnType<WorkflowApi['pullRequests']['codeReview']>>;
 
 /**
  * One in-memory owner for snapshots, cursors, drafts, and delivery state.
@@ -190,6 +193,13 @@ export class WorkflowStore {
     // The provider detail and queue history are not in the echo. Refresh them quietly.
     this.invalidateEntry(detail);
     if (update.mergeQueue !== undefined || update.mergeQueued !== undefined) this.invalidateEntry(this.entry('timeline', update.id, false));
+    // The echo carries the review but not its findings, so the findings are refetched.
+    if (update.codeReview !== undefined) {
+      const review = this.entry('codeReview', update.id, false);
+      changed = this.updateData<CodeReviewData>(review, (data) => jsonEqual(data.review, update.codeReview) ? data
+        : { ...data, review: update.codeReview ?? null }) || changed;
+      this.invalidateEntry(review);
+    }
     if (changed) this.emit();
   }
   private scheduleRecovery(delay = RECOVERY_DEBOUNCE) {
@@ -293,6 +303,14 @@ export class WorkflowStore {
         return item;
       }
       case 'environments': return this.api.environments.list();
+      case 'codeReview': {
+        // A held row answers the scope question without a live GitHub read.
+        const held = this.findPr(id);
+        if (!held) await this.authorizedPr(id, scope);
+        else if (held.workspaceId !== scope.workspace) throw { status: 403 };
+        assertScope();
+        return this.api.pullRequests.codeReview(id);
+      }
     }
   }
   private async reconcile(chatId: string, scope: Scope, prior?: Transcript): Promise<Transcript> {
@@ -505,6 +523,61 @@ export class WorkflowStore {
     await this.api.pullRequests.resubmitMergeQueue(id);
     this.refresh('pr', id); this.refresh('timeline', id);
   }
+
+  // Code review. The server answer wins; the findings are refetched after each action.
+
+  /** Put a review the server returned on the PR row and the review entry. */
+  private applyCodeReview(id: string, review: CodeReviewPublic | null) {
+    this.patchPr(id, { codeReview: review });
+    if (this.updateData<CodeReviewData>(this.entry('codeReview', id, false), (data) => jsonEqual(data.review, review) ? data : { ...data, review })) this.emit();
+  }
+  private patchFindings(id: string, ids: ReadonlySet<string>, patch: Partial<CodeReviewFinding>) {
+    if (this.updateData<CodeReviewData>(this.entry('codeReview', id, false), (data) => data.findings.some((finding) => ids.has(finding.id))
+      ? { ...data, findings: data.findings.map((finding) => ids.has(finding.id) ? { ...finding, ...patch } : finding) } : data)) this.emit();
+  }
+  async startCodeReview(id: string, preset: CodeReviewPreset, reset = false) {
+    const review = await this.api.pullRequests.startCodeReview(id, { preset, ...(reset ? { reset: true } : {}) });
+    this.applyCodeReview(id, review);
+    this.refresh('codeReview', id);
+    return review;
+  }
+  /** Stopping a fix stops its task, not the review. A review in flight is cancelled. Mirrors web. */
+  async stopCodeReview(id: string, fixTaskId?: string | null) {
+    try {
+      if (fixTaskId) await this.api.tasks.stop(fixTaskId);
+      else this.applyCodeReview(id, await this.api.pullRequests.cancelCodeReview(id));
+    } finally { this.refresh('codeReview', id); }
+  }
+  async fixCodeReviewFindings(id: string, findingIds: string[]) {
+    const result = await this.api.pullRequests.fixCodeReviewFindings(id, findingIds);
+    if (result?.review) this.applyCodeReview(id, result.review);
+    if (result?.taskId) this.patchPr(id, { taskId: result.taskId });
+    this.refresh('codeReview', id);
+    return result;
+  }
+  async postCodeReviewFindings(id: string, findingIds: string[]) {
+    const result = await this.api.pullRequests.postCodeReviewFindings(id, findingIds);
+    if (result.review) this.applyCodeReview(id, result.review);
+    this.refresh('codeReview', id);
+    return result;
+  }
+  async dismissCodeReviewFinding(id: string, findingId: string, reason?: CodeReviewDismissReason) {
+    const prior = this.read<CodeReviewData>('codeReview', id).data?.findings.find((finding) => finding.id === findingId);
+    this.patchFindings(id, new Set([findingId]), { disposition: 'dismissed', dismissedReason: reason ?? null });
+    try {
+      this.applyCodeReview(id, await this.api.pullRequests.dismissCodeReviewFinding(id, findingId, reason));
+    } catch (error) {
+      if (prior) this.patchFindings(id, new Set([findingId]), { disposition: prior.disposition, dismissedReason: prior.dismissedReason ?? null });
+      throw error;
+    } finally { this.refresh('codeReview', id); }
+  }
+  async undismissCodeReviewFinding(id: string, findingId: string) {
+    try {
+      this.applyCodeReview(id, await this.api.pullRequests.undismissCodeReviewFinding(id, findingId));
+    } finally { this.refresh('codeReview', id); }
+  }
+  /** One finding with its body, suggestion and anchor, which the list leaves out. */
+  codeReviewFinding(id: string, findingId: string) { return this.api.pullRequests.codeReviewFinding(id, findingId); }
 
   dispose() {
     this.setScope(null); this.stopped = true; this.unbind.forEach((unbind) => unbind()); this.listeners.clear(); clearTimeout(this.timer);

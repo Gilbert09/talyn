@@ -66,14 +66,14 @@ describe('native lists and useful states', () => {
     await render(<StateNotice resource={resource} offline={false} refresh={jest.fn()} />);
     expect(screen.toJSON()).toBeNull();
   });
-  it('keeps Attention read-only with one status and a separate review pill', async () => {
-    mockActive.api.pullRequests.list.mockResolvedValueOnce([pr({ summary: { ...pr().summary, ciStatus: undefined } })]);
+  it('keeps PR lists read-only with one status and a separate review pill', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([pr({ authored: true, summary: { ...pr().summary, ciStatus: undefined } })]);
     await render(<AttentionScreen />);
     expect(await screen.findByRole('link', { name: /Status: Unknown\. Review: Needs approval\./ })).toBeVisible();
     expect(screen.getByText('#42')).toBeVisible();
     expect(screen.queryByText(/Review: Review required/)).toBeNull();
     expect(screen.queryByRole('button', { name: /merge|approve|queue/i })).toBeNull();
-    expect(screen.getByRole('header', { name: 'Attention' })).toBeVisible();
+    expect(screen.getByText('Waiting for review')).toBeVisible();
   });
   it('virtualizes a performance fixture with ten thousand sessions', async () => {
     mockActive.api.workbenches.list.mockResolvedValueOnce(Array.from({ length: 10000 }, (_, index) => session({ id: `session-${index}`, title: `Work ${index}` })));

@@ -7,6 +7,10 @@ import type { ClientSocket } from '@talyn/client/native';
  */
 export const NATIVE_SOCKET_OPTIONS = { headers: { origin: '' } };
 
+// React Native's constructor takes a third options argument that the DOM type leaves out.
+type NativeWebSocket = new (url: string, protocols: string | string[] | undefined, options: typeof NATIVE_SOCKET_OPTIONS) => unknown;
+
 export function createNativeSocket(url: string): ClientSocket {
-  return new WebSocket(url, undefined, NATIVE_SOCKET_OPTIONS) as unknown as ClientSocket;
+  const Socket = WebSocket as unknown as NativeWebSocket;
+  return new Socket(url, undefined, NATIVE_SOCKET_OPTIONS) as ClientSocket;
 }

@@ -1,5 +1,5 @@
 import type { CloudProviderInfo, MergeQueueTimelineEvent, pullRequests } from '@talyn/client/native';
-import { fixBlockedMessage, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
+import { fixBlockedMessage, queueSessionBadge, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, Switch, View } from 'react-native';
@@ -16,10 +16,12 @@ import { completeIntent } from '../../navigation/intents';
 import { sessionRoute } from '../../navigation/routes';
 import { useTheme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
-import { externalLabel, queueLabel, stackLabel } from '../../workflow/model';
+import { queueLabel, stackLabel } from '../../workflow/model';
 import { WEB_APP_URL } from '../settings/about';
 import { autoKeepLabel, checksLine, failingChecks, fixAgentChoices, mergeLine, prActions, queueStateLabel, startPrFix,
   type FixOutcome } from './actions';
+import { CodeReviewSection, CodeReviewSelectionBar, useCodeReview } from './CodeReviewSection';
+import { pullsRoute, queueBudgetsLine, queueStatusLine } from './lists';
 
 type PrDetail = Awaited<ReturnType<typeof pullRequests.get>>;
 type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | null;
@@ -59,7 +61,8 @@ export function PullRequestDetailScreen() {
   const timeline = useResource<{ events: MergeQueueTimelineEvent[] }>('timeline', id, queued);
   const writable = Boolean(row?.authored && row.state === 'open');
   const providers = useResource<CloudProviderInfo[]>('providers', '', writable);
-  const workspace = useResource<Workspace>('workspace', '', writable);
+  // Also read for the code review's reporting bar, so it is needed on every PR.
+  const workspace = useResource<Workspace>('workspace', '', Boolean(row));
   const environments = useResource<Environment[]>('environments', '', writable);
   const offline = useNetwork() === 'offline';
   const now = useNow();
@@ -69,6 +72,8 @@ export function PullRequestDetailScreen() {
   const [notice, setNotice] = useState<{ message: string; session?: { id: string; name: string } } | null>(null);
   useEffect(() => { if (row) completeIntent(`/attention/${encodeURIComponent(id)}`); }, [row, id]);
   useEffect(() => setNotice(null), [id]);
+  const codeReview = useCodeReview(id, { seed: row?.codeReview, enabled: Boolean(row),
+    reportingBar: resolveReportingBar(workspace.data?.settings?.codeReview) });
 
   const fresh = state.data?.fresh ?? null;
   const summary = fresh ?? row?.summary;
@@ -130,6 +135,9 @@ export function PullRequestDetailScreen() {
   const requeue = () => row && void run('queue', `Could not requeue ${ref}`, () => workflow.setMergeQueue(row.id, true));
 
   const entry = row?.mergeQueue;
+  const queueBlocked = entry?.status === 'blocked' || entry?.status === 'blocked_manual';
+  const sessionBadge = queueSessionBadge(entry);
+  const budgets = queueBudgetsLine(entry);
   const failing = failingChecks(fresh?.checkContexts);
   const checks = checksLine(summary?.checks);
   const stack = row ? stackLabel(row) : '';
@@ -138,7 +146,7 @@ export function PullRequestDetailScreen() {
   return <ScreenContainer>
     <ScrollView contentContainerStyle={[styles.content, local.content]}
       refreshControl={<RefreshControl refreshing={(state.refreshing || timeline.refreshing) && Boolean(row)}
-        onRefresh={() => { void state.refresh(); if (queued) void timeline.refresh(); }} tintColor={colors.muted} colors={[colors.primaryAction]} />}>
+        onRefresh={() => { void state.refresh(); void codeReview.state.refresh(); if (queued) void timeline.refresh(); }} tintColor={colors.muted} colors={[colors.primaryAction]} />}>
       <StateNotice resource={state} offline={offline} refresh={state.refresh} />
       {row && summary && status && actions ? <>
         <View style={local.header}>
@@ -185,11 +193,13 @@ export function PullRequestDetailScreen() {
               onValueChange={toggleAutoKeep} trackColor={{ true: colors.primaryAction, false: colors.surface }} />} /> : null}
         </Group> : null}
 
+        <CodeReviewSection review={codeReview} open={row.state === 'open'} openSheet={sheet.open} />
+
         {queued ? <View style={{ gap: 8 }}>
           <SectionLabel title="Merge queue" />
-          <AppText variant="meta">{[entry?.position ? `#${entry.position}` : '', entry ? queueLabel(entry.status) : 'Waiting',
-            entry?.external?.state ? `External queue: ${externalLabel(entry.external.state)}` : ''].filter(Boolean).join(' · ')}</AppText>
-          {entry?.reason ? <AppText variant="meta" tone="muted">{entry.reason}</AppText> : null}
+          <AppText variant="meta" tone={queueBlocked && !sessionBadge ? 'warning' : 'default'}>{queueStatusLine(entry, row.session?.name)}</AppText>
+          {queueBlocked && entry?.reason ? <AppText variant="meta" tone="muted">{entry.reason}</AppText> : null}
+          {budgets ? <AppText variant="caption" tone="muted">{budgets}{entry?.headShaShort ? `. Scoped to ${entry.headShaShort}; a new push resets them.` : ''}</AppText> : null}
           {actions.resubmit || actions.requeue ? <View style={{ alignSelf: 'flex-start' }}>
             {actions.resubmit ? <Button variant="secondary" size="sm" title="Re-submit to Trunk" loading={busy === 'resubmit'} disabled={busyAny} onPress={resubmit} />
               : <Button variant="secondary" size="sm" title="Requeue" loading={busy === 'queue'} disabled={busyAny} onPress={requeue} />}
@@ -203,9 +213,10 @@ export function PullRequestDetailScreen() {
           <Row title={row.session.name} href={sessionRoute(row.session.id)} chevron divider={false} />
         </Group> : null}
       </> : state.status === 'deleted' || state.status === 'unauthorized'
-        ? <Row title="Back to Attention" href="/attention" chevron divider={false} /> : null}
+        ? <Row title="Back to pull requests" href={pullsRoute('mine')} chevron divider={false} /> : null}
     </ScrollView>
-    {row && actions ? <BottomBar>
+    {row && codeReview.selected.size > 0 && !codeReview.fixing ? <CodeReviewSelectionBar review={codeReview} />
+      : row && actions ? <BottomBar>
       {actions.merge ? <View style={{ flex: 1 }}><Button title="Merge" icon={{ ios: 'arrow.triangle.merge', android: 'merge' }}
         loading={busy === 'merge'} disabled={busyAny} onPress={merge} /></View> : null}
       {actions.fix ? <View style={{ flex: 1 }}><Button title="Fix with agent" variant={actions.merge || actions.fixBlocked ? 'secondary' : 'primary'}
