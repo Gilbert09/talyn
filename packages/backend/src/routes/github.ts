@@ -22,8 +22,13 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { debugBus } from '../services/debugBus.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
+import {
+  invalidReturnToBody,
+  mobileGitHubReturnUrl,
+  parseReturnTo,
+} from '../services/mobileReturn.js';
 import type { Request } from 'express';
-import type { ApiResponse } from '@talyn/shared';
+import type { ApiResponse, GitHubCallbackErrorReason } from '@talyn/shared';
 
 // OAuth flows don't run more than a few times per user per hour. 20 per
 // 10 minutes per IP is generous for legitimate retries and blunts brute-
@@ -50,8 +55,20 @@ const pendingOAuthStates = new Map<
      * constant", never a caller-supplied destination.
      */
     client: OAuthClient;
+    /**
+     * The mobile app's allowlisted URL base (`talyn-mobile://`), when the
+     * mobile app started the flow. Validated against `MOBILE_RETURN_SCHEMES`
+     * before it is stored, and it wins over `client` at the end.
+     */
+    mobileReturn: string | null;
   }
 >();
+
+/** How a callback ends: the client, plus a mobile return when one was stored. */
+interface CallbackEnding {
+  client: OAuthClient;
+  mobileReturn: string | null;
+}
 
 type OAuthClient = 'web' | 'desktop';
 
@@ -64,6 +81,20 @@ type OAuthClient = 'web' | 'desktop';
 function originClient(req: Request): OAuthClient {
   const webApp = getWebAppUrl();
   return webApp && req.headers.origin === webApp ? 'web' : 'desktop';
+}
+
+/**
+ * The ending for a callback that fails before (or at) the state check. The
+ * Origin sniff decides web vs desktop as before; a pending state that names
+ * a mobile return sends the person back to the app instead. The state is
+ * only read here, never consumed, so an error hop leaves it as it was.
+ */
+function earlyEnding(req: Request, state: unknown): CallbackEnding {
+  const fallback: CallbackEnding = { client: originClient(req), mobileReturn: null };
+  if (typeof state !== 'string') return fallback;
+  const token = state.split(':')[1];
+  const pending = token ? pendingOAuthStates.get(token) : undefined;
+  return pending?.mobileReturn ? { client: pending.client, mobileReturn: pending.mobileReturn } : fallback;
 }
 
 setInterval(() => {
@@ -102,9 +133,22 @@ export function githubPublicRoutes(): Router {
      * query string for the app to surface.
      */
     const finish = (
-      client: OAuthClient,
-      opts: { ok: boolean; message: string; status?: number }
+      ending: CallbackEnding,
+      opts: { ok: boolean; message: string; status?: number; reason?: GitHubCallbackErrorReason }
     ) => {
+      const { client, mobileReturn } = ending;
+      if (mobileReturn) {
+        // The app's base is allowlisted and the path is ours; only the
+        // reason code (a fixed vocabulary) varies. The message stays out:
+        // it can carry GitHub's own text and the app has no use for it.
+        return res.redirect(
+          302,
+          mobileGitHubReturnUrl(
+            mobileReturn,
+            opts.ok ? { ok: true } : { ok: false, reason: opts.reason ?? 'connect_failed' }
+          )
+        );
+      }
       if (client === 'web') {
         // Path and origin are ours; only `message` comes from outside, and
         // URL serialisation escapes it. Never a caller-supplied destination.
@@ -121,18 +165,21 @@ export function githubPublicRoutes(): Router {
     };
 
     if (error) {
-      // No state yet (or it's unusable), so fall back to the Origin sniff.
-      return finish(originClient(req), {
+      // No usable state yet, so fall back to the Origin sniff (or a
+      // mobile return the state names).
+      return finish(earlyEnding(req, state), {
         ok: false,
         status: 400,
+        reason: error === 'access_denied' ? 'access_denied' : 'provider_error',
         message:
           (error_description as string) || (error as string) || 'GitHub App error',
       });
     }
     if (typeof code !== 'string' || typeof state !== 'string' || !code || !state) {
-      return finish(originClient(req), {
+      return finish(earlyEnding(req, state), {
         ok: false,
         status: 400,
+        reason: 'missing_code',
         message: 'Missing code or state',
       });
     }
@@ -142,14 +189,17 @@ export function githubPublicRoutes(): Router {
       !pendingState || pendingState.workspaceId !== workspaceId ||
       extra !== undefined || pendingState.expiresAt <= Date.now()
     ) {
+      const ending = earlyEnding(req, state);
       if (pendingState && pendingState.expiresAt <= Date.now()) pendingOAuthStates.delete(stateToken);
-      return finish(originClient(req), {
+      return finish(ending, {
         ok: false,
         status: 400,
+        reason: 'invalid_state',
         message: 'Invalid install state — try again from Talyn',
       });
     }
-    const { userId, client } = pendingState;
+    const { userId, client, mobileReturn } = pendingState;
+    const ending: CallbackEnding = { client, mobileReturn };
     pendingOAuthStates.delete(stateToken);
 
     try {
@@ -170,11 +220,12 @@ export function githubPublicRoutes(): Router {
           userId,
           expiresAt: Date.now() + 10 * 60 * 1000,
           client,
+          mobileReturn,
         });
         return res.redirect(buildInstallUrl(`${workspaceId}:${newState}`));
       }
       return finish(
-        client,
+        ending,
         installCount > 0
           ? { ok: true, message: 'GitHub connected!' }
           : {
@@ -186,7 +237,7 @@ export function githubPublicRoutes(): Router {
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      return finish(client, { ok: false, status: 500, message });
+      return finish(ending, { ok: false, status: 500, reason: 'connect_failed', message });
     }
   });
 
@@ -344,9 +395,13 @@ export function githubRoutes(): Router {
 
   // GitHub App install URL. The public /app/callback validates the state token
   // before persisting anything.
+  // An optional `returnTo` (the mobile app's allowlisted URL base) makes the
+  // callback finish with a 302 to `${returnTo}github/callback?...`.
   router.post('/app/install-url', oauthRateLimit, async (req, res) => {
     const workspaceId = await gateWorkspace(req, res, 'body');
     if (!workspaceId) return;
+    const returnTo = parseReturnTo(req.body?.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!isGitHubAppConfigured()) {
       return res.status(400).json({ success: false, error: 'GitHub App not configured' });
     }
@@ -356,6 +411,7 @@ export function githubRoutes(): Router {
       userId: req.user!.id,
       expiresAt: Date.now() + 10 * 60 * 1000,
       client: originClient(req),
+      mobileReturn: returnTo.returnTo,
     });
     try {
       // Two URLs, same single-use state:

@@ -27,6 +27,8 @@ import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
+import { clientAttentionKey, useAttentionSeen } from '../../lib/contextRail';
+import { sessionPr } from '../../lib/sessionState';
 import { ImageDropOverlay, useImageDropZone } from './useComposerImages';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
@@ -46,6 +48,11 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
+  const storeChats = useWorkbenchStore((s) => s.chats[workbench.id]);
+  useAttentionSeen(
+    workbench.id,
+    clientAttentionKey(workbench, storeChats ?? workbench.chats ?? [], sessionPr(workbench, pr)),
+  );
 
   // The overlay belongs to the session it was opened from.
   useEffect(() => () => openPrDetail(null), [workbench.id, openPrDetail]);
