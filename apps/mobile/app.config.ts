@@ -127,7 +127,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         ],
       }] } : {}),
     },
-    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-notifications', {
+    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-notifications', {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },

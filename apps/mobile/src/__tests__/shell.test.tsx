@@ -132,6 +132,7 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: '/sessions/session-one' });
     expect(screen.getByRole('header', { name: 'Choose a workspace' })).toBeVisible();
     expect(mockWorkflow.api.workbenches.get).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Select workspace One', selected: false })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Select workspace One' }));
     expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
     expect(screen).toHavePathname('/sessions/session-one');
@@ -141,6 +142,11 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(screen.getByRole('header', { name: 'Settings' })).toBeVisible();
     expect(screen.getByText('alice@example.com')).toBeVisible();
+    expect(screen.queryByText('Account ID: alice')).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Show account ID' }));
+    expect(screen.getByText('Account ID: alice')).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Hide account ID' }));
+    expect(screen.queryByText('Account ID: alice')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
     expect(mockSignOut).toHaveBeenCalledTimes(1);
   });

@@ -25,7 +25,10 @@ describe('native lists and useful states', () => {
   it.each(['session', 'thread'] as const)('provides an accessible %s list, scope, and refresh action', async (kind) => {
     await render(<WorkbenchListScreen kind={kind} />);
     expect(await screen.findByRole('link', { name: new RegExp(kind === 'session' ? 'Current work' : 'Planning work') })).toBeVisible();
-    expect(screen.getByRole('header', { name: kind === 'session' ? 'Sessions' : 'Threads' })).toBeVisible();
+    expect(screen.getAllByRole('header', { name: kind === 'session' ? 'Sessions' : 'Threads' })).toHaveLength(1);
+    const calls = mockActive.api.workbenches.list.mock.calls.length;
+    await fireEvent.press(screen.getByRole('button', { name: 'Refresh list' }));
+    await waitFor(() => expect(mockActive.api.workbenches.list.mock.calls.length).toBeGreaterThan(calls));
     expect(screen.getByRole('link', { name: 'Workspace: Test workspace' })).toBeVisible();
   });
   it('shows loading and empty states', async () => {
@@ -65,6 +68,10 @@ describe('detail and composer accessibility', () => {
     expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
     expect(screen.getByText('Readiness: Available')).toBeVisible(); expect(screen.getByLabelText('Message')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(screen.queryByText(/Model: Default/)).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Conversation details' }));
+    expect(screen.getByText(/Model: Default/)).toBeVisible();
+    expect(mockActive.store.local('chat-one').following).toBe(false);
   });
   it('supports a normal text send and shows acknowledged delivery', async () => {
     await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
@@ -94,6 +101,9 @@ describe('detail and composer accessibility', () => {
   it('shows the planning conversation and child sessions', async () => {
     mockParams = { id: 'thread-one' };
     await render(<WorkbenchDetailScreen kind="thread" />);
+    expect(screen.queryByRole('link', { name: /^Current work\./ })).toBeNull();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Related sessions (1)' }));
+    expect(mockActive.store.local('thread-chat').following).toBe(false);
     expect(await screen.findByRole('link', { name: /^Current work\./ })).toBeVisible();
     expect(screen.getByRole('header', { name: 'Planning work' })).toBeVisible();
     expect(await screen.findByLabelText('Message')).toBeVisible();

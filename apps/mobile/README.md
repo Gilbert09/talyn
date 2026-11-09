@@ -435,3 +435,39 @@ The test host cannot prove native accessibility, keyboard behavior, universal li
 Phase 4 adds notifications, registration, preferences, and a durable worker. Physical delivery still needs device evidence.
 Signed release archives, universal-link association, privacy disclosures, store operations, and review remain release gates.
 The phase 2 Apple login and deletion-completion gates remain open.
+
+## Mobile interface
+
+The mobile theme follows the paper, ink, and clay colors in the web and desktop apps.
+Semantic tokens live in `src/theme/tokens.ts`.
+Muted ink and action clay are darker in light mode to keep small text readable on paper.
+Shared controls live in `src/components/UI.tsx`.
+
+Native tabs keep their platform behavior.
+`ScreenContainer` handles safe areas, including the tab bar, through React Native Screens.
+Automatic tab content insets are disabled to prevent duplicate padding.
+System fonts can scale without a limit.
+Rows and badges wrap, and content has a maximum width on tablets.
+
+Rebuild the development client after this change because it adds `expo-navigation-bar`.
+The module controls Android system navigation icons.
+The root view and status bar follow the system theme.
+
+### Review on a device
+
+The sandbox tests cannot verify native layout, keyboards, or screen reader behavior.
+Use the device preview to check these items before release:
+
+- Open every route in light and dark mode.
+- Check sign-in, callback, restore, offline, error, empty, and unavailable page states.
+- Set text to 200 percent on a narrow Android phone.
+- Check long workspace names, repository names, titles, badges, and messages.
+- Open a conversation and show the keyboard. Check the input, send action, and bottom tabs.
+- Switch conversations. Check drafts, older messages, and scroll restoration.
+- Check status and navigation icons with gesture navigation and button navigation.
+- Check the same routes on a tablet and in landscape.
+- Use VoiceOver or TalkBack to select a workspace and read a conversation.
+- Check notification permissions, quiet hours, external links, and the account deletion confirmation.
+- Enable reduced motion. Check that sign-in has no transition animation.
+
+The floating Expo development gear belongs to the development client.

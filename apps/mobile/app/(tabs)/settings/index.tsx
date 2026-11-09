@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Button } from 'react-native';
+import { Alert } from 'react-native';
 
+import { Button, Card, Label, SectionHeader } from '../../../src/components/UI';
 import { useAuth, useMobileRuntime, useNetwork, useWorkspace } from '../../../src/auth/AuthProvider';
 import { Status } from '../../../src/components/AuthControls';
 import { ShellScreen, ShellText } from '../../../src/components/ShellScreen';
@@ -13,6 +14,7 @@ export default function SettingsScreen() {
   const workspace = useWorkspace();
   const router = useRouter();
   const offline = useNetwork() === 'offline';
+  const [showId, setShowId] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const confirmDeletion = () => Alert.alert('Delete your Talyn account?',
@@ -27,18 +29,25 @@ export default function SettingsScreen() {
         });
       } },
     ]);
-  return <ShellScreen title="Settings" description="Manage your Talyn account.">
+  return <ShellScreen topInset title="Settings" description="Make Talyn work for you.">
+    <Card><SectionHeader title="Account" />
     <ShellText>{auth.user?.email ?? 'GitHub account'}</ShellText>
-    <ShellText>Account ID: {auth.user?.id}</ShellText>
+    <Button variant="quiet" title={showId ? 'Hide account ID' : 'Show account ID'} onPress={() => setShowId(!showId)} />
+    {showId ? <Label muted small>Account ID: {auth.user?.id}</Label> : null}
+    <Button variant="secondary" title="Sign out" disabled={deleting} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
+    </Card>
+    <Card><SectionHeader title="Workspace" />
     <ShellText>Workspace: {workspace.choices.find((choice) => choice.id === workspace.selected)?.name ?? 'None selected'}</ShellText>
     {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
     {offline ? <Status message="You are offline. Account deletion needs an internet connection." /> : null}
-    <Button title="Choose workspace" disabled={deleting} onPress={() => router.push('/workspaces')} />
-    <Button title="Sign out" disabled={deleting} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
+    <Button variant="secondary" title="Choose workspace" disabled={deleting} onPress={() => router.push('/workspaces')} />
+    </Card>
     {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
+    <Card><SectionHeader title="Delete account" detail="This action is permanent." />
     <ShellText>Account deletion removes owned workspaces. Backups, billing records, and external provider records can remain.</ShellText>
     {deleting ? <Status message="Deleting your account" loading /> : null}
     {result ? <Status message={result} /> : null}
-    <Button title="Delete account" accessibilityLabel="Delete Talyn account" color="#b42318" disabled={deleting || offline} onPress={confirmDeletion} />
+    <Button title="Delete account" accessibilityLabel="Delete Talyn account" variant="destructive" disabled={deleting || offline} onPress={confirmDeletion} />
+    </Card>
   </ShellScreen>;
 }
