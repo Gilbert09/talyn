@@ -186,7 +186,11 @@ describe('session credentials during lifecycle operations', () => {
     } });
     expect(githubService.getVerifiedAccessToken).toHaveBeenCalledWith('ws');
     expect(resolveRunCredential).toHaveBeenCalledWith('ws', 'claude', expect.any(Object));
-    expect(mcpIntegrationSecrets).toHaveBeenCalledWith({ workspaceId: 'ws', metadata: undefined });
+    expect(mcpIntegrationSecrets).toHaveBeenCalledWith({
+      workspaceId: 'ws',
+      metadata: undefined,
+      repositoryId: 'repo',
+    });
   });
 
   it.each<[string, Patch, string, string]>([

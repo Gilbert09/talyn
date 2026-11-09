@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
 import { buildAppShortcuts } from '../components/layout/appShortcuts';
 import { clearShortcuts, formatKeys, registerShortcuts } from '../lib/shortcuts';
+import { CONTEXT_JUMP_KEYS } from '../components/layout/appShortcuts';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
@@ -130,8 +131,8 @@ describe('palette: workspaces and spaces', () => {
     open();
     expect(screen.getByText('Workspaces and spaces')).toBeInTheDocument();
     expect(screen.getByText('Switch to Infra')).toBeInTheDocument();
-    expect(screen.getByText(formatKeys('mod+alt+shift+1'))).toBeInTheDocument();
-    expect(screen.getByText(formatKeys('mod+alt+shift+3'))).toBeInTheDocument();
+    expect(screen.getByText(formatKeys(CONTEXT_JUMP_KEYS(1)))).toBeInTheDocument();
+    expect(screen.getByText(formatKeys(CONTEXT_JUMP_KEYS(3)))).toBeInTheDocument();
     expect(screen.getByText('New space in Platform…')).toBeInTheDocument();
     expect(screen.getByText('Team settings: Platform')).toBeInTheDocument();
     expect(screen.getByText('Create team…')).toBeInTheDocument();

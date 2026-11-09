@@ -20,7 +20,7 @@ import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { Input } from '../../ui/input';
 import { SettingRow, SettingsPage, SettingsSection } from '../../ui/settings';
 import { MemberAvatar, SpaceDot } from '../../spaces/SpaceAvatars';
-import { ColorPicker } from '../../spaces/SpaceDialogs';
+import { ColorPicker, SpaceImagePicker } from '../../spaces/SpaceDialogs';
 import { TeamSettings as TeamSeats } from '../../panels/TeamBilling';
 
 const ROLE_LABEL: Record<TeamRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' };
@@ -361,6 +361,7 @@ function SpaceRow({ space }: { space: Space }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(space.name);
   const [color, setColor] = useState(space.color);
+  const [image, setImage] = useState(space.image);
   const [busy, setBusy] = useState(false);
   const [archiving, setArchiving] = useState(false);
 
@@ -371,7 +372,11 @@ function SpaceRow({ space }: { space: Space }) {
   const save = async () => {
     setBusy(true);
     try {
-      useSpacesStore.getState().upsertSpace(await api.spaces.update(space.id, { name: name.trim(), color }));
+      useSpacesStore.getState().upsertSpace(await api.spaces.update(space.id, {
+          name: name.trim(),
+          color,
+          ...(image !== space.image ? { image } : {}),
+        }));
       setEditing(false);
     } catch (err) {
       toast.error('Could not save the space', errorText(err, ''));
@@ -425,21 +430,23 @@ function SpaceRow({ space }: { space: Space }) {
             </Button>
           </div>
           <ColorPicker value={color} onChange={setColor} />
+          <SpaceImagePicker name={name} color={color} value={image} onChange={setImage} disabled={busy} />
         </div>
       ) : (
         <div className="flex items-center gap-2">
-          <SpaceDot color={space.color} />
+          <SpaceDot color={space.color} image={space.image} />
           <span className="min-w-0 flex-1 truncate font-medium">{space.name}</span>
           <button
             type="button"
             onClick={() => {
               setName(space.name);
               setColor(space.color);
+              setImage(space.image);
               setEditing(true);
             }}
             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
             aria-label={`Edit ${space.name}`}
-            title="Rename or change the colour"
+            title="Rename or change the colour or image"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>

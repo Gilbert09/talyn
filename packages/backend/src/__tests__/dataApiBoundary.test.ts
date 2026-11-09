@@ -194,6 +194,8 @@ describe('Data API database boundary', () => {
       'workbench_background_jobs', 'workbench_wakeups',
       // Box resource samples (0121): written by the usage sweep.
       'workbench_resource_samples',
+      // Memory review runs (0123): read by a sweep with no request.
+      'memory_review_runs',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

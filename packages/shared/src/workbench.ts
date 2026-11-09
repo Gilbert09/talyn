@@ -14,6 +14,7 @@ import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 import type { WorkbenchConfig } from './workbenchConfig.js';
 import type { WorkbenchImportedFrom } from './claudeSessionImport.js';
 import type { SlackSessionSource } from './slack.js';
+import type { MemoryReviewSessionSource } from './memoryReview.js';
 import type { SandboxSize } from './sandboxSize.js';
 import type { WorkbenchBackground, WorkbenchMessageTrigger } from './workbenchBackground.js';
 
@@ -136,6 +137,14 @@ export interface WorkbenchSettings {
   resizeTo?: SandboxSize;
   /** Why the agent asked for the resize, for the note the person sees. Server-written. */
   resizeReason?: string;
+  /**
+   * When somebody asked to restart the session on a fresh box, to pick up
+   * MCP servers and other box settings changed since the box was made. It
+   * waits for the running turn to end. Server-written.
+   */
+  restartRequestedAt?: string;
+  /** Why the restart was asked for, for the note the person sees. Server-written. */
+  restartReason?: string;
   scripts?: {
     setup?: string | null;
     /** One command, or named run scripts. */
@@ -251,7 +260,7 @@ export interface LoopSessionSource {
 }
 
 /** Where a session came from when the app composer did not start it. */
-export type WorkbenchSource = SlackSessionSource | LoopSessionSource;
+export type WorkbenchSource = SlackSessionSource | LoopSessionSource | MemoryReviewSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {

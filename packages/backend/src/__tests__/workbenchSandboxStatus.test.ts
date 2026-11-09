@@ -289,9 +289,9 @@ describe('the last problem', () => {
 describe('the actions', () => {
   const kinds = (given: Partial<SandboxStatusInput>) => describeSandboxStatus(input(given)).actions.map((a) => a.kind);
   it.each<[string, Partial<SandboxStatusInput>, string[]]>([
-    ['awake', {}, ['resize']],
-    ['asleep', { fleet: fleet({ status: 'suspended', suspendDir: '/x' }) }, ['wake', 'resize']],
-    ['hibernated', { fleet: fleet({ status: 'suspended', suspendUploaded: true }) }, ['wake', 'resize']],
+    ['awake', {}, ['resize', 'restart']],
+    ['asleep', { fleet: fleet({ status: 'suspended', suspendDir: '/x' }) }, ['wake', 'resize', 'restart']],
+    ['hibernated', { fleet: fleet({ status: 'suspended', suspendUploaded: true }) }, ['wake', 'resize', 'restart']],
     ['failed', { row: row({ status: 'error' }), fleet: null }, ['retry']],
     ['starting, recently', { row: row({ status: 'provisioning', updatedAt: ago(MIN) }), fleet: null }, []],
     ['starting, stuck', { row: row({ status: 'provisioning', updatedAt: ago(STUCK_START_MS + MIN) }), fleet: null }, ['retry']],
@@ -300,8 +300,8 @@ describe('the actions', () => {
     ['a thread', { row: row({ kind: 'thread' }) }, []],
     ['archived', { row: row({ archivedAt: ago(MIN) }) }, []],
     ['local', { row: row({ runtime: 'local' }) }, []],
-    ['a setup that failed', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 2, startedAt: null }] }, ['resize', 'show_setup_output']],
-    ['a setup that worked', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 0, startedAt: null }] }, ['resize']],
+    ['a setup that failed', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 2, startedAt: null }] }, ['resize', 'restart', 'show_setup_output']],
+    ['a setup that worked', { scripts: [{ name: 'setup', sandboxId: 'box', running: false, exitCode: 0, startedAt: null }] }, ['resize', 'restart']],
   ])('%s', (_label, given, expected) => {
     expect(kinds(given)).toEqual(expected);
   });
@@ -311,7 +311,15 @@ describe('the actions', () => {
     expect(failed.confirm).toContain('Changes that are not pushed are lost.');
     const lost = describeSandboxStatus(input({ row: row({ status: 'provisioning', sandboxState: 'lost', updatedAt: ago(STUCK_START_MS + MIN) }), fleet: null })).actions[0];
     expect(lost).toEqual({ kind: 'retry', label: 'Retry', confirm: null });
-    for (const a of describeSandboxStatus(input({ fleet: fleet({ status: 'suspended' }) })).actions) expect(a.confirm).toBeNull();
+    const actions = describeSandboxStatus(input({ fleet: fleet({ status: 'suspended' }) })).actions;
+    for (const a of actions.filter((x) => x.kind !== 'restart')) expect(a.confirm).toBeNull();
+  });
+
+  it('asks before a restart, and says what carries over and what stops', () => {
+    const restart = describeSandboxStatus(input({})).actions.find((a) => a.kind === 'restart');
+    expect(restart?.label).toBe('Restart sandbox');
+    expect(restart?.confirm).toContain('current MCP servers');
+    expect(restart?.confirm).toContain('Running scripts and terminals stop.');
   });
 });
 
@@ -578,7 +586,7 @@ describe('GET /workbenches/:id/sandbox-status', () => {
       problem: { text: 'The sandbox was lost.' },
       activity: [{ kind: 'turn', text: 'The agent is working for 5 minutes.' }],
     });
-    expect((res.body.data!.actions as Array<{ kind: string }>).map((a) => a.kind)).toEqual(['resize', 'show_setup_output']);
+    expect((res.body.data!.actions as Array<{ kind: string }>).map((a) => a.kind)).toEqual(['resize', 'restart', 'show_setup_output']);
     expect(getSandbox).toHaveBeenCalledWith('box');
   });
 

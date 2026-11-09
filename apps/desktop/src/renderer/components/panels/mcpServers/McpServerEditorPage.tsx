@@ -43,6 +43,15 @@ function analyticsHost(url: string): string {
   }
 }
 
+function parsesAsUrl(value: string): boolean {
+  try {
+    new URL(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The tool-server editor.
  *
@@ -103,6 +112,9 @@ export function McpServerEditorPage({
   const [probing, setProbing] = useState(false);
 
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
+  const repositories = useWorkspaceStore((state) =>
+    (state.repositories ?? []).filter((repository) => repository.workspaceId === workspaceId)
+  );
   const [routeState, setRouteState] = useState<{ workspaceId: string; routes: PrivateRoute[] } | null>(null);
   const privateRoutes = useMemo(() => routeState?.workspaceId === workspaceId ? routeState.routes : [], [routeState, workspaceId]);
   useEffect(() => {
@@ -231,12 +243,16 @@ export function McpServerEditorPage({
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
 
   const connected = probe?.ok === true || oauthConnected;
-  const validAddress = !mcpServerInputProblem({
+  const addressProblem = mcpServerInputProblem({
     name: 'discovery',
     url: input.url,
     authKind: 'none',
     enabled: true,
   }, privateRoutes);
+  const validAddress = !addressProblem;
+  // Silent while the address is still being typed: only a URL that parses
+  // gets a reason, so "htt" does not read as an error.
+  const addressHint = addressProblem && parsesAsUrl(input.url) ? addressProblem : null;
 
   const edit = useCallback((patch: Partial<McpServerInput>) => {
     if ('secret' in patch || 'inject' in patch || 'url' in patch || 'authKind' in patch) {
@@ -334,6 +350,7 @@ export function McpServerEditorPage({
   }, [editing?.id, editing?.oauth?.status, oauthConnected, onTest, probe]);
 
   const allowed = input.tools;
+  const allowedRepositories = input.repositoryIds ?? null;
   const offered = probe?.toolNames ?? [];
 
   return (
@@ -431,6 +448,11 @@ export function McpServerEditorPage({
                 }}
                 placeholder="https://mcp.linear.app/mcp"
               />
+              {addressHint && (
+                <p role="alert" className="text-sm text-red-500">
+                  {addressHint}
+                </p>
+              )}
             </Section>
           )}
 
@@ -607,6 +629,27 @@ export function McpServerEditorPage({
             </>
           )}
 
+          {(editing || connected) && (
+            <Section
+              title="Repository access"
+              description="Allow this server in every repository, or limit it to selected repositories."
+            >
+              <RepositoryPicker
+                repositories={repositories}
+                allowed={allowedRepositories}
+                onChange={(repositoryIds) => {
+                  trackEvent('mcp_repository_scope_changed', {
+                    mcp_server_host: analyticsHost(input.url),
+                    scope: repositoryIds === null ? 'all' : repositoryIds.length === 0 ? 'none' : 'subset',
+                    allowed_count: repositoryIds === null ? null : repositoryIds.length,
+                    repository_count: repositories.length,
+                  });
+                  edit({ repositoryIds });
+                }}
+              />
+            </Section>
+          )}
+
           {connected && (
             <Section
               title="Tools"
@@ -649,6 +692,76 @@ export function McpServerEditorPage({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RepositoryPicker({
+  repositories,
+  allowed,
+  onChange,
+}: {
+  repositories: { id: string; fullName: string }[];
+  allowed: string[] | null;
+  onChange: (next: string[] | null) => void;
+}) {
+  const selected = new Set(allowed ?? []);
+  return (
+    <div className="space-y-3">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="radio"
+          name="mcp-repository-access"
+          checked={allowed === null}
+          onChange={() => onChange(null)}
+        />
+        <span>
+          All repositories
+          <span className="block text-xs text-muted-foreground">
+            This includes repositories that you add later.
+          </span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="radio"
+          name="mcp-repository-access"
+          checked={allowed !== null}
+          onChange={() => onChange(repositories.map((repository) => repository.id))}
+        />
+        <span>Only selected repositories</span>
+      </label>
+
+      {allowed !== null && (
+        repositories.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            This workspace has no repositories.
+          </p>
+        ) : (
+          <div className="divide-y divide-border rounded-lg border border-border">
+            {repositories.map((repository) => (
+              <label key={repository.id} className="flex items-center gap-3 px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selected.has(repository.id)}
+                  onChange={(event) => onChange(
+                    event.target.checked
+                      ? [...allowed, repository.id]
+                      : allowed.filter((id) => id !== repository.id)
+                  )}
+                />
+                <span className="min-w-0 truncate">{repository.fullName}</span>
+              </label>
+            ))}
+          </div>
+        )
+      )}
+
+      {allowed !== null && allowed.length === 0 && (
+        <p className="text-xs text-amber-600">
+          No repository can access this server.
+        </p>
+      )}
     </div>
   );
 }

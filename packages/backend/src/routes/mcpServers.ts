@@ -55,6 +55,8 @@ function serverShape(s: McpServerDefinition): Record<string, unknown> {
     mcp_from_catalog: s.catalogHandle !== null,
     mcp_tools_restricted: Array.isArray(s.tools),
     mcp_tool_count: Array.isArray(s.tools) ? s.tools.length : null,
+    mcp_repositories_restricted: Array.isArray(s.repositoryIds),
+    mcp_repository_count: Array.isArray(s.repositoryIds) ? s.repositoryIds.length : null,
     mcp_enabled: s.enabled,
   };
 }
@@ -210,7 +212,15 @@ export function mcpServerRoutes(): Router {
 
     let normalized;
     try {
-      normalized = await validateWorkspaceMcpServer({ ...req.body, name: req.body?.name ?? server.name }, server.workspaceId);
+      normalized = await validateWorkspaceMcpServer({
+        ...req.body,
+        name: req.body?.name ?? server.name,
+        // Older clients do not know this field. Keep a restriction when they
+        // edit another setting instead of silently widening it to all repos.
+        repositoryIds: Object.prototype.hasOwnProperty.call(req.body ?? {}, 'repositoryIds')
+          ? req.body.repositoryIds
+          : server.repositoryIds,
+      }, server.workspaceId);
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -259,7 +269,9 @@ export function mcpServerRoutes(): Router {
     // Decrypted through the dispatch path deliberately: probing with a
     // different credential from the one a run would carry is how a green tick
     // comes to mean nothing.
-    const [withSecret] = await mcpServersForDispatch(server.workspaceId, [server.id]);
+    const [withSecret] = await mcpServersForDispatch(server.workspaceId, [server.id], {
+      ignoreRepositoryAccess: true,
+    });
     const probe = await probeMcpServer({
       workspaceId: server.workspaceId,
       url: server.url,

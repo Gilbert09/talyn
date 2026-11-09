@@ -33,6 +33,7 @@ import { chooseReadSource, type StoredReadReason } from './sandboxReadSource.js'
 import { publicWorkbench } from './prLink.js';
 import { recoverLostSandbox } from './recovery.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
+import { requestSessionRestart, type RestartInput, type SessionRestartResult } from './restart.js';
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
 import { startScript, stopScript } from './scripts.js';
 import {
@@ -393,6 +394,27 @@ export async function resizeSession(row: WorkbenchRow, input: ResizeInput, conti
   const result = await requestSessionResize(row, input, { startNow: !continueWith });
   let continued = false;
   if (continueWith && result.outcome !== 'unchanged') {
+    const chat = (await listChats(row.id)).find((c) => !c.closedAt);
+    if (chat) {
+      await sendMessage(chat.id, { text: continueWith }, { origin: 'talyn' });
+      continued = true;
+    }
+  }
+  await emitWorkbenchUpdated(await publicWorkbench((await getWorkbench(row.id)) ?? row));
+  return { ...result, continued };
+}
+
+/**
+ * Restart the session on a fresh sandbox of the same size, after the running
+ * turn, so it picks up MCP servers connected since its box started.
+ * `continueWith` works as for a resize: the next turn starts on the new box.
+ * A restart replaces the box, so it adds no box and the box gate has nothing
+ * to check.
+ */
+export async function restartSession(row: WorkbenchRow, input: RestartInput, continueWith: string): Promise<SessionRestartResult> {
+  const result = await requestSessionRestart(row, input, { startNow: !continueWith });
+  let continued = false;
+  if (continueWith) {
     const chat = (await listChats(row.id)).find((c) => !c.closedAt);
     if (chat) {
       await sendMessage(chat.id, { text: continueWith }, { origin: 'talyn' });

@@ -62,12 +62,22 @@ export const SPACE_COLUMNS = {
 
 export type SpaceRow = Pick<typeof spacesTable.$inferSelect, keyof typeof SPACE_COLUMNS>;
 
-export function toSpace(row: SpaceRow): Space {
+/**
+ * `SPACE_COLUMNS` plus the inline image. Access checks run on every space
+ * request and WebSocket recheck, so they use `SPACE_COLUMNS` and never read
+ * the image. Only the reads that answer with a `Space` use this.
+ */
+export const SPACE_DETAIL_COLUMNS = { ...SPACE_COLUMNS, image: spacesTable.image } as const;
+
+export type SpaceDetailRow = Pick<typeof spacesTable.$inferSelect, keyof typeof SPACE_DETAIL_COLUMNS>;
+
+export function toSpace(row: SpaceDetailRow): Space {
   return {
     id: row.id,
     teamId: row.teamId,
     name: row.name,
     color: row.color,
+    image: row.image,
     createdByUserId: row.createdByUserId,
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
@@ -252,7 +262,7 @@ export async function listMyTeams(userId: string): Promise<SpacesTeam[]> {
   if (rows.length === 0) return [];
   const owned = await ownedWorkspaceIds(userId);
   const spaceRows = await db
-    .select(SPACE_COLUMNS)
+    .select(SPACE_DETAIL_COLUMNS)
     .from(spacesTable)
     .where(
       and(

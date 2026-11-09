@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-import { MAX_SPACE_NAME_LENGTH, MAX_TEAM_NAME_LENGTH, type SpaceRepository } from '@talyn/shared';
+import { useEffect, useRef, useState } from 'react';
+import { ImagePlus, Loader2, X } from 'lucide-react';
+import {
+  MAX_SPACE_IMAGE_LENGTH,
+  MAX_SPACE_NAME_LENGTH,
+  MAX_TEAM_NAME_LENGTH,
+  SPACE_IMAGE_MAX_DIMENSION,
+  type SpaceRepository,
+} from '@talyn/shared';
 import { api } from '../../lib/api';
+import { downscaleImage } from '../../lib/imageDownscale';
 import { switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -9,6 +16,7 @@ import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
 import { RepoPicker } from '../workbench/new/NewWorkbenchControls';
+import { SpaceTile } from './SpaceAvatars';
 
 export const SPACE_COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#64748b'];
 
@@ -149,6 +157,10 @@ export function CreateSpaceDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [color, setColor] = useState(SPACE_COLORS[0]);
+  const [image, setImage] = useState<string | null>(null);
+  useEffect(() => {
+    if (teamId !== null) setImage(null);
+  }, [teamId]);
   return (
     <NameDialog
       open={teamId !== null}
@@ -161,12 +173,13 @@ export function CreateSpaceDialog({
       submitLabel="Create space"
       onSubmit={async (name) => {
         if (!teamId) return;
-        const space = await api.teams.createSpace(teamId, { name, color });
+        const space = await api.teams.createSpace(teamId, { name, color, ...(image ? { image } : {}) });
         useSpacesStore.getState().upsertSpace(space);
         switchContext({ kind: 'space', spaceId: space.id });
       }}
     >
       <ColorPicker value={color} onChange={setColor} />
+      <SpaceImagePicker name="" color={color} value={image} onChange={setImage} />
     </NameDialog>
   );
 }
@@ -186,6 +199,87 @@ export function ColorPicker({ value, onChange }: { value: string | null; onChang
           style={{ backgroundColor: c }}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * Upload or remove a space image. The file is downscaled in the app before it
+ * is sent, because the image is stored inline and every member loads it.
+ */
+export function SpaceImagePicker({
+  name,
+  color,
+  value,
+  onChange,
+  disabled,
+}: {
+  name: string;
+  color: string | null;
+  value: string | null;
+  onChange: (image: string | null) => void;
+  disabled?: boolean;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pick = async (file: File) => {
+    setError(null);
+    setReading(true);
+    try {
+      const dataUrl = await downscaleImage(file, SPACE_IMAGE_MAX_DIMENSION);
+      if (dataUrl.length > MAX_SPACE_IMAGE_LENGTH) {
+        setError('That image is too detailed. Try a smaller or simpler one.');
+        return;
+      }
+      onChange(dataUrl);
+    } catch {
+      setError('Could not read that image.');
+    } finally {
+      setReading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1" data-attr="space-image-picker">
+      <div className="flex items-center gap-2">
+        <SpaceTile name={name || '?'} color={color} image={value} size={32} />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => input.current?.click()}
+          disabled={disabled || reading}
+        >
+          {reading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="mr-1 h-3.5 w-3.5" />}
+          {value ? 'Change image' : 'Upload image'}
+        </Button>
+        {value && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => onChange(null)} disabled={disabled || reading}>
+            <X className="mr-1 h-3.5 w-3.5" /> Remove
+          </Button>
+        )}
+        <input
+          ref={input}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="hidden"
+          aria-label="Space image"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void pick(file);
+          }}
+        />
+      </div>
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">Optional. The image shows in place of the colour.</p>
+      )}
     </div>
   );
 }

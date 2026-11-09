@@ -69,6 +69,7 @@ import { notifyThread } from './threads.js';
 import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { applyPendingResize, pendingResize } from './resize.js';
+import { applyPendingRestart, pendingRestart } from './restart.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { SANDBOX_LOST_MESSAGE } from './recovery.js';
@@ -532,11 +533,14 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
     // After the link: a PR this turn opened keeps the branch its name.
     if (succeeded && linked.runtime === 'sandbox') startBranchNaming(linked.id, succeeded);
-    // A resize asked for during this turn. When a queued message already started the next turn, its start applies it.
+    // A resize or a restart asked for during this turn. When a queued message already started the next turn, its start applies it.
+    // A resize makes a fresh box too, so it answers a restart asked for before it.
     if (chat.status !== 'running') {
       const latest = await getWorkbench(chat.workbenchId);
       if (latest && pendingResize(latest)) {
         void applyPendingResize(latest).catch((err) => console.warn(`[workbench] resizing ${latest.id} after a turn failed:`, err));
+      } else if (latest && pendingRestart(latest)) {
+        void applyPendingRestart(latest).catch((err) => console.warn(`[workbench] restarting ${latest.id} after a turn failed:`, err));
       }
     }
   } catch (err) {
@@ -782,6 +786,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     }
     // A resize asked for during an earlier turn, not yet applied: move before the agent starts.
     if (pendingResize(wb)) wb = await applyPendingResize(wb, { ownerChatId: chatId });
+    // A restart asked for during an earlier turn, not yet answered by a move: a fresh box before the agent starts.
+    if (pendingRestart(wb)) wb = await applyPendingRestart(wb, { ownerChatId: chatId });
     if (live.cancelRequested) return cancelledOutcome(events);
 
     // A box asleep on its host wakes with its credentials, so the fleet does
