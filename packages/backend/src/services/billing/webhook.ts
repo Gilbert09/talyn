@@ -8,7 +8,7 @@ import {
   users as usersTable,
 } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
-import { CREDIT_PACKS, formatUsd, type CreditPackId } from '@talyn/shared';
+import { CREDIT_PACKS, formatUsd, isTierUpgrade, type CreditPackId } from '@talyn/shared';
 import { emitSubscriptionUpdated } from '../websocket.js';
 import { settleCreditOrder } from './autoTopup.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
@@ -452,7 +452,7 @@ export async function applySubscriptionEvent(
       ? { previousProductId: current[0].productId }
       : {}),
     ...(eventType === 'subscription.updated' && sameSubscription && previouslyGranting && !current[0]?.productId
-      && personalProductTier(sub.productId) === 'pro'
+      && (personalProductTier(sub.productId) === 'pro' || personalProductTier(sub.productId) === 'max')
       ? { previousProductId: UNRECORDED_LEGACY_PRODUCT }
       : {}),
   };
@@ -602,7 +602,7 @@ function notifyPlanChange(result: ApplyResult, sub: PolarSubscription, eventId: 
   const newPlan = subscriptionProductLabel(sub.productId, team) ?? sub.product?.name ?? sub.productId;
   const oldTier = unrecorded ? 'legacy_pro' : team ? teamProductTier(oldProductId) : personalProductTier(oldProductId);
   const newTier = team ? teamProductTier(sub.productId) : personalProductTier(sub.productId);
-  const level: TodiexLevel = oldTier === 'legacy_pro' && newTier === 'pro' ? 'success' : 'info';
+  const level: TodiexLevel = oldTier && newTier && isTierUpgrade(oldTier, newTier) ? 'success' : 'info';
 
   notifyTodiex(async () => {
     if (result.teamId) {

@@ -49,6 +49,7 @@ const POLAR_KEYS = [
   'POLAR_ENVIRONMENT',
   'POLAR_PRODUCT_ID_MONTHLY',
   'POLAR_PRODUCT_ID_ANNUAL',
+  'POLAR_PRODUCT_ID_MAX_MONTHLY',
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -184,6 +185,39 @@ describe('GET /billing/status', () => {
       cancelAtPeriodEnd: true,
       currentPeriodEnd: '2026-08-06T00:00:00.000Z',
     });
+  });
+});
+
+describe('GET /billing/status: the Max plan', () => {
+  function setMax(product = true) {
+    setPolarEnv();
+    if (product) process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'prod-max-m';
+  }
+
+  it('sends the Max price to every account when the Max product is set', async () => {
+    setMax();
+    const status = await getStatus();
+    expect(status.pricing).toMatchObject({ maxMonthlyMicros: 100_000_000 });
+    expect(status.pricing).not.toHaveProperty('maxAnnualMicros');
+  });
+
+  it('leaves the Max price out when the Max product is unset', async () => {
+    setMax(false);
+    const status = await getStatus();
+    expect(status.pricing).toBeDefined();
+    expect(status.pricing?.maxMonthlyMicros).toBeUndefined();
+  });
+
+  it('a Max subscriber reads Max, 1,000 hours and its price', async () => {
+    setMax();
+    await db
+      .update(usersTable)
+      .set({ plan: 'unlimited', subscriptionStatus: 'active', polarProductId: 'prod-max-m', currentPeriodEnd: new Date('2099-01-01T00:00:00.000Z') })
+      .where(eq(usersTable.id, TEST_USER_ID));
+    const status = await getStatus();
+    expect(status).toMatchObject({ plan: 'max', tier: 'max', planSource: 'subscription', period: 'monthly' });
+    expect(status.usage?.includedWsec).toBe(1000 * 3600);
+    expect(status.pricing?.maxMonthlyMicros).toBe(100_000_000);
   });
 });
 

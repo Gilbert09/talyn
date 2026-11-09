@@ -655,7 +655,7 @@ export interface AdminGoldenRebakeRequest extends AdminMutationRequest {
  * pricing.ts: the usage tiers plus `unlimited`, the old comp value (which
  * grants Pro). `effectivePlan` is always a tier, never `unlimited`.
  */
-export type AdminPlan = 'free' | 'unlimited' | 'pro' | 'legacy_pro';
+export type AdminPlan = 'free' | 'unlimited' | 'pro' | 'max' | 'legacy_pro';
 
 export interface AdminUserSummary {
   id: string;

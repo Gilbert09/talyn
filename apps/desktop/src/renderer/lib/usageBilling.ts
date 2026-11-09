@@ -1,8 +1,10 @@
 import {
   CONCURRENT_BOX_LIMIT_ERROR_CODE,
+  PLAN_LIMITS,
   PLAN_PRICES,
   SIZE_REQUIRES_PRO_ERROR_CODE,
   USAGE_EXHAUSTED_ERROR_CODE,
+  sellableTierPrices,
   type BillingPricing,
   type BillingStatus,
   type PlanTier,
@@ -101,14 +103,14 @@ export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
  * The card's button, or null for none. Free cannot buy credits, so it always
  * gets "Upgrade". A paid plan gets "Add credits" only when less than
  * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
- * gets no button and Legacy Pro gets "Upgrade".
+ * and Max get no button and Legacy Pro gets "Upgrade".
  */
 export function gaugeAction(status: UsageBillingStatus): GaugeAction | null {
   if (status.tier === 'free') return 'upgrade';
   const { includedWsec, usedWsec, exhausted } = status.usage;
   const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
   if (low) return 'add_credits';
-  return status.tier === 'pro' ? null : 'upgrade';
+  return status.tier === 'legacy_pro' ? 'upgrade' : null;
 }
 
 export const GAUGE_ACTION_LABELS: Record<GaugeAction, string> = {
@@ -116,7 +118,11 @@ export const GAUGE_ACTION_LABELS: Record<GaugeAction, string> = {
   add_credits: 'Add credits',
 };
 
-/** List prices from the status, or the shared constants when the status has none. */
+/**
+ * List prices from the status, or the shared constants when the status has
+ * none. The Max prices pass through only when the backend sent them: they are
+ * never filled in, because their absence means "do not offer Max".
+ */
 export function pricingOf(status: BillingStatus | null | undefined): BillingPricing {
   return (
     status?.pricing ?? {
@@ -126,6 +132,30 @@ export function pricingOf(status: BillingStatus | null | undefined): BillingPric
       boxHourMicros: 220_000,
     }
   );
+}
+
+/** Max's prices, or null when this account may not buy Max (the status carries no Max prices). */
+export function maxPricesOf(status: BillingStatus | null | undefined): { monthlyMicros: number; annualMicros: number | null } | null {
+  return sellableTierPrices('max', pricingOf(status));
+}
+
+/**
+ * True for a Pro annual subscriber who may buy Max. Max is monthly only, so
+ * that move is annual to monthly: the backend refuses it in place and the
+ * billing portal does it instead.
+ */
+export function maxNeedsPortal(status: BillingStatus | null | undefined): boolean {
+  return (
+    status?.tier === 'pro' &&
+    status.planSource === 'subscription' &&
+    status.period === 'annual' &&
+    maxPricesOf(status) != null
+  );
+}
+
+/** "1,000 box-hours": a tier's included hours, with a thousands separator. */
+export function includedHoursText(tier: PlanTier): string {
+  return `${PLAN_LIMITS[tier].includedBoxHours.toLocaleString('en-US')} box-hours`;
 }
 
 /** "12 Nov", or "12 Nov 2027" when the year is not this one. */

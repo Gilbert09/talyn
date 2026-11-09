@@ -123,15 +123,19 @@ export interface TierResolution extends Entitlement {
  */
 export interface TierProductIds {
   pro: readonly string[];
+  /** Absent in older tests and callers: no Max product is known. */
+  max?: readonly string[];
   legacy: readonly string[];
 }
 
 export const PRO_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_PRO_ANNUAL'] as const;
+/** Max is sold monthly only. */
+export const MAX_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MAX_MONTHLY'] as const;
 export const LEGACY_PRODUCT_ENV_VARS = ['POLAR_PRODUCT_ID_MONTHLY', 'POLAR_PRODUCT_ID_ANNUAL'] as const;
 
 const PERIOD_PRODUCT_ENV_VARS: Record<'personal' | 'team', Record<'monthly' | 'annual', readonly string[]>> = {
   personal: {
-    monthly: ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_MONTHLY'],
+    monthly: ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_MAX_MONTHLY', 'POLAR_PRODUCT_ID_MONTHLY'],
     annual: ['POLAR_PRODUCT_ID_PRO_ANNUAL', 'POLAR_PRODUCT_ID_ANNUAL'],
   },
   team: {
@@ -160,9 +164,26 @@ function productIdsFromEnv(names: readonly string[]): string[] {
   return names.map((name) => process.env[name]?.trim()).filter((id): id is string => Boolean(id));
 }
 
+/** The Max product is set, so this deployment can sell Max. */
+export function maxProductsConfigured(): boolean {
+  return productIdsFromEnv(MAX_PRODUCT_ENV_VARS).length === MAX_PRODUCT_ENV_VARS.length;
+}
+
+/**
+ * Whether this deployment sells Max: billing on and the Max product set.
+ * Holding Max never depends on this.
+ */
+export function maxPlanOffered(): boolean {
+  return billingEnabled() && maxProductsConfigured();
+}
+
 /** Read at call time, so a test or a redeploy with new env takes effect at once. */
 export function tierProductIds(): TierProductIds {
-  return { pro: productIdsFromEnv(PRO_PRODUCT_ENV_VARS), legacy: productIdsFromEnv(LEGACY_PRODUCT_ENV_VARS) };
+  return {
+    pro: productIdsFromEnv(PRO_PRODUCT_ENV_VARS),
+    max: productIdsFromEnv(MAX_PRODUCT_ENV_VARS),
+    legacy: productIdsFromEnv(LEGACY_PRODUCT_ENV_VARS),
+  };
 }
 
 /**
@@ -176,12 +197,15 @@ export function hasGrantingSubscription(plan: string | null | undefined): boolea
   return typeof plan === 'string' && GRANTING_PLANS.has(plan);
 }
 
-/** The tier a granting personal subscription gives: Pro for a Pro product, else Legacy Pro. */
+/** The tier a granting personal subscription gives: Pro or Max for their products, else Legacy Pro. */
 export function subscriptionTier(
   polarProductId: string | null | undefined,
   ids: TierProductIds = tierProductIds()
 ): Exclude<PlanTier, 'free'> {
-  return polarProductId && ids.pro.includes(polarProductId) ? 'pro' : 'legacy_pro';
+  if (!polarProductId) return 'legacy_pro';
+  if (ids.pro.includes(polarProductId)) return 'pro';
+  if (ids.max?.includes(polarProductId)) return 'max';
+  return 'legacy_pro';
 }
 
 /** The billing columns of the team whose seat a user holds. */
@@ -217,10 +241,11 @@ export interface UserBillingRow {
  * holds a seat, that seat's team.
  *
  * Order:
- * 1. `plan_override` (`unlimited` and `pro` → pro, `legacy_pro` → legacy_pro,
- *    `free` → free). A personal `free` beats everything below on purpose: it
+ * 1. `plan_override` (`unlimited` and `pro` → pro, `max` → max,
+ *    `legacy_pro` → legacy_pro, `free` → free). A personal `free` beats everything below on purpose: it
  *    is how an operator blocks one account, and a team must not undo that.
- * 2. The user's own granting subscription: a Pro product → pro; an old
+ * 2. The user's own granting subscription: a Pro product → pro; a Max
+ *    product → max; an old
  *    Unlimited product, no stored product, or an unknown one → legacy_pro.
  * 3. A paid team seat → the team's tier.
  * 4. Free.
@@ -870,13 +895,26 @@ async function loadBillingTeam(ownerId: string): Promise<{
   };
 }
 
-/** List prices the clients draw. */
+/** List prices the clients draw. Max is added per account by {@link billingPricingFor}. */
 export const BILLING_PRICING: BillingPricing = {
   proMonthlyMicros: PLAN_PRICES.pro.monthlyMicros,
   proAnnualMicros: PLAN_PRICES.pro.annualMicros ?? 0,
   legacyProMonthlyMicros: PLAN_PRICES.legacy_pro.monthlyMicros,
   boxHourMicros: BOX_HOUR_PRICE_MICROS,
 };
+
+/**
+ * The prices one account sees. Max's price is sent when this deployment sells
+ * Max or the account already holds it, so a client offers Max exactly when it
+ * is there.
+ */
+export function billingPricingFor(input: { tier: PlanTier; maxOffered: boolean }): BillingPricing {
+  if (!input.maxOffered && input.tier !== 'max') return BILLING_PRICING;
+  return {
+    ...BILLING_PRICING,
+    maxMonthlyMicros: PLAN_PRICES.max.monthlyMicros,
+  };
+}
 
 /** Pure: the period's usage as `BillingStatus.usage` shows it. */
 export function usageSummaryFromBudget(budget: UsageBudget): UsageSummary {
@@ -1037,7 +1075,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     ...(autoTopup ? { autoTopup } : {}),
     sizePrices: sizePriceTable(tier),
     concurrentBoxes: { used: boxesInUse, limit: limits.concurrentBoxes },
-    pricing: BILLING_PRICING,
+    pricing: billingPricingFor({ tier, maxOffered: maxPlanOffered() }),
   };
 }
 

@@ -142,6 +142,61 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('auto-topup')).toBeNull();
   });
 
+  it('offers Pro no Max upgrade when Max is not offered', () => {
+    show(usageStatus('pro', { overrides: { period: 'monthly' } }));
+    expect(screen.queryByRole('button', { name: 'Upgrade to Max' })).toBeNull();
+    expect(screen.getByTestId('plan-card')).not.toHaveTextContent('Max');
+  });
+
+  it('offers a Pro subscriber the move to Max in place', async () => {
+    changePlan.mockResolvedValue({ ok: true });
+    show(usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } }));
+    expect(within(screen.getByTestId('plan-card')).getByRole('button', { name: 'Manage billing' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max' }));
+    expect(screen.getByTestId('max-changes')).toHaveTextContent('200 box-hours a month becomes 1,000 box-hours');
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+    await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
+    expect(checkout).not.toHaveBeenCalled();
+  });
+
+  it('sends a Pro annual subscriber to Manage billing for Max', async () => {
+    portal.mockResolvedValue({ url: 'https://polar.test/portal' });
+    show(usageStatus('pro', { maxOffered: true, overrides: { period: 'annual' } }));
+    const card = screen.getByTestId('plan-card');
+    expect(screen.getByTestId('max-via-portal-hint')).toHaveTextContent(
+      'Max is monthly only. To move from annual Pro to Max, use Manage billing.'
+    );
+    expect(within(card).queryByRole('button', { name: 'Upgrade to Max' })).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: 'Manage billing' }));
+    await waitFor(() => expect(portal).toHaveBeenCalled());
+    expect(changePlan).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Pro monthly', usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } })],
+    ['Pro without Max on offer', usageStatus('pro', { overrides: { period: 'annual' } })],
+    ['Max', usageStatus('max', { overrides: { period: 'monthly' } })],
+  ])('shows no Max portal note for %s', (_label, status) => {
+    show(status);
+    expect(screen.queryByTestId('max-via-portal-hint')).toBeNull();
+  });
+
+  it('shows a Max subscriber the plan, its hours and the portal for a move to Pro', async () => {
+    portal.mockResolvedValue({ url: 'https://polar.test/portal' });
+    show(usageStatus('max', { usedHours: 250, overrides: { period: 'monthly' } }));
+    const card = screen.getByTestId('plan-card');
+    expect(card).toHaveTextContent('Max');
+    expect(screen.getByTestId('plan-period-line')).toHaveTextContent('Max · Monthly · $100/month');
+    expect(card).toHaveTextContent('1,000 box-hours a month, 100 boxes at once, every box size, credits and auto top-up.');
+    expect(screen.getByTestId('max-to-pro-hint')).toHaveTextContent('To move to Pro, use Manage billing.');
+    expect(screen.getByTestId('usage-card')).toHaveTextContent('250 of 1,000 box-hours used');
+    expect(screen.getByTestId('credits-card')).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Upgrade|Move to Pro/ })).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: 'Manage billing' }));
+    await waitFor(() => expect(portal).toHaveBeenCalled());
+    expect(changePlan).not.toHaveBeenCalled();
+  });
+
   it('shows Pro credits, lots and expiry, and buys a pack', async () => {
     creditCheckout.mockResolvedValue({ url: 'u' });
     show(
@@ -365,6 +420,7 @@ describe('BillingSettings with usage billing', () => {
       ['pro', 'monthly', 'Pro · Monthly · $40/month'],
       ['pro', 'annual', 'Pro · Annual · $400/year'],
       ['legacy_pro', 'monthly', 'Legacy Pro · Monthly · $15/month'],
+      ['max', 'monthly', 'Max · Monthly · $100/month'],
     ] as const)('%s %s shows the period line', (tier, period, text) => {
       show(usageStatus(tier, { overrides: { period } }));
       expect(screen.getByTestId('plan-period-line')).toHaveTextContent(text);
@@ -384,6 +440,21 @@ describe('BillingSettings with usage billing', () => {
       ['comp', { period: 'monthly' as const, planSource: 'override' as const }],
     ])('no switch offered when %s', (_name, overrides) => {
       show(usageStatus('pro', { overrides }));
+      expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
+    });
+
+    it.each([
+      ['monthly', 'monthly' as const],
+      ['unknown', null],
+    ])('shows Max monthly only when the period is %s', (_label, period) => {
+      show(usageStatus('max', { overrides: { period } }));
+      const line = screen.getByTestId('plan-period-line');
+      expect(line).toHaveTextContent('$100/month');
+      expect(line).not.toHaveTextContent(/year|\$1,000/);
+    });
+
+    it('offers no annual switch to a monthly Max subscriber', () => {
+      show(usageStatus('max', { overrides: { period: 'monthly' } }));
       expect(screen.queryByRole('button', { name: /Switch to annual/ })).toBeNull();
     });
 

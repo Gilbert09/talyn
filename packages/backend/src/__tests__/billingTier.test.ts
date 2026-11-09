@@ -6,6 +6,7 @@ import type { Database } from '../db/client.js';
 import { teamSeats, teams, users } from '../db/schema.js';
 import {
   LEGACY_PRODUCT_ENV_VARS,
+  MAX_PRODUCT_ENV_VARS,
   PRO_PRODUCT_ENV_VARS,
   deriveEntitlement,
   deriveTier,
@@ -24,6 +25,7 @@ import { resolveUsageTier } from '../services/billing/usage/tier.js';
 
 const IDS: TierProductIds = {
   pro: ['prod-pro-monthly', 'prod-pro-annual'],
+  max: ['prod-max-monthly'],
   legacy: ['prod-unlimited-monthly', 'prod-unlimited-annual'],
 };
 
@@ -31,6 +33,7 @@ const PRODUCTS = {
   'no product': null,
   'pro monthly': 'prod-pro-monthly',
   'pro annual': 'prod-pro-annual',
+  'max monthly': 'prod-max-monthly',
   'old unlimited monthly': 'prod-unlimited-monthly',
   'old unlimited annual': 'prod-unlimited-annual',
   'unknown product': 'prod-something-else',
@@ -48,13 +51,13 @@ const TEAMS: Record<string, TeamBillingRow | null> = {
   'paid pro team blocked by override': { plan: 'team', planOverride: 'none', tier: 'pro' },
 };
 
-const OVERRIDES = [null, 'free', 'unlimited', 'pro', 'legacy_pro', 'gold'] as const;
+const OVERRIDES = [null, 'free', 'unlimited', 'pro', 'max', 'legacy_pro', 'gold'] as const;
 const PLANS = ['free', 'unlimited', 'pro', 'legacy_pro', 'none'] as const;
 
 /**
  * The spec's order, written out case by case rather than reusing the code
- * under test: override, then own subscription (Pro product → pro, anything
- * else → legacy_pro), then a paid seat (team tier, unknown → legacy_pro),
+ * under test: override, then own subscription (Pro product → pro, Max
+ * product → max, anything else → legacy_pro), then a paid seat (team tier, unknown → legacy_pro),
  * then free.
  */
 function expected(
@@ -65,11 +68,13 @@ function expected(
 ): { tier: PlanTier; source: EntitlementSource } {
   if (override === 'free') return { tier: 'free', source: 'override' };
   if (override === 'unlimited' || override === 'pro') return { tier: 'pro', source: 'override' };
+  if (override === 'max') return { tier: 'max', source: 'override' };
   if (override === 'legacy_pro') return { tier: 'legacy_pro', source: 'override' };
   const subscribed = plan === 'unlimited' || plan === 'pro' || plan === 'legacy_pro';
   if (subscribed) {
     const isPro = product === 'pro monthly' || product === 'pro annual';
-    return { tier: isPro ? 'pro' : 'legacy_pro', source: 'subscription' };
+    const isMax = product === 'max monthly';
+    return { tier: isPro ? 'pro' : isMax ? 'max' : 'legacy_pro', source: 'subscription' };
   }
   const paid = team !== null && (team.planOverride === 'team' || (team.planOverride !== 'none' && team.plan === 'team'));
   if (paid) return { tier: team.tier === 'pro' ? 'pro' : 'legacy_pro', source: 'team' };
@@ -86,7 +91,7 @@ const MATRIX = OVERRIDES.flatMap((override) =>
 
 describe('deriveTierResolution: every source × product kind × override × team seat', () => {
   it(`covers ${MATRIX.length} combinations`, () => {
-    expect(MATRIX.length).toBe(OVERRIDES.length * PLANS.length * 6 * Object.keys(TEAMS).length);
+    expect(MATRIX.length).toBe(OVERRIDES.length * PLANS.length * Object.keys(PRODUCTS).length * Object.keys(TEAMS).length);
   });
 
   it.each(MATRIX)('override=$override plan=$plan product=$product team=$team', ({ override, plan, product, team }) => {
@@ -104,6 +109,9 @@ describe('deriveTierResolution: named cases from the spec', () => {
     ['old Unlimited subscriber, no stored product → Legacy Pro on their own period', { plan: 'unlimited', planOverride: null, polarProductId: null, currentPeriodEnd: end }, null, 'legacy_pro', 'subscription', end],
     ['old Unlimited product id → Legacy Pro', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-unlimited-annual', currentPeriodEnd: end }, null, 'legacy_pro', 'subscription', end],
     ['new Pro product → Pro on their own period', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-pro-monthly', currentPeriodEnd: end }, null, 'pro', 'subscription', end],
+    ['new Max product → Max on their own period', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-max-monthly', currentPeriodEnd: end }, null, 'max', 'subscription', end],
+    ['max override on a free user → Max on the calendar month', { plan: 'free', planOverride: 'max' }, null, 'max', 'override', null],
+    ['own Max subscription wins over a pro seat', { plan: 'unlimited', planOverride: null, polarProductId: 'prod-max-monthly', currentPeriodEnd: end }, TEAMS['paid pro team']!, 'max', 'subscription', end],
     ['webhook writes the tier as the plan', { plan: 'pro', planOverride: null, polarProductId: 'prod-pro-annual', currentPeriodEnd: end }, null, 'pro', 'subscription', end],
     ['comp (unlimited override) → Pro on the calendar month', { plan: 'free', planOverride: 'unlimited' }, null, 'pro', 'override', null],
     ['pro override on a subscriber keeps their period', { plan: 'unlimited', planOverride: 'pro', currentPeriodEnd: end }, null, 'pro', 'override', end],
@@ -121,10 +129,11 @@ describe('deriveTierResolution: named cases from the spec', () => {
 });
 
 describe('subscriptionTier', () => {
-  it.each<[ProductKind, 'pro' | 'legacy_pro']>([
+  it.each<[ProductKind, 'pro' | 'max' | 'legacy_pro']>([
     ['no product', 'legacy_pro'],
     ['pro monthly', 'pro'],
     ['pro annual', 'pro'],
+    ['max monthly', 'max'],
     ['old unlimited monthly', 'legacy_pro'],
     ['old unlimited annual', 'legacy_pro'],
     ['unknown product', 'legacy_pro'],
@@ -134,6 +143,10 @@ describe('subscriptionTier', () => {
 
   it('a Pro product reads as Legacy Pro when the Pro env vars are not set', () => {
     expect(subscriptionTier('prod-pro-monthly', { pro: [], legacy: [] })).toBe('legacy_pro');
+  });
+
+  it('a Max product reads as Legacy Pro when the Max env vars are not set', () => {
+    expect(subscriptionTier('prod-max-monthly', { pro: IDS.pro, legacy: IDS.legacy })).toBe('legacy_pro');
   });
 });
 
@@ -153,7 +166,7 @@ describe('hasGrantingSubscription', () => {
 });
 
 describe('tierProductIds', () => {
-  const names = [...PRO_PRODUCT_ENV_VARS, ...LEGACY_PRODUCT_ENV_VARS];
+  const names = [...PRO_PRODUCT_ENV_VARS, ...MAX_PRODUCT_ENV_VARS, ...LEGACY_PRODUCT_ENV_VARS];
   const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
   afterEach(() => {
     for (const n of names) {
@@ -162,18 +175,25 @@ describe('tierProductIds', () => {
     }
   });
 
-  it('reads the four product env vars at call time', () => {
+  it('reads the five product env vars at call time', () => {
     process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = 'pm';
     process.env.POLAR_PRODUCT_ID_PRO_ANNUAL = ' pa ';
+    process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'mm';
     process.env.POLAR_PRODUCT_ID_MONTHLY = 'um';
     process.env.POLAR_PRODUCT_ID_ANNUAL = 'ua';
-    expect(tierProductIds()).toEqual({ pro: ['pm', 'pa'], legacy: ['um', 'ua'] });
+    expect(tierProductIds()).toEqual({ pro: ['pm', 'pa'], max: ['mm'], legacy: ['um', 'ua'] });
   });
 
   it('drops unset and blank values', () => {
     for (const n of names) delete process.env[n];
     process.env.POLAR_PRODUCT_ID_PRO_MONTHLY = '   ';
-    expect(tierProductIds()).toEqual({ pro: [], legacy: [] });
+    process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = '  ';
+    expect(tierProductIds()).toEqual({ pro: [], max: [], legacy: [] });
+  });
+
+  it('defaults deriveEntitlement to the env Max ids', () => {
+    process.env.POLAR_PRODUCT_ID_MAX_MONTHLY = 'env-max';
+    expect(deriveEntitlement({ plan: 'unlimited', planOverride: null, polarProductId: 'env-max' }).tier).toBe('max');
   });
 
   it('defaults deriveEntitlement to the env ids', () => {

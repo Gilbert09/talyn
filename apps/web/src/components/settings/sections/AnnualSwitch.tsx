@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { PLAN_PRICES, annualSavingsMicros, formatUsd, type BillingStatus } from '@talyn/shared';
+import { PLAN_PRICES, formatUsd, isSellableTier, sellableTierPrices, tierSoldAnnually, type BillingStatus } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
 import { toast } from '../../../stores/toast';
 import { Button } from '../../ui/button';
 
-/** A monthly Pro subscriber paying for themselves: the only account the switch applies to. */
+/** A monthly Pro subscriber paying for themselves: the only accounts the switch applies to. Max is monthly only. */
 export function canSwitchToAnnual(status: BillingStatus): boolean {
   return (
-    status.tier === 'pro' &&
+    isSellableTier(status.tier) &&
+    tierSoldAnnually(status.tier) &&
     status.planSource === 'subscription' &&
     status.period === 'monthly' &&
     !status.cancelAtPeriodEnd &&
@@ -29,20 +30,25 @@ export function AnnualSwitch({ status, placement }: { status: BillingStatus; pla
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (done) return <p className="text-xs text-muted-foreground" data-testid="annual-switch-done">Switched to annual. Your plan updates in a moment.</p>;
-  if (!canSwitchToAnnual(status)) return null;
-  const pricing = {
-    proMonthlyMicros: status.pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros,
-    proAnnualMicros: status.pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros ?? 0,
-  };
-  const saving = formatUsd(annualSavingsMicros(pricing), 0);
-  const annual = formatUsd(pricing.proAnnualMicros, 0);
+  if (!canSwitchToAnnual(status) || !isSellableTier(status.tier)) return null;
+  const tier = status.tier;
+  const prices = sellableTierPrices(tier, {
+    proMonthlyMicros: PLAN_PRICES.pro.monthlyMicros,
+    proAnnualMicros: PLAN_PRICES.pro.annualMicros ?? 0,
+    legacyProMonthlyMicros: PLAN_PRICES.legacy_pro.monthlyMicros,
+    boxHourMicros: 0,
+    ...status.pricing,
+  });
+  if (prices?.annualMicros == null) return null;
+  const saving = formatUsd(Math.max(0, prices.monthlyMicros * 12 - prices.annualMicros), 0);
+  const annual = formatUsd(prices.annualMicros, 0);
 
   const confirm = async () => {
     setBusy(true);
     setError(null);
     trackEvent('annual_switch_started', { placement });
     try {
-      await api.billing.changePlan({ to: 'pro', period: 'annual' });
+      await api.billing.changePlan({ to: tier, period: 'annual' });
       trackEvent('annual_switch_completed', { placement });
       setDone(true);
       toast.success('Switched to annual', 'Polar invoices the prorated difference now.');

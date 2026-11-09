@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Max plan (2026-11-08)
+
+A third paid tier: **Max**, $100 a month (monthly only, Tom's call), 1,000 box-hours a month, every size, credits and auto features. Tom asked for "something like $100 with a lot more compute" that does not lose money.
+- Cost basis: the main fleet host is a Scaleway EM-B520E-NVMe (EPYC 7272, 24 threads, 256 GiB), billed monthly at a listed €189.99 (about $205, or $0.28 a host-hour). CPU binds first (96-box cap, four a thread). One busy `standard` box per thread costs $0.012 a box-hour, 12 at once $0.023. The cautious estimate stays $0.04 (`FLEET_BOX_HOUR_COST_ESTIMATE_MICROS`): the 12-box case at a host price near €330. Talyn sends no box-hour events to PostHog, so the real usage spread is only in the database (admin Compute usage page).
+- At the likely $0.012–0.023, Max at full use keeps 75–87%. At the cautious $0.04 it keeps 57% (break-even $0.094 a box-hour after Polar's fees). An annual Max at $1,000 would have kept only 49% at the cautious cost, which is one reason it was dropped. Annual → monthly moves go through the portal, so Pro annual → Max does too. One host gives about 17,500 box-hours a month at 24 busy boxes; selling about 2,200 of them at Max rates pays for it.
+- One leak closed, one accepted. A mid-period upgrade between paid tiers gets prorated hours (`includedAfterTierChange`); without it, Pro → Max on the last day cost about $2 for 800 hours. Legacy Pro → Pro is prorated the same way now. Downgrades go through the portal, and the org keeps the default proration `prorate` (Tom, 2026-11-09: `next_period` would make portal upgrades wait for renewal too). So a customer can use Max hours and then downgrade for a credit on the unused part. The worst case is an upgrade at the start of a period, a burst of about 800 hours (about 33 boxes for a day), then a downgrade: about $2 net for $10–32 of compute, once a period.
+- No feature flag (Tom's call): setting `POLAR_PRODUCT_ID_MAX_MONTHLY` offers Max to every account. A subscriber's tier comes from their product id.
+
 ## Session background jobs and wake-ups: backend (2026-11-08)
 
 An agent can start a command that outlives its turn. It can ask Talyn to start a new turn later. These features are released to every account (decision 2026-11-08). The UI is separate work.

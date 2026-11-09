@@ -37,6 +37,10 @@ const POLAR_ENV = {
   POLAR_PRODUCT_ID_CREDITS_100: 'prod-c100',
   POLAR_PRODUCT_ID_CREDITS_500: 'prod-c500',
 } as const;
+const MAX_ENV = {
+  POLAR_PRODUCT_ID_MAX_MONTHLY: 'prod-max-m',
+} as const;
+const ENV_KEYS = [...Object.keys(POLAR_ENV), ...Object.keys(MAX_ENV)];
 const savedEnv: Record<string, string | undefined> = {};
 
 let db: Database;
@@ -46,6 +50,15 @@ let close: () => Promise<void>;
 
 function setPolarEnv() {
   for (const [k, v] of Object.entries(POLAR_ENV)) process.env[k] = v;
+}
+
+/** Billing plus the Max product. */
+function setMaxEnv(overrides: Partial<Record<keyof typeof MAX_ENV, string>> = {}) {
+  setPolarEnv();
+  for (const [k, v] of Object.entries({ ...MAX_ENV, ...overrides })) {
+    if (v) process.env[k] = v;
+    else delete process.env[k];
+  }
 }
 
 async function call(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = headers) {
@@ -65,7 +78,7 @@ const subscribed = (productId: string | null = 'prod-legacy-m') =>
 
 beforeEach(async () => {
   ({ db, cleanup } = await createTestDb());
-  for (const k of Object.keys(POLAR_ENV)) {
+  for (const k of ENV_KEYS) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -86,7 +99,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const k of Object.keys(POLAR_ENV)) {
+  for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
@@ -233,12 +246,43 @@ describe('POST /billing/checkout', () => {
     setPolarEnv();
     const res = await call('POST', '/checkout', body);
     expect(res.status).toBe(200);
-    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, period);
+    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, period, 'pro');
   });
 
-  it('400 for a plan other than pro', async () => {
-    setPolarEnv();
-    expect((await call('POST', '/checkout', { period: 'monthly', plan: 'unlimited' })).status).toBe(400);
+  it.each([['unlimited'], ['legacy_pro'], ['free'], ['Max']])('400 for plan %s', async (plan) => {
+    setMaxEnv();
+    expect((await call('POST', '/checkout', { period: 'monthly', plan })).status).toBe(400);
+  });
+
+  it.each([
+    ['monthly', 'monthly'],
+    [undefined, 'monthly'],
+  ])('sells Max (period %s → %s) when it is offered', async (period, expected) => {
+    setMaxEnv();
+    const res = await call('POST', '/checkout', { plan: 'max', ...(period ? { period } : {}) });
+    expect(res.status).toBe(200);
+    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, expected, 'max');
+  });
+
+  it('403 for Max when the Max product is not set', async () => {
+    setMaxEnv({ POLAR_PRODUCT_ID_MAX_MONTHLY: '' });
+    const { status, body } = await call('POST', '/checkout', { period: 'monthly', plan: 'max' });
+    expect(status).toBe(403);
+    expect(body.code).toBe('max_plan_unavailable');
+    expect(polar.createCheckoutUrl).not.toHaveBeenCalled();
+  });
+
+  it('400 for annual Max: it is sold monthly only', async () => {
+    setMaxEnv();
+    const { status, body } = await call('POST', '/checkout', { period: 'annual', plan: 'max' });
+    expect(status).toBe(400);
+    expect(body.code).toBe('monthly_only');
+    expect(polar.createCheckoutUrl).not.toHaveBeenCalled();
+  });
+
+  it('an unset Max product never blocks Pro', async () => {
+    setMaxEnv({ POLAR_PRODUCT_ID_MAX_MONTHLY: '' });
+    expect((await call('POST', '/checkout', { period: 'monthly', plan: 'pro' })).status).toBe(200);
   });
 
   it('409 when a granting subscription exists: change it instead', async () => {
@@ -319,6 +363,56 @@ describe('POST /billing/change-plan', () => {
     const { status, body } = await call('POST', '/change-plan', { to: 'pro', period: 'monthly' });
     expect(status).toBe(409);
     expect(body.code).toBe('annual_to_monthly_via_portal');
+    expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Pro monthly → Max', 'prod-pro-m', 'monthly', 'prod-max-m'],
+    ['Legacy Pro → Max', 'prod-legacy-m', 'monthly', 'prod-max-m'],
+  ])('upgrades %s', async (_name, from, period, productId) => {
+    setMaxEnv();
+    await subscribed(from);
+    const { status } = await call('POST', '/change-plan', { to: 'max', period });
+    expect(status).toBe(200);
+    expect(polar.changeSubscriptionProduct).toHaveBeenCalledWith('sub-1', productId);
+  });
+
+  it.each([
+    ['Max monthly → Pro monthly', 'prod-max-m', 'pro', 'monthly', 'downgrade_via_portal'],
+    ['Max monthly → Pro annual', 'prod-max-m', 'pro', 'annual', 'downgrade_via_portal'],
+    ['Pro annual → Max', 'prod-pro-a', 'max', 'monthly', 'annual_to_monthly_via_portal'],
+  ])('refuses %s: the portal does that', async (_name, from, to, period, code) => {
+    setMaxEnv();
+    await subscribed(from);
+    const { status, body } = await call('POST', '/change-plan', { to, period });
+    expect(status).toBe(409);
+    expect(body.code).toBe(code);
+    expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
+  });
+
+  it('400 for an annual Max upgrade: it is sold monthly only', async () => {
+    setMaxEnv();
+    await subscribed('prod-pro-m');
+    const { status, body } = await call('POST', '/change-plan', { to: 'max', period: 'annual' });
+    expect(status).toBe(400);
+    expect(body.code).toBe('monthly_only');
+    expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
+  });
+
+  it('a Max subscriber moves to Pro in the portal', async () => {
+    setMaxEnv();
+    await subscribed('prod-max-m');
+    const { status, body } = await call('POST', '/change-plan', { to: 'pro', period: 'monthly' });
+    expect(status).toBe(409);
+    expect(body.code).toBe('downgrade_via_portal');
+  });
+
+  it('403 for an upgrade to Max when the Max product is not set', async () => {
+    setMaxEnv({ POLAR_PRODUCT_ID_MAX_MONTHLY: '' });
+    await subscribed('prod-pro-m');
+    const { status, body } = await call('POST', '/change-plan', { to: 'max', period: 'monthly' });
+    expect(status).toBe(403);
+    expect(body.code).toBe('max_plan_unavailable');
     expect(polar.changeSubscriptionProduct).not.toHaveBeenCalled();
   });
 
