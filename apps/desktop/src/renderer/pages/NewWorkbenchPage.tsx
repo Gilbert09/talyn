@@ -21,7 +21,7 @@ import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbench
 import { TooltipProvider } from '../components/ui/tooltip';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from '../components/workbench/ComposerPopover';
-import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from '../components/workbench/useComposerImages';
+import { ImageAttachButton, ImageAttachmentChips, ImageDropOverlay, useComposerImages, useImageDropZone } from '../components/workbench/useComposerImages';
 import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 import {
   AgentPicker,
@@ -108,6 +108,7 @@ export function NewWorkbenchPage() {
   const [loadingFileSource, setLoadingFileSource] = useState<string | null>(null);
   const effectiveRuntime = mode === 'thread' ? 'sandbox' : runtime;
   const images = useComposerImages(effectiveRuntime);
+  const { dragging, dropProps } = useImageDropZone((files) => void images.attachFiles(files));
 
   const repo = repositories.find((r) => r.id === repositoryId) ?? null;
   const defaultBranch = workspace?.repos.find((r) => r.name.toLowerCase() === repo?.fullName.toLowerCase())?.defaultBranch ?? '';
@@ -387,13 +388,13 @@ export function NewWorkbenchPage() {
 
           <div className="space-y-2">
             <div
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={images.onDrop}
+              {...dropProps}
               className={cn(
                 'relative rounded-xl border border-border bg-card shadow-sm transition-colors focus-within:border-ring/60',
                 busy && 'opacity-80'
               )}
             >
+              <ImageDropOverlay dragging={dragging} className="rounded-xl" />
               {trigger && (
                 <ComposerPopover
                   kind="mention"
