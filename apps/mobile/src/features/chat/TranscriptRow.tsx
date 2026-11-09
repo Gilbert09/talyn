@@ -1,30 +1,26 @@
-import { StyleSheet, View } from 'react-native';
+import type { Workbench } from '@talyn/shared';
+import { memo } from 'react';
 
-import { AppText } from '../../components/UI';
-import { NativeText } from '../../components/Workflow';
-import { longTime, shortTime } from '../../lib/time';
-import { radius, useTheme } from '../../theme/tokens';
-import type { TranscriptRow as Row } from '../../workflow/model';
+import type { TranscriptRow as Row } from './transcript';
+import { ToolGroupRow, ToolRow } from './ToolRow';
+import { AgentText, EventLine, FailedLine, PermissionRow, PlanCard, QueuedBubble, SystemRow, ThinkingRow, UserBubble } from './TranscriptParts';
 
-/** One transcript entry. Phase 2 replaces this with rendered markdown and tool rows. */
-export function TranscriptRow({ row, now }: { row: Row; now: number }) {
-  const c = useTheme();
-  const time = row.timestamp ? shortTime(row.timestamp, now) : '';
-  const meta = [row.author === 'System' ? 'Talyn' : row.author === 'Agent' ? 'Agent' : '', time, row.streaming ? 'Streaming' : ''].filter(Boolean).join(' · ');
-  if (row.author === 'You') {
-    return <View style={styles.userWrap} accessibilityLabel={`You${row.timestamp ? `, ${longTime(row.timestamp)}` : ''}`}>
-      <View style={[styles.bubble, { backgroundColor: c.surface }]}><NativeText text={row.text} /></View>
-      {time ? <AppText variant="caption" tone="muted">{time}</AppText> : null}
-    </View>;
+export interface PlanControls { busy: boolean; disabled: boolean; approve(): void; keepPlanning(): void }
+
+/** One conversation row. No author badges and no full timestamps: the shape says who wrote it. */
+export const TranscriptRow = memo(function TranscriptRow({ row, now, workbench, plan }: { row: Row; now: number; workbench: Workbench; plan: PlanControls }) {
+  switch (row.kind) {
+    case 'user': return <UserBubble text={row.text} timestamp={row.timestamp} attachments={row.attachments} now={now} />;
+    case 'text': return <AgentText text={row.text} streaming={row.streaming} />;
+    case 'thinking': return <ThinkingRow text={row.text} />;
+    case 'tool': return <ToolRow tool={row.tool} />;
+    case 'tool_group': return <ToolGroupRow group={row.group} />;
+    case 'permission': return <PermissionRow row={row} />;
+    case 'system': return <SystemRow row={row} workbench={workbench} />;
+    case 'failed': return <FailedLine text={row.text} />;
+    case 'stopped': return <EventLine icon={{ ios: 'stop.circle', android: 'stop_circle' }} text="Stopped" />;
+    case 'queued': return <QueuedBubble text={row.text} fromTalyn={row.fromTalyn} />;
+    case 'plan': return <PlanCard plan={row.plan} state={row.state} busy={plan.busy} disabled={plan.disabled}
+      onApprove={plan.approve} onKeepPlanning={plan.keepPlanning} />;
   }
-  return <View style={[styles.flat, row.author === 'System' && { opacity: 0.85 }]} accessibilityLiveRegion="none">
-    {meta ? <AppText variant="caption" tone="muted">{meta}</AppText> : null}
-    <NativeText text={row.text} />
-  </View>;
-}
-
-const styles = StyleSheet.create({
-  userWrap: { alignItems: 'flex-end', gap: 4, paddingLeft: 40, paddingVertical: 6 },
-  bubble: { borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 8, maxWidth: '100%' },
-  flat: { gap: 4, paddingVertical: 6 },
 });

@@ -1,6 +1,6 @@
 import { cacheKey, canCompose, canStartSend, ciLabel, queueLabel, externalLabel, deliveryLabel, deliveryReducer, EMPTY_DELIVERY, emptyTranscript,
   EVENT_LIMIT, explicitSendFailure, failureState, groupByRepository, humanGate, mergeEvents, needsAttention, selectWorkbenches,
-  stackLabel, statusLabel, transcriptRows, upsertWorkbench, withChat, workbenchTitle } from '../workflow/model';
+  stackLabel, statusLabel, upsertWorkbench, withChat, workbenchTitle } from '../workflow/model';
 import { chat, event, pr, scope, session } from './workflowFixtures';
 
 describe('isolated memory keys and selectors', () => {
@@ -61,17 +61,6 @@ describe('bounded cursor reconciliation', () => {
     const current = mergeEvents('chat-one', emptyTranscript(), [event(2000)], 'rest', { events: [], cursor: 2000, oldestSeq: 2000 });
     const older = mergeEvents('chat-one', current, Array.from({ length: 1999 }, (_, index) => event(index + 1)), 'older', { events: [], cursor: 1999, oldestSeq: 1, hasOlder: false });
     expect(older.events[0].seq).toBe(1); expect(older.events).toHaveLength(EVENT_LIMIT); expect(older.trimmed).toBe(true);
-  });
-  it('uses native rows for user text, agent text, system events, and interruptions', () => {
-    const rows = transcriptRows('chat-one', [event(1, { event: { seq: 1, type: 'user', message: { content: [{ type: 'text', text: 'Hello' }] } } }),
-      event(2), event(3, { event: { seq: 3, type: 'system', subtype: 'talyn_interruption' } })]);
-    expect(rows.map((row) => row.author)).toEqual(['You', 'Agent', 'System']);
-    expect(rows.map((row) => row.text)).toContain('Interrupted'); expect(rows[0].timestamp).toBeNull();
-    expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length);
-  });
-  it('marks streamed text without announcing tokens', () => {
-    const rows = transcriptRows('chat-one', [event(1, { event: { seq: 1, type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Streaming text' } } } })]);
-    expect(rows[0]).toMatchObject({ author: 'Agent', text: 'Streaming text', streaming: true });
   });
 });
 

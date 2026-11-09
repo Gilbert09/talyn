@@ -1,4 +1,4 @@
-import { buildBlocks, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import type { PRRow, WorkbenchEventsPage } from '@talyn/client/native';
 
 export const SCHEMA_VERSION = 1;
@@ -7,7 +7,8 @@ export const EVENT_BYTES = 2_000_000;
 export const PAGE_SIZE = 200;
 export const ROW_TEXT_LIMIT = 16000;
 export interface Scope { environment: string; user: string; workspace: string }
-export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript';
+export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
+  | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments';
 export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
   JSON.stringify(['mobile', SCHEMA_VERSION, scope.environment, scope.user, scope.workspace, entity, id]);
 export const sameScope = (a: Scope | null, b: Scope | null) => a === b || Boolean(a && b &&
@@ -159,39 +160,4 @@ export function stackLabel(row: PRRow) {
 }
 export function canCompose(item: Workbench | undefined, chat: WorkbenchChat | undefined) {
   return Boolean(item && chat && item.status === 'ready' && !item.archivedAt && ['idle', 'running', 'awaiting_input', 'error'].includes(chat.status));
-}
-
-export interface TranscriptRow { key: string; author: 'You' | 'Agent' | 'System'; text: string; timestamp: string | null; streaming: boolean }
-export function transcriptRows(chatId: string, events: WorkbenchEvent[]): TranscriptRow[] {
-  const normalized = events.map((item) => ({ ...item.event, seq: item.seq }));
-  const bySeq = new Map(events.map((item) => [item.seq, item.event]));
-  const rows: TranscriptRow[] = [];
-  for (const block of buildBlocks(normalized)) {
-    const seq = Number(block.key.split('.')[0]);
-    const event = bySeq.get(seq);
-    const rawTime = event?.timestamp;
-    const timestamp = typeof rawTime === 'string' && Number.isFinite(Date.parse(rawTime)) ? rawTime : null;
-    let text: string;
-    if (block.kind === 'text' || block.kind === 'thinking' || block.kind === 'system') text = block.text;
-    else if (block.kind === 'result') text = block.isError ? `Turn failed. ${block.summary}` : block.summary || 'Turn complete';
-    else if (block.kind === 'permission') text = block.status === 'pending' ? 'A permission request needs the desktop or web app.' : `Permission: ${statusLabel(block.status)}`;
-    else if (block.kind === 'tool_use') text = `Tool: ${block.name}`;
-    else text = block.stopped ? 'Tool interrupted' : block.isError ? 'Tool failed' : 'Tool result';
-    const system = block.kind !== 'text' && block.kind !== 'thinking' || Boolean(event?.talyn);
-    rows.push({ key: `${chatId}:${block.key}`, author: system ? 'System' : event?.type === 'user' ? 'You' : 'Agent',
-      text: text.slice(0, ROW_TEXT_LIMIT), timestamp, streaming: block.key.startsWith('stream-') });
-  }
-  for (const item of events) {
-    if (item.event.type !== 'user' || item.event.talyn) continue;
-    const content = item.event.message?.content;
-    const text = typeof content === 'string' ? content : Array.isArray(content)
-      ? content.filter((part) => part?.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n') : '';
-    if (!text || text.startsWith('[Request interrupted')) continue;
-    rows.push({ key: `${chatId}:${item.seq}.user`, author: 'You', text: text.slice(0, ROW_TEXT_LIMIT),
-      timestamp: typeof item.event.timestamp === 'string' ? item.event.timestamp : null, streaming: false });
-  }
-  return rows.sort((a, b) => {
-    const seq = (row: TranscriptRow) => row.key.includes(':stream-') ? Infinity : Number(row.key.slice(chatId.length + 1).split('.')[0]);
-    return seq(a) - seq(b);
-  });
 }
