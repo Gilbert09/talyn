@@ -21,6 +21,13 @@ async function inspect() {
   assert(gradle.includes(`versionName "${exp.version}"`) || gradle.includes(`versionName '${exp.version}'`));
   const app = manifest.manifest.application[0];
   assert.notEqual(app.$['android:usesCleartextTraffic'], 'true');
+  if (exp.updates.enabled) {
+    // The app starts its own checks (src/features/updates); native code checks only to recover from a failed launch.
+    const meta = Object.fromEntries((app['meta-data'] ?? []).map((entry) => [entry.$['android:name'], entry.$['android:value']]));
+    assert(!meta['expo.modules.updates.CODE_SIGNING_CERTIFICATE'] && !meta['expo.modules.updates.CODE_SIGNING_METADATA'], 'Updates are unsigned. Remove the update certificate.');
+    assert.equal(meta['expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH'], 'ERROR_RECOVERY_ONLY');
+    assert.equal(meta['expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS'], '0');
+  }
   const iosRoot = path.join(root, 'ios');
   const project = fs.readdirSync(iosRoot).find((name) => fs.existsSync(path.join(iosRoot, name, 'Info.plist')));
   assert(project, 'Generate the iOS project first.');
@@ -29,7 +36,12 @@ async function inspect() {
   assert.equal(info.CFBundleShortVersionString, exp.version);
   assert.equal(info.CFBundleVersion, exp.ios.buildNumber);
   assert.notEqual(info.NSAppTransportSecurity?.NSAllowsArbitraryLoads, true);
-  for (const key of Object.keys(info)) assert(!/^NS(Camera|Microphone|Contacts|Location|PhotoLibrary|UserTracking).*UsageDescription$/.test(key), `Review unexpected iOS usage description: ${key}`);
+  // Image attachments ask for the camera and the photo library. Every other sensitive description needs review.
+  const reviewedUsage = ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription'];
+  for (const key of Object.keys(info)) {
+    if (reviewedUsage.includes(key)) continue;
+    assert(!/^NS(Camera|Microphone|Contacts|Location|PhotoLibrary|UserTracking).*UsageDescription$/.test(key), `Review unexpected iOS usage description: ${key}`);
+  }
   const entitlementsFile = fs.readdirSync(path.join(iosRoot, project)).find((name) => name.endsWith('.entitlements'));
   assert(entitlementsFile, 'Missing iOS entitlements.');
   const entitlements = parse(entitlementsFile);
@@ -42,11 +54,13 @@ async function inspect() {
   assert.deepEqual(privacy.NSPrivacyTrackingDomains ?? [], []);
   const expoPlist = parse('Supporting/Expo.plist');
   assert.equal(expoPlist.EXUpdatesEnabled, !!exp.updates.enabled);
+  // Updates are unsigned by decision (2026-11-09). A certificate would make the binary reject every unsigned update.
+  assert(!expoPlist.EXUpdatesCodeSigningCertificate && !expoPlist.EXUpdatesCodeSigningMetadata, 'Updates are unsigned. Remove the update certificate.');
   if (exp.updates.enabled) {
-    assert(expoPlist.EXUpdatesCodeSigningCertificate);
     assert.equal(expoPlist.EXUpdatesURL, exp.updates.url);
-    assert.equal(expoPlist.EXUpdatesCodeSigningMetadata.alg, 'rsa-v1_5-sha256');
     assert.equal(expoPlist.EXUpdatesRequestHeaders['expo-channel-name'], exp.extra.release.profile);
+    assert.equal(expoPlist.EXUpdatesCheckOnLaunch, 'ERROR_RECOVERY_ONLY');
+    assert.equal(expoPlist.EXUpdatesLaunchWaitMs, 0);
   }
   console.log('Generated native identity, version, permissions, entitlements, privacy, and update settings passed.');
   console.log('Signed archives, merged dependency manifests, and 16 KB binary alignment remain release gates.');

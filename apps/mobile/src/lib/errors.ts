@@ -1,0 +1,79 @@
+import { CONCURRENT_BOX_LIMIT_ERROR_CODE, SIZE_REQUIRES_PRO_ERROR_CODE, USAGE_BILLING_ERROR_CODES, USAGE_EXHAUSTED_ERROR_CODE,
+  type UsageBillingErrorCode } from '@talyn/shared';
+import { router, type Href } from 'expo-router';
+import { Alert, type AlertButton } from 'react-native';
+
+export interface BoxRefusal { code: UsageBillingErrorCode; title: string; message: string }
+
+const TITLES: Record<UsageBillingErrorCode, string> = {
+  [USAGE_EXHAUSTED_ERROR_CODE]: 'Out of box-hours',
+  [SIZE_REQUIRES_PRO_ERROR_CODE]: 'This size needs Pro',
+  [CONCURRENT_BOX_LIMIT_ERROR_CODE]: 'All your boxes are busy',
+};
+const FALLBACK: Record<UsageBillingErrorCode, string> = {
+  [USAGE_EXHAUSTED_ERROR_CODE]: 'You have used the box-hours of this period.',
+  [SIZE_REQUIRES_PRO_ERROR_CODE]: 'This box size needs the Pro plan.',
+  [CONCURRENT_BOX_LIMIT_ERROR_CODE]: 'A new box can start when one stops.',
+};
+
+const isBillingCode = (code: unknown): code is UsageBillingErrorCode =>
+  typeof code === 'string' && (USAGE_BILLING_ERROR_CODES as readonly string[]).includes(code);
+
+/**
+ * The box gate's 402 refusal, with the server's own sentence. Null for any
+ * other error. Mirrors web `boxRefusalFromError`.
+ */
+export function boxRefusal(error: unknown): BoxRefusal | null {
+  if (!error || typeof error !== 'object') return null;
+  const { code, message, details } = error as { code?: unknown; message?: unknown; details?: Record<string, unknown> };
+  if (!isBillingCode(code)) return null;
+  const notice = details?.notice && typeof details.notice === 'object' ? details.notice as { message?: unknown } : {};
+  const said = typeof notice.message === 'string' && notice.message ? notice.message
+    : typeof message === 'string' && message ? message : FALLBACK[code];
+  return { code, title: TITLES[code], message: said };
+}
+
+/** The server's message for an action that failed, or the fallback. */
+export function errorMessage(error: unknown, fallback: string): string {
+  const message = error && typeof error === 'object' ? (error as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && message.trim() ? message : fallback;
+}
+
+/** Plan and credits. Read-only when the build sells nothing. */
+export const BILLING_ROUTE = '/billing' as Href;
+/** Home with the drawer open, where running sessions can be stopped or archived. */
+export const SESSIONS_DRAWER_ROUTE = '/sessions' satisfies Href;
+export const REPOSITORIES_ROUTE = '/repositories' satisfies Href;
+
+export interface RefusalAction { label: string; href: Href }
+
+/**
+ * Where each refusal sends the person. Out of hours and a size the plan cannot
+ * start go to Plan and credits. A size refusal also offers the repository's
+ * size setting, since a smaller size is the other fix. All boxes busy opens
+ * the drawer, where a session can be stopped or archived.
+ */
+export function refusalActions(code: UsageBillingErrorCode): RefusalAction[] {
+  switch (code) {
+    case USAGE_EXHAUSTED_ERROR_CODE: return [{ label: 'Plan and credits', href: BILLING_ROUTE }];
+    case SIZE_REQUIRES_PRO_ERROR_CODE: return [
+      { label: 'Change the box size', href: REPOSITORIES_ROUTE },
+      { label: 'Plan and credits', href: { pathname: BILLING_ROUTE as string, params: { note: SIZE_REQUIRES_PRO_ERROR_CODE } } as Href },
+    ];
+    case CONCURRENT_BOX_LIMIT_ERROR_CODE: return [{ label: 'Show sessions', href: SESSIONS_DRAWER_ROUTE }];
+  }
+}
+
+/** The refusal with the server's own message, and a button for each way out. */
+export function showBoxRefusal(refusal: BoxRefusal) {
+  const buttons: AlertButton[] = [{ text: 'Close', style: 'cancel' },
+    ...refusalActions(refusal.code).map((action) => ({ text: action.label, onPress: () => router.navigate(action.href) }))];
+  Alert.alert(refusal.title, refusal.message, buttons);
+}
+
+/** Show why an action failed. A box refusal gets its own message. */
+export function showActionError(title: string, error: unknown, fallback = 'Please try again.') {
+  const refusal = boxRefusal(error);
+  if (refusal) { showBoxRefusal(refusal); return; }
+  Alert.alert(title, errorMessage(error, fallback));
+}

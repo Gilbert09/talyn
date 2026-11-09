@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { SpacePresenceEvent, TaskStatus, WorkbenchWsPayloads } from '@talyn/shared';
 import { wsClient } from '../lib/api';
-import { spacesOffered } from '../lib/spaces';
+import { followSessionContext, spacesOffered } from '../lib/spaces';
 import { useOnReconnect } from './useOnReconnect';
 import { useNavigationStore } from '../stores/navigation';
+import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore } from '../stores/workspace';
 import {
   findSpace,
@@ -38,6 +39,28 @@ export function useSpacesBoot(): void {
     if (!offered || context.kind !== 'space' || teams === null) return;
     if (!findSpace(teams, context.spaceId)) useWorkspaceStore.getState().setContext({ kind: 'personal', workspaceId: null });
   }, [offered, context, teams]);
+}
+
+/**
+ * When a session from another space or workspace opens, for example from a
+ * link, move the app there. This occurs one time for each opened session, so
+ * a later context switch on the same session is not undone.
+ */
+export function useFollowSessionContext(): void {
+  const routeId = useNavigationStore((s) => (s.route.view === 'workbench' ? s.route.id : null));
+  const workbench = useWorkbenchStore((s) => (routeId ? s.workbenches[routeId] : undefined));
+  const features = useWorkspaceStore((s) => s.features);
+  const teams = useSpacesStore((s) => s.teams);
+  const followed = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!routeId) {
+      followed.current = null;
+      return;
+    }
+    if (followed.current === routeId || !workbench) return;
+    if (followSessionContext(workbench)) followed.current = routeId;
+  }, [routeId, workbench, features, teams]);
 }
 
 /** The socket calls the presence hook makes. A seam for tests. */

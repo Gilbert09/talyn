@@ -27,8 +27,8 @@ import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { lazyWithReload } from '../../lib/lazyWithReload';
-import { useActiveSpace, loadExtraWorkbench } from '../../lib/spaces';
-import { useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
+import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
+import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
 import { PendingInviteDialog } from '../spaces/PendingInviteDialog';
@@ -51,6 +51,7 @@ export function AppShell() {
   useWorkbenchList();
   useAppShortcuts();
   useSpacesBoot();
+  useFollowSessionContext();
   const space = useActiveSpace();
   useSpaceLive(space?.space.id ?? null);
   const codeReviewIntro = useCodeReviewIntro();
@@ -140,7 +141,7 @@ function useWorkbenchList(): void {
   const workbenches = useWorkbenchStore((s) => s.workbenches);
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
   const route = useNavigationStore((s) => s.route);
-  const inSpace = useActiveSpace() !== null;
+  const spacesOn = spacesOffered(features);
   const extraLoads = useSpacesStore((s) => s.extraLoads);
 
   useEffect(() => {
@@ -149,7 +150,7 @@ function useWorkbenchList(): void {
 
   useEffect(() => {
     // A teammate's session is not in my list: fetch it before deciding the route is gone.
-    if (inSpace && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
+    if (spacesOn && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
       const state = extraLoads[route.id];
       if (!state) {
         void loadExtraWorkbench(route.id);
@@ -158,7 +159,7 @@ function useWorkbenchList(): void {
       if (state === 'loading') return;
     }
     useNavigationStore.getState().reconcileWorkbenchRoute({ workbenches, listLoaded, offered });
-  }, [route, workbenches, listLoaded, offered, inSpace, extraLoads]);
+  }, [route, workbenches, listLoaded, offered, spacesOn, extraLoads]);
 }
 
 const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));

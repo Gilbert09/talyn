@@ -9,8 +9,10 @@ import * as WebBrowser from 'expo-web-browser';
 import { AppState } from 'react-native';
 
 import type { MobileConfig } from '../config';
+import { createNativeSocket } from '../native/socket';
 import { createNativeLifecycle } from '../native/lifecycle';
 import { WorkspaceController } from '../workspaces/controller';
+import { ContextController, contextKey } from '../workspaces/context';
 import { clearIntent } from '../navigation/intents';
 import { WorkflowStore } from '../workflow/store';
 import { NotificationController } from '../notifications/controller';
@@ -51,12 +53,14 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     await oldStorage.clearAuth();
     if (oldUser) await SecureStore.deleteItemAsync(installationKey(previous, oldUser));
     if (oldUser) await AsyncStorage.removeItem(`talyn.workspace.${previous}.${encodeURIComponent(oldUser)}`);
+    if (oldUser) await AsyncStorage.removeItem(contextKey(previous, oldUser));
   }
   assertCurrent();
   await SecureStore.setItemAsync('talyn-active-environment', namespace, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
   assertCurrent();
   const lifecycle = createNativeLifecycle(AppState, NetInfo);
   const workspace = new WorkspaceController(AsyncStorage, namespace, () => workspaces.list());
+  const context = new ContextController(AsyncStorage, namespace);
   let rejectRefresh = () => {};
   installAuthCrypto();
   const supabase = createClient(config.supabaseUrl, config.supabaseKey, {
@@ -68,7 +72,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   });
   const initialized = supabase.auth.initialize();
   const bindClient = () => configureApiClient({
-    baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle },
+    baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle, createWebSocket: createNativeSocket },
     getAccessToken: () => auth.getAccessToken(), recoverSession: () => auth.recoverSession(),
   });
   const workflow = new WorkflowStore(lifecycle);
@@ -88,7 +92,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     if (priorUser) clearIntent();
     wsClient.reset();
     bindClient();
-    return Promise.all([workspace.clear(priorUser), notifications?.clearLocal(priorUser)]).then(() => {});
+    return Promise.all([workspace.clear(priorUser), context.clear(priorUser), notifications?.clearLocal(priorUser)]).then(() => {});
   });
   rejectRefresh = () => { void auth.signOut(); };
   bindClient();
@@ -123,16 +127,18 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   const bindWorkflow = () => {
     const account = auth.getSnapshot();
     const selected = workspace.getSnapshot();
-    workflow.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+    // A workspace being revalidated keeps its selection, so the cached views stay.
+    const usable = selected.status === 'ready' || selected.status === 'loading';
+    workflow.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
       ? { environment: namespace, user: account.user.id, workspace: selected.selected } : null);
-    notifications.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+    notifications.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
       ? { user: account.user.id, workspace: selected.selected } : null);
   };
   const unbindAuth = auth.subscribe(bindWorkflow);
   const unbindWorkspace = workspace.subscribe(bindWorkflow);
   let signingOut: Promise<void> | null = null;
   return {
-    auth, workspace, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
+    auth, workspace, context, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
     signOut() {
       signingOut ??= notifications.logout().finally(() => auth.signOut()).finally(() => { signingOut = null; });
       return signingOut;
@@ -144,7 +150,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
       previousStorageDrain = storage.seal();
       auth.dispose();
       subscription.subscription.unsubscribe();
-      unbind(); lifecycle.dispose(); workspace.dispose(); wsClient.reset();
+      unbind(); lifecycle.dispose(); workspace.dispose(); context.dispose(); wsClient.reset();
       // Rebinding also invalidates REST requests from the previous runtime.
       configureApiClient({ baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`,
         getAccessToken: async () => null, recoverSession: async () => false,

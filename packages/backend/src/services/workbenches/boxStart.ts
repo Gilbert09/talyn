@@ -265,6 +265,103 @@ export function parseStartHistory(value: StartHistoryEntry[] | string | null | u
   );
 }
 
+/** One past start of the repository, split by the steps the start progress names. */
+export interface StartStepEntry {
+  readyMs: number | null;
+  checkoutMs: number | null;
+  /** The setup script's own total. Null: the start ran no setup script. */
+  setupMs: number | null;
+  layer: string | null;
+}
+
+/**
+ * The repository's recent starts, as the per-step times the start progress
+ * needs. The same entries as {@link startHistoryQuery}: one with no
+ * `boxReadyMs` timed only the setup script.
+ */
+export function startStepHistoryQuery(repositoryId: string) {
+  const history = sql`${repositories.settings} -> 'setupTimingHistory'`;
+  const ms = (key: string) => sql`round((e ->> ${key})::numeric)`;
+  return db()
+    .select({
+      steps: sql<StartStepEntry[] | string | null>`(
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'readyMs', ${ms('boxReadyMs')},
+          'checkoutMs', ${ms('checkoutMs')},
+          'setupMs', CASE WHEN (e ->> 'totalMs')::numeric > 0 THEN ${ms('totalMs')} END,
+          'layer', e ->> 'layer'
+        ) ORDER BY i), '[]'::jsonb)
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${history}) = 'array' THEN ${history} ELSE '[]'::jsonb END)
+          WITH ORDINALITY AS h(e, i)
+        WHERE jsonb_typeof(e) = 'object' AND e ->> 'boxReadyMs' IS NOT NULL
+      )`,
+    })
+    .from(repositories)
+    .where(eq(repositories.id, repositoryId))
+    .limit(1);
+}
+
+/** The entries from {@link startStepHistoryQuery}'s answer. */
+export function parseStartStepHistory(value: StartStepEntry[] | string | null | undefined): StartStepEntry[] {
+  let list: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      list = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((e: Partial<StartStepEntry>) =>
+    e && typeof e === 'object'
+      ? [{ readyMs: num(e.readyMs), checkoutMs: num(e.checkoutMs), setupMs: num(e.setupMs), layer: text(e.layer) }]
+      : [],
+  );
+}
+
+export interface StartStepMedians {
+  sandbox: number | null;
+  /** A checkout from an image that holds the repository. */
+  checkout: number | null;
+  /** A full clone on the base image. */
+  clone: number | null;
+  setup: number | null;
+}
+
+/** A median, once there are {@link SANDBOX_START_MEDIAN_MIN} samples: the rule the start comparison uses. */
+function medianOf(values: Array<number | null>): number | null {
+  const known = values.filter((v): v is number => v !== null && v >= 0);
+  return known.length >= SANDBOX_START_MEDIAN_MIN ? median(known) : null;
+}
+
+/**
+ * The median of each step. A checkout and a full clone differ by minutes, so
+ * each is a median of its own kind of start. An entry with no image layer
+ * says neither, and counts for neither.
+ */
+export function startStepMedians(entries: StartStepEntry[]): StartStepMedians {
+  return {
+    sandbox: medianOf(entries.map((e) => e.readyMs)),
+    checkout: medianOf(entries.filter((e) => e.layer && e.layer !== 'base').map((e) => e.checkoutMs)),
+    clone: medianOf(entries.filter((e) => e.layer === 'base').map((e) => e.checkoutMs)),
+    setup: medianOf(entries.map((e) => e.setupMs)),
+  };
+}
+
+const NO_MEDIANS: StartStepMedians = { sandbox: null, checkout: null, clone: null, setup: null };
+
+/** The repository's step medians. Never throws: a start must not fail on its progress bar. */
+export async function readStartStepMedians(repositoryId: string | null): Promise<StartStepMedians> {
+  if (!repositoryId) return NO_MEDIANS;
+  try {
+    const [found] = await startStepHistoryQuery(repositoryId);
+    return startStepMedians(parseStartStepHistory(found?.steps));
+  } catch (err) {
+    console.warn(`[workbench] reading the start times of repository ${repositoryId} failed:`, err);
+    return NO_MEDIANS;
+  }
+}
+
 // ============================================================================
 // The section
 // ============================================================================

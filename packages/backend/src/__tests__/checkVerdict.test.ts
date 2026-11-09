@@ -69,6 +69,28 @@ describe('deriveCiVerdict', () => {
     expect(v.humanGates).toHaveLength(gates);
   });
 
+  it.each<[string, CheckFact[]]>([
+    ['no checks', []],
+    ['all green', [fact('a', 'success'), fact('b', 'skipped')]],
+    ['running', [fact('a', 'success'), fact('b', 'pending'), fact('c', 'in_progress', false)]],
+    ['mixed failures while running', [fact('a', 'failure', true), fact('b', 'failure', false), fact('c', 'failure', null), fact('d', 'pending')]],
+    ['optional failure only', [fact('a', 'failure', false), fact('b', 'success')]],
+    ['unknown failure only', [fact('a', 'failure', null), fact('b', 'skipped')]],
+    ['Visual Review and its consequence', [VR(), fact('Visual regression tests pass', 'failure'), fact('Django Tests Pass', 'pending')]],
+    ['Visual Review that errored', [VR('failure', 'ERROR'), fact('ok', 'success')]],
+    ['a passing Visual Review', [VR('success', 'SUCCESS'), fact('x', 'in_progress')]],
+  ])('failing checks plus a tally give the full verdict: %s', (_l, facts) => {
+    const failing = facts.filter((f) => f.state === 'failure');
+    const tally = {
+      total: facts.length,
+      running: facts.filter((f) => f.state === 'pending' || f.state === 'in_progress').length,
+    };
+    for (const pr of [{}, { mergeable: 'MERGEABLE', mergeStateStatus: 'UNSTABLE' }, { mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED' }]) {
+      expect(deriveCiVerdict(failing, pr, tally)).toEqual(deriveCiVerdict(facts, pr));
+      expect(deriveCiVerdict(facts, pr, tally)).toEqual(deriveCiVerdict(facts, pr));
+    }
+  });
+
   it('counts blocking, unknown and optional failures separately', () => {
     const v = deriveCiVerdict([
       fact('req', 'failure', true),

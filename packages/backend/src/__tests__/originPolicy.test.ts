@@ -105,3 +105,27 @@ describe('isDesktop (WebSocket upgrade only)', () => {
     }
   );
 });
+
+describe('isOwnHost', () => {
+  const PREVIEW_ID = '0123456789abcdef0123456789abcdef';
+
+  it.each([
+    ['https://prod.talyn.dev', 'prod.talyn.dev', true],
+    ['http://localhost:4747', 'localhost:4747', true],
+    ['https://prod.talyn.dev', 'api.talyn.dev', false],
+    ['https://prod.talyn.dev.evil.com', 'prod.talyn.dev', false],
+    ['https://evil.com', 'prod.talyn.dev', false],
+    ['https://prod.talyn.dev:443', 'prod.talyn.dev', false],
+    [undefined, 'prod.talyn.dev', false],
+    ['', 'prod.talyn.dev', false],
+    ['https://prod.talyn.dev', undefined, false],
+    ['null', 'null', false],
+  ])('origin %s on host %s → %s', (origin, host, expected) => {
+    expect(policy({}).isOwnHost(origin, host)).toBe(expected);
+  });
+
+  it('never accepts a preview host, even with a matching origin', () => {
+    const host = `${PREVIEW_ID}-3000.preview.test`;
+    expect(policy({ PREVIEW_BASE_DOMAIN: 'preview.test' }).isOwnHost(`https://${host}`, host)).toBe(false);
+  });
+});

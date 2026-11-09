@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { SpacesTeam, Workbench, Workspace } from '@talyn/shared';
+import type { SpaceSessionRow, SpacesTeam, Workbench, Workspace } from '@talyn/shared';
 import { SpaceHomePage } from '../components/spaces/SpaceHomePage';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useSpacesStore } from '../stores/spaces';
@@ -99,5 +99,53 @@ describe('SpaceHomePage modes', () => {
     expect(screen.getByText('acme/web')).toBeInTheDocument();
     act(() => useNavigationStore.getState().navigate({ view: 'home', mode: 'thread' }));
     expect(composer().placeholder).toMatch(/^Start a thread in Web\./);
+  });
+});
+
+function feedRow(overrides: Partial<SpaceSessionRow>): SpaceSessionRow {
+  return {
+    id: 'r1',
+    spaceId: 's1',
+    workspaceId: 'ws-other',
+    kind: 'session',
+    threadId: null,
+    name: 'fix-login',
+    title: 'Fix the login',
+    status: 'ready',
+    sandboxState: 'running',
+    running: false,
+    repoFullName: 'acme/web',
+    branch: 'fix-login',
+    baseBranch: 'main',
+    agent: 'claude',
+    model: null,
+    pullRequest: null,
+    creator: { userId: 'u2', githubLogin: 'teammate', avatarUrl: null },
+    lastActivityAt: null,
+    archivedAt: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  } as SpaceSessionRow;
+}
+
+describe('SpaceHomePage session feed', () => {
+  it.each<[string, Partial<SpaceSessionRow>, string]>([
+    ['idle', {}, 'Idle'],
+    ['running', { running: true }, 'Working'],
+    ['starting', { status: 'provisioning', sandboxState: 'creating' }, 'Starting'],
+    ['failed', { status: 'error' }, 'Failed to start'],
+    ['open PR', { pullRequest: { number: 12, state: 'open', url: 'https://x/12' } }, '#12 open, waiting on checks or review'],
+    ['merged PR', { pullRequest: { number: 13, state: 'merged', url: 'https://x/13' } }, 'Done: #13 merged'],
+    ['closed PR', { pullRequest: { number: 14, state: 'closed', url: 'https://x/14' } }, '#14 closed'],
+  ])('shows the %s state on the row', async (_name, overrides, label) => {
+    const row = feedRow(overrides);
+    listSessions.mockResolvedValue({ items: [row], hiddenCount: 0 });
+    useSpacesStore.setState({ sessions: { s1: { items: [row], hiddenCount: 0, loaded: true, error: null } } });
+    render(<SpaceHomePage active={ACTIVE} />);
+    const state = await screen.findByText(label, { selector: '[data-attr="space-feed-session-state"] span' });
+    expect(state.closest('[data-attr="space-feed-session"]')).toHaveTextContent('Fix the login');
+    expect(screen.getByLabelText(label)).toBeInTheDocument();
+    expect(screen.queryByText(/· working/)).toBeNull();
   });
 });

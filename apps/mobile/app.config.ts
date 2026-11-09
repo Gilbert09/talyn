@@ -1,6 +1,6 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import type { AppEnvironment, MobileConfig } from './src/config';
+import type { AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
 import { readReleaseSettings } from './release/policy.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
@@ -36,7 +36,16 @@ export function readMobileConfig(env: PublicEnvironment, environment: AppEnviron
   return {
     environment, apiOrigin: origin(api, environment === 'development'),
     supabaseUrl: origin(supabase, environment === 'development'), supabaseKey: publicSupabaseKey(key), callbackUrl: callback,
+    purchaseMode: readPurchaseMode(env),
   };
+}
+
+/** `EXPO_PUBLIC_PURCHASE_MODE`: `external` (the default) or `none` for a store build with no purchase links. */
+export function readPurchaseMode(env: PublicEnvironment): PurchaseMode {
+  const value = env.EXPO_PUBLIC_PURCHASE_MODE?.trim();
+  if (!value) return 'external';
+  if (value === 'external' || value === 'none') return value;
+  throw new Error('EXPO_PUBLIC_PURCHASE_MODE must be external or none.');
 }
 
 type Environment = 'development' | 'preview' | 'production';
@@ -71,18 +80,23 @@ export function getAppIdentity(env: IdentityEnvironment) {
   };
 }
 
-export function readPushProjectId(env: PublicEnvironment, environment: AppEnvironment): string | undefined {
-  const projectId = env.EXPO_PUBLIC_EAS_PROJECT_ID;
-  if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
+/** The Expo account that owns the EAS project. */
+export const EAS_OWNER = 'talyn-app';
+/** `@talyn-app/talyn-mobile`. A public identifier, not a credential. */
+export const EAS_PROJECT_ID = '69499768-c478-44c0-8588-355c674515df';
+
+/** The EAS project for push and updates. `EXPO_PUBLIC_EAS_PROJECT_ID` overrides the Talyn project, for a fork. */
+export function readPushProjectId(env: PublicEnvironment): string {
+  const projectId = env.EXPO_PUBLIC_EAS_PROJECT_ID || EAS_PROJECT_ID;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
     throw new Error('Use a valid public EAS project ID.');
   }
-  if (environment === 'production' && !projectId) throw new Error('Production requires EXPO_PUBLIC_EAS_PROJECT_ID.');
   return projectId;
 }
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   const identity = getAppIdentity(process.env);
-  const projectId = readPushProjectId(process.env, identity.environment);
+  const projectId = readPushProjectId(process.env);
 
   const release = readReleaseSettings(process.env, identity.environment, projectId);
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
@@ -91,6 +105,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: identity.name,
+    owner: EAS_OWNER,
     slug: 'talyn-mobile',
     version: release.version,
     icon: '../desktop/assets/icons/1024x1024.png',
@@ -127,10 +142,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         ],
       }] } : {}),
     },
-    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-notifications', {
+    plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-splash-screen', { image: './assets/splash-owl.png', imageWidth: 120, resizeMode: 'contain', backgroundColor: '#fcfbf8', dark: { image: './assets/splash-owl-dark.png', backgroundColor: '#211d18' } }], ['expo-image-picker', { photosPermission: 'Talyn uses your photos when you attach an image to a message.', cameraPermission: 'Talyn uses the camera when you take a photo to attach to a message.', microphonePermission: false }], ['expo-notifications', {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },
-    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, ...(projectId ? { eas: { projectId } } : {}) },
+    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, eas: { projectId } },
   };
 };

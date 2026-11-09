@@ -1,9 +1,12 @@
 import Constants from 'expo-constants';
 import { type Href, usePathname, useRouter } from 'expo-router';
 import { createContext, type PropsWithChildren, useContext, useEffect, useState, useSyncExternalStore } from 'react';
-import { Button, Linking } from 'react-native';
+import { Linking, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ShellScreen } from '../components/ShellScreen';
+import { Button, ui } from '../components/UI';
+import { ShellScreen, useShellColors } from '../components/ShellScreen';
+import { BootScreen } from '../components/BootScreen';
 import { Status } from '../components/AuthControls';
 import { rememberIntent } from '../navigation/intents';
 import type { MobileConfig } from '../config';
@@ -44,18 +47,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (initial && isAuthLink(initial)) receiveCallback(initial);
       else if (initial) rememberIntent(initial);
       setRuntime(created);
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (__DEV__) console.warn('Talyn could not start', error);
       current?.dispose();
       if (!disposed) setFailed(true);
     });
     return () => { disposed = true; abort.abort(); links.remove(); unbind(); current?.dispose(); };
   }, [config, retry]);
 
-  if (!config) return <ShellScreen title="Connect Talyn" description="Set the four public mobile configuration values in the mobile README, then restart the app." />;
-  if (failed) return <ShellScreen title="Unlock this device" description="Secure sign-in is not available. Unlock this device and try again.">
+  if (!config) return <ShellScreen topInset centered title="Connect Talyn" description="Set the four public mobile configuration values in the mobile README, then restart the app." />;
+  if (failed) return <ShellScreen topInset centered title="Unlock this device" description="Secure sign-in is not available. Unlock this device and try again.">
     <Button title="Try again" onPress={() => setRetry((value) => value + 1)} />
   </ShellScreen>;
-  if (!runtime) return <ShellScreen title="Opening Talyn" description="Restoring your account securely."><Status message="Restoring sign-in" loading /></ShellScreen>;
+  if (!runtime) return <BootScreen label="Restoring sign-in" />;
   return <RuntimeContext.Provider value={runtime}><WorkspaceBinding /><NotificationBinding />{children}</RuntimeContext.Provider>;
 }
 
@@ -77,19 +81,22 @@ export function useNetwork() {
   return useSyncExternalStore(lifecycle.subscribe, lifecycle.getSnapshot, lifecycle.getSnapshot).reachability;
 }
 function WorkspaceBinding() {
-  const { workspace } = useMobileRuntime();
+  const { workspace, context } = useMobileRuntime();
   const user = useAuth().user?.id;
-  useEffect(() => { if (user) void workspace.load(user); }, [user, workspace]);
+  useEffect(() => { if (user) { void workspace.load(user); void context.load(user); } }, [user, workspace, context]);
   return null;
 }
 function NotificationBinding() {
   const { notifications } = useMobileRuntime();
   const router = useRouter();
   const pathname = usePathname();
+  const colors = useShellColors();
+  const insets = useSafeAreaInsets();
   const state = useSyncExternalStore(notifications.subscribe, notifications.getSnapshot, notifications.getSnapshot);
   useEffect(() => { notifications.setNavigation((path) => router.push(path as Href), pathname); }, [notifications, router, pathname]);
   if (!state.tapIssue) return null;
-  return <><Status message={state.tapIssue} />
-    <Button title="Try notification again" onPress={notifications.retryTap} />
-    <Button title="Dismiss notification message" onPress={notifications.clearTapIssue} /></>;
+  return <View style={{ paddingTop: insets.top, paddingHorizontal: 16, paddingBottom: 8, gap: 8, backgroundColor: colors.background }}>
+    <Status message={state.tapIssue} tone="warning" /><View style={ui.wrap}>
+    <Button variant="secondary" title="Try notification again" onPress={notifications.retryTap} />
+    <Button variant="quiet" title="Dismiss notification message" onPress={notifications.clearTapIssue} /></View></View>;
 }

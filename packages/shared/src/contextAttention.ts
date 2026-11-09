@@ -19,10 +19,16 @@ export interface AttentionSessionInput {
   status: WorkbenchStatus | string;
   sandboxState: WorkbenchSandboxState | string;
   archivedAt: unknown;
-  /** The open chats only. A closed tab is not shown, so it cannot need you. */
-  chats: { status: WorkbenchChatStatus | string; queued: number }[];
-  /** The linked pull request. `mergeable` is GitHub's word ('CONFLICTING', 'MERGEABLE', 'UNKNOWN'). */
-  pr: { state: string; mergeable: string | null } | null;
+  /**
+   * The open chats only. A closed tab is not shown, so it cannot need you.
+   * `id` and `turnCount` name the alert in {@link sessionAttentionKey}.
+   */
+  chats: { id?: string; status: WorkbenchChatStatus | string; queued: number; turnCount?: number }[];
+  /**
+   * The linked pull request. `mergeable` is GitHub's word ('CONFLICTING', 'MERGEABLE', 'UNKNOWN').
+   * `id` and `headSha` name the alert in {@link sessionAttentionKey}.
+   */
+  pr: { id?: string; state: string; mergeable: string | null; headSha?: string | null } | null;
 }
 
 /**
@@ -35,15 +41,39 @@ export interface AttentionSessionInput {
  * turn shows as working.
  */
 export function sessionNeedsAttention(session: AttentionSessionInput): boolean {
-  if (session.archivedAt) return false;
-  if (session.status === 'archived') return false;
-  if (session.status === 'error' || session.sandboxState === 'error') return true;
-  if (session.chats.some((c) => c.status === 'error')) return true;
-  if (session.status === 'provisioning' || session.sandboxState === 'creating') return false;
-  if (session.chats.some((c) => c.status === 'running' || c.queued > 0)) return false;
-  if (session.chats.some((c) => c.status === 'awaiting_input')) return true;
-  if (session.kind === 'thread') return false;
-  return session.pr?.state === 'open' && session.pr.mergeable === 'CONFLICTING';
+  return sessionAttentionKey(session) !== null;
+}
+
+/**
+ * A name for what the session waits on me for, or null when it waits on
+ * nothing. When I open the session, the server keeps this key
+ * (`workbenches.attention_ack`), and the rail stops counting the session while
+ * the key stays the same. A new alert has a new key, so it counts again: a
+ * question in a later turn has a new turn count, and conflicts after a push
+ * have a new head.
+ */
+export function sessionAttentionKey(session: AttentionSessionInput): string | null {
+  if (session.archivedAt) return null;
+  if (session.status === 'archived') return null;
+  if (session.status === 'error' || session.sandboxState === 'error') return 'error';
+  const failed = session.chats.filter((c) => c.status === 'error');
+  if (failed.length > 0) return chatKey('chat_error', failed);
+  if (session.status === 'provisioning' || session.sandboxState === 'creating') return null;
+  if (session.chats.some((c) => c.status === 'running' || c.queued > 0)) return null;
+  const asking = session.chats.filter((c) => c.status === 'awaiting_input');
+  if (asking.length > 0) return chatKey('reply', asking);
+  if (session.kind === 'thread') return null;
+  if (session.pr?.state === 'open' && session.pr.mergeable === 'CONFLICTING') {
+    return `conflict:${session.pr.id ?? ''}:${session.pr.headSha ?? ''}`;
+  }
+  return null;
+}
+
+function chatKey(reason: string, chats: AttentionSessionInput['chats']): string {
+  return `${reason}:${chats
+    .map((c) => `${c.id ?? ''}@${c.turnCount ?? 0}`)
+    .sort()
+    .join(',')}`;
 }
 
 /** Add one item to a count map. */

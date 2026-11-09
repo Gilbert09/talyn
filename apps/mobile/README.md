@@ -17,7 +17,8 @@ Merge #128, then #129, then this release change. Do not queue this stacked chang
 Development and preview remain useful without production secrets.
 Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
 The mobile package supplies the version. Both stores use `MOBILE_BUILD_NUMBER` with local EAS version management.
-Every profile uses a fingerprint runtime. Updates remain disabled until signed-update configuration is supplied.
+Every profile uses a fingerprint runtime. Preview, internal-beta, and production builds run unsigned EAS updates.
+The development client loads from Metro and has updates off.
 Local plans have no side effects. Execution requires the protected manual workflow on main.
 
 ```sh
@@ -41,9 +42,9 @@ Permission denial does not block any workflow. Settings shows denied, disabled, 
 Global and category choices apply to the selected workspace. Quiet hours use the saved IANA timezone.
 The sensitive preview choice is reserved. Every current alert uses generic text.
 
-Push needs a physical device, a development build, and an approved public EAS project ID.
-Set `EXPO_PUBLIC_EAS_PROJECT_ID` before generating native projects.
-The public configuration exposes it as `extra.eas.projectId`. Production rejects a missing or invalid ID.
+Push needs a physical device and a development build.
+The config uses the Talyn EAS project (`@talyn-app/talyn-mobile`) unless `EXPO_PUBLIC_EAS_PROJECT_ID` names another one.
+The public configuration exposes it as `extra.eas.projectId`. The config rejects an invalid ID.
 No provider credential belongs in public configuration or this repository.
 The protected release workflow owns signing and submission operations. Credentials remain in EAS or approved secret custody.
 
@@ -116,7 +117,7 @@ Supabase 2.103.3 matches the existing apps. Pin updates until callback and clean
 With no configuration, development and preview builds show a setup screen.
 No production credentials are required for exports or tests.
 To test sign-in, supply the four sign-in values below for an approved test environment.
-Push also needs the public EAS project ID.
+Push uses the Talyn EAS project ID by default.
 Use your own account. Do not put private test accounts in the repository.
 
 ## Public configuration
@@ -131,7 +132,7 @@ Use a Supabase publishable key or legacy anon key. Never use a secret key or ser
 | `EXPO_PUBLIC_SUPABASE_URL` | Supabase project origin without a path or query. |
 | `EXPO_PUBLIC_SUPABASE_KEY` | Public publishable key or legacy anon key. |
 | `EXPO_PUBLIC_AUTH_CALLBACK_URL` | Exact callback URL for this environment, ending in `/callback`. |
-| `EXPO_PUBLIC_EAS_PROJECT_ID` | Public EAS project UUID. Required for push and every production build. |
+| `EXPO_PUBLIC_EAS_PROJECT_ID` | Optional public EAS project UUID. The default is the Talyn project `69499768-c478-44c0-8588-355c674515df`. |
 
 Set `APP_ENV` to `development`, `preview`, or `production`. Development is the default.
 Production configuration fails if any public value is missing. Production requires HTTPS for all three URLs.
@@ -245,7 +246,24 @@ These commands generate native projects and install a development build.
 Generated `ios/`, `android/`, `.expo/`, and export output stay out of git.
 EAS profiles preserve separate development and preview identities. Internal beta and production share the approved store identities.
 Confirm organization ownership and link an approved EAS project before an EAS build.
-This change supplies no signing credentials, EAS tokens, store uploads, or OTA updates.
+The repository holds no signing credentials or EAS tokens. Store uploads stay on the protected release workflow.
+
+## OTA updates
+
+Each push to `main` that changes the app, `packages/client`, `packages/shared`, or the lockfile publishes an unsigned EAS update
+to the `preview` and `internal-beta` channels (`.github/workflows/mobile-update.yml`). Production updates need an approved manual dispatch.
+Set the repository variable `MOBILE_UPDATES_AUTO=0` to stop automatic publishing.
+
+The app checks at cold start and on return to the foreground, at most every 15 minutes (`src/features/updates/`).
+It downloads in the background, then shows **Update ready** with **Restart**. It never restarts by itself, so a draft is safe.
+A closed banner leaves the update for the next cold start. Settings → About shows the channel, runtime, running update,
+and **Check for updates**. Update errors show only there. The development client and web never check.
+
+An update can change JavaScript and assets only. A new native module, config plugin, or native field in `app.config.ts`
+changes the native fingerprint, so its update reaches no installed app. Ship that change in a new binary.
+Updates are unsigned by decision (2026-11-09), because EAS code signing needs a paid EAS plan. EAS HTTPS delivery and
+access to `EXPO_TOKEN` and the Expo project protect them. Signing later needs that plan, a certificate in the config, and a new binary.
+See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-updates-for-preview-and-internal-beta) for secrets, checks, and rollback.
 
 An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter.
 Expo's `preferUniversalLinks` enables the HTTPS authentication callback on iOS 17.4 and later.
@@ -435,3 +453,39 @@ The test host cannot prove native accessibility, keyboard behavior, universal li
 Phase 4 adds notifications, registration, preferences, and a durable worker. Physical delivery still needs device evidence.
 Signed release archives, universal-link association, privacy disclosures, store operations, and review remain release gates.
 The phase 2 Apple login and deletion-completion gates remain open.
+
+## Mobile interface
+
+The mobile theme follows the paper, ink, and clay colors in the web and desktop apps.
+Semantic tokens live in `src/theme/tokens.ts`.
+Muted ink and action clay are darker in light mode to keep small text readable on paper.
+Shared controls live in `src/components/UI.tsx`.
+
+Native tabs keep their platform behavior.
+`ScreenContainer` handles safe areas, including the tab bar, through React Native Screens.
+Automatic tab content insets are disabled to prevent duplicate padding.
+System fonts can scale without a limit.
+Rows and badges wrap, and content has a maximum width on tablets.
+
+Rebuild the development client after this change because it adds `expo-navigation-bar`.
+The module controls Android system navigation icons.
+The root view and status bar follow the system theme.
+
+### Review on a device
+
+The sandbox tests cannot verify native layout, keyboards, or screen reader behavior.
+Use the device preview to check these items before release:
+
+- Open every route in light and dark mode.
+- Check sign-in, callback, restore, offline, error, empty, and unavailable page states.
+- Set text to 200 percent on a narrow Android phone.
+- Check long workspace names, repository names, titles, badges, and messages.
+- Open a conversation and show the keyboard. Check the input, send action, and bottom tabs.
+- Switch conversations. Check drafts, older messages, and scroll restoration.
+- Check status and navigation icons with gesture navigation and button navigation.
+- Check the same routes on a tablet and in landscape.
+- Use VoiceOver or TalkBack to select a workspace and read a conversation.
+- Check notification permissions, quiet hours, external links, and the account deletion confirmation.
+- Enable reduced motion. Check that sign-in has no transition animation.
+
+The floating Expo development gear belongs to the development client.

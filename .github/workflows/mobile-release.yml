@@ -62,8 +62,8 @@ jobs:
       TALYN_MOBILE_SUPPORT_URL: ${{ vars.TALYN_MOBILE_SUPPORT_URL }}
       TALYN_MOBILE_PRIVACY_URL: ${{ vars.TALYN_MOBILE_PRIVACY_URL }}
       TALYN_MOBILE_DELETION_URL: ${{ vars.TALYN_MOBILE_DELETION_URL }}
-      MOBILE_UPDATES_ENABLED: ${{ vars.MOBILE_UPDATES_ENABLED }}
-      MOBILE_UPDATE_KEY_ID: ${{ vars.MOBILE_UPDATE_KEY_ID }}
+      # Mirrors eas.json: every profile except the development client runs signed updates.
+      MOBILE_UPDATES_ENABLED: ${{ inputs.profile == 'development' && '0' || '1' }}
       MOBILE_ASC_APP_ID: ${{ vars.MOBILE_ASC_APP_ID }}
       MOBILE_APPLE_TEAM_ID: ${{ vars.MOBILE_APPLE_TEAM_ID }}
     steps:
@@ -104,8 +104,6 @@ jobs:
           npm run mobile:test
       - name: Prepare protected files outside the repository
         env:
-          UPDATE_CERTIFICATE: ${{ secrets.MOBILE_UPDATE_CERTIFICATE_PEM }}
-          UPDATE_PRIVATE_KEY: ${{ secrets.MOBILE_UPDATE_PRIVATE_KEY_PEM }}
           RELEASE_EVIDENCE: ${{ secrets.MOBILE_RELEASE_EVIDENCE_JSON }}
           STORE_METADATA: ${{ secrets.MOBILE_STORE_METADATA_JSON }}
         run: |
@@ -113,13 +111,14 @@ jobs:
           const fs = require('node:fs');
           const path = require('node:path');
           const dir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'mobile-release-'));
-          const files = { MOBILE_UPDATE_CERTIFICATE: [path.join(process.env.GITHUB_WORKSPACE, 'apps/mobile/release/update-certificate.pem'), process.env.UPDATE_CERTIFICATE], MOBILE_UPDATE_PRIVATE_KEY_PATH: [path.join(dir, 'private-key.pem'), process.env.UPDATE_PRIVATE_KEY], MOBILE_RELEASE_EVIDENCE_PATH: [path.join(dir, 'evidence.json'), process.env.RELEASE_EVIDENCE] };
+          // Updates are unsigned by decision (2026-11-09), so no update certificate or signing key is written.
+          const files = { MOBILE_RELEASE_EVIDENCE_PATH: [path.join(dir, 'evidence.json'), process.env.RELEASE_EVIDENCE] };
           files.MOBILE_STORE_METADATA_PATH = [path.join(dir, 'metadata.json'), process.env.STORE_METADATA];
           for (const [name, [file, value]] of Object.entries(files)) {
             if (!value) continue;
             const target = file;
             fs.writeFileSync(target, value, { mode: 0o600 });
-            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${name === 'MOBILE_UPDATE_CERTIFICATE' ? './release/update-certificate.pem' : target}\n`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${target}\n`);
           }
           fs.appendFileSync(process.env.GITHUB_ENV, `MOBILE_RELEASE_TEMP=${dir}\n`);
           NODE
@@ -132,5 +131,4 @@ jobs:
       - name: Remove protected files
         if: always()
         run: |
-          rm -f -- apps/mobile/release/update-certificate.pem
           if [ -n "$MOBILE_RELEASE_TEMP" ]; then rm -rf -- "$MOBILE_RELEASE_TEMP"; fi

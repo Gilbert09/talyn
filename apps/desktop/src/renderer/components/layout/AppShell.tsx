@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered } from '@talyn/shared';
 import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
-import { useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
+import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
 import { MoveToSpaceDialog } from '../spaces/MoveToSpace';
@@ -62,6 +62,7 @@ export function AppShell() {
   useStartupCheckoutDetection();
   useAppShortcuts();
   useSpacesBoot();
+  useFollowSessionContext();
   const space = useActiveSpace();
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
   useSpaceLive(space?.space.id ?? null);
@@ -145,7 +146,7 @@ function useWorkbenchList(): void {
   const offered = features === null ? null : workbenchesOffered(features);
   const workbenches = useWorkbenchStore((s) => s.workbenches);
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
-  const inSpace = useActiveSpace() !== null;
+  const spacesOn = spacesOffered(features);
   const extraLoads = useSpacesStore((s) => s.extraLoads);
   const route = useNavigationStore((s) => s.route);
 
@@ -155,7 +156,7 @@ function useWorkbenchList(): void {
   }, [workspaceId, offered]);
 
   useEffect(() => {
-    if (inSpace && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
+    if (spacesOn && offered && listLoaded && route.view === 'workbench' && !workbenches[route.id]) {
       const state = extraLoads[route.id];
       if (!state) {
         void loadExtraWorkbench(route.id);
@@ -164,5 +165,5 @@ function useWorkbenchList(): void {
       if (state === 'loading') return;
     }
     useNavigationStore.getState().reconcileWorkbenchRoute({ workbenches, listLoaded, offered });
-  }, [route, workbenches, listLoaded, offered, inSpace, extraLoads]);
+  }, [route, workbenches, listLoaded, offered, spacesOn, extraLoads]);
 }

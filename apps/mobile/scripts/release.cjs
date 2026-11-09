@@ -18,15 +18,15 @@ function releasePlan(action, profile, platform, env) {
     if (platform === 'ios' && (!/^\d+$/.test(env.MOBILE_ASC_APP_ID ?? '') || !/^[A-Z0-9]{10}$/.test(env.MOBILE_APPLE_TEAM_ID ?? ''))) throw new Error('Configure the approved Apple app and team IDs.');
     args.push('submit', '--profile', profile, '--platform', platform, '--id', id, '--non-interactive', '--wait', '--no-auto-testflight-setup');
   } else if (action === 'update' || action === 'rollback') {
-    if (profile === 'development' || env.MOBILE_UPDATES_ENABLED !== '1') throw new Error('Signed updates must be enabled in the installed binary.');
+    if (profile === 'development' || env.MOBILE_UPDATES_ENABLED !== '1') throw new Error('Updates must be enabled in the installed binary.');
     const runtime = required(env, 'MOBILE_RUNTIME_VERSION');
     if (!/^[a-f0-9]{40,64}$/.test(runtime)) throw new Error('Use the installed platform fingerprint as the runtime.');
-    const key = required(env, 'MOBILE_UPDATE_PRIVATE_KEY_PATH');
+    // Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan.
     const message = `Mobile ${action} ${profile}`;
     if (action === 'rollback') args.push('update:roll-back-to-embedded', '--channel', policy.channel,
-      '--runtime-version', runtime, '--platform', platform, '--message', message, '--private-key-path', key, '--non-interactive');
+      '--runtime-version', runtime, '--platform', platform, '--message', message, '--non-interactive');
     else args.push('update', '--channel', policy.channel, '--environment', policy.environment,
-      '--platform', platform, '--message', message, '--private-key-path', key, '--non-interactive');
+      '--platform', platform, '--message', message, '--non-interactive');
   } else throw new Error('Choose build, submit, update, or rollback.');
   return { action, profile, platform, policy, args };
 }
@@ -107,18 +107,6 @@ function assertChannel(result, name) {
   }
 }
 
-function checkCertificate(certificate, privateKeyPath) {
-  const crypto = require('node:crypto');
-  const cert = new crypto.X509Certificate(fs.readFileSync(certificate));
-  if (cert.publicKey.asymmetricKeyType !== 'rsa' || Date.parse(cert.validFrom) > Date.now() || Date.parse(cert.validTo) <= Date.now()) {
-    throw new Error('Use a current RSA update certificate.');
-  }
-  if (privateKeyPath) {
-    const key = crypto.createPrivateKey(fs.readFileSync(privateKeyPath));
-    if (!cert.checkPrivateKey(key)) throw new Error('The update signing key does not match.');
-  }
-}
-
 function execute(plan, env, exp) {
   const executable = required(env, 'MOBILE_EAS_CLI_PATH');
   const installed = JSON.parse(fs.readFileSync(path.join(path.dirname(executable), '../package.json'), 'utf8'));
@@ -133,14 +121,8 @@ function execute(plan, env, exp) {
     if (view.status !== 0) throw new Error('Cannot verify the hosted build.');
     assertBuild(JSON.parse(view.stdout), plan, env, exp);
   }
-  if (exp.updates?.enabled) {
-    const certificate = exp.updates?.codeSigningCertificate && path.resolve(root, exp.updates.codeSigningCertificate);
-    const needsKey = ['update', 'rollback'].includes(plan.action);
-    if (!certificate || !fs.existsSync(certificate) || (needsKey && !fs.existsSync(env.MOBILE_UPDATE_PRIVATE_KEY_PATH))) {
-      throw new Error('Supply the approved update certificate and private key files.');
-    }
-    checkCertificate(certificate, needsKey ? env.MOBILE_UPDATE_PRIVATE_KEY_PATH : undefined);
-  }
+  // A certificate in the binary would reject every unsigned update this project publishes.
+  if (exp.updates?.codeSigningCertificate || exp.updates?.codeSigningMetadata) throw new Error('Updates are unsigned. Remove update code signing from the app config.');
   // Hosted logs can contain signed URLs. Keep all provider output out of CI logs and artifacts.
   const result = spawnSync(process.execPath, [executable, ...plan.args], { cwd: root, env, stdio: 'ignore' });
   if (result.status !== 0) throw new Error('EAS failed. Inspect the restricted EAS dashboard.');
@@ -148,4 +130,4 @@ function execute(plan, env, exp) {
 }
 
 if (require.main === module) Promise.resolve().then(run).catch(() => { console.error('Release blocked. Check configuration, approval evidence, and the release runbook.'); process.exitCode = 1; });
-module.exports = { releasePlan, assertExecution, assertRuntime, assertBuild, assertChannel, checkCertificate };
+module.exports = { releasePlan, assertExecution, assertRuntime, assertBuild, assertChannel };

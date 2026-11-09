@@ -317,6 +317,7 @@ async function main() {
   const originPolicy = createOriginPolicy();
   const isOriginAllowed = (origin: string | undefined) => originPolicy.isAllowed(origin);
   const isDesktopOrigin = (origin: string | undefined) => originPolicy.isDesktop(origin);
+  const isOwnHostOrigin = (origin: string | undefined, host: string | undefined) => originPolicy.isOwnHost(origin, host);
   app.use(
     cors({
       origin(origin, cb) {
@@ -462,7 +463,7 @@ async function main() {
     // sends a valid JWT in its first frame (see services/websocket.ts), so
     // an unrecognised origin that slips through still gets nothing.
     const origin = req.headers.origin;
-    if (!isOriginAllowed(origin) && !isDesktopOrigin(origin)) {
+    if (!isOriginAllowed(origin) && !isDesktopOrigin(origin) && !isOwnHostOrigin(origin, req.headers.host)) {
       socket.destroy();
       return;
     }

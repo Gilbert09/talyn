@@ -769,7 +769,8 @@ export function unitModelTier(preset: CodeReviewPreset, kind: RunKind): 'default
   // DISABLED, deliberately, and not by deleting the mechanism.
   //
   // Escalation picks the top catalogue entry for the vendor, which is currently
-  // claude-fable-5-1 — and the fleet's Claude Code refuses it outright:
+  // claude-fable-5-2 (claude-fable-5-1 when this was written) — and the fleet's
+  // Claude Code refused it outright:
   //
   //   400 invalid_request_error
   //   "Claude Code 2.1.75 does not support this model; version 2.1.251 or newer

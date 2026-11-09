@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react-native';
 import { defaultMobileNotificationPreferences } from '@talyn/shared';
 import type { Session } from '@supabase/supabase-js';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AccountActions } from '../auth/account';
 import { AuthController, type AuthGateway } from '../auth/controller';
@@ -8,15 +9,26 @@ import { SecureSessionStorage } from '../auth/storage';
 import { clearIntent, consumeIntent, rememberIntent } from '../navigation/intents';
 import { NotificationController, type PushDevice, type PushGateway } from '../notifications/controller';
 import { WorkspaceController } from '../workspaces/controller';
-import { AttentionScreen, PullRequestDetailScreen, WorkbenchDetailScreen, WorkbenchListScreen } from '../workflow/screens';
+import { PullRequestsScreen } from '../features/prs/PullRequestsScreen';
+import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
+import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
+import { NavDrawer } from '../features/nav/NavDrawer';
 import { fixture, scope, session as workbench } from './workflowFixtures';
 
 let mockActive: ReturnType<typeof fixture>;
 let mockWorkspace: WorkspaceController;
 let mockParams = { id: 'session-one' };
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams, Link: ({ children }: { children: React.ReactNode }) => children }));
+jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams, Link: ({ children }: { children: React.ReactNode }) => children,
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn(), canGoBack: () => true }), Stack: { Screen: () => null },
+  usePathname: () => '/home', useGlobalSearchParams: () => ({}) }));
+jest.mock('../features/usage/data', () => ({ useBillingStatus: () => ({ status: 'idle', data: undefined, stale: false, refreshing: false }) }));
+const insets = { frame: { x: 0, y: 0, width: 400, height: 900 }, insets: { top: 0, left: 0, right: 0, bottom: 0 } };
+const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
+const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
 jest.mock('../auth/AuthProvider', () => ({
-  useMobileRuntime: () => ({ workflow: mockActive.store }),
+  useMobileRuntime: () => ({ workflow: mockActive.store, lifecycle: mockActive.lifecycle, workspace: mockWorkspace,
+    context: mockContext }),
+  useAuth: () => ({ user: { id: 'user-one' } }),
   useWorkspace: () => mockWorkspace.getSnapshot(),
   useNetwork: () => mockActive.lifecycle.getSnapshot().reachability,
 }));
@@ -58,16 +70,16 @@ describe('deterministic release journeys', () => {
     await auth.signIn(); expect(gateway.exchangeCodeForSession).toHaveBeenCalledTimes(1);
     await mockWorkspace.load(scope.user); expect(mockActive.store.getScope()).toBeNull();
     await mockWorkspace.select('one'); expect(consumeIntent()).toBe('/sessions/session-one');
-    let view = await render(<WorkbenchListScreen kind="session" />);
+    let view = await render(<SafeAreaProvider initialMetrics={insets}><NavDrawer close={jest.fn()} /></SafeAreaProvider>);
     expect(await screen.findByRole('link', { name: /Current work/ })).toBeVisible(); await view.unmount();
     view = await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByText('Agent response 1')).toBeVisible(); await view.unmount();
     mockParams = { id: 'thread-one' }; view = await render(<WorkbenchDetailScreen kind="thread" />);
     expect(await screen.findByRole('header', { name: 'Planning work' })).toBeVisible(); await view.unmount();
-    view = await render(<AttentionScreen />);
+    view = await render(<PullRequestsScreen tab="reviews" />);
     expect(await screen.findByRole('link', { name: /Review current work/ })).toBeVisible(); await view.unmount();
     mockParams = { id: 'pr-one' }; view = await render(<PullRequestDetailScreen />);
-    expect(await screen.findByLabelText('Pull request and merge queue timeline')).toBeVisible(); await view.unmount();
+    expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible(); await view.unmount();
     mockActive.store.updateLocal('chat-one', { draft: 'Fixture draft' });
     await mockWorkspace.select('two'); expect(mockActive.store.local('chat-one').draft).toBe('');
     await auth.signOut(); expect(mockActive.store.getScope()).toBeNull(); expect(preferences.size).toBe(0);

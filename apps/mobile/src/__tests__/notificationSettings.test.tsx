@@ -1,16 +1,20 @@
-import { fireEvent, render, screen } from '@testing-library/react-native';
-import { defaultMobileNotificationPreferences } from '@talyn/shared';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { defaultMobileNotificationPreferences, type MobileNotificationPreferences } from '@talyn/shared';
 
-import { NotificationSettings } from '../notifications/Settings';
+import { deviceTimezone, NotificationSettings, SAVE_DEBOUNCE, shiftTime, validPreferences } from '../notifications/Settings';
 import type { NotificationController, PushSnapshot } from '../notifications/controller';
 
-function fixture(state: PushSnapshot['state'] = 'disabled', enabled = false) {
-  const snapshot: PushSnapshot = { state, preferences: { ...defaultMobileNotificationPreferences('workspace'), enabled },
+function fixture(state: PushSnapshot['state'] = 'disabled', enabled = false, patch: Partial<MobileNotificationPreferences> = {}) {
+  const snapshot: PushSnapshot = { state, preferences: { ...defaultMobileNotificationPreferences('workspace'), enabled, ...patch },
     providerAvailable: true, tapIssue: null };
   const controller = { getSnapshot: () => snapshot, subscribe: () => () => {},
-    enableDevice: jest.fn(), save: jest.fn(), refresh: jest.fn() };
+    enableDevice: jest.fn(), save: jest.fn(async () => {}), refresh: jest.fn() };
   return { controller, render: (offline = false) => render(<NotificationSettings controller={controller as unknown as NotificationController} offline={offline} />) };
 }
+const flush = async () => { await act(async () => { jest.advanceTimersByTime(SAVE_DEBOUNCE); }); };
+
+beforeEach(() => jest.useFakeTimers());
+afterEach(() => jest.useRealTimers());
 
 describe('accessible notification settings', () => {
   it('explains value and permission before explicit device opt-in', async () => {
@@ -29,28 +33,68 @@ describe('accessible notification settings', () => {
   });
   it.each(['loading', 'offline'] as const)('disables writes when %s', async (condition) => {
     const f = fixture(condition === 'loading' ? 'loading' : 'ready', true); await f.render(condition === 'offline');
-    expect(screen.getByRole('button', { name: 'Save notification settings' })).toBeDisabled();
     expect(screen.getByRole('switch', { name: 'Enable workspace notifications' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save notification settings' })).toBeNull();
   });
-  it('edits categories, quiet hours, timezone, and reserved preview preferences', async () => {
+  it.each(['Session updates', 'Quiet hours'])('disables %s while workspace notifications are off', async (label) => {
+    const f = fixture('ready', false); await f.render();
+    expect(screen.getByRole('switch', { name: label })).toBeDisabled();
+  });
+  it('saves once after a run of edits, without a save button', async () => {
     const f = fixture('ready', true); await f.render();
     await fireEvent(screen.getByRole('switch', { name: 'CI failures' }), 'valueChange', false);
-    await fireEvent(screen.getByRole('switch', { name: 'Quiet hours' }), 'valueChange', true);
-    await fireEvent.changeText(screen.getByLabelText('Quiet hours start'), '21:30');
-    await fireEvent.changeText(screen.getByLabelText('Quiet hours end'), '07:00');
-    await fireEvent.changeText(screen.getByLabelText('Notification timezone'), 'America/New_York');
-    await fireEvent(screen.getByRole('switch', { name: 'Sensitive preview preference' }), 'valueChange', true);
-    await fireEvent.press(screen.getByRole('button', { name: 'Save notification settings' }));
+    await fireEvent(screen.getByRole('switch', { name: 'PR reviews' }), 'valueChange', false);
+    expect(screen.getByText('Saving…')).toBeVisible();
+    expect(f.controller.save).not.toHaveBeenCalled();
+    await flush();
+    expect(f.controller.save).toHaveBeenCalledTimes(1);
     expect(f.controller.save).toHaveBeenCalledWith(expect.objectContaining({
-      categories: expect.objectContaining({ ci_failure: false }), quietHours: { enabled: true, start: '21:30', end: '07:00' },
-      timezone: 'America/New_York', sensitivePreview: true,
+      categories: expect.objectContaining({ ci_failure: false, pr_review: false }), sensitivePreview: false,
     }));
-    expect(screen.getByText(/All alerts currently use generic text/)).toBeVisible();
+    expect(await screen.findByText('Saved.')).toBeVisible();
   });
-  it.each([['Quiet hours start', '25:90'], ['Notification timezone', 'not-a-timezone']])('announces invalid %s', async (label, value) => {
-    const f = fixture('ready', true); await f.render(); await fireEvent.changeText(screen.getByLabelText(label), value);
-    await fireEvent.press(screen.getByRole('button', { name: 'Save notification settings' }));
+  it('defaults quiet hours to the device timezone and steps times by 30 minutes', async () => {
+    const f = fixture('ready', true); await f.render();
+    await fireEvent(screen.getByRole('switch', { name: 'Quiet hours' }), 'valueChange', true);
+    await fireEvent.press(screen.getByRole('button', { name: 'Quiet hours start later' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Quiet hours end earlier' }));
+    await flush();
+    expect(f.controller.save).toHaveBeenLastCalledWith(expect.objectContaining({
+      quietHours: { enabled: true, start: '22:30', end: '07:30' },
+      timezone: deviceTimezone() === 'UTC' ? 'UTC' : deviceTimezone(),
+    }));
+  });
+  it('offers the device timezone when the saved one differs', async () => {
+    const f = fixture('ready', true, { timezone: deviceTimezone() === 'Pacific/Auckland' ? 'America/New_York' : 'Pacific/Auckland' });
+    await f.render();
+    await fireEvent.press(screen.getByRole('button', { name: new RegExp("Use this device's timezone") }));
+    await flush();
+    expect(f.controller.save).toHaveBeenCalledWith(expect.objectContaining({ timezone: deviceTimezone() }));
+  });
+  it('announces an invalid saved timezone and does not save it', async () => {
+    const f = fixture('ready', true, { timezone: 'not-a-timezone' }); await f.render();
+    await fireEvent(screen.getByRole('switch', { name: 'CI failures' }), 'valueChange', false);
+    await flush();
     expect(screen.getByRole('alert', { name: 'Use a valid timezone and times in HH:MM format.' })).toBeVisible();
     expect(f.controller.save).not.toHaveBeenCalled();
+  });
+  it('has no placeholder preview setting', async () => {
+    const f = fixture('ready', true); await f.render();
+    expect(screen.queryByText(/Sensitive preview/)).toBeNull();
+  });
+});
+
+describe('notification setting helpers', () => {
+  it.each([
+    ['22:00', 30, '22:30'], ['23:30', 30, '00:00'], ['00:00', -30, '23:30'], ['08:15', -30, '07:45'], ['bad', 30, '00:30'],
+  ])('shifts %s by %i minutes to %s', (value, minutes, expected) => expect(shiftTime(value, minutes)).toBe(expected));
+  it.each([
+    [{ timezone: 'Europe/London', start: '22:00', end: '08:00' }, true],
+    [{ timezone: 'not-a-timezone', start: '22:00', end: '08:00' }, false],
+    [{ timezone: 'UTC', start: '25:00', end: '08:00' }, false],
+    [{ timezone: 'UTC', start: '22:00', end: '8:00' }, false],
+  ])('validates %o', ({ timezone, start, end }, expected) => {
+    const value = { ...defaultMobileNotificationPreferences('workspace'), timezone, quietHours: { enabled: true, start, end } };
+    expect(validPreferences(value)).toBe(expected);
   });
 });

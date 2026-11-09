@@ -77,6 +77,27 @@ it('uploads a pasted sandbox image and shows its chip', async () => {
   expect(upload.mock.calls[0][1].type).toBe('image/png');
 });
 
+it('lets a surrounding drop zone attach images through attachRef', async () => {
+  vi.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
+  const upload = vi.spyOn(api.workbenches, 'uploadAttachment').mockResolvedValue(attachment);
+  const attachRef: { current: ((files: File[]) => void) | null } = { current: null };
+  render(
+    <Composer
+      workbench={workbench}
+      chat={chat}
+      ops={sandboxOps(workbench)}
+      todos={null}
+      contextUsage={null}
+      slashCommands={null}
+      attachRef={attachRef}
+    />,
+  );
+  expect(attachRef.current).toBeInstanceOf(Function);
+  act(() => attachRef.current?.([new File(['image'], 'shot.png', { type: 'image/png' })]));
+  await waitFor(() => expect(screen.getByText('shot.png')).toBeInTheDocument());
+  expect(upload).toHaveBeenCalledWith('wb-1', expect.any(Blob), 'shot.png');
+});
+
 it('shows the ready note without an upload or message change', async () => {
   vi.mocked(downscaleImage).mockResolvedValue('data:image/png;base64,aGVsbG8=');
   const upload = vi.spyOn(api.workbenches, 'uploadAttachment').mockResolvedValue(attachment);

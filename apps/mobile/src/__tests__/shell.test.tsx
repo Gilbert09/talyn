@@ -1,8 +1,8 @@
 import { act, fireEvent, renderRouter, screen, testRouter } from 'expo-router/testing-library';
 
 import { router } from 'expo-router';
-import { Alert } from 'react-native';
-import { fixture } from './workflowFixtures';
+import { Alert, BackHandler } from 'react-native';
+import { chat, fixture, session, thread } from './workflowFixtures';
 import { clearIntent, rememberIntent } from '../navigation/intents';
 
 let mockWorkflow = fixture();
@@ -11,18 +11,16 @@ import type { AuthSnapshot } from '../auth/controller';
 import RootLayout from '../../app/_layout';
 import Index from '../../app';
 import NotFoundScreen from '../../app/+not-found';
-import TabsLayout from '../../app/(tabs)/_layout';
-import AttentionLayout from '../../app/(tabs)/attention/_layout';
-import SessionsLayout from '../../app/(tabs)/sessions/_layout';
-import SettingsLayout from '../../app/(tabs)/settings/_layout';
-import ThreadsLayout from '../../app/(tabs)/threads/_layout';
-import AttentionScreen from '../../app/(tabs)/attention';
-import PullRequestScreen from '../../app/(tabs)/attention/[id]';
-import SessionsScreen from '../../app/(tabs)/sessions';
-import SessionScreen from '../../app/(tabs)/sessions/[id]';
-import SettingsScreen from '../../app/(tabs)/settings';
-import ThreadsScreen from '../../app/(tabs)/threads';
-import ThreadScreen from '../../app/(tabs)/threads/[id]';
+import DrawerLayout from '../../app/(drawer)/_layout';
+import AttentionList from '../../app/(drawer)/attention';
+import HomeScreen from '../../app/(drawer)/home';
+import SessionsList from '../../app/(drawer)/sessions';
+import ThreadsList from '../../app/(drawer)/threads';
+import PullsScreen from '../../app/pulls';
+import SettingsScreen from '../../app/settings';
+import PullRequestScreen from '../../app/attention/[id]';
+import SessionScreen from '../../app/sessions/[id]';
+import ThreadScreen from '../../app/threads/[id]';
 
 import SignInScreen from '../../app/(auth)/sign-in';
 import AuthLayout from '../../app/(auth)/_layout';
@@ -38,17 +36,21 @@ const mockWorkspace: { status: string; choices: { id: string; name: string }[]; 
   status: 'ready', choices: [{ id: 'one', name: 'One' }], selected: 'one',
 };
 const mockSelectWorkspace = jest.fn(async (id: string) => { mockWorkspace.selected = id; });
+const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
+const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
 jest.mock('../auth/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
   useAuth: () => mockAuth,
   useNetwork: () => mockNetwork,
   useWorkspace: () => mockWorkspace,
   useMobileRuntime: () => ({
-    workflow: mockWorkflow.store,
+    workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle,
     auth: { signIn: mockSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
     account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: mockSelectWorkspace },
+    context: mockContext,
   }),
 }));
+jest.mock('../features/usage/data', () => ({ useBillingStatus: () => ({ status: 'idle', data: undefined, stale: false, refreshing: false }) }));
 beforeEach(() => {
   clearIntent();
   mockWorkflow.store.dispose(); mockWorkflow = fixture();
@@ -67,53 +69,141 @@ const routes = {
   workspaces: WorkspacesScreen,
   index: Index,
   '+not-found': NotFoundScreen,
-  '(tabs)/_layout': TabsLayout,
-  '(tabs)/sessions/_layout': SessionsLayout,
-  '(tabs)/threads/_layout': ThreadsLayout,
-  '(tabs)/attention/_layout': AttentionLayout,
-  '(tabs)/settings/_layout': SettingsLayout,
-  '(tabs)/sessions/index': SessionsScreen,
-  '(tabs)/sessions/[id]': SessionScreen,
-  '(tabs)/threads/index': ThreadsScreen,
-  '(tabs)/threads/[id]': ThreadScreen,
-  '(tabs)/attention/index': AttentionScreen,
-  '(tabs)/attention/[id]': PullRequestScreen,
-  '(tabs)/settings/index': SettingsScreen,
+  '(drawer)/_layout': DrawerLayout,
+  '(drawer)/home': HomeScreen,
+  '(drawer)/sessions': SessionsList,
+  '(drawer)/threads': ThreadsList,
+  '(drawer)/attention': AttentionList,
+  'pulls/index': PullsScreen,
+  settings: SettingsScreen,
+  'sessions/[id]': SessionScreen,
+  'threads/[id]': ThreadScreen,
+  'attention/[id]': PullRequestScreen,
 };
 
 describe('native shell', () => {
-  it('opens Sessions at startup', async () => {
+  it('opens home at startup', async () => {
     await renderRouter(routes, { initialUrl: '/' });
-    expect(screen).toHavePathname('/sessions');
-    expect(screen.getByRole('header', { name: 'Sessions' })).toBeVisible();
+    expect(screen).toHavePathname('/home');
+    expect(await screen.findByText('What do you want to build?')).toBeVisible();
+    expect(screen.getByRole('header', { name: 'One' })).toBeVisible();
+    expect(screen.queryByTestId('navigation-drawer')).toBeNull();
   });
 
-  it('returns to Sessions from an unknown route', async () => {
+  it('goes home from an unknown route', async () => {
     await renderRouter(routes, { initialUrl: '/missing' });
     expect(screen.getByRole('header', { name: 'Page unavailable' })).toBeVisible();
-    await fireEvent.press(screen.getByRole('link', { name: 'Open Sessions' }));
-    expect(screen).toHavePathname('/sessions');
+    await fireEvent.press(screen.getByRole('link', { name: 'Go home' }));
+    expect(screen).toHavePathname('/home');
   });
 
   it.each([
-    ['/sessions', 'Sessions', 'Current work', '/sessions/session-one', 'Current work'],
-    ['/threads', 'Threads', 'Planning work', '/threads/thread-one', 'Planning work'],
-    ['/attention', 'Attention', 'Review current work', '/attention/pr-one', 'Review current work'],
-  ])('opens a detail from %s', async (url, heading, label, destination, detailHeading) => {
+    ['/sessions', 'Current work', '/sessions/session-one'],
+    ['/threads', 'Planning work', '/threads/thread-one'],
+  ])('opens the drawer for the old list link %s and its rows open details', async (url, label, destination) => {
     await renderRouter(routes, { initialUrl: url });
-    expect(screen.getByRole('header', { name: heading })).toBeVisible();
+    expect(screen).toHavePathname('/home');
+    expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
     await fireEvent.press(await screen.findByRole('link', { name: new RegExp(label) }));
     expect(screen).toHavePathname(destination);
-    expect(await screen.findByRole('header', { name: detailHeading })).toBeVisible();
-    await testRouter.back(url);
-    expect(screen.getByRole('header', { name: heading })).toBeVisible();
+    expect(await screen.findByRole('header', { name: label })).toBeVisible();
+    // Leaving home closed the drawer, so Back shows home itself.
+    await testRouter.back('/home');
+    expect(screen.queryByTestId('navigation-drawer')).toBeNull();
+  });
+
+  it('sends the old Attention link to My PRs', async () => {
+    await renderRouter(routes, { initialUrl: '/attention' });
+    expect(screen).toHavePathname('/pulls');
+    expect(screen).toHaveSearchParams({ tab: 'mine' });
+  });
+
+  it('opens the drawer from the menu button and reaches every app page', async () => {
+    await renderRouter(routes, { initialUrl: '/home' });
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
+    const drawer = await screen.findByTestId('navigation-drawer');
+    expect(drawer).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Workspace: One' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'New session', selected: true })).toBeVisible();
+    for (const name of ['Threads', 'Sessions']) expect(screen.getByRole('header', { name })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'example/project', expanded: true })).toBeVisible();
+    for (const name of ['Pull requests', 'Merge queue', 'Insights', 'Agents', 'History']) expect(screen.getByRole('button', { name })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: /^Review requests/ }));
+    expect(screen).toHavePathname('/pulls');
+    expect(screen).toHaveSearchParams({ tab: 'reviews' });
+    await testRouter.back('/home');
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen).toHavePathname('/settings');
+    expect(await screen.findByText('Signed in with GitHub')).toBeVisible();
+  });
+
+  it('closes the open drawer with Android back, and back from a page returns home', async () => {
+    // Hardware back runs the newest listener first, until one handles it.
+    type Handler = Parameters<typeof BackHandler.addEventListener>[1];
+    const handlers: Handler[] = [];
+    const spy = jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_name, handler) => {
+      handlers.push(handler);
+      return { remove: () => { const at = handlers.lastIndexOf(handler); if (at >= 0) handlers.splice(at, 1); } };
+    });
+    const pressBack = () => [...handlers].reverse().some((handler) => (handler as () => boolean | null | undefined)() === true);
+    await renderRouter(routes, { initialUrl: '/home' });
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
+    expect(screen.getByTestId('navigation-drawer')).toBeVisible();
+    await act(async () => { expect(pressBack()).toBe(true); });
+    expect(screen.queryByTestId('navigation-drawer')).toBeNull();
+    expect(screen).toHavePathname('/home');
+    await fireEvent.press(screen.getByRole('button', { name: 'Open menu' }));
+    await fireEvent.press(screen.getByRole('button', { name: /^Merge queue/ }));
+    expect(screen).toHaveSearchParams({ tab: 'queue' });
+    await act(async () => { expect(pressBack()).toBe(true); });
+    expect(screen).toHavePathname('/home');
+    expect(screen.queryByTestId('navigation-drawer')).toBeNull();
+    // Home with the drawer closed has nothing to go back to, so the app may exit.
+    await act(async () => { expect(pressBack()).toBe(false); });
+    spy.mockRestore();
+  });
+
+  it('searches the drawer lists and clears the search', async () => {
+    await renderRouter(routes, { initialUrl: '/sessions' });
+    expect(await screen.findByRole('link', { name: /Current work/ })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'planning');
+    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(screen.getByRole('link', { name: /Planning work/ })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'nothing like this');
+    expect(screen.getByText('No sessions or threads match.')).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.getByRole('link', { name: /Current work/ })).toBeVisible();
+  });
+
+  it('collapses a repository group and a thread', async () => {
+    mockWorkflow.api.workbenches.list.mockImplementation(async () => [
+      session(), session({ id: 'child-one', title: 'Child work', threadId: 'thread-one' }), thread()]);
+    await renderRouter(routes, { initialUrl: '/sessions' });
+    // Under its thread and under its repository, like web.
+    expect(await screen.findAllByRole('link', { name: /Child work/ })).toHaveLength(2);
+    await fireEvent.press(screen.getByRole('button', { name: 'Hide sessions of Planning work' }));
+    expect(screen.getAllByRole('link', { name: /Child work/ })).toHaveLength(1);
+    await fireEvent.press(screen.getByRole('button', { name: 'example/project' }));
+    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'example/project', expanded: false })).toBeVisible();
+  });
+
+  it('marks the menu and lists work that needs the person', async () => {
+    mockWorkflow.api.workbenches.list.mockImplementation(async () => [
+      session({ chats: [chat({ status: 'awaiting_input' })] }), thread()]);
+    await renderRouter(routes, { initialUrl: '/home' });
+    expect(await screen.findByTestId('menu-attention-dot')).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open menu' }));
+    expect(screen.getByRole('header', { name: 'Needs you' })).toBeVisible();
+    expect(screen.getAllByRole('link', { name: /Current work/ })).toHaveLength(2);
   });
 
   it('restores a cold session link after authentication', async () => {
     rememberIntent('/sessions/session-one');
     mockAuth = { status: 'signedOut', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/sessions/session-one' });
-    expect(screen.getByRole('header', { name: 'Sign in to Talyn' })).toBeVisible();
+    expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     mockAuth = { status: 'signedIn', user: { id: 'alice' }, issue: null };
     await act(async () => router.replace('/'));
     expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
@@ -121,7 +211,7 @@ describe('native shell', () => {
   });
 
   it('fetches current authorized state for a warm pull request link', async () => {
-    await renderRouter(routes, { initialUrl: '/sessions' });
+    await renderRouter(routes, { initialUrl: '/home' });
     await act(async () => router.push('/attention/pr-one'));
     expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible();
     expect(mockWorkflow.api.pullRequests.get).toHaveBeenCalledWith('pr-one');
@@ -132,6 +222,7 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: '/sessions/session-one' });
     expect(screen.getByRole('header', { name: 'Choose a workspace' })).toBeVisible();
     expect(mockWorkflow.api.workbenches.get).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Select workspace One', selected: false })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Select workspace One' }));
     expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
     expect(screen).toHavePathname('/sessions/session-one');
@@ -139,8 +230,13 @@ describe('native shell', () => {
 
   it('shows account details and accessible account actions', async () => {
     await renderRouter(routes, { initialUrl: '/settings' });
-    expect(screen.getByRole('header', { name: 'Settings' })).toBeVisible();
+    expect(screen.getByText('Signed in with GitHub')).toBeVisible();
     expect(screen.getByText('alice@example.com')).toBeVisible();
+    expect(screen.queryByText('Account ID: alice')).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Show account ID' }));
+    expect(screen.getByText('Account ID: alice')).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Hide account ID' }));
+    expect(screen.queryByText('Account ID: alice')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
     expect(mockSignOut).toHaveBeenCalledTimes(1);
   });
@@ -160,16 +256,16 @@ describe('auth route gates and accessible states', () => {
   it('gates private deep links while signed out', async () => {
     mockAuth = { status: 'signedOut', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/settings' });
-    expect(screen.getByRole('header', { name: 'Sign in to Talyn' })).toBeVisible();
+    expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     expect(screen.queryByText('alice@example.com')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Continue with GitHub' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign in with GitHub' }));
     expect(mockSignIn).toHaveBeenCalledTimes(1);
   });
   it('gates the shell until restoration finishes', async () => {
     mockAuth = { status: 'restoring', user: null, issue: null };
-    await renderRouter(routes, { initialUrl: '/sessions' });
-    expect(screen.getByRole('alert', { name: 'Restoring sign-in' })).toBeVisible();
-    expect(screen.queryByRole('header', { name: 'Sessions' })).toBeNull();
+    await renderRouter(routes, { initialUrl: '/home' });
+    expect(screen.getByRole('progressbar', { name: 'Restoring sign-in' })).toBeVisible();
+    expect(screen.queryByText('What do you want to build?')).toBeNull();
   });
   it('shows offline and retry states without exposing diagnostic errors', async () => {
     mockAuth = { status: 'signedOut', user: null, issue: 'failed' }; mockNetwork = 'offline';
@@ -181,7 +277,7 @@ describe('auth route gates and accessible states', () => {
     mockAuth = { status: 'signingIn', user: null, issue: null };
     await renderRouter(routes, { initialUrl: '/sign-in' });
     expect(screen.getByRole('alert', { name: 'Waiting for GitHub sign-in' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Continue with GitHub' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Opening browser…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel sign-in' })).toBeVisible();
   });
   it('uses a native destructive confirmation with Cancel preferred', async () => {

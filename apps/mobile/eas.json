@@ -11,7 +11,8 @@
       "channel": "development",
       "autoIncrement": false,
       "env": {
-        "APP_ENV": "development"
+        "APP_ENV": "development",
+        "MOBILE_UPDATES_ENABLED": "0"
       },
       "developmentClient": true
     },
@@ -21,7 +22,8 @@
       "channel": "preview",
       "autoIncrement": false,
       "env": {
-        "APP_ENV": "preview"
+        "APP_ENV": "preview",
+        "MOBILE_UPDATES_ENABLED": "1"
       }
     },
     "internal-beta": {
@@ -30,7 +32,8 @@
       "channel": "internal-beta",
       "autoIncrement": false,
       "env": {
-        "APP_ENV": "production"
+        "APP_ENV": "production",
+        "MOBILE_UPDATES_ENABLED": "1"
       },
       "credentialsSource": "remote",
       "android": {
@@ -43,7 +46,8 @@
       "channel": "production",
       "autoIncrement": false,
       "env": {
-        "APP_ENV": "production"
+        "APP_ENV": "production",
+        "MOBILE_UPDATES_ENABLED": "1"
       },
       "credentialsSource": "remote",
       "android": {

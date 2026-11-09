@@ -1,32 +1,44 @@
 {
   "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
-  "lockfileSha256": "a76ce6a9dffabd2c476424b6819743714055afedf9ea81483dea2d592ed975eb",
+  "lockfileSha256": "553c2d28ca37f829ef79a673928f44a89236ba0f7a1c13637d6b2f2b18bec969",
   "mobileDependencies": {
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo-google-fonts/jetbrains-mono": "^0.4.1",
+    "@expo-google-fonts/space-grotesk": "^0.4.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "12.0.1",
     "@supabase/supabase-js": "2.103.3",
     "@talyn/client": "*",
     "@talyn/shared": "*",
     "expo": "~58.0.23",
+    "expo-clipboard": "~58.0.4",
     "expo-constants": "~58.0.15",
     "expo-crypto": "~58.0.7",
     "expo-dev-client": "~58.0.18",
     "expo-device": "~58.0.5",
     "expo-font": "~58.0.11",
+    "expo-image-picker": "~58.0.10",
     "expo-linking": "~58.0.16",
+    "expo-navigation-bar": "~58.0.4",
     "expo-notifications": "~58.1.8",
     "expo-router": "~58.0.30",
     "expo-secure-store": "~58.0.2",
+    "expo-splash-screen": "~58.0.13",
     "expo-symbols": "~58.0.4",
     "expo-system-ui": "~58.0.7",
     "expo-updates": "~58.0.21",
     "expo-web-browser": "~58.0.7",
     "fast-text-encoding": "1.0.6",
+    "marked": "^16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
+    "react-native-drawer-layout": "^4.2.12",
+    "react-native-gesture-handler": "~3.3.0",
+    "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.11.1",
-    "react-native-screens": "~4.30.1"
+    "react-native-screens": "~4.30.1",
+    "react-native-worklets": "0.13.0"
   },
   "prohibited": [
     "analytics",
@@ -118,19 +130,74 @@
         "network metadata",
         "persistent EAS client ID sent as EAS-Client-ID"
       ],
-      "purpose": "Signed compatible software delivery when enabled",
+      "purpose": "Compatible software delivery over HTTPS from EAS. Updates are unsigned by decision (2026-11-09). Enabled in preview, internal-beta, and production builds; the development client loads from Metro and sends no update requests",
       "location": "Expo EAS Update; device update cache; native UserDefaults or SharedPreferences for the EAS client ID",
-      "retention": "The EAS client ID and update cache can survive logout. Review Expo retention, uninstall, backup, and native cache behavior before activation."
+      "retention": "The EAS client ID and update cache can survive logout. The privacy owner must review Expo retention, uninstall, backup, and native cache behavior before beta."
+    },
+    {
+      "category": "Photos and camera",
+      "fields": [
+        "images the person picks from the photo library",
+        "photos the person takes with the camera"
+      ],
+      "purpose": "Attach images to a chat message, only when the person chooses to",
+      "location": "System photo picker and camera (permission asked on first use); uploaded to the session sandbox through the Talyn backend",
+      "retention": "Kept with the session's sandbox files; backend and sandbox retention require approval"
+    },
+    {
+      "category": "Clipboard",
+      "fields": [
+        "clipboard text when it looks like a Claude sign-in code"
+      ],
+      "purpose": "Prefill the Claude sign-in code field; the person confirms before it is sent",
+      "location": "Process memory only; sent to the Talyn backend only when the person submits",
+      "retention": "Not stored on the device"
+    },
+    {
+      "category": "Agent credentials",
+      "fields": [
+        "Claude sign-in code",
+        "Anthropic or OpenAI API keys the person enters"
+      ],
+      "purpose": "Connect the workspace's coding agents",
+      "location": "Sent once to the Talyn backend, which keeps them encrypted; not stored on the device",
+      "retention": "Until the person removes the account or deletes the workspace"
+    },
+    {
+      "category": "Device preferences",
+      "fields": [
+        "theme",
+        "onboarding progress",
+        "chosen team space"
+      ],
+      "purpose": "Restore the person's choices on this device",
+      "location": "AsyncStorage, scoped by environment and user where it names account data",
+      "retention": "Onboarding progress and space choice clear on sign-out; theme stays until changed or the app is removed"
+    },
+    {
+      "category": "Billing",
+      "fields": [
+        "plan",
+        "usage",
+        "credit balance",
+        "order history"
+      ],
+      "purpose": "Show the plan and let the person upgrade or buy credits",
+      "location": "Talyn backend; checkout and portal run on Polar in the browser, not in the app",
+      "retention": "Polar is the merchant of record; its retention and Talyn's billing records require approval"
     }
   ],
   "processors": [
     "Talyn backend and hosting",
     "Supabase authentication",
     "GitHub OAuth",
-    "Expo Push Service and EAS Update when enabled",
+    "Expo Push Service and EAS Update",
     "Apple APNs",
     "Google FCM",
-    "Configured coding-agent and repository providers through the existing backend"
+    "Configured coding-agent and repository providers through the existing backend",
+    "Polar checkout and customer portal, opened in the browser",
+    "Anthropic Claude sign-in, opened in the browser",
+    "GitHub App installation, opened in the browser"
   ],
   "applePreparation": {
     "tracking": false,

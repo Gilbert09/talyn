@@ -56,6 +56,7 @@ export function Composer({
   todos,
   contextUsage,
   slashCommands,
+  attachRef,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
@@ -63,6 +64,8 @@ export function Composer({
   todos: WorkbenchTodo[] | null;
   contextUsage: WorkbenchContextUsage | null;
   slashCommands: string[] | null;
+  /** Set by the composer so a drop zone around it can attach images. */
+  attachRef?: React.MutableRefObject<((files: File[]) => void) | null>;
 }) {
   const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
@@ -72,7 +75,10 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const images = useComposerImages(ops.runtime, ops, workbench.status);
-  const { attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste, onDrop } = images;
+  const { attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
+  useEffect(() => {
+    if (attachRef) attachRef.current = (files) => void attachFiles(files);
+  });
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
   const [active, setActive] = useState(0);
   const [paths, setPaths] = useState<string[] | null>(null);
@@ -342,7 +348,7 @@ export function Composer({
   };
 
   return (
-    <div className="border-t bg-background px-3 pb-3 pt-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="border-t bg-background px-3 pb-3 pt-2">
       <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
       {queue.length > 0 && (
         <ul className="mb-2 space-y-1">

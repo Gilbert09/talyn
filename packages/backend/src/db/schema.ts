@@ -25,6 +25,7 @@ import type {
   WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
+  WorkbenchStartProgress,
   WorkbenchSource,
   MemorySource,
   SlackRepoCandidate,
@@ -260,7 +261,7 @@ export const teamMembers = pgTable(
 );
 
 /**
- * Team invites by email (migration 0125). The row waits for the person to
+ * Team invites by email (migration 0127). The row waits for the person to
  * open the emailed link and accept with their GitHub sign-in; accepting adds
  * their `team_members` row. Only a hash of the link token is stored.
  */
@@ -2350,6 +2351,8 @@ export const workbenches = pgTable(
     /** `WorkbenchStatus`. */
     status: text('status').notNull().default('provisioning'),
     statusMessage: text('status_message'),
+    /** The step a sandbox start is on (migration 0125). Null when no start runs. Git's live percent is not stored. */
+    startProgress: jsonb('start_progress').$type<Omit<WorkbenchStartProgress, 'percent' | 'detail'>>(),
     pullRequestId: text('pull_request_id').references(() => pullRequests.id, {
       onDelete: 'set null',
     }),
@@ -2383,6 +2386,12 @@ export const workbenches = pgTable(
     lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
     /** The space this session is in (migration 0116). Null: Personal. */
     spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
+    /**
+     * The `sessionAttentionKey` the owner saw when they last opened the session
+     * (migration 0126). The context rail does not count the session while its
+     * key is the same. Null: never seen.
+     */
+    attentionAck: text('attention_ack'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

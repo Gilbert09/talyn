@@ -2,6 +2,32 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Mobile app aligned with web (2026-11-09)
+
+An on-device review of `apps/mobile` found it looked and worked like a form, not like Talyn. This session rebuilt it to match web and added the features a phone needs.
+- **Live updates never worked on Android.** React Native sends `Origin: https://<api host>` when the app sets none, and the WS upgrade gate destroyed the socket. The app now sends an empty Origin (allowed for native clients), and the server also accepts its own host as an origin (`isOwnHost`). Before this, every screen showed stale data.
+- **The store marked every entry stale on every socket event**, which kept a "Stale data" banner up and locked the composer on busy repos. Invalidation is now per id, refetches are silent and coalesced, and data stays on screen.
+- **Navigation is a drawer that mirrors the web sidebar**, not bottom tabs. Home is the new-session composer, as on web. Pinning every page above Settings left no room for sessions on a phone, so only the pull request lists stay pinned.
+- **Edge-to-edge Android does not resize for the keyboard.** A disabled `KeyboardAvoidingView` with `behavior="padding"` writes `paddingBottom: 0` over its own style, and the reported keyboard height leaves out the navigation bar. The inset now comes from the keyboard's `screenY`.
+- New: Markdown chat with tool rows, plan approval, stop, image attachments, session menu actions, PR actions and code review, changes and diffs, jobs, history, spaces, automations, usage, agents, insights, feature flags (`GET /features`), the owl boot and sign-in screens, and a native splash.
+- Metro caches the worklets Babel plugin in memory. After adding reanimated or worklets, restart Metro with `--clear`, or the app fails with a version mismatch.
+
+## Check ledger recompute reads one row (2026-11-09)
+
+After 486b78b7cf, `recomputeVerdicts` was still the largest egress source: about 207 ledger rows per call for PostHog/posthog, about 900 calls in 7 minutes.
+- `ledgerTallyQuery` returns one aggregate row: the `breakdownOf` counts, the md5 of the check digest, and the failing checks as JSON. `deriveCiVerdict` reads every other check only as a count, so it now takes an optional `tally` (`total`, `running`) and accepts the failing checks alone.
+- The digest string is about 50 bytes per check, so it no longer ships either. The UPDATE writes `last_check_digest` from a scalar subquery and holds the write unless the subquery's md5 equals the one the read saw. Every ledger write is followed by its own recompute, so a held write is one a newer recompute makes. `affectedPrsForSha` ships `md5(last_check_digest)` for the required-ness recheck, not the digest.
+- JS sorts by UTF-16 code unit and `COLLATE "C"` by UTF-8 byte. They differ only for names with a character at or above U+E000. Such a ledger takes the old full read and computes in JS.
+- The reseed stays direct. prCache already coalesces it per commit and runs two at a time, it recomputes only when the ledger hash changed, and its tests and `_awaitCheckLedgerReseeds` expect the verdict when it returns. Its md5 `ledgerHash` cannot reuse the check digest, because it also covers `required` and `raw_state`.
+
+## Start progress for session boxes (2026-11-09)
+
+A session that is starting now shows a progress bar in place of a spinner: "Step 1 of 3 · Starting the sandbox", then "Getting the code" with git's real percentage, then "Running the setup script". The work was written on 2026-11-06 and left uncommitted in the main checkout; it was rebased onto main and its migration renumbered from 0118 (taken by `0118_usage_period_midnight`) to `0125_workbench_start_progress`.
+- The STEP is stored on `workbenches.start_progress` and changes a few times per start. Git's PERCENTAGE changes many times a second, so it stays in the process that runs the clone (`startProgress.ts`) and goes out at most once a second. A broadcast from another instance has no percentage; the front ends never move a bar backwards within a step, so that is harmless.
+- Each step's estimate is this repository's MEDIAN from `setupTimingHistory`, with a checkout and a full clone kept apart because they differ by minutes. With fewer samples than the start comparison needs, the bar is indeterminate. The estimate slows as it nears 95% so a slow start never shows as done.
+- The clone script runs git with `--progress` through `git_progress`, a subshell with `pipefail` that turns git's `\r` updates into lines and keeps each command's own exit status (`GIT_PROGRESS_FUNCTIONS`). The error message quotes the last stderr lines that are NOT progress, so a failed clone no longer reports "Receiving objects: 43%".
+- A warm-pool box skips the sandbox step. A thread has one step, the box. Every path that ends or restarts a start (ready, failure, retry, restore) clears the column.
+
 ## Max plan (2026-11-08)
 
 A third paid tier: **Max**, $100 a month (monthly only, Tom's call), 1,000 box-hours a month, every size, credits and auto features. Tom asked for "something like $100 with a lot more compute" that does not lose money.
@@ -7449,3 +7475,10 @@ A session that a thread starts goes in the space of the thread when the caller g
 `PUT /workbenches/:id/space` now moves a thread. It also moves the live sessions of the thread (`thread_id`, same workspace) to the same target, and sends `workbench:updated` for each. Archived sessions of the thread stay where they are.
 "Continue as thread" from a session in a space puts the new thread in the same space (`createThread` reads the `spaceId` of `fromSessionId`).
 The space list (`spaceSessionsQuery`) now returns sessions and threads, with `kind` and `threadId`. A thread has no repository, so `createViewer` shows it to its owner only. For a teammate it counts in `hiddenCount`. Space events and teammate reads use the same rule. A teammate can see a session of the thread when they can read its repository.
+
+### 2026-11-09 — Opening a session clears its context rail badge
+
+Before, a session that needed me kept its red count on the context rail until the alert itself went away. A pull request with conflicts kept the badge after I opened the session and saw it.
+Now opening a session marks its current alert as seen. `sessionAttentionKey` (`packages/shared/src/contextAttention.ts`) names the alert: `error`, `chat_error:<chat>@<turn>`, `reply:<chat>@<turn>` or `conflict:<pr>:<headSha>`. `POST /workbenches/:id/attention/seen` stores the current key in `workbenches.attention_ack` (migration 0126), and `contextAttention` does not count a session whose key equals it. A new alert has a new key, so it counts again: a question in a later turn, a failure in a later turn, or conflicts on a new head.
+The route is owner-only through `attentionSessionsQuery`, so a teammate who opens a space session does not clear the owner's badge.
+In both apps, `useAttentionSeen` (`lib/contextRail.ts`) runs in `WorkbenchView` when the session opens, when its alert changes while it is open, and on window focus with an alert showing. It then asks the rail again (`refreshContextAttention`), so the badge clears at once.

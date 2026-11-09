@@ -168,7 +168,7 @@ function boxRow(box: Pick<WarmBox, 'id' | 'workspaceId' | 'repositoryId' | 'agen
     threadId: null, name: 'warm-pool', title: null, branch: box.baseBranch, baseBranch: box.baseBranch, runtime: 'sandbox',
     agent: box.agent, model: null, deviceId: null, localPath: null, sandboxId: box.sandboxId, sandboxGeneration: box.sandboxId,
     sandboxState: 'running', memoryRestorePending: null, archivePendingAt: null, archiveRetryAt: null, restoreRequestedAt: null,
-    archiveLeaseUntil: null, archiveFailures: 0, fleetHost: box.fleetHost, status: 'provisioning', statusMessage: null,
+    archiveLeaseUntil: null, archiveFailures: 0, fleetHost: box.fleetHost, status: 'provisioning', statusMessage: null, startProgress: null,
     pullRequestId: null, pullRequestLinkedAt: null, pushedHeadShas: [], allocatedBranch: false,
     settings: { internetAccess: box.internetAccess, sandboxSize: box.size as SandboxSize }, source: null, diffStat: null,
     workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null, workCheckedAt: null, workUnpushedCommits: null,

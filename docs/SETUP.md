@@ -801,6 +801,14 @@ then keeps the old build serving, so nothing breaks, but nothing deploys.
    `/settings/billing` (`?checkout=success&kind=plan|credits` on success).
    `POLAR_SUCCESS_URL`, when set, replaces the success page. With neither,
    Polar shows its own receipt page.
+   A checkout or portal session started from the mobile app (an allowlisted
+   `returnTo`, see `MOBILE_RETURN_SCHEMES`) returns to the app instead, at
+   `<returnTo>billing/return?kind=checkout|credits|portal&result=success|cancel`.
+   Polar accepts only http(s) URLs, so these go through the public
+   `GET /api/v1/billing/mobile-return` hop, which needs the backend's public
+   origin (`TALYN_PUBLIC_API_URL`, or the origin of
+   `POSTHOG_OAUTH_REDIRECT_URI` / `SLACK_OAUTH_REDIRECT_URI`). Without one, a
+   mobile checkout keeps the web return URLs.
 
 How the pieces behave:
 
@@ -1160,6 +1168,14 @@ POSTHOG_HOST=https://us.i.posthog.com
 # becomes the GitHub App callback's redirect target and a bad one strands the
 # user on the API origin. Only ever read from env, never from a request.
 # WEB_APP_URL=https://app.talyn.dev
+#
+# MOBILE_RETURN_SCHEMES: comma-separated app return bases the mobile app may
+# pass as `returnTo` on the GitHub install URL, checkout, credit checkout and
+# portal routes. Each entry must be exactly `scheme://` (no host, no path); an
+# https/http/javascript entry is dropped. A `returnTo` is accepted only on an
+# EXACT match, else 400 `invalid_return_to`. Unset or blank means the three app
+# variants below.
+# MOBILE_RETURN_SCHEMES=talyn-mobile://,talyn-mobile-preview://,talyn-mobile-development://
 #
 # RESEND_API_KEY: sends email through Resend (https://resend.com). Today only
 # team invites by email use it: the invitee gets a link to
