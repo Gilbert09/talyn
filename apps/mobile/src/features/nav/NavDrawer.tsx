@@ -2,7 +2,7 @@ import type { Workbench } from '@talyn/shared';
 import { useGlobalSearchParams, usePathname, useRouter, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SessionStateIcon } from '../../components/Status';
@@ -20,9 +20,6 @@ import { useSessionMenu } from '../sessions/SessionMenu';
 import { WorkbenchRow } from '../sessions/WorkbenchRow';
 import { useDrawerWork } from './data';
 import { activeTarget, badgeText, drawerEntries, toggled, type DrawerEntry, type DrawerTarget } from './model';
-
-/** Below this window height the app pages scroll with the lists instead of staying pinned. */
-const PIN_PAGES_MIN_HEIGHT = 760;
 
 const LIST_LINKS = new Set(['/sessions', '/threads']);
 
@@ -51,7 +48,6 @@ export function NavDrawer({ close }: { close(): void }) {
     [offered, sessions.data, threads.data, query, collapsedGroups, collapsedThreads]);
   const now = useNow();
   const menu = useSessionMenu();
-  const tall = useWindowDimensions().height >= PIN_PAGES_MIN_HEIGHT;
 
   // Leaving home closes the drawer, so Back comes back to the screen and not to the open drawer.
   // The old list links open the drawer themselves, so they must not close it.
@@ -78,8 +74,9 @@ export function NavDrawer({ close }: { close(): void }) {
   };
 
   const pages = <AppPages active={active} go={go} history={offered} />;
-  // With no list to scroll (still loading, or no sessions on the account) the pages always stay pinned.
-  const pinned = tall || features === null || !offered;
+  // The pull request lists stay pinned. The other pages scroll after the lists, so a phone keeps room for sessions.
+  // With no list to scroll (still loading, or no sessions on the account) every page stays pinned.
+  const pinnedAll = features === null || !offered;
   return <View style={[styles.drawer, { backgroundColor: c.paper, paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
     <View style={styles.top}>
       <WorkspaceSwitcher onPress={() => go('/workspaces')} />
@@ -91,8 +88,8 @@ export function NavDrawer({ close }: { close(): void }) {
         accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
         initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
-        ListFooterComponent={pinned ? undefined : <View style={styles.footerPages}>{pages}</View>} />}
-    {pinned ? <View style={[styles.pinned, { borderTopColor: c.border }]}>{pages}</View> : null}
+        ListFooterComponent={pinnedAll ? undefined : <View style={styles.footerPages}><AppPages active={active} go={go} history={offered} withPullRequests={false} /></View>} />}
+    <View style={[styles.pinned, { borderTopColor: c.border }]}>{pinnedAll ? pages : <PullRequestLinks active={active} go={go} />}</View>
     <View style={[styles.settings, { borderTopColor: c.border }]}>
       <NavRow label="Settings" icon={{ ios: 'gearshape', android: 'settings' }} active={active === 'settings'} onPress={() => go('/settings')} />
     </View>
@@ -101,10 +98,10 @@ export function NavDrawer({ close }: { close(): void }) {
 }
 
 /** The app pages under the lists: the pull request lists with counts, then the pages the account may see. */
-function AppPages({ active, go, history }: { active: DrawerTarget; go(href: Href): void; history: boolean }) {
+function AppPages({ active, go, history, withPullRequests = true }: { active: DrawerTarget; go(href: Href): void; history: boolean; withPullRequests?: boolean }) {
   const items = useNavItems();
   return <View style={styles.pages}>
-    <PullRequestLinks active={active} go={go} />
+    {withPullRequests ? <PullRequestLinks active={active} go={go} /> : null}
     {items.map((item) => <NavRow key={item.key} label={item.label} icon={item.icon} active={active === item.key} onPress={() => go(item.route)} />)}
     {history ? <NavRow label="History" icon={{ ios: 'clock.arrow.circlepath', android: 'history' }} active={active === 'history'} onPress={() => go('/history')} /> : null}
   </View>;
