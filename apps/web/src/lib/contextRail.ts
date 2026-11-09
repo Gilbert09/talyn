@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
-import type { ContextAttentionCounts, SpacesTeam, Workspace, WorkspaceLogo } from '@talyn/shared';
+import {
+  sessionAttentionKey,
+  type ContextAttentionCounts,
+  type SpacesTeam,
+  type Workbench,
+  type WorkbenchChat,
+  type Workspace,
+  type WorkspaceLogo,
+} from '@talyn/shared';
 import { api } from './api';
 import type { AppContext } from '../stores/workspace';
 
@@ -67,10 +75,18 @@ export function railInitials(name: string): string {
 /** How often the rail asks for its badges. Each ask is two narrow reads. */
 export const ATTENTION_POLL_MS = 30_000;
 
+const refreshListeners = new Set<() => void>();
+
+/** Ask for the rail's badges now, for example after a session's alert was seen. */
+export function refreshContextAttention(): void {
+  for (const listener of refreshListeners) listener();
+}
+
 /**
  * The rail's badge counts. Asks on mount, every 30 seconds while the window
- * shows, when the window comes back, and when `refreshKey` changes (a context
- * switch, so the context I just left shows its count at once).
+ * shows, when the window comes back, when `refreshKey` changes (a context
+ * switch, so the context I just left shows its count at once), and on
+ * {@link refreshContextAttention}.
  */
 export function useContextAttention(enabled: boolean, refreshKey: string): ContextAttentionCounts | null {
   const [counts, setCounts] = useState<ContextAttentionCounts | null>(null);
@@ -92,12 +108,63 @@ export function useContextAttention(enabled: boolean, refreshKey: string): Conte
     const timer = setInterval(load, ATTENTION_POLL_MS);
     window.addEventListener('focus', load);
     document.addEventListener('visibilitychange', load);
+    refreshListeners.add(load);
     return () => {
       cancelled = true;
       clearInterval(timer);
       window.removeEventListener('focus', load);
       document.removeEventListener('visibilitychange', load);
+      refreshListeners.delete(load);
     };
   }, [enabled, refreshKey]);
   return enabled ? counts : null;
+}
+
+/**
+ * The client's view of the session's alert. It does not match the server's
+ * key exactly (the client has no turn counts), but it changes when the alert
+ * changes, which is all {@link useAttentionSeen} needs.
+ */
+export function clientAttentionKey(
+  workbench: Pick<Workbench, 'kind' | 'status' | 'sandboxState' | 'archivedAt'>,
+  chats: Pick<WorkbenchChat, 'id' | 'status' | 'queuedMessages'>[],
+  pr: { state: string; summary: { mergeable?: string | null } } | null,
+): string | null {
+  return sessionAttentionKey({
+    kind: workbench.kind ?? 'session',
+    status: workbench.status,
+    sandboxState: workbench.sandboxState,
+    archivedAt: workbench.archivedAt,
+    chats: chats.map((c) => ({ id: c.id, status: c.status, queued: c.queuedMessages?.length ?? 0 })),
+    pr: pr ? { state: pr.state, mergeable: pr.summary.mergeable ?? null } : null,
+  });
+}
+
+/** Tell the server I saw the session's alert, then ask for the rail's badges again. */
+export function markAttentionSeen(workbenchId: string): void {
+  Promise.resolve()
+    .then(() => api.workbenches.attentionSeen(workbenchId))
+    .then(() => refreshContextAttention())
+    .catch(() => {
+      // A teammate's session or a lost request: the badge stays until the next open.
+    });
+}
+
+/**
+ * Looking at a session sees its alert, so the context rail stops counting it.
+ * Runs when the session opens, when its alert changes while it is open, and
+ * when the window comes back with an alert showing.
+ */
+export function useAttentionSeen(workbenchId: string, attentionKey: string | null): void {
+  useEffect(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return undefined;
+    markAttentionSeen(workbenchId);
+    return undefined;
+  }, [workbenchId, attentionKey]);
+  useEffect(() => {
+    if (attentionKey === null) return undefined;
+    const onFocus = () => markAttentionSeen(workbenchId);
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [workbenchId, attentionKey]);
 }

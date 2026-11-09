@@ -39,6 +39,8 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
+import { acknowledgeAttention } from '../services/workbenches/attention.js';
+import { getDbClient } from '../db/client.js';
 import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
@@ -919,6 +921,19 @@ export function workbenchRoutes(): Router {
         return;
       }
       ok(res, await publicWorkbench(await archiveWorkbench(row.id)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * The person opened the session: its current alert stops counting on the
+   * context rail. Owner-only by the query, so a teammate's view is a no-op.
+   */
+  router.post('/:id/attention/seen', async (req, res) => {
+    const user = assertUser(req);
+    try {
+      ok(res, { acknowledged: await acknowledgeAttention(getDbClient(), user.id, req.params.id) });
     } catch (err) {
       fail(res, err);
     }
