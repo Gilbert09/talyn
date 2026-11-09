@@ -5,6 +5,7 @@ import {
   Loader2,
   Copy,
   Check,
+  Link,
   Bot,
   MessageSquare,
   Users,
@@ -27,6 +28,7 @@ import {
 } from 'lucide-react';
 import type { PRHumanGate, PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '../../ui/context-menu';
 import { buildStackIndex, stackSelection, type StackMeta } from './stacks';
 import {
   type TaskStatus,
@@ -555,16 +557,23 @@ const PRTableRow = React.memo(function PRTableRow({
   const fixBlocked = fixBlockedReason(summary, { state: row.state, taskRunning });
   const canFollowUp = fixBlocked === null;
 
-  async function copyMarkdownLink(e: React.MouseEvent) {
-    e.stopPropagation();
-    const { markdown, html } = prMarkdownLink(summary.title, summary.url);
+  async function copyToClipboard(write: () => Promise<void>) {
     try {
-      await copyRich(html, markdown);
+      await write();
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       toast.error('Could not copy to clipboard');
     }
+  }
+
+  function copyUrl() {
+    void copyToClipboard(() => navigator.clipboard.writeText(summary.url));
+  }
+
+  function copyMarkdownLink() {
+    const { markdown, html } = prMarkdownLink(summary.title, summary.url);
+    void copyToClipboard(() => copyRich(html, markdown));
   }
 
   async function runMerge(e: React.MouseEvent) {
@@ -1543,19 +1552,41 @@ const PRTableRow = React.memo(function PRTableRow({
             </button>
           )}
           <OpenInWorkbenchButton row={row} variant="row" />
-          <button
-            type="button"
-            data-attr="pr-row-copy-link"
-            onClick={copyMarkdownLink}
-            className="rounded p-1 text-muted-foreground hover:text-foreground"
-            title={copied ? 'Copied!' : 'Copy as Markdown link'}
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-emerald-600" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </button>
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <button
+                type="button"
+                data-attr="pr-row-copy-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyUrl();
+                }}
+                className="rounded p-1 text-muted-foreground hover:text-foreground"
+                title={copied ? 'Copied!' : 'Copy link (right-click for more)'}
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </ContextMenuTrigger>
+            {/* The menu renders in a portal, but React events still bubble to
+                the row, so stop them here or a menu pick also selects the row. */}
+            <ContextMenuContent
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              <ContextMenuItem data-attr="pr-row-copy-url" onSelect={copyUrl}>
+                <Link className="h-3.5 w-3.5" />
+                Copy link
+              </ContextMenuItem>
+              <ContextMenuItem data-attr="pr-row-copy-markdown-link" onSelect={copyMarkdownLink}>
+                <Copy className="h-3.5 w-3.5" />
+                Copy as Markdown link
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
           <a
             href={summary.url}
             target="_blank"
