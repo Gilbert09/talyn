@@ -1,23 +1,26 @@
 import type { Workbench } from '@talyn/shared';
 import { useGlobalSearchParams, usePathname, useRouter, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SessionStateIcon } from '../../components/Status';
-import { useWorkspaceName } from '../../components/ScreenHeader';
 import { AppText, IconButton, Spinner, type Symbol } from '../../components/UI';
 import { workbenchState } from '../../lib/status';
 import { useNow } from '../../lib/time';
 import { HOME, newWorkRoute, threadRoute } from '../../navigation/routes';
-import { display, radius, sans, type, useTheme } from '../../theme/tokens';
+import { radius, sans, type, useTheme } from '../../theme/tokens';
 import { workbenchTitle } from '../../workflow/model';
 import { useNavItems } from '../more/MoreScreen';
 import { usePrCounts } from '../prs/counts';
 import { pullsRoute, type PullsTab } from '../prs/lists';
 import { useSessionMenu } from '../sessions/SessionMenu';
 import { WorkbenchRow } from '../sessions/WorkbenchRow';
+import { useActiveContext } from '../spaces/context';
+import { ContextSwitcher } from './ContextSwitcher';
+import { GroupHeader, Heading } from './DrawerParts';
+import { SpaceDrawerList } from './SpaceDrawer';
 import { useDrawerWork } from './data';
 import { activeTarget, badgeText, drawerEntries, toggled, type DrawerEntry, type DrawerTarget } from './model';
 
@@ -40,14 +43,17 @@ export function NavDrawer({ close }: { close(): void }) {
   const pathname = usePathname();
   const { tab } = useGlobalSearchParams<{ tab?: string }>();
   const active = activeTarget(pathname, tab);
-  const { features, offered, sessions, threads } = useDrawerWork();
+  const { features, offered, sessions, threads, personal } = useDrawerWork();
   const [query, setQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedThreads, setCollapsedThreads] = useState<ReadonlySet<string>>(() => new Set());
-  const entries = useMemo(() => offered ? drawerEntries({ sessions: sessions.data, threads: threads.data, query, collapsedGroups, collapsedThreads }) : [],
-    [offered, sessions.data, threads.data, query, collapsedGroups, collapsedThreads]);
+  const entries = useMemo(() => offered ? drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads }) : [],
+    [offered, personal, query, collapsedGroups, collapsedThreads]);
   const now = useNow();
   const menu = useSessionMenu();
+  const place = useActiveContext();
+  const owned = useMemo(() => new Map([...(sessions.data ?? []), ...(threads.data ?? [])].map((item) => [item.id, item])),
+    [sessions.data, threads.data]);
 
   // Leaving home closes the drawer, so Back comes back to the screen and not to the open drawer.
   // The old list links open the drawer themselves, so they must not close it.
@@ -76,19 +82,23 @@ export function NavDrawer({ close }: { close(): void }) {
   const pages = <AppPages active={active} go={go} history={offered} />;
   // The pull request lists stay pinned. The other pages scroll after the lists, so a phone keeps room for sessions.
   // With no list to scroll (still loading, or no sessions on the account) every page stays pinned.
-  const pinnedAll = features === null || !offered;
+  const space = place.active?.space ?? null;
+  const pinnedAll = features === null || place.context.kind === 'pending' || (!offered && !space);
+  const footer = pinnedAll ? undefined : <View style={styles.footerPages}><AppPages active={active} go={go} history={offered} withPullRequests={false} /></View>;
   return <View style={[styles.drawer, { backgroundColor: c.paper, paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
     <View style={styles.top}>
-      <WorkspaceSwitcher onPress={() => go('/workspaces')} />
+      <ContextSwitcher state={place} />
       {offered ? <NavRow label="New session" icon={{ ios: 'square.and.pencil', android: 'edit_square' }} active={active === 'home'} onPress={goHome} /> : null}
       {offered ? <SearchField value={query} onChange={setQuery} /> : null}
     </View>
-    {features === null ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
+    {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
+      : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} onLongPress={menu.open} footer={footer}
+        onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
       : !offered ? <View style={{ flex: 1 }} /> : <FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
         accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
         initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
-        ListFooterComponent={pinnedAll ? undefined : <View style={styles.footerPages}><AppPages active={active} go={go} history={offered} withPullRequests={false} /></View>} />}
+        ListFooterComponent={footer} />}
     <View style={[styles.pinned, { borderTopColor: c.border }]}>{pinnedAll ? pages : <PullRequestLinks active={active} go={go} />}</View>
     <View style={[styles.settings, { borderTopColor: c.border }]}>
       <NavRow label="Settings" icon={{ ios: 'gearshape', android: 'settings' }} active={active === 'settings'} onPress={() => go('/settings')} />
@@ -131,16 +141,6 @@ export function NavRow({ label, icon, badge, active = false, onPress }: { label:
   </Pressable>;
 }
 
-function WorkspaceSwitcher({ onPress }: { onPress(): void }) {
-  const c = useTheme();
-  const name = useWorkspaceName();
-  return <Pressable accessibilityRole="button" accessibilityLabel={name ? `Workspace: ${name}` : 'Choose workspace'}
-    accessibilityHint="Opens the workspace chooser." onPress={onPress} style={styles.switcher}>
-    <Text numberOfLines={1} style={[styles.workspace, { color: c.text }]}>{name ?? 'Choose workspace'}</Text>
-    <SymbolView name={{ ios: 'chevron.down', android: 'expand_more' }} size={14} tintColor={c.muted} />
-  </Pressable>;
-}
-
 function SearchField({ value, onChange }: { value: string; onChange(value: string): void }) {
   const c = useTheme();
   return <View style={[styles.search, { backgroundColor: c.background, borderColor: c.border }]}>
@@ -152,27 +152,6 @@ function SearchField({ value, onChange }: { value: string; onChange(value: strin
       <SymbolView name={{ ios: 'xmark.circle.fill', android: 'cancel' }} size={16} tintColor={c.muted} />
     </Pressable> : null}
   </View>;
-}
-
-function Heading({ title, trailing }: { title: string; trailing?: ReactNode }) {
-  return <View style={styles.heading}>
-    <AppText accessibilityRole="header" variant="section" tone="muted" style={{ flex: 1 }}>{title}</AppText>
-    {trailing}
-  </View>;
-}
-
-/** A repository's name. Tap it to hide or show its sessions. It goes bold when it hides one that needs the person. */
-function GroupHeader({ repo, expanded, hidden, attention, onToggle }: { repo: string; expanded: boolean; hidden: number; attention: boolean; onToggle(): void }) {
-  const c = useTheme();
-  return <Pressable accessibilityRole="button" accessibilityLabel={repo} accessibilityState={{ expanded }}
-    accessibilityHint={expanded ? 'Hides the sessions of this repository.' : 'Shows the sessions of this repository.'}
-    onPress={onToggle} style={styles.group}>
-    <Text numberOfLines={1} style={[type.caption, sans(attention ? 600 : 500), { color: attention ? c.text : c.muted, flexShrink: 1 }]}>{repo}</Text>
-    <SymbolView name={expanded ? { ios: 'chevron.down', android: 'expand_more' } : { ios: 'chevron.right', android: 'chevron_right' }}
-      size={11} tintColor={c.muted} />
-    <View style={{ flex: 1 }} />
-    {hidden ? <Text style={[type.caption, { color: c.muted, fontVariant: ['tabular-nums'] }]}>{hidden}</Text> : null}
-  </Pressable>;
 }
 
 /** A thread with how many of its sessions run, and a toggle for its sessions. */
@@ -205,14 +184,10 @@ function ThreadRow({ item, expanded, childCount, running, onToggle, onLongPress 
 const styles = StyleSheet.create({
   drawer: { flex: 1 },
   top: { paddingHorizontal: 12, gap: 6, paddingBottom: 8 },
-  switcher: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 6 },
-  workspace: { fontSize: 18, lineHeight: 24, ...display(600), flexShrink: 1 },
   search: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, marginTop: 2 },
   searchInput: { flex: 1, paddingVertical: 8 },
   list: { paddingHorizontal: 12, paddingBottom: 16 },
-  heading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32, paddingHorizontal: 6, paddingTop: 12 },
-  group: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 32, paddingHorizontal: 6, paddingTop: 6 },
   indent: { paddingLeft: 18 },
   notice: { paddingHorizontal: 6, paddingVertical: 8 },
   loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },

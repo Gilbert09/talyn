@@ -1,5 +1,5 @@
-import type { PRRow, WatchedRepo } from '@talyn/client/native';
-import type { WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type WatchedRepo } from '@talyn/client/native';
+import type { SpaceRepository, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
@@ -17,10 +17,14 @@ import { useKeyboardInset } from '../../lib/keyboard';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
 import { display, mono, radius, sans, type, useTheme } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
+import { useRemote } from '../more/useRemote';
 import { WEB_APP_URL } from '../settings/about';
+import { SpaceTile } from '../spaces/Avatars';
+import { useActiveContext } from '../spaces/context';
 import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
   effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
   rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
+import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
 
 type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
 
@@ -45,7 +49,7 @@ const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
  * a route replaces itself and home pushes.
  */
 export function NewWorkScreen({ initialMode = 'session', presentation = 'route' }: { initialMode?: NewWorkMode; presentation?: 'home' | 'route' }) {
-  const { workflow } = useMobileRuntime();
+  const { workflow, workspace: workspaces } = useMobileRuntime();
   const router = useRouter();
   const c = useTheme();
   const offline = useNetwork() === 'offline';
@@ -60,6 +64,19 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const android = Platform.OS === 'android';
   const workspaceId = workflow.getScope()?.workspace ?? '';
   const draftKey = 'new:prompt';
+  // In a space, new work goes through the space and runs in my home workspace for its team, like web.
+  const place = useActiveContext();
+  const inSpace = place.active;
+  const spaceId = inSpace?.space.id ?? null;
+  const home = inSpace?.team.homeWorkspaceId ?? null;
+  const remoteHome = home && home !== workspaceId ? home : null;
+  const spaceRepos = useRemote<SpaceRepository[]>(offered && spaceId ? `space-repositories:${spaceId}` : null, () => spaces.repositories(spaceId ?? ''));
+  const homeReadiness = useRemote<WorkbenchReadiness>(offered && remoteHome ? `readiness:${remoteHome}` : null,
+    () => workbenches.readiness(remoteHome ?? ''));
+  const homeWorkspace = useRemote<Workspace>(offered && remoteHome ? `workspace:${remoteHome}` : null, () => workspaceApi.get(remoteHome ?? ''));
+  const readinessSource = remoteHome ? homeReadiness : readiness;
+  const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
+  const repoKey = spaceId ? `space:${spaceId}` : workspaceId;
   const prompt = useLocal(draftKey).draft;
 
   const [mode, setMode] = useState<NewWorkMode>(initialMode);
@@ -77,39 +94,58 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   // Open pull requests give the branch sheet its suggestions, so they load only while it is open.
   const openPrs = useResource<PRRow[]>('attention', '', offered && sheet === 'branch');
 
-  const repos = useMemo(() => repositories.data ?? [], [repositories.data]);
+  const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data) : repositories.data ?? [],
+    [spaceId, spaceRepos.data, repositories.data]);
+  const reposStatus = spaceId ? spaceRepos.status : repositories.status;
   useEffect(() => {
-    if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(workspaceId, repos));
-  }, [repos, repositoryId, workspaceId]);
+    if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(repoKey, repos));
+  }, [repos, repositoryId, repoKey]);
   const repository = repos.find((repo) => repo.id === repositoryId) ?? null;
   // A failed readiness read is reported like web: the server or the connection, not the agents.
-  const sandbox = readiness.data?.sandbox ?? (readiness.status === 'error' || readiness.status === 'offline' || offline
+  const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
     ? { ok: false, reasons: [{ code: 'unreachable', message: offline ? 'You are offline' : 'Talyn’s server is not responding' }],
       agents: { claude: { ok: false }, codex: { ok: false } } } as WorkbenchReadiness['sandbox'] : null);
   const agent = usableAgent(sandbox, wantedAgent);
-  const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(workspace.data?.settings, agent);
+  const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess };
-  const blocked = blockedReason(form, sandbox, offline);
+  const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline);
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const agentOk = agentChoice(sandbox, agent);
   const connect = !sandboxOk.available ? sandboxOk.connect : !agentOk.available ? agentOk.connect : undefined;
   const unreachable = sandbox?.reasons[0]?.code === 'unreachable';
   const branch = effectiveBranch(baseBranch, repository);
-  const chipState: ChipState = { mode, repository, repositoriesLoading: repositories.status !== 'ready' && !repos.length,
+  const chipState: ChipState = { mode, repository, repositoriesLoading: reposStatus !== 'ready' && !repos.length,
     branch, internetAccess, agent, model };
-  const chips = composerChips(mode, repository);
+  const chips = composerChips(mode, repository, Boolean(inSpace));
+  const addsNote = inSpace && home ? addsRepositoryNote(mode, repository?.fullName, settingsSource) : null;
 
   const start = async () => {
     if (!send.enabled) return;
     setBusy(true); setError(null);
     try {
+      const open = (id: string) => {
+        const href = mode === 'thread' ? threadRoute(id) : sessionRoute(id);
+        if (presentation === 'route') router.replace(href); else router.push(href);
+      };
+      if (inSpace) {
+        const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form));
+        if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
+        workflow.updateLocal(draftKey, { draft: '' });
+        // The detail screens read the selected workspace, so a session in another of mine switches to it first.
+        if (created.workspaceId === workspaceId) { workflow.applyWorkbench(created.workbench); open(created.workbench.id); }
+        else {
+          await workspaces.select(created.workspaceId);
+          if (workspaces.getSnapshot().selected === created.workspaceId) open(created.workbench.id);
+          else toast.show(mode === 'thread' ? 'Thread started.' : 'Session started.');
+        }
+        return;
+      }
       const item = await workflow.createWorkbench(createInput(form, workspaceId));
       if (mode === 'session' && repository) rememberRepository(workspaceId, repository.id);
       workflow.updateLocal(draftKey, { draft: '' });
       setBaseBranch('');
-      const href = mode === 'thread' ? threadRoute(item.id) : sessionRoute(item.id);
-      if (presentation === 'route') router.replace(href); else router.push(href);
+      open(item.id);
     } catch (failure) {
       const refusal = boxRefusal(failure);
       if (refusal) showBoxRefusal(refusal);
@@ -125,21 +161,24 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
     toast.show(internetMessage(next));
   };
 
-  if (features === null) return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
+  if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
   </ScreenContainer>;
 
-  const noRepositories = mode === 'session' && repositories.status === 'ready' && !repos.length;
+  const noRepositories = mode === 'session' && reposStatus === 'ready' && !repos.length;
   const notices = <>
     {error ? <Banner tone="destructive" message={error} /> : null}
     {!sandboxOk.available && sandbox ? <Banner tone="warning" message={`Sandbox unavailable: ${sandboxOk.reason ?? 'Cloud sessions are unavailable'}`}
       action={unreachable ? (offline ? undefined : 'Retry') : 'Open web'}
-      onAction={unreachable ? () => { void readiness.refresh(); } : () => openExternal(WEB_APP_URL)} />
+      onAction={unreachable ? () => { void readinessSource.refresh(); } : () => openExternal(WEB_APP_URL)} />
       : connect ? <Banner tone="information" message={`${agentOk.reason ?? 'This agent is not connected'}. Connect your Claude or ChatGPT subscription in Talyn on the web, in Settings, Integrations.`}
         action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
-    {noRepositories ? <Banner tone="information" message="Add a repository in Talyn on the web to start a session. A thread needs no repository."
+    {noRepositories ? <Banner tone="information" message={inSpace
+      ? 'This space has no repositories yet. Add one in Talyn on the web. A thread needs no repository.'
+      : 'Add a repository in Talyn on the web to start a session. A thread needs no repository.'}
       action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
+    {addsNote ? <AppText variant="meta" tone="muted" style={styles.note}>{addsNote}</AppText> : null}
   </>;
 
   const chip = (kind: ComposerChip) => {
@@ -161,6 +200,10 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       behavior={android ? undefined : 'padding'} keyboardVerticalOffset={presentation === 'route' ? headerHeight : 0}>
       <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
         <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
+        {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
+          <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
+          <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
+        </View> : null}
         {toast.element}
       </Pressable>
       <View style={styles.dock}>
@@ -171,7 +214,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
         </ScrollView>
         <View style={[styles.card, { backgroundColor: c.elevated, borderColor: focused ? c.primary : c.border, opacity: busy ? 0.85 : 1 }]}>
           <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
-            placeholder={PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
+            placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
             style={[styles.prompt, { color: c.text }]} />
@@ -280,6 +323,9 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   greeting: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
   heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
+  inSpace: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, maxWidth: '100%' },
+  inSpaceText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },
+  note: { paddingHorizontal: 4 },
   dock: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, gap: 8, width: '100%', maxWidth: 760, alignSelf: 'center' },
   card: { borderRadius: 16, borderWidth: 1 },
   // Two lines tall from the start, so the first typed line does not resize the field.

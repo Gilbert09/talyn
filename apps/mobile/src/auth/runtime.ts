@@ -12,6 +12,7 @@ import type { MobileConfig } from '../config';
 import { createNativeSocket } from '../native/socket';
 import { createNativeLifecycle } from '../native/lifecycle';
 import { WorkspaceController } from '../workspaces/controller';
+import { ContextController, contextKey } from '../workspaces/context';
 import { clearIntent } from '../navigation/intents';
 import { WorkflowStore } from '../workflow/store';
 import { NotificationController } from '../notifications/controller';
@@ -52,12 +53,14 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     await oldStorage.clearAuth();
     if (oldUser) await SecureStore.deleteItemAsync(installationKey(previous, oldUser));
     if (oldUser) await AsyncStorage.removeItem(`talyn.workspace.${previous}.${encodeURIComponent(oldUser)}`);
+    if (oldUser) await AsyncStorage.removeItem(contextKey(previous, oldUser));
   }
   assertCurrent();
   await SecureStore.setItemAsync('talyn-active-environment', namespace, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
   assertCurrent();
   const lifecycle = createNativeLifecycle(AppState, NetInfo);
   const workspace = new WorkspaceController(AsyncStorage, namespace, () => workspaces.list());
+  const context = new ContextController(AsyncStorage, namespace);
   let rejectRefresh = () => {};
   installAuthCrypto();
   const supabase = createClient(config.supabaseUrl, config.supabaseKey, {
@@ -89,7 +92,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     if (priorUser) clearIntent();
     wsClient.reset();
     bindClient();
-    return Promise.all([workspace.clear(priorUser), notifications?.clearLocal(priorUser)]).then(() => {});
+    return Promise.all([workspace.clear(priorUser), context.clear(priorUser), notifications?.clearLocal(priorUser)]).then(() => {});
   });
   rejectRefresh = () => { void auth.signOut(); };
   bindClient();
@@ -135,7 +138,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   const unbindWorkspace = workspace.subscribe(bindWorkflow);
   let signingOut: Promise<void> | null = null;
   return {
-    auth, workspace, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
+    auth, workspace, context, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
     signOut() {
       signingOut ??= notifications.logout().finally(() => auth.signOut()).finally(() => { signingOut = null; });
       return signingOut;
@@ -147,7 +150,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
       previousStorageDrain = storage.seal();
       auth.dispose();
       subscription.subscription.unsubscribe();
-      unbind(); lifecycle.dispose(); workspace.dispose(); wsClient.reset();
+      unbind(); lifecycle.dispose(); workspace.dispose(); context.dispose(); wsClient.reset();
       // Rebinding also invalidates REST requests from the previous runtime.
       configureApiClient({ baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`,
         getAccessToken: async () => null, recoverSession: async () => false,

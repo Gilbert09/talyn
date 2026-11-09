@@ -81,9 +81,9 @@ export function useNetwork() {
   return useSyncExternalStore(lifecycle.subscribe, lifecycle.getSnapshot, lifecycle.getSnapshot).reachability;
 }
 function WorkspaceBinding() {
-  const { workspace } = useMobileRuntime();
+  const { workspace, context } = useMobileRuntime();
   const user = useAuth().user?.id;
-  useEffect(() => { if (user) void workspace.load(user); }, [user, workspace]);
+  useEffect(() => { if (user) { void workspace.load(user); void context.load(user); } }, [user, workspace, context]);
   return null;
 }
 function NotificationBinding() {

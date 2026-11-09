@@ -36,6 +36,8 @@ const mockWorkspace: { status: string; choices: { id: string; name: string }[]; 
   status: 'ready', choices: [{ id: 'one', name: 'One' }], selected: 'one',
 };
 const mockSelectWorkspace = jest.fn(async (id: string) => { mockWorkspace.selected = id; });
+const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
+const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
 jest.mock('../auth/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
   useAuth: () => mockAuth,
@@ -45,6 +47,7 @@ jest.mock('../auth/AuthProvider', () => ({
     workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle,
     auth: { signIn: mockSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
     account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: mockSelectWorkspace },
+    context: mockContext,
   }),
 }));
 jest.mock('../features/usage/data', () => ({ useBillingStatus: () => ({ status: 'idle', data: undefined, stale: false, refreshing: false }) }));

@@ -23,8 +23,12 @@ jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
   Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
 }));
+const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
+const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
 jest.mock('../auth/AuthProvider', () => ({
-  useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => mockNetwork,
+  useMobileRuntime: () => ({ workflow: mockActive.store, lifecycle: mockActive.lifecycle, workspace: { getSnapshot: () => mockWorkspace, select: jest.fn() },
+    context: mockContext }),
+  useNetwork: () => mockNetwork, useAuth: () => ({ user: { id: 'user-one' } }),
   useWorkspace: () => mockWorkspace,
 }));
 beforeEach(() => {

@@ -19,6 +19,22 @@ export function findSpace(teams: readonly SpacesTeam[] | null | undefined, space
   return null;
 }
 
+/**
+ * A session or thread in a space shows in that space, not in Personal. It
+ * shows in Personal when Spaces is off or its space is gone, so it is never
+ * lost. While my teams load (null) it stays out, so it does not show and then
+ * go. Mirrors web `inPersonalList`.
+ */
+export function inPersonalList(workbench: Pick<Workbench, 'spaceId'>, teams: readonly SpacesTeam[] | null, offered: boolean): boolean {
+  if (!workbench.spaceId || !offered) return true;
+  return teams !== null && !findSpace(teams, workbench.spaceId);
+}
+
+/** The Personal subset of a list, or undefined while the list loads. */
+export function personalItems<T extends Pick<Workbench, 'spaceId'>>(items: T[] | undefined, teams: readonly SpacesTeam[] | null, offered: boolean): T[] | undefined {
+  return items?.filter((item) => inPersonalList(item, teams, offered));
+}
+
 /** One or two letters for a space tile. Mirrors web `railInitials`. */
 export function spaceInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -88,17 +104,18 @@ export function hiddenText(hidden: number): string | null {
   return hidden === 1 ? "1 item you can't see" : `${hidden} items you can't see`;
 }
 
-export type OpenTarget = { kind: 'route'; href: Href } | { kind: 'web'; path: string };
+export type OpenTarget = { kind: 'route'; href: Href } | { kind: 'switch'; workspaceId: string; href: Href } | { kind: 'web'; path: string };
 
 /**
  * Where tapping a space row goes. The app's detail screens read the selected
- * workspace only, so an item from another workspace (a teammate's, or mine
- * elsewhere) opens on the web, where the narrow teammate view lives.
+ * workspace only. Mine in another of my workspaces switches to it first. A
+ * teammate's opens on the web, where the narrow teammate view lives.
  */
-export function openTarget(row: Pick<SpaceSessionRow, 'id' | 'kind' | 'workspaceId'>, workspaceId: string | null): OpenTarget {
-  if (workspaceId && row.workspaceId === workspaceId) {
-    return { kind: 'route', href: row.kind === 'thread' ? threadRoute(row.id) : sessionRoute(row.id) };
-  }
+export function openTarget(row: Pick<SpaceSessionRow, 'id' | 'kind' | 'workspaceId'>, workspaceId: string | null,
+  mine: readonly string[] = []): OpenTarget {
+  const href = row.kind === 'thread' ? threadRoute(row.id) : sessionRoute(row.id);
+  if (workspaceId && row.workspaceId === workspaceId) return { kind: 'route', href };
+  if (mine.includes(row.workspaceId)) return { kind: 'switch', workspaceId: row.workspaceId, href };
   return { kind: 'web', path: `/s/${encodeURIComponent(row.id)}` };
 }
 
