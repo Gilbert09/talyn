@@ -20,6 +20,9 @@ import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
 import { emptySpaceList, loadSpaceSessions, useSpacesStore, type SpaceRef } from '../../stores/spaces';
 import { useNavigationStore } from '../../stores/navigation';
 import { workbenchPlaceLabel } from '../../lib/threads';
+import { spaceSessionState } from '../../lib/sessionState';
+import { useSpaceSidebarModel } from '../layout/spaceSidebarModel';
+import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { TooltipProvider } from '../ui/tooltip';
 import { ModelPicker } from '../workbench/ComposerControls';
 import {
@@ -282,6 +285,8 @@ function SpaceFeed({ spaceId }: { spaceId: string }) {
   const presence = useSpacesStore((s) => s.presence[spaceId]);
   const selfUserId = useSpacesStore((s) => s.selfUserId);
   const groups = useMemo(() => groupSpaceSessions(sessions.items, presence, selfUserId), [sessions.items, presence, selfUserId]);
+  // The sidebar's states: live for my own loaded sessions, from the space row for the rest.
+  const { states } = useSpaceSidebarModel(spaceId);
   const rows = [...groups.active, ...groups.recent];
   const hidden = sessions.hiddenCount + tasks.hiddenCount;
 
@@ -304,6 +309,7 @@ function SpaceFeed({ spaceId }: { spaceId: string }) {
           <ul className="divide-y divide-border/60 rounded-lg border border-border bg-card">
             {rows.map((row) => {
               const viewers = viewersOf(presence, row.id, selfUserId);
+              const state = states.get(row.id) ?? spaceSessionState(row);
               return (
                 <li key={row.id}>
                   <button
@@ -317,10 +323,18 @@ function SpaceFeed({ spaceId }: { spaceId: string }) {
                       <span className="block truncate font-medium">{row.title || row.name}</span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {row.creator.githubLogin ?? 'A teammate'} · {workbenchPlaceLabel(row)}
-                        {row.running ? ' · working' : ''}
                       </span>
                     </span>
                     <PresenceAvatars members={viewers} size={18} />
+                    <span
+                      className="flex min-w-0 max-w-[40%] shrink items-center gap-1.5 text-xs text-muted-foreground"
+                      data-attr="space-feed-session-state"
+                    >
+                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                        <SessionStateIcon state={state} />
+                      </span>
+                      <span className="truncate">{state.label}</span>
+                    </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {timeAgo(row.lastActivityAt ?? row.updatedAt)}
                     </span>
