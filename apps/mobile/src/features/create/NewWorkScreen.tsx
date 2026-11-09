@@ -21,7 +21,8 @@ import { useRemote } from '../more/useRemote';
 import { WEB_APP_URL } from '../settings/about';
 import { SpaceTile } from '../spaces/Avatars';
 import { useActiveContext } from '../spaces/context';
-import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
+import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
+import { agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
   effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
   rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
@@ -89,6 +90,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [sheet, setSheet] = useState<SheetKind | null>(null);
+  const [connectAgent, setConnectAgent] = useState<WorkbenchAgent | null>(null);
   const [repoQuery, setRepoQuery] = useState('');
   useEffect(() => { setMode(initialMode); }, [initialMode]);
   // Open pull requests give the branch sheet its suggestions, so they load only while it is open.
@@ -111,8 +113,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline);
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
-  const agentOk = agentChoice(sandbox, agent);
-  const connect = !sandboxOk.available ? sandboxOk.connect : !agentOk.available ? agentOk.connect : undefined;
+  const connect = connectNotice(sandbox, agent);
   const unreachable = sandbox?.reasons[0]?.code === 'unreachable';
   const branch = effectiveBranch(baseBranch, repository);
   const chipState: ChipState = { mode, repository, repositoriesLoading: reposStatus !== 'ready' && !repos.length,
@@ -155,6 +156,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
 
   const openSheet = (kind: SheetKind) => { Keyboard.dismiss(); setSheet(kind); };
   const closeSheet = () => { setSheet(null); setRepoQuery(''); };
+  const openConnect = (target: WorkbenchAgent) => { Keyboard.dismiss(); setConnectAgent(target); };
   const toggleInternet = () => {
     const next = !internetAccess;
     setInternetAccess(next);
@@ -169,11 +171,11 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const noRepositories = mode === 'session' && reposStatus === 'ready' && !repos.length;
   const notices = <>
     {error ? <Banner tone="destructive" message={error} /> : null}
-    {!sandboxOk.available && sandbox ? <Banner tone="warning" message={`Sandbox unavailable: ${sandboxOk.reason ?? 'Cloud sessions are unavailable'}`}
-      action={unreachable ? (offline ? undefined : 'Retry') : 'Open web'}
-      onAction={unreachable ? () => { void readinessSource.refresh(); } : () => openExternal(WEB_APP_URL)} />
-      : connect ? <Banner tone="information" message={`${agentOk.reason ?? 'This agent is not connected'}. Connect your Claude or ChatGPT subscription in Talyn on the web, in Settings, Integrations.`}
-        action="Open web" onAction={() => openExternal(WEB_APP_URL)} /> : null}
+    {connect ? <Banner tone="information" message={connect.message} action={offline ? undefined : connect.action}
+      onAction={() => openConnect(connect.agent)} />
+      : !sandboxOk.available && sandbox ? <Banner tone="warning" message={`Sandbox unavailable: ${sandboxOk.reason ?? 'Cloud sessions are unavailable'}`}
+        action={unreachable ? (offline ? undefined : 'Retry') : 'Open web'}
+        onAction={unreachable ? () => { void readinessSource.refresh(); } : () => openExternal(WEB_APP_URL)} /> : null}
     {noRepositories ? <Banner tone="information" message={inSpace
       ? 'This space has no repositories yet. Add one in Talyn on the web. A thread needs no repository.'
       : 'Add a repository in Talyn on the web to start a session. A thread needs no repository.'}
@@ -247,11 +249,21 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
 
     <PickerSheet visible={sheet === 'model'} title="Model" onClose={closeSheet} sections={modelSections(sandbox, agent).map((section): PickerSection => ({
       key: section.agent, title: section.title, note: section.note,
-      action: section.connect ? { label: section.connect === 'reauth' ? 'Sign in on the web' : 'Connect on the web', onPress: () => openExternal(WEB_APP_URL) } : undefined,
+      action: section.connect ? { label: CONNECT_ACTION[section.connect], onPress: () => {
+        closeSheet();
+        // Two native modals cannot swap in one frame on iOS, so the connect sheet opens once the model sheet has gone.
+        setTimeout(() => openConnect(section.agent), 350);
+      } } : undefined,
       items: section.models.map((item) => ({ key: item.id, label: item.label, detail: item.blurb,
         selected: section.agent === agent && item.id === model,
         onPress: () => { setWantedAgent(agentForModel(item.id) ?? section.agent); setPickedModel(item.id); } })),
     }))} />
+
+    <ConnectAgentSheet visible={connectAgent !== null} agent={connectAgent ?? undefined} workspaceId={remoteHome ?? undefined}
+      onClose={() => setConnectAgent(null)} onConnected={() => {
+        if (connectAgent) setWantedAgent(connectAgent);
+        void readinessSource.refresh();
+      }} />
   </ScreenContainer>;
 }
 

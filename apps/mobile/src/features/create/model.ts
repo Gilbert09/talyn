@@ -11,7 +11,7 @@ export const AGENT_NAMES: Record<WorkbenchAgent, string> = { claude: 'Claude Cod
 export interface Choice {
   available: boolean;
   reason?: string;
-  /** The fix is a sign-in in Settings on the web. */
+  /** The fix is a sign-in, which the connect sheet does. */
   connect?: 'connect' | 'reauth';
 }
 type Sandbox = WorkbenchReadiness['sandbox'];
@@ -204,6 +204,27 @@ export function modelSections(sandbox: Sandbox | null | undefined, current: Work
       : `${name} is not connected to this workspace, so ${name} models cannot run.`;
     return [{ agent, title: AGENT_NAMES[agent], models: [], note, connect: choice.connect }];
   });
+}
+
+/** The label of a section's connect action in the model sheet. */
+export const CONNECT_ACTION: Record<NonNullable<Choice['connect']>, string> = { connect: 'Connect', reauth: 'Sign in again' };
+
+export interface ConnectNotice { agent: WorkbenchAgent; kind: NonNullable<Choice['connect']>; message: string; action: string }
+
+/**
+ * The composer's notice when the agent needs a sign-in, with the action that
+ * opens the connect sheet. Null when the agent can run or the fix is not a
+ * sign-in, such as a sandbox outage.
+ */
+export function connectNotice(sandbox: Sandbox | null | undefined, agent: WorkbenchAgent): ConnectNotice | null {
+  const choice = agentChoice(sandbox, agent);
+  if (!choice.connect) return null;
+  const name = AGENT_SHORT[agent];
+  if (choice.connect === 'reauth') {
+    return { agent, kind: 'reauth', message: `The ${name} sign-in has expired. Sign in again to start.`, action: 'Sign in' };
+  }
+  const subscription = agent === 'codex' ? 'ChatGPT' : 'Claude';
+  return { agent, kind: 'connect', message: `${name} is not connected. Connect your ${subscription} subscription to start.`, action: 'Connect' };
 }
 
 /** Repositories whose name contains the query, in the workspace's order. */

@@ -91,7 +91,7 @@ describe('session controls', () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByText('The sandbox did not start.')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left. Manage your plan in Talyn on the web.', expect.any(Array)));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
   });
   it('disables network actions offline', async () => {
     mockNetwork = 'offline';
@@ -242,12 +242,14 @@ describe('start new work', () => {
     await waitFor(() => expect(sendButton().props.accessibilityHint).toBe('Describe a task.'));
     expect(sendButton()).toBeDisabled();
   });
-  it('shows web copy when no agent can run', async () => {
+  it('offers to connect when no agent can run', async () => {
     mockActive.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: true, reasons: [], agents: {
       claude: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Claude in Settings' } },
       codex: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Codex in Settings' } } } } });
     await render(<NewWorkScreen />);
-    expect(await screen.findByText(/Sandbox unavailable: Connect Claude in Settings/)).toBeVisible();
+    expect(await screen.findByText('Claude is not connected. Connect your Claude subscription to start.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeVisible();
+    expect(screen.queryByText(/Sandbox unavailable/)).toBeNull();
     await fireEvent.changeText(screen.getByLabelText('Task'), 'Something');
     expect(sendButton()).toBeDisabled();
     expect(sendButton().props.accessibilityHint).toBe('Connect Claude in Settings');
