@@ -38,7 +38,7 @@ import {
 } from '../../services/sessionMcpToken.js';
 import type { SessionResizeResult } from '../../services/workbenches/resize.js';
 import type { SessionRestartResult } from '../../services/workbenches/restart.js';
-import { announceThreadSession } from '../../services/workbenches/threads.js';
+import { announceSessionSpawn } from '../../services/workbenches/threads.js';
 import { callApi, McpApiError } from '../api.js';
 import {
   bool,
@@ -502,7 +502,10 @@ async function createInSpace(
     ...(str(args.branch) ? { branch: str(args.branch) } : {}),
     ...(args.internet_access !== undefined ? { internetAccess: bool(args, 'internet_access') } : {}),
   });
-  if (ctx?.session) await recordSessionSpawn(created.workbench.id, ctx.session);
+  if (ctx?.session) {
+    await recordSessionSpawn(created.workbench.id, ctx.session);
+    await announceSessionSpawn(ctx.session.workbenchId, created.workbench.id);
+  }
   return sessionDetail(created.workbench);
 }
 
@@ -669,8 +672,10 @@ export const SESSIONS = [
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
       if (reserved?.threadId) body.threadId = reserved.threadId;
       const created = await callApi<Workbench>(ownerId, 'POST', '/workbenches', body);
-      if (ctx?.session) await recordSessionSpawn(created.id, ctx.session);
-      if (reserved?.threadId) await announceThreadSession(created.id);
+      if (ctx?.session) {
+        await recordSessionSpawn(created.id, ctx.session);
+        await announceSessionSpawn(ctx.session.workbenchId, created.id);
+      }
       return fallback ? `${fallback}\n${sessionDetail(created)}` : sessionDetail(created);
     },
     FEATURE
