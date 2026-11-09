@@ -5,13 +5,15 @@ import { View } from 'react-native';
 
 import { useAuth, useNetwork, useWorkspace } from '../../auth/AuthProvider';
 import { SessionStateIcon } from '../../components/Status';
-import { AppText, EmptyState, Group, Pill, PrNumber, Row, ui } from '../../components/UI';
+import { AppText, Button, EmptyState, Group, Pill, PrNumber, Row, ui } from '../../components/UI';
 import { openExternal, StateNotice } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
 import { shortTime, useNow } from '../../lib/time';
-import { Intro, Loading, Page, webUrl } from '../more/Page';
+import { HOME } from '../../navigation/routes';
+import { Intro, Loading, Page } from '../more/Page';
 import { MemberAvatar, SpaceTile } from './Avatars';
-import { useSpaceEvents, useSpaceItems, useSpacePresence, useTeamMembers, useTeams } from './data';
+import { useActiveContext, useOpenSpaceRow } from './context';
+import { useSpaceEvents, useSpaceItems, useSpacePresence, useTeamMembers } from './data';
 import {
   activeLogins, findSpace, groupSpaceSessions, hiddenText, memberName, openTarget, placeLabel, presenceSentence,
   spaceSessionState, spacesOffered, viewersOf,
@@ -24,7 +26,9 @@ export function SpaceDetailScreen() {
   const offered = spacesOffered(features);
   const offline = useNetwork() === 'offline';
   const self = useAuth().user?.id ?? null;
-  const teams = useTeams();
+  const place = useActiveContext();
+  const teams = place.teams;
+  const router = useRouter();
   const found = findSpace(teams.data, spaceId);
   const items = useSpaceItems(offered && found ? spaceId : null);
   const members = useTeamMembers(found?.team.id ?? null);
@@ -56,6 +60,11 @@ export function SpaceDetailScreen() {
         <AppText variant="meta" tone="muted">{sentence ?? found.team.name}</AppText>
       </View>
     </View>
+    {place.active?.space.id === spaceId ? <AppText variant="meta" tone="muted">You are in this space. New work starts here.</AppText>
+      : <View style={{ alignSelf: 'flex-start' }}>
+        <Button variant="secondary" size="sm" title="Switch to this space"
+          onPress={() => { void place.select({ kind: 'space', spaceId }).then(() => router.navigate(HOME)); }} />
+      </View>}
     {items.data === undefined && items.status === 'loading' ? <Loading label="Loading the space" />
       : <StateNotice resource={items} offline={offline} refresh={() => { void items.refresh(); }} />}
     {items.data ? <>
@@ -72,12 +81,13 @@ export function SpaceDetailScreen() {
 function SessionGroup({ title, rows, presence, self }: { title: string; rows: SpaceSessionRow[]; presence: SpacePresenceMember[] | undefined; self: string | null }) {
   const now = useNow();
   const workspaceId = useWorkspace().selected;
-  const router = useRouter();
+  const choices = useWorkspace().choices;
+  const open = useOpenSpaceRow();
   return <Group title={title}>
     {rows.map((row, index) => {
       const state = spaceSessionState(row);
       const viewers = viewersOf(presence, row.id, self);
-      const target = openTarget(row, workspaceId);
+      const target = openTarget(row, workspaceId, choices.map((choice) => choice.id));
       const name = row.title || row.name;
       const owner = memberName(row.creator);
       const viewing = presenceSentence(viewers);
@@ -85,7 +95,7 @@ function SessionGroup({ title, rows, presence, self }: { title: string; rows: Sp
         subtitle={`${owner} · ${placeLabel(row)}`}
         accessibilityLabel={`${name}. ${state.label}. ${owner}.${viewing ? ` ${viewing}.` : ''}${target.kind === 'web' ? ' Opens on the web.' : ''}`}
         accessibilityRole="link"
-        onPress={() => { if (target.kind === 'route') router.push(target.href); else openExternal(webUrl(target.path)); }}
+        onPress={() => open(row)}
         trailing={<AppText variant="meta" tone="muted">{shortTime(row.lastActivityAt ?? row.updatedAt, now)}</AppText>}>
         <View style={ui.wrap}>
           <AppText variant="caption" tone="muted" numberOfLines={1}>{state.label}</AppText>

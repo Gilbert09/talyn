@@ -14,6 +14,8 @@ export interface PickerItem {
   /** A second line, such as a model's one-line description. */
   detail?: string;
   icon?: Symbol;
+  /** Drawn in place of the icon, such as a space tile. */
+  leading?: ReactNode;
   selected?: boolean;
   disabled?: boolean;
   /** Draw the label in the code face, for branch names. */
@@ -126,7 +128,7 @@ function PickerRow({ item, onPress }: { item: PickerItem; onPress(): void }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={item.accessibilityLabel ?? item.label} accessibilityHint={item.detail}
     accessibilityState={{ selected: Boolean(item.selected), disabled: Boolean(item.disabled) }} disabled={item.disabled} onPress={onPress}
     style={({ pressed }) => [styles.row, { backgroundColor: pressed ? c.surface : 'transparent', opacity: item.disabled ? 0.45 : 1 }]}>
-    {item.icon ? <SymbolView name={item.icon} size={18} tintColor={c.muted} /> : null}
+    {item.leading ?? (item.icon ? <SymbolView name={item.icon} size={18} tintColor={c.muted} /> : null)}
     <View style={styles.rowText}>
       <Text numberOfLines={1} style={[item.mono ? styles.monoLabel : styles.label, { color: c.text }]}>{item.label}</Text>
       {item.detail ? <AppText variant="meta" tone="muted" numberOfLines={2}>{item.detail}</AppText> : null}

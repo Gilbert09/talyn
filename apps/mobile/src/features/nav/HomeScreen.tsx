@@ -5,6 +5,7 @@ import { featureOffered, useFeatures } from '../../lib/features';
 import { sans, useTheme } from '../../theme/tokens';
 import { NewWorkScreen } from '../create/NewWorkScreen';
 import { PullRequestsScreen } from '../prs/PullRequestsScreen';
+import { useActiveContext } from '../spaces/context';
 
 /**
  * Home, like web's landing page: the new-session composer. An account
@@ -16,11 +17,12 @@ export function HomeScreen() {
   return <NewWorkScreen presentation="home" />;
 }
 
-/** The home header's title: the workspace name. */
+/** The home header's title: the active space, or the workspace name. */
 export function HomeTitle() {
   const c = useTheme();
   const name = useWorkspaceName();
-  return <Text accessibilityRole="header" numberOfLines={1} style={[styles.title, { color: c.text }]}>{name ?? 'Talyn'}</Text>;
+  const space = useActiveContext().active?.space.name;
+  return <Text accessibilityRole="header" numberOfLines={1} style={[styles.title, { color: c.text }]}>{space ?? name ?? 'Talyn'}</Text>;
 }
 
 const styles = StyleSheet.create({
