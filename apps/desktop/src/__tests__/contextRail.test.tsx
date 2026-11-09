@@ -132,7 +132,7 @@ describe('ContextRail', () => {
     expect(screen.getByText('DP')).toBeInTheDocument();
   });
 
-  it('badges the contexts that are not open, and not the open one', async () => {
+  it('badges every context, including the open one', async () => {
     setup({
       workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')],
       teams: [TEAM],
@@ -142,22 +142,24 @@ describe('ContextRail', () => {
     render(<ContextRail />);
     expect(await screen.findByRole('button', { name: 'Side, 1 item needs you' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Web (Acme), 120 items need you' })).toHaveTextContent('99+');
-    const open = screen.getByRole('button', { name: 'Mine' });
+    const open = screen.getByRole('button', { name: 'Mine, 5 items need you' });
     expect(open).toHaveAttribute('aria-current', 'true');
-    expect(open).not.toHaveTextContent('5');
-    expect(screen.getAllByText((_, el) => el?.getAttribute('data-attr') === 'context-rail-badge')).toHaveLength(2);
+    expect(open).toHaveTextContent('5');
+    expect(screen.getAllByText((_, el) => el?.getAttribute('data-attr') === 'context-rail-badge')).toHaveLength(3);
   });
 
   it('switches to a space and asks again for the counts', async () => {
-    setup({ workspaces: [ws('ws1', 'Mine')], teams: [TEAM], spaces: true, counts: { workspaces: { ws1: 2 }, spaces: {} } });
+    setup({ workspaces: [ws('ws1', 'Mine')], teams: [TEAM], spaces: true, counts: { workspaces: { ws1: 2 }, spaces: { s1: 3 } } });
     render(<ContextRail />);
     await waitFor(() => expect(attention).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Web (Acme)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Web (Acme), 3 items need you' }));
     expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'space', spaceId: 's1' });
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
     await waitFor(() => expect(attention).toHaveBeenCalledTimes(2));
     expect(await screen.findByRole('button', { name: 'Mine, 2 items need you' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Web (Acme)' })).toHaveAttribute('aria-current', 'true');
+    const open = screen.getByRole('button', { name: 'Web (Acme), 3 items need you' });
+    expect(open).toHaveAttribute('aria-current', 'true');
+    expect(open).toHaveTextContent('3');
   });
 
   it('switches workspace when spaces are off', async () => {

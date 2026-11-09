@@ -6,8 +6,8 @@ import type { WorkbenchChatStatus, WorkbenchKind, WorkbenchSandboxState, Workben
  * `GET /workspaces/attention` answers it.
  *
  * The keys are ids. A workspace or a space with nothing waiting is left out.
- * A session in a space counts for its space only. It runs in my workspace,
- * but the Personal sidebar leaves it out, so its tile must too.
+ * A session in a space counts for its space and its workspace. The workspace
+ * tile is the desktop launcher, so its count covers Personal and every space.
  */
 export interface ContextAttentionCounts {
   workspaces: Record<string, number>;
@@ -57,8 +57,8 @@ export function countContextAttention(
 ): ContextAttentionCounts {
   const out: ContextAttentionCounts = { workspaces: {}, spaces: {} };
   for (const s of sessions) {
+    bump(out.workspaces, s.workspaceId);
     if (s.spaceId) bump(out.spaces, s.spaceId);
-    else bump(out.workspaces, s.workspaceId);
   }
   return out;
 }

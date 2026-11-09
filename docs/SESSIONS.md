@@ -7407,8 +7407,8 @@ The first message of a new session with images uses the same path.
 
 ### 2026-11-08 — Context rail for workspaces and spaces
 
-Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⇧1–9 counts the same tiles. The open context gets a pill and a ring. Each other context gets a red count of the items that need the person.
-The count comes from `GET /workspaces/attention` (`services/workbenches/attention.ts`). The rule is `sessionNeedsAttention` in `packages/shared/src/contextAttention.ts`: a live session or thread that failed, that asks a question, or whose open pull request has conflicts. A running turn or a queued message wins, as in the sidebar. An unread reply is not counted: read state is kept only in the open app. A session in a space counts for its workspace and for its space, because both sidebars show it. The rail asks every 30 seconds while the window shows, on window focus, and on a context switch. The two reads are narrow; `contextAttention.test.ts` pins that.
+Both apps now show a bar on the far left, like Slack's workspace bar, when a person has two or more contexts (workspaces, plus spaces when the `spaces` flag is on). There is one tile per context, in the switcher's order, so ⌘⇧1–9 counts the same tiles. The open context gets a pill and a ring. Every context keeps its red count, including the open context.
+The count comes from `GET /workspaces/attention` (`services/workbenches/attention.ts`). The rule is `sessionNeedsAttention` in `packages/shared/src/contextAttention.ts`: a live session or thread that failed, that asks a question, or whose open pull request has conflicts. A running turn or a queued message wins, as in the sidebar. An unread reply is not counted: read state is kept only in the open app. A space session counts for its space and for the aggregate workspace launcher. The rail asks every 30 seconds while the window shows, on window focus, and on a context switch. The two reads are narrow; `contextAttention.test.ts` pins that.
 The rail is `ContextRail.tsx` with `lib/contextRail.ts`, in both apps. On macOS desktop, the top strip of the rail is a drag area under the traffic lights.
 
 ### 2026-11-08 — A thread hears when a session's pull request merges
@@ -7423,7 +7423,7 @@ Before, a session created in a space also showed in the Personal sidebar. It run
 Now `inPersonalList` (`lib/spaces.ts`, both apps) keeps a session with a `spaceId` out of the Personal lists: the sidebar, threads, ⌘1–9, the command palette and recent sessions on the new-session page. `useWorkspaceWorkbenches` applies it; `orderedLiveWorkbenches` in `appShortcuts.ts` does the same.
 A space session shows in Personal again when the `spaces` flag is off or its space is not in my teams (archived, or I left the team), so it is never lost. While my teams load, it stays out, so it does not show and then go.
 History keeps archived space sessions (`useWorkspaceWorkbenches({ withSpaceSessions: true })`), because the space feed leaves archived sessions out.
-The store still holds space sessions, so opening one from the space feed needs no fetch. `countContextAttention` now counts a space session for its space only, not for its workspace. This replaces the rule in the context rail note above.
+The store still holds space sessions, so opening one from the space feed needs no fetch. The Personal sidebar still excludes them. The workspace tile is now an aggregate launcher, so its count includes Personal and space sessions.
 
 ### 2026-11-08 — CPU and memory charts in the Sandbox tab
 
